@@ -190,10 +190,23 @@ fn invoke_clippy(workspace: &Path, lint_args: &[String]) -> Result<std::process:
 }
 
 /// Parse cargo's JSONL output stream and yield Diagnostic structs for
-/// every primary span that lives in `file_filter` and whose lint code
-/// is in `remap`. Lines that don't parse, or that aren't compiler
-/// messages, are silently ignored — cargo emits a lot of build noise
-/// that doesn't concern us.
+/// every primary span that lives in `file_filter`.
+///
+/// We surface every clippy lint, not just the ones with an explicit
+/// `Backend::Clippy` binding in comply's rule registry:
+///
+/// - If the lint code is in `remap`, the diagnostic is rewritten with
+///   the comply rule_id and remediation severity (this is the "branded"
+///   path — the user sees the comply name).
+/// - Otherwise, if the lint code starts with `clippy::`, we pass it
+///   through as-is. The rule_id stays as `clippy::needless_borrow`
+///   (etc.) and the message is clippy's verbatim message. The user
+///   doesn't lose the diagnostic just because comply doesn't have a
+///   first-class binding for it.
+/// - Pure rustc warnings without a binding (`dead_code`, `unused_imports`,
+///   etc.) are skipped — those are the compiler's job, not comply's.
+///   Bind them explicitly via `Backend::Clippy { lint: "..." }` if you
+///   want comply to surface them.
 ///
 /// `workspace_root` is the directory containing the `Cargo.toml` we
 /// invoked clippy with. Cargo emits span file_name as paths relative
@@ -217,7 +230,16 @@ fn parse_clippy_jsonl(
         }
         let Some(diag) = envelope.message else { continue };
         let Some(code) = diag.code.as_ref() else { continue };
-        let Some(meta) = remap.get(&code.code) else { continue };
+
+        // Decide how to surface this lint:
+        //   - bound to a comply rule via remap → use the comply meta
+        //   - any other clippy::* lint → pass through with raw code
+        //   - anything else (rustc warnings without binding) → skip
+        let mapped_meta = remap.get(&code.code).copied();
+        if mapped_meta.is_none() && !code.code.starts_with("clippy::") {
+            continue;
+        }
+
         let Some(span) = diag.spans.iter().find(|s| s.is_primary) else { continue };
 
         // Cargo emits file_name relative to the workspace root. Resolve
@@ -234,17 +256,28 @@ fn parse_clippy_jsonl(
             continue;
         }
 
+        // Severity: prefer rustc's level (it knows whether the user
+        // promoted the lint to deny), fall back to the comply meta's
+        // severity for the bound case, and default to Warning for the
+        // pass-through case (clippy emits warnings by default).
+        let severity = match diag.level {
+            RustcLevel::Error => Severity::Error,
+            RustcLevel::Warning => Severity::Warning,
+            _ => mapped_meta.map_or(Severity::Warning, |m| m.severity),
+        };
+
+        let rule_id = match mapped_meta {
+            Some(meta) => meta.id.to_string(),
+            None => code.code.clone(),
+        };
+
         diagnostics.push(Diagnostic {
             path: span_path,
             line: span.line_start.max(1),
             column: span.column_start.max(1),
-            rule_id: meta.id.to_string(),
+            rule_id,
             message: diag.message,
-            severity: match diag.level {
-                RustcLevel::Error => Severity::Error,
-                RustcLevel::Warning => Severity::Warning,
-                _ => meta.severity,
-            },
+            severity,
         });
     }
 
@@ -344,6 +377,35 @@ mod tests {
         let filter: HashSet<PathBuf> = HashSet::new();
         let json = br#"{"reason":"build-finished","success":true}
 {"reason":"compiler-artifact","package_id":"x"}"#;
+        let diagnostics = parse_clippy_jsonl(json, Path::new("/abs"), &filter, &remap);
+        assert!(diagnostics.is_empty());
+    }
+
+    #[test]
+    fn parse_clippy_jsonl_passes_through_unbound_clippy_lints() {
+        // No remap entry — but the lint code starts with `clippy::`,
+        // so we keep the diagnostic with its raw rule_id.
+        let remap: HashMap<String, &'static RuleMeta> = HashMap::new();
+        let json = br#"{"reason":"compiler-message","message":{"message":"needless borrow","code":{"code":"clippy::needless_borrow"},"level":"warning","spans":[{"file_name":"/abs/src/main.rs","line_start":4,"column_start":2,"is_primary":true}]}}"#;
+        let mut filter = HashSet::new();
+        filter.insert(PathBuf::from("/abs/src/main.rs"));
+
+        let diagnostics = parse_clippy_jsonl(json, Path::new("/abs"), &filter, &remap);
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].rule_id, "clippy::needless_borrow");
+        assert_eq!(diagnostics[0].message, "needless borrow");
+        assert_eq!(diagnostics[0].severity, Severity::Warning);
+    }
+
+    #[test]
+    fn parse_clippy_jsonl_skips_unbound_rustc_warnings() {
+        // `dead_code` is a rustc lint, not clippy, and it has no
+        // explicit binding — comply leaves it to the compiler.
+        let remap: HashMap<String, &'static RuleMeta> = HashMap::new();
+        let json = br#"{"reason":"compiler-message","message":{"message":"function `foo` is never used","code":{"code":"dead_code"},"level":"warning","spans":[{"file_name":"/abs/src/main.rs","line_start":1,"column_start":1,"is_primary":true}]}}"#;
+        let mut filter = HashSet::new();
+        filter.insert(PathBuf::from("/abs/src/main.rs"));
+
         let diagnostics = parse_clippy_jsonl(json, Path::new("/abs"), &filter, &remap);
         assert!(diagnostics.is_empty());
     }
