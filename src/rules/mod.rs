@@ -15,6 +15,7 @@
 //! See TODO.md "Architecture" for the full rationale.
 
 pub mod backend;
+pub mod banned_comment_words;
 pub mod banned_identifiers;
 pub mod boolean_naming;
 pub mod delegated;
@@ -51,6 +52,7 @@ pub mod no_nested_ternary;
 pub mod no_new_regex_with_variable;
 pub mod no_nullish_default_on_input;
 pub mod no_put_method;
+pub mod no_section_divider_comments;
 pub mod no_set_x_to_y;
 pub mod no_skipped_test_without_link;
 pub mod no_throw;
@@ -301,6 +303,9 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         error_without_cause::register(),
         no_set_x_to_y::register(),
         no_and_in_function_name::register(),
+        // v2.8 — Comments: mechanical comment-quality rules.
+        banned_comment_words::register(),
+        no_section_divider_comments::register(),
     ];
     rules.extend(delegated::register_all());
     rules

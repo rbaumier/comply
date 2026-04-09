@@ -36,12 +36,16 @@ impl TextCheck for Check {
     }
 }
 
-/// Find a `TODO` or `FIXME` marker inside a comment on the given line.
+/// Find a tracked-debt marker inside a comment on the given line. The full
+/// marker set covers every conventional rot signal — `TODO`/`FIXME` for
+/// future work, plus `XXX`/`HACK`/`BUG` for "this is wrong, fix it later"
+/// markers used in many older codebases. Without an issue link they all rot
+/// the same way.
 /// Returns `(marker, trailing_text)` or None if the line has no comment marker.
 fn find_marker(line: &str) -> Option<(&'static str, &str)> {
     let comment_pos = line.find("//").or_else(|| line.find("/*"))?;
     let after_comment = &line[comment_pos..];
-    for marker in ["TODO", "FIXME"] {
+    for marker in ["TODO", "FIXME", "XXX", "HACK", "BUG"] {
         if let Some(pos) = after_comment.find(marker) {
             return Some((marker, &after_comment[pos + marker.len()..]));
         }
@@ -131,5 +135,25 @@ mod tests {
     #[test]
     fn ignores_todo_in_code_not_comment() {
         assert!(run("const TODO = 1;").is_empty());
+    }
+
+    #[test]
+    fn flags_xxx_marker() {
+        assert_eq!(run("// XXX broken on safari").len(), 1);
+    }
+
+    #[test]
+    fn flags_hack_marker() {
+        assert_eq!(run("// HACK forced cast").len(), 1);
+    }
+
+    #[test]
+    fn flags_bug_marker() {
+        assert_eq!(run("// BUG drops the last item").len(), 1);
+    }
+
+    #[test]
+    fn xxx_with_link_passes() {
+        assert!(run("// XXX #42 known limitation").is_empty());
     }
 }

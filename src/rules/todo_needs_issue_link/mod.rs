@@ -10,9 +10,10 @@ use crate::rules::RuleDef;
 
 pub const META: RuleMeta = RuleMeta {
     id: "todo-needs-issue-link",
-    description: "TODO/FIXME without a tracked reference rots into silent tech debt.",
-    remediation: "Add an issue reference after TODO/FIXME — `#123`, `GH-123`, \
-                  a ticket key (`ABC-123`), or a full URL.",
+    description: "TODO/FIXME/XXX/HACK/BUG without a tracked reference rots into silent tech debt.",
+    remediation: "Add an issue reference after the marker — `#123`, `GH-123`, \
+                  a ticket key (`ABC-123`), or a full URL. Covers TODO, FIXME, \
+                  XXX, HACK, and BUG.",
     severity: Severity::Warning,
     doc_url: None,
 };
