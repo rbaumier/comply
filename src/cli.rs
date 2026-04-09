@@ -1,8 +1,11 @@
-//! CLI argument parsing — produces a single ScanMode that the orchestrator
-//! consumes. The mutex flags (`--working-tree`, `--staged`, etc.) are wired
-//! into a clap ArgGroup so the user gets a clear error if they combine them.
+//! CLI argument parsing.
+//!
+//! Design: the default invocation `comply [path]` lints files and is the
+//! hottest code path. Optional subcommands (`explain`, `list`) provide
+//! introspection tooling without disrupting the lint flow. When no
+//! subcommand is passed, we fall into `Command::Lint` with the legacy flags.
 
-use clap::{ArgGroup, Parser};
+use clap::{ArgGroup, Parser, Subcommand};
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
@@ -13,8 +16,12 @@ use std::path::PathBuf;
         .multiple(false)
 ))]
 pub struct Cli {
+    /// Optional subcommand. Default = lint.
+    #[command(subcommand)]
+    pub command: Option<Command>,
+
     /// Lint files modified in the working tree.
-    #[arg(long)]
+    #[arg(long, global = false)]
     pub working_tree: bool,
 
     /// Lint staged files only.
@@ -33,8 +40,28 @@ pub struct Cli {
     #[arg(long, num_args = 2)]
     pub range: Option<Vec<String>>,
 
+    /// Output diagnostics as JSON (for editors and CI).
+    #[arg(long)]
+    pub json: bool,
+
     /// Path to lint (default: current directory).
     pub path: Option<PathBuf>,
+}
+
+/// Top-level subcommands. None = lint mode with the legacy flag parser.
+#[derive(Subcommand, Debug)]
+pub enum Command {
+    /// Show the full description and remediation for a specific rule.
+    Explain {
+        /// The stable rule id, e.g. "no-throw" or "typescript/no-explicit-any".
+        rule_id: String,
+    },
+    /// List every registered rule with its id, severity, and description.
+    List {
+        /// Output as JSON instead of human-readable text.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 /// Resolved scan mode — determines which files comply will lint.
@@ -62,8 +89,6 @@ impl Cli {
             return ScanMode::Commit(sha.clone());
         }
         if let Some(range) = &self.range {
-            // clap's `num_args = 2` enforces exactly two values, so direct
-            // indexing is safe — but we destructure to make that explicit.
             let [from, to] = [range[0].clone(), range[1].clone()];
             return ScanMode::Range(from, to);
         }
@@ -77,11 +102,13 @@ mod tests {
 
     fn cli_with_defaults() -> Cli {
         Cli {
+            command: None,
             working_tree: false,
             staged: false,
             last_commit: false,
             commit: None,
             range: None,
+            json: false,
             path: None,
         }
     }
