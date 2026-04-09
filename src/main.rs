@@ -14,6 +14,7 @@
 //! 5. Apply comply-ignore suppressions across every discovered file.
 //! 6. Format diagnostics, print, exit 0/1/2.
 
+mod cargo_shear;
 mod cli;
 mod clippy;
 mod config;
@@ -181,6 +182,15 @@ fn lint_rust(rs_files: &[&SourceFile], config: &Config) -> Result<Vec<Diagnostic
         eprintln!(
             "comply: cargo clippy not found — skipping clippy-backed rules. \
              Install with: rustup component add clippy"
+        );
+    }
+
+    if cargo_shear::is_available() {
+        diagnostics.extend(cargo_shear::lint_files(rs_files)?);
+    } else {
+        eprintln!(
+            "comply: cargo shear not found — skipping unused-dependency rule. \
+             Install with: cargo install cargo-shear"
         );
     }
 
