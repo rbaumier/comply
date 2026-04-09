@@ -56,6 +56,17 @@ pub mod no_verb_in_rest_url;
 pub mod prefer_switch_over_chained_if;
 pub mod prefer_type_over_interface;
 pub mod react_hoist_regex_outside_component;
+pub mod rust_await_holding_lock;
+pub mod rust_explicit_iter_loop;
+pub mod rust_large_enum_variant;
+pub mod rust_must_use_on_result;
+pub mod rust_no_linkedlist;
+pub mod rust_no_panic_macros;
+pub mod rust_no_println_in_library;
+pub mod rust_no_unwrap;
+pub mod rust_ptr_arg;
+pub mod rust_redundant_clone;
+pub mod rust_undocumented_unsafe;
 pub mod react_no_and_conditional_jsx;
 pub mod react_no_array_index_key;
 pub mod react_use_state_lazy_init;
@@ -171,6 +182,21 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         zod_no_any::register(),
         drizzle_timestamp_with_timezone::register(),
         tailwind_no_dynamic_class::register(),
+        // v1.5 — Rust rules from the language-rust skill. All have clippy
+        // coverage; these mod.rs files document them so `comply list` and
+        // `comply explain` surface the mapping. See each rule's rust.rs
+        // for the corresponding clippy lint name + setup.
+        rust_no_unwrap::register(),
+        rust_no_panic_macros::register(),
+        rust_must_use_on_result::register(),
+        rust_undocumented_unsafe::register(),
+        rust_no_println_in_library::register(),
+        rust_await_holding_lock::register(),
+        rust_large_enum_variant::register(),
+        rust_ptr_arg::register(),
+        rust_explicit_iter_loop::register(),
+        rust_no_linkedlist::register(),
+        rust_redundant_clone::register(),
     ];
     rules.extend(delegated::register_all());
     rules
