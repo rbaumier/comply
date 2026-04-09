@@ -11,6 +11,7 @@
 pub mod banned_identifiers;
 pub mod max_file_lines;
 pub mod max_function_lines;
+pub mod no_nested_ternary;
 pub mod no_throw;
 
 use crate::diagnostic::Diagnostic;
@@ -54,6 +55,7 @@ pub fn all_rules() -> Vec<Box<dyn Rule>> {
         Box::new(max_file_lines::MaxFileLines),
         Box::new(max_function_lines::MaxFunctionLines),
         Box::new(no_throw::NoThrow),
+        Box::new(no_nested_ternary::NoNestedTernary),
         Box::new(banned_identifiers::BannedIdentifiers),
     ]
 }
