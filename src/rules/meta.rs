@@ -1,5 +1,3 @@
-#![allow(dead_code)] // Consumed once the engine dispatches on RuleDef (refactor step 3+).
-
 //! RuleMeta — the stable identity card of a lint rule.
 //!
 //! Every concrete rule is a RuleMeta + one or more per-language backends.
@@ -17,7 +15,14 @@
 use crate::diagnostic::Severity;
 
 /// Stable identity + presentation for a lint rule.
+///
+/// The engine currently dispatches solely on the backends and uses the
+/// backend-embedded `rule_id` string in each diagnostic. The RuleMeta is
+/// carried alongside every rule so future features (JSON output with rule
+/// metadata, `comply explain <rule>`, Oxlint diagnostic remapping) can
+/// surface description/remediation/doc_url without re-plumbing.
 #[derive(Debug, Clone, Copy)]
+#[allow(dead_code)] // Fields read by JSON output / explain / remap (coming soon).
 pub struct RuleMeta {
     /// Stable id shown in diagnostics (e.g. "no-default-params").
     pub id: &'static str,

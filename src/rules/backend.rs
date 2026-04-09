@@ -1,5 +1,3 @@
-#![allow(dead_code)] // Consumed once the engine dispatches on RuleDef (refactor step 3+).
-
 //! Backend enum — how a rule is enforced for a given language.
 //!
 //! A rule can be enforced several different ways per language:
@@ -42,6 +40,7 @@ pub trait TextCheck: Send + Sync {
 }
 
 /// How a rule is enforced for one language.
+#[allow(dead_code)] // Oxlint/Clippy/Tsc variants land in later steps.
 pub enum Backend {
     /// In-process tree-sitter AST walk.
     TreeSitter(Box<dyn AstCheck>),
@@ -51,9 +50,7 @@ pub enum Backend {
     /// oxlintrc and remaps oxlint's diagnostic back to our RuleMeta.
     Oxlint { rule: &'static str },
     /// (v2) Delegate to a clippy lint — same remap pattern as Oxlint.
-    #[allow(dead_code)] // Reserved for v2.
     Clippy { lint: &'static str },
     /// (v1.2) Shell out to `tsc --noEmit` and filter by diagnostic code.
-    #[allow(dead_code)] // Reserved for v1.2.
     Tsc { codes: &'static [u32] },
 }
