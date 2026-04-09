@@ -18,6 +18,7 @@ pub mod backend;
 pub mod banned_identifiers;
 pub mod boolean_naming;
 pub mod delegated;
+pub mod drizzle_timestamp_with_timezone;
 pub mod explicit_return_type_on_exported;
 pub mod explicit_units;
 pub mod exports_at_top;
@@ -28,28 +29,44 @@ pub mod max_function_lines;
 pub mod meta;
 pub mod module_header;
 pub mod no_abbreviated_names;
+pub mod no_auth_token_in_localstorage;
 pub mod no_boolean_flag_param;
 pub mod no_commented_out_code;
 pub mod no_common_grab_bag;
+pub mod no_dangerously_set_inner_html;
 pub mod no_default_params;
 pub mod no_double_cast;
 pub mod no_enum;
+pub mod no_focused_test;
 pub mod no_function_overloads;
 pub mod no_generic_names;
+pub mod no_hardcoded_secret;
 pub mod no_inline_param_type;
 pub mod no_json_parse_cast;
+pub mod no_match_snapshot;
 pub mod no_multi_op_oneliner;
 pub mod no_nested_ternary;
+pub mod no_new_regex_with_variable;
 pub mod no_nullish_default_on_input;
 pub mod no_put_method;
+pub mod no_skipped_test_without_link;
 pub mod no_throw;
 pub mod no_type_encoded_names;
 pub mod no_verb_in_rest_url;
 pub mod prefer_switch_over_chained_if;
 pub mod prefer_type_over_interface;
+pub mod react_hoist_regex_outside_component;
+pub mod react_no_and_conditional_jsx;
+pub mod react_no_array_index_key;
+pub mod react_use_state_lazy_init;
+pub mod tailwind_no_dynamic_class;
+pub mod tanstack_query_array_key;
+pub mod tanstack_query_no_deprecated_props;
 pub mod timeout_on_io;
 pub mod todo_needs_issue_link;
 pub mod walker;
+pub mod zod_no_any;
+pub mod zod_prefer_top_level_format;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
@@ -136,6 +153,24 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         no_function_overloads::register(),
         no_verb_in_rest_url::register(),
         no_put_method::register(),
+        // v1.4 — ecosystem rules (security / testing / react / tanstack / zod / drizzle / tailwind)
+        no_new_regex_with_variable::register(),
+        no_auth_token_in_localstorage::register(),
+        no_dangerously_set_inner_html::register(),
+        no_hardcoded_secret::register(),
+        no_focused_test::register(),
+        no_skipped_test_without_link::register(),
+        no_match_snapshot::register(),
+        react_no_array_index_key::register(),
+        react_use_state_lazy_init::register(),
+        react_no_and_conditional_jsx::register(),
+        react_hoist_regex_outside_component::register(),
+        tanstack_query_array_key::register(),
+        tanstack_query_no_deprecated_props::register(),
+        zod_prefer_top_level_format::register(),
+        zod_no_any::register(),
+        drizzle_timestamp_with_timezone::register(),
+        tailwind_no_dynamic_class::register(),
     ];
     rules.extend(delegated::register_all());
     rules
