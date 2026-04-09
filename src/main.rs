@@ -14,10 +14,14 @@
 //! 5. Apply comply-ignore suppressions across every discovered file.
 //! 6. Format diagnostics, print, exit 0/1/2.
 
+mod cargo_modules;
 mod cargo_shear;
 mod cli;
 mod clippy;
 mod config;
+mod jscpd;
+mod knip;
+mod madge;
 mod diagnostic;
 mod engine;
 mod explain;
@@ -194,6 +198,21 @@ fn lint_rust(rs_files: &[&SourceFile], config: &Config) -> Result<Vec<Diagnostic
         );
     }
 
+    if cargo_modules::is_available() {
+        diagnostics.extend(cargo_modules::lint_files(rs_files)?);
+    } else {
+        eprintln!(
+            "comply: cargo modules not found — skipping orphan-module rule. \
+             Install with: cargo install cargo-modules"
+        );
+    }
+
+    if jscpd::is_available() {
+        diagnostics.extend(jscpd::lint_files(rs_files)?);
+    } else {
+        // jscpd is also used by lint_typescript — only warn once.
+    }
+
     diagnostics.extend(engine::lint_files(rs_files, config)?);
     Ok(diagnostics)
 }
@@ -226,6 +245,33 @@ fn lint_typescript(ts_files: &[&SourceFile], config: &Config) -> Result<Vec<Diag
         eprintln!(
             "comply: oxlint not found — skipping oxlint rules. \
              Install with: npm install -g oxlint"
+        );
+    }
+
+    if jscpd::is_available() {
+        diagnostics.extend(jscpd::lint_files(ts_files)?);
+    } else {
+        eprintln!(
+            "comply: jscpd not found — skipping clone-detection rule. \
+             Install with: npm install -g jscpd"
+        );
+    }
+
+    if knip::is_available() {
+        diagnostics.extend(knip::lint_files(ts_files)?);
+    } else {
+        eprintln!(
+            "comply: knip not found — skipping dead-code rules. \
+             Install with: npm install -g knip"
+        );
+    }
+
+    if madge::is_available() {
+        diagnostics.extend(madge::lint_files(ts_files)?);
+    } else {
+        eprintln!(
+            "comply: madge not found — skipping circular-import rule. \
+             Install with: npm install -g madge"
         );
     }
 
