@@ -18,6 +18,7 @@ pub mod backend;
 pub mod banned_identifiers;
 pub mod boolean_naming;
 pub mod delegated;
+pub mod explicit_return_type_on_exported;
 pub mod explicit_units;
 pub mod exports_at_top;
 pub mod jsdoc_on_exported;
@@ -31,13 +32,21 @@ pub mod no_boolean_flag_param;
 pub mod no_commented_out_code;
 pub mod no_common_grab_bag;
 pub mod no_default_params;
+pub mod no_double_cast;
+pub mod no_enum;
+pub mod no_function_overloads;
 pub mod no_generic_names;
+pub mod no_inline_param_type;
+pub mod no_json_parse_cast;
 pub mod no_multi_op_oneliner;
 pub mod no_nested_ternary;
 pub mod no_nullish_default_on_input;
+pub mod no_put_method;
 pub mod no_throw;
 pub mod no_type_encoded_names;
+pub mod no_verb_in_rest_url;
 pub mod prefer_switch_over_chained_if;
+pub mod prefer_type_over_interface;
 pub mod timeout_on_io;
 pub mod todo_needs_issue_link;
 pub mod walker;
@@ -117,6 +126,16 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         no_nullish_default_on_input::register(),
         prefer_switch_over_chained_if::register(),
         no_multi_op_oneliner::register(),
+        // v1.2 — api-design + language-typescript rules
+        no_enum::register(),
+        no_double_cast::register(),
+        no_json_parse_cast::register(),
+        explicit_return_type_on_exported::register(),
+        no_inline_param_type::register(),
+        prefer_type_over_interface::register(),
+        no_function_overloads::register(),
+        no_verb_in_rest_url::register(),
+        no_put_method::register(),
     ];
     rules.extend(delegated::register_all());
     rules
