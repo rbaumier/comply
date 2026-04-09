@@ -44,6 +44,14 @@ pub struct Cli {
     #[arg(long)]
     pub json: bool,
 
+    /// Apply auto-fixes for any rule whose backend supports it.
+    /// Currently delegates to `oxlint --fix` for TS/JS files and to
+    /// `cargo clippy --fix --allow-dirty --allow-staged` for Rust
+    /// crates. After fixing, comply re-runs the lint pass so the
+    /// remaining (non-fixable) violations are still reported.
+    #[arg(long)]
+    pub fix: bool,
+
     /// Path to lint (default: current directory).
     pub path: Option<PathBuf>,
 }
@@ -131,6 +139,7 @@ mod tests {
             commit: None,
             range: None,
             json: false,
+            fix: false,
             path: None,
         }
     }

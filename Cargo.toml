@@ -2,6 +2,9 @@
 name = "comply"
 version = "0.1.0"
 edition = "2024"
+# `cargo run` defaults to the production binary; `regen-clippy-lints` is
+# dev-only tooling and only runs when explicitly requested via `--bin`.
+default-run = "comply"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
