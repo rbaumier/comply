@@ -1,10 +1,14 @@
 //! rust-no-unwrap — no `.unwrap()` or `.expect()` in production code.
 //!
-//! Delegated entirely to clippy. This module exists so the rule shows
-//! up in `comply list` / `comply explain` — the actual enforcement
-//! runs via `cargo clippy`. See rust.rs for setup details.
+//! Tree-sitter-based backend detects `.unwrap()` / `.expect()` calls
+//! outside of test contexts. Tests are exempted (panicking inside a
+//! `#[test]` is a clean failure mode).
+
+mod rust;
 
 use crate::diagnostic::Severity;
+use crate::files::Language;
+use crate::rules::backend::Backend;
 use crate::rules::meta::RuleMeta;
 use crate::rules::RuleDef;
 
@@ -14,8 +18,8 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Handle the None / Err case explicitly. Use `?` with \
                   proper error propagation, or `unwrap_or_else` with a \
                   meaningful fallback. `unwrap()` turns runtime conditions \
-                  into crashes. Enable `clippy::unwrap_used` and \
-                  `clippy::expect_used` in your crate root to enforce.",
+                  into crashes. Tests are exempted — panicking inside a \
+                  `#[test]` is a clean failure.",
     severity: Severity::Error,
     doc_url: None,
 };
@@ -23,6 +27,6 @@ pub const META: RuleMeta = RuleMeta {
 pub fn register() -> RuleDef {
     RuleDef {
         meta: META,
-        backends: vec![],
+        backends: vec![(Language::Rust, Backend::TreeSitter(Box::new(rust::Check)))],
     }
 }
