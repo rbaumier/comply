@@ -1,6 +1,7 @@
 mod cli;
 mod diagnostic;
 mod engine;
+mod ignore_comments;
 mod files;
 mod output;
 mod oxlint;
