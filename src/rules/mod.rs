@@ -1,0 +1,76 @@
+//! Custom lint rules — each rule implements the Rule trait and is registered
+//! in `all_rules()`. The engine calls every rule on every file whose language
+//! matches.
+//!
+//! Rules that only need source text override `check()`.
+//! Rules that need the AST override `check_tree()` — the engine parses each
+//! file once with tree-sitter and passes the tree to all rules.
+
+pub mod banned_identifiers;
+pub mod max_file_lines;
+pub mod max_function_lines;
+pub mod no_nested_ternary;
+pub mod no_throw;
+pub mod walker;
+
+use crate::diagnostic::Diagnostic;
+use crate::files::Language;
+use std::path::Path;
+
+/// A lint rule that operates on source code, optionally with a tree-sitter AST.
+pub trait Rule {
+    /// Unique rule identifier (e.g., "max-file-lines").
+    fn id(&self) -> &'static str;
+
+    /// Which languages this rule applies to.
+    fn languages(&self) -> &[Language];
+
+    /// Run the rule on raw source text. Default: no-op.
+    fn check(&self, _path: &Path, _source: &str, _language: Language) -> Vec<Diagnostic> {
+        vec![]
+    }
+
+    /// Run the rule with a parsed tree-sitter AST. Default: no-op.
+    /// The engine calls this after parsing — rules needing the AST override this.
+    fn check_tree(
+        &self,
+        _path: &Path,
+        _source: &[u8],
+        _tree: &tree_sitter::Tree,
+        _language: Language,
+    ) -> Vec<Diagnostic> {
+        vec![]
+    }
+
+    /// Whether this rule needs the tree-sitter AST (controls whether check_tree is called).
+    fn needs_tree(&self) -> bool {
+        false
+    }
+}
+
+/// Test helper — parses TS source with tree-sitter and applies a rule.
+#[cfg(test)]
+pub fn lint_ts_with<R: Rule>(rule: &R, source: &str) -> Vec<Diagnostic> {
+    let mut parser = tree_sitter::Parser::new();
+    parser
+        .set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into())
+        .expect("failed to load TypeScript grammar");
+    let tree = parser.parse(source, None).expect("failed to parse source");
+    rule.check_tree(
+        Path::new("test.ts"),
+        source.as_bytes(),
+        &tree,
+        Language::TypeScript,
+    )
+}
+
+/// All registered custom rules. Add new rules here.
+pub fn all_rules() -> Vec<Box<dyn Rule>> {
+    vec![
+        Box::new(max_file_lines::MaxFileLines),
+        Box::new(max_function_lines::MaxFunctionLines),
+        Box::new(no_throw::NoThrow),
+        Box::new(no_nested_ternary::NoNestedTernary),
+        Box::new(banned_identifiers::BannedIdentifiers),
+    ]
+}
