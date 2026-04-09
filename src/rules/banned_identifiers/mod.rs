@@ -26,6 +26,9 @@ pub fn register() -> RuleDef {
             (Language::TypeScript, Backend::TreeSitter(Box::new(typescript::Check))),
             (Language::JavaScript, Backend::TreeSitter(Box::new(typescript::Check))),
             (Language::Tsx, Backend::TreeSitter(Box::new(typescript::Check))),
+            // Rust: clippy::disallowed_names (configurable; doesn't do
+            // word-boundary matching out of the box). See rust.rs.
+            (Language::Rust, Backend::Clippy { lint: "clippy::disallowed_names" }),
         ],
     }
 }

@@ -28,6 +28,10 @@ pub fn register() -> RuleDef {
             (Language::TypeScript, Backend::TreeSitter(Box::new(typescript::Check))),
             (Language::JavaScript, Backend::TreeSitter(Box::new(typescript::Check))),
             (Language::Tsx, Backend::TreeSitter(Box::new(typescript::Check))),
+            // Rust: clippy::panic is the representative; see rust.rs for
+            // the full `clippy::{panic,unwrap_used,expect_used,todo,
+            // unimplemented,unreachable}` bundle.
+            (Language::Rust, Backend::Clippy { lint: "clippy::panic" }),
         ],
     }
 }
