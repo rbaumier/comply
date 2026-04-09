@@ -2,6 +2,7 @@ mod cli;
 mod diagnostic;
 mod files;
 mod output;
+mod oxlint;
 
 use anyhow::Result;
 use clap::Parser;
