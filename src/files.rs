@@ -19,7 +19,6 @@ const RUST_EXTENSIONS: &[&str] = &["rs"];
 /// A discovered file tagged with its detected language.
 #[derive(Debug)]
 pub struct SourceFile {
-    #[allow(dead_code)] // Read by engine::run_custom_rules (task 6).
     pub path: PathBuf,
     pub language: Language,
 }

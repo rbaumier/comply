@@ -1,8 +1,10 @@
 mod cli;
 mod diagnostic;
+mod engine;
 mod files;
 mod output;
 mod oxlint;
+mod rules;
 
 use anyhow::Result;
 use clap::Parser;
