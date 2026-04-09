@@ -62,10 +62,15 @@ pub mod rust_block_on_in_async;
 pub mod rust_builder_without_must_use;
 pub mod rust_explicit_iter_loop;
 pub mod rust_helpers;
+pub mod rust_impl_debug_on_public_types;
 pub mod rust_large_enum_variant;
+pub mod rust_mod_tests_without_cfg_test;
 pub mod rust_must_use_on_result;
+pub mod rust_no_bool_return_from_fallible;
 pub mod rust_no_box_default;
+pub mod rust_no_dbg_macro;
 pub mod rust_no_float_for_money;
+pub mod rust_no_large_tuple_return;
 pub mod rust_no_linkedlist;
 pub mod rust_no_panic_macros;
 pub mod rust_no_println_in_library;
@@ -75,11 +80,14 @@ pub mod rust_ptr_arg;
 pub mod rust_rc_mutex;
 pub mod rust_redundant_clone;
 pub mod rust_serde_deny_unknown_fields;
+pub mod rust_string_as_error;
 pub mod rust_sync_io_in_async;
 pub mod rust_thread_sleep_in_async;
+pub mod rust_tokio_spawn_without_handle;
 pub mod rust_unbounded_channel;
 pub mod rust_undocumented_unsafe;
 pub mod rust_unit_error_result;
+pub mod rust_unsafe_impl_without_comment;
 pub mod react_no_and_conditional_jsx;
 pub mod react_no_array_index_key;
 pub mod react_use_state_lazy_init;
@@ -241,6 +249,16 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         rust_builder_without_must_use::register(),
         rust_arc_non_send_sync::register(),
         rust_no_box_default::register(),
+        // v2.2 — Rust-native rules: debugging hygiene, error typing,
+        // public type discoverability, test gating.
+        rust_no_dbg_macro::register(),
+        rust_tokio_spawn_without_handle::register(),
+        rust_string_as_error::register(),
+        rust_impl_debug_on_public_types::register(),
+        rust_mod_tests_without_cfg_test::register(),
+        rust_no_bool_return_from_fallible::register(),
+        rust_no_large_tuple_return::register(),
+        rust_unsafe_impl_without_comment::register(),
     ];
     rules.extend(delegated::register_all());
     rules
