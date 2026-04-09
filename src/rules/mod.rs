@@ -32,10 +32,12 @@ pub mod no_commented_out_code;
 pub mod no_common_grab_bag;
 pub mod no_default_params;
 pub mod no_generic_names;
+pub mod no_multi_op_oneliner;
 pub mod no_nested_ternary;
 pub mod no_nullish_default_on_input;
 pub mod no_throw;
 pub mod no_type_encoded_names;
+pub mod prefer_switch_over_chained_if;
 pub mod timeout_on_io;
 pub mod todo_needs_issue_link;
 pub mod walker;
@@ -113,6 +115,8 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         law_of_demeter::register(),
         timeout_on_io::register(),
         no_nullish_default_on_input::register(),
+        prefer_switch_over_chained_if::register(),
+        no_multi_op_oneliner::register(),
     ];
     rules.extend(delegated::register_all());
     rules
