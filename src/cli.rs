@@ -29,7 +29,6 @@ pub struct Cli {
 }
 
 /// Resolved scan mode — determines which files comply will lint.
-#[allow(dead_code)] // Variants consumed by files::discover (task 3).
 pub enum ScanMode {
     All(PathBuf),
     WorkingTree,
