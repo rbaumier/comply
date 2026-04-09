@@ -16,12 +16,30 @@
 
 pub mod backend;
 pub mod banned_identifiers;
+pub mod boolean_naming;
 pub mod delegated;
+pub mod explicit_units;
+pub mod exports_at_top;
+pub mod jsdoc_on_exported;
+pub mod law_of_demeter;
 pub mod max_file_lines;
 pub mod max_function_lines;
 pub mod meta;
+pub mod module_header;
+pub mod no_abbreviated_names;
+pub mod no_boolean_flag_param;
+pub mod no_commented_out_code;
+pub mod no_common_grab_bag;
+pub mod no_default_params;
+pub mod no_generic_names;
+pub mod no_multi_op_oneliner;
 pub mod no_nested_ternary;
+pub mod no_nullish_default_on_input;
 pub mod no_throw;
+pub mod no_type_encoded_names;
+pub mod prefer_switch_over_chained_if;
+pub mod timeout_on_io;
+pub mod todo_needs_issue_link;
 pub mod walker;
 
 use crate::diagnostic::Severity;
@@ -81,6 +99,24 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         no_throw::register(),
         no_nested_ternary::register(),
         banned_identifiers::register(),
+        todo_needs_issue_link::register(),
+        no_commented_out_code::register(),
+        no_common_grab_bag::register(),
+        no_default_params::register(),
+        boolean_naming::register(),
+        exports_at_top::register(),
+        jsdoc_on_exported::register(),
+        module_header::register(),
+        no_boolean_flag_param::register(),
+        explicit_units::register(),
+        no_abbreviated_names::register(),
+        no_generic_names::register(),
+        no_type_encoded_names::register(),
+        law_of_demeter::register(),
+        timeout_on_io::register(),
+        no_nullish_default_on_input::register(),
+        prefer_switch_over_chained_if::register(),
+        no_multi_op_oneliner::register(),
     ];
     rules.extend(delegated::register_all());
     rules

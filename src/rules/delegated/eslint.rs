@@ -100,5 +100,47 @@ pub fn register_all() -> Vec<RuleDef> {
             "If the catch block just rethrows the original error, remove it \
              — the error propagates identically without the ceremony.",
         ),
+        // --- v1.1 additions ---
+        entry(
+            "id-length",
+            "id-length",
+            Severity::Error,
+            "Single-letter identifiers hide intent.",
+            "Rename to a full word — `createdAt` not `d`, `userCount` not `n`. \
+             Exceptions: loop indices `i`, `j` inside tight for-loops.",
+        ),
+        entry(
+            "no-await-in-loop",
+            "no-await-in-loop",
+            Severity::Error,
+            "Sequential `await` in a loop serializes independent work.",
+            "If the iterations don't depend on each other, use \
+             `Promise.all(items.map(f))` instead. If they do depend, keep the \
+             loop and document why.",
+        ),
+        entry(
+            "no-param-reassign",
+            "no-param-reassign",
+            Severity::Error,
+            "Reassigning function parameters mutates the caller's data.",
+            "Copy the argument into a local `let` if you need to mutate it. \
+             Mutating params silently surprises callers.",
+        ),
+        entry(
+            "no-empty",
+            "no-empty",
+            Severity::Error,
+            "Empty blocks — including empty `catch` — must be justified.",
+            "Either handle the case or add a comment naming why the block \
+             is intentionally empty. Silent empty blocks rot into bugs.",
+        ),
+        entry(
+            "no-implicit-coercion",
+            "no-implicit-coercion",
+            Severity::Error,
+            "Implicit type coercion hides intent.",
+            "Replace `!!value` with `Boolean(value)`, `+str` with \
+             `Number(str)`, `~~n` with `Math.trunc(n)`. Explicit is clearer.",
+        ),
     ]
 }
