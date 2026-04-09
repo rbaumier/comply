@@ -35,14 +35,28 @@ pub fn is_available() -> bool {
     })
 }
 
+/// Max files per oxlint invocation. Conservative chunk size to avoid the
+/// OS ARG_MAX limit on huge monorepos: macOS ~256KiB, Linux ~2MiB. At 60-byte
+/// average paths, 500 paths ≈ 30KiB — well below the floor with headroom for
+/// long absolute paths.
+const FILES_PER_BATCH: usize = 500;
+
 /// Invoke oxlint on the given TS/JS files and return unified diagnostics.
+///
+/// Files are split into batches of `FILES_PER_BATCH` and oxlint is invoked
+/// once per batch — without batching, monorepos with thousands of TS files
+/// would hit OS ARG_MAX and fail with an opaque "argument list too long".
 #[must_use = "diagnostics from oxlint must be reported"]
 pub fn lint_files(files: &[&SourceFile], config_path: Option<&Path>) -> Result<Vec<Diagnostic>> {
     if files.is_empty() {
         return Ok(vec![]);
     }
-    let output = invoke_oxlint(files, config_path)?;
-    parse_json_bytes(&output.stdout, &output.stderr)
+    let mut all = Vec::with_capacity(files.len());
+    for batch in files.chunks(FILES_PER_BATCH) {
+        let output = invoke_oxlint(batch, config_path)?;
+        all.extend(parse_json_bytes(&output.stdout, &output.stderr)?);
+    }
+    Ok(all)
 }
 
 /// Spawn oxlint as a subprocess and validate exit status.

@@ -61,6 +61,18 @@ fn banned_identifiers_does_not_flag_document_or_database() {
 }
 
 #[test]
+fn trailing_comply_ignore_suppresses_current_line() {
+    // Round 5: same-line trailing markers suppress the current line.
+    let source = "function f() { throw 1; } // comply-ignore: no-throw — boundary\n";
+    let (_dir, path) = write_ts_file("trailing.ts", source);
+    Command::cargo_bin("comply")
+        .unwrap()
+        .arg(&path)
+        .assert()
+        .stdout(predicate::str::contains("no-throw").not());
+}
+
+#[test]
 fn bom_prefixed_file_honors_line_one_ignore() {
     // Round 4: strip leading UTF-8 BOM before scanning ignore markers,
     // otherwise line-1 ignores silently never apply.
