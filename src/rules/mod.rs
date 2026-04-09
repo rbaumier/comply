@@ -20,8 +20,11 @@ pub mod delegated;
 pub mod max_file_lines;
 pub mod max_function_lines;
 pub mod meta;
+pub mod no_commented_out_code;
+pub mod no_common_grab_bag;
 pub mod no_nested_ternary;
 pub mod no_throw;
+pub mod todo_needs_issue_link;
 pub mod walker;
 
 use crate::diagnostic::Severity;
@@ -81,6 +84,9 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         no_throw::register(),
         no_nested_ternary::register(),
         banned_identifiers::register(),
+        todo_needs_issue_link::register(),
+        no_commented_out_code::register(),
+        no_common_grab_bag::register(),
     ];
     rules.extend(delegated::register_all());
     rules
