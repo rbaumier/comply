@@ -17,8 +17,10 @@
 mod cli;
 mod diagnostic;
 mod engine;
+mod explain;
 mod files;
 mod ignore_comments;
+mod list;
 mod output;
 mod oxlint;
 mod oxlint_config;
@@ -28,39 +30,62 @@ use std::process::ExitCode;
 
 use anyhow::Result;
 use clap::Parser;
-use cli::Cli;
+use cli::{Cli, Command};
 use diagnostic::Diagnostic;
 use files::{Language, SourceFile};
 
 fn main() -> ExitCode {
-    match lint_project() {
+    match run() {
         Ok(true) => ExitCode::from(1),  // violations found
         Ok(false) => ExitCode::from(0), // clean
         Err(e) => {
             eprintln!(
                 "comply: crashed unexpectedly: {e:#}\n\
-                 Re-run with RUST_BACKTRACE=1 and report at https://github.com/anthropics/comply/issues"
+                 Re-run with RUST_BACKTRACE=1 and report at https://github.com/rbaumier/comply/issues"
             );
             ExitCode::from(2)
         }
     }
 }
 
-/// Top-level orchestrator. Returns `true` if any violation was reported.
-fn lint_project() -> Result<bool> {
+/// Dispatch on the top-level subcommand. Default = lint.
+fn run() -> Result<bool> {
     let cli = Cli::parse();
+    match cli.command {
+        Some(Command::Explain { ref rule_id }) => {
+            explain::run(rule_id)?;
+            Ok(false)
+        }
+        Some(Command::List { json }) => {
+            list::run(json)?;
+            Ok(false)
+        }
+        None => lint_project(&cli),
+    }
+}
+
+/// Top-level lint orchestrator. Returns `true` if any violation was reported.
+fn lint_project(cli: &Cli) -> Result<bool> {
     let mode = cli.scan_mode();
     let discovered = files::discover(&mode)?;
 
     if discovered.is_empty() {
-        println!("comply: no files to lint");
+        if !cli.json {
+            println!("comply: no files to lint");
+        } else {
+            println!("[]");
+        }
         return Ok(false);
     }
 
     let diagnostics = collect_all_diagnostics(&discovered)?;
     let after_suppressions = ignore_comments::apply_to_all(diagnostics, &discovered);
 
-    report_diagnostics(&after_suppressions);
+    if cli.json {
+        report_diagnostics_json(&after_suppressions)?;
+    } else {
+        report_diagnostics(&after_suppressions);
+    }
     Ok(!after_suppressions.is_empty())
 }
 
@@ -128,4 +153,12 @@ fn report_diagnostics(diagnostics: &[Diagnostic]) {
         diagnostics.len(),
         if diagnostics.len() == 1 { "" } else { "s" }
     );
+}
+
+/// Print diagnostics as a JSON array — nothing else on stdout so editors
+/// and CI tools can pipe the output directly into a parser.
+fn report_diagnostics_json(diagnostics: &[Diagnostic]) -> Result<()> {
+    let json = output::format_json(diagnostics)?;
+    println!("{json}");
+    Ok(())
 }

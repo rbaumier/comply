@@ -1,7 +1,13 @@
-//! Output formatter — renders diagnostics in ESLint-like single-line format.
+//! Output formatter — renders diagnostics in two wire formats:
 //!
-//! Format: `path:line:col: severity [rule-id] message`
-//! One line per violation, easy to grep and parse by editors.
+//! - **ESLint-like** (`format_eslint`) for humans and grep-based tools.
+//!   Each line: `path:line:col: severity [rule-id] message`
+//! - **JSON** (`format_json`) for editors, CI dashboards, and anything
+//!   that wants structured data. One object per diagnostic, sorted by
+//!   path then line.
+
+use anyhow::{Context, Result};
+use serde_json::json;
 
 use crate::diagnostic::{Diagnostic, Severity};
 use std::fmt::Write as _;
@@ -34,6 +40,28 @@ pub fn format_eslint(diagnostics: &[Diagnostic]) -> String {
         .expect("writing to a String never fails");
     }
     out
+}
+
+/// Format diagnostics as a JSON array — one object per violation.
+/// Stable shape so editors and CI tools can depend on it.
+pub fn format_json(diagnostics: &[Diagnostic]) -> Result<String> {
+    let payload: Vec<_> = diagnostics
+        .iter()
+        .map(|d| {
+            json!({
+                "path": d.path.display().to_string(),
+                "line": d.line,
+                "column": d.column,
+                "ruleId": d.rule_id,
+                "message": d.message,
+                "severity": match d.severity {
+                    Severity::Error => "error",
+                    Severity::Warning => "warning",
+                },
+            })
+        })
+        .collect();
+    serde_json::to_string_pretty(&payload).context("failed to serialize diagnostics as JSON")
 }
 
 #[cfg(test)]
@@ -73,5 +101,19 @@ mod tests {
     fn multiple_diagnostics_each_on_own_line() {
         let out = format_eslint(&[diag(Severity::Error), diag(Severity::Warning)]);
         assert_eq!(out.lines().count(), 2);
+    }
+
+    #[test]
+    fn json_format_produces_array() {
+        let out = format_json(&[diag(Severity::Error)]).unwrap();
+        assert!(out.starts_with('['));
+        assert!(out.contains("\"ruleId\": \"no-throw\""));
+        assert!(out.contains("\"severity\": \"error\""));
+        assert!(out.contains("\"line\": 10"));
+    }
+
+    #[test]
+    fn json_format_empty_array_for_no_diagnostics() {
+        assert_eq!(format_json(&[]).unwrap(), "[]");
     }
 }
