@@ -25,6 +25,9 @@
 //! incremental (cargo's normal cache). This is unavoidable — clippy
 //! has no per-file mode.
 
+mod all_args;
+mod all_lints;
+mod config_writer;
 mod remap;
 mod schema;
 
@@ -35,6 +38,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
 
+use crate::config::Config;
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::files::SourceFile;
 use crate::rules::meta::RuleMeta;
@@ -54,17 +58,29 @@ pub fn is_available() -> bool {
 
 /// Run clippy on every workspace touched by `files` and return the
 /// remapped diagnostics. Files outside any workspace are skipped.
+///
+/// `config` is the resolved per-project comply.toml. We use it to:
+///   - add `-W clippy::xxx` for any lint flagged `enabled = true`
+///     in `[rules."clippy::xxx"]` (most clippy lints default to
+///     `allow`, so this is how the user opts in to extra ones)
+///   - materialize a temporary `clippy.toml` from per-lint thresholds
+///     and point cargo at it via `CLIPPY_CONF_DIR`, so something like
+///     `[rules."clippy::too_many_lines"] threshold = 50` actually
+///     reaches clippy
 #[must_use = "diagnostics from clippy must be reported"]
-pub fn lint_files(files: &[&SourceFile]) -> Result<Vec<Diagnostic>> {
+pub fn lint_files(files: &[&SourceFile], config: &Config) -> Result<Vec<Diagnostic>> {
     if files.is_empty() {
         return Ok(vec![]);
     }
     let bindings = crate::rules::collect_clippy_bindings();
-    if bindings.is_empty() {
-        return Ok(vec![]);
-    }
     let remap = remap::build_table(&bindings);
-    let lint_args = build_lint_args(&bindings);
+    let mut lint_args = build_lint_args(&bindings);
+    extend_with_user_enabled(&mut lint_args, config);
+    extend_with_user_disabled(&mut lint_args, config);
+
+    // Materialize the optional temp clippy.toml. The TempDir handle
+    // must outlive the cargo subprocess, so keep it bound here.
+    let clippy_conf = config_writer::materialize(config)?;
 
     let workspaces = group_by_workspace(files);
     let mut diagnostics = Vec::new();
@@ -77,7 +93,11 @@ pub fn lint_files(files: &[&SourceFile]) -> Result<Vec<Diagnostic>> {
                     .iter()
                     .map(|f| canonicalize_or_self(&f.path))
                     .collect();
-                let output = invoke_clippy(&root, &lint_args)?;
+                let output = invoke_clippy(
+                    &root,
+                    &lint_args,
+                    clippy_conf.as_ref().map(|(_, p)| p.as_path()),
+                )?;
                 diagnostics.extend(parse_clippy_jsonl(
                     &output.stdout,
                     &root,
@@ -103,6 +123,54 @@ pub fn lint_files(files: &[&SourceFile]) -> Result<Vec<Diagnostic>> {
     }
 
     Ok(diagnostics)
+}
+
+/// Append `-W clippy::xxx` for every clippy lint the user explicitly
+/// enabled in their `comply.toml`. We only flip on lints that exist
+/// in the `all_lints` registry, so a typo in the rule id becomes a
+/// silent no-op rather than a clippy crash.
+fn extend_with_user_enabled(args: &mut Vec<String>, config: &Config) {
+    for (rule_id, rule) in config.iter_rules() {
+        if rule.enabled != Some(true) {
+            continue;
+        }
+        if !rule_id.starts_with("clippy::") {
+            continue;
+        }
+        if !is_known_clippy_lint(rule_id) {
+            continue;
+        }
+        args.push(format!("-W{rule_id}"));
+    }
+}
+
+/// Append `-A clippy::xxx` for every clippy lint the user disabled in
+/// their `comply.toml`. This stops the lint from firing in the first
+/// place rather than relying on the post-filter — keeps clippy's
+/// output cleaner and saves cycles. The post-filter still runs as a
+/// safety net for diagnostics from non-clippy backends.
+fn extend_with_user_disabled(args: &mut Vec<String>, config: &Config) {
+    for (rule_id, rule) in config.iter_rules() {
+        if rule.disabled != Some(true) {
+            continue;
+        }
+        if !rule_id.starts_with("clippy::") {
+            continue;
+        }
+        if !is_known_clippy_lint(rule_id) {
+            continue;
+        }
+        args.push(format!("-A{rule_id}"));
+    }
+}
+
+/// True if `rule_id` matches a clippy lint we discovered via
+/// `cargo clippy -- -W help` and recorded in `all_lints.rs`. Used to
+/// drop typos before they become `error: unknown lint` crashes.
+fn is_known_clippy_lint(rule_id: &str) -> bool {
+    all_lints::ALL_CLIPPY_LINTS
+        .iter()
+        .any(|(name, _)| *name == rule_id)
 }
 
 /// Build the `-W clippy::lint` flag list passed to clippy after `--`.
@@ -156,7 +224,17 @@ fn find_workspace_root(file: &Path) -> Option<PathBuf> {
 /// Spawn `cargo clippy` for one workspace and return the captured Output.
 /// We pass `--quiet` to suppress cargo's progress noise on stderr, and
 /// `--message-format=json` to get structured diagnostics on stdout.
-fn invoke_clippy(workspace: &Path, lint_args: &[String]) -> Result<std::process::Output> {
+///
+/// `clippy_conf_dir` is the directory containing comply's generated
+/// `clippy.toml` (when the user set per-lint thresholds in
+/// `comply.toml`). When `Some`, it gets passed via the
+/// `CLIPPY_CONF_DIR` env var so cargo finds it before falling back to
+/// the project's own `clippy.toml`.
+fn invoke_clippy(
+    workspace: &Path,
+    lint_args: &[String],
+    clippy_conf_dir: Option<&Path>,
+) -> Result<std::process::Output> {
     let manifest = workspace.join("Cargo.toml");
     let mut cmd = Command::new("cargo");
     cmd.args([
@@ -169,6 +247,10 @@ fn invoke_clippy(workspace: &Path, lint_args: &[String]) -> Result<std::process:
     cmd.arg("--");
     for arg in lint_args {
         cmd.arg(arg);
+    }
+    if let Some(dir) = clippy_conf_dir {
+        let (key, val) = config_writer::env_var_for_dir(dir);
+        cmd.env(key, val);
     }
 
     let output = cmd

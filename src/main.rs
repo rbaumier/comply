@@ -176,7 +176,7 @@ fn lint_rust(rs_files: &[&SourceFile], config: &Config) -> Result<Vec<Diagnostic
     let mut diagnostics = Vec::new();
 
     if clippy::is_available() {
-        diagnostics.extend(clippy::lint_files(rs_files)?);
+        diagnostics.extend(clippy::lint_files(rs_files, config)?);
     } else {
         eprintln!(
             "comply: cargo clippy not found — skipping clippy-backed rules. \
