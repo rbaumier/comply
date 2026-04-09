@@ -8,6 +8,7 @@
 //! Rules that need the AST override `check_tree()` — the engine parses each
 //! file once with tree-sitter and passes the tree to all rules.
 
+pub mod banned_identifiers;
 pub mod max_file_lines;
 pub mod max_function_lines;
 pub mod no_throw;
@@ -53,5 +54,6 @@ pub fn all_rules() -> Vec<Box<dyn Rule>> {
         Box::new(max_file_lines::MaxFileLines),
         Box::new(max_function_lines::MaxFunctionLines),
         Box::new(no_throw::NoThrow),
+        Box::new(banned_identifiers::BannedIdentifiers),
     ]
 }
