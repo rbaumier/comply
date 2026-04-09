@@ -19,8 +19,10 @@ const MAX_LINES: usize = 30;
 /// Node kinds that represent function bodies in TypeScript/TSX.
 const TS_FUNCTION_KINDS: &[&str] = &[
     "function_declaration",
+    "function_expression",
     "method_definition",
     "arrow_function",
+    "generator_function_declaration",
 ];
 
 pub struct MaxFunctionLines;

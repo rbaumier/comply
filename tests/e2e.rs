@@ -170,3 +170,58 @@ fn output_format_matches_eslint_pattern() {
         .assert()
         .stdout(predicate::str::is_match(r":\d+:\d+: (error|warning) \[").unwrap());
 }
+
+#[test]
+fn marker_inside_string_literal_is_not_honored() {
+    // Regression: round 3 hardened marker matching to require leading
+    // whitespace only — string literals containing "// comply-ignore: ..."
+    // must NOT register a phantom suppression that swallows the next line.
+    let source = "const fake = \"// comply-ignore: no-throw — bypass\";\nfunction f() { throw 1; }\n";
+    let (_dir, path) = write_ts_file("phantom.ts", source);
+    Command::cargo_bin("comply")
+        .unwrap()
+        .arg(&path)
+        .assert()
+        .stdout(predicate::str::contains("no-throw"));
+}
+
+#[test]
+fn parse_errors_do_not_emit_phantom_diagnostics() {
+    // Regression: round 2 walker now skips ERROR/MISSING subtrees, so a
+    // truncated function body shouldn't emit a `max-function-lines` diagnostic
+    // pointing at the recovered junk.
+    let source = "function f() { const x =\n";
+    let (_dir, path) = write_ts_file("broken.ts", source);
+    Command::cargo_bin("comply")
+        .unwrap()
+        .arg(&path)
+        .assert()
+        .stdout(predicate::str::contains("max-function-lines").not());
+}
+
+#[test]
+fn jsx_files_use_tsx_grammar() {
+    // Regression: round 2 split Language::Tsx so .jsx/.tsx use LANGUAGE_TSX.
+    // Without this, JSX expressions parse as ERROR nodes and the walker
+    // either misses real violations or emits phantoms.
+    let source = "const App = () => <div onClick={() => { throw new Error('boom'); }}>x</div>;\n";
+    let (_dir, path) = write_ts_file("App.jsx", source);
+    Command::cargo_bin("comply")
+        .unwrap()
+        .arg(&path)
+        .assert()
+        .stdout(predicate::str::contains("no-throw"));
+}
+
+#[test]
+fn banned_identifiers_does_not_flag_document_or_database() {
+    // Regression: round 1 added word-boundary check so "document"/"database"
+    // are not flagged for starting with "do".
+    let source = "const document = {}; const database = {}; const domain = '';\n";
+    let (_dir, path) = write_ts_file("words.ts", source);
+    Command::cargo_bin("comply")
+        .unwrap()
+        .arg(&path)
+        .assert()
+        .stdout(predicate::str::contains("banned-identifiers").not());
+}

@@ -1,15 +1,11 @@
 //! File discovery — finds lintable files via directory walk or git diff.
 //!
-//! How it works:
-//! 1. ScanMode::All → walks the directory tree using `ignore` crate's
-//!    `standard_filters` (.gitignore + .ignore + hidden + parent traversal).
-//!    Without standard_filters we'd descend into .git/, node_modules/, target/.
-//! 2. Git-based modes → shells out to `git diff --name-only` (or git show
-//!    for single-commit mode) and validates the exit status. Silent empty
-//!    output on failure used to mask real errors.
-//! 3. Each file is classified by extension into a Language. Unknown
-//!    extensions are silently skipped — letting users point comply at a
-//!    mixed-language repo without noise.
+//! - `ScanMode::All` → directory walk via `ignore` crate (standard_filters
+//!   excludes .git/, node_modules/, target/).
+//! - Git modes → shell out to `git diff` / `git show` and validate exit
+//!   status (silent empty output used to mask real failures).
+//! - Each file is classified by extension into a Language; unknown
+//!   extensions are silently skipped.
 
 use anyhow::{bail, Context, Result};
 use ignore::WalkBuilder;
@@ -64,8 +60,8 @@ pub fn discover(mode: &ScanMode) -> Result<Vec<SourceFile>> {
         ScanMode::All(path) => walk_directory(path),
         ScanMode::WorkingTree => git_diff_files(&[]),
         ScanMode::Staged => git_diff_files(&["--cached"]),
-        // `git diff HEAD~1 HEAD` — without the second `HEAD`, git diffs against
-        // the working tree, mixing unstaged changes into "last commit" results.
+        // `HEAD~1 HEAD` — without the second `HEAD`, git diffs against the
+        // working tree and mixes unstaged changes into "last commit" results.
         ScanMode::LastCommit => git_diff_files(&["HEAD~1", "HEAD"]),
         ScanMode::Commit(sha) => git_show_files(sha),
         ScanMode::Range(from, to) => git_diff_files(&[from.as_str(), to.as_str()]),
@@ -76,7 +72,6 @@ pub fn discover(mode: &ScanMode) -> Result<Vec<SourceFile>> {
 fn walk_directory(path: &Path) -> Result<Vec<SourceFile>> {
     let mut files = Vec::new();
     let walker = WalkBuilder::new(path).standard_filters(true).build();
-
     for entry in walker {
         let entry = entry.context("failed to read directory entry")?;
         if !entry.file_type().is_some_and(|ft| ft.is_file()) {
@@ -86,48 +81,41 @@ fn walk_directory(path: &Path) -> Result<Vec<SourceFile>> {
             files.push(sf);
         }
     }
-
     Ok(files)
 }
 
-/// Run `git diff --name-only` with the given args, validate exit status,
-/// then classify each output line.
+/// `git diff --name-only` with the given args. Used for working-tree, staged,
+/// last-commit, and range modes.
 fn git_diff_files(args: &[&str]) -> Result<Vec<SourceFile>> {
-    let output = Command::new("git")
-        .arg("diff")
+    let mut cmd = Command::new("git");
+    cmd.arg("diff")
         .args(args)
-        .args(["--name-only", "--diff-filter=d", "--relative"])
-        .output()
-        .context("failed to invoke git — is git installed and PATH correct?")?;
-
-    if !output.status.success() {
-        bail!(
-            "git diff failed (exit {}): {}",
-            output.status.code().unwrap_or(-1),
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
-    }
-
-    parse_git_output(&output.stdout)
+        .args(["--name-only", "--diff-filter=d", "--relative"]);
+    run_git(cmd, "git diff")
 }
 
-/// Run `git show --name-only` for a single commit. Handles initial commits
-/// and merge commits correctly (which `git diff <sha>~1 <sha>` does not).
+/// `git show --name-only` for a single commit — handles initial and merge
+/// commits, which `git diff <sha>~1 <sha>` cannot.
 fn git_show_files(sha: &str) -> Result<Vec<SourceFile>> {
-    let output = Command::new("git")
-        .args(["show", "--name-only", "--pretty=format:", "--diff-filter=d"])
-        .arg(sha)
-        .output()
-        .context("failed to invoke git — is git installed and PATH correct?")?;
+    let mut cmd = Command::new("git");
+    cmd.args(["show", "--name-only", "--pretty=format:", "--diff-filter=d"])
+        .arg(sha);
+    run_git(cmd, "git show")
+}
 
+/// Spawn git, validate exit status, then classify the output paths.
+/// Centralizes the bail-on-error pattern so future git modes can't forget it.
+fn run_git(mut cmd: Command, label: &str) -> Result<Vec<SourceFile>> {
+    let output = cmd
+        .output()
+        .context("failed to invoke git — is git installed and on PATH?")?;
     if !output.status.success() {
         bail!(
-            "git show failed for {sha} (exit {}): {}",
+            "{label} failed (exit {}): {}",
             output.status.code().unwrap_or(-1),
             String::from_utf8_lossy(&output.stderr).trim()
         );
     }
-
     parse_git_output(&output.stdout)
 }
 
@@ -168,45 +156,29 @@ fn classify(path: &Path) -> Option<SourceFile> {
 mod tests {
     use super::*;
 
+    fn lang_for(ext: &str) -> Language {
+        classify(&PathBuf::from(format!("foo.{ext}"))).unwrap().language
+    }
+
     #[test]
-    fn classify_recognizes_plain_typescript() {
+    fn classify_routes_extension_to_language() {
         for ext in ["ts", "mts"] {
-            let r = classify(&PathBuf::from(format!("foo.{ext}"))).unwrap();
-            assert_eq!(r.language, Language::TypeScript);
+            assert_eq!(lang_for(ext), Language::TypeScript);
         }
-    }
-
-    #[test]
-    fn classify_recognizes_tsx_and_jsx_as_tsx_variant() {
         for ext in ["tsx", "jsx"] {
-            let r = classify(&PathBuf::from(format!("foo.{ext}"))).unwrap();
-            assert_eq!(r.language, Language::Tsx, "{ext} must use the TSX grammar");
+            assert_eq!(lang_for(ext), Language::Tsx, "{ext} → TSX grammar");
         }
-    }
-
-    #[test]
-    fn classify_recognizes_javascript() {
         for ext in ["js", "mjs"] {
-            let r = classify(&PathBuf::from(format!("foo.{ext}"))).unwrap();
-            assert_eq!(r.language, Language::JavaScript);
+            assert_eq!(lang_for(ext), Language::JavaScript);
         }
+        assert_eq!(lang_for("rs"), Language::Rust);
     }
 
     #[test]
-    fn classify_recognizes_rust() {
-        let r = classify(&PathBuf::from("foo.rs")).unwrap();
-        assert_eq!(r.language, Language::Rust);
-    }
-
-    #[test]
-    fn classify_skips_unsupported_extensions() {
+    fn classify_skips_unsupported_or_extensionless() {
         for ext in ["txt", "md", "json", "py"] {
             assert!(classify(&PathBuf::from(format!("foo.{ext}"))).is_none());
         }
-    }
-
-    #[test]
-    fn classify_skips_files_without_extension() {
         assert!(classify(&PathBuf::from("Makefile")).is_none());
     }
 
@@ -219,13 +191,8 @@ mod tests {
     }
 
     #[test]
-    fn parse_git_output_handles_strict_utf8() {
-        let result = parse_git_output(b"src/foo.ts\nsrc/bar.rs\n").unwrap();
-        assert_eq!(result.len(), 2);
-    }
-
-    #[test]
-    fn parse_git_output_rejects_invalid_utf8() {
+    fn parse_git_output_strict_utf8() {
+        assert_eq!(parse_git_output(b"a.ts\nb.rs\n").unwrap().len(), 2);
         // Invalid UTF-8 byte sequence — must error, not corrupt silently.
         assert!(parse_git_output(&[0xFF, 0xFE, b'\n']).is_err());
     }

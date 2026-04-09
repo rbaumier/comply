@@ -41,12 +41,12 @@ pub fn lint_files(files: &[&SourceFile], config_path: Option<&Path>) -> Result<V
     if files.is_empty() {
         return Ok(vec![]);
     }
-    let output = run_subprocess(files, config_path)?;
+    let output = invoke_oxlint(files, config_path)?;
     parse_json_bytes(&output.stdout, &output.stderr)
 }
 
 /// Spawn oxlint as a subprocess and validate exit status.
-fn run_subprocess(
+fn invoke_oxlint(
     files: &[&SourceFile],
     config_path: Option<&Path>,
 ) -> Result<std::process::Output> {

@@ -1,61 +1,60 @@
-//! comply-ignore parser — scans source for suppression comments and filters diagnostics.
+//! comply-ignore parser — scans source for suppression comments + filters diagnostics.
 //!
-//! Format: `// comply-ignore: <rule-id> — <justification>`
-//! Or:     `// comply-ignore: <rule-id> -- <justification>` (ASCII fallback)
-//!
-//! How it works:
-//! 1. Walk each line looking for the literal `// comply-ignore:` marker.
-//! 2. Strip the marker, hand the remainder to `payload::parse`.
-//! 3. Empty rule-id → skip silently. Empty justification → emit a diagnostic.
-//! 4. Build a `(line+1, rule-id)` set so the next-line diagnostic gets removed
-//!    by `apply_suppressions`.
-//!
-//! Limitation: the marker is matched textually, so a string literal containing
-//! `"// comply-ignore: ..."` would register a phantom suppression. Acceptable
-//! for v1 — moving the scan into the AST is the v2 fix.
+//! Format: `// comply-ignore: <rule-id> — <justification>` (em-dash or ` -- `).
+//! The marker must be the first non-whitespace content on the line —
+//! otherwise a string literal containing `"// comply-ignore: ..."` would
+//! register a phantom suppression. Justification is mandatory; missing →
+//! emit `comply-ignore-missing-justification` diagnostic.
 
 mod payload;
 
 use crate::diagnostic::{Diagnostic, Severity};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 const MARKER: &str = "// comply-ignore:";
 
 /// Result of parsing comply-ignore comments in a source file.
 pub struct IgnoreResult {
-    /// `(line_to_suppress, rule_id)` pairs — the line below the comment.
-    pub suppressions: HashSet<(usize, String)>,
+    /// Map from suppressed line number → set of suppressed rule ids on that line.
+    /// Keyed this way (instead of HashSet<(line, String)>) so the lookup in
+    /// `apply_suppressions` doesn't have to clone the rule_id on every check.
+    pub suppressions: HashMap<usize, HashSet<String>>,
     /// Diagnostics for malformed comply-ignore comments (missing justification).
     pub bad_ignores: Vec<Diagnostic>,
 }
 
 /// Parse all comply-ignore comments in source text.
 pub fn parse_ignores(path: &Path, source: &str) -> IgnoreResult {
-    let mut suppressions = HashSet::new();
+    let mut suppressions: HashMap<usize, HashSet<String>> = HashMap::new();
     let mut bad_ignores = Vec::new();
 
     for (idx, line) in source.lines().enumerate() {
-        let line_num = idx + 1; // 1-indexed.
-        let Some(marker_start) = line.find(MARKER) else {
+        let line_num = idx + 1;
+        let trimmed = line.trim_start();
+        if !trimmed.starts_with(MARKER) {
             continue;
-        };
-        let parsed = payload::parse(&line[marker_start + MARKER.len()..]);
+        }
+        let parsed = payload::parse(&trimmed[MARKER.len()..]);
         if parsed.rule_id.is_empty() {
             continue;
         }
         if parsed.justification.is_empty() {
+            let leading_ws = line.len() - trimmed.len();
+            let char_column = line[..leading_ws].chars().count();
             bad_ignores.push(make_bad_ignore_diagnostic(
                 path,
                 line_num,
-                marker_start,
+                char_column,
                 &parsed.rule_id,
             ));
         }
-        // Suppress the line below even if justification was missing — the
-        // user clearly intended to suppress, and the bad-ignore diagnostic
-        // already nags them about the missing reason.
-        suppressions.insert((line_num + 1, parsed.rule_id));
+        // Suppress the line below even if justification was missing — the user
+        // intent is clear and the bad-ignore diagnostic already nags about it.
+        suppressions
+            .entry(line_num + 1)
+            .or_default()
+            .insert(parsed.rule_id);
     }
 
     IgnoreResult {
@@ -68,15 +67,13 @@ pub fn parse_ignores(path: &Path, source: &str) -> IgnoreResult {
 fn make_bad_ignore_diagnostic(
     path: &Path,
     line: usize,
-    column: usize,
+    char_column: usize,
     rule_id: &str,
 ) -> Diagnostic {
     Diagnostic {
         path: path.to_path_buf(),
         line,
-        // NOTE: byte offset, not char offset — wrong for lines with multibyte
-        // chars before the marker. v2: convert via line[..byte_offset].chars().count().
-        column: column + 1,
+        column: char_column + 1, // 1-indexed for editor consumption
         rule_id: "comply-ignore-missing-justification".into(),
         message: format!(
             "comply-ignore without justification — explain why this exception \
@@ -96,9 +93,16 @@ pub fn apply_suppressions(
     let total = diagnostics.len() + ignore_result.bad_ignores.len();
     let mut result: Vec<Diagnostic> = Vec::with_capacity(total);
 
-    for d in diagnostics {
-        if !ignore_result.suppressions.contains(&(d.line, d.rule_id.clone())) {
-            result.push(d);
+    for diag in diagnostics {
+        // Look up the line in the map first; only the inner set lookup needs
+        // to compare against the rule_id, and HashSet<String>::contains takes
+        // &str so we don't allocate.
+        let is_suppressed = ignore_result
+            .suppressions
+            .get(&diag.line)
+            .is_some_and(|rules| rules.contains(diag.rule_id.as_str()));
+        if !is_suppressed {
+            result.push(diag);
         }
     }
     result.extend(ignore_result.bad_ignores);
@@ -108,50 +112,34 @@ pub fn apply_suppressions(
 /// Apply comply-ignore suppressions across every discovered file.
 ///
 /// Iterates over every discovered file (not just files with diagnostics) so
-/// that malformed `comply-ignore` comments in clean files are still flagged.
-/// Files that can't be read are reported on stderr and their diagnostics pass
-/// through unchanged — a missing source shouldn't crash the whole report.
+/// malformed `comply-ignore` comments in clean files are still flagged.
+/// Files that can't be read pass through unchanged + warn on stderr.
 pub fn apply_to_all(
     diagnostics: Vec<Diagnostic>,
     discovered: &[crate::files::SourceFile],
 ) -> Vec<Diagnostic> {
-    let mut by_file = group_by_path(diagnostics);
-    let total: usize = by_file.values().map(Vec::len).sum();
-    let mut result = Vec::with_capacity(total);
+    let mut by_file: HashMap<std::path::PathBuf, Vec<Diagnostic>> =
+        HashMap::with_capacity(diagnostics.len());
+    for d in diagnostics {
+        by_file.entry(d.path.clone()).or_default().push(d);
+    }
 
+    let mut result = Vec::with_capacity(by_file.values().map(Vec::len).sum::<usize>());
     for file in discovered {
         let file_diags = by_file.remove(&file.path).unwrap_or_default();
         match std::fs::read_to_string(&file.path) {
-            Ok(source) => result.extend(apply_suppressions(file_diags, &file.path, &source)),
+            Ok(src) => result.extend(apply_suppressions(file_diags, &file.path, &src)),
             Err(e) => {
-                eprintln!(
-                    "comply: skipping ignore-comment scan for {}: {e}",
-                    file.path.display()
-                );
+                eprintln!("comply: skipping ignore-scan for {}: {e}", file.path.display());
                 result.extend(file_diags);
             }
         }
     }
-
-    // Diagnostics for files NOT in the discovered list (e.g. paths normalized
-    // differently by oxlint) — keep them as-is, no suppression possible.
+    // Files not in `discovered` (e.g. oxlint canonicalized differently) pass through.
     for (_, file_diags) in by_file {
         result.extend(file_diags);
     }
-
     result
-}
-
-/// Group a flat diagnostic list by source path.
-fn group_by_path(
-    diagnostics: Vec<Diagnostic>,
-) -> std::collections::HashMap<std::path::PathBuf, Vec<Diagnostic>> {
-    let mut by_file: std::collections::HashMap<std::path::PathBuf, Vec<Diagnostic>> =
-        std::collections::HashMap::with_capacity(diagnostics.len());
-    for d in diagnostics {
-        by_file.entry(d.path.clone()).or_default().push(d);
-    }
-    by_file
 }
 
 #[cfg(test)]
@@ -173,7 +161,11 @@ mod tests {
     #[test]
     fn parse_extracts_suppression() {
         let r = parse_ignores(Path::new("t.ts"), "// comply-ignore: no-throw — ok\nx;");
-        assert!(r.suppressions.contains(&(2, "no-throw".into())));
+        assert!(
+            r.suppressions
+                .get(&2)
+                .is_some_and(|s| s.contains("no-throw"))
+        );
         assert!(r.bad_ignores.is_empty());
     }
 

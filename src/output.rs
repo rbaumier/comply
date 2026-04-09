@@ -4,24 +4,34 @@
 //! One line per violation, easy to grep and parse by editors.
 
 use crate::diagnostic::{Diagnostic, Severity};
+use std::fmt::Write as _;
+
+/// Average bytes per ESLint-line — used to pre-size the output buffer to
+/// avoid log-N reallocations on long diagnostic lists. Picked from observation:
+/// `path:line:col: error [rule-id] message` averages ~120 bytes in practice.
+const BYTES_PER_LINE_HINT: usize = 120;
 
 /// Format diagnostics as ESLint-like single-line output.
 pub fn format_eslint(diagnostics: &[Diagnostic]) -> String {
-    let mut out = String::with_capacity(diagnostics.len() * 120);
-    for d in diagnostics {
-        let severity = match d.severity {
+    let mut out = String::with_capacity(diagnostics.len() * BYTES_PER_LINE_HINT);
+    for diag in diagnostics {
+        let severity = match diag.severity {
             Severity::Error => "error",
             Severity::Warning => "warning",
         };
-        out.push_str(&format!(
-            "{}:{}:{}: {} [{}] {}\n",
-            d.path.display(),
-            d.line,
-            d.column,
+        // writeln! writes directly into `out` without an intermediate String alloc.
+        // unwrap is infallible here — writing to a String never fails.
+        writeln!(
+            out,
+            "{}:{}:{}: {} [{}] {}",
+            diag.path.display(),
+            diag.line,
+            diag.column,
             severity,
-            d.rule_id,
-            d.message,
-        ));
+            diag.rule_id,
+            diag.message,
+        )
+        .expect("writing to a String never fails");
     }
     out
 }
