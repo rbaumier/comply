@@ -37,12 +37,20 @@ pub struct ComplyToml {
 /// user actually sets get written to TOML, and merging respects that.
 ///
 /// `extra` captures any rule-specific threshold (`max`, `min`,
-/// `min_arms`, `min_ops`, `min_line_length`, etc.) so each rule can
-/// pull its own knob without us hardcoding the schema for every rule.
+/// `min_arms`, `min_ops`, `min_line_length`, `threshold`, `values`,
+/// etc.) so each rule can pull its own knob without us hardcoding
+/// the schema for every rule.
+///
+/// `enabled` only matters for clippy lints that default to `allow`:
+/// `enabled = true` flips one on by adding a `-W` flag to the clippy
+/// invocation. Tree-sitter rules ignore the field — they run as long
+/// as `disabled` isn't `true`.
 #[derive(Debug, Default, Clone, Deserialize)]
 pub struct RuleConfig {
     #[serde(default)]
     pub disabled: Option<bool>,
+    #[serde(default)]
+    pub enabled: Option<bool>,
     #[serde(default)]
     pub severity: Option<SeverityToml>,
     #[serde(default, flatten)]

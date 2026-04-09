@@ -21,7 +21,7 @@
 mod defaults;
 mod schema;
 
-pub use schema::ComplyToml;
+pub use schema::{ComplyToml, RuleConfig};
 
 /// Process-wide default config used by `CheckCtx::for_test` so unit
 /// tests don't have to construct one. Initialized lazily on first use.
@@ -115,6 +115,15 @@ impl Config {
             .map(Into::into)
     }
 
+    /// Iterate over every `[rules.<id>]` block the user (or the
+    /// defaults) has configured. Returns `(rule_id, &RuleConfig)`
+    /// pairs. Used by the clippy module to discover which lints to
+    /// enable explicitly and which thresholds to write into the
+    /// generated `clippy.toml`.
+    pub fn iter_rules(&self) -> impl Iterator<Item = (&str, &RuleConfig)> {
+        self.raw.rules.iter().map(|(k, v)| (k.as_str(), v))
+    }
+
     /// Read a numeric threshold for `rule_id`. The hardcoded `fallback`
     /// is the value the rule should use when neither the user nor the
     /// defaults provide one — keeping it at the call site means a rule
@@ -175,6 +184,9 @@ fn merge(mut base: ComplyToml, user: ComplyToml) -> ComplyToml {
         let entry = base.rules.entry(rule_id).or_default();
         if let Some(d) = user_rule.disabled {
             entry.disabled = Some(d);
+        }
+        if let Some(e) = user_rule.enabled {
+            entry.enabled = Some(e);
         }
         if let Some(s) = user_rule.severity {
             entry.severity = Some(s);
