@@ -10,6 +10,7 @@
 
 pub mod max_file_lines;
 pub mod max_function_lines;
+pub mod no_throw;
 
 use crate::diagnostic::Diagnostic;
 use crate::files::Language;
@@ -51,5 +52,6 @@ pub fn all_rules() -> Vec<Box<dyn Rule>> {
     vec![
         Box::new(max_file_lines::MaxFileLines),
         Box::new(max_function_lines::MaxFunctionLines),
+        Box::new(no_throw::NoThrow),
     ]
 }
