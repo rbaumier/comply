@@ -16,17 +16,18 @@ use tree_sitter::Parser;
 
 use crate::diagnostic::Diagnostic;
 use crate::files::{Language, SourceFile};
-use crate::rules;
+use crate::rules::{self, backend::Backend};
 
-/// Apply every registered custom rule to the given files.
+/// Apply every registered custom rule (both legacy trait and new RuleDef) to the given files.
 #[must_use = "diagnostics from custom rules must be reported"]
 pub fn lint_files(files: &[&SourceFile]) -> Result<Vec<Diagnostic>> {
-    let rules = rules::all_rules();
+    let legacy_rules = rules::all_rules();
+    let rule_defs = rules::all_rule_defs();
     let mut diagnostics = Vec::with_capacity(files.len());
     let mut parser = Parser::new();
 
     for file in files {
-        match lint_one_file(file, &rules, &mut parser) {
+        match lint_one_file(file, &legacy_rules, &rule_defs, &mut parser) {
             Ok(file_diags) => diagnostics.extend(file_diags),
             Err(e) => {
                 // Skip-and-warn — one bad file shouldn't kill the whole scan.
@@ -38,27 +39,46 @@ pub fn lint_files(files: &[&SourceFile]) -> Result<Vec<Diagnostic>> {
     Ok(diagnostics)
 }
 
-/// Apply every applicable rule to a single file. Parses the AST once if needed.
+/// Apply every applicable rule (legacy + RuleDef) to a single file.
+/// Parses the AST once if any applicable rule needs it.
 fn lint_one_file(
     file: &SourceFile,
-    rules: &[Box<dyn rules::Rule>],
+    legacy_rules: &[Box<dyn rules::Rule>],
+    rule_defs: &[rules::RuleDef],
     parser: &mut Parser,
 ) -> Result<Vec<Diagnostic>> {
     let source = fs::read_to_string(&file.path)
         .with_context(|| format!("failed to read {}", file.path.display()))?;
-    let applicable: Vec<&dyn rules::Rule> = rules
+
+    let applicable_legacy: Vec<&dyn rules::Rule> = legacy_rules
         .iter()
         .filter(|r| r.languages().contains(&file.language))
         .map(AsRef::as_ref)
         .collect();
-    if applicable.is_empty() {
+
+    // For RuleDef: collect the backends whose language matches this file.
+    let applicable_defs: Vec<(&rules::meta::RuleMeta, &Backend)> = rule_defs
+        .iter()
+        .flat_map(|r| {
+            r.backends
+                .iter()
+                .filter(|(lang, _)| *lang == file.language)
+                .map(move |(_, backend)| (&r.meta, backend))
+        })
+        .collect();
+
+    if applicable_legacy.is_empty() && applicable_defs.is_empty() {
         return Ok(vec![]);
     }
-    Ok(apply_rules(file, &source, &applicable, parser))
+
+    let mut diagnostics =
+        apply_legacy_rules(file, &source, &applicable_legacy, parser);
+    diagnostics.extend(apply_rule_defs(file, &source, &applicable_defs, parser));
+    Ok(diagnostics)
 }
 
-/// Apply each rule to the file, parsing the AST once if any rule needs it.
-fn apply_rules(
+/// Apply legacy-trait rules to the file, parsing the AST once if any needs it.
+fn apply_legacy_rules(
     file: &SourceFile,
     source: &str,
     applicable: &[&dyn rules::Rule],
@@ -79,6 +99,50 @@ fn apply_rules(
             }
         } else {
             diagnostics.extend(rule.check(&file.path, source, file.language));
+        }
+    }
+    diagnostics
+}
+
+/// Apply RuleDef-shaped rules to the file. Dispatches on each backend variant.
+fn apply_rule_defs(
+    file: &SourceFile,
+    source: &str,
+    applicable: &[(&rules::meta::RuleMeta, &Backend)],
+    parser: &mut Parser,
+) -> Vec<Diagnostic> {
+    if applicable.is_empty() {
+        return vec![];
+    }
+
+    let needs_ast = applicable
+        .iter()
+        .any(|(_, b)| matches!(b, Backend::TreeSitter(_)));
+    let tree = if needs_ast {
+        parse_with_grammar(parser, file.language, source.as_bytes())
+    } else {
+        None
+    };
+
+    let ctx = rules::backend::CheckCtx {
+        path: &file.path,
+        source,
+    };
+    let mut diagnostics = Vec::new();
+    for (_meta, backend) in applicable {
+        match backend {
+            Backend::TreeSitter(check) => {
+                if let Some(ref t) = tree {
+                    diagnostics.extend(check.check(&ctx, t));
+                }
+            }
+            Backend::Text(check) => {
+                diagnostics.extend(check.check(&ctx));
+            }
+            // Oxlint / Clippy / Tsc backends don't produce diagnostics here —
+            // they contribute their rule-id to the external tool's config
+            // and their diagnostics are remapped elsewhere.
+            Backend::Oxlint { .. } | Backend::Clippy { .. } | Backend::Tsc { .. } => {}
         }
     }
     diagnostics

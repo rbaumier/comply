@@ -24,7 +24,6 @@ use std::path::Path;
 
 /// New rule shape — a RuleMeta + per-language backends. Will replace the
 /// `Rule` trait once every shipped rule has been migrated.
-#[allow(dead_code)] // Used by migrated rules once the engine learns to dispatch on it.
 pub struct RuleDef {
     pub meta: meta::RuleMeta,
     pub backends: Vec<(Language, backend::Backend)>,
@@ -77,7 +76,7 @@ pub fn lint_ts_with<R: Rule>(rule: &R, source: &str) -> Vec<Diagnostic> {
     )
 }
 
-/// All registered custom rules. Add new rules here.
+/// All registered legacy-trait rules. Shrinks as rules migrate to RuleDef.
 pub fn all_rules() -> Vec<Box<dyn Rule>> {
     vec![
         Box::new(max_file_lines::MaxFileLines),
@@ -86,4 +85,10 @@ pub fn all_rules() -> Vec<Box<dyn Rule>> {
         Box::new(no_nested_ternary::NoNestedTernary),
         Box::new(banned_identifiers::BannedIdentifiers),
     ]
+}
+
+/// All registered RuleDef rules. Grows as rules migrate from the legacy trait.
+/// Empty until step 3 starts migrating individual rules.
+pub fn all_rule_defs() -> Vec<RuleDef> {
+    vec![]
 }
