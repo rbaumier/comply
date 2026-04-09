@@ -41,8 +41,11 @@ pub struct Cli {
     pub range: Option<Vec<String>>,
 
     /// Output diagnostics as JSON (for editors and CI).
-    #[arg(long)]
-    pub json: bool,
+    ///
+    /// Field is named `should_emit_json` so it reads as a predicate; the CLI
+    /// flag stays `--json` via the explicit `long` attribute.
+    #[arg(long = "json")]
+    pub should_emit_json: bool,
 
     /// Path to lint (default: current directory).
     pub path: Option<PathBuf>,
@@ -59,9 +62,11 @@ pub enum Command {
     },
     /// List every registered rule with its id, severity, and description.
     List {
-        /// Output as JSON instead of human-readable text.
-        #[arg(long)]
-        json: bool,
+        /// Output as JSON instead of human-readable text. Field is
+        /// renamed to `should_emit_json` so it passes boolean-naming; the
+        /// CLI flag stays `--json` via the explicit `long` attribute.
+        #[arg(long = "json")]
+        should_emit_json: bool,
     },
     /// Manage the project's `comply.toml` configuration file.
     Config {
@@ -134,7 +139,7 @@ mod tests {
             last_commit: false,
             commit: None,
             range: None,
-            json: false,
+            should_emit_json: false,
             path: None,
         }
     }

@@ -4,20 +4,6 @@ use crate::diagnostic::Severity;
 use crate::rules::meta::RuleMeta;
 use crate::rules::{oxlint_delegate, RuleDef, TS_FAMILY};
 
-fn entry(id: &'static str, oxlint_key: &'static str, remediation: &'static str) -> RuleDef {
-    oxlint_delegate(
-        RuleMeta {
-            id,
-            description: "Promise discipline — avoid classic async footguns.",
-            remediation,
-            severity: Severity::Error,
-            doc_url: None,
-        },
-        oxlint_key,
-        TS_FAMILY,
-    )
-}
-
 pub fn register_all() -> Vec<RuleDef> {
     vec![
         entry(
@@ -75,4 +61,20 @@ pub fn register_all() -> Vec<RuleDef> {
              other names confuse reviewers.",
         ),
     ]
+}
+
+// Entry-builder helper used by `register_all` above.
+
+fn entry(id: &'static str, oxlint_key: &'static str, remediation: &'static str) -> RuleDef {
+    oxlint_delegate(
+        RuleMeta {
+            id,
+            description: "Promise discipline — avoid classic async footguns.",
+            remediation,
+            severity: Severity::Error,
+            doc_url: None,
+        },
+        oxlint_key,
+        TS_FAMILY,
+    )
 }

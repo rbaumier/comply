@@ -32,6 +32,8 @@ pub mod law_of_demeter;
 pub mod max_file_lines;
 pub mod max_function_lines;
 pub mod meta;
+// rust_must_use_on_result intentionally not declared — see mod.rs
+// below for the rationale.
 pub mod module_header;
 pub mod no_abbreviated_names;
 pub mod no_and_in_function_name;
@@ -74,7 +76,6 @@ pub mod rust_helpers;
 pub mod rust_impl_debug_on_public_types;
 pub mod rust_large_enum_variant;
 pub mod rust_mod_tests_without_cfg_test;
-pub mod rust_must_use_on_result;
 pub mod rust_no_bool_return_from_fallible;
 pub mod rust_no_box_default;
 pub mod rust_no_dbg_macro;
@@ -126,7 +127,6 @@ use meta::RuleMeta;
 /// which contains trait objects that can't reasonably implement Debug
 /// (see `backend::Backend` for the rationale). Public consumers can
 /// read `meta` directly for any human-readable representation they need.
-// comply-ignore: rust-impl-debug-on-public-types — see doc above.
 pub struct RuleDef {
     pub meta: RuleMeta,
     pub backends: Vec<(Language, Backend)>,
@@ -268,7 +268,12 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         // for the corresponding clippy lint name + setup.
         rust_no_unwrap::register(),
         rust_no_panic_macros::register(),
-        rust_must_use_on_result::register(),
+        // rust_must_use_on_result removed: std::result::Result is already
+        // `#[must_use]` and type aliases (`io::Result`, `anyhow::Result`)
+        // inherit it. Explicitly annotating Result-returning pub fns is
+        // redundant and trips clippy::double_must_use. The rule's use case
+        // collapsed down to hypothetical new types named Result that
+        // don't alias std — we've never seen one in the wild.
         rust_undocumented_unsafe::register(),
         rust_no_println_in_library::register(),
         rust_await_holding_lock::register(),

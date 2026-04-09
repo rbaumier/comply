@@ -79,16 +79,29 @@ fn is_pub(item: tree_sitter::Node, source: &[u8]) -> bool {
 }
 
 fn has_debug_derive(item: tree_sitter::Node, source: &[u8]) -> bool {
+    // Walk every preceding sibling; keep going through attribute_item
+    // and comment nodes (both `line_comment` and `block_comment`, which
+    // tree-sitter-rust inserts between attributes when a trailing `//`
+    // or block comment sits beside an attribute like
+    // `#[allow(...)] // trailing note`). Stop at the first sibling that
+    // isn't an attribute or a comment — that's where our declaration's
+    // attribute block actually ends.
     let mut sibling = item.prev_named_sibling();
     while let Some(s) = sibling {
-        if s.kind() != "attribute_item" {
-            break;
-        }
-        if let Ok(text) = s.utf8_text(source)
-            && text.contains("derive(")
-            && text.contains("Debug")
-        {
-            return true;
+        match s.kind() {
+            "attribute_item" => {
+                if let Ok(text) = s.utf8_text(source)
+                    && text.contains("derive(")
+                    && text.contains("Debug")
+                {
+                    return true;
+                }
+            }
+            "line_comment" | "block_comment" => {
+                // Comments interleaved with attributes don't end the
+                // attribute block. Keep walking.
+            }
+            _ => break,
         }
         sibling = s.prev_named_sibling();
     }
@@ -143,5 +156,37 @@ mod tests {
     #[test]
     fn does_not_flag_private_struct() {
         assert!(run_on("struct User { name: String }").is_empty());
+    }
+
+    #[test]
+    fn allows_doc_comment_above_multi_attribute_block() {
+        // Reproduces the RuleMeta false positive: a doc comment, then
+        // `#[derive(Debug, ...)]`, then another `#[allow(...)]`, then
+        // the struct. The walker must traverse both attribute items
+        // without being stopped by the preceding doc comment.
+        let source = "/// Doc line 1.\n\
+                      /// Doc line 2.\n\
+                      #[derive(Debug, Clone, Copy)]\n\
+                      #[allow(dead_code)]\n\
+                      pub struct RuleMeta { pub id: &'static str }";
+        assert!(
+            run_on(source).is_empty(),
+            "false positive: multi-attribute block with Debug derive should not fire"
+        );
+    }
+
+    #[test]
+    fn allows_trailing_comment_after_inner_attribute() {
+        // Reproduces the exact RuleMeta shape in meta.rs: a trailing
+        // `// comment` after `#[allow(dead_code)]` between the derive
+        // and the struct. tree-sitter-rust may split this differently.
+        let source = "/// Doc.\n\
+                      #[derive(Debug, Clone, Copy)]\n\
+                      #[allow(dead_code)] // Fields read by JSON output / explain / remap (coming soon).\n\
+                      pub struct RuleMeta { pub id: &'static str }";
+        assert!(
+            run_on(source).is_empty(),
+            "false positive: trailing line comment after attribute should not defeat Debug detection"
+        );
     }
 }

@@ -64,8 +64,8 @@ fn run() -> Result<bool> {
             explain::run(rule_id)?;
             Ok(false)
         }
-        Some(Command::List { json }) => {
-            list::run(json)?;
+        Some(Command::List { should_emit_json }) => {
+            list::run(should_emit_json)?;
             Ok(false)
         }
         Some(Command::Config { ref action }) => {
@@ -105,7 +105,7 @@ fn lint_project(cli: &Cli) -> Result<bool> {
     let discovered = files::discover(&mode)?;
 
     if discovered.is_empty() {
-        if !cli.json {
+        if !cli.should_emit_json {
             println!("comply: no files to lint");
         } else {
             println!("[]");
@@ -127,7 +127,7 @@ fn lint_project(cli: &Cli) -> Result<bool> {
     let after_overrides = apply_config_filters(diagnostics, &config);
     let after_suppressions = ignore_comments::apply_to_all(after_overrides, &discovered);
 
-    if cli.json {
+    if cli.should_emit_json {
         report_diagnostics_json(&after_suppressions)?;
     } else {
         report_diagnostics(&after_suppressions);

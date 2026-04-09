@@ -12,8 +12,16 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::walker::walk_tree;
 
+// Predicate prefixes accepted by the rule. The first row is the classic
+// API-surface set (`is_ready`, `has_items`, `should_retry`, …). The
+// second row covers loop/state-machine idioms that read as predicates
+// in English: `in_string` ("currently inside a string literal?"),
+// `seen_private` ("has this branch been traversed?"), `found_return`
+// ("did the scan land on its target?"). Forcing `is_in_string` etc.
+// adds syllables without information.
 const VALID_PREFIXES: &[&str] = &[
     "is_", "has_", "should_", "can_", "will_", "did_", "was_",
+    "in_", "seen_", "found_",
 ];
 const NEGATIVE_SUBSTRINGS: &[&str] = &["_not_", "isnt_", "cannot_", "shouldnt_"];
 
@@ -54,7 +62,8 @@ fn check_node(
         rule_id: "boolean-naming".into(),
         message: format!(
             "Boolean '{name}' {problem}. Use a predicate prefix: \
-             `is_*`, `has_*`, `should_*`, `can_*`, `will_*`, `did_*`, `was_*`."
+             `is_*`, `has_*`, `should_*`, `can_*`, `will_*`, `did_*`, `was_*`, \
+             `in_*`, `seen_*`, `found_*`."
         ),
         severity: Severity::Warning,
     })

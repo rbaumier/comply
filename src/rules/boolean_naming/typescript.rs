@@ -13,7 +13,13 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::walker::walk_tree;
 
-const VALID_PREFIXES: &[&str] = &["is", "has", "should", "can", "will", "did", "was"];
+// See the Rust backend for the rationale — classic predicate prefixes
+// plus `in`/`seen`/`found` for loop/state-machine idioms
+// (`inString`, `seenFirst`, `foundTarget`).
+const VALID_PREFIXES: &[&str] = &[
+    "is", "has", "should", "can", "will", "did", "was",
+    "in", "seen", "found",
+];
 const NEGATIVE_SUBSTRINGS: &[&str] = &["Not", "Isnt", "Cannot", "Cant", "Shouldnt"];
 
 #[derive(Debug)]
@@ -56,7 +62,8 @@ fn check_node(
         rule_id: "boolean-naming".into(),
         message: format!(
             "Boolean '{name}' {problem}. Use a predicate prefix: \
-             `is*`, `has*`, `should*`, `can*`, `will*`, `did*`, `was*`."
+             `is*`, `has*`, `should*`, `can*`, `will*`, `did*`, `was*`, \
+             `in*`, `seen*`, `found*`."
         ),
         severity: Severity::Warning,
     })

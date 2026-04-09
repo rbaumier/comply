@@ -4,48 +4,6 @@ use crate::diagnostic::Severity;
 use crate::rules::meta::RuleMeta;
 use crate::rules::{oxlint_and_clippy, oxlint_delegate, RuleDef, TS_FAMILY};
 
-fn entry(
-    id: &'static str,
-    oxlint_key: &'static str,
-    severity: Severity,
-    description: &'static str,
-    remediation: &'static str,
-) -> RuleDef {
-    oxlint_delegate(
-        RuleMeta {
-            id,
-            description,
-            remediation,
-            severity,
-            doc_url: None,
-        },
-        oxlint_key,
-        TS_FAMILY,
-    )
-}
-
-/// Same shape as `entry()` but also binds the rule to a clippy lint on Rust.
-fn entry_with_clippy(
-    id: &'static str,
-    oxlint_key: &'static str,
-    clippy_lint: &'static str,
-    severity: Severity,
-    description: &'static str,
-    remediation: &'static str,
-) -> RuleDef {
-    oxlint_and_clippy(
-        RuleMeta {
-            id,
-            description,
-            remediation,
-            severity,
-            doc_url: None,
-        },
-        oxlint_key,
-        clippy_lint,
-    )
-}
-
 // comply-ignore: max-function-lines — this is a flat data table, not logic; splitting it would scatter related rule entries across files for no readability gain.
 pub fn register_all() -> Vec<RuleDef> {
     vec![
@@ -176,4 +134,48 @@ pub fn register_all() -> Vec<RuleDef> {
              `Number(str)`, `~~n` with `Math.trunc(n)`. Explicit is clearer.",
         ),
     ]
+}
+
+// Entry-builder helpers used by `register_all` above.
+
+fn entry(
+    id: &'static str,
+    oxlint_key: &'static str,
+    severity: Severity,
+    description: &'static str,
+    remediation: &'static str,
+) -> RuleDef {
+    oxlint_delegate(
+        RuleMeta {
+            id,
+            description,
+            remediation,
+            severity,
+            doc_url: None,
+        },
+        oxlint_key,
+        TS_FAMILY,
+    )
+}
+
+/// Same shape as `entry()` but also binds the rule to a clippy lint on Rust.
+fn entry_with_clippy(
+    id: &'static str,
+    oxlint_key: &'static str,
+    clippy_lint: &'static str,
+    severity: Severity,
+    description: &'static str,
+    remediation: &'static str,
+) -> RuleDef {
+    oxlint_and_clippy(
+        RuleMeta {
+            id,
+            description,
+            remediation,
+            severity,
+            doc_url: None,
+        },
+        oxlint_key,
+        clippy_lint,
+    )
 }

@@ -25,17 +25,6 @@ pub fn has_issue_reference(text: &str) -> bool {
     has_ticket_key(text)
 }
 
-/// True if `text` contains a `#<digit>` reference anywhere.
-fn has_hash_number(text: &str) -> bool {
-    let bytes = text.as_bytes();
-    bytes.iter().enumerate().any(|(i, &b)| {
-        b == b'#'
-            && bytes
-                .get(i + 1)
-                .is_some_and(|c| c.is_ascii_digit())
-    })
-}
-
 /// Detect `ABC-123` / `GH-45` patterns — uppercase prefix, dash, digits.
 /// The prefix must be at least one uppercase letter, followed by a `-`,
 /// followed by at least one digit. We don't require the prefix to start
@@ -63,6 +52,17 @@ pub fn has_ticket_key(text: &str) -> bool {
         }
     }
     false
+}
+
+/// True if `text` contains a `#<digit>` reference anywhere.
+fn has_hash_number(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    bytes.iter().enumerate().any(|(i, &b)| {
+        b == b'#'
+            && bytes
+                .get(i + 1)
+                .is_some_and(|c| c.is_ascii_digit())
+    })
 }
 
 #[cfg(test)]

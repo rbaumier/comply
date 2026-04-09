@@ -1,134 +1,43 @@
 # comply.toml — Comply's own configuration.
 #
-# Comply is a CLI binary and a Rust workspace, not a library or a TS app.
-# Several lints designed for libraries / TypeScript apps don't make sense
-# here, and a few are only meaningful for first-party callers we don't have.
-# We disable them globally with a clear reason next to each one.
+# The goal of this file is "as short as possible". Every entry here is a
+# real project-specific tuning, not a workaround for a broken rule. When
+# we found rules that produced false positives on idiomatic Rust, we
+# fixed the rule itself rather than disabling it from here. If this file
+# grows, that's a signal the rules need more work — not more overrides.
 
-# `println!` is the *whole point* of a CLI binary — main.rs, list.rs, and
-# explain.rs all need to write to stdout. The "no println in library" lint
-# is for crates compiled as libraries; it doesn't apply here.
-[rules.rust-no-println-in-library]
-disabled = true
-
-# `exports-at-top` was designed for TypeScript modules where you put
-# `export const X` above private helpers. The Rust idiom is the opposite:
-# `mod foo;` declarations come first (they're technically "private items"
-# in the export-at-top sense), then `pub use` re-exports. The rule fires
-# on every Rust file with even one private `mod` above a `pub use`. Until
-# the rule learns about Rust module declarations, we silence it for `.rs`.
-[rules.exports-at-top]
-disabled = true
-
-# `id-length` is delegated to clippy::min_ident_chars, which flags every
-# `i`, `j`, `k`, `e` in idiomatic Rust loop bodies and `match` arms. The
-# noise floor is too high to be useful — when we have a *real* one-letter
-# variable bug, code review catches it. Disable.
-[rules.id-length]
-disabled = true
-
-# `no-abbreviated-names` flags `args`, `cfg`, `len`, `idx`, `pos`, `ctx`,
-# `fmt` and other Rust idioms that no human would expand. Disable for the
-# same reason as id-length: the noise outweighs the signal.
-[rules.no-abbreviated-names]
-disabled = true
-
-# `boolean-naming` insists on `is_*`/`has_*`/`should_*` prefixes but
-# Rust idioms like `in_string`, `in_double`, `seen_private`, `found_return`
-# are perfectly readable English flags whose meaning is unambiguous from
-# the surrounding loop body. Renaming them to `is_in_string` adds bytes
-# without information. Disable until we find a real misnamed boolean.
-[rules.boolean-naming]
-disabled = true
-
-# `no-multi-op-oneliner` flags any chain of 6+ operators on a single
-# line. Most of the violations are in helpers like the regex parser
-# and `text.contains() && text.bytes().any(...)` short-circuit chains
-# where extracting `let` bindings actually hurts readability. Tightened
-# to 10 in the threshold so the rule still catches the truly obscene
-# chains. (Threshold knob is read by the rule itself.)
+# `no-multi-op-oneliner` catches cosmetic "expression-too-dense" lines.
+# Default `min_ops = 6` is aggressive; Comply's regex/parser helpers
+# legitimately chain 7-8 operators in a short-circuit. 10 is strict
+# enough to catch the truly obscene chains.
 [rules.no-multi-op-oneliner]
 min_ops = 10
 min_line_length = 100
 
-# Comply has 7 files that exceed 200 lines: clippy/mod.rs (412),
-# config/mod.rs (366), rules/mod.rs (325), main.rs (303), knip.rs (246),
-# cargo_shear.rs (235), comment_paraphrases_code/typescript.rs (217).
-# Each is internally cohesive: clippy/mod.rs is one runner, rules/mod.rs
-# is the rule registry, main.rs is the CLI entry point. Splitting them
-# would scatter related logic across files for no readability gain.
-# Bump the limit to 450 — stricter than "no limit" but generous enough
-# for these 7 files. Each new file added to the codebase still has to
-# justify going past 200 by way of code review.
+# Max file lines — Comply's clippy runner, config module, rule registry,
+# and main entry point each legitimately exceed 200 lines because each
+# is one cohesive unit. 450 is generous but still well under "no limit".
 [rules.max-file-lines]
 max = 450
 
-# `rust-must-use-on-result` insists on `#[must_use]` above any pub fn
-# returning Result, but `std::result::Result` is itself `#[must_use]`,
-# so adding the attribute redundantly trips `clippy::double_must_use`.
-# The two rules contradict each other for the std type. Disable —
-# Result-returning functions inherit must_use semantics for free.
-[rules.rust-must-use-on-result]
-disabled = true
-
-# The orphan-module rule flagged 15 stub `rust.rs` files inside
-# `src/rules/<rule>/`. Those files are a mix of pure documentation
-# (explaining how clippy covers the rule) and real Check implementations
-# that were written but never wired in via `mod rust;` from the parent
-# `mod.rs`. Wiring them in is a separate refactor (would expand Rust-side
-# rule coverage by ~10 rules). Until that lands, we silence the orphan
-# rule on these specific paths via the override below.
-
 [overrides]
 
-# Per-rule `rust.rs` files: see the comment above. These are documentation
-# stubs / unwired check implementations awaiting a follow-up refactor.
-[overrides."**/src/rules/*/rust.rs"]
-disable = ["rust-orphan-module", "no-clones"]
-
-# The rule that flags banned filler words AND the rule that flags
-# comment paraphrases both need to mention those exact words/patterns
-# in their own documentation. Silence the rule on its own source files.
-[overrides."**/src/rules/banned_comment_words/**"]
-disable = ["banned-comment-words"]
-[overrides."**/src/rules/comment_paraphrases_code/**"]
-disable = ["banned-comment-words", "comment-paraphrases-code"]
-
-# Same self-reference principle for the other rule directories whose
-# own documentation has to mention the bad pattern by example.
-[overrides."**/src/rules/no_section_divider_comments/**"]
-disable = ["no-section-divider-comments"]
-[overrides."**/src/rules/no_commented_out_code/**"]
-disable = ["no-commented-out-code"]
-[overrides."**/src/rules/no_hardcoded_secret/**"]
-disable = ["no-hardcoded-secret"]
-[overrides."**/src/rules/no_verb_in_rest_url/**"]
-disable = ["no-verb-in-rest-url"]
-[overrides."**/src/rules/todo_needs_issue_link/**"]
-disable = ["todo-needs-issue-link"]
-
-# `Backend` enum carries trait objects so it intentionally doesn't derive
-# Debug AND has #[non_exhaustive], but the rule walkers misread the multi-
-# attribute block. False positives, suppressed at file level.
+# `Backend` enum carries `Box<dyn AstCheck>` / `Box<dyn TextCheck>` trait
+# objects — it genuinely cannot derive Debug without forcing every
+# concrete check struct to implement Debug AND thread the bound through
+# the trait surface. Legitimate architectural exception.
 [overrides."**/src/rules/backend.rs"]
-disable = ["rust-impl-debug-on-public-types", "rust-pub-enum-without-non-exhaustive"]
-
-# RuleMeta has #[derive(Debug, Clone, Copy)] but the walker misses it
-# through the multi-attribute block before the struct.
-[overrides."**/src/rules/meta.rs"]
 disable = ["rust-impl-debug-on-public-types"]
 
-# RuleConfig has #[derive(Debug, Default, Clone, Deserialize)] but the
-# walker misses it for the same reason.
-[overrides."**/src/config/schema.rs"]
-disable = ["rust-impl-debug-on-public-types", "rust-serde-deny-unknown-fields"]
+# `RuleDef` carries `Backend` transitively, same reason.
+[overrides."**/src/rules/mod.rs"]
+disable = ["rust-impl-debug-on-public-types"]
 
-# External tool JSON schemas (cargo-shear, jscpd, knip, madge, clippy,
-# oxlint). These mirror what the tools emit; we deliberately do NOT use
-# `#[serde(deny_unknown_fields)]` here because the tools can and do add
-# new fields without warning, and a strict schema would crash comply on
-# every tool upgrade. The deny-unknown-fields rule applies to configs WE
-# own, not to mirrors of external contracts.
+# External-tool JSON schemas (cargo-shear, jscpd, knip, madge, clippy,
+# oxlint) mirror contracts we don't own. Adding
+# `#[serde(deny_unknown_fields)]` would crash comply every time an
+# upstream tool added a field. The deny rule applies to configs WE
+# author, not to mirrors.
 [overrides."**/src/cargo_shear.rs"]
 disable = ["rust-serde-deny-unknown-fields"]
 [overrides."**/src/jscpd.rs"]
@@ -142,9 +51,19 @@ disable = ["rust-serde-deny-unknown-fields"]
 [overrides."**/src/oxlint/schema.rs"]
 disable = ["rust-serde-deny-unknown-fields"]
 
+# The 15 `src/rules/<rule>/rust.rs` files are unwired Check
+# implementations and documentation stubs awaiting a future refactor
+# that will register them (expanding Rust-side rule coverage by ~10
+# rules). Until then, the orphan-module rule correctly identifies them
+# as dead code, and their shared scaffold trips the clone detector.
+# Both are the right signal long-term; the short-term override avoids
+# drowning the other diagnostics.
+[overrides."**/src/rules/*/rust.rs"]
+disable = ["rust-orphan-module", "no-clones"]
+
 # Test fixtures intentionally contain code patterns the rules flag —
-# that's the whole point of a fixture. Silence rules that would otherwise
-# scream on every fixture file.
+# that's the whole point of a fixture. Silence rules that would
+# otherwise scream on every fixture file.
 [overrides."tests/**"]
 disable = [
   "id-length",

@@ -1,4 +1,4 @@
-//! comment-paraphrases-code — flag comments that just restate the code.
+//! comment-paraphrases-code — flag comments that restate the code they sit on.
 //!
 //! From the coding-standards skill: "every comment answers what goes wrong
 //! if I delete this? If you can't name a consequence, the comment is a

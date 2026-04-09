@@ -61,15 +61,25 @@ fn is_pub(item: tree_sitter::Node, source: &[u8]) -> bool {
 }
 
 fn has_non_exhaustive(item: tree_sitter::Node, source: &[u8]) -> bool {
+    // Walk every preceding sibling; keep going through attribute_item
+    // and interleaved comment nodes (tree-sitter-rust inserts
+    // `line_comment`/`block_comment` siblings for trailing `//` notes).
+    // Without this, a comment between `#[non_exhaustive]` and the enum
+    // silently defeats detection.
     let mut sibling = item.prev_named_sibling();
     while let Some(s) = sibling {
-        if s.kind() != "attribute_item" {
-            break;
-        }
-        if let Ok(text) = s.utf8_text(source)
-            && text.contains("non_exhaustive")
-        {
-            return true;
+        match s.kind() {
+            "attribute_item" => {
+                if let Ok(text) = s.utf8_text(source)
+                    && text.contains("non_exhaustive")
+                {
+                    return true;
+                }
+            }
+            "line_comment" | "block_comment" => {
+                // Interleaved comment — keep walking.
+            }
+            _ => break,
         }
         sibling = s.prev_named_sibling();
     }

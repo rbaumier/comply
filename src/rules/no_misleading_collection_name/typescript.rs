@@ -13,23 +13,6 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::walker::walk_tree;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Shape {
-    Array,
-    Set,
-    Map,
-}
-
-impl Shape {
-    fn label(self) -> &'static str {
-        match self {
-            Shape::Array => "Array",
-            Shape::Set => "Set",
-            Shape::Map => "Map",
-        }
-    }
-}
-
 #[derive(Debug)]
 pub struct Check;
 
@@ -78,6 +61,27 @@ impl AstCheck for Check {
             });
         });
         diagnostics
+    }
+}
+
+/// Claimed vs. actual collection shape inferred from a binding name's
+/// suffix and from its initializer expression. Kept as a closed enum so
+/// we can exhaustively match on it in `name_suffix_shape` /
+/// `initializer_shape`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Shape {
+    Array,
+    Set,
+    Map,
+}
+
+impl Shape {
+    fn label(self) -> &'static str {
+        match self {
+            Shape::Array => "Array",
+            Shape::Set => "Set",
+            Shape::Map => "Map",
+        }
     }
 }
 

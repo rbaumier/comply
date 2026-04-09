@@ -1,4 +1,9 @@
 //! rust-no-println-in-library — library code must use tracing, not println.
+//!
+//! Crate-type aware: skips files living in a pure binary crate (no
+//! `src/lib.rs`). See `rust.rs` for the detection logic.
+
+mod rust;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
@@ -11,8 +16,9 @@ pub const META: RuleMeta = RuleMeta {
     description: "Library code must use tracing, not `println!` / `eprintln!`.",
     remediation: "Replace `println!` with `tracing::info!` / `tracing::debug!` \
                   and add structured fields. Library consumers configure the \
-                  tracing subscriber; they cannot redirect `println!`. Enable \
-                  `clippy::print_stdout` and `clippy::print_stderr`.",
+                  tracing subscriber; they cannot redirect `println!`. The rule \
+                  auto-skips pure binary crates where writing to stdout is the \
+                  whole point.",
     severity: Severity::Error,
     doc_url: None,
 };
@@ -20,9 +26,6 @@ pub const META: RuleMeta = RuleMeta {
 pub fn register() -> RuleDef {
     RuleDef {
         meta: META,
-        backends: vec![
-            (Language::Rust, Backend::Clippy { lint: "clippy::print_stdout" }),
-            (Language::Rust, Backend::Clippy { lint: "clippy::print_stderr" }),
-        ],
+        backends: vec![(Language::Rust, Backend::TreeSitter(Box::new(rust::Check)))],
     }
 }
