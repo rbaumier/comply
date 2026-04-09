@@ -42,30 +42,40 @@ impl Rule for BannedIdentifiers {
     ) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
         walk_tree(tree, |node| {
-            if node.kind() != "identifier" && node.kind() != "property_identifier" {
-                return;
-            }
-            let Ok(name) = node.utf8_text(source) else {
-                return;
-            };
-            if let Some(prefix) = matched_banned_prefix(name) {
-                let pos = node.start_position();
-                diagnostics.push(Diagnostic {
-                    path: path.to_path_buf(),
-                    line: pos.row + 1,
-                    column: pos.column + 1,
-                    rule_id: self.id().into(),
-                    message: format!(
-                        "Rename '{name}' — use intent over implementation. \
-                         Banned prefix: '{prefix}'. \
-                         Try: what does this actually accomplish?"
-                    ),
-                    severity: Severity::Warning,
-                });
+            if let Some(d) = check_identifier_node(node, source, path, self.id()) {
+                diagnostics.push(d);
             }
         });
         diagnostics
     }
+}
+
+/// Inspect a single AST node and emit a diagnostic if it's an identifier
+/// whose name starts with a banned prefix on a word boundary.
+fn check_identifier_node(
+    node: tree_sitter::Node,
+    source: &[u8],
+    path: &Path,
+    rule_id: &str,
+) -> Option<Diagnostic> {
+    if node.kind() != "identifier" && node.kind() != "property_identifier" {
+        return None;
+    }
+    let name = node.utf8_text(source).ok()?;
+    let prefix = matched_banned_prefix(name)?;
+    let pos = node.start_position();
+    Some(Diagnostic {
+        path: path.to_path_buf(),
+        line: pos.row + 1,
+        column: pos.column + 1,
+        rule_id: rule_id.into(),
+        message: format!(
+            "Rename '{name}' — use intent over implementation. \
+             Banned prefix: '{prefix}'. \
+             Try: what does this actually accomplish?"
+        ),
+        severity: Severity::Warning,
+    })
 }
 
 /// Return the banned prefix that matches `name` on a word boundary, or None.

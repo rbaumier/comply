@@ -49,37 +49,47 @@ impl Rule for MaxFunctionLines {
     ) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
         walk_tree(tree, |node| {
-            if !TS_FUNCTION_KINDS.contains(&node.kind()) {
-                return;
+            if let Some(d) = check_function_node(node, source, path, self.id()) {
+                diagnostics.push(d);
             }
-            let start = node.start_position();
-            let end = node.end_position();
-            // saturating_sub: defensive against malformed nodes where end < start.
-            let line_count = end.row.saturating_sub(start.row) + 1;
-            if line_count <= MAX_LINES {
-                return;
-            }
-            // Try to extract function name from named child.
-            let name = node
-                .child_by_field_name("name")
-                .and_then(|n| n.utf8_text(source).ok())
-                .unwrap_or("<anonymous>");
-
-            diagnostics.push(Diagnostic {
-                path: path.to_path_buf(),
-                line: start.row + 1,
-                column: start.column + 1,
-                rule_id: self.id().into(),
-                message: format!(
-                    "Function '{name}' is {line_count} lines (max {MAX_LINES}). \
-                     Extract a named helper for the logic below line {}.",
-                    start.row + 1 + MAX_LINES
-                ),
-                severity: Severity::Error,
-            });
         });
         diagnostics
     }
+}
+
+/// Inspect a single AST node and emit a diagnostic if it's a function over MAX_LINES.
+fn check_function_node(
+    node: tree_sitter::Node,
+    source: &[u8],
+    path: &Path,
+    rule_id: &str,
+) -> Option<Diagnostic> {
+    if !TS_FUNCTION_KINDS.contains(&node.kind()) {
+        return None;
+    }
+    let start = node.start_position();
+    let end = node.end_position();
+    // saturating_sub: defensive against malformed nodes where end < start.
+    let line_count = end.row.saturating_sub(start.row) + 1;
+    if line_count <= MAX_LINES {
+        return None;
+    }
+    let name = node
+        .child_by_field_name("name")
+        .and_then(|n| n.utf8_text(source).ok())
+        .unwrap_or("<anonymous>");
+    Some(Diagnostic {
+        path: path.to_path_buf(),
+        line: start.row + 1,
+        column: start.column + 1,
+        rule_id: rule_id.into(),
+        message: format!(
+            "Function '{name}' is {line_count} lines (max {MAX_LINES}). \
+             Extract a named helper for the logic below line {}.",
+            start.row + 1 + MAX_LINES
+        ),
+        severity: Severity::Error,
+    })
 }
 
 #[cfg(test)]

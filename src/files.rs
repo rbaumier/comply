@@ -91,7 +91,7 @@ fn git_diff_files(args: &[&str]) -> Result<Vec<SourceFile>> {
     cmd.arg("diff")
         .args(args)
         .args(["--name-only", "--diff-filter=d", "--relative"]);
-    run_git(cmd, "git diff")
+    capture_git_output(cmd, "git diff")
 }
 
 /// `git show --name-only` for a single commit — handles initial and merge
@@ -100,12 +100,12 @@ fn git_show_files(sha: &str) -> Result<Vec<SourceFile>> {
     let mut cmd = Command::new("git");
     cmd.args(["show", "--name-only", "--pretty=format:", "--diff-filter=d"])
         .arg(sha);
-    run_git(cmd, "git show")
+    capture_git_output(cmd, "git show")
 }
 
 /// Spawn git, validate exit status, then classify the output paths.
 /// Centralizes the bail-on-error pattern so future git modes can't forget it.
-fn run_git(mut cmd: Command, label: &str) -> Result<Vec<SourceFile>> {
+fn capture_git_output(mut cmd: Command, label: &str) -> Result<Vec<SourceFile>> {
     let output = cmd
         .output()
         .context("failed to invoke git — is git installed and on PATH?")?;

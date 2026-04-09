@@ -29,6 +29,10 @@ pub fn parse_ignores(path: &Path, source: &str) -> IgnoreResult {
     let mut suppressions: HashMap<usize, HashSet<String>> = HashMap::new();
     let mut bad_ignores = Vec::new();
 
+    // Strip leading UTF-8 BOM — `is_whitespace` doesn't include U+FEFF, so
+    // a line-1 ignore comment in a BOM-prefixed file would never apply.
+    let source = source.strip_prefix('\u{FEFF}').unwrap_or(source);
+
     for (idx, line) in source.lines().enumerate() {
         let line_num = idx + 1;
         let trimmed = line.trim_start();
@@ -41,16 +45,9 @@ pub fn parse_ignores(path: &Path, source: &str) -> IgnoreResult {
         }
         if parsed.justification.is_empty() {
             let leading_ws = line.len() - trimmed.len();
-            let char_column = line[..leading_ws].chars().count();
-            bad_ignores.push(make_bad_ignore_diagnostic(
-                path,
-                line_num,
-                char_column,
-                &parsed.rule_id,
-            ));
+            let col = line[..leading_ws].chars().count();
+            bad_ignores.push(make_bad_ignore_diagnostic(path, line_num, col, &parsed.rule_id));
         }
-        // Suppress the line below even if justification was missing — the user
-        // intent is clear and the bad-ignore diagnostic already nags about it.
         suppressions
             .entry(line_num + 1)
             .or_default()

@@ -46,36 +46,42 @@ fn lint_one_file(
 ) -> Result<Vec<Diagnostic>> {
     let source = fs::read_to_string(&file.path)
         .with_context(|| format!("failed to read {}", file.path.display()))?;
-    let source_bytes = source.as_bytes();
-
-    let applicable: Vec<_> = rules
+    let applicable: Vec<&dyn rules::Rule> = rules
         .iter()
         .filter(|r| r.languages().contains(&file.language))
+        .map(AsRef::as_ref)
         .collect();
-
     if applicable.is_empty() {
         return Ok(vec![]);
     }
+    Ok(apply_rules(file, &source, &applicable, parser))
+}
 
-    let needs_tree = applicable.iter().any(|r| r.needs_tree());
-    let tree = if needs_tree {
+/// Apply each rule to the file, parsing the AST once if any rule needs it.
+fn apply_rules(
+    file: &SourceFile,
+    source: &str,
+    applicable: &[&dyn rules::Rule],
+    parser: &mut Parser,
+) -> Vec<Diagnostic> {
+    let source_bytes = source.as_bytes();
+    let tree = if applicable.iter().any(|r| r.needs_tree()) {
         parse_with_grammar(parser, file.language, source_bytes)
     } else {
         None
     };
 
     let mut diagnostics = Vec::new();
-    for rule in &applicable {
+    for rule in applicable {
         if rule.needs_tree() {
             if let Some(ref t) = tree {
                 diagnostics.extend(rule.check_tree(&file.path, source_bytes, t, file.language));
             }
         } else {
-            diagnostics.extend(rule.check(&file.path, &source, file.language));
+            diagnostics.extend(rule.check(&file.path, source, file.language));
         }
     }
-
-    Ok(diagnostics)
+    diagnostics
 }
 
 /// Configure the parser for the language and parse the source.
