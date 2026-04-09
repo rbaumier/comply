@@ -1,5 +1,3 @@
-#![allow(dead_code)] // Called by main orchestrator (task 12).
-
 //! Rule engine — reads source files and runs all applicable custom rules.
 //!
 //! How it works:

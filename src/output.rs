@@ -6,7 +6,6 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
 /// Format diagnostics as ESLint-like single-line output.
-#[allow(dead_code)] // Called by main orchestrator (task 12).
 pub fn format_eslint(diagnostics: &[Diagnostic]) -> String {
     let mut out = String::with_capacity(diagnostics.len() * 120);
     for d in diagnostics {

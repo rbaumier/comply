@@ -1,0 +1,50 @@
+{
+  "plugins": ["typescript", "import", "unicorn", "promise"],
+  "overrides": [
+    {
+      "files": ["*.vue"],
+      "rules": {
+        "import/no-default-export": "off",
+        "unicorn/filename-case": "off",
+        "no-magic-numbers": "off",
+        "typescript/consistent-type-imports": "off"
+      }
+    }
+  ],
+  "rules": {
+    "typescript/no-explicit-any": "error",
+    "typescript/no-unsafe-type-assertion": "error",
+    "typescript/array-type": ["error", { "default": "array" }],
+    "typescript/consistent-type-imports": "error",
+    "typescript/no-non-null-assertion": "error",
+    "typescript/prefer-as-const": "error",
+    "typescript/prefer-ts-expect-error": "error",
+    "typescript/no-unsafe-function-type": "error",
+    "typescript/no-require-imports": "error",
+    "import/no-default-export": "error",
+    "no-else-return": "error",
+    "max-depth": ["error", { "max": 2 }],
+    "max-params": ["error", { "max": 3 }],
+    "no-magic-numbers": ["error", { "ignore": [0, 1, -1], "ignoreArrayIndexes": true, "ignoreDefaultValues": true }],
+    "prefer-const": "error",
+    "no-var": "error",
+    "no-useless-catch": "error",
+    "curly": "error",
+    "eqeqeq": "error",
+    "unicorn/filename-case": ["error", { "case": "kebabCase" }],
+    "unicorn/no-array-for-each": "error",
+    "unicorn/prefer-array-flat-map": "error",
+    "oxc/no-accumulating-spread": "error",
+    "oxc/no-barrel-file": "error",
+    "oxc/misrefactored-assign-op": "error",
+    "promise/catch-or-return": "error",
+    "promise/always-return": "error",
+    "promise/no-multiple-resolved": "error",
+    "promise/no-nesting": "error",
+    "promise/no-return-wrap": "error",
+    "promise/prefer-await-to-then": "error",
+    "promise/prefer-await-to-callbacks": "error",
+    "promise/no-return-in-finally": "error",
+    "promise/param-names": "error"
+  }
+}

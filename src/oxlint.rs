@@ -1,5 +1,3 @@
-#![allow(dead_code)] // Module consumed by main orchestrator (task 12).
-
 //! oxlint subprocess — runs oxlint on TS/JS files and converts JSON output
 //! into unified Diagnostic structs.
 //!

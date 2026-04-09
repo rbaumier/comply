@@ -1,5 +1,3 @@
-#![allow(dead_code)] // Called by main orchestrator (task 12).
-
 //! comply-ignore parser — scans source for suppression comments and filters diagnostics.
 //!
 //! Format: `// comply-ignore: <rule-id> — <justification>`
@@ -16,13 +14,6 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use std::collections::HashSet;
 use std::path::Path;
-
-/// Suppression entry: the line being suppressed and the rule being suppressed.
-#[derive(Hash, Eq, PartialEq)]
-struct Suppression {
-    line: usize,
-    rule_id: String,
-}
 
 /// Result of parsing comply-ignore comments in a source file.
 pub struct IgnoreResult {

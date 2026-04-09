@@ -1,5 +1,3 @@
-#![allow(dead_code)] // Rules consumed by engine::run_custom_rules (task 12).
-
 //! Custom lint rules — each rule implements the Rule trait and is registered
 //! in `all_rules()`. The engine calls every rule on every file whose language
 //! matches.
