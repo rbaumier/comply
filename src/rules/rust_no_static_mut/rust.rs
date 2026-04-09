@@ -1,0 +1,88 @@
+//! rust-no-static-mut backend.
+//!
+//! Flags `static mut FOO: T = ...` declarations. The Rust 2024
+//! edition deprecates this feature because every read or write
+//! requires `unsafe` and there's no race-free path to use it
+//! correctly without wrapping in a sync primitive — at which point
+//! you might as well use the sync primitive directly.
+
+use crate::diagnostic::{Diagnostic, Severity};
+use crate::rules::backend::{AstCheck, CheckCtx};
+use crate::rules::walker::walk_tree;
+
+pub struct Check;
+
+impl AstCheck for Check {
+    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
+        let source_bytes = ctx.source.as_bytes();
+        let mut diagnostics = Vec::new();
+        walk_tree(tree, |node| {
+            if node.kind() != "static_item" {
+                return;
+            }
+            // tree-sitter-rust represents `static mut FOO` by including
+            // a `mutable_specifier` child holding the `mut` keyword.
+            let mut cursor = node.walk();
+            let has_mut = node
+                .children(&mut cursor)
+                .any(|c| c.kind() == "mutable_specifier");
+            if !has_mut {
+                return;
+            }
+            // Surface the static's name in the message if we can read it.
+            let name = node
+                .child_by_field_name("name")
+                .and_then(|n| n.utf8_text(source_bytes).ok())
+                .unwrap_or("FOO");
+            let pos = node.start_position();
+            diagnostics.push(Diagnostic {
+                path: ctx.path.to_path_buf(),
+                line: pos.row + 1,
+                column: pos.column + 1,
+                rule_id: "rust-no-static-mut".into(),
+                message: format!(
+                    "`static mut {name}` — deprecated in Rust 2024 and \
+                     impossible to use race-free. Use `OnceLock`/`LazyLock` \
+                     for init-once, `Mutex`/`RwLock` for shared state, or \
+                     `Atomic*` for primitive counters."
+                ),
+                severity: Severity::Error,
+            });
+        });
+        diagnostics
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        let mut parser = tree_sitter::Parser::new();
+        parser.set_language(&tree_sitter_rust::LANGUAGE.into()).unwrap();
+        let tree = parser.parse(source, None).unwrap();
+        Check.check(
+            &CheckCtx {
+                path: Path::new("t.rs"),
+                source,
+            },
+            &tree,
+        )
+    }
+
+    #[test]
+    fn flags_static_mut() {
+        assert_eq!(run_on("static mut COUNTER: u64 = 0;").len(), 1);
+    }
+
+    #[test]
+    fn allows_static_immutable() {
+        assert!(run_on("static MAX: u32 = 100;").is_empty());
+    }
+
+    #[test]
+    fn allows_const() {
+        assert!(run_on("const MAX: u32 = 100;").is_empty());
+    }
+}

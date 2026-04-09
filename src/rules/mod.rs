@@ -56,18 +56,30 @@ pub mod no_verb_in_rest_url;
 pub mod prefer_switch_over_chained_if;
 pub mod prefer_type_over_interface;
 pub mod react_hoist_regex_outside_component;
+pub mod rust_arc_non_send_sync;
 pub mod rust_await_holding_lock;
+pub mod rust_block_on_in_async;
+pub mod rust_builder_without_must_use;
 pub mod rust_explicit_iter_loop;
+pub mod rust_helpers;
 pub mod rust_large_enum_variant;
 pub mod rust_must_use_on_result;
+pub mod rust_no_box_default;
+pub mod rust_no_float_for_money;
 pub mod rust_no_linkedlist;
 pub mod rust_no_panic_macros;
 pub mod rust_no_println_in_library;
+pub mod rust_no_static_mut;
 pub mod rust_no_unwrap;
 pub mod rust_ptr_arg;
 pub mod rust_rc_mutex;
 pub mod rust_redundant_clone;
+pub mod rust_serde_deny_unknown_fields;
+pub mod rust_sync_io_in_async;
+pub mod rust_thread_sleep_in_async;
+pub mod rust_unbounded_channel;
 pub mod rust_undocumented_unsafe;
+pub mod rust_unit_error_result;
 pub mod react_no_and_conditional_jsx;
 pub mod react_no_array_index_key;
 pub mod react_use_state_lazy_init;
@@ -216,6 +228,19 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         rust_redundant_clone::register(),
         // v2.0 — Rust-native custom rules (not mere clippy markers).
         rust_rc_mutex::register(),
+        // v2.1 — More Rust-native rules: high-signal runtime bugs +
+        // a couple of doc-only markers for clippy lints in the same family.
+        rust_no_static_mut::register(),
+        rust_unit_error_result::register(),
+        rust_no_float_for_money::register(),
+        rust_unbounded_channel::register(),
+        rust_thread_sleep_in_async::register(),
+        rust_block_on_in_async::register(),
+        rust_sync_io_in_async::register(),
+        rust_serde_deny_unknown_fields::register(),
+        rust_builder_without_must_use::register(),
+        rust_arc_non_send_sync::register(),
+        rust_no_box_default::register(),
     ];
     rules.extend(delegated::register_all());
     rules
