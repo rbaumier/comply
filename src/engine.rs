@@ -124,7 +124,7 @@ fn parse_with_grammar(
     language: Language,
     source: &[u8],
 ) -> Option<tree_sitter::Tree> {
-    let lang = match language {
+    let lang: tree_sitter::Language = match language {
         // Plain TS/JS — TypeScript grammar handles both (TS is a superset).
         Language::TypeScript | Language::JavaScript => {
             tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()
@@ -132,9 +132,9 @@ fn parse_with_grammar(
         // TSX/JSX needs the JSX-aware grammar — using LANGUAGE_TYPESCRIPT
         // produces ERROR nodes peppered through every JSX expression.
         Language::Tsx => tree_sitter_typescript::LANGUAGE_TSX.into(),
-        // No grammar bundled for Rust in v1 — explicit skip prevents the
-        // parser from being applied with whatever language was set previously.
-        Language::Rust => return None,
+        // Rust grammar — enables in-process Rust rules for checks clippy
+        // doesn't cover (boolean-naming, explicit-units, law-of-demeter…).
+        Language::Rust => tree_sitter_rust::LANGUAGE.into(),
     };
     parser.set_language(&lang).ok()?;
     parser.parse(source, None)
