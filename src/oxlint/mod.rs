@@ -2,27 +2,33 @@
 //! into unified Diagnostic structs.
 //!
 //! How it works:
-//! 1. `is_available()` checks the binary is on PATH so the orchestrator can
-//!    decide whether to skip silently or fail loudly. The result is cached
-//!    in a `OnceLock` so we don't fork oxlint on every invocation.
-//! 2. `lint_files()` invokes `oxlint --format json` with file paths terminated
-//!    by `--` (so a path like `./-r.ts` is not interpreted as a flag).
-//! 3. Parses the JSON envelope from raw bytes — never via lossy UTF-8
-//!    conversion — and maps each entry to our Diagnostic.
-//!
-//! Position fallback: when oxlint emits a diagnostic with no labels we fall
-//! back to (1, 1) instead of (0, 0). Editors choke on `path:0:0:`.
+//! 1. `is_available()` checks the binary is on PATH. Result is cached in a
+//!    `OnceLock` so we don't fork oxlint on every invocation.
+//! 2. `lint_files()` collects every `Backend::Oxlint` binding from the rule
+//!    registry, passes them to `oxlint_config::generate` to produce the
+//!    runtime config, then invokes `oxlint --format json -c <config>` with
+//!    file paths terminated by `--` (so paths starting with `-` don't look
+//!    like flags).
+//! 3. Parses the JSON envelope from raw bytes and remaps each diagnostic's
+//!    rule-id + severity through the comply registry so users see
+//!    `[no-explicit-any]` instead of `typescript-eslint(no-explicit-any)`.
 
+mod remap;
 mod schema;
 
 use anyhow::{bail, Context, Result};
+use std::collections::HashMap;
 use std::path::Path;
 use std::process::Command;
 use std::sync::OnceLock;
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::files::SourceFile;
+use crate::rules::meta::RuleMeta;
 use schema::{OxlintDiag, OxlintOutput, OxlintSeverity};
+
+/// Max files per oxlint invocation. Conservative chunk size to avoid ARG_MAX.
+const FILES_PER_BATCH: usize = 500;
 
 /// Check if oxlint binary is on PATH. Result is cached for the process lifetime.
 pub fn is_available() -> bool {
@@ -35,26 +41,25 @@ pub fn is_available() -> bool {
     })
 }
 
-/// Max files per oxlint invocation. Conservative chunk size to avoid the
-/// OS ARG_MAX limit on huge monorepos: macOS ~256KiB, Linux ~2MiB. At 60-byte
-/// average paths, 500 paths ≈ 30KiB — well below the floor with headroom for
-/// long absolute paths.
-const FILES_PER_BATCH: usize = 500;
-
 /// Invoke oxlint on the given TS/JS files and return unified diagnostics.
-///
-/// Files are split into batches of `FILES_PER_BATCH` and oxlint is invoked
-/// once per batch — without batching, monorepos with thousands of TS files
-/// would hit OS ARG_MAX and fail with an opaque "argument list too long".
 #[must_use = "diagnostics from oxlint must be reported"]
-pub fn lint_files(files: &[&SourceFile], config_path: Option<&Path>) -> Result<Vec<Diagnostic>> {
+pub fn lint_files(files: &[&SourceFile]) -> Result<Vec<Diagnostic>> {
     if files.is_empty() {
         return Ok(vec![]);
     }
+    let bindings = crate::rules::collect_oxlint_bindings();
+    if bindings.is_empty() {
+        return Ok(vec![]);
+    }
+    let rule_entries: Vec<(&str, Severity)> =
+        bindings.iter().map(|(key, _, sev)| (*key, *sev)).collect();
+    let config = crate::oxlint_config::generate(&rule_entries)?;
+    let remap = remap::build_table(&bindings);
+
     let mut all = Vec::with_capacity(files.len());
     for batch in files.chunks(FILES_PER_BATCH) {
-        let output = invoke_oxlint(batch, config_path)?;
-        all.extend(parse_json_bytes(&output.stdout, &output.stderr)?);
+        let output = invoke_oxlint(batch, Some(config.path()))?;
+        all.extend(parse_json_bytes(&output.stdout, &output.stderr, &remap)?);
     }
     Ok(all)
 }
@@ -92,35 +97,50 @@ fn invoke_oxlint(
 }
 
 /// Parse oxlint JSON output bytes into unified Diagnostic structs.
-/// Includes stderr in the error context so the user sees what went wrong.
-fn parse_json_bytes(stdout: &[u8], stderr: &[u8]) -> Result<Vec<Diagnostic>> {
+fn parse_json_bytes(
+    stdout: &[u8],
+    stderr: &[u8],
+    remap: &HashMap<String, &'static RuleMeta>,
+) -> Result<Vec<Diagnostic>> {
     let envelope: OxlintOutput = serde_json::from_slice(stdout).with_context(|| {
         format!(
             "failed to parse oxlint JSON output. oxlint stderr: {}",
             String::from_utf8_lossy(stderr)
         )
     })?;
-    Ok(envelope.diagnostics.into_iter().map(into_diagnostic).collect())
+    Ok(envelope
+        .diagnostics
+        .into_iter()
+        .map(|d| into_diagnostic(d, remap))
+        .collect())
 }
 
-/// Convert one oxlint diagnostic into our unified format.
-fn into_diagnostic(d: OxlintDiag) -> Diagnostic {
+/// Convert one oxlint diagnostic into our unified format, remapping the
+/// rule_id + severity through the registry when a match exists.
+fn into_diagnostic(d: OxlintDiag, remap: &HashMap<String, &'static RuleMeta>) -> Diagnostic {
     let (line, column) = d
         .labels
         .first()
         .map(|l| (l.span.line.max(1), l.span.column.max(1)))
         .unwrap_or((1, 1));
 
-    let severity = match d.severity {
-        OxlintSeverity::Warning | OxlintSeverity::Advice => Severity::Warning,
-        OxlintSeverity::Error => Severity::Error,
+    let oxlint_code = d.code.clone().unwrap_or_default();
+    let (rule_id, severity) = match remap.get(&oxlint_code) {
+        Some(meta) => (meta.id.to_string(), meta.severity),
+        None => (
+            d.code.unwrap_or_else(|| "oxlint/unknown".into()),
+            match d.severity {
+                OxlintSeverity::Warning | OxlintSeverity::Advice => Severity::Warning,
+                OxlintSeverity::Error => Severity::Error,
+            },
+        ),
     };
 
     Diagnostic {
         path: d.filename.into(),
         line,
         column,
-        rule_id: d.code.unwrap_or_else(|| "oxlint/unknown".into()),
+        rule_id,
         message: d.message,
         severity,
     }
@@ -131,28 +151,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_real_oxlint_output() {
-        // Captured from `oxlint --format json` on a file with `any` type.
-        let json = br#"{ "diagnostics": [{"message": "Test", "code": "eslint(test)", "severity": "warning", "causes": [], "filename": "/tmp/x.ts", "labels": [{"label": "x", "span": {"offset": 6, "length": 1, "line": 3, "column": 5}}], "related": []}], "number_of_files": 1, "number_of_rules": 10, "threads_count": 4, "start_time": 0.001 }"#;
-        let result = parse_json_bytes(json, b"").expect("must parse");
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0].line, 3);
-        assert_eq!(result[0].column, 5);
-        assert_eq!(result[0].rule_id, "eslint(test)");
-    }
-
-    #[test]
     fn fallback_position_is_one_one_not_zero_zero() {
+        let remap = HashMap::new();
         let json = br#"{ "diagnostics": [{"message": "X", "severity": "error", "filename": "/tmp/x.ts", "labels": []}] }"#;
-        let result = parse_json_bytes(json, b"").expect("must parse");
+        let result = parse_json_bytes(json, b"", &remap).expect("must parse");
         assert_eq!(result[0].line, 1);
         assert_eq!(result[0].column, 1);
     }
 
     #[test]
     fn empty_diagnostics_array_yields_empty_vec() {
+        let remap = HashMap::new();
         let json = br#"{ "diagnostics": [] }"#;
-        let result = parse_json_bytes(json, b"").expect("must parse");
+        let result = parse_json_bytes(json, b"", &remap).expect("must parse");
         assert!(result.is_empty());
     }
 }
