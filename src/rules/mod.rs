@@ -19,6 +19,8 @@ pub mod banned_identifiers;
 pub mod boolean_naming;
 pub mod delegated;
 pub mod drizzle_timestamp_with_timezone;
+pub mod empty_catch_block;
+pub mod error_without_cause;
 pub mod explicit_return_type_on_exported;
 pub mod explicit_units;
 pub mod exports_at_top;
@@ -29,6 +31,7 @@ pub mod max_function_lines;
 pub mod meta;
 pub mod module_header;
 pub mod no_abbreviated_names;
+pub mod no_and_in_function_name;
 pub mod no_auth_token_in_localstorage;
 pub mod no_boolean_flag_param;
 pub mod no_commented_out_code;
@@ -49,6 +52,7 @@ pub mod no_nested_ternary;
 pub mod no_new_regex_with_variable;
 pub mod no_nullish_default_on_input;
 pub mod no_put_method;
+pub mod no_set_x_to_y;
 pub mod no_skipped_test_without_link;
 pub mod no_throw;
 pub mod no_type_encoded_names;
@@ -294,6 +298,11 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         rust_no_lossy_as_cast::register(),
         rust_no_format_in_debug_impl::register(),
         rust_no_empty_test_fn::register(),
+        // v2.7 — Cat A: mechanical AST rules from the coding-standards skill.
+        empty_catch_block::register(),
+        error_without_cause::register(),
+        no_set_x_to_y::register(),
+        no_and_in_function_name::register(),
     ];
     rules.extend(delegated::register_all());
     rules
