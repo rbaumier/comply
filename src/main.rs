@@ -1,5 +1,7 @@
 mod cli;
+mod diagnostic;
 mod files;
+mod output;
 
 use anyhow::Result;
 use clap::Parser;
