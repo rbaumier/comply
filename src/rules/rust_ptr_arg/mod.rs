@@ -1,6 +1,8 @@
 //! rust-ptr-arg — `&str`/`&[T]`/`&Path` over `&String`/`&Vec<T>`/`&PathBuf`.
 
 use crate::diagnostic::Severity;
+use crate::files::Language;
+use crate::rules::backend::Backend;
 use crate::rules::meta::RuleMeta;
 use crate::rules::RuleDef;
 
@@ -17,6 +19,9 @@ pub const META: RuleMeta = RuleMeta {
 pub fn register() -> RuleDef {
     RuleDef {
         meta: META,
-        backends: vec![],
+        backends: vec![(
+            Language::Rust,
+            Backend::Clippy { lint: "clippy::ptr_arg" },
+        )],
     }
 }

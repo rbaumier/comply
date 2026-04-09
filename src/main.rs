@@ -15,6 +15,7 @@
 //! 6. Format diagnostics, print, exit 0/1/2.
 
 mod cli;
+mod clippy;
 mod diagnostic;
 mod engine;
 mod explain;
@@ -98,10 +99,29 @@ fn collect_all_diagnostics(discovered: &[SourceFile]) -> Result<Vec<Diagnostic>>
         diagnostics.extend(lint_typescript(&ts_files)?);
     }
     if !rs_files.is_empty() {
-        // Custom rules only — clippy integration is v2.
-        diagnostics.extend(engine::lint_files(&rs_files)?);
+        diagnostics.extend(lint_rust(&rs_files)?);
     }
 
+    Ok(diagnostics)
+}
+
+/// Lint Rust files via clippy subprocess + custom tree-sitter rules.
+/// The two passes are complementary: clippy catches type-aware lints
+/// and the standard library footguns; custom rules catch the architecture
+/// and naming concerns that clippy doesn't model.
+fn lint_rust(rs_files: &[&SourceFile]) -> Result<Vec<Diagnostic>> {
+    let mut diagnostics = Vec::new();
+
+    if clippy::is_available() {
+        diagnostics.extend(clippy::lint_files(rs_files)?);
+    } else {
+        eprintln!(
+            "comply: cargo clippy not found — skipping clippy-backed rules. \
+             Install with: rustup component add clippy"
+        );
+    }
+
+    diagnostics.extend(engine::lint_files(rs_files)?);
     Ok(diagnostics)
 }
 
