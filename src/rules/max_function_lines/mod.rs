@@ -24,6 +24,8 @@ pub fn register() -> RuleDef {
             (Language::TypeScript, Backend::TreeSitter(Box::new(typescript::Check))),
             (Language::JavaScript, Backend::TreeSitter(Box::new(typescript::Check))),
             (Language::Tsx, Backend::TreeSitter(Box::new(typescript::Check))),
+            // Rust: delegated to clippy — see rust.rs for setup.
+            (Language::Rust, Backend::Clippy { lint: "clippy::too_many_lines" }),
         ],
     }
 }

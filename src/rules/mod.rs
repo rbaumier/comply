@@ -106,6 +106,22 @@ pub fn oxlint_delegate(meta: RuleMeta, rule: &'static str, languages: &[Language
     }
 }
 
+/// Helper for rules bound to BOTH oxlint (TS-family) and clippy (Rust).
+/// Used when the same coding standard has direct enforcement on both
+/// sides: `max-params` → oxlint `max-params` + clippy `too_many_arguments`.
+pub fn oxlint_and_clippy(
+    meta: RuleMeta,
+    oxlint_rule: &'static str,
+    clippy_lint: &'static str,
+) -> RuleDef {
+    let mut backends: Vec<(Language, Backend)> = TS_FAMILY
+        .iter()
+        .map(|&lang| (lang, Backend::Oxlint { rule: oxlint_rule }))
+        .collect();
+    backends.push((Language::Rust, Backend::Clippy { lint: clippy_lint }));
+    RuleDef { meta, backends }
+}
+
 /// Accessor for the oxlint-delegated backends across every registered rule.
 /// Used by the oxlint subprocess module to generate the runtime config and
 /// build the diagnostic-code remap table.

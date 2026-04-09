@@ -2,7 +2,7 @@
 
 use crate::diagnostic::Severity;
 use crate::rules::meta::RuleMeta;
-use crate::rules::{oxlint_delegate, RuleDef, TS_FAMILY};
+use crate::rules::{oxlint_and_clippy, oxlint_delegate, RuleDef, TS_FAMILY};
 
 fn entry(
     id: &'static str,
@@ -21,6 +21,28 @@ fn entry(
         },
         oxlint_key,
         TS_FAMILY,
+    )
+}
+
+/// Same shape as `entry()` but also binds the rule to a clippy lint on Rust.
+fn entry_with_clippy(
+    id: &'static str,
+    oxlint_key: &'static str,
+    clippy_lint: &'static str,
+    severity: Severity,
+    description: &'static str,
+    remediation: &'static str,
+) -> RuleDef {
+    oxlint_and_clippy(
+        RuleMeta {
+            id,
+            description,
+            remediation,
+            severity,
+            doc_url: None,
+        },
+        oxlint_key,
+        clippy_lint,
     )
 }
 
@@ -59,13 +81,16 @@ pub fn register_all() -> Vec<RuleDef> {
              The intent becomes explicit and accidental reassignment becomes \
              a compile error.",
         ),
-        entry(
+        entry_with_clippy(
             "no-else-return",
             "no-else-return",
+            "clippy::redundant_else",
             Severity::Error,
             "Prefer guard clauses over else-after-return.",
             "Remove the `else` after a `return` and de-indent the trailing \
-             block. Early returns keep the happy path at the leftmost level.",
+             block. Early returns keep the happy path at the leftmost level. \
+             Rust: enabled via `clippy::redundant_else` (also see \
+             `clippy::needless_return`).",
         ),
         entry(
             "no-magic-numbers",
@@ -75,14 +100,16 @@ pub fn register_all() -> Vec<RuleDef> {
             "Move the literal into a named constant at module scope. If the \
              literal is a one-shot index (0, 1, -1), it's ignored.",
         ),
-        entry(
+        entry_with_clippy(
             "max-params",
             "max-params",
+            "clippy::too_many_arguments",
             Severity::Error,
             "Functions should take at most 3 positional arguments.",
             "If you need more than 3 parameters, pack them into an options \
              object — named fields carry intent where positional arguments \
-             don't.",
+             don't. Rust: enable `clippy::too_many_arguments` and set \
+             `too-many-arguments-threshold = 3` in `clippy.toml`.",
         ),
         entry(
             "max-depth",
@@ -101,13 +128,15 @@ pub fn register_all() -> Vec<RuleDef> {
              — the error propagates identically without the ceremony.",
         ),
         // --- v1.1 additions ---
-        entry(
+        entry_with_clippy(
             "id-length",
             "id-length",
+            "clippy::min_ident_chars",
             Severity::Error,
             "Single-letter identifiers hide intent.",
             "Rename to a full word — `createdAt` not `d`, `userCount` not `n`. \
-             Exceptions: loop indices `i`, `j` inside tight for-loops.",
+             Exceptions: loop indices `i`, `j` inside tight for-loops. \
+             Rust: enable `clippy::min_ident_chars` in your crate.",
         ),
         entry(
             "no-await-in-loop",

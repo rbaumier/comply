@@ -3,9 +3,10 @@
 mod typescript;
 
 use crate::diagnostic::Severity;
+use crate::files::Language;
 use crate::rules::backend::Backend;
 use crate::rules::meta::RuleMeta;
-use crate::rules::{RuleDef, TS_FAMILY};
+use crate::rules::RuleDef;
 
 pub const META: RuleMeta = RuleMeta {
     id: "no-boolean-flag-param",
@@ -22,9 +23,13 @@ pub const META: RuleMeta = RuleMeta {
 pub fn register() -> RuleDef {
     RuleDef {
         meta: META,
-        backends: TS_FAMILY
-            .iter()
-            .map(|&lang| (lang, Backend::TreeSitter(Box::new(typescript::Check))))
-            .collect(),
+        backends: vec![
+            (Language::TypeScript, Backend::TreeSitter(Box::new(typescript::Check))),
+            (Language::JavaScript, Backend::TreeSitter(Box::new(typescript::Check))),
+            (Language::Tsx, Backend::TreeSitter(Box::new(typescript::Check))),
+            // Rust: partial coverage via clippy::fn_params_excessive_bools.
+            // Set `max-fn-params-bools = 0` in clippy.toml for strict parity.
+            (Language::Rust, Backend::Clippy { lint: "clippy::fn_params_excessive_bools" }),
+        ],
     }
 }

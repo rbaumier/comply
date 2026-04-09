@@ -2,7 +2,7 @@
 
 use crate::diagnostic::Severity;
 use crate::rules::meta::RuleMeta;
-use crate::rules::{oxlint_delegate, RuleDef, TS_FAMILY};
+use crate::rules::{oxlint_and_clippy, oxlint_delegate, RuleDef, TS_FAMILY};
 
 fn entry(id: &'static str, oxlint_key: &'static str, remediation: &'static str) -> RuleDef {
     oxlint_delegate(
@@ -15,6 +15,25 @@ fn entry(id: &'static str, oxlint_key: &'static str, remediation: &'static str) 
         },
         oxlint_key,
         TS_FAMILY,
+    )
+}
+
+fn entry_with_clippy(
+    id: &'static str,
+    oxlint_key: &'static str,
+    clippy_lint: &'static str,
+    remediation: &'static str,
+) -> RuleDef {
+    oxlint_and_clippy(
+        RuleMeta {
+            id,
+            description: "oxc native lint — opinionated perf/correctness checks.",
+            remediation,
+            severity: Severity::Error,
+            doc_url: None,
+        },
+        oxlint_key,
+        clippy_lint,
     )
 }
 
@@ -33,11 +52,14 @@ pub fn register_all() -> Vec<RuleDef> {
              tree-shaking and create cyclic deps. Import from the source \
              module directly.",
         ),
-        entry(
+        entry_with_clippy(
             "oxc/misrefactored-assign-op",
             "oxc/misrefactored-assign-op",
+            "clippy::misrefactored_assign_op",
             "Assignment operator is misrefactored — verify the operand \
-             order. `x -= y` is not the same as `x = y - x`.",
+             order. `x -= y` is not the same as `x = y - x`. Rust: \
+             enable `clippy::misrefactored_assign_op` (this oxlint rule \
+             is literally a port of the clippy original).",
         ),
     ]
 }

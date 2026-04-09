@@ -3,9 +3,10 @@
 mod typescript;
 
 use crate::diagnostic::Severity;
+use crate::files::Language;
 use crate::rules::backend::Backend;
 use crate::rules::meta::RuleMeta;
-use crate::rules::{RuleDef, TS_FAMILY};
+use crate::rules::RuleDef;
 
 pub const META: RuleMeta = RuleMeta {
     id: "prefer-switch-over-chained-if",
@@ -20,9 +21,14 @@ pub const META: RuleMeta = RuleMeta {
 pub fn register() -> RuleDef {
     RuleDef {
         meta: META,
-        backends: TS_FAMILY
-            .iter()
-            .map(|&lang| (lang, Backend::TreeSitter(Box::new(typescript::Check))))
-            .collect(),
+        backends: vec![
+            (Language::TypeScript, Backend::TreeSitter(Box::new(typescript::Check))),
+            (Language::JavaScript, Backend::TreeSitter(Box::new(typescript::Check))),
+            (Language::Tsx, Backend::TreeSitter(Box::new(typescript::Check))),
+            // Rust: partial coverage via clippy::comparison_chain for
+            // numeric 3-arm chains. Rustaceans idiomatically reach for
+            // `match` on longer chains.
+            (Language::Rust, Backend::Clippy { lint: "clippy::comparison_chain" }),
+        ],
     }
 }
