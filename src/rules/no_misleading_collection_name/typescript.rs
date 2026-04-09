@@ -30,6 +30,7 @@ impl Shape {
     }
 }
 
+#[derive(Debug)]
 pub struct Check;
 
 impl AstCheck for Check {

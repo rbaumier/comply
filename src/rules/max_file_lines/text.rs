@@ -12,6 +12,7 @@ use crate::rules::backend::{CheckCtx, TextCheck};
 /// in `comply.toml` via `[rules.max-file-lines] max = N`.
 pub const DEFAULT_MAX_LINES: usize = 200;
 
+#[derive(Debug)]
 pub struct Check;
 
 impl TextCheck for Check {

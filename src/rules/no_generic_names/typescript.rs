@@ -20,6 +20,7 @@ const GENERIC_NAMES: &[&str] = &[
     "retval",
 ];
 
+#[derive(Debug)]
 pub struct Check;
 
 impl AstCheck for Check {

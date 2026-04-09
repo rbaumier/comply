@@ -32,6 +32,7 @@ const KNOWN_SUFFIXES: &[&str] = &[
     "Count",
 ];
 
+#[derive(Debug)]
 pub struct Check;
 
 impl AstCheck for Check {

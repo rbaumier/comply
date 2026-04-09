@@ -26,6 +26,7 @@ const TOKEN_KEYS: &[&str] = &[
     "id_token",
 ];
 
+#[derive(Debug)]
 pub struct Check;
 
 impl AstCheck for Check {

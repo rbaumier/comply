@@ -14,6 +14,7 @@ const BANNED_PREFIXES: &[&str] = &[
     "process", "handle", "data", "do", "execute", "run", "perform",
 ];
 
+#[derive(Debug)]
 pub struct Check;
 
 impl AstCheck for Check {

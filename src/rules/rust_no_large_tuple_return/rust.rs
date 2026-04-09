@@ -12,6 +12,7 @@ use crate::rules::walker::walk_tree;
 
 const DEFAULT_MAX_ELEMENTS: usize = 3;
 
+#[derive(Debug)]
 pub struct Check;
 
 impl AstCheck for Check {

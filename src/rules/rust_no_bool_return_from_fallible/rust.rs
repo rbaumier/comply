@@ -21,6 +21,7 @@ const EXEMPT_PREFIXES: &[&str] = &[
     "contains_", "matches_", "supports_", "accepts_",
 ];
 
+#[derive(Debug)]
 pub struct Check;
 
 impl AstCheck for Check {

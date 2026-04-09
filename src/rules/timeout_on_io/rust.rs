@@ -17,6 +17,7 @@ const IO_METHODS: &[&str] = &[
 /// Callee bases that indicate I/O clients.
 const IO_BASES: &[&str] = &["reqwest", "sqlx", "hyper", "http", "client"];
 
+#[derive(Debug)]
 pub struct Check;
 
 impl AstCheck for Check {

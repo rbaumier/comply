@@ -8,6 +8,7 @@ use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::rust_helpers::is_inside_async_fn;
 use crate::rules::walker::walk_tree;
 
+#[derive(Debug)]
 pub struct Check;
 
 impl AstCheck for Check {

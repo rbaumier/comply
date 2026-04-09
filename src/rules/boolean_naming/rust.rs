@@ -17,6 +17,7 @@ const VALID_PREFIXES: &[&str] = &[
 ];
 const NEGATIVE_SUBSTRINGS: &[&str] = &["_not_", "isnt_", "cannot_", "shouldnt_"];
 
+#[derive(Debug)]
 pub struct Check;
 
 impl AstCheck for Check {

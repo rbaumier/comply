@@ -28,6 +28,7 @@ const IO_METHOD_SUFFIXES: &[&str] = &[
     "send",
 ];
 
+#[derive(Debug)]
 pub struct Check;
 
 impl AstCheck for Check {

@@ -33,6 +33,7 @@ const DEPRECATED: &[(&str, &str)] = &[
     ("onSettled", "removed from useQuery in v5 — use useEffect"),
 ];
 
+#[derive(Debug)]
 pub struct Check;
 
 impl AstCheck for Check {

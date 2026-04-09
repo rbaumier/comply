@@ -20,6 +20,7 @@ const NARROWING_TARGETS: &[&str] = &[
     "u8", "u16", "u32", "i8", "i16", "i32", "f32",
 ];
 
+#[derive(Debug)]
 pub struct Check;
 
 impl AstCheck for Check {

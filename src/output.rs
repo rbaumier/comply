@@ -44,6 +44,7 @@ pub fn format_eslint(diagnostics: &[Diagnostic]) -> String {
 
 /// Format diagnostics as a JSON array — one object per violation.
 /// Stable shape so editors and CI tools can depend on it.
+#[must_use]
 pub fn format_json(diagnostics: &[Diagnostic]) -> Result<String> {
     let payload: Vec<_> = diagnostics
         .iter()

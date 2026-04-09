@@ -49,6 +49,7 @@ pub struct Cli {
 }
 
 /// Top-level subcommands. None = lint mode with the legacy flag parser.
+#[non_exhaustive]
 #[derive(Subcommand, Debug)]
 pub enum Command {
     /// Show the full description and remediation for a specific rule.
@@ -70,6 +71,7 @@ pub enum Command {
 }
 
 /// Subcommands for `comply config`.
+#[non_exhaustive]
 #[derive(Subcommand, Debug)]
 pub enum ConfigAction {
     /// Write a `comply.toml` with every default value to the current
@@ -87,6 +89,8 @@ pub enum ConfigAction {
 }
 
 /// Resolved scan mode — determines which files comply will lint.
+#[non_exhaustive]
+#[derive(Debug)]
 pub enum ScanMode {
     All(PathBuf),
     WorkingTree,

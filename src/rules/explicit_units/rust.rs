@@ -29,6 +29,7 @@ const NUMERIC_TYPES: &[&str] = &[
     "f32", "f64",
 ];
 
+#[derive(Debug)]
 pub struct Check;
 
 impl AstCheck for Check {

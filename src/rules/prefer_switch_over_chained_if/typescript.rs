@@ -20,6 +20,7 @@ use crate::rules::walker::walk_tree;
 
 const DEFAULT_MIN_ARMS: usize = 4;
 
+#[derive(Debug)]
 pub struct Check;
 
 impl AstCheck for Check {

@@ -8,6 +8,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::walker::walk_tree;
 
+#[derive(Debug)]
 pub struct Check;
 
 impl AstCheck for Check {

@@ -21,6 +21,7 @@ const ITEM_KINDS: &[&str] = &[
     "use_declaration",
 ];
 
+#[derive(Debug)]
 pub struct Check;
 
 impl AstCheck for Check {

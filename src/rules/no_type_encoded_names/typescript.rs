@@ -17,6 +17,7 @@ const TYPE_PREFIXES: &[&str] = &[
     "str", "arr", "obj", "num", "bool", "int", "fn", "func",
 ];
 
+#[derive(Debug)]
 pub struct Check;
 
 impl AstCheck for Check {

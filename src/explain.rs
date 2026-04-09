@@ -13,6 +13,7 @@ use crate::rules::{self, meta::RuleMeta};
 
 /// Print the metadata for the rule matching `rule_id`. Returns an error
 /// if no rule with that id is registered.
+#[must_use]
 pub fn run(rule_id: &str) -> Result<()> {
     let rules = rules::all_rule_defs();
     let Some(meta) = find_rule(&rules, rule_id) else {

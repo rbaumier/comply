@@ -11,6 +11,7 @@ use crate::rules::walker::walk_tree;
 const DEFAULT_MIN_OPS: usize = 6;
 const DEFAULT_MIN_LINE_LENGTH: usize = 80;
 
+#[derive(Debug)]
 pub struct Check;
 
 impl AstCheck for Check {

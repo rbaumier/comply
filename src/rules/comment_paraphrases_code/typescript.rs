@@ -29,6 +29,7 @@ const STOP_WORDS: &[&str] = &[
     "this", "that", "these", "those",
 ];
 
+#[derive(Debug)]
 pub struct Check;
 
 impl AstCheck for Check {

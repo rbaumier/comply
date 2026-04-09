@@ -22,6 +22,7 @@ const TS_FUNCTION_KINDS: &[&str] = &[
     "generator_function_declaration",
 ];
 
+#[derive(Debug)]
 pub struct Check;
 
 impl AstCheck for Check {

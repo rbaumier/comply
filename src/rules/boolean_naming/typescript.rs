@@ -16,6 +16,7 @@ use crate::rules::walker::walk_tree;
 const VALID_PREFIXES: &[&str] = &["is", "has", "should", "can", "will", "did", "was"];
 const NEGATIVE_SUBSTRINGS: &[&str] = &["Not", "Isnt", "Cannot", "Cant", "Shouldnt"];
 
+#[derive(Debug)]
 pub struct Check;
 
 impl AstCheck for Check {

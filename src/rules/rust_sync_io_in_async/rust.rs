@@ -34,6 +34,7 @@ const SYNC_IO_SUFFIXES: &[&str] = &[
     "std::net::UdpSocket::bind",
 ];
 
+#[derive(Debug)]
 pub struct Check;
 
 impl AstCheck for Check {

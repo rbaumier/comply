@@ -20,6 +20,7 @@ const TAILWIND_PREFIXES: &[&str] = &[
     "fill-", "stroke-", "outline-", "accent-", "caret-", "divide-", "placeholder-",
 ];
 
+#[derive(Debug)]
 pub struct Check;
 
 impl AstCheck for Check {

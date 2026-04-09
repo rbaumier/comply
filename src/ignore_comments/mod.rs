@@ -14,6 +14,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 /// Result of parsing comply-ignore comments in a source file.
+#[derive(Debug)]
 pub struct IgnoreResult {
     /// Map: line number → set of rule ids suppressed on that line. Keyed
     /// this way (instead of HashSet<(line, String)>) so the lookup in

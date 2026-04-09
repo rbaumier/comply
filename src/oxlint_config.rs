@@ -25,6 +25,7 @@ use std::io::Write;
 use crate::diagnostic::Severity;
 
 /// Build an oxlint config and write it to a fresh temp file.
+#[must_use]
 pub fn generate(rules: &[(&str, Severity)]) -> Result<tempfile::NamedTempFile> {
     let config = build_config_json(rules);
     let serialized =

@@ -33,6 +33,7 @@ use std::path::Path;
 /// read their knobs from here via `config.threshold(rule_id, key, fallback)`,
 /// so a project's `comply.toml` can override the defaults without
 /// touching any rule code.
+#[derive(Debug)]
 pub struct CheckCtx<'a> {
     pub path: &'a Path,
     pub source: &'a str,
@@ -66,6 +67,12 @@ pub trait TextCheck: Send + Sync {
 }
 
 /// How a rule is enforced for one language.
+///
+/// `Debug` is intentionally NOT derived: the `TreeSitter` and `Text`
+/// variants carry `Box<dyn AstCheck>` / `Box<dyn TextCheck>` trait
+/// objects, and adding `Debug` would force every concrete check struct
+/// to implement Debug AND require an extra bound on the trait surface.
+#[non_exhaustive]
 #[allow(dead_code)] // Oxlint/Clippy/Tsc variants land in later steps.
 pub enum Backend {
     /// In-process tree-sitter AST walk.

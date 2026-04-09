@@ -25,6 +25,7 @@ pub mod error_without_cause;
 pub mod explicit_return_type_on_exported;
 pub mod explicit_units;
 pub mod exports_at_top;
+pub mod issue_link;
 pub mod jsdoc_missing_example;
 pub mod jsdoc_on_exported;
 pub mod law_of_demeter;
@@ -120,6 +121,11 @@ use backend::Backend;
 use meta::RuleMeta;
 
 /// A rule: identity + per-language enforcement backends.
+///
+/// `Debug` is intentionally NOT derived: `RuleDef` carries `Backend`,
+/// which contains trait objects that can't reasonably implement Debug
+/// (see `backend::Backend` for the rationale). Public consumers can
+/// read `meta` directly for any human-readable representation they need.
 pub struct RuleDef {
     pub meta: RuleMeta,
     pub backends: Vec<(Language, Backend)>,

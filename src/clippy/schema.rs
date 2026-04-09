@@ -16,7 +16,7 @@ use serde::Deserialize;
 /// Top-level cargo message envelope. We only deserialize the `reason`
 /// discriminator and the `message` payload — every other field of the
 /// envelope (target, package_id, manifest_path, etc.) is ignored.
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 pub struct CargoMessage {
     #[serde(default)]
     pub reason: String,
@@ -28,7 +28,7 @@ pub struct CargoMessage {
 
 /// A rustc/clippy diagnostic. Mirrors what `rustc --error-format=json`
 /// produces inside a cargo `compiler-message`.
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 pub struct RustcDiagnostic {
     #[serde(default)]
     pub message: String,
@@ -45,7 +45,7 @@ pub struct RustcDiagnostic {
     pub _extra: IgnoredAny,
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 pub struct RustcCode {
     #[serde(default)]
     pub code: String,
@@ -53,7 +53,8 @@ pub struct RustcCode {
     pub _extra: IgnoredAny,
 }
 
-#[derive(Deserialize, Default)]
+#[non_exhaustive]
+#[derive(Debug, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum RustcLevel {
     #[default]
@@ -65,7 +66,7 @@ pub enum RustcLevel {
     FailureNote,
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 pub struct RustcSpan {
     #[serde(default)]
     pub file_name: String,

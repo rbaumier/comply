@@ -10,6 +10,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 
+#[derive(Debug)]
 pub struct Check;
 
 impl AstCheck for Check {

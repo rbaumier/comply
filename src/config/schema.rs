@@ -39,6 +39,11 @@ pub struct ComplyToml {
 /// `extra` captures any rule-specific threshold (`max`, `min`,
 /// `min_arms`, `min_ops`, `min_line_length`, etc.) so each rule can
 /// pull its own knob without us hardcoding the schema for every rule.
+// `deny_unknown_fields` is intentionally OMITTED here: `extra` uses
+// `#[serde(flatten)]` to capture rule-specific threshold knobs (`max`,
+// `min`, `min_arms`, etc.) without hardcoding each one. `deny_unknown_fields`
+// would reject those threshold keys *before* the flatten could catch them,
+// so the two attributes are mutually exclusive.
 #[derive(Debug, Default, Clone, Deserialize)]
 pub struct RuleConfig {
     #[serde(default)]
@@ -63,6 +68,7 @@ pub struct OverrideConfig {
 /// Severity values accepted in TOML. Mirrors `crate::diagnostic::Severity`
 /// but kept separate so the wire format can evolve independently of the
 /// internal type.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SeverityToml {

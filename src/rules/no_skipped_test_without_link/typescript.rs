@@ -11,6 +11,7 @@ use crate::rules::walker::walk_tree;
 
 const TEST_BASES: &[&str] = &["test", "it", "describe", "suite", "context"];
 
+#[derive(Debug)]
 pub struct Check;
 
 impl AstCheck for Check {
@@ -58,6 +59,8 @@ impl AstCheck for Check {
 }
 
 /// Look at the previous sibling comment and check for an issue reference.
+/// Reference detection is shared with `todo-needs-issue-link` via the
+/// `crate::rules::issue_link` module.
 fn has_issue_reference_nearby(node: tree_sitter::Node, source: &[u8]) -> bool {
     // Walk up to the nearest statement-level node and check its preceding comment.
     let mut current = node;
@@ -77,37 +80,7 @@ fn has_issue_reference_nearby(node: tree_sitter::Node, source: &[u8]) -> bool {
     let Ok(text) = prev.utf8_text(source) else {
         return false;
     };
-    text.contains("http://")
-        || text.contains("https://")
-        || text.bytes().enumerate().any(|(i, b)| {
-            b == b'#' && text.as_bytes().get(i + 1).is_some_and(|c| c.is_ascii_digit())
-        })
-        || has_ticket_key(text)
-}
-
-/// Detect an `ABC-123` / `GH-45` style ticket key.
-fn has_ticket_key(text: &str) -> bool {
-    let bytes = text.as_bytes();
-    for i in 0..bytes.len() {
-        if !bytes[i].is_ascii_uppercase() {
-            continue;
-        }
-        let mut j = i + 1;
-        while j < bytes.len() && bytes[j].is_ascii_uppercase() {
-            j += 1;
-        }
-        if j == i + 1 || j >= bytes.len() || bytes[j] != b'-' {
-            continue;
-        }
-        let mut k = j + 1;
-        while k < bytes.len() && bytes[k].is_ascii_digit() {
-            k += 1;
-        }
-        if k > j + 1 {
-            return true;
-        }
-    }
-    false
+    crate::rules::issue_link::has_issue_reference(text)
 }
 
 #[cfg(test)]

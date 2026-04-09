@@ -18,6 +18,7 @@ use crate::rules::walker::walk_tree;
 
 const BANNED_MACROS: &[&str] = &["panic", "todo", "unimplemented", "unreachable"];
 
+#[derive(Debug)]
 pub struct Check;
 
 impl AstCheck for Check {

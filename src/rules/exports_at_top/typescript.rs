@@ -25,6 +25,7 @@ const NON_EXPORT_DECLS: &[&str] = &[
     "enum_declaration",
 ];
 
+#[derive(Debug)]
 pub struct Check;
 
 impl AstCheck for Check {

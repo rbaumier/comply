@@ -21,6 +21,7 @@ const STRING_CHAIN_METHODS: &[(&str, &str)] = &[
     ("ip", "z.ipv4() or z.ipv6()"),
 ];
 
+#[derive(Debug)]
 pub struct Check;
 
 impl AstCheck for Check {

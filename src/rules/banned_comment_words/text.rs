@@ -17,6 +17,7 @@ const BANNED: &[&str] = &[
     "trivially",
 ];
 
+#[derive(Debug)]
 pub struct Check;
 
 impl TextCheck for Check {

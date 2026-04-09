@@ -16,6 +16,7 @@ use crate::rules::backend::{CheckCtx, TextCheck};
 const DIVIDER_CHARS: &[u8] = b"=-*#~";
 const MIN_RUN: usize = 5;
 
+#[derive(Debug)]
 pub struct Check;
 
 impl TextCheck for Check {

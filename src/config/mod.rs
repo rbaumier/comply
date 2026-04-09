@@ -45,6 +45,7 @@ pub const CONFIG_FILE_NAME: &str = "comply.toml";
 
 /// Resolved configuration: defaults merged with the user's `comply.toml`,
 /// plus a precompiled glob matcher for the per-path overrides.
+#[derive(Debug)]
 pub struct Config {
     raw: ComplyToml,
     /// Compiled globs in the order they appear in the TOML. Each
@@ -65,6 +66,7 @@ impl Config {
     /// Walk up from `start_dir` looking for the nearest `comply.toml`.
     /// If one is found, layer the user's overrides on top of the
     /// defaults; otherwise return the defaults verbatim.
+    #[must_use]
     pub fn load_from(start_dir: &Path) -> Result<Self> {
         let Some(path) = find_comply_toml(start_dir) else {
             return Ok(Self::default());

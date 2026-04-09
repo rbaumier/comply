@@ -12,6 +12,7 @@ use crate::rules::walker::walk_tree;
 
 const TEST_BASES: &[&str] = &["test", "it", "describe", "suite", "context"];
 
+#[derive(Debug)]
 pub struct Check;
 
 impl AstCheck for Check {

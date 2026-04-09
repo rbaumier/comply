@@ -19,6 +19,7 @@ const MONEY_NAMES: &[&str] = &[
     "tax", "discount", "revenue", "salary", "wage", "fare", "charge",
 ];
 
+#[derive(Debug)]
 pub struct Check;
 
 impl AstCheck for Check {

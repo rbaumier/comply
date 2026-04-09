@@ -14,6 +14,7 @@ const BANNED_VERBS: &[&str] = &[
     "submit", "approve", "reject", "archive",
 ];
 
+#[derive(Debug)]
 pub struct Check;
 
 impl AstCheck for Check {

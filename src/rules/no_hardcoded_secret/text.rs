@@ -15,6 +15,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
 
+#[derive(Debug)]
 pub struct Check;
 
 impl TextCheck for Check {

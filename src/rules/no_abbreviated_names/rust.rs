@@ -35,6 +35,7 @@ const BANNED_ABBREVIATIONS: &[(&str, &str)] = &[
     ("addr", "address"),
 ];
 
+#[derive(Debug)]
 pub struct Check;
 
 impl AstCheck for Check {

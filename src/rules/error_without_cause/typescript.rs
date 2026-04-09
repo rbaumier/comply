@@ -21,6 +21,7 @@ const ERROR_CTORS: &[&str] = &[
     "URIError",
 ];
 
+#[derive(Debug)]
 pub struct Check;
 
 impl AstCheck for Check {
