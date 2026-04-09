@@ -19,7 +19,6 @@ pub mod banned_identifiers;
 pub mod boolean_naming;
 pub mod delegated;
 pub mod drizzle_timestamp_with_timezone;
-pub mod empty_catch_block;
 pub mod error_without_cause;
 pub mod explicit_return_type_on_exported;
 pub mod explicit_units;
@@ -299,7 +298,6 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         rust_no_format_in_debug_impl::register(),
         rust_no_empty_test_fn::register(),
         // v2.7 — Cat A: mechanical AST rules from the coding-standards skill.
-        empty_catch_block::register(),
         error_without_cause::register(),
         no_set_x_to_y::register(),
         no_and_in_function_name::register(),
