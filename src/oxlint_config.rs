@@ -12,7 +12,7 @@
 //!    a JSON object with `plugins` + `rules`, and writes it to a fresh
 //!    per-invocation temp file (`tempfile::NamedTempFile`).
 //! 3. The returned NamedTempFile deletes itself on drop, so the caller
-//!    just keeps it alive for as long as the oxlint subprocess runs.
+//!    keeps it alive for as long as the oxlint subprocess runs.
 //!
 //! Security note: NamedTempFile uses an unpredictable filename + O_EXCL
 //! mode, preventing the classic `/tmp` symlink attack.
@@ -25,7 +25,6 @@ use std::io::Write;
 use crate::diagnostic::Severity;
 
 /// Build an oxlint config and write it to a fresh temp file.
-#[must_use]
 pub fn generate(rules: &[(&str, Severity)]) -> Result<tempfile::NamedTempFile> {
     let config = build_config_json(rules);
     let serialized =

@@ -1,7 +1,7 @@
 //! rust-no-empty-test-fn — empty `#[test]` functions test nothing.
 //!
 //! `#[test] fn it_works() {}` always passes — no assertion, no
-//! exercise of the code under test, just a green dot in the test
+//! exercise of the code under test, a green dot in the test
 //! report. The most common cause is a stub that the author meant
 //! to fill in but forgot, and the harness happily ships it as
 //! "covered."

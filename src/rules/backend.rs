@@ -5,7 +5,7 @@
 //!   control, zero-subprocess latency, works for any language comply bundles
 //!   a grammar for.
 //! - **Text**: plain-text / regex / filesystem check. No AST needed — used
-//!   for line counts, TODO scans, filename conventions.
+//!   for line counts, TODO scans, filename conventions. // comply-ignore: todo-needs-issue-link — mention, not marker.
 //! - **Oxlint**: delegation to an oxlint rule. Comply registers the oxlint
 //!   rule-id in the runtime-generated oxlintrc, then remaps the resulting
 //!   diagnostic's rule-id + message back to our RuleMeta. From the user's
@@ -74,6 +74,8 @@ pub trait TextCheck: Send + Sync {
 /// to implement Debug AND require an extra bound on the trait surface.
 #[non_exhaustive]
 #[allow(dead_code)] // Oxlint/Clippy/Tsc variants land in later steps.
+// comply-ignore: rust-impl-debug-on-public-types — see doc above (trait-object variants).
+// comply-ignore: rust-pub-enum-without-non-exhaustive — already on line 77; rule walker misses the multi-attr block.
 pub enum Backend {
     /// In-process tree-sitter AST walk.
     TreeSitter(Box<dyn AstCheck>),

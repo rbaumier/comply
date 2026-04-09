@@ -14,7 +14,7 @@
 
 /// True if `text` contains any kind of issue reference. Used by the
 /// `todo-needs-issue-link` and `no-skipped-test-without-link` rules to
-/// decide whether a TODO marker / skipped test is "tracked enough".
+/// decide whether a TODO marker / skipped test is "tracked enough". // comply-ignore: todo-needs-issue-link — mention, not marker.
 pub fn has_issue_reference(text: &str) -> bool {
     if text.contains("http://") || text.contains("https://") {
         return true;

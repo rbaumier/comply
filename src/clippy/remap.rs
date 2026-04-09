@@ -3,7 +3,7 @@
 //! Unlike oxlint (which decorates rule ids with plugin prefixes),
 //! clippy reports lints with their canonical name — `clippy::unwrap_used`,
 //! `clippy::too_many_arguments`, etc. — which is exactly the string we
-//! store in `Backend::Clippy { lint }`. So the remap is just a direct
+//! store in `Backend::Clippy { lint }`. So the remap is a direct
 //! HashMap with no string surgery.
 //!
 //! The `missing_docs` rustc lint is the only exception: it's not in the

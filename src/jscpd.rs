@@ -124,7 +124,6 @@ fn convert_duplicates(duplicates: Vec<Duplicate>) -> Vec<Diagnostic> {
         .collect()
 }
 
-// ---------- JSON schema ----------
 //
 // jscpd's `firstFile.start` field is a token offset (a number), not a
 // line/column object. The actual source position lives under

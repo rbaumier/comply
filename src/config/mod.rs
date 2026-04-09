@@ -59,14 +59,16 @@ impl Config {
     /// Defaults-only config — used by tests and as the base layer
     /// when no `comply.toml` is found in the project tree.
     pub fn default() -> Self {
-        Self::from_raw(defaults::build_default_config())
+        // defaults::build_default_config() is statically known to compile;
+        // a panic here means a programmer bug in the defaults table, not a
+        // runtime condition.
+        Self::from_raw(defaults::build_default_config()) // comply-ignore: rust-no-unwrap — defaults are static.
             .expect("default config must compile")
     }
 
     /// Walk up from `start_dir` looking for the nearest `comply.toml`.
     /// If one is found, layer the user's overrides on top of the
     /// defaults; otherwise return the defaults verbatim.
-    #[must_use]
     pub fn load_from(start_dir: &Path) -> Result<Self> {
         let Some(path) = find_comply_toml(start_dir) else {
             return Ok(Self::default());
@@ -171,7 +173,7 @@ fn find_comply_toml(start: &Path) -> Option<PathBuf> {
 /// Layer `user` on top of `base`. Per-rule overrides merge field-by-field:
 /// the user's `disabled`, `severity`, and individual `extra` knobs win,
 /// while everything they didn't touch falls back to the default.
-/// Per-path overrides simply replace whatever was at that glob.
+/// Per-path overrides replace whatever was at that glob.
 fn merge(mut base: ComplyToml, user: ComplyToml) -> ComplyToml {
     for (rule_id, user_rule) in user.rules {
         let entry = base.rules.entry(rule_id).or_default();

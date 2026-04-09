@@ -150,7 +150,6 @@ fn convert_report(report: KnipReport, root: &Path) -> Vec<Diagnostic> {
     diagnostics
 }
 
-// ---------- JSON schema ----------
 
 #[derive(Debug, Deserialize)]
 struct KnipReport {

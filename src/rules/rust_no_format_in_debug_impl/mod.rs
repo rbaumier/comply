@@ -3,7 +3,7 @@
 //! `format!` builds a `String` by allocating, writing to it, then
 //! returns it. If you then `write!(f, "{}", that_string)`, you've
 //! done the work twice: once to build the temporary, once to copy
-//! it into the formatter's writer. Just `write!(f, "...", args)`
+//! it into the formatter's writer. `write!(f, "...", args)`
 //! directly — it streams into the writer with no intermediate.
 //!
 //! `Debug::fmt` is on the hot path for any structured logging

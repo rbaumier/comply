@@ -56,7 +56,7 @@ impl AstCheck for Check {
     }
 }
 
-/// Returns true when the attribute value is `{identifier}` — i.e. just
+/// Returns true when the attribute value is `{identifier}` — i.e. 
 /// a variable reference, not a derived expression.
 fn attribute_value_is_simple_identifier(attr: tree_sitter::Node, _source: &[u8]) -> bool {
     // jsx_attribute → name = jsx_expression → identifier

@@ -1,6 +1,6 @@
 //! max-file-lines backend — plain line count, same impl for every language.
 //!
-//! No AST required; we just count newlines in the source. The check applies
+//! No AST required; we count newlines in the source. The check applies
 //! identically to TS, TSX, JS, and Rust — the rule's job is to enforce a
 //! ceiling on file size regardless of syntax.
 

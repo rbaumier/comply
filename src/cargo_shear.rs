@@ -156,13 +156,14 @@ fn convert_findings(findings: Vec<Finding>, workspace: &Path) -> Result<Vec<Diag
     Ok(diagnostics)
 }
 
-/// Read `path` and convert a byte `offset` into a 1-based (line, column).
-/// Falls back to (1, 1) if the file can't be read — better to surface the
-/// finding at the top of the manifest than to drop it entirely.
-fn byte_offset_to_line_col(path: &Path, offset: usize) -> Option<(usize, usize)> {
+/// Read `path` and convert a byte `offset_bytes` into a 1-based
+/// (line, column). Falls back to (1, 1) if the file can't be read —
+/// better to surface the finding at the top of the manifest than to
+/// drop it entirely.
+fn byte_offset_to_line_col(path: &Path, offset_bytes: usize) -> Option<(usize, usize)> {
     let content = fs::read_to_string(path).ok()?;
     let bytes = content.as_bytes();
-    let clamped = offset.min(bytes.len());
+    let clamped = offset_bytes.min(bytes.len());
     let mut line = 1usize;
     let mut col = 1usize;
     for &b in &bytes[..clamped] {
@@ -176,7 +177,6 @@ fn byte_offset_to_line_col(path: &Path, offset: usize) -> Option<(usize, usize)>
     Some((line, col))
 }
 
-// ---------- JSON schema ----------
 
 #[derive(Debug, Deserialize)]
 struct ShearReport {

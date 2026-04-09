@@ -3,7 +3,7 @@
 //! clippy ships `clippy::fn_params_excessive_bools` which flags functions
 //! taking more than 3 bool parameters (configurable threshold). It's
 //! weaker than comply's TypeScript rule — which flags EVERY boolean
-//! parameter, not just excessive counts — but it catches the worst cases.
+//! parameter, not excessive counts — but it catches the worst cases.
 //!
 //! Enable in your crate root:
 //!

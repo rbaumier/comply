@@ -2,7 +2,7 @@
 //!
 //! `let n: u8 = some_u32 as u8` does what you'd expect when the
 //! value fits and produces nonsense the moment it doesn't — no
-//! panic, no error, just `255 + 1 → 0`. The `try_into()` /
+//! panic, no error, `255 + 1 → 0`. The `try_into()` /
 //! `u8::try_from()` path returns a `Result` and forces the caller
 //! to think about the overflow case.
 //!

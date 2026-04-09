@@ -46,6 +46,7 @@ fn entry_with_clippy(
     )
 }
 
+// comply-ignore: max-function-lines — this is a flat data table, not logic; splitting it would scatter related rule entries across files for no readability gain.
 pub fn register_all() -> Vec<RuleDef> {
     vec![
         entry(

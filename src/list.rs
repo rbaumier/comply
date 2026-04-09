@@ -10,7 +10,6 @@ use crate::diagnostic::Severity;
 use crate::rules;
 
 /// Print the registry. `json` toggles between pretty and JSON output.
-#[must_use]
 pub fn run(json: bool) -> Result<()> {
     let rules = rules::all_rule_defs();
     if json {

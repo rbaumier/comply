@@ -45,6 +45,7 @@ pub struct ComplyToml {
 // would reject those threshold keys *before* the flatten could catch them,
 // so the two attributes are mutually exclusive.
 #[derive(Debug, Default, Clone, Deserialize)]
+// comply-ignore: rust-serde-deny-unknown-fields — see comment above (flatten ↔ deny conflict).
 pub struct RuleConfig {
     #[serde(default)]
     pub disabled: Option<bool>,

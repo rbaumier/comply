@@ -118,7 +118,13 @@ fn looks_like_paraphrase(identifier: &str, comment_body: &str) -> bool {
         .iter()
         .filter(|token| id_tokens.contains(token))
         .count();
-    let ratio = overlap as f32 / comment_tokens.len() as f32;
+    // Both counts are bounded by MAX_COMMENT_TOKENS (6), well within f32's
+    // lossless integer range — `as f32` is provably safe here.
+    // comply-ignore: rust-no-lossy-as-cast — bounded count.
+    let overlap_f = overlap as f32;
+    // comply-ignore: rust-no-lossy-as-cast — bounded count.
+    let total_f = comment_tokens.len() as f32;
+    let ratio = overlap_f / total_f;
     ratio >= OVERLAP_THRESHOLD
 }
 

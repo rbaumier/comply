@@ -45,4 +45,4 @@ pub fn is_inside_async_fn(node: Node, source: &[u8]) -> bool {
 // that depend on it (`rust-thread-sleep-in-async`, `rust-block-on-in-async`,
 // `rust-sync-io-in-async`). Their backend test suites cover both the
 // async-fn-positive and sync-fn-negative cases, so a unit test here
-// would just duplicate that coverage.
+// would duplicate that coverage.

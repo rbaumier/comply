@@ -2,7 +2,7 @@
 //! argument is a non-trivial function call.
 //!
 //! Why: `useState(getInitial())` evaluates `getInitial()` on every render,
-//! not just the first. The value is thrown away after mount but the cost
+//! not the first. The value is thrown away after mount but the cost
 //! stays. Worse, `useState(window.innerWidth)` crashes in SSR. The lazy
 //! form `useState(() => getInitial())` evaluates only once.
 

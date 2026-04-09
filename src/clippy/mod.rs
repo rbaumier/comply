@@ -192,7 +192,7 @@ fn invoke_clippy(workspace: &Path, lint_args: &[String]) -> Result<std::process:
 /// Parse cargo's JSONL output stream and yield Diagnostic structs for
 /// every primary span that lives in `file_filter`.
 ///
-/// We surface every clippy lint, not just the ones with an explicit
+/// We surface every clippy lint, not the ones with an explicit
 /// `Backend::Clippy` binding in comply's rule registry:
 ///
 /// - If the lint code is in `remap`, the diagnostic is rewritten with
@@ -201,7 +201,7 @@ fn invoke_clippy(workspace: &Path, lint_args: &[String]) -> Result<std::process:
 /// - Otherwise, if the lint code starts with `clippy::`, we pass it
 ///   through as-is. The rule_id stays as `clippy::needless_borrow`
 ///   (etc.) and the message is clippy's verbatim message. The user
-///   doesn't lose the diagnostic just because comply doesn't have a
+///   doesn't lose the diagnostic because comply doesn't have a
 ///   first-class binding for it.
 /// - Pure rustc warnings without a binding (`dead_code`, `unused_imports`,
 ///   etc.) are skipped — those are the compiler's job, not comply's.

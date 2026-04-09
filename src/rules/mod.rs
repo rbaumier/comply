@@ -7,12 +7,12 @@
 //!
 //! Backends can be:
 //! - `TreeSitter` — in-process Rust AST walk (the common case for opinionated rules)
-//! - `Text` — plain-text / regex / filesystem check (line count, TODO scan)
+//! - `Text` — plain-text / regex / filesystem check (line count, TODO scan) // comply-ignore: todo-needs-issue-link — mention, not marker.
 //! - `Oxlint` — delegation to an oxlint rule, with rule-id + message remap
 //! - `Clippy` — (v2) delegation to a clippy lint
 //! - `Tsc` — (v1.2) shell out to `tsc --noEmit`
 //!
-//! See TODO.md "Architecture" for the full rationale.
+//! See TODO.md "Architecture" for the full rationale. // comply-ignore: todo-needs-issue-link — file reference, not marker.
 
 pub mod backend;
 pub mod banned_comment_words;
@@ -126,6 +126,7 @@ use meta::RuleMeta;
 /// which contains trait objects that can't reasonably implement Debug
 /// (see `backend::Backend` for the rationale). Public consumers can
 /// read `meta` directly for any human-readable representation they need.
+// comply-ignore: rust-impl-debug-on-public-types — see doc above.
 pub struct RuleDef {
     pub meta: RuleMeta,
     pub backends: Vec<(Language, Backend)>,

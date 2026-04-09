@@ -27,6 +27,7 @@ pub fn format_eslint(diagnostics: &[Diagnostic]) -> String {
         };
         // writeln! writes directly into `out` without an intermediate String alloc.
         // unwrap is infallible here — writing to a String never fails.
+        // comply-ignore: rust-no-unwrap — String::write_fmt is infallible.
         writeln!(
             out,
             "{}:{}:{}: {} [{}] {}",
@@ -44,7 +45,6 @@ pub fn format_eslint(diagnostics: &[Diagnostic]) -> String {
 
 /// Format diagnostics as a JSON array — one object per violation.
 /// Stable shape so editors and CI tools can depend on it.
-#[must_use]
 pub fn format_json(diagnostics: &[Diagnostic]) -> Result<String> {
     let payload: Vec<_> = diagnostics
         .iter()

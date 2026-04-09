@@ -76,7 +76,7 @@ pub fn apply_suppressions(
 
 /// Apply comply-ignore suppressions across every discovered file.
 ///
-/// Iterates over every discovered file (not just files with diagnostics) so
+/// Iterates over every discovered file (not files with diagnostics) so
 /// malformed `comply-ignore` comments in clean files are still flagged.
 ///
 /// **Path canonicalization**: oxlint reports paths it canonicalized

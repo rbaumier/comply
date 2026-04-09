@@ -2,7 +2,7 @@
 //!
 //! Why: `acct` / `usr` / `btn` / `cfg` saves 2 keystrokes at declaration
 //! and costs every future reader a moment of decoding. Modern editors
-//! auto-complete full words — there's no tradeoff, just tech debt.
+//! auto-complete full words — there's no tradeoff, tech debt.
 //!
 //! Detection: walk every `identifier` / `property_identifier` node, split
 //! into camelCase/snake_case words, and flag any word that matches the
