@@ -18,12 +18,14 @@ pub mod backend;
 pub mod banned_comment_words;
 pub mod banned_identifiers;
 pub mod boolean_naming;
+pub mod comment_paraphrases_code;
 pub mod delegated;
 pub mod drizzle_timestamp_with_timezone;
 pub mod error_without_cause;
 pub mod explicit_return_type_on_exported;
 pub mod explicit_units;
 pub mod exports_at_top;
+pub mod jsdoc_missing_example;
 pub mod jsdoc_on_exported;
 pub mod law_of_demeter;
 pub mod max_file_lines;
@@ -47,6 +49,7 @@ pub mod no_hardcoded_secret;
 pub mod no_inline_param_type;
 pub mod no_json_parse_cast;
 pub mod no_match_snapshot;
+pub mod no_misleading_collection_name;
 pub mod no_multi_op_oneliner;
 pub mod no_nested_ternary;
 pub mod no_new_regex_with_variable;
@@ -306,6 +309,10 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         // v2.8 — Comments: mechanical comment-quality rules.
         banned_comment_words::register(),
         no_section_divider_comments::register(),
+        jsdoc_missing_example::register(),
+        comment_paraphrases_code::register(),
+        // v2.9 — Naming: intent + collection-type alignment.
+        no_misleading_collection_name::register(),
     ];
     rules.extend(delegated::register_all());
     rules
