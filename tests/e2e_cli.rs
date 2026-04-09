@@ -10,7 +10,12 @@ use tempfile::TempDir;
 #[test]
 fn exit_code_zero_on_clean_file() {
     // Exported so oxlint's no-unused-vars doesn't fire on us.
-    let (_dir, path) = write_ts_file("clean.ts", "export const totalCount = 1;\n");
+    // Module-header JSDoc added so the v1.1 module-header rule is satisfied.
+    let (_dir, path) = write_ts_file(
+        "clean.ts",
+        "/** Sample clean file for the comply exit-code test. */\n\
+         export const totalCount = 1;\n",
+    );
     Command::cargo_bin("comply")
         .unwrap()
         .arg(&path)

@@ -19,9 +19,12 @@ pub mod banned_identifiers;
 pub mod boolean_naming;
 pub mod delegated;
 pub mod exports_at_top;
+pub mod jsdoc_on_exported;
 pub mod max_file_lines;
 pub mod max_function_lines;
 pub mod meta;
+pub mod module_header;
+pub mod no_boolean_flag_param;
 pub mod no_commented_out_code;
 pub mod no_common_grab_bag;
 pub mod no_default_params;
@@ -93,6 +96,9 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         no_default_params::register(),
         boolean_naming::register(),
         exports_at_top::register(),
+        jsdoc_on_exported::register(),
+        module_header::register(),
+        no_boolean_flag_param::register(),
     ];
     rules.extend(delegated::register_all());
     rules
