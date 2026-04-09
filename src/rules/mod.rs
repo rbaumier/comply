@@ -171,6 +171,28 @@ pub fn collect_oxlint_bindings() -> Vec<(&'static str, &'static RuleMeta, Severi
     bindings
 }
 
+/// Accessor for the clippy-delegated backends across every registered rule.
+/// Mirror of `collect_oxlint_bindings` but for `Backend::Clippy { lint }`
+/// markers. Used by `crate::clippy` to generate the `-W clippy::lint`
+/// flags passed to `cargo clippy` and to build the rule-id remap table.
+pub fn collect_clippy_bindings() -> Vec<(&'static str, &'static RuleMeta, Severity)> {
+    let mut bindings = Vec::new();
+    for rule in all_rule_defs() {
+        let meta_static: &'static RuleMeta = Box::leak(Box::new(rule.meta));
+        for (_lang, backend) in &rule.backends {
+            if let Backend::Clippy { lint } = backend {
+                bindings.push((*lint, meta_static, meta_static.severity));
+            }
+        }
+    }
+    // Dedupe by lint name — multiple rules occasionally share a clippy
+    // lint (e.g. `disallowed_names` is referenced by both
+    // `banned_identifiers` and `no_generic_names`). Keep the first one.
+    bindings.sort_by_key(|(lint, _, _)| *lint);
+    bindings.dedup_by_key(|(lint, _, _)| *lint);
+    bindings
+}
+
 /// All registered rules — both the custom ones and the oxlint-delegated ones.
 pub fn all_rule_defs() -> Vec<RuleDef> {
     let mut rules = vec![
