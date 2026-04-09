@@ -65,6 +65,7 @@ pub mod rust_no_panic_macros;
 pub mod rust_no_println_in_library;
 pub mod rust_no_unwrap;
 pub mod rust_ptr_arg;
+pub mod rust_rc_mutex;
 pub mod rust_redundant_clone;
 pub mod rust_undocumented_unsafe;
 pub mod react_no_and_conditional_jsx;
@@ -213,6 +214,8 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         rust_explicit_iter_loop::register(),
         rust_no_linkedlist::register(),
         rust_redundant_clone::register(),
+        // v2.0 — Rust-native custom rules (not mere clippy markers).
+        rust_rc_mutex::register(),
     ];
     rules.extend(delegated::register_all());
     rules

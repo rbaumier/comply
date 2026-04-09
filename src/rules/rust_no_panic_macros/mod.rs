@@ -1,6 +1,10 @@
 //! rust-no-panic-macros — no `panic!`/`todo!`/`unimplemented!`/`unreachable!`.
 
+mod rust;
+
 use crate::diagnostic::Severity;
+use crate::files::Language;
+use crate::rules::backend::Backend;
 use crate::rules::meta::RuleMeta;
 use crate::rules::RuleDef;
 
@@ -10,9 +14,8 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Replace the macro with a typed Result error. `todo!()` and \
                   `unimplemented!()` mark placeholders that must not ship. \
                   `unreachable!()` should only mark compiler-proven impossible \
-                  states with a `// Impossible: ...` comment. Enable \
-                  `clippy::panic` + `clippy::todo` + `clippy::unimplemented` + \
-                  `clippy::unreachable` in your crate root.",
+                  states with a `// Impossible: ...` comment. Tests are \
+                  exempted — panicking in a `#[test]` is a clean failure.",
     severity: Severity::Error,
     doc_url: None,
 };
@@ -20,6 +23,6 @@ pub const META: RuleMeta = RuleMeta {
 pub fn register() -> RuleDef {
     RuleDef {
         meta: META,
-        backends: vec![],
+        backends: vec![(Language::Rust, Backend::TreeSitter(Box::new(rust::Check)))],
     }
 }
