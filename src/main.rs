@@ -24,6 +24,7 @@ mod files;
 mod fix;
 mod ignore_comments;
 mod list;
+mod lsp;
 mod output;
 mod oxlint;
 mod oxlint_config;
@@ -66,6 +67,17 @@ fn run() -> Result<bool> {
         }
         Some(Command::Config { ref action }) => {
             run_config_action(action)?;
+            Ok(false)
+        }
+        Some(Command::Lsp) => {
+            // Spin up a small tokio runtime just for the LSP server.
+            // Comply itself is sync; we don't pay the runtime cost
+            // unless the user actually starts the LSP.
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .map_err(|e| anyhow::anyhow!("failed to start tokio runtime: {e}"))?;
+            runtime.block_on(lsp::run());
             Ok(false)
         }
         None => lint_project(&cli),

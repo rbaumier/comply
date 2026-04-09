@@ -75,6 +75,12 @@ pub enum Command {
         #[command(subcommand)]
         action: ConfigAction,
     },
+    /// Run as a Language Server Protocol server on stdio. Editors
+    /// connect to this to display comply diagnostics inline as the
+    /// user types. Skips oxlint and clippy (subprocess overhead is
+    /// too high for per-keystroke linting); the in-process tree-sitter
+    /// rules still fire.
+    Lsp,
 }
 
 /// Subcommands for `comply config`.
