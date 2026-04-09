@@ -21,6 +21,7 @@ mod diagnostic;
 mod engine;
 mod explain;
 mod files;
+mod fix;
 mod ignore_comments;
 mod list;
 mod output;
@@ -118,6 +119,17 @@ fn lint_project(cli: &Cli) -> Result<bool> {
         .map(std::path::Path::to_path_buf)
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
     let config = Config::load_from(&config_anchor)?;
+
+    // --fix runs the upstream fixers (oxlint --fix, cargo clippy
+    // --fix) over the discovered files BEFORE the lint pass. After
+    // the editors finish, comply re-reads the files via the normal
+    // pipeline so the user sees what's left — typically the
+    // architectural diagnostics no fixer can address.
+    if cli.fix {
+        let runs = fix::apply_fixes(&discovered, &config)?;
+        eprintln!("comply: ran {runs} fixer(s); re-linting");
+    }
+
     let diagnostics = collect_all_diagnostics(&discovered, &config)?;
     let after_overrides = apply_config_filters(diagnostics, &config);
     let after_suppressions = ignore_comments::apply_to_all(after_overrides, &discovered);
