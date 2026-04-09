@@ -1,76 +1,87 @@
-//! Custom lint rules — each rule implements the Rule trait and is registered
-//! in `all_rules()`. The engine calls every rule on every file whose language
-//! matches.
+//! Custom lint rules — each rule is a `RuleDef` with per-language backends.
 //!
-//! Rules that only need source text override `check()`.
-//! Rules that need the AST override `check_tree()` — the engine parses each
-//! file once with tree-sitter and passes the tree to all rules.
+//! A rule concept owns a stable `RuleMeta` (id, description, remediation,
+//! severity) and a list of `(Language, Backend)` pairs. The engine walks
+//! every registered rule, filters by the file's language, and dispatches
+//! to the matching backend.
+//!
+//! Backends can be:
+//! - `TreeSitter` — in-process Rust AST walk (the common case for opinionated rules)
+//! - `Text` — plain-text / regex / filesystem check (line count, TODO scan)
+//! - `Oxlint` — delegation to an oxlint rule, with rule-id + message remap
+//! - `Clippy` — (v2) delegation to a clippy lint
+//! - `Tsc` — (v1.2) shell out to `tsc --noEmit`
+//!
+//! See TODO.md "Architecture" for the full rationale.
 
+pub mod backend;
 pub mod banned_identifiers;
+pub mod delegated;
 pub mod max_file_lines;
 pub mod max_function_lines;
+pub mod meta;
 pub mod no_nested_ternary;
 pub mod no_throw;
 pub mod walker;
 
-use crate::diagnostic::Diagnostic;
+use crate::diagnostic::Severity;
 use crate::files::Language;
-use std::path::Path;
+use backend::Backend;
+use meta::RuleMeta;
 
-/// A lint rule that operates on source code, optionally with a tree-sitter AST.
-pub trait Rule {
-    /// Unique rule identifier (e.g., "max-file-lines").
-    fn id(&self) -> &'static str;
+/// A rule: identity + per-language enforcement backends.
+pub struct RuleDef {
+    pub meta: RuleMeta,
+    pub backends: Vec<(Language, Backend)>,
+}
 
-    /// Which languages this rule applies to.
-    fn languages(&self) -> &[Language];
+/// Language slice for the TS-family. Used by rules that apply to all three
+/// variants identically (either via the TS grammar or oxlint delegation).
+pub const TS_FAMILY: &[Language] = &[Language::TypeScript, Language::Tsx, Language::JavaScript];
 
-    /// Run the rule on raw source text. Default: no-op.
-    fn check(&self, _path: &Path, _source: &str, _language: Language) -> Vec<Diagnostic> {
-        vec![]
-    }
-
-    /// Run the rule with a parsed tree-sitter AST. Default: no-op.
-    /// The engine calls this after parsing — rules needing the AST override this.
-    fn check_tree(
-        &self,
-        _path: &Path,
-        _source: &[u8],
-        _tree: &tree_sitter::Tree,
-        _language: Language,
-    ) -> Vec<Diagnostic> {
-        vec![]
-    }
-
-    /// Whether this rule needs the tree-sitter AST (controls whether check_tree is called).
-    fn needs_tree(&self) -> bool {
-        false
+/// Helper for rules whose enforcement is 100% delegated to oxlint.
+/// Each entry in `languages` gets a `Backend::Oxlint { rule }` binding.
+pub fn oxlint_delegate(meta: RuleMeta, rule: &'static str, languages: &[Language]) -> RuleDef {
+    RuleDef {
+        meta,
+        backends: languages
+            .iter()
+            .map(|&lang| (lang, Backend::Oxlint { rule }))
+            .collect(),
     }
 }
 
-/// Test helper — parses TS source with tree-sitter and applies a rule.
-#[cfg(test)]
-pub fn lint_ts_with<R: Rule>(rule: &R, source: &str) -> Vec<Diagnostic> {
-    let mut parser = tree_sitter::Parser::new();
-    parser
-        .set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into())
-        .expect("failed to load TypeScript grammar");
-    let tree = parser.parse(source, None).expect("failed to parse source");
-    rule.check_tree(
-        Path::new("test.ts"),
-        source.as_bytes(),
-        &tree,
-        Language::TypeScript,
-    )
+/// Accessor for the oxlint-delegated backends across every registered rule.
+/// Used by the oxlint subprocess module to generate the runtime config and
+/// build the diagnostic-code remap table.
+pub fn collect_oxlint_bindings() -> Vec<(&'static str, &'static RuleMeta, Severity)> {
+    let mut bindings = Vec::new();
+    for rule in all_rule_defs() {
+        // Leak the meta to 'static so the caller can reference it across the
+        // oxlint subprocess boundary without lifetime gymnastics. This runs
+        // once per process invocation, so the leak is negligible.
+        let meta_static: &'static RuleMeta = Box::leak(Box::new(rule.meta));
+        for (_lang, backend) in &rule.backends {
+            if let Backend::Oxlint { rule: oxlint_key } = backend {
+                bindings.push((*oxlint_key, meta_static, meta_static.severity));
+            }
+        }
+    }
+    // Dedupe by oxlint config key (TS_FAMILY yields 3 bindings for the same key).
+    bindings.sort_by_key(|(key, _, _)| *key);
+    bindings.dedup_by_key(|(key, _, _)| *key);
+    bindings
 }
 
-/// All registered custom rules. Add new rules here.
-pub fn all_rules() -> Vec<Box<dyn Rule>> {
-    vec![
-        Box::new(max_file_lines::MaxFileLines),
-        Box::new(max_function_lines::MaxFunctionLines),
-        Box::new(no_throw::NoThrow),
-        Box::new(no_nested_ternary::NoNestedTernary),
-        Box::new(banned_identifiers::BannedIdentifiers),
-    ]
+/// All registered rules — both the custom ones and the oxlint-delegated ones.
+pub fn all_rule_defs() -> Vec<RuleDef> {
+    let mut rules = vec![
+        max_file_lines::register(),
+        max_function_lines::register(),
+        no_throw::register(),
+        no_nested_ternary::register(),
+        banned_identifiers::register(),
+    ];
+    rules.extend(delegated::register_all());
+    rules
 }

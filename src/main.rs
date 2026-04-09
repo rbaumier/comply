@@ -99,14 +99,11 @@ fn lint_typescript(ts_files: &[&SourceFile]) -> Result<Vec<Diagnostic>> {
     let mut diagnostics = Vec::new();
 
     if oxlint::is_available() {
-        // The temp file must outlive the subprocess call — its Drop deletes
-        // the file. Hold the binding by name (no underscore prefix) so future
-        // readers don't think it's an unused variable suppressed for warnings.
-        let config_tempfile = oxlint_config::write()?;
-        diagnostics.extend(oxlint::lint_files(
-            ts_files,
-            Some(config_tempfile.path()),
-        )?);
+        // oxlint::lint_files now owns its own temp-config lifecycle —
+        // it collects Backend::Oxlint bindings from the rule registry,
+        // generates the oxlintrc, and holds the NamedTempFile until the
+        // subprocess finishes reading it.
+        diagnostics.extend(oxlint::lint_files(ts_files)?);
     } else {
         eprintln!(
             "comply: oxlint not found — skipping oxlint rules. \

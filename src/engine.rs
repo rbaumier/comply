@@ -1,14 +1,16 @@
-//! Rule engine — reads source files and applies all relevant custom rules.
+//! Rule engine — reads source files and applies every RuleDef backend.
 //!
 //! How it works:
-//! 1. Collect all registered rules from rules::all_rules().
-//! 2. For each file, read its contents once via `lint_one_file`.
-//!    Files that aren't valid UTF-8 are skipped with a stderr warning so a
-//!    single binary-ish file can't kill the entire scan.
-//! 3. If any applicable rule needs a tree-sitter AST, parse with the right
-//!    grammar (LANGUAGE_TYPESCRIPT for .ts/.js, LANGUAGE_TSX for .tsx/.jsx).
-//! 4. Text-only rules go through `check()`, AST rules through `check_tree()`.
-//! 5. Return all collected diagnostics.
+//! 1. Collect all registered rules from `rules::all_rule_defs()`.
+//! 2. For each file, read its contents once via `lint_one_file`. Files that
+//!    aren't valid UTF-8 are skipped with a stderr warning so a single
+//!    binary-ish file can't kill the entire scan.
+//! 3. Pick the backends whose `Language` matches this file.
+//! 4. If any TreeSitter backend is applicable, parse with the right grammar
+//!    once (LANGUAGE_TYPESCRIPT for .ts/.js, LANGUAGE_TSX for .tsx/.jsx).
+//! 5. Dispatch per backend variant: TreeSitter/Text run in-process;
+//!    Oxlint/Clippy/Tsc contribute their rule-id to external tools and
+//!    their diagnostics are remapped post-hoc.
 
 use anyhow::{Context, Result};
 use std::fs;
@@ -16,17 +18,17 @@ use tree_sitter::Parser;
 
 use crate::diagnostic::Diagnostic;
 use crate::files::{Language, SourceFile};
-use crate::rules;
+use crate::rules::{self, backend::Backend, backend::CheckCtx, meta::RuleMeta, RuleDef};
 
-/// Apply every registered custom rule to the given files.
+/// Apply every registered rule to the given files.
 #[must_use = "diagnostics from custom rules must be reported"]
 pub fn lint_files(files: &[&SourceFile]) -> Result<Vec<Diagnostic>> {
-    let rules = rules::all_rules();
+    let rule_defs = rules::all_rule_defs();
     let mut diagnostics = Vec::with_capacity(files.len());
     let mut parser = Parser::new();
 
     for file in files {
-        match lint_one_file(file, &rules, &mut parser) {
+        match lint_one_file(file, &rule_defs, &mut parser) {
             Ok(file_diags) => diagnostics.extend(file_diags),
             Err(e) => {
                 // Skip-and-warn — one bad file shouldn't kill the whole scan.
@@ -38,47 +40,74 @@ pub fn lint_files(files: &[&SourceFile]) -> Result<Vec<Diagnostic>> {
     Ok(diagnostics)
 }
 
-/// Apply every applicable rule to a single file. Parses the AST once if needed.
+/// Apply every applicable rule to one file. Parses the AST once if any of
+/// the file's applicable backends is a TreeSitter backend.
 fn lint_one_file(
     file: &SourceFile,
-    rules: &[Box<dyn rules::Rule>],
+    rule_defs: &[RuleDef],
     parser: &mut Parser,
 ) -> Result<Vec<Diagnostic>> {
     let source = fs::read_to_string(&file.path)
         .with_context(|| format!("failed to read {}", file.path.display()))?;
-    let applicable: Vec<&dyn rules::Rule> = rules
-        .iter()
-        .filter(|r| r.languages().contains(&file.language))
-        .map(AsRef::as_ref)
-        .collect();
+
+    let applicable = collect_applicable(rule_defs, file.language);
     if applicable.is_empty() {
         return Ok(vec![]);
     }
-    Ok(apply_rules(file, &source, &applicable, parser))
+    Ok(dispatch_backends(file, &source, &applicable, parser))
 }
 
-/// Apply each rule to the file, parsing the AST once if any rule needs it.
-fn apply_rules(
+/// Flatten `RuleDef[]` into `(meta, backend)` pairs that apply to `language`.
+fn collect_applicable(
+    rule_defs: &[RuleDef],
+    language: Language,
+) -> Vec<(&RuleMeta, &Backend)> {
+    rule_defs
+        .iter()
+        .flat_map(|r| {
+            r.backends
+                .iter()
+                .filter(move |(lang, _)| *lang == language)
+                .map(move |(_, backend)| (&r.meta, backend))
+        })
+        .collect()
+}
+
+/// Dispatch each backend variant to produce diagnostics.
+fn dispatch_backends(
     file: &SourceFile,
     source: &str,
-    applicable: &[&dyn rules::Rule],
+    applicable: &[(&RuleMeta, &Backend)],
     parser: &mut Parser,
 ) -> Vec<Diagnostic> {
-    let source_bytes = source.as_bytes();
-    let tree = if applicable.iter().any(|r| r.needs_tree()) {
-        parse_with_grammar(parser, file.language, source_bytes)
+    let needs_ast = applicable
+        .iter()
+        .any(|(_, b)| matches!(b, Backend::TreeSitter(_)));
+    let tree = if needs_ast {
+        parse_with_grammar(parser, file.language, source.as_bytes())
     } else {
         None
     };
 
+    let ctx = CheckCtx {
+        path: &file.path,
+        source,
+    };
     let mut diagnostics = Vec::new();
-    for rule in applicable {
-        if rule.needs_tree() {
-            if let Some(ref t) = tree {
-                diagnostics.extend(rule.check_tree(&file.path, source_bytes, t, file.language));
+    for (_meta, backend) in applicable {
+        match backend {
+            Backend::TreeSitter(check) => {
+                if let Some(ref t) = tree {
+                    diagnostics.extend(check.check(&ctx, t));
+                }
             }
-        } else {
-            diagnostics.extend(rule.check(&file.path, source, file.language));
+            Backend::Text(check) => {
+                diagnostics.extend(check.check(&ctx));
+            }
+            // Oxlint / Clippy / Tsc backends don't produce diagnostics here —
+            // they contribute their rule-id to the external tool's config
+            // and their diagnostics are remapped in the oxlint/clippy/tsc modules.
+            Backend::Oxlint { .. } | Backend::Clippy { .. } | Backend::Tsc { .. } => {}
         }
     }
     diagnostics
