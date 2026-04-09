@@ -1,0 +1,33 @@
+//! rust-mod-tests-without-cfg-test — `mod tests` must be gated.
+//!
+//! A `mod tests { ... }` block without `#[cfg(test)]` above it
+//! ships every test function and every test-only helper inside the
+//! production binary. The compiler doesn't see them as test code,
+//! so they go through normal codegen, bloat the binary, and may
+//! reference dev dependencies that aren't available at runtime.
+
+mod rust;
+
+use crate::diagnostic::Severity;
+use crate::files::Language;
+use crate::rules::backend::Backend;
+use crate::rules::meta::RuleMeta;
+use crate::rules::RuleDef;
+
+pub const META: RuleMeta = RuleMeta {
+    id: "rust-mod-tests-without-cfg-test",
+    description: "`mod tests` must be gated by `#[cfg(test)]`.",
+    remediation: "Add `#[cfg(test)]` immediately above the `mod tests` \
+                  declaration. Without it, every test function ships in \
+                  the release binary — bloat plus a risk of pulling in \
+                  dev-dependencies that aren't built for release.",
+    severity: Severity::Error,
+    doc_url: None,
+};
+
+pub fn register() -> RuleDef {
+    RuleDef {
+        meta: META,
+        backends: vec![(Language::Rust, Backend::TreeSitter(Box::new(rust::Check)))],
+    }
+}
