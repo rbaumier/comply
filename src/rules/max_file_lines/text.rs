@@ -7,26 +7,30 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
 
-/// Size cap. 200 lines ≈ one screen at 12pt — forces splitting before a file
-/// owns more than one concern.
-pub const MAX_LINES: usize = 200;
+/// Default cap: 200 lines ≈ one screen at 12pt — forces splitting
+/// before a file owns more than one concern. The user can override
+/// in `comply.toml` via `[rules.max-file-lines] max = N`.
+pub const DEFAULT_MAX_LINES: usize = 200;
 
 pub struct Check;
 
 impl TextCheck for Check {
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
+        let max_lines = ctx
+            .config
+            .threshold("max-file-lines", "max", DEFAULT_MAX_LINES);
         let count = ctx.source.lines().count();
-        if count <= MAX_LINES {
+        if count <= max_lines {
             return vec![];
         }
         vec![Diagnostic {
             path: ctx.path.to_path_buf(),
-            line: MAX_LINES + 1,
+            line: max_lines + 1,
             column: 1,
             rule_id: "max-file-lines".into(),
             message: format!(
-                "File has {count} lines — split by responsibility (max {MAX_LINES}). \
-                 Extract helpers below line {MAX_LINES} into a separate module."
+                "File has {count} lines — split by responsibility (max {max_lines}). \
+                 Extract helpers below line {max_lines} into a separate module."
             ),
             severity: Severity::Error,
         }]
@@ -39,15 +43,12 @@ mod tests {
     use std::path::Path;
 
     fn run(source: &str) -> Vec<Diagnostic> {
-        Check.check(&CheckCtx {
-            path: Path::new("foo.ts"),
-            source,
-        })
+        Check.check(&CheckCtx::for_test(Path::new("foo.ts"), source))
     }
 
     #[test]
     fn flags_file_over_limit() {
-        let source = "x\n".repeat(MAX_LINES + 5);
+        let source = "x\n".repeat(DEFAULT_MAX_LINES + 5);
         let diags = run(&source);
         assert_eq!(diags.len(), 1);
         assert_eq!(diags[0].rule_id, "max-file-lines");
@@ -55,7 +56,7 @@ mod tests {
 
     #[test]
     fn allows_file_at_limit() {
-        assert!(run(&"x\n".repeat(MAX_LINES)).is_empty());
+        assert!(run(&"x\n".repeat(DEFAULT_MAX_LINES)).is_empty());
     }
 
     #[test]

@@ -103,10 +103,7 @@ mod tests {
         parser.set_language(&tree_sitter_rust::LANGUAGE.into()).unwrap();
         let tree = parser.parse(source, None).unwrap();
         Check.check(
-            &CheckCtx {
-                path: Path::new("t.rs"),
-                source,
-            },
+            &CheckCtx::for_test(Path::new("t.rs"), source),
             &tree,
         )
     }

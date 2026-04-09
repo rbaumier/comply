@@ -8,9 +8,10 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::walker::walk_tree;
 
-/// 30 lines ≈ one code-review screen without scrolling. Beyond that,
-/// functions start mixing abstraction levels.
-pub const MAX_LINES: usize = 30;
+/// Default threshold: 30 lines ≈ one code-review screen without
+/// scrolling. The user can override this in `comply.toml` via
+/// `[rules.max-function-lines] max = N`.
+pub const DEFAULT_MAX_LINES: usize = 30;
 
 /// Tree-sitter node kinds representing a function body in the TS grammar.
 const TS_FUNCTION_KINDS: &[&str] = &[
@@ -26,9 +27,12 @@ pub struct Check;
 impl AstCheck for Check {
     fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
         let source_bytes = ctx.source.as_bytes();
+        let max_lines = ctx
+            .config
+            .threshold("max-function-lines", "max", DEFAULT_MAX_LINES);
         let mut diagnostics = Vec::new();
         walk_tree(tree, |node| {
-            if let Some(d) = check_function_node(node, source_bytes, ctx.path) {
+            if let Some(d) = check_function_node(node, source_bytes, ctx.path, max_lines) {
                 diagnostics.push(d);
             }
         });
@@ -36,11 +40,12 @@ impl AstCheck for Check {
     }
 }
 
-/// Build a diagnostic for one AST node if it's a function over MAX_LINES.
+/// Build a diagnostic for one AST node if it's a function over `max_lines`.
 fn check_function_node(
     node: tree_sitter::Node,
     source: &[u8],
     path: &std::path::Path,
+    max_lines: usize,
 ) -> Option<Diagnostic> {
     if !TS_FUNCTION_KINDS.contains(&node.kind()) {
         return None;
@@ -48,7 +53,7 @@ fn check_function_node(
     let start = node.start_position();
     let end = node.end_position();
     let line_count = end.row.saturating_sub(start.row) + 1;
-    if line_count <= MAX_LINES {
+    if line_count <= max_lines {
         return None;
     }
     let name = node
@@ -61,9 +66,9 @@ fn check_function_node(
         column: start.column + 1,
         rule_id: "max-function-lines".into(),
         message: format!(
-            "Function '{name}' is {line_count} lines (max {MAX_LINES}). \
+            "Function '{name}' is {line_count} lines (max {max_lines}). \
              Extract a named helper for the logic below line {}.",
-            start.row + 1 + MAX_LINES
+            start.row + 1 + max_lines
         ),
         severity: Severity::Error,
     })
@@ -81,17 +86,14 @@ mod tests {
             .unwrap();
         let tree = parser.parse(source, None).unwrap();
         Check.check(
-            &CheckCtx {
-                path: Path::new("t.ts"),
-                source,
-            },
+            &CheckCtx::for_test(Path::new("t.ts"), source),
             &tree,
         )
     }
 
     #[test]
     fn flags_long_function() {
-        let body = "let x = 0;\n".repeat(MAX_LINES + 5);
+        let body = "let x = 0;\n".repeat(DEFAULT_MAX_LINES + 5);
         let diags = run_on(&format!("function long() {{\n{body}}}"));
         assert_eq!(diags.len(), 1);
     }
@@ -103,7 +105,7 @@ mod tests {
 
     #[test]
     fn extracts_function_name_in_message() {
-        let body = "let x = 0;\n".repeat(MAX_LINES + 1);
+        let body = "let x = 0;\n".repeat(DEFAULT_MAX_LINES + 1);
         let diags = run_on(&format!("function myLongFunc() {{\n{body}}}"));
         assert!(diags[0].message.contains("myLongFunc"));
     }

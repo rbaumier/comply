@@ -68,10 +68,7 @@ mod tests {
             .unwrap();
         let tree = parser.parse(source, None).unwrap();
         Check.check(
-            &CheckCtx {
-                path: Path::new("t.tsx"),
-                source,
-            },
+            &CheckCtx::for_test(Path::new("t.tsx"), source),
             &tree,
         )
     }

@@ -16,19 +16,26 @@ use anyhow::{Context, Result};
 use std::fs;
 use tree_sitter::Parser;
 
+use crate::config::Config;
 use crate::diagnostic::Diagnostic;
 use crate::files::{Language, SourceFile};
 use crate::rules::{self, backend::Backend, backend::CheckCtx, meta::RuleMeta, RuleDef};
 
 /// Apply every registered rule to the given files.
+///
+/// `config` is the resolved per-project configuration. We use it to:
+///   - skip rules that are globally `disabled = true`
+///   - skip rules that match a per-glob `[overrides."..."]` block
+///   - thread thresholds through to rules via `CheckCtx`
+///   - rewrite each diagnostic's severity if the user set one
 #[must_use = "diagnostics from custom rules must be reported"]
-pub fn lint_files(files: &[&SourceFile]) -> Result<Vec<Diagnostic>> {
+pub fn lint_files(files: &[&SourceFile], config: &Config) -> Result<Vec<Diagnostic>> {
     let rule_defs = rules::all_rule_defs();
     let mut diagnostics = Vec::with_capacity(files.len());
     let mut parser = Parser::new();
 
     for file in files {
-        match lint_one_file(file, &rule_defs, &mut parser) {
+        match lint_one_file(file, &rule_defs, &mut parser, config) {
             Ok(file_diags) => diagnostics.extend(file_diags),
             Err(e) => {
                 // Skip-and-warn — one bad file shouldn't kill the whole scan.
@@ -46,6 +53,7 @@ fn lint_one_file(
     file: &SourceFile,
     rule_defs: &[RuleDef],
     parser: &mut Parser,
+    config: &Config,
 ) -> Result<Vec<Diagnostic>> {
     let source = fs::read_to_string(&file.path)
         .with_context(|| format!("failed to read {}", file.path.display()))?;
@@ -54,7 +62,7 @@ fn lint_one_file(
     if applicable.is_empty() {
         return Ok(vec![]);
     }
-    Ok(dispatch_backends(file, &source, &applicable, parser))
+    Ok(dispatch_backends(file, &source, &applicable, parser, config))
 }
 
 /// Flatten `RuleDef[]` into `(meta, backend)` pairs that apply to `language`.
@@ -74,13 +82,29 @@ fn collect_applicable(
 }
 
 /// Dispatch each backend variant to produce diagnostics.
+///
+/// Per-rule and per-glob filtering happens here, before the rule even
+/// runs: a disabled rule's `Check::check` is never called, so the user
+/// pays nothing for rules they've turned off. Severity overrides are
+/// applied after the diagnostic is produced.
 fn dispatch_backends(
     file: &SourceFile,
     source: &str,
     applicable: &[(&RuleMeta, &Backend)],
     parser: &mut Parser,
+    config: &Config,
 ) -> Vec<Diagnostic> {
-    let needs_ast = applicable
+    // Cull disabled rules up front so we can decide whether parsing the
+    // AST is even worth the cost.
+    let active: Vec<&(&RuleMeta, &Backend)> = applicable
+        .iter()
+        .filter(|(meta, _)| config.is_rule_enabled(meta.id, &file.path))
+        .collect();
+    if active.is_empty() {
+        return Vec::new();
+    }
+
+    let needs_ast = active
         .iter()
         .any(|(_, b)| matches!(b, Backend::TreeSitter(_)));
     let tree = if needs_ast {
@@ -92,23 +116,33 @@ fn dispatch_backends(
     let ctx = CheckCtx {
         path: &file.path,
         source,
+        config,
     };
     let mut diagnostics = Vec::new();
-    for (_meta, backend) in applicable {
-        match backend {
+    for (meta, backend) in &active {
+        let mut produced = match backend {
             Backend::TreeSitter(check) => {
                 if let Some(ref t) = tree {
-                    diagnostics.extend(check.check(&ctx, t));
+                    check.check(&ctx, t)
+                } else {
+                    Vec::new()
                 }
             }
-            Backend::Text(check) => {
-                diagnostics.extend(check.check(&ctx));
-            }
+            Backend::Text(check) => check.check(&ctx),
             // Oxlint / Clippy / Tsc backends don't produce diagnostics here —
             // they contribute their rule-id to the external tool's config
             // and their diagnostics are remapped in the oxlint/clippy/tsc modules.
-            Backend::Oxlint { .. } | Backend::Clippy { .. } | Backend::Tsc { .. } => {}
+            Backend::Oxlint { .. } | Backend::Clippy { .. } | Backend::Tsc { .. } => {
+                Vec::new()
+            }
+        };
+        // Apply severity override if the user set one for this rule.
+        if let Some(override_sev) = config.severity_for(meta.id) {
+            for d in &mut produced {
+                d.severity = override_sev;
+            }
         }
+        diagnostics.extend(produced);
     }
     diagnostics
 }

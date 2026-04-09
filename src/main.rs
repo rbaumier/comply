@@ -16,6 +16,7 @@
 
 mod cli;
 mod clippy;
+mod config;
 mod diagnostic;
 mod engine;
 mod explain;
@@ -31,7 +32,8 @@ use std::process::ExitCode;
 
 use anyhow::Result;
 use clap::Parser;
-use cli::{Cli, Command};
+use cli::{Cli, Command, ConfigAction};
+use config::Config;
 use diagnostic::Diagnostic;
 use files::{Language, SourceFile};
 
@@ -61,8 +63,35 @@ fn run() -> Result<bool> {
             list::run(json)?;
             Ok(false)
         }
+        Some(Command::Config { ref action }) => {
+            run_config_action(action)?;
+            Ok(false)
+        }
         None => lint_project(&cli),
     }
+}
+
+/// Handle `comply config init` and `comply config print`.
+fn run_config_action(action: &ConfigAction) -> Result<()> {
+    match action {
+        ConfigAction::Init { force } => {
+            let cwd = std::env::current_dir()?;
+            let target = cwd.join(config::CONFIG_FILE_NAME);
+            if target.exists() && !force {
+                eprintln!(
+                    "comply: {} already exists — pass --force to overwrite",
+                    target.display()
+                );
+                return Ok(());
+            }
+            std::fs::write(&target, Config::print_default_toml())?;
+            println!("comply: wrote {}", target.display());
+        }
+        ConfigAction::Print => {
+            print!("{}", Config::print_default_toml());
+        }
+    }
+    Ok(())
 }
 
 /// Top-level lint orchestrator. Returns `true` if any violation was reported.
@@ -79,8 +108,19 @@ fn lint_project(cli: &Cli) -> Result<bool> {
         return Ok(false);
     }
 
-    let diagnostics = collect_all_diagnostics(&discovered)?;
-    let after_suppressions = ignore_comments::apply_to_all(diagnostics, &discovered);
+    // Look for `comply.toml` starting from the first discovered file's
+    // directory rather than from `cwd`. This makes `comply some/path/x.ts`
+    // pick up `some/path/comply.toml` (or a parent's) without requiring
+    // the user to `cd` into the project first.
+    let config_anchor = discovered
+        .first()
+        .and_then(|f| f.path.parent())
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+    let config = Config::load_from(&config_anchor)?;
+    let diagnostics = collect_all_diagnostics(&discovered, &config)?;
+    let after_overrides = apply_config_filters(diagnostics, &config);
+    let after_suppressions = ignore_comments::apply_to_all(after_overrides, &discovered);
 
     if cli.json {
         report_diagnostics_json(&after_suppressions)?;
@@ -91,25 +131,48 @@ fn lint_project(cli: &Cli) -> Result<bool> {
 }
 
 /// Apply every linter (oxlint + custom rules) and collect diagnostics.
-fn collect_all_diagnostics(discovered: &[SourceFile]) -> Result<Vec<Diagnostic>> {
+fn collect_all_diagnostics(
+    discovered: &[SourceFile],
+    config: &Config,
+) -> Result<Vec<Diagnostic>> {
     let (ts_files, rs_files) = partition_by_language(discovered);
     let mut diagnostics = Vec::with_capacity(discovered.len());
 
     if !ts_files.is_empty() {
-        diagnostics.extend(lint_typescript(&ts_files)?);
+        diagnostics.extend(lint_typescript(&ts_files, config)?);
     }
     if !rs_files.is_empty() {
-        diagnostics.extend(lint_rust(&rs_files)?);
+        diagnostics.extend(lint_rust(&rs_files, config)?);
     }
 
     Ok(diagnostics)
+}
+
+/// Apply config-driven filters to subprocess diagnostics (oxlint, clippy)
+/// where the rule already ran but the user wants it dropped or its
+/// severity changed. Tree-sitter rules are filtered upstream in the engine.
+///
+/// We need this post-filter because oxlint/clippy don't know about
+/// per-glob `disable = [...]` overrides — they run their full lint set
+/// and we filter the resulting diagnostics by `(rule_id, file_path)`.
+fn apply_config_filters(
+    mut diagnostics: Vec<Diagnostic>,
+    config: &Config,
+) -> Vec<Diagnostic> {
+    diagnostics.retain(|d| config.is_rule_enabled(&d.rule_id, &d.path));
+    for d in &mut diagnostics {
+        if let Some(override_sev) = config.severity_for(&d.rule_id) {
+            d.severity = override_sev;
+        }
+    }
+    diagnostics
 }
 
 /// Lint Rust files via clippy subprocess + custom tree-sitter rules.
 /// The two passes are complementary: clippy catches type-aware lints
 /// and the standard library footguns; custom rules catch the architecture
 /// and naming concerns that clippy doesn't model.
-fn lint_rust(rs_files: &[&SourceFile]) -> Result<Vec<Diagnostic>> {
+fn lint_rust(rs_files: &[&SourceFile], config: &Config) -> Result<Vec<Diagnostic>> {
     let mut diagnostics = Vec::new();
 
     if clippy::is_available() {
@@ -121,7 +184,7 @@ fn lint_rust(rs_files: &[&SourceFile]) -> Result<Vec<Diagnostic>> {
         );
     }
 
-    diagnostics.extend(engine::lint_files(rs_files)?);
+    diagnostics.extend(engine::lint_files(rs_files, config)?);
     Ok(diagnostics)
 }
 
@@ -140,7 +203,7 @@ fn partition_by_language(discovered: &[SourceFile]) -> (Vec<&SourceFile>, Vec<&S
 }
 
 /// Lint TypeScript/JavaScript files via oxlint subprocess + custom rules.
-fn lint_typescript(ts_files: &[&SourceFile]) -> Result<Vec<Diagnostic>> {
+fn lint_typescript(ts_files: &[&SourceFile], config: &Config) -> Result<Vec<Diagnostic>> {
     let mut diagnostics = Vec::new();
 
     if oxlint::is_available() {
@@ -156,7 +219,7 @@ fn lint_typescript(ts_files: &[&SourceFile]) -> Result<Vec<Diagnostic>> {
         );
     }
 
-    diagnostics.extend(engine::lint_files(ts_files)?);
+    diagnostics.extend(engine::lint_files(ts_files, config)?);
     Ok(diagnostics)
 }
 
