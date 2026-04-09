@@ -26,7 +26,7 @@ impl Rule for BannedIdentifiers {
     }
 
     fn languages(&self) -> &[Language] {
-        &[Language::TypeScript]
+        &[Language::TypeScript, Language::Tsx, Language::JavaScript]
     }
 
     fn needs_tree(&self) -> bool {

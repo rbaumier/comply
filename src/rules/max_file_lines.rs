@@ -18,7 +18,12 @@ impl Rule for MaxFileLines {
     }
 
     fn languages(&self) -> &[Language] {
-        &[Language::TypeScript, Language::Rust]
+        &[
+            Language::TypeScript,
+            Language::Tsx,
+            Language::JavaScript,
+            Language::Rust,
+        ]
     }
 
     fn check(&self, path: &Path, source: &str, _language: Language) -> Vec<Diagnostic> {

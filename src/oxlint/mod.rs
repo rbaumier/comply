@@ -3,117 +3,53 @@
 //!
 //! How it works:
 //! 1. `is_available()` checks the binary is on PATH so the orchestrator can
-//!    decide whether to skip silently or fail loudly.
+//!    decide whether to skip silently or fail loudly. The result is cached
+//!    in a `OnceLock` so we don't fork oxlint on every invocation.
 //! 2. `lint_files()` invokes `oxlint --format json` with file paths terminated
 //!    by `--` (so a path like `./-r.ts` is not interpreted as a flag).
-//! 3. Parses the JSON envelope (`diagnostics` array) from raw bytes — never
-//!    via lossy UTF-8 conversion — and maps each entry to our Diagnostic.
+//! 3. Parses the JSON envelope from raw bytes — never via lossy UTF-8
+//!    conversion — and maps each entry to our Diagnostic.
 //!
 //! Position fallback: when oxlint emits a diagnostic with no labels we fall
 //! back to (1, 1) instead of (0, 0). Editors choke on `path:0:0:`.
 
+mod schema;
+
 use anyhow::{bail, Context, Result};
-use serde::Deserialize;
 use std::path::Path;
 use std::process::Command;
+use std::sync::OnceLock;
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::files::SourceFile;
+use schema::{OxlintDiag, OxlintOutput, OxlintSeverity};
 
-/// Top-level oxlint JSON output envelope.
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-#[allow(dead_code)]
-struct OxlintOutput {
-    #[serde(default)]
-    diagnostics: Vec<OxlintDiag>,
-    /// Fields oxlint emits that we currently ignore — listed so the
-    /// `deny_unknown_fields` contract above doesn't reject the payload.
-    #[serde(default, rename = "number_of_files")]
-    _number_of_files: Option<u64>,
-    #[serde(default, rename = "number_of_rules")]
-    _number_of_rules: Option<u64>,
-    #[serde(default, rename = "threads_count")]
-    _threads_count: Option<u64>,
-    #[serde(default, rename = "start_time")]
-    _start_time: Option<f64>,
-}
-
-/// A single oxlint diagnostic — adapted from actual oxlint 1.59 JSON format.
-///
-/// Some fields are accepted-but-unused so `deny_unknown_fields` doesn't reject
-/// the payload when oxlint emits them. They're marked `#[allow(dead_code)]`.
-#[derive(Deserialize)]
-#[allow(dead_code)]
-struct OxlintDiag {
-    #[serde(default)]
-    message: String,
-    /// Rule identifier, e.g. "eslint(no-unused-vars)".
-    #[serde(default)]
-    code: Option<String>,
-    #[serde(default)]
-    severity: OxlintSeverity,
-    #[serde(default)]
-    filename: String,
-    /// Position labels — first label carries the primary span.
-    #[serde(default)]
-    labels: Vec<OxlintLabel>,
-    // Fields we don't use but oxlint emits — accept and discard.
-    #[serde(default)]
-    causes: Vec<serde_json::Value>,
-    #[serde(default)]
-    url: Option<String>,
-    #[serde(default)]
-    help: Option<String>,
-    #[serde(default)]
-    related: Vec<serde_json::Value>,
-}
-
-#[derive(Deserialize, Default)]
-#[serde(rename_all = "lowercase")]
-enum OxlintSeverity {
-    #[default]
-    Error,
-    Warning,
-    Advice,
-}
-
-#[derive(Deserialize)]
-#[allow(dead_code)]
-struct OxlintLabel {
-    #[serde(default)]
-    span: OxlintSpan,
-    #[serde(default)]
-    label: Option<String>,
-}
-
-#[derive(Deserialize, Default)]
-#[allow(dead_code)]
-struct OxlintSpan {
-    #[serde(default)]
-    line: usize,
-    #[serde(default)]
-    column: usize,
-    #[serde(default)]
-    offset: usize,
-    #[serde(default)]
-    length: usize,
-}
-
-/// Check if oxlint binary is on PATH.
+/// Check if oxlint binary is on PATH. Result is cached for the process lifetime.
 pub fn is_available() -> bool {
-    Command::new("oxlint")
-        .arg("--version")
-        .output()
-        .is_ok_and(|o| o.status.success())
+    static AVAILABLE: OnceLock<bool> = OnceLock::new();
+    *AVAILABLE.get_or_init(|| {
+        Command::new("oxlint")
+            .arg("--version")
+            .output()
+            .is_ok_and(|o| o.status.success())
+    })
 }
 
 /// Invoke oxlint on the given TS/JS files and return unified diagnostics.
+#[must_use = "diagnostics from oxlint must be reported"]
 pub fn lint_files(files: &[&SourceFile], config_path: Option<&Path>) -> Result<Vec<Diagnostic>> {
     if files.is_empty() {
         return Ok(vec![]);
     }
+    let output = run_subprocess(files, config_path)?;
+    parse_json_bytes(&output.stdout, &output.stderr)
+}
 
+/// Spawn oxlint as a subprocess and validate exit status.
+fn run_subprocess(
+    files: &[&SourceFile],
+    config_path: Option<&Path>,
+) -> Result<std::process::Output> {
     let mut cmd = Command::new("oxlint");
     cmd.args(["--format", "json"]);
     if let Some(cfg) = config_path {
@@ -138,8 +74,7 @@ pub fn lint_files(files: &[&SourceFile], config_path: Option<&Path>) -> Result<V
             String::from_utf8_lossy(&output.stderr)
         );
     }
-
-    parse_json_bytes(&output.stdout, &output.stderr)
+    Ok(output)
 }
 
 /// Parse oxlint JSON output bytes into unified Diagnostic structs.
@@ -151,7 +86,6 @@ fn parse_json_bytes(stdout: &[u8], stderr: &[u8]) -> Result<Vec<Diagnostic>> {
             String::from_utf8_lossy(stderr)
         )
     })?;
-
     Ok(envelope.diagnostics.into_iter().map(into_diagnostic).collect())
 }
 
@@ -195,7 +129,7 @@ mod tests {
 
     #[test]
     fn fallback_position_is_one_one_not_zero_zero() {
-        let json = br#"{ "diagnostics": [{"message": "X", "severity": "error", "filename": "/tmp/x.ts", "labels": [], "causes": [], "related": []}] }"#;
+        let json = br#"{ "diagnostics": [{"message": "X", "severity": "error", "filename": "/tmp/x.ts", "labels": []}] }"#;
         let result = parse_json_bytes(json, b"").expect("must parse");
         assert_eq!(result[0].line, 1);
         assert_eq!(result[0].column, 1);

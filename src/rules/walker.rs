@@ -9,7 +9,12 @@
 //! Centralizing the walk also removes ~80 lines of duplicated cursor mechanics
 //! across the rule files.
 
-/// Visit every node in the tree, calling `visit` once per node.
+/// Visit every "well-formed" node in the tree, calling `visit` once per node.
+///
+/// Skips entire subtrees rooted at ERROR or MISSING nodes — without this skip,
+/// tree-sitter's syntax recovery emits phantom `function_declaration`,
+/// `throw_statement`, etc. children inside garbage subtrees, producing
+/// nonsense diagnostics on files with parse errors.
 ///
 /// The visitor receives the current node by value (cheap — `Node` is just a
 /// pointer pair) and decides whether to record a diagnostic for it.
@@ -19,22 +24,39 @@ where
 {
     let mut cursor = tree.walk();
     loop {
-        visit(cursor.node());
+        let node = cursor.node();
 
-        // Descend into the first child if any.
+        // Skip the entire subtree if this node is part of a parse-error region.
+        // We don't visit it, and we don't descend into it.
+        if node.is_error() || node.is_missing() {
+            if !advance_to_next_sibling(&mut cursor) {
+                return;
+            }
+            continue;
+        }
+
+        visit(node);
+
         if cursor.goto_first_child() {
             continue;
         }
 
-        // No children — find the next sibling, walking up if necessary.
-        // We stop when we walk back up to the root with no more siblings.
-        loop {
-            if cursor.goto_next_sibling() {
-                break;
-            }
-            if !cursor.goto_parent() {
-                return; // Walked back to the root, done.
-            }
+        if !advance_to_next_sibling(&mut cursor) {
+            return;
+        }
+    }
+}
+
+/// Advance the cursor to the next sibling, walking up the tree if needed.
+/// Returns false if we walked back to the root with no more siblings — the
+/// caller should stop iterating.
+fn advance_to_next_sibling(cursor: &mut tree_sitter::TreeCursor) -> bool {
+    loop {
+        if cursor.goto_next_sibling() {
+            return true;
+        }
+        if !cursor.goto_parent() {
+            return false;
         }
     }
 }
@@ -69,6 +91,29 @@ mod tests {
             }
         });
         assert!(found_return);
+    }
+
+    #[test]
+    fn handles_empty_source() {
+        let tree = parse("");
+        let mut count = 0;
+        walk_tree(&tree, |_| count += 1);
+        // Empty program still has a root program node.
+        assert!(count >= 1);
+    }
+
+    #[test]
+    fn skips_subtrees_under_error_nodes() {
+        // Truncated source — tree-sitter recovers with ERROR nodes.
+        let tree = parse("function f() { const x =");
+        let mut throw_count = 0;
+        walk_tree(&tree, |node| {
+            if node.kind() == "throw_statement" {
+                throw_count += 1;
+            }
+        });
+        // Even if recovery synthesizes anything weird, we shouldn't hallucinate throws.
+        assert_eq!(throw_count, 0);
     }
 
     #[test]

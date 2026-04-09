@@ -2,11 +2,13 @@
 //!
 //! How it works:
 //! 1. Collect all registered rules from rules::all_rules().
-//! 2. For each file, read its contents once.
-//! 3. If any applicable rule needs a tree-sitter AST, parse the file with the
-//!    appropriate grammar and pass the tree to those rules.
+//! 2. For each file, read its contents once via `lint_one_file`.
+//!    Files that aren't valid UTF-8 are skipped with a stderr warning so a
+//!    single binary-ish file can't kill the entire scan.
+//! 3. If any applicable rule needs a tree-sitter AST, parse with the right
+//!    grammar (LANGUAGE_TYPESCRIPT for .ts/.js, LANGUAGE_TSX for .tsx/.jsx).
 //! 4. Text-only rules go through `check()`, AST rules through `check_tree()`.
-//! 5. Collect and return all diagnostics.
+//! 5. Return all collected diagnostics.
 
 use anyhow::{Context, Result};
 use std::fs;
@@ -17,14 +19,20 @@ use crate::files::{Language, SourceFile};
 use crate::rules;
 
 /// Apply every registered custom rule to the given files.
+#[must_use = "diagnostics from custom rules must be reported"]
 pub fn lint_files(files: &[&SourceFile]) -> Result<Vec<Diagnostic>> {
     let rules = rules::all_rules();
-    let mut diagnostics = Vec::with_capacity(files.len() * 2);
+    let mut diagnostics = Vec::with_capacity(files.len());
     let mut parser = Parser::new();
 
     for file in files {
-        let file_diags = lint_one_file(file, &rules, &mut parser)?;
-        diagnostics.extend(file_diags);
+        match lint_one_file(file, &rules, &mut parser) {
+            Ok(file_diags) => diagnostics.extend(file_diags),
+            Err(e) => {
+                // Skip-and-warn — one bad file shouldn't kill the whole scan.
+                eprintln!("comply: skipping {}: {e:#}", file.path.display());
+            }
+        }
     }
 
     Ok(diagnostics)
@@ -40,7 +48,6 @@ fn lint_one_file(
         .with_context(|| format!("failed to read {}", file.path.display()))?;
     let source_bytes = source.as_bytes();
 
-    // Filter to rules that declare this file's language.
     let applicable: Vec<_> = rules
         .iter()
         .filter(|r| r.languages().contains(&file.language))
@@ -50,8 +57,6 @@ fn lint_one_file(
         return Ok(vec![]);
     }
 
-    // Parse tree-sitter AST once if any applicable rule needs it AND we have
-    // a grammar for the language. Returns None for languages without a grammar.
     let needs_tree = applicable.iter().any(|r| r.needs_tree());
     let tree = if needs_tree {
         parse_with_grammar(parser, file.language, source_bytes)
@@ -61,14 +66,12 @@ fn lint_one_file(
 
     let mut diagnostics = Vec::new();
     for rule in &applicable {
-        // Text-only rules — always available.
-        diagnostics.extend(rule.check(&file.path, &source, file.language));
-
-        // AST rules — only if we successfully parsed a tree.
-        if rule.needs_tree()
-            && let Some(ref t) = tree
-        {
-            diagnostics.extend(rule.check_tree(&file.path, source_bytes, t, file.language));
+        if rule.needs_tree() {
+            if let Some(ref t) = tree {
+                diagnostics.extend(rule.check_tree(&file.path, source_bytes, t, file.language));
+            }
+        } else {
+            diagnostics.extend(rule.check(&file.path, &source, file.language));
         }
     }
 
@@ -87,12 +90,16 @@ fn parse_with_grammar(
     source: &[u8],
 ) -> Option<tree_sitter::Tree> {
     let lang = match language {
-        Language::TypeScript => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
-        Language::Rust => {
-            // No grammar bundled in v1 — explicit skip prevents the parser
-            // from being applied with whatever language was set previously.
-            return None;
+        // Plain TS/JS — TypeScript grammar handles both (TS is a superset).
+        Language::TypeScript | Language::JavaScript => {
+            tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()
         }
+        // TSX/JSX needs the JSX-aware grammar — using LANGUAGE_TYPESCRIPT
+        // produces ERROR nodes peppered through every JSX expression.
+        Language::Tsx => tree_sitter_typescript::LANGUAGE_TSX.into(),
+        // No grammar bundled for Rust in v1 — explicit skip prevents the
+        // parser from being applied with whatever language was set previously.
+        Language::Rust => return None,
     };
     parser.set_language(&lang).ok()?;
     parser.parse(source, None)
