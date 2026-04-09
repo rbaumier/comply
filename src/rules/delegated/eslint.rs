@@ -111,13 +111,16 @@ pub fn register_all() -> Vec<RuleDef> {
              don't. Rust: enable `clippy::too_many_arguments` and set \
              `too-many-arguments-threshold = 3` in `clippy.toml`.",
         ),
-        entry(
+        entry_with_clippy(
             "max-depth",
             "max-depth",
+            "clippy::excessive_nesting",
             Severity::Error,
             "Nesting beyond 2 levels is a smell.",
             "Flatten via early return, extract a helper, or invert the \
-             condition. Deep nesting hides the happy path.",
+             condition. Deep nesting hides the happy path. Rust: enable \
+             `clippy::excessive_nesting` (restriction lint) and set \
+             `excessive-nesting-threshold = 3` in `clippy.toml`.",
         ),
         entry(
             "no-useless-catch",
