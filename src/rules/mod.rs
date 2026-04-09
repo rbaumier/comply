@@ -1,14 +1,19 @@
-//! Custom lint rules — each rule implements the Rule trait and is registered
-//! in `all_rules()`. The engine calls every rule on every file whose language
-//! matches.
+//! Custom lint rules.
 //!
-//! Rules that only need source text override `check()`.
-//! Rules that need the AST override `check_tree()` — the engine parses each
-//! file once with tree-sitter and passes the tree to all rules.
+//! **Transitional state**: two APIs coexist during the rules-backend refactor.
+//! - **Legacy trait** (`Rule`): one type per (rule, language) pair, currently
+//!   used by all shipped rules. The engine still dispatches on this.
+//! - **New struct** (`RuleDef`): one value per rule concept with a list of
+//!   `(Language, Backend)` pairs. Backends are pluggable: tree-sitter,
+//!   text, oxlint delegation, clippy delegation, tsc delegation. New rules
+//!   will be authored as RuleDef; legacy rules will migrate one at a time
+//!   before the old trait is deleted. See TODO.md "Architecture" section.
 
+pub mod backend;
 pub mod banned_identifiers;
 pub mod max_file_lines;
 pub mod max_function_lines;
+pub mod meta;
 pub mod no_nested_ternary;
 pub mod no_throw;
 pub mod walker;
@@ -16,6 +21,14 @@ pub mod walker;
 use crate::diagnostic::Diagnostic;
 use crate::files::Language;
 use std::path::Path;
+
+/// New rule shape — a RuleMeta + per-language backends. Will replace the
+/// `Rule` trait once every shipped rule has been migrated.
+#[allow(dead_code)] // Used by migrated rules once the engine learns to dispatch on it.
+pub struct RuleDef {
+    pub meta: meta::RuleMeta,
+    pub backends: Vec<(Language, backend::Backend)>,
+}
 
 /// A lint rule that operates on source code, optionally with a tree-sitter AST.
 pub trait Rule {
