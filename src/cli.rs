@@ -62,6 +62,28 @@ pub enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Manage the project's `comply.toml` configuration file.
+    Config {
+        #[command(subcommand)]
+        action: ConfigAction,
+    },
+}
+
+/// Subcommands for `comply config`.
+#[derive(Subcommand, Debug)]
+pub enum ConfigAction {
+    /// Write a `comply.toml` with every default value to the current
+    /// directory. Refuses to overwrite an existing file unless `--force`
+    /// is passed.
+    Init {
+        /// Overwrite an existing `comply.toml` if one is already present.
+        #[arg(long)]
+        force: bool,
+    },
+    /// Print the default config to stdout (TOML format) without writing
+    /// any file. Useful for diffing your project's `comply.toml` against
+    /// the upstream defaults.
+    Print,
 }
 
 /// Resolved scan mode — determines which files comply will lint.

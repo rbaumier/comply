@@ -18,13 +18,16 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::walker::walk_tree;
 
-const MAX_DEPTH: usize = 3;
+const DEFAULT_MAX_DEPTH: usize = 3;
 
 pub struct Check;
 
 impl AstCheck for Check {
     fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
         let source_bytes = ctx.source.as_bytes();
+        let max_depth = ctx
+            .config
+            .threshold("law-of-demeter", "max_depth", DEFAULT_MAX_DEPTH);
         let mut diagnostics = Vec::new();
         walk_tree(tree, |node| {
             if node.kind() != "member_expression" {
@@ -38,7 +41,7 @@ impl AstCheck for Check {
                 return;
             }
             let depth = chain_depth(node);
-            if depth < MAX_DEPTH {
+            if depth < max_depth {
                 return;
             }
             if is_self_chain(node, source_bytes) || is_constant_chain(node, source_bytes) {
@@ -131,10 +134,7 @@ mod tests {
             .unwrap();
         let tree = parser.parse(source, None).unwrap();
         Check.check(
-            &CheckCtx {
-                path: Path::new("t.ts"),
-                source,
-            },
+            &CheckCtx::for_test(Path::new("t.ts"), source),
             &tree,
         )
     }

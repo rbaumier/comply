@@ -10,13 +10,18 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::walker::walk_tree;
 
-const THRESHOLD: usize = 3;
+const DEFAULT_MAX_ELEMENTS: usize = 3;
 
 pub struct Check;
 
 impl AstCheck for Check {
     fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
         let source_bytes = ctx.source.as_bytes();
+        let max_elements = ctx.config.threshold(
+            "rust-no-large-tuple-return",
+            "max_elements",
+            DEFAULT_MAX_ELEMENTS,
+        );
         let mut diagnostics = Vec::new();
         walk_tree(tree, |node| {
             if node.kind() != "function_item" {
@@ -30,7 +35,7 @@ impl AstCheck for Check {
             }
             let mut cursor = ret_type.walk();
             let count = ret_type.named_children(&mut cursor).count();
-            if count < THRESHOLD {
+            if count < max_elements {
                 return;
             }
             let name = node
@@ -65,10 +70,7 @@ mod tests {
         parser.set_language(&tree_sitter_rust::LANGUAGE.into()).unwrap();
         let tree = parser.parse(source, None).unwrap();
         Check.check(
-            &CheckCtx {
-                path: Path::new("t.rs"),
-                source,
-            },
+            &CheckCtx::for_test(Path::new("t.rs"), source),
             &tree,
         )
     }

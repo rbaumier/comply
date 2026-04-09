@@ -43,10 +43,7 @@ mod tests {
     use std::path::Path;
 
     fn run(path_str: &str) -> Vec<Diagnostic> {
-        Check.check(&CheckCtx {
-            path: Path::new(path_str),
-            source: "",
-        })
+        Check.check(&CheckCtx::for_test(Path::new(path_str), ""))
     }
 
     #[test]

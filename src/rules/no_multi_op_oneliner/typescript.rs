@@ -17,13 +17,21 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::walker::walk_tree;
 
-const MIN_OPS: usize = 6;
-const MIN_LINE_LENGTH: usize = 80;
+const DEFAULT_MIN_OPS: usize = 6;
+const DEFAULT_MIN_LINE_LENGTH: usize = 80;
 
 pub struct Check;
 
 impl AstCheck for Check {
     fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
+        let min_ops = ctx
+            .config
+            .threshold("no-multi-op-oneliner", "min_ops", DEFAULT_MIN_OPS);
+        let min_line_length = ctx.config.threshold(
+            "no-multi-op-oneliner",
+            "min_line_length",
+            DEFAULT_MIN_LINE_LENGTH,
+        );
         let lines: Vec<&str> = ctx.source.lines().collect();
         let mut reported_lines = std::collections::HashSet::new();
         let mut diagnostics = Vec::new();
@@ -43,11 +51,11 @@ impl AstCheck for Check {
             let Some(line) = lines.get(start.row) else {
                 return;
             };
-            if line.len() < MIN_LINE_LENGTH {
+            if line.len() < min_line_length {
                 return;
             }
             let ops = count_operators(line);
-            if ops < MIN_OPS {
+            if ops < min_ops {
                 return;
             }
             reported_lines.insert(start.row);
@@ -104,10 +112,7 @@ mod tests {
             .unwrap();
         let tree = parser.parse(source, None).unwrap();
         Check.check(
-            &CheckCtx {
-                path: Path::new("t.ts"),
-                source,
-            },
+            &CheckCtx::for_test(Path::new("t.ts"), source),
             &tree,
         )
     }

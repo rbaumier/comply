@@ -20,13 +20,39 @@
 //! they contribute their rule-id to the generated config for the external
 //! tool, and their diagnostics are remapped post-hoc.
 
+use crate::config::Config;
+#[cfg(test)]
+use crate::config::default_static_config;
 use crate::diagnostic::Diagnostic;
 use std::path::Path;
 
 /// Read-only context handed to in-process check implementations.
+///
+/// `config` is the resolved per-project configuration. Rules that
+/// expose thresholds (max-function-lines, law-of-demeter depth, …)
+/// read their knobs from here via `config.threshold(rule_id, key, fallback)`,
+/// so a project's `comply.toml` can override the defaults without
+/// touching any rule code.
 pub struct CheckCtx<'a> {
     pub path: &'a Path,
     pub source: &'a str,
+    pub config: &'a Config,
+}
+
+impl<'a> CheckCtx<'a> {
+    /// Convenience constructor for unit tests. Uses the process-wide
+    /// default config (defaults only, no user `comply.toml`), so test
+    /// files don't need to construct one and pass it through manually.
+    /// Production code should always go through engine.rs which builds
+    /// a real `CheckCtx` with the loaded config.
+    #[cfg(test)]
+    pub fn for_test(path: &'a Path, source: &'a str) -> Self {
+        Self {
+            path,
+            source,
+            config: default_static_config(),
+        }
+    }
 }
 
 /// A tree-sitter-backed check — receives a parsed AST.

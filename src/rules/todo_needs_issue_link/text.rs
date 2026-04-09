@@ -99,10 +99,7 @@ mod tests {
     use std::path::Path;
 
     fn run(source: &str) -> Vec<Diagnostic> {
-        Check.check(&CheckCtx {
-            path: Path::new("t.ts"),
-            source,
-        })
+        Check.check(&CheckCtx::for_test(Path::new("t.ts"), source))
     }
 
     #[test]
