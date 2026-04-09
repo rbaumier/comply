@@ -75,3 +75,32 @@ fn collect_nested_ternaries(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rules::run_rule_on_ts;
+
+    #[test]
+    fn flags_nested_ternary() {
+        let source = "const x = a ? b ? 1 : 2 : 3;";
+        let diags = run_rule_on_ts(&NoNestedTernary, source);
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].rule_id, "no-nested-ternary");
+    }
+
+    #[test]
+    fn allows_single_ternary() {
+        let source = "const x = a ? 1 : 2;";
+        let diags = run_rule_on_ts(&NoNestedTernary, source);
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn flags_deeply_nested_ternaries() {
+        let source = "const x = a ? b ? c ? 1 : 2 : 3 : 4;";
+        let diags = run_rule_on_ts(&NoNestedTernary, source);
+        // 2 nested levels (b? and c?).
+        assert_eq!(diags.len(), 2);
+    }
+}

@@ -40,3 +40,31 @@ impl Rule for MaxFileLines {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn flags_file_over_limit() {
+        let source = "x\n".repeat(MAX_LINES + 5);
+        let diags = MaxFileLines.check(Path::new("foo.ts"), &source, Language::TypeScript);
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].rule_id, "max-file-lines");
+    }
+
+    #[test]
+    fn allows_file_at_limit() {
+        let source = "x\n".repeat(MAX_LINES);
+        let diags = MaxFileLines.check(Path::new("foo.ts"), &source, Language::TypeScript);
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn allows_file_under_limit() {
+        let source = "x\n".repeat(50);
+        let diags = MaxFileLines.check(Path::new("foo.ts"), &source, Language::TypeScript);
+        assert!(diags.is_empty());
+    }
+}

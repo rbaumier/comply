@@ -25,3 +25,43 @@ pub fn format_eslint(diagnostics: &[Diagnostic]) -> String {
     }
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn diag(severity: Severity) -> Diagnostic {
+        Diagnostic {
+            path: PathBuf::from("foo.ts"),
+            line: 10,
+            column: 5,
+            rule_id: "no-throw".into(),
+            message: "use Result".into(),
+            severity,
+        }
+    }
+
+    #[test]
+    fn empty_diagnostics_produces_empty_string() {
+        assert_eq!(format_eslint(&[]), "");
+    }
+
+    #[test]
+    fn formats_error_severity_correctly() {
+        let out = format_eslint(&[diag(Severity::Error)]);
+        assert_eq!(out, "foo.ts:10:5: error [no-throw] use Result\n");
+    }
+
+    #[test]
+    fn formats_warning_severity_correctly() {
+        let out = format_eslint(&[diag(Severity::Warning)]);
+        assert_eq!(out, "foo.ts:10:5: warning [no-throw] use Result\n");
+    }
+
+    #[test]
+    fn multiple_diagnostics_each_on_own_line() {
+        let out = format_eslint(&[diag(Severity::Error), diag(Severity::Warning)]);
+        assert_eq!(out.lines().count(), 2);
+    }
+}

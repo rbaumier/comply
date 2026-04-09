@@ -98,3 +98,33 @@ fn collect_functions(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rules::run_rule_on_ts;
+
+    #[test]
+    fn flags_long_function() {
+        let body = "let x = 0;\n".repeat(MAX_LINES + 5);
+        let source = format!("function long() {{\n{body}}}");
+        let diags = run_rule_on_ts(&MaxFunctionLines, &source);
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].rule_id, "max-function-lines");
+    }
+
+    #[test]
+    fn allows_short_function() {
+        let source = "function short() { return 42; }";
+        let diags = run_rule_on_ts(&MaxFunctionLines, source);
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn extracts_function_name_in_message() {
+        let body = "let x = 0;\n".repeat(MAX_LINES + 1);
+        let source = format!("function myLongFunc() {{\n{body}}}");
+        let diags = run_rule_on_ts(&MaxFunctionLines, &source);
+        assert!(diags[0].message.contains("myLongFunc"));
+    }
+}

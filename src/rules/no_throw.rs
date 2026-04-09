@@ -71,3 +71,31 @@ fn collect_throw_statements(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rules::run_rule_on_ts;
+
+    #[test]
+    fn flags_throw_statement() {
+        let source = "function f() { throw new Error('boom'); }";
+        let diags = run_rule_on_ts(&NoThrow, source);
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].rule_id, "no-throw");
+    }
+
+    #[test]
+    fn allows_code_without_throw() {
+        let source = "function f() { return 42; }";
+        let diags = run_rule_on_ts(&NoThrow, source);
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn flags_multiple_throws() {
+        let source = "function f() { throw 1; } function g() { throw 2; }";
+        let diags = run_rule_on_ts(&NoThrow, source);
+        assert_eq!(diags.len(), 2);
+    }
+}

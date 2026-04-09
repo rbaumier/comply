@@ -92,7 +92,9 @@ fn run() -> Result<bool> {
     }
 
     // --- Apply comply-ignore suppressions ---
-    all_diagnostics = apply_ignore_suppressions(all_diagnostics)?;
+    // Pass all discovered files so even clean files are scanned for malformed
+    // comply-ignore comments.
+    all_diagnostics = apply_ignore_suppressions(all_diagnostics, &discovered)?;
 
     // --- Output ---
     let has_violations = !all_diagnostics.is_empty();
@@ -121,8 +123,14 @@ fn write_temp_oxlintrc() -> Result<std::path::PathBuf> {
     Ok(path)
 }
 
-/// Read each file with diagnostics and apply comply-ignore suppressions.
-fn apply_ignore_suppressions(diagnostics: Vec<Diagnostic>) -> Result<Vec<Diagnostic>> {
+/// Apply comply-ignore suppressions to diagnostics.
+///
+/// Iterates over every discovered file (not just files with diagnostics) so
+/// that malformed `comply-ignore` comments in clean files are still flagged.
+fn apply_ignore_suppressions(
+    diagnostics: Vec<Diagnostic>,
+    discovered: &[files::SourceFile],
+) -> Result<Vec<Diagnostic>> {
     use std::collections::HashMap;
 
     // Group diagnostics by file path.
@@ -132,14 +140,25 @@ fn apply_ignore_suppressions(diagnostics: Vec<Diagnostic>) -> Result<Vec<Diagnos
     }
 
     let mut result = Vec::new();
-    for (path, file_diags) in by_file {
-        // Read source to find comply-ignore comments.
-        if let Ok(source) = fs::read_to_string(&path) {
-            result.extend(ignore_comments::apply_suppressions(file_diags, &path, &source));
+
+    // Process every discovered file — even ones with no diagnostics — so we
+    // catch malformed comply-ignore comments everywhere.
+    for file in discovered {
+        let file_diags = by_file.remove(&file.path).unwrap_or_default();
+
+        if let Ok(source) = fs::read_to_string(&file.path) {
+            result.extend(ignore_comments::apply_suppressions(
+                file_diags, &file.path, &source,
+            ));
         } else {
-            // Can't read file — keep diagnostics as-is.
             result.extend(file_diags);
         }
+    }
+
+    // Diagnostics for files NOT in the discovered list (e.g. from oxlint
+    // resolving paths differently) — keep them as-is without suppression.
+    for (_, file_diags) in by_file {
+        result.extend(file_diags);
     }
 
     Ok(result)

@@ -88,3 +88,48 @@ fn collect_banned(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rules::run_rule_on_ts;
+
+    #[test]
+    fn flags_handle_prefix() {
+        let source = "function handleClick() {}";
+        let diags = run_rule_on_ts(&BannedIdentifiers, source);
+        assert!(diags.iter().any(|d| d.message.contains("handleClick")));
+    }
+
+    #[test]
+    fn flags_process_prefix() {
+        let source = "function processOrder() {}";
+        let diags = run_rule_on_ts(&BannedIdentifiers, source);
+        assert!(diags.iter().any(|d| d.message.contains("processOrder")));
+    }
+
+    #[test]
+    fn allows_intent_named_function() {
+        let source = "function fulfillOrder() {}";
+        let diags = run_rule_on_ts(&BannedIdentifiers, source);
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn does_not_flag_substring_match() {
+        // "random" contains "do" but not as prefix.
+        let source = "const random = 5;";
+        let diags = run_rule_on_ts(&BannedIdentifiers, source);
+        assert!(
+            diags.is_empty(),
+            "should not flag 'random' which contains 'do' as substring, not prefix"
+        );
+    }
+
+    #[test]
+    fn flags_data_identifier() {
+        let source = "const data = 5;";
+        let diags = run_rule_on_ts(&BannedIdentifiers, source);
+        assert!(diags.iter().any(|d| d.message.contains("data")));
+    }
+}

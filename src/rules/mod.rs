@@ -47,6 +47,22 @@ pub trait Rule {
     }
 }
 
+/// Test helper — parses TS source with tree-sitter and runs a rule's check_tree.
+#[cfg(test)]
+pub fn run_rule_on_ts<R: Rule>(rule: &R, source: &str) -> Vec<Diagnostic> {
+    let mut parser = tree_sitter::Parser::new();
+    parser
+        .set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into())
+        .expect("failed to load TypeScript grammar");
+    let tree = parser.parse(source, None).expect("failed to parse source");
+    rule.check_tree(
+        Path::new("test.ts"),
+        source.as_bytes(),
+        &tree,
+        Language::TypeScript,
+    )
+}
+
 /// All registered custom rules. Add new rules here.
 pub fn all_rules() -> Vec<Box<dyn Rule>> {
     vec![

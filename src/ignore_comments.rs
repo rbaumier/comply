@@ -92,3 +92,52 @@ pub fn apply_suppressions(
     result.extend(ignore_result.bad_ignores);
     result
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diagnostic::Severity;
+
+    fn make_diag(line: usize, rule_id: &str) -> Diagnostic {
+        Diagnostic {
+            path: Path::new("test.ts").to_path_buf(),
+            line,
+            column: 1,
+            rule_id: rule_id.into(),
+            message: "test".into(),
+            severity: Severity::Error,
+        }
+    }
+
+    #[test]
+    fn parse_ignores_extracts_rule_with_justification() {
+        let source = "// comply-ignore: no-throw — legacy code\nthrow err;";
+        let result = parse_ignores(Path::new("test.ts"), source);
+        assert!(result.suppressions.contains(&(2, "no-throw".into())));
+        assert!(result.bad_ignores.is_empty());
+    }
+
+    #[test]
+    fn parse_ignores_flags_missing_justification() {
+        let source = "// comply-ignore: no-throw\nthrow err;";
+        let result = parse_ignores(Path::new("test.ts"), source);
+        assert_eq!(result.bad_ignores.len(), 1);
+        assert_eq!(result.bad_ignores[0].rule_id, "comply-ignore-missing-justification");
+    }
+
+    #[test]
+    fn apply_suppressions_removes_matching_diagnostic() {
+        let source = "// comply-ignore: no-throw — needed\nthrow err;";
+        let diags = vec![make_diag(2, "no-throw")];
+        let filtered = apply_suppressions(diags, Path::new("test.ts"), source);
+        assert_eq!(filtered.len(), 0);
+    }
+
+    #[test]
+    fn apply_suppressions_keeps_unrelated_diagnostic() {
+        let source = "// comply-ignore: no-throw — needed\nlet x = 5;";
+        let diags = vec![make_diag(2, "no-nested-ternary")];
+        let filtered = apply_suppressions(diags, Path::new("test.ts"), source);
+        assert_eq!(filtered.len(), 1);
+    }
+}
