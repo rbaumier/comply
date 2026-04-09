@@ -79,7 +79,6 @@ pub fn lint_ts_with<R: Rule>(rule: &R, source: &str) -> Vec<Diagnostic> {
 /// All registered legacy-trait rules. Shrinks as rules migrate to RuleDef.
 pub fn all_rules() -> Vec<Box<dyn Rule>> {
     vec![
-        Box::new(max_file_lines::MaxFileLines),
         Box::new(max_function_lines::MaxFunctionLines),
         Box::new(no_throw::NoThrow),
         Box::new(no_nested_ternary::NoNestedTernary),
@@ -88,7 +87,6 @@ pub fn all_rules() -> Vec<Box<dyn Rule>> {
 }
 
 /// All registered RuleDef rules. Grows as rules migrate from the legacy trait.
-/// Empty until step 3 starts migrating individual rules.
 pub fn all_rule_defs() -> Vec<RuleDef> {
-    vec![]
+    vec![max_file_lines::register()]
 }
