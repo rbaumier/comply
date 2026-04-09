@@ -21,6 +21,7 @@ pub mod delegated;
 pub mod explicit_units;
 pub mod exports_at_top;
 pub mod jsdoc_on_exported;
+pub mod law_of_demeter;
 pub mod max_file_lines;
 pub mod max_function_lines;
 pub mod meta;
@@ -32,8 +33,10 @@ pub mod no_common_grab_bag;
 pub mod no_default_params;
 pub mod no_generic_names;
 pub mod no_nested_ternary;
+pub mod no_nullish_default_on_input;
 pub mod no_throw;
 pub mod no_type_encoded_names;
+pub mod timeout_on_io;
 pub mod todo_needs_issue_link;
 pub mod walker;
 
@@ -107,6 +110,9 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         no_abbreviated_names::register(),
         no_generic_names::register(),
         no_type_encoded_names::register(),
+        law_of_demeter::register(),
+        timeout_on_io::register(),
+        no_nullish_default_on_input::register(),
     ];
     rules.extend(delegated::register_all());
     rules

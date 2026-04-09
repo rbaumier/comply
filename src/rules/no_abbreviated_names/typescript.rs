@@ -78,10 +78,8 @@ impl AstCheck for Check {
 fn matches_banned(name: &str) -> Option<(&'static str, &'static str)> {
     for word in split_words(name) {
         let lower = word.to_ascii_lowercase();
-        for &(abbr, full) in BANNED_ABBREVIATIONS {
-            if lower == abbr {
-                return Some((abbr, full));
-            }
+        if let Some(&pair) = BANNED_ABBREVIATIONS.iter().find(|(abbr, _)| lower == *abbr) {
+            return Some(pair);
         }
     }
     None
