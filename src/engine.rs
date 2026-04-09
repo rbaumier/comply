@@ -65,6 +65,37 @@ fn lint_one_file(
     Ok(dispatch_backends(file, &source, &applicable, parser, config))
 }
 
+/// Lint in-memory text against every registered rule for `language`.
+///
+/// Used by the LSP server, where the editor sends us the current
+/// document text on every keystroke and we don't want to read from
+/// disk (the disk version is stale relative to the editor's buffer).
+/// Same dispatch logic as `lint_one_file`, minus the disk read.
+///
+/// `dispatch_backends` already skips Oxlint/Clippy/Tsc — those backends
+/// don't produce diagnostics in-process — so the LSP path inherits
+/// "tree-sitter and text rules only" for free, which is exactly what
+/// we want for per-keystroke editor feedback.
+#[must_use = "diagnostics from in-memory lint must be reported"]
+pub fn lint_in_memory(
+    path: &std::path::Path,
+    language: Language,
+    source: &str,
+    config: &Config,
+) -> Vec<Diagnostic> {
+    let rule_defs = rules::all_rule_defs();
+    let applicable = collect_applicable(&rule_defs, language);
+    if applicable.is_empty() {
+        return Vec::new();
+    }
+    let file = SourceFile {
+        path: path.to_path_buf(),
+        language,
+    };
+    let mut parser = Parser::new();
+    dispatch_backends(&file, source, &applicable, &mut parser, config)
+}
+
 /// Flatten `RuleDef[]` into `(meta, backend)` pairs that apply to `language`.
 fn collect_applicable(
     rule_defs: &[RuleDef],

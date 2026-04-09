@@ -51,6 +51,25 @@ impl Language {
             Language::TypeScript | Language::Tsx | Language::JavaScript
         )
     }
+
+    /// Detect the language from a file path's extension. Returns `None`
+    /// for extensions comply doesn't recognize. Used by the LSP server,
+    /// which receives URIs from the editor and needs to decide whether
+    /// the buffer is in scope before running the lint pass.
+    pub fn from_path(path: &Path) -> Option<Self> {
+        let ext = path.extension()?.to_str()?;
+        if TS_EXTENSIONS.contains(&ext) {
+            Some(Language::TypeScript)
+        } else if TSX_EXTENSIONS.contains(&ext) {
+            Some(Language::Tsx)
+        } else if JS_EXTENSIONS.contains(&ext) {
+            Some(Language::JavaScript)
+        } else if RUST_EXTENSIONS.contains(&ext) {
+            Some(Language::Rust)
+        } else {
+            None
+        }
+    }
 }
 
 /// Discover files to lint based on the resolved scan mode.
