@@ -69,14 +69,20 @@ pub mod rust_must_use_on_result;
 pub mod rust_no_bool_return_from_fallible;
 pub mod rust_no_box_default;
 pub mod rust_no_dbg_macro;
+pub mod rust_no_empty_test_fn;
 pub mod rust_no_float_for_money;
+pub mod rust_no_format_in_debug_impl;
 pub mod rust_no_large_tuple_return;
 pub mod rust_no_linkedlist;
+pub mod rust_no_lossy_as_cast;
 pub mod rust_no_panic_macros;
 pub mod rust_no_println_in_library;
+pub mod rust_no_pub_use_glob;
 pub mod rust_no_static_mut;
 pub mod rust_no_unwrap;
+pub mod rust_no_unwrap_in_from_impl;
 pub mod rust_ptr_arg;
+pub mod rust_pub_enum_without_non_exhaustive;
 pub mod rust_rc_mutex;
 pub mod rust_redundant_clone;
 pub mod rust_serde_deny_unknown_fields;
@@ -259,6 +265,13 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         rust_no_bool_return_from_fallible::register(),
         rust_no_large_tuple_return::register(),
         rust_unsafe_impl_without_comment::register(),
+        // v2.3 — final batch: API hygiene + safety rules.
+        rust_no_unwrap_in_from_impl::register(),
+        rust_pub_enum_without_non_exhaustive::register(),
+        rust_no_pub_use_glob::register(),
+        rust_no_lossy_as_cast::register(),
+        rust_no_format_in_debug_impl::register(),
+        rust_no_empty_test_fn::register(),
     ];
     rules.extend(delegated::register_all());
     rules
