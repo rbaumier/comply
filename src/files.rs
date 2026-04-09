@@ -41,10 +41,13 @@ pub fn discover(mode: &ScanMode) -> Result<Vec<SourceFile>> {
     }
 }
 
-/// Walk a directory tree, respecting .gitignore, and classify each file.
+/// Walk a directory tree, respecting .gitignore + standard hidden filters,
+/// and classify each file.
 fn walk_directory(path: &Path) -> Result<Vec<SourceFile>> {
     let mut files = Vec::new();
-    let walker = WalkBuilder::new(path).git_ignore(true).hidden(false).build();
+    // standard_filters = .gitignore + .ignore + hidden + parents — without it,
+    // we'd walk into .git/, node_modules/, target/, etc. on every invocation.
+    let walker = WalkBuilder::new(path).standard_filters(true).build();
 
     for entry in walker {
         let entry = entry.context("failed to read directory entry")?;
@@ -91,4 +94,42 @@ fn classify(path: &Path) -> Option<SourceFile> {
         path: path.to_path_buf(),
         language,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn classify_recognizes_typescript_extensions() {
+        for ext in ["ts", "tsx", "js", "jsx", "mts", "mjs"] {
+            let path = PathBuf::from(format!("foo.{ext}"));
+            let result = classify(&path);
+            assert!(result.is_some(), "{ext} should be recognized");
+            assert_eq!(result.unwrap().language, Language::TypeScript);
+        }
+    }
+
+    #[test]
+    fn classify_recognizes_rust_extension() {
+        let result = classify(&PathBuf::from("foo.rs"));
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().language, Language::Rust);
+    }
+
+    #[test]
+    fn classify_skips_unsupported_extensions() {
+        for ext in ["txt", "md", "json", "py"] {
+            let path = PathBuf::from(format!("foo.{ext}"));
+            assert!(
+                classify(&path).is_none(),
+                "{ext} must not be classified as a lintable source file"
+            );
+        }
+    }
+
+    #[test]
+    fn classify_skips_files_without_extension() {
+        assert!(classify(&PathBuf::from("Makefile")).is_none());
+    }
 }

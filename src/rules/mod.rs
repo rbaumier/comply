@@ -11,6 +11,7 @@ pub mod max_file_lines;
 pub mod max_function_lines;
 pub mod no_nested_ternary;
 pub mod no_throw;
+pub mod walker;
 
 use crate::diagnostic::Diagnostic;
 use crate::files::Language;
@@ -47,9 +48,9 @@ pub trait Rule {
     }
 }
 
-/// Test helper — parses TS source with tree-sitter and runs a rule's check_tree.
+/// Test helper — parses TS source with tree-sitter and applies a rule.
 #[cfg(test)]
-pub fn run_rule_on_ts<R: Rule>(rule: &R, source: &str) -> Vec<Diagnostic> {
+pub fn lint_ts_with<R: Rule>(rule: &R, source: &str) -> Vec<Diagnostic> {
     let mut parser = tree_sitter::Parser::new();
     parser
         .set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into())

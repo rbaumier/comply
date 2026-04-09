@@ -1,8 +1,18 @@
 //! comply — your code will comply.
 //!
 //! Enforces coding-standards rules via syntactic analysis. Dispatches to oxlint
-//! for TS/JS linting, runs custom tree-sitter rules in-process, and unifies
+//! for TS/JS linting, applies custom tree-sitter rules in-process, and unifies
 //! all output into ESLint-like format with remediation messages.
+//!
+//! Pipeline overview:
+//! 1. Parse CLI args → ScanMode (which files to lint).
+//! 2. Discover files via filesystem walk or git diff.
+//! 3. For TS/JS files: invoke oxlint subprocess (if installed) AND apply
+//!    custom tree-sitter rules. The two passes are complementary —
+//!    oxlint catches type/style issues, custom rules catch architecture issues.
+//! 4. For Rust files: apply custom rules only (clippy integration is v2).
+//! 5. Apply comply-ignore suppressions across every discovered file.
+//! 6. Format diagnostics, print, exit 0/1/2.
 
 mod cli;
 mod diagnostic;
@@ -13,36 +23,37 @@ mod output;
 mod oxlint;
 mod rules;
 
-use std::fs;
+use std::collections::HashMap;
 use std::io::Write;
+use std::path::PathBuf;
 use std::process::ExitCode;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Parser;
 use cli::Cli;
 use diagnostic::Diagnostic;
-use files::Language;
+use files::{Language, SourceFile};
 
-/// Embedded oxlint config — written to a temp file at runtime.
+/// Embedded oxlint config — written to a per-invocation temp file at runtime
+/// so concurrent invocations don't race on a shared `/tmp/comply/` path.
 const OXLINTRC: &str = include_str!("oxlintrc.json");
 
 fn main() -> ExitCode {
-    match run() {
-        Ok(has_violations) => {
-            if has_violations {
-                ExitCode::from(1)
-            } else {
-                ExitCode::from(0)
-            }
-        }
+    match lint_project() {
+        Ok(true) => ExitCode::from(1),  // violations found
+        Ok(false) => ExitCode::from(0), // clean
         Err(e) => {
-            eprintln!("comply: internal error: {e:#}");
+            eprintln!(
+                "comply: crashed unexpectedly: {e:#}\n\
+                 Re-run with RUST_BACKTRACE=1 and report at https://github.com/anthropics/comply/issues"
+            );
             ExitCode::from(2)
         }
     }
 }
 
-fn run() -> Result<bool> {
+/// Top-level orchestrator. Returns `true` if any violation was reported.
+fn lint_project() -> Result<bool> {
     let cli = Cli::parse();
     let mode = cli.scan_mode();
     let discovered = files::discover(&mode)?;
@@ -52,75 +63,109 @@ fn run() -> Result<bool> {
         return Ok(false);
     }
 
-    let mut all_diagnostics: Vec<Diagnostic> = Vec::new();
+    let diagnostics = collect_all_diagnostics(&discovered)?;
+    let after_suppressions = apply_ignore_suppressions(diagnostics, &discovered)?;
 
-    // Partition files by language.
-    let ts_files: Vec<_> = discovered
+    report_diagnostics(&after_suppressions);
+    Ok(!after_suppressions.is_empty())
+}
+
+/// Apply every linter (oxlint + custom rules) and collect diagnostics.
+fn collect_all_diagnostics(discovered: &[SourceFile]) -> Result<Vec<Diagnostic>> {
+    let (ts_files, rs_files) = partition_by_language(discovered);
+    let mut diagnostics = Vec::with_capacity(discovered.len() * 2);
+
+    if !ts_files.is_empty() {
+        diagnostics.extend(lint_typescript(&ts_files)?);
+    }
+    if !rs_files.is_empty() {
+        // Custom rules only — clippy integration is v2.
+        diagnostics.extend(engine::lint_files(&rs_files)?);
+    }
+
+    Ok(diagnostics)
+}
+
+/// Split discovered files into TS/JS and Rust slices for language-specific dispatch.
+fn partition_by_language(
+    discovered: &[SourceFile],
+) -> (Vec<&SourceFile>, Vec<&SourceFile>) {
+    let ts_files = discovered
         .iter()
         .filter(|f| f.language == Language::TypeScript)
         .collect();
-    let _rs_files: Vec<_> = discovered
+    let rs_files = discovered
         .iter()
         .filter(|f| f.language == Language::Rust)
         .collect();
-
-    // --- TS/JS pipeline ---
-    if !ts_files.is_empty() {
-        // oxlint subprocess — skip silently if not installed (non-blocking).
-        if oxlint::is_available() {
-            let config_path = write_temp_oxlintrc()?;
-            let oxlint_diags = oxlint::run(&ts_files, Some(config_path.as_path()))?;
-            all_diagnostics.extend(oxlint_diags);
-        } else {
-            eprintln!(
-                "comply: oxlint not found — skipping oxlint rules. \
-                 Install with: npm install -g oxlint"
-            );
-        }
-
-        // Custom tree-sitter rules on TS files.
-        let custom_diags = engine::run_custom_rules(&ts_files)?;
-        all_diagnostics.extend(custom_diags);
-    }
-
-    // --- Rust pipeline (v2 — custom rules only, no clippy yet) ---
-    // Custom rules that apply to Rust (e.g. max-file-lines) already run
-    // via engine::run_custom_rules since they declare Language::Rust.
-    if !_rs_files.is_empty() {
-        let rs_custom_diags = engine::run_custom_rules(&_rs_files)?;
-        all_diagnostics.extend(rs_custom_diags);
-    }
-
-    // --- Apply comply-ignore suppressions ---
-    // Pass all discovered files so even clean files are scanned for malformed
-    // comply-ignore comments.
-    all_diagnostics = apply_ignore_suppressions(all_diagnostics, &discovered)?;
-
-    // --- Output ---
-    let has_violations = !all_diagnostics.is_empty();
-    if has_violations {
-        let formatted = output::format_eslint(&all_diagnostics);
-        print!("{formatted}");
-        eprintln!(
-            "\ncomply: {} violation{} found",
-            all_diagnostics.len(),
-            if all_diagnostics.len() == 1 { "" } else { "s" }
-        );
-    } else {
-        println!("comply: all clear");
-    }
-
-    Ok(has_violations)
+    (ts_files, rs_files)
 }
 
-/// Write the embedded oxlintrc.json to a temp file. Returns the path.
-fn write_temp_oxlintrc() -> Result<std::path::PathBuf> {
-    let dir = std::env::temp_dir().join("comply");
-    fs::create_dir_all(&dir)?;
-    let path = dir.join("oxlintrc.json");
-    let mut file = fs::File::create(&path)?;
-    file.write_all(OXLINTRC.as_bytes())?;
-    Ok(path)
+/// Lint TypeScript/JavaScript files via oxlint subprocess + custom rules.
+fn lint_typescript(ts_files: &[&SourceFile]) -> Result<Vec<Diagnostic>> {
+    let mut diagnostics = Vec::new();
+
+    if oxlint::is_available() {
+        let config = write_temp_oxlintrc()?;
+        diagnostics.extend(oxlint::lint_files(ts_files, Some(config.path()))?);
+        // `config` is held here so the temp file lives until oxlint finishes.
+        drop(config);
+    } else {
+        eprintln!(
+            "comply: oxlint not found — skipping oxlint rules. \
+             Install with: npm install -g oxlint"
+        );
+    }
+
+    diagnostics.extend(engine::lint_files(ts_files)?);
+    Ok(diagnostics)
+}
+
+/// Print diagnostics in ESLint-like format and a summary line.
+fn report_diagnostics(diagnostics: &[Diagnostic]) {
+    if diagnostics.is_empty() {
+        println!("comply: all clear");
+        return;
+    }
+    let formatted = output::format_eslint(diagnostics);
+    print!("{formatted}");
+    eprintln!(
+        "\ncomply: {} violation{} found",
+        diagnostics.len(),
+        if diagnostics.len() == 1 { "" } else { "s" }
+    );
+}
+
+/// Hand-rolled temp file holder — writes the embedded oxlintrc to a unique
+/// per-invocation file with `O_EXCL` semantics via `tempfile::NamedTempFile`.
+struct TempConfig {
+    inner: tempfile::NamedTempFile,
+}
+
+impl TempConfig {
+    fn path(&self) -> &std::path::Path {
+        self.inner.path()
+    }
+}
+
+/// Write the embedded oxlintrc to a fresh temp file and return its handle.
+///
+/// Uses `tempfile::NamedTempFile` rather than a shared `/tmp/comply/` path:
+/// - Concurrent comply invocations can't clobber each other (race-free).
+/// - The unpredictable filename + `O_EXCL` mode prevents the classic
+///   `/tmp` symlink attack where a malicious user pre-creates the path
+///   as a symlink to a victim-writable file.
+/// - The handle deletes the file on drop, so we don't litter /tmp.
+fn write_temp_oxlintrc() -> Result<TempConfig> {
+    let mut tmp = tempfile::Builder::new()
+        .prefix("comply-")
+        .suffix(".json")
+        .tempfile()
+        .context("failed to create temp oxlint config")?;
+    tmp.write_all(OXLINTRC.as_bytes())
+        .context("failed to write oxlint config to temp file")?;
+    tmp.flush().context("failed to flush temp oxlint config")?;
+    Ok(TempConfig { inner: tmp })
 }
 
 /// Apply comply-ignore suppressions to diagnostics.
@@ -129,37 +174,40 @@ fn write_temp_oxlintrc() -> Result<std::path::PathBuf> {
 /// that malformed `comply-ignore` comments in clean files are still flagged.
 fn apply_ignore_suppressions(
     diagnostics: Vec<Diagnostic>,
-    discovered: &[files::SourceFile],
+    discovered: &[SourceFile],
 ) -> Result<Vec<Diagnostic>> {
-    use std::collections::HashMap;
+    let mut by_file = group_by_path(diagnostics);
+    let mut result = Vec::with_capacity(by_file.len());
 
-    // Group diagnostics by file path.
-    let mut by_file: HashMap<std::path::PathBuf, Vec<Diagnostic>> = HashMap::new();
-    for d in diagnostics {
-        by_file.entry(d.path.clone()).or_default().push(d);
-    }
-
-    let mut result = Vec::new();
-
-    // Process every discovered file — even ones with no diagnostics — so we
-    // catch malformed comply-ignore comments everywhere.
     for file in discovered {
         let file_diags = by_file.remove(&file.path).unwrap_or_default();
-
-        if let Ok(source) = fs::read_to_string(&file.path) {
-            result.extend(ignore_comments::apply_suppressions(
-                file_diags, &file.path, &source,
-            ));
-        } else {
-            result.extend(file_diags);
-        }
+        let with_suppressions = suppress_for_file(file_diags, &file.path);
+        result.extend(with_suppressions);
     }
 
-    // Diagnostics for files NOT in the discovered list (e.g. from oxlint
-    // resolving paths differently) — keep them as-is without suppression.
+    // Diagnostics for files NOT in the discovered list (e.g. paths normalized
+    // differently by oxlint) — keep them as-is, no suppression.
     for (_, file_diags) in by_file {
         result.extend(file_diags);
     }
 
     Ok(result)
+}
+
+/// Group a flat diagnostic list by source path.
+fn group_by_path(diagnostics: Vec<Diagnostic>) -> HashMap<PathBuf, Vec<Diagnostic>> {
+    let mut by_file: HashMap<PathBuf, Vec<Diagnostic>> = HashMap::new();
+    for d in diagnostics {
+        by_file.entry(d.path.clone()).or_default().push(d);
+    }
+    by_file
+}
+
+/// Read source for one file and apply comply-ignore filtering.
+/// Returns the original diagnostics unchanged if the file can't be read.
+fn suppress_for_file(file_diags: Vec<Diagnostic>, path: &std::path::Path) -> Vec<Diagnostic> {
+    match std::fs::read_to_string(path) {
+        Ok(source) => ignore_comments::apply_suppressions(file_diags, path, &source),
+        Err(_) => file_diags, // Source unreadable — bypass suppression rather than crash.
+    }
 }
