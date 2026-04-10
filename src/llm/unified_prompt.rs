@@ -13,99 +13,9 @@ use std::path::Path;
 use crate::diagnostic::{Diagnostic, Severity};
 use super::claude_cli;
 
-/// Max lines per chunk sent to a single `claude -p` call. Files
-/// exceeding this after extraction are split into multiple calls.
-const MAX_CHUNK_LINES: usize = 400;
-
-/// Run the unified prompt on one file and return all diagnostics.
-/// If the extracted snippets exceed `MAX_CHUNK_LINES`, the file is
-/// split into chunks and each chunk gets its own `claude -p` call.
-pub fn evaluate_file(
-    source: &str,
-    file_path: &Path,
-    model: &str,
-) -> Result<Vec<Diagnostic>> {
-    if source.lines().count() < 3 {
-        return Ok(vec![]);
-    }
-    let snippets = super::extract::extract_snippets(source);
-    let snippet_lines: Vec<&str> = snippets.lines().collect();
-
-    if snippet_lines.len() <= MAX_CHUNK_LINES {
-        return evaluate_chunk(&snippets, file_path, model);
-    }
-
-    // Split into chunks at gap markers ("... (lines N-M omitted)")
-    // to avoid cutting in the middle of a block.
-    let mut all_diags = Vec::new();
-    let mut chunk = String::new();
-    let mut chunk_line_count = 0;
-
-    for line in &snippet_lines {
-        let is_gap = line.starts_with("... (lines ");
-
-        if chunk_line_count >= MAX_CHUNK_LINES && is_gap {
-            if !chunk.is_empty() {
-                match evaluate_chunk(&chunk, file_path, model) {
-                    Ok(diags) => all_diags.extend(diags),
-                    Err(e) => eprintln!(
-                        "comply: LLM chunk failed on {}: {e:#}",
-                        file_path.display(),
-                    ),
-                }
-            }
-            chunk.clear();
-            chunk_line_count = 0;
-        }
-
-        chunk.push_str(line);
-        chunk.push('\n');
-        chunk_line_count += 1;
-    }
-
-    // Last chunk.
-    if !chunk.is_empty() {
-        match evaluate_chunk(&chunk, file_path, model) {
-            Ok(diags) => all_diags.extend(diags),
-            Err(e) => eprintln!(
-                "comply: LLM chunk failed on {}: {e:#}",
-                file_path.display(),
-            ),
-        }
-    }
-
-    Ok(all_diags)
-}
-
 /// Parse raw JSON from the Bun worker into diagnostics.
 pub fn parse_response(raw: &str, file_path: &Path) -> Result<Vec<Diagnostic>> {
     let resp: UnifiedResponse = serde_json::from_str(raw)
-        .unwrap_or_else(|_| UnifiedResponse {
-            comment_quality: CommentQuality::default(),
-            intent_naming: vec![],
-            pii_in_logs: vec![],
-            mixed_abstraction: vec![],
-            define_errors_out_of_existence: vec![],
-            pull_complexity_downward: vec![],
-            barricade_pattern: vec![],
-            temporal_decomposition: vec![],
-            shallow_module: vec![],
-        });
-    convert_response(resp, file_path)
-}
-
-fn evaluate_chunk(
-    snippets: &str,
-    file_path: &Path,
-    model: &str,
-) -> Result<Vec<Diagnostic>> {
-    let prompt = build_prompt(snippets);
-    let raw = claude_cli::invoke(&claude_cli::LlmRequest {
-        prompt: &prompt,
-        json_schema: UNIFIED_SCHEMA,
-        model,
-    })?;
-    let resp: UnifiedResponse = serde_json::from_str(&raw)
         .unwrap_or_else(|_| UnifiedResponse {
             comment_quality: CommentQuality::default(),
             intent_naming: vec![],
@@ -292,9 +202,7 @@ Is a function's public interface as complex as its implementation? Flag pass-thr
 
 Return EMPTY arrays for categories with no issues. Be conservative — false negatives are better than false positives.
 
-The source below shows only the relevant snippets (comments, function signatures, log statements, function bodies). Lines are prefixed with their original line number. Gaps show `... (lines N-M omitted)`. Use the original line numbers in your output.
-
-Source snippets:
+Source file:
 ```
 {source}
 ```"#

@@ -43,6 +43,12 @@ pub fn extract_snippets(source: &str) -> String {
             }
         }
 
+        // 2b. Non-function declarations (struct, enum, impl, trait,
+        //     type, const, mod, pub use) → keep the full block.
+        if is_declaration(trimmed) {
+            ranges.push((i, block_end(&lines, i)));
+        }
+
         // 3. Log/print statements → 2 lines of context each side.
         if is_log_statement(trimmed) {
             ranges.push((i.saturating_sub(2), (i + 2).min(total - 1)));
@@ -143,6 +149,34 @@ fn is_function_decl(trimmed: &str) -> bool {
         return true;
     }
     false
+}
+
+fn is_declaration(trimmed: &str) -> bool {
+    trimmed.starts_with("pub struct ")
+        || trimmed.starts_with("struct ")
+        || trimmed.starts_with("pub enum ")
+        || trimmed.starts_with("enum ")
+        || trimmed.starts_with("impl ")
+        || trimmed.starts_with("pub trait ")
+        || trimmed.starts_with("trait ")
+        || trimmed.starts_with("pub type ")
+        || trimmed.starts_with("type ")
+        || trimmed.starts_with("pub const ")
+        || trimmed.starts_with("const ")
+        || trimmed.starts_with("pub static ")
+        || trimmed.starts_with("static ")
+        || trimmed.starts_with("pub mod ")
+        || trimmed.starts_with("mod ")
+        || trimmed.starts_with("pub use ")
+        || trimmed.starts_with("pub(crate) struct ")
+        || trimmed.starts_with("pub(crate) enum ")
+        || trimmed.starts_with("pub(crate) type ")
+        || trimmed.starts_with("pub(crate) mod ")
+        || trimmed.starts_with("pub(crate) use ")
+        // TS/JS exports
+        || trimmed.starts_with("export type ")
+        || trimmed.starts_with("export interface ")
+        || trimmed.starts_with("export class ")
 }
 
 fn is_log_statement(trimmed: &str) -> bool {

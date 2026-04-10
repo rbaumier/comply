@@ -17,7 +17,7 @@ use anyhow::{Context, Result};
 use crate::diagnostic::Diagnostic;
 
 /// Cache version — bump when the unified prompt changes materially.
-const PROMPT_VERSION: u32 = 3;
+const PROMPT_VERSION: u32 = 8;
 
 /// Configuration for an LLM lint pass.
 #[derive(Debug)]
@@ -104,77 +104,50 @@ pub fn lint_files(
         return Ok(all_diagnostics);
     }
 
-    // Phase 2: build worker jobs (extract snippets + build prompt).
+    // Phase 2: one worker job per file — full source, all 9 rules.
     let worker_jobs: Vec<WorkerJob> = jobs
         .iter()
-        .flat_map(|job| {
-            let snippets = extract::extract_snippets(&job.source);
-            let snippet_lines: Vec<&str> = snippets.lines().collect();
-
-            // Split large extractions into chunks at gap markers.
-            let chunks = split_into_chunks(&snippet_lines, 400);
-            let num_chunks = chunks.len();
-
-            chunks
-                .into_iter()
-                .enumerate()
-                .map(|(chunk_idx, chunk)| {
-                    let id = if num_chunks == 1 {
-                        job.path.display().to_string()
-                    } else {
-                        format!("{}#chunk{}", job.path.display(), chunk_idx)
-                    };
-                    WorkerJob {
-                        id,
-                        prompt: unified_prompt::build_prompt(&chunk),
-                        model: config.model.clone(),
-                    }
-                })
-                .collect::<Vec<_>>()
+        .map(|job| WorkerJob {
+            id: job.path.display().to_string(),
+            prompt: unified_prompt::build_prompt(&job.source),
+            model: config.model.clone(),
         })
         .collect();
 
-    eprintln!(
-        "comply: LLM — {} files, {} chunks to evaluate",
-        cache_misses,
-        worker_jobs.len(),
-    );
+    eprintln!("comply: LLM — {} files to evaluate", worker_jobs.len());
 
     // Phase 3: invoke Bun worker.
     let worker_results = invoke_worker(&worker_jobs)?;
 
     // Phase 4: parse results, update cache.
-    // Group results by file path (strip #chunkN suffix).
     for job in &jobs {
         let file_id = job.path.display().to_string();
-        let mut file_diags: Vec<Diagnostic> = Vec::new();
 
-        for wr in &worker_results {
-            let wr_file = wr.id.split("#chunk").next().unwrap_or(&wr.id);
-            if wr_file != file_id {
-                continue;
-            }
+        let wr = match worker_results.iter().find(|r| r.id == file_id) {
+            Some(r) => r,
+            None => continue,
+        };
 
-            if let Some(ref err) = wr.error {
-                eprintln!("comply: LLM failed on {}: {err}", wr.id);
-                continue;
-            }
-
-            if let Some(ref json) = wr.result {
-                match unified_prompt::parse_response(json, &job.path) {
-                    Ok(diags) => file_diags.extend(diags),
-                    Err(e) => {
-                        eprintln!("comply: LLM parse failed on {}: {e:#}", wr.id);
-                    }
-                }
-            }
+        if let Some(ref err) = wr.error {
+            eprintln!("comply: LLM failed on {file_id}: {err}");
+            continue;
         }
 
-        // Cache the merged diagnostics for the whole file.
-        if let Ok(json) = serde_json::to_string(&file_diags) {
+        let diags = match wr.result.as_deref() {
+            Some(json) => match unified_prompt::parse_response(json, &job.path) {
+                Ok(d) => d,
+                Err(e) => {
+                    eprintln!("comply: LLM parse failed on {file_id}: {e:#}");
+                    continue;
+                }
+            },
+            None => continue,
+        };
+
+        if let Ok(json) = serde_json::to_string(&diags) {
             let _ = cache::store(&conn, &job.cache_key, &json);
         }
-        all_diagnostics.extend(file_diags);
+        all_diagnostics.extend(diags);
     }
 
     eprintln!(
@@ -182,37 +155,6 @@ pub fn lint_files(
     );
 
     Ok(all_diagnostics)
-}
-
-/// Split snippet lines into chunks of at most `max_lines`, cutting at
-/// gap markers ("... (lines N-M omitted)") to avoid splitting blocks.
-fn split_into_chunks(lines: &[&str], max_lines: usize) -> Vec<String> {
-    if lines.len() <= max_lines {
-        return vec![lines.join("\n")];
-    }
-
-    let mut chunks = Vec::new();
-    let mut chunk = String::new();
-    let mut chunk_len = 0;
-
-    for line in lines {
-        let is_gap = line.starts_with("... (lines ");
-
-        if chunk_len >= max_lines && is_gap && !chunk.is_empty() {
-            chunks.push(std::mem::take(&mut chunk));
-            chunk_len = 0;
-        }
-
-        chunk.push_str(line);
-        chunk.push('\n');
-        chunk_len += 1;
-    }
-
-    if !chunk.is_empty() {
-        chunks.push(chunk);
-    }
-
-    chunks
 }
 
 /// Spawn the Bun worker, send jobs on stdin, read NDJSON results.
