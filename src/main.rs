@@ -21,6 +21,7 @@ mod clippy;
 mod config;
 mod jscpd;
 mod knip;
+mod llm;
 mod madge;
 mod runner_helpers;
 mod diagnostic;
@@ -148,7 +149,26 @@ fn lint_project(cli: &Cli) -> Result<bool> {
         eprintln!("comply: ran {runs} fixer(s); re-linting");
     }
 
-    let diagnostics = collect_all_diagnostics(&discovered, &config)?;
+    let mut diagnostics = collect_all_diagnostics(&discovered, &config)?;
+
+    // Phase 3: LLM rules (opt-in via --with-llm).
+    if cli.with_llm {
+        if !llm::claude_cli::is_available() {
+            anyhow::bail!(
+                "--with-llm requires the `claude` CLI. Install it: \
+                 https://docs.anthropic.com/en/docs/claude-code"
+            );
+        }
+        let all_files: Vec<&SourceFile> = discovered.iter().collect();
+        let llm_rules = crate::rules::llm_rules();
+        let llm_config = llm::LlmConfig {
+            model: cli.model.clone(),
+            concurrency: cli.llm_concurrency,
+            project_root: config_anchor,
+        };
+        diagnostics.extend(llm::lint_files(&all_files, &llm_rules, &llm_config)?);
+    }
+
     let after_overrides = apply_config_filters(diagnostics, &config);
     let after_suppressions = ignore_comments::apply_to_all(after_overrides, &discovered);
 
