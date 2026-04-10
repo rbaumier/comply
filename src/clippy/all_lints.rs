@@ -12,6 +12,7 @@
 /// modifies it. Mirrors clippy's `Allow` / `Warn` / `Deny` / `Forbid`.
 #[allow(dead_code)] // Forbid currently unused; keep the variant for future-proofing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ClippyDefaultLevel {
     Allow,
     Warn,
@@ -22,7 +23,7 @@ pub enum ClippyDefaultLevel {
 /// Every clippy lint, indexed by snake_case name. The names match what
 /// clippy emits in its diagnostic JSON output (`clippy::unwrap_used`,
 /// `clippy::needless_borrow`, …) so a `comply.toml` entry like
-/// `[rules."clippy::needless_borrow"] disabled = true` Just Works.
+/// `[rules."clippy::needless_borrow"] disabled = true` Works.
 pub const ALL_CLIPPY_LINTS: &[(&str, ClippyDefaultLevel)] = &[
     ("clippy::absolute_paths", ClippyDefaultLevel::Allow),
     ("clippy::absurd_extreme_comparisons", ClippyDefaultLevel::Deny),

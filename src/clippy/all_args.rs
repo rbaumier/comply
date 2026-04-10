@@ -12,12 +12,14 @@
 
 #[allow(dead_code)] // String is unused today; keep it for future schemas.
 #[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
 pub enum ArgKind {
     Int,
     String,
     Array,
 }
 
+#[derive(Debug)]
 pub struct ClippyArg {
     pub lint: &'static str,
     pub clippy_toml_key: &'static str,

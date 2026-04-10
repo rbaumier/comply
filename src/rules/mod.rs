@@ -112,8 +112,14 @@ pub mod rust_unit_error_result;
 pub mod rust_unsafe_impl_without_comment;
 pub mod react_no_and_conditional_jsx;
 pub mod react_no_array_index_key;
+pub mod react_no_cookies_in_layout;
+pub mod react_no_object_in_dep_array;
 pub mod react_use_state_lazy_init;
 pub mod tailwind_no_dynamic_class;
+pub mod vue_no_duplicate_v_if;
+pub mod vue_no_options_api;
+pub mod vue_no_reactive_destructure;
+pub mod vue_v_for_needs_stable_key;
 pub mod tanstack_query_array_key;
 pub mod tanstack_query_no_deprecated_props;
 pub mod timeout_on_io;
@@ -331,6 +337,13 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         comment_paraphrases_code::register(),
         // v2.9 — Naming: intent + collection-type alignment.
         no_misleading_collection_name::register(),
+        // v2.7+ — Framework rules (React + Vue).
+        react_no_cookies_in_layout::register(),
+        react_no_object_in_dep_array::register(),
+        vue_no_options_api::register(),
+        vue_no_reactive_destructure::register(),
+        vue_v_for_needs_stable_key::register(),
+        vue_no_duplicate_v_if::register(),
     ];
     rules.extend(delegated::register_all());
     rules
