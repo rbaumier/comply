@@ -20,7 +20,10 @@ pub mod call_expression;
 pub mod banned_identifiers;
 pub mod boolean_naming;
 pub mod comment_paraphrases_code;
+pub mod db_no_n_plus_one;
+pub mod db_no_string_concat_sql;
 pub mod delegated;
+pub mod drizzle_fk_needs_index;
 pub mod drizzle_timestamp_with_timezone;
 pub mod error_without_cause;
 pub mod explicit_return_type_on_exported;
@@ -34,6 +37,8 @@ pub mod law_of_demeter;
 pub mod max_file_lines;
 pub mod max_function_lines;
 pub mod meta;
+pub mod migration_needs_lock_timeout;
+pub mod migration_needs_rollback;
 // rust_must_use_on_result intentionally not declared — see mod.rs
 // below for the rationale.
 pub mod module_header;
@@ -115,6 +120,15 @@ pub mod react_no_array_index_key;
 pub mod react_no_cookies_in_layout;
 pub mod react_no_object_in_dep_array;
 pub mod react_use_state_lazy_init;
+pub mod sql_no_between_timestamp;
+pub mod sql_no_float_for_money;
+pub mod sql_no_like_wildcard_prefix;
+pub mod sql_no_offset_pagination;
+pub mod sql_no_pg_enum;
+pub mod sql_no_select_star;
+pub mod sql_no_timestamp_without_tz;
+pub mod sql_no_varchar;
+pub mod sql_prefer_exists_over_in;
 pub mod tailwind_no_dynamic_class;
 pub mod vue_no_duplicate_v_if;
 pub mod vue_no_options_api;
@@ -344,6 +358,21 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         vue_no_reactive_destructure::register(),
         vue_v_for_needs_stable_key::register(),
         vue_no_duplicate_v_if::register(),
+        // Database rules (extracted from the database skill).
+        sql_no_select_star::register(),
+        sql_no_between_timestamp::register(),
+        sql_no_offset_pagination::register(),
+        sql_no_varchar::register(),
+        sql_no_float_for_money::register(),
+        sql_no_timestamp_without_tz::register(),
+        sql_no_like_wildcard_prefix::register(),
+        sql_no_pg_enum::register(),
+        sql_prefer_exists_over_in::register(),
+        db_no_n_plus_one::register(),
+        db_no_string_concat_sql::register(),
+        migration_needs_lock_timeout::register(),
+        migration_needs_rollback::register(),
+        drizzle_fk_needs_index::register(),
     ];
     rules.extend(delegated::register_all());
     rules
