@@ -77,6 +77,23 @@ pub fn evaluate_file(
     Ok(all_diags)
 }
 
+/// Parse raw JSON from the Bun worker into diagnostics.
+pub fn parse_response(raw: &str, file_path: &Path) -> Result<Vec<Diagnostic>> {
+    let resp: UnifiedResponse = serde_json::from_str(raw)
+        .unwrap_or_else(|_| UnifiedResponse {
+            comment_quality: CommentQuality::default(),
+            intent_naming: vec![],
+            pii_in_logs: vec![],
+            mixed_abstraction: vec![],
+            define_errors_out_of_existence: vec![],
+            pull_complexity_downward: vec![],
+            barricade_pattern: vec![],
+            temporal_decomposition: vec![],
+            shallow_module: vec![],
+        });
+    convert_response(resp, file_path)
+}
+
 fn evaluate_chunk(
     snippets: &str,
     file_path: &Path,
@@ -228,7 +245,7 @@ const UNIFIED_SCHEMA: &str = r#"{
   "required": ["comment_quality", "intent_naming", "pii_in_logs", "mixed_abstraction", "define_errors_out_of_existence", "pull_complexity_downward", "barricade_pattern", "temporal_decomposition", "shallow_module"]
 }"#;
 
-fn build_prompt(source: &str) -> String {
+pub fn build_prompt(source: &str) -> String {
     format!(
         r#"You are a code quality auditor. Analyze the following source file and evaluate it against these 4 categories. Be strict but fair — only flag real problems, not pedantic nitpicks.
 
