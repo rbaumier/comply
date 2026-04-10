@@ -46,10 +46,11 @@ pub fn invoke(req: &LlmRequest) -> Result<String> {
         .spawn()
         .context("failed to spawn `claude` CLI — is it installed?")?;
 
-    // Write prompt to stdin, then drop to signal EOF.
-    if let Some(mut stdin) = child.stdin.take() {
+    {
         use std::io::Write;
-        let _ = stdin.write_all(req.prompt.as_bytes());
+        let mut stdin = child.stdin.take().context("failed to open stdin pipe")?;
+        stdin.write_all(req.prompt.as_bytes()).context("failed to write prompt to stdin")?;
+        stdin.flush().context("failed to flush stdin")?;
     }
 
     let output = child.wait_with_output().context("claude subprocess failed")?;

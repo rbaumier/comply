@@ -13,7 +13,13 @@ use std::path::Path;
 use crate::diagnostic::{Diagnostic, Severity};
 use super::claude_cli;
 
+/// Max lines per chunk sent to a single `claude -p` call. Files
+/// exceeding this after extraction are split into multiple calls.
+const MAX_CHUNK_LINES: usize = 400;
+
 /// Run the unified prompt on one file and return all diagnostics.
+/// If the extracted snippets exceed `MAX_CHUNK_LINES`, the file is
+/// split into chunks and each chunk gets its own `claude -p` call.
 pub fn evaluate_file(
     source: &str,
     file_path: &Path,
@@ -23,7 +29,60 @@ pub fn evaluate_file(
         return Ok(vec![]);
     }
     let snippets = super::extract::extract_snippets(source);
-    let prompt = build_prompt(&snippets);
+    let snippet_lines: Vec<&str> = snippets.lines().collect();
+
+    if snippet_lines.len() <= MAX_CHUNK_LINES {
+        return evaluate_chunk(&snippets, file_path, model);
+    }
+
+    // Split into chunks at gap markers ("... (lines N-M omitted)")
+    // to avoid cutting in the middle of a block.
+    let mut all_diags = Vec::new();
+    let mut chunk = String::new();
+    let mut chunk_line_count = 0;
+
+    for line in &snippet_lines {
+        let is_gap = line.starts_with("... (lines ");
+
+        if chunk_line_count >= MAX_CHUNK_LINES && is_gap {
+            if !chunk.is_empty() {
+                match evaluate_chunk(&chunk, file_path, model) {
+                    Ok(diags) => all_diags.extend(diags),
+                    Err(e) => eprintln!(
+                        "comply: LLM chunk failed on {}: {e:#}",
+                        file_path.display(),
+                    ),
+                }
+            }
+            chunk.clear();
+            chunk_line_count = 0;
+        }
+
+        chunk.push_str(line);
+        chunk.push('\n');
+        chunk_line_count += 1;
+    }
+
+    // Last chunk.
+    if !chunk.is_empty() {
+        match evaluate_chunk(&chunk, file_path, model) {
+            Ok(diags) => all_diags.extend(diags),
+            Err(e) => eprintln!(
+                "comply: LLM chunk failed on {}: {e:#}",
+                file_path.display(),
+            ),
+        }
+    }
+
+    Ok(all_diags)
+}
+
+fn evaluate_chunk(
+    snippets: &str,
+    file_path: &Path,
+    model: &str,
+) -> Result<Vec<Diagnostic>> {
+    let prompt = build_prompt(snippets);
     let raw = claude_cli::invoke(&claude_cli::LlmRequest {
         prompt: &prompt,
         json_schema: UNIFIED_SCHEMA,

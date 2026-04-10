@@ -4,15 +4,12 @@
 //! Each snippet keeps its original line numbers so the LLM can report
 //! accurate locations. Irrelevant stretches are replaced with a single
 //! `... (lines N-M omitted)` marker.
+//!
+//! Ranges are collected, then merged — if block A contains block B,
+//! only A survives. This prevents a `///` doc comment on a struct
+//! field from duplicating the enclosing struct.
 
-/// Walk the source and keep only blocks that matter for LLM rules:
-///
-/// - Comment + the full block it documents (fn, struct, enum, type, …)
-/// - Public function/method signatures (intent_naming, shallow_module)
-/// - Log/print statements with 2 lines of context (pii_in_logs)
-/// - Functions containing throw/bail!/return Err (define_errors_out_of_existence)
-/// - Functions >20 lines (mixed_abstraction)
-///
+/// Walk the source and keep only blocks that matter for LLM rules.
 /// Returns a new string with `N: original_line` numbering preserved.
 pub fn extract_snippets(source: &str) -> String {
     let lines: Vec<&str> = source.lines().collect();
@@ -21,52 +18,63 @@ pub fn extract_snippets(source: &str) -> String {
         return String::new();
     }
 
-    // Mark which lines to keep.
-    let mut keep = vec![false; total];
+    let mut ranges: Vec<(usize, usize)> = Vec::new();
 
     for (i, line) in lines.iter().enumerate() {
         let trimmed = line.trim();
 
-        // 1. Comment lines → keep the comment + the full block below.
+        // 1. Comment lines → keep the comment + the block it documents.
         if is_comment_start(trimmed) {
-            mark_comment_and_block(&lines, i, &mut keep);
+            let r = comment_and_block_range(&lines, i);
+            ranges.push(r);
         }
 
-        // 2. Function/method declarations → keep the full body.
+        // 2. Functions >20 lines → keep full body (mixed_abstraction).
+        //    Smaller functions → signature only (intent_naming, shallow_module).
         if is_function_decl(trimmed) {
-            mark_block(&lines, i, &mut keep);
-        }
-
-        // 3. Log/print statements → keep with 2 lines context.
-        if is_log_statement(trimmed) {
-            mark_range(&mut keep, i.saturating_sub(2), (i + 3).min(total));
-        }
-    }
-
-    // Build output with line numbers, replacing gaps with markers.
-    let mut out = String::with_capacity(source.len() / 2);
-    let mut last_kept = None;
-
-    for (i, line) in lines.iter().enumerate() {
-        if keep[i] {
-            // Insert gap marker if we skipped lines.
-            if let Some(prev) = last_kept {
-                if i > prev + 1 {
-                    out.push_str(&format!(
-                        "... (lines {}-{} omitted)\n",
-                        prev + 2,
-                        i
-                    ));
-                }
-            } else if i > 0 {
-                out.push_str(&format!("... (lines 1-{} omitted)\n", i));
+            let block_end = block_end(&lines, i);
+            let size = block_end - i + 1;
+            if size > 20 {
+                ranges.push((i, block_end));
+            } else {
+                let sig_end = signature_end(&lines, i);
+                ranges.push((i, sig_end));
+                ranges.push((block_end, block_end));
             }
-            out.push_str(&format!("{}: {}\n", i + 1, line));
-            last_kept = Some(i);
+        }
+
+        // 3. Log/print statements → 2 lines of context each side.
+        if is_log_statement(trimmed) {
+            ranges.push((i.saturating_sub(2), (i + 2).min(total - 1)));
         }
     }
 
-    if let Some(prev) = last_kept {
+    // Merge overlapping/contained ranges.
+    let merged = merge_ranges(&mut ranges);
+
+    // Build output with line numbers, inserting gap markers.
+    let mut out = String::with_capacity(source.len() / 2);
+    let mut last_end: Option<usize> = None;
+
+    for &(start, end) in &merged {
+        if let Some(prev) = last_end {
+            if start > prev + 1 {
+                out.push_str(&format!(
+                    "... (lines {}-{} omitted)\n",
+                    prev + 2,
+                    start,
+                ));
+            }
+        } else if start > 0 {
+            out.push_str(&format!("... (lines 1-{} omitted)\n", start));
+        }
+        for i in start..=end {
+            out.push_str(&format!("{}: {}\n", i + 1, lines[i]));
+        }
+        last_end = Some(end);
+    }
+
+    if let Some(prev) = last_end {
         if prev + 1 < total {
             out.push_str(&format!(
                 "... (lines {}-{} omitted)\n",
@@ -79,21 +87,43 @@ pub fn extract_snippets(source: &str) -> String {
     out
 }
 
+// ── Range helpers ───────────────────────────────────────────────────
+
+/// Sort ranges by start, then merge overlapping/contained ones.
+fn merge_ranges(ranges: &mut Vec<(usize, usize)>) -> Vec<(usize, usize)> {
+    if ranges.is_empty() {
+        return vec![];
+    }
+    ranges.sort_unstable();
+    let mut merged: Vec<(usize, usize)> = vec![ranges[0]];
+    for &(s, e) in &ranges[1..] {
+        let last = merged.last_mut().unwrap();
+        if s <= last.1 + 1 {
+            // Overlapping or adjacent — extend.
+            last.1 = last.1.max(e);
+        } else {
+            merged.push((s, e));
+        }
+    }
+    merged
+}
+
+// ── Block detection ─────────────────────────────────────────────────
+
 fn is_comment_start(trimmed: &str) -> bool {
     trimmed.starts_with("//")
-        || trimmed.starts_with("///")
         || trimmed.starts_with("/*")
-        || trimmed.starts_with("/**")
-        || trimmed.starts_with("*")
+        || trimmed.starts_with("* ")
+        || trimmed == "*/"
 }
 
 fn is_function_decl(trimmed: &str) -> bool {
     // Rust
-    if (trimmed.starts_with("pub fn ")
+    if trimmed.starts_with("pub fn ")
         || trimmed.starts_with("pub async fn ")
         || trimmed.starts_with("fn ")
         || trimmed.starts_with("async fn ")
-        || trimmed.starts_with("pub(crate) fn "))
+        || trimmed.starts_with("pub(crate) fn ")
     {
         return true;
     }
@@ -106,7 +136,7 @@ fn is_function_decl(trimmed: &str) -> bool {
     {
         return true;
     }
-    // Arrow/method patterns: `name(` or `async name(`
+    // Arrow/method patterns
     if (trimmed.contains("=> {") || trimmed.contains("=> ("))
         && (trimmed.starts_with("export const ") || trimmed.starts_with("const "))
     {
@@ -137,38 +167,35 @@ fn is_log_statement(trimmed: &str) -> bool {
         || trimmed.contains("debug!(")
 }
 
-/// Mark a comment and the code block it documents (fn, struct, etc.).
-fn mark_comment_and_block(lines: &[&str], start: usize, keep: &mut [bool]) {
+/// Range covering a comment block + the code it documents.
+fn comment_and_block_range(lines: &[&str], start: usize) -> (usize, usize) {
     let total = lines.len();
     let mut i = start;
 
-    // Mark all consecutive comment lines.
+    // Skip consecutive comment lines.
     while i < total && is_comment_start(lines[i].trim()) {
-        keep[i] = true;
         i += 1;
     }
-
-    // Skip blank lines between comment and declaration.
+    // Skip blanks.
     while i < total && lines[i].trim().is_empty() {
-        keep[i] = true;
         i += 1;
     }
 
-    // Mark the block below (fn, struct, impl, etc.).
-    if i < total {
-        mark_block(lines, i, keep);
+    if i >= total {
+        return (start, i.saturating_sub(1));
     }
+
+    let end = block_end(lines, i);
+    (start, end)
 }
 
-/// Mark a full brace-delimited block starting at `start`.
-fn mark_block(lines: &[&str], start: usize, keep: &mut [bool]) {
+/// Find the last line of a brace-delimited block starting at `start`.
+fn block_end(lines: &[&str], start: usize) -> usize {
     let total = lines.len();
     let mut depth: i32 = 0;
     let mut found_open = false;
 
     for i in start..total {
-        keep[i] = true;
-
         for ch in lines[i].chars() {
             if ch == '{' {
                 depth += 1;
@@ -177,23 +204,29 @@ fn mark_block(lines: &[&str], start: usize, keep: &mut [bool]) {
                 depth -= 1;
             }
         }
-
-        // Block closed — or single-line statement without braces.
         if found_open && depth <= 0 {
-            break;
+            return i;
         }
-        // No braces after a few lines → probably a declaration without body.
+        // No braces after a few lines → single-line declaration.
         if !found_open && i > start + 2 {
-            break;
+            return i;
         }
     }
+    total.saturating_sub(1)
 }
 
-fn mark_range(keep: &mut [bool], from: usize, to: usize) {
-    let end = to.min(keep.len());
-    for k in &mut keep[from..end] {
-        *k = true;
+/// Find the end of a function signature (up to and including the `{`).
+fn signature_end(lines: &[&str], start: usize) -> usize {
+    let total = lines.len();
+    for i in start..total {
+        if lines[i].contains('{') {
+            return i;
+        }
+        if i > start + 3 {
+            return i;
+        }
     }
+    start
 }
 
 #[cfg(test)]
@@ -245,5 +278,42 @@ fn process() {
         let src = "line1\nline2\nfn foo() {\n}\nline5";
         let out = extract_snippets(src);
         assert!(out.contains("3: fn foo()"));
+    }
+
+    #[test]
+    fn dedup_nested_ranges() {
+        let mut ranges = vec![(5, 50), (10, 20), (15, 18), (48, 55)];
+        let merged = merge_ranges(&mut ranges);
+        assert_eq!(merged, vec![(5, 55)]);
+    }
+
+    #[test]
+    fn dedup_disjoint_ranges() {
+        let mut ranges = vec![(1, 5), (10, 20), (30, 40)];
+        let merged = merge_ranges(&mut ranges);
+        assert_eq!(merged, vec![(1, 5), (10, 20), (30, 40)]);
+    }
+
+    #[test]
+    fn doc_comments_on_struct_fields_dont_duplicate_struct() {
+        // A struct with 3 doc-commented fields — the struct should
+        // appear once, not 3 times.
+        let src = "\
+use something;
+
+/// The main config.
+struct Config {
+    /// Server IP.
+    ip: String,
+    /// Server port.
+    port: u16,
+    /// Enable TLS.
+    tls: bool,
+}
+
+fn other() {}";
+        let out = extract_snippets(src);
+        let config_count = out.matches("struct Config").count();
+        assert_eq!(config_count, 1, "struct Config should appear once, got:\n{out}");
     }
 }
