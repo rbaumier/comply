@@ -7,6 +7,7 @@
 
 pub mod cache;
 pub mod claude_cli;
+pub mod extract;
 pub mod pool;
 pub mod unified_prompt;
 
@@ -19,7 +20,7 @@ use crate::diagnostic::Diagnostic;
 /// Cache version — bump when the unified prompt changes materially.
 /// All cached entries with a different version are automatically
 /// invalidated (the version is part of the cache key hash).
-const PROMPT_VERSION: u32 = 2;
+const PROMPT_VERSION: u32 = 3;
 
 /// Configuration for an LLM lint pass.
 #[derive(Debug)]

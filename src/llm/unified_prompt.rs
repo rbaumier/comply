@@ -22,7 +22,8 @@ pub fn evaluate_file(
     if source.lines().count() < 3 {
         return Ok(vec![]);
     }
-    let prompt = build_prompt(source);
+    let snippets = super::extract::extract_snippets(source);
+    let prompt = build_prompt(&snippets);
     let raw = claude_cli::invoke(&claude_cli::LlmRequest {
         prompt: &prompt,
         json_schema: UNIFIED_SCHEMA,
@@ -215,7 +216,9 @@ Is a function's public interface as complex as its implementation? Flag pass-thr
 
 Return EMPTY arrays for categories with no issues. Be conservative — false negatives are better than false positives.
 
-Source file:
+The source below shows only the relevant snippets (comments, function signatures, log statements, function bodies). Lines are prefixed with their original line number. Gaps show `... (lines N-M omitted)`. Use the original line numbers in your output.
+
+Source snippets:
 ```
 {source}
 ```"#
