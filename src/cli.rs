@@ -63,9 +63,9 @@ pub struct Cli {
     #[arg(long, default_value = "sonnet")]
     pub model: String,
 
-    /// Maximum parallel `claude` subprocesses (default: 8).
+    /// Maximum parallel `claude` subprocesses (default: 30).
     /// Only used with `--with-llm`.
-    #[arg(long, default_value = "8")]
+    #[arg(long, default_value = "30")]
     pub llm_concurrency: usize,
 
     /// Path to lint (default: current directory).
@@ -170,7 +170,7 @@ mod tests {
             fix: false,
             with_llm: false,
             model: "sonnet".to_string(),
-            llm_concurrency: 8,
+            llm_concurrency: 30,
             path: None,
         }
     }
