@@ -114,7 +114,7 @@ async function processJob(job: Job): Promise<SuccessResult | ErrorResult> {
         model: claudeCode(job.model, {
           permissionMode: 'bypassPermissions',
           allowedTools: [],
-          maxTurns: 2,
+          maxTurns: 3,
         }),
         schema: LintResultSchema,
         prompt: job.prompt,
