@@ -31,6 +31,10 @@ pub mod explicit_units;
 pub mod exports_at_top;
 pub mod issue_link;
 pub mod jsx;
+pub mod llm_comment_quality;
+pub mod llm_function_abstraction_levels;
+pub mod llm_intent_naming;
+pub mod llm_pii_in_logs;
 pub mod jsdoc_missing_example;
 pub mod jsdoc_on_exported;
 pub mod law_of_demeter;
@@ -376,4 +380,16 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
     ];
     rules.extend(delegated::register_all());
     rules
+}
+
+/// LLM-powered rules — activated only when `--with-llm` is passed.
+/// Each rule implements `crate::llm::LlmRule` and evaluates code blocks
+/// via the `claude` CLI subprocess.
+pub fn llm_rules() -> Vec<Box<dyn crate::llm::LlmRule>> {
+    vec![
+        Box::new(llm_comment_quality::Rule),
+        Box::new(llm_intent_naming::Rule),
+        Box::new(llm_pii_in_logs::Rule),
+        Box::new(llm_function_abstraction_levels::Rule),
+    ]
 }

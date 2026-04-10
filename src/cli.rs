@@ -48,12 +48,25 @@ pub struct Cli {
     pub should_emit_json: bool,
 
     /// Apply auto-fixes for any rule whose backend supports it.
-    /// Currently delegates to `oxlint --fix` for TS/JS files and to
-    /// `cargo clippy --fix --allow-dirty --allow-staged` for Rust
-    /// crates. After fixing, comply re-runs the lint pass so the
-    /// remaining (non-fixable) violations are still reported.
     #[arg(long)]
     pub fix: bool,
+
+    /// Enable LLM-powered semantic rules. Spawns `claude` CLI as a
+    /// subprocess for rules that can't be checked mechanically (comment
+    /// quality, intent naming, PII detection, etc.). Uses your local
+    /// Claude subscription — no API key or extra cost. Panics if the
+    /// `claude` CLI is not installed.
+    #[arg(long)]
+    pub with_llm: bool,
+
+    /// LLM model override (default: sonnet). Only used with `--with-llm`.
+    #[arg(long, default_value = "sonnet")]
+    pub model: String,
+
+    /// Maximum parallel `claude` subprocesses (default: 8).
+    /// Only used with `--with-llm`.
+    #[arg(long, default_value = "8")]
+    pub llm_concurrency: usize,
 
     /// Path to lint (default: current directory).
     pub path: Option<PathBuf>,
@@ -155,6 +168,9 @@ mod tests {
             range: None,
             should_emit_json: false,
             fix: false,
+            with_llm: false,
+            model: "sonnet".to_string(),
+            llm_concurrency: 8,
             path: None,
         }
     }
