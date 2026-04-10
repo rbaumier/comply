@@ -77,6 +77,13 @@ pub fn materialize(config: &Config) -> Result<Option<(tempfile::TempDir, PathBuf
     Ok(Some((dir, dir_path)))
 }
 
+/// Cargo expects `CLIPPY_CONF_DIR` to point to a directory containing
+/// `clippy.toml`, not to the file itself.
+#[must_use]
+pub fn env_var_for_dir(dir: &Path) -> (String, String) {
+    ("CLIPPY_CONF_DIR".to_string(), dir.display().to_string())
+}
+
 fn lookup_arg(rule_id: &str) -> Option<&'static ClippyArg> {
     CLIPPY_THRESHOLD_LINTS.iter().find(|a| a.lint == rule_id)
 }
@@ -109,14 +116,6 @@ fn encode_arg(arg: &ClippyArg, value: &toml::Value) -> Option<String> {
 
 fn escape_toml_string(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
-}
-
-/// Cargo expects `CLIPPY_CONF_DIR` to point to a directory containing
-/// `clippy.toml`, not to the file itself. This helper exists so the
-/// callers don't have to remember.
-#[must_use]
-pub fn env_var_for_dir(dir: &Path) -> (String, String) {
-    ("CLIPPY_CONF_DIR".to_string(), dir.display().to_string())
 }
 
 #[cfg(test)]

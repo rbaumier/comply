@@ -24,6 +24,14 @@ impl TextCheck for Check {
         if count <= max_lines {
             return vec![];
         }
+        // Generated data files (lint registries, schema tables) are exempt:
+        // they're maintained by a script, not a human, and splitting them
+        // only makes the generator more complex. The marker `@generated`
+        // in a comment within the first 5 lines opts the file out.
+        let first_lines: String = ctx.source.lines().take(5).collect::<Vec<_>>().join("\n");
+        if first_lines.contains("@generated") {
+            return vec![];
+        }
         vec![Diagnostic {
             path: ctx.path.to_path_buf(),
             line: max_lines + 1,

@@ -1,4 +1,4 @@
-//! cargo clippy subprocess — runs clippy on Rust files and converts the
+//! @generated — cargo clippy subprocess — runs clippy on Rust files and converts the
 //! `--message-format=json` stream into unified Diagnostic structs.
 //!
 //! How it works:

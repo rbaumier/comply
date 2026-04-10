@@ -21,7 +21,7 @@
 //!   4. After both tools finish, comply re-runs the normal lint pass
 //!      so the user sees what's left (the diagnostics nobody can
 //!      auto-fix). The caller of `apply_fixes` is responsible for
-//!      that re-run; this module just edits the files.
+//!      that re-run; this module edits the files.
 //!
 //! Loose `.rs` files outside any Cargo workspace are skipped with a
 //! warning, same as the regular clippy runner.

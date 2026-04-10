@@ -76,7 +76,7 @@ fn run() -> Result<bool> {
             Ok(false)
         }
         Some(Command::Lsp) => {
-            // Spin up a small tokio runtime just for the LSP server.
+            // Spin up a small tokio runtime for the LSP server.
             // Comply itself is sync; we don't pay the runtime cost
             // unless the user actually starts the LSP.
             let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -165,14 +165,18 @@ fn collect_all_diagnostics(
     discovered: &[SourceFile],
     config: &Config,
 ) -> Result<Vec<Diagnostic>> {
-    let (ts_files, rs_files) = partition_by_language(discovered);
+    let by_lang = partition_by_language(discovered);
     let mut diagnostics = Vec::with_capacity(discovered.len());
 
-    if !ts_files.is_empty() {
-        diagnostics.extend(lint_typescript(&ts_files, config)?);
+    if !by_lang.ts.is_empty() {
+        diagnostics.extend(lint_typescript(&by_lang.ts, config)?);
     }
-    if !rs_files.is_empty() {
-        diagnostics.extend(lint_rust(&rs_files, config)?);
+    if !by_lang.rs.is_empty() {
+        diagnostics.extend(lint_rust(&by_lang.rs, config)?);
+    }
+    // Vue SFCs: text-based rules only (no tree-sitter grammar, no oxlint).
+    if !by_lang.vue.is_empty() {
+        diagnostics.extend(engine::lint_files(&by_lang.vue, config)?);
     }
 
     Ok(diagnostics)
@@ -242,18 +246,22 @@ fn lint_rust(rs_files: &[&SourceFile], config: &Config) -> Result<Vec<Diagnostic
     Ok(diagnostics)
 }
 
-/// Split discovered files into TS-family and Rust slices for dispatch.
-/// Without this split we'd hand .rs files to oxlint, which would error.
-fn partition_by_language(discovered: &[SourceFile]) -> (Vec<&SourceFile>, Vec<&SourceFile>) {
-    let ts_files = discovered
-        .iter()
-        .filter(|f| f.language.is_typescript_family())
-        .collect();
-    let rs_files = discovered
-        .iter()
-        .filter(|f| f.language == Language::Rust)
-        .collect();
-    (ts_files, rs_files)
+/// Files grouped by language family for dispatch.
+#[derive(Debug)]
+struct FilesByLanguage<'a> {
+    ts: Vec<&'a SourceFile>,
+    rs: Vec<&'a SourceFile>,
+    vue: Vec<&'a SourceFile>,
+}
+
+/// Split discovered files into TS-family, Rust, and Vue slices.
+/// Without this split we'd hand .rs/.vue files to oxlint, which would error.
+fn partition_by_language(discovered: &[SourceFile]) -> FilesByLanguage<'_> {
+    FilesByLanguage {
+        ts: discovered.iter().filter(|f| f.language.is_typescript_family()).collect(),
+        rs: discovered.iter().filter(|f| f.language == Language::Rust).collect(),
+        vue: discovered.iter().filter(|f| f.language == Language::Vue).collect(),
+    }
 }
 
 /// Lint TypeScript/JavaScript files via oxlint subprocess + custom rules.

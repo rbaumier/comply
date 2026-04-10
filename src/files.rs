@@ -18,6 +18,7 @@ const TS_EXTENSIONS: &[&str] = &["ts", "mts"];
 const TSX_EXTENSIONS: &[&str] = &["tsx", "jsx"];
 const JS_EXTENSIONS: &[&str] = &["js", "mjs"];
 const RUST_EXTENSIONS: &[&str] = &["rs"];
+const VUE_EXTENSIONS: &[&str] = &["vue"];
 
 /// A discovered file tagged with its detected language.
 #[derive(Debug)]
@@ -39,8 +40,12 @@ pub enum Language {
     /// Plain JavaScript `.js` / `.mjs` — handled by the TypeScript grammar
     /// since it's a strict superset.
     JavaScript,
-    /// Rust source `.rs` — no tree-sitter grammar bundled in v1.
+    /// Rust source `.rs`.
     Rust,
+    /// Vue Single-File Component `.vue` — text-based rules only (no
+    /// tree-sitter grammar bundled). Rules check the raw SFC source
+    /// for template/script patterns.
+    Vue,
 }
 
 impl Language {
@@ -67,6 +72,8 @@ impl Language {
             Some(Language::JavaScript)
         } else if RUST_EXTENSIONS.contains(&ext) {
             Some(Language::Rust)
+        } else if VUE_EXTENSIONS.contains(&ext) {
+            Some(Language::Vue)
         } else {
             None
         }
@@ -163,6 +170,8 @@ fn classify(path: &Path) -> Option<SourceFile> {
         Language::JavaScript
     } else if RUST_EXTENSIONS.contains(&ext) {
         Language::Rust
+    } else if VUE_EXTENSIONS.contains(&ext) {
+        Language::Vue
     } else {
         return None;
     };
