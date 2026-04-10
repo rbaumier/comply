@@ -18,24 +18,19 @@
 
 use anyhow::{Context, Result};
 use serde::Deserialize;
-use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 use std::sync::OnceLock;
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::files::SourceFile;
+use crate::runner_helpers;
 
 pub const RULE_ID: &str = "no-circular-imports";
 
 pub fn is_available() -> bool {
     static AVAILABLE: OnceLock<bool> = OnceLock::new();
-    *AVAILABLE.get_or_init(|| {
-        Command::new("madge")
-            .arg("--version")
-            .output()
-            .is_ok_and(|o| o.status.success())
-    })
+    *AVAILABLE.get_or_init(|| runner_helpers::probe_binary("madge", &["--version"]))
 }
 
 #[must_use = "diagnostics from madge must be reported"]
@@ -43,34 +38,11 @@ pub fn lint_files(files: &[&SourceFile]) -> Result<Vec<Diagnostic>> {
     if files.is_empty() {
         return Ok(vec![]);
     }
-    let roots = collect_project_roots(files);
     let mut diagnostics = Vec::new();
-    for root in roots {
+    for root in runner_helpers::collect_unique_roots(files, "package.json") {
         diagnostics.extend(scan_root(&root)?);
     }
     Ok(diagnostics)
-}
-
-fn collect_project_roots(files: &[&SourceFile]) -> HashSet<PathBuf> {
-    let mut roots = HashSet::new();
-    for f in files {
-        if let Some(root) = find_package_root(&f.path) {
-            roots.insert(root);
-        }
-    }
-    roots
-}
-
-fn find_package_root(path: &Path) -> Option<PathBuf> {
-    let canonical = path.canonicalize().ok()?;
-    let mut current = canonical.parent();
-    while let Some(dir) = current {
-        if dir.join("package.json").is_file() {
-            return Some(dir.to_path_buf());
-        }
-        current = dir.parent();
-    }
-    None
 }
 
 fn scan_root(root: &Path) -> Result<Vec<Diagnostic>> {
@@ -121,6 +93,7 @@ fn convert_cycles(cycles: Vec<Vec<String>>, root: &Path) -> Vec<Diagnostic> {
         .collect()
 }
 
+/// External wire format mirror — see comply:rust-serde-deny-unknown-fields.
 #[derive(Debug, Deserialize)]
 struct MadgeWrapped {
     #[serde(default)]

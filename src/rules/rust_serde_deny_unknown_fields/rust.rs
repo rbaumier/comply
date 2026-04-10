@@ -37,6 +37,15 @@ impl AstCheck for Check {
             if has_flatten_field(node, source_bytes) {
                 return;
             }
+            // Structs marked with a `external wire format mirror` doc
+            // comment are mirrors of an external JSON contract we don't
+            // own. Adding `deny_unknown_fields` would crash on every
+            // upstream tool upgrade that adds a field. The marker is the
+            // explicit opt-out — visible at the source, not hidden in
+            // comply.toml.
+            if has_external_mirror_marker(node, source_bytes) {
+                return;
+            }
             let name = node
                 .child_by_field_name("name")
                 .and_then(|n| n.utf8_text(source_bytes).ok())
@@ -97,6 +106,32 @@ fn has_deny_unknown_fields(attr_text: &str) -> bool {
     attr_text.contains("deny_unknown_fields")
 }
 
+/// True if the struct's preceding doc comments contain the literal
+/// marker phrase `external wire format mirror`. Convention used to
+/// opt out of the rule for structs that mirror an external JSON
+/// schema we don't own (`cargo-shear`, `jscpd`, …) — adding
+/// `deny_unknown_fields` to those would crash comply on every
+/// upstream tool upgrade that adds a field.
+fn has_external_mirror_marker(item: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut sibling = item.prev_named_sibling();
+    while let Some(s) = sibling {
+        match s.kind() {
+            "line_comment" | "block_comment" => {
+                if let Ok(text) = s.utf8_text(source) {
+                    let lowered = text.to_ascii_lowercase();
+                    if lowered.contains("external wire format mirror") {
+                        return true;
+                    }
+                }
+            }
+            "attribute_item" => {}
+            _ => break,
+        }
+        sibling = s.prev_named_sibling();
+    }
+    false
+}
+
 /// True if any field inside the struct body carries a
 /// `#[serde(flatten)]` attribute. We walk the `field_declaration_list`
 /// child and, for each `field_declaration`, look for preceding
@@ -135,16 +170,14 @@ fn has_flatten_field(struct_node: tree_sitter::Node, source: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
+    
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
-        let mut parser = tree_sitter::Parser::new();
-        parser.set_language(&tree_sitter_rust::LANGUAGE.into()).unwrap();
-        let tree = parser.parse(source, None).unwrap();
-        Check.check(
-            &CheckCtx::for_test(Path::new("t.rs"), source),
-            &tree,
-        )
+
+
+        crate::rules::test_helpers::run_rust(source, &Check)
+
+
     }
 
     #[test]

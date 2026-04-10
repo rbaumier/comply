@@ -26,17 +26,13 @@ use std::sync::OnceLock;
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::files::SourceFile;
+use crate::runner_helpers;
 
 pub const RULE_ID: &str = "no-clones";
 
 pub fn is_available() -> bool {
     static AVAILABLE: OnceLock<bool> = OnceLock::new();
-    *AVAILABLE.get_or_init(|| {
-        Command::new("jscpd")
-            .arg("--version")
-            .output()
-            .is_ok_and(|o| o.status.success())
-    })
+    *AVAILABLE.get_or_init(|| runner_helpers::probe_binary("jscpd", &["--version"]))
 }
 
 #[must_use = "diagnostics from jscpd must be reported"]
@@ -44,26 +40,23 @@ pub fn lint_files(files: &[&SourceFile]) -> Result<Vec<Diagnostic>> {
     if files.is_empty() {
         return Ok(vec![]);
     }
-    let scan_roots = collect_scan_roots(files);
     let mut diagnostics = Vec::new();
-    for root in scan_roots {
+    for root in collect_scan_roots(files) {
         diagnostics.extend(scan_root(&root)?);
     }
     Ok(diagnostics)
 }
 
-/// jscpd scans directories rather than individual files. We collapse the
-/// input file list to its set of parent directories, then to the shortest
-/// common ancestors so we don't scan a parent twice (e.g. `src/a.ts` and
-/// `src/b.ts` both contribute `src/` once).
+/// jscpd scans directories rather than ancestor manifests, so it can't
+/// use `runner_helpers::collect_unique_roots` (which expects a marker
+/// filename like `package.json`). We collapse the input file list to its
+/// set of canonicalized parent directories — `src/a.ts` and `src/b.ts`
+/// both contribute `src/` once.
 fn collect_scan_roots(files: &[&SourceFile]) -> HashSet<PathBuf> {
-    let mut dirs: HashSet<PathBuf> = HashSet::new();
-    for f in files {
-        if let Some(parent) = f.path.parent().and_then(|p| p.canonicalize().ok()) {
-            dirs.insert(parent);
-        }
-    }
-    dirs
+    files
+        .iter()
+        .filter_map(|f| f.path.parent().and_then(|p| p.canonicalize().ok()))
+        .collect()
 }
 
 fn scan_root(root: &std::path::Path) -> Result<Vec<Diagnostic>> {
@@ -77,8 +70,18 @@ fn scan_root(root: &std::path::Path) -> Result<Vec<Diagnostic>> {
         pid = std::process::id()
     ));
     let _ = std::fs::create_dir_all(&report_dir);
+    // jscpd's default `--min-tokens=50` is calibrated for JavaScript and
+    // produces a torrent of false positives on Rust, where ~10 lines of
+    // trivial code (imports, struct field lists, match arms) can easily
+    // hit 50 tokens with no real duplication. We bumped to 150 — the
+    // sweet spot empirically for a mixed Rust+TS codebase. At that level
+    // jscpd stops flagging the irreducible `pub struct Check; impl
+    // AstCheck for Check { fn check { let source ...; walk_tree(...) } }`
+    // preamble that every tree-sitter rule needs (one-time syntactic
+    // overhead, not real duplication) but still catches the genuine
+    // "I copied this 30-line helper into a sibling module" signal.
     let output = Command::new("jscpd")
-        .args(["--reporters", "json", "--silent", "--output"])
+        .args(["--reporters", "json", "--silent", "--min-tokens", "150", "--output"])
         .arg(&report_dir)
         .arg(root)
         .output()
@@ -130,12 +133,14 @@ fn convert_duplicates(duplicates: Vec<Duplicate>) -> Vec<Diagnostic> {
 // `firstFile.startLoc` as `{ line, column, position }`. We deserialize
 // `startLoc` and ignore the token-offset `start` entirely.
 
+/// External wire format mirror — see comply:rust-serde-deny-unknown-fields.
 #[derive(Debug, Deserialize)]
 struct JscpdReport {
     #[serde(default)]
     duplicates: Vec<Duplicate>,
 }
 
+/// External wire format mirror — see comply:rust-serde-deny-unknown-fields.
 #[derive(Debug, Deserialize)]
 struct Duplicate {
     lines: usize,
@@ -145,6 +150,7 @@ struct Duplicate {
     second_file: FilePosition,
 }
 
+/// External wire format mirror — see comply:rust-serde-deny-unknown-fields.
 #[derive(Debug, Deserialize)]
 struct FilePosition {
     name: String,
@@ -152,6 +158,7 @@ struct FilePosition {
     start_loc: LineCol,
 }
 
+/// External wire format mirror — see comply:rust-serde-deny-unknown-fields.
 #[derive(Debug, Deserialize)]
 struct LineCol {
     line: usize,

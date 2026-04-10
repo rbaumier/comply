@@ -6,49 +6,31 @@
 //! `async fn` via the shared `is_inside_async_fn` helper.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::rust_helpers::is_inside_async_fn;
-use crate::rules::walker::walk_tree;
 
-#[derive(Debug)]
-pub struct Check;
-
-impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
-        let source_bytes = ctx.source.as_bytes();
-        let mut diagnostics = Vec::new();
-        walk_tree(tree, |node| {
-            if node.kind() != "call_expression" {
-                return;
-            }
-            let Some(function) = node.child_by_field_name("function") else {
-                return;
-            };
-            let Ok(text) = function.utf8_text(source_bytes) else {
-                return;
-            };
-            if !is_thread_sleep_call(text) {
-                return;
-            }
-            if !is_inside_async_fn(node, source_bytes) {
-                return;
-            }
-            let pos = node.start_position();
-            diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
-                line: pos.row + 1,
-                column: pos.column + 1,
-                rule_id: "rust-thread-sleep-in-async".into(),
-                message: format!(
-                    "`{text}(..)` blocks the OS thread — inside an `async fn` \
-                     this freezes the runtime worker. Use \
-                     `tokio::time::sleep(d).await` instead."
-                ),
-                severity: Severity::Error,
-            });
-        });
-        diagnostics
+crate::ast_check! { |node, source, ctx, diagnostics|
+    let Some(text) = crate::rules::call_expression::call_function_name(node, source) else {
+        return;
+    };
+    if !is_thread_sleep_call(text) {
+        return;
     }
+    if !is_inside_async_fn(node, source) {
+        return;
+    }
+    let pos = node.start_position();
+    diagnostics.push(Diagnostic {
+        path: ctx.path.to_path_buf(),
+        line: pos.row + 1,
+        column: pos.column + 1,
+        rule_id: "rust-thread-sleep-in-async".into(),
+        message: format!(
+            "`{text}(..)` blocks the OS thread — inside an `async fn` this \
+             freezes the runtime worker. Use `tokio::time::sleep(d).await` \
+             instead."
+        ),
+        severity: Severity::Error,
+    });
 }
 
 fn is_thread_sleep_call(text: &str) -> bool {
@@ -61,16 +43,14 @@ fn is_thread_sleep_call(text: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
+    
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
-        let mut parser = tree_sitter::Parser::new();
-        parser.set_language(&tree_sitter_rust::LANGUAGE.into()).unwrap();
-        let tree = parser.parse(source, None).unwrap();
-        Check.check(
-            &CheckCtx::for_test(Path::new("t.rs"), source),
-            &tree,
-        )
+
+
+        crate::rules::test_helpers::run_rust(source, &Check)
+
+
     }
 
     #[test]

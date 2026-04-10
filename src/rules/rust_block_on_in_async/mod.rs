@@ -11,8 +11,6 @@
 mod rust;
 
 use crate::diagnostic::Severity;
-use crate::files::Language;
-use crate::rules::backend::Backend;
 use crate::rules::meta::RuleMeta;
 use crate::rules::RuleDef;
 
@@ -25,11 +23,6 @@ pub const META: RuleMeta = RuleMeta {
                   runtime` panic.",
     severity: Severity::Error,
     doc_url: None,
-};
-
-pub fn register() -> RuleDef {
-    RuleDef {
-        meta: META,
-        backends: vec![(Language::Rust, Backend::TreeSitter(Box::new(rust::Check)))],
-    }
+};pub fn register() -> RuleDef {
+    crate::register_rust_only!(META, rust)
 }

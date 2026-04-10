@@ -13,6 +13,7 @@
 use serde::de::IgnoredAny;
 use serde::Deserialize;
 
+/// External wire format mirror — see comply:rust-serde-deny-unknown-fields.
 /// Top-level cargo message envelope. We only deserialize the `reason`
 /// discriminator and the `message` payload — every other field of the
 /// envelope (target, package_id, manifest_path, etc.) is ignored.
@@ -26,6 +27,7 @@ pub struct CargoMessage {
     pub _extra: IgnoredAny,
 }
 
+/// External wire format mirror — see comply:rust-serde-deny-unknown-fields.
 /// A rustc/clippy diagnostic. Mirrors what `rustc --error-format=json`
 /// produces inside a cargo `compiler-message`.
 #[derive(Debug, Deserialize)]
@@ -45,6 +47,7 @@ pub struct RustcDiagnostic {
     pub _extra: IgnoredAny,
 }
 
+/// External wire format mirror — see comply:rust-serde-deny-unknown-fields.
 #[derive(Debug, Deserialize)]
 pub struct RustcCode {
     #[serde(default)]
@@ -66,6 +69,7 @@ pub enum RustcLevel {
     FailureNote,
 }
 
+/// External wire format mirror — see comply:rust-serde-deny-unknown-fields.
 #[derive(Debug, Deserialize)]
 pub struct RustcSpan {
     #[serde(default)]

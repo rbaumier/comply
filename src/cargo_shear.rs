@@ -24,14 +24,14 @@
 
 use anyhow::{Context, Result};
 use serde::Deserialize;
-use std::collections::HashSet;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 use std::sync::OnceLock;
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::files::SourceFile;
+use crate::runner_helpers;
 
 /// Stable comply rule id surfaced in diagnostics for unused-dependency
 /// findings. Mirrors the convention used by clippy/oxlint runners.
@@ -40,12 +40,7 @@ pub const RULE_ID: &str = "rust-unused-dep";
 /// Cached availability probe for `cargo shear`.
 pub fn is_available() -> bool {
     static AVAILABLE: OnceLock<bool> = OnceLock::new();
-    *AVAILABLE.get_or_init(|| {
-        Command::new("cargo")
-            .args(["shear", "--version"])
-            .output()
-            .is_ok_and(|o| o.status.success())
-    })
+    *AVAILABLE.get_or_init(|| runner_helpers::probe_binary("cargo", &["shear", "--version"]))
 }
 
 /// Run `cargo shear` on every workspace touched by `files` and return the
@@ -56,42 +51,11 @@ pub fn lint_files(files: &[&SourceFile]) -> Result<Vec<Diagnostic>> {
     if files.is_empty() {
         return Ok(vec![]);
     }
-    let workspaces = collect_workspaces(files);
     let mut diagnostics = Vec::new();
-    for workspace in workspaces {
+    for workspace in runner_helpers::collect_unique_roots(files, "Cargo.toml") {
         diagnostics.extend(lint_workspace(&workspace)?);
     }
     Ok(diagnostics)
-}
-
-/// Walk every input file and collect the unique set of workspace roots.
-/// A workspace root is the nearest ancestor directory containing a
-/// `Cargo.toml`. Files outside any workspace are dropped.
-fn collect_workspaces(files: &[&SourceFile]) -> HashSet<PathBuf> {
-    let mut roots = HashSet::new();
-    for f in files {
-        if let Some(root) = find_cargo_root(&f.path) {
-            roots.insert(root);
-        }
-    }
-    roots
-}
-
-/// Walk parents until we find a `Cargo.toml`. Returns the directory
-/// containing it, not the manifest itself. We canonicalize first so that
-/// callers passing relative paths (`src/main.rs`) still get an absolute
-/// workspace root — without canonicalization, walking parents stops at
-/// the first relative segment and returns an empty path.
-fn find_cargo_root(path: &Path) -> Option<PathBuf> {
-    let canonical = path.canonicalize().ok()?;
-    let mut current = canonical.parent();
-    while let Some(dir) = current {
-        if dir.join("Cargo.toml").is_file() {
-            return Some(dir.to_path_buf());
-        }
-        current = dir.parent();
-    }
-    None
 }
 
 /// Run `cargo shear --format=json` from inside `workspace` and parse the
@@ -178,12 +142,14 @@ fn byte_offset_to_line_col(path: &Path, offset_bytes: usize) -> Option<(usize, u
 }
 
 
+/// External wire format mirror — see comply:rust-serde-deny-unknown-fields.
 #[derive(Debug, Deserialize)]
 struct ShearReport {
     #[serde(default)]
     findings: Vec<Finding>,
 }
 
+/// External wire format mirror — see comply:rust-serde-deny-unknown-fields.
 #[derive(Debug, Deserialize)]
 struct Finding {
     code: String,
@@ -198,6 +164,7 @@ struct Finding {
     location: Option<Location>,
 }
 
+/// External wire format mirror — see comply:rust-serde-deny-unknown-fields.
 #[derive(Debug, Deserialize)]
 struct Location {
     offset: usize,

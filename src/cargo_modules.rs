@@ -21,24 +21,19 @@
 //!    file path.
 
 use anyhow::{Context, Result};
-use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 use std::sync::OnceLock;
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::files::SourceFile;
+use crate::runner_helpers;
 
 pub const RULE_ID: &str = "rust-orphan-module";
 
 pub fn is_available() -> bool {
     static AVAILABLE: OnceLock<bool> = OnceLock::new();
-    *AVAILABLE.get_or_init(|| {
-        Command::new("cargo")
-            .args(["modules", "--version"])
-            .output()
-            .is_ok_and(|o| o.status.success())
-    })
+    *AVAILABLE.get_or_init(|| runner_helpers::probe_binary("cargo", &["modules", "--version"]))
 }
 
 #[must_use = "diagnostics from cargo-modules must be reported"]
@@ -46,34 +41,11 @@ pub fn lint_files(files: &[&SourceFile]) -> Result<Vec<Diagnostic>> {
     if files.is_empty() {
         return Ok(vec![]);
     }
-    let workspaces = collect_workspaces(files);
     let mut diagnostics = Vec::new();
-    for workspace in workspaces {
+    for workspace in runner_helpers::collect_unique_roots(files, "Cargo.toml") {
         diagnostics.extend(scan_workspace(&workspace)?);
     }
     Ok(diagnostics)
-}
-
-fn collect_workspaces(files: &[&SourceFile]) -> HashSet<PathBuf> {
-    let mut roots = HashSet::new();
-    for f in files {
-        if let Some(root) = find_cargo_root(&f.path) {
-            roots.insert(root);
-        }
-    }
-    roots
-}
-
-fn find_cargo_root(path: &Path) -> Option<PathBuf> {
-    let canonical = path.canonicalize().ok()?;
-    let mut current = canonical.parent();
-    while let Some(dir) = current {
-        if dir.join("Cargo.toml").is_file() {
-            return Some(dir.to_path_buf());
-        }
-        current = dir.parent();
-    }
-    None
 }
 
 fn scan_workspace(workspace: &Path) -> Result<Vec<Diagnostic>> {

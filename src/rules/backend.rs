@@ -68,10 +68,12 @@ pub trait TextCheck: Send + Sync {
 
 /// How a rule is enforced for one language.
 ///
-/// `Debug` is intentionally NOT derived: the `TreeSitter` and `Text`
-/// variants carry `Box<dyn AstCheck>` / `Box<dyn TextCheck>` trait
-/// objects, and adding `Debug` would force every concrete check struct
-/// to implement Debug AND require an extra bound on the trait surface.
+/// `Debug` is hand-written below rather than derived: the `TreeSitter`
+/// and `Text` variants carry `Box<dyn AstCheck>` / `Box<dyn TextCheck>`
+/// trait objects, and adding `Debug` to those traits would force every
+/// concrete check struct to implement Debug AND thread the bound through
+/// the trait surface. The manual impl labels the variant and elides the
+/// inner check, which is enough for diagnostics + assert messages.
 #[non_exhaustive]
 #[allow(dead_code)] // Oxlint/Clippy/Tsc variants land in later steps.
 pub enum Backend {
@@ -86,4 +88,16 @@ pub enum Backend {
     Clippy { lint: &'static str },
     /// (v1.2) Shell out to `tsc --noEmit` and filter by diagnostic code.
     Tsc { codes: &'static [u32] },
+}
+
+impl std::fmt::Debug for Backend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TreeSitter(_) => f.write_str("Backend::TreeSitter(<dyn AstCheck>)"),
+            Self::Text(_) => f.write_str("Backend::Text(<dyn TextCheck>)"),
+            Self::Oxlint { rule } => write!(f, "Backend::Oxlint {{ rule: {rule:?} }}"),
+            Self::Clippy { lint } => write!(f, "Backend::Clippy {{ lint: {lint:?} }}"),
+            Self::Tsc { codes } => write!(f, "Backend::Tsc {{ codes: {codes:?} }}"),
+        }
+    }
 }

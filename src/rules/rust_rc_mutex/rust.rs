@@ -89,16 +89,14 @@ fn first_type_arg_is(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
+    
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
-        let mut parser = tree_sitter::Parser::new();
-        parser.set_language(&tree_sitter_rust::LANGUAGE.into()).unwrap();
-        let tree = parser.parse(source, None).unwrap();
-        Check.check(
-            &CheckCtx::for_test(Path::new("t.rs"), source),
-            &tree,
-        )
+
+
+        crate::rules::test_helpers::run_rust(source, &Check)
+
+
     }
 
     #[test]

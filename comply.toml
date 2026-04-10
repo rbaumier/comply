@@ -21,54 +21,11 @@ min_line_length = 100
 max = 450
 
 [overrides]
-
-# `Backend` enum carries `Box<dyn AstCheck>` / `Box<dyn TextCheck>` trait
-# objects — it genuinely cannot derive Debug without forcing every
-# concrete check struct to implement Debug AND thread the bound through
-# the trait surface. Legitimate architectural exception.
-[overrides."**/src/rules/backend.rs"]
-disable = ["rust-impl-debug-on-public-types"]
-
-# `RuleDef` carries `Backend` transitively, same reason.
-[overrides."**/src/rules/mod.rs"]
-disable = ["rust-impl-debug-on-public-types"]
-
-# External-tool JSON schemas (cargo-shear, jscpd, knip, madge, clippy,
-# oxlint) mirror contracts we don't own. Adding
-# `#[serde(deny_unknown_fields)]` would crash comply every time an
-# upstream tool added a field. The deny rule applies to configs WE
-# author, not to mirrors.
-[overrides."**/src/cargo_shear.rs"]
-disable = ["rust-serde-deny-unknown-fields"]
-[overrides."**/src/jscpd.rs"]
-disable = ["rust-serde-deny-unknown-fields"]
-[overrides."**/src/knip.rs"]
-disable = ["rust-serde-deny-unknown-fields"]
-[overrides."**/src/madge.rs"]
-disable = ["rust-serde-deny-unknown-fields"]
-[overrides."**/src/clippy/schema.rs"]
-disable = ["rust-serde-deny-unknown-fields"]
-[overrides."**/src/oxlint/schema.rs"]
-disable = ["rust-serde-deny-unknown-fields"]
-
-# The 15 `src/rules/<rule>/rust.rs` files are unwired Check
-# implementations and documentation stubs awaiting a future refactor
-# that will register them (expanding Rust-side rule coverage by ~10
-# rules). Until then, the orphan-module rule correctly identifies them
-# as dead code, and their shared scaffold trips the clone detector.
-# Both are the right signal long-term; the short-term override avoids
-# drowning the other diagnostics.
-[overrides."**/src/rules/*/rust.rs"]
-disable = ["rust-orphan-module", "no-clones"]
-
-# Test fixtures intentionally contain code patterns the rules flag —
-# that's the whole point of a fixture. Silence rules that would
-# otherwise scream on every fixture file.
-[overrides."tests/**"]
-disable = [
-  "id-length",
-  "no-abbreviated-names",
-  "rust-no-unwrap",
-  "rust-no-panic",
-  "no-clones",
-]
+# (intentionally empty)
+#
+# This block existed for `tests/**` overrides at one point — `id-length`,
+# `rust-no-unwrap`, etc. were silenced for fixture files. Those rules
+# all now respect `#[cfg(test)]` and `#![cfg(test)]` properly, so
+# integration tests no longer trip them. If a fixture file ever needs
+# special handling, prefer fixing the rule's test-context detection
+# over re-adding an override.

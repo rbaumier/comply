@@ -11,6 +11,7 @@
 use serde::de::IgnoredAny;
 use serde::Deserialize;
 
+/// External wire format mirror — see comply:rust-serde-deny-unknown-fields.
 /// Top-level oxlint JSON output envelope.
 #[derive(Debug, Deserialize)]
 pub struct OxlintOutput {
@@ -22,6 +23,7 @@ pub struct OxlintOutput {
     pub _extra: IgnoredAny,
 }
 
+/// External wire format mirror — see comply:rust-serde-deny-unknown-fields.
 /// A single oxlint diagnostic — adapted from oxlint 1.59 JSON format.
 #[derive(Debug, Deserialize)]
 pub struct OxlintDiag {
@@ -52,6 +54,7 @@ pub enum OxlintSeverity {
     Advice,
 }
 
+/// External wire format mirror — see comply:rust-serde-deny-unknown-fields.
 #[derive(Debug, Deserialize)]
 pub struct OxlintLabel {
     #[serde(default)]
@@ -60,6 +63,7 @@ pub struct OxlintLabel {
     pub _extra: IgnoredAny,
 }
 
+/// External wire format mirror — see comply:rust-serde-deny-unknown-fields.
 #[derive(Debug, Deserialize, Default)]
 pub struct OxlintSpan {
     #[serde(default)]

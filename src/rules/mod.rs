@@ -16,6 +16,7 @@
 
 pub mod backend;
 pub mod banned_comment_words;
+pub mod call_expression;
 pub mod banned_identifiers;
 pub mod boolean_naming;
 pub mod comment_paraphrases_code;
@@ -26,6 +27,7 @@ pub mod explicit_return_type_on_exported;
 pub mod explicit_units;
 pub mod exports_at_top;
 pub mod issue_link;
+pub mod jsx;
 pub mod jsdoc_missing_example;
 pub mod jsdoc_on_exported;
 pub mod law_of_demeter;
@@ -53,6 +55,10 @@ pub mod no_inline_param_type;
 pub mod no_json_parse_cast;
 pub mod no_match_snapshot;
 pub mod no_misleading_collection_name;
+pub mod object_literal;
+#[cfg(test)]
+pub mod test_helpers;
+pub mod test_methods;
 pub mod no_multi_op_oneliner;
 pub mod no_nested_ternary;
 pub mod no_new_regex_with_variable;
@@ -122,15 +128,15 @@ use backend::Backend;
 use meta::RuleMeta;
 
 /// A rule: identity + per-language enforcement backends.
-///
-/// `Debug` is intentionally NOT derived: `RuleDef` carries `Backend`,
-/// which contains trait objects that can't reasonably implement Debug
-/// (see `backend::Backend` for the rationale). Public consumers can
-/// read `meta` directly for any human-readable representation they need.
+#[derive(Debug)]
 pub struct RuleDef {
     pub meta: RuleMeta,
     pub backends: Vec<(Language, Backend)>,
 }
+
+// Registry helpers + macros — moved to `registry.rs` and re-exported below.
+mod registry;
+pub use registry::{build_rust_only_rule, build_ts_family_rule, RustBinding};
 
 /// Language slice for the TS-family. Used by rules that apply to all three
 /// variants identically (either via the TS grammar or oxlint delegation).

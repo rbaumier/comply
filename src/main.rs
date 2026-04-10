@@ -22,6 +22,7 @@ mod config;
 mod jscpd;
 mod knip;
 mod madge;
+mod runner_helpers;
 mod diagnostic;
 mod engine;
 mod explain;

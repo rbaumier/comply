@@ -6,68 +6,45 @@
 //! `invalidateQueries({ queryKey: ['todos'] })` match everything.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::walker::walk_tree;
 
-#[derive(Debug)]
-pub struct Check;
-
-impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
-        let source_bytes = ctx.source.as_bytes();
-        let mut diagnostics = Vec::new();
-        walk_tree(tree, |node| {
-            if node.kind() != "pair" {
-                return;
-            }
-            let Some(key) = node.child_by_field_name("key") else {
-                return;
-            };
-            let Ok(key_text) = key.utf8_text(source_bytes) else {
-                return;
-            };
-            if key_text != "queryKey" && key_text != "mutationKey" {
-                return;
-            }
-            let Some(value) = node.child_by_field_name("value") else {
-                return;
-            };
-            if !matches!(value.kind(), "string" | "template_string") {
-                return;
-            }
-            let pos = value.start_position();
-            diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
-                line: pos.row + 1,
-                column: pos.column + 1,
-                rule_id: "tanstack-query-array-key".into(),
-                message: format!(
-                    "`{key_text}` must be an array. Wrap the string in \
-                     brackets: `['todos']` instead of `'todos'`. Array keys \
-                     enable hierarchical invalidation."
-                ),
-                severity: Severity::Error,
-            });
-        });
-        diagnostics
+crate::ast_check! { |node, source, ctx, diagnostics|
+    let Some((key, _)) = crate::rules::object_literal::object_pair(node, source) else {
+        return;
+    };
+    if key != "queryKey" && key != "mutationKey" {
+        return;
     }
+    let Some(value_node) = node.child_by_field_name("value") else {
+        return;
+    };
+    if !matches!(value_node.kind(), "string" | "template_string") {
+        return;
+    }
+    let pos = value_node.start_position();
+    diagnostics.push(Diagnostic {
+        path: ctx.path.to_path_buf(),
+        line: pos.row + 1,
+        column: pos.column + 1,
+        rule_id: "tanstack-query-array-key".into(),
+        message: format!(
+            "`{key}` must be an array. Wrap the string in brackets: `['todos']` \
+             instead of `'todos'`. Array keys enable hierarchical invalidation."
+        ),
+        severity: Severity::Error,
+    });
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
+    
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
-        let mut parser = tree_sitter::Parser::new();
-        parser
-            .set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into())
-            .unwrap();
-        let tree = parser.parse(source, None).unwrap();
-        Check.check(
-            &CheckCtx::for_test(Path::new("t.ts"), source),
-            &tree,
-        )
+
+
+        crate::rules::test_helpers::run_ts(source, &Check)
+
+
     }
 
     #[test]

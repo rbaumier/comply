@@ -6,77 +6,40 @@
 //! generic bounds, etc.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::walker::walk_tree;
+use crate::rules::rust_helpers::result_error_type;
 
-#[derive(Debug)]
-pub struct Check;
-
-impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
-        let source_bytes = ctx.source.as_bytes();
-        let mut diagnostics = Vec::new();
-        walk_tree(tree, |node| {
-            if node.kind() != "generic_type" {
-                return;
-            }
-            let Some(type_node) = node.child_by_field_name("type") else {
-                return;
-            };
-            let Ok(type_text) = type_node.utf8_text(source_bytes) else {
-                return;
-            };
-            if type_text != "Result" && !type_text.ends_with("::Result") {
-                return;
-            }
-            let Some(args) = node.child_by_field_name("type_arguments") else {
-                return;
-            };
-            // The error type is the second positional argument. If there's
-            // only one (e.g. `io::Result<T>`), the error is implicit and we
-            // can't reason about it from the AST alone, so we skip.
-            let mut cursor = args.walk();
-            let positional: Vec<_> = args
-                .named_children(&mut cursor)
-                .filter(|c| c.kind() != "type_binding")
-                .collect();
-            if positional.len() < 2 {
-                return;
-            }
-            let err_type = positional[1];
-            if err_type.kind() != "unit_type" {
-                return;
-            }
-            let pos = node.start_position();
-            diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
-                line: pos.row + 1,
-                column: pos.column + 1,
-                rule_id: "rust-unit-error-result".into(),
-                message: "`Result<_, ()>` discards every error detail. \
-                          Define a real error type, or return `Option<T>` \
-                          if absence is the only failure mode."
-                    .into(),
-                severity: Severity::Warning,
-            });
-        });
-        diagnostics
+crate::ast_check! { |node, source, ctx, diagnostics|
+    let Some(err_type) = result_error_type(node, source) else {
+        return;
+    };
+    if err_type.kind() != "unit_type" {
+        return;
     }
+    let pos = node.start_position();
+    diagnostics.push(Diagnostic {
+        path: ctx.path.to_path_buf(),
+        line: pos.row + 1,
+        column: pos.column + 1,
+        rule_id: "rust-unit-error-result".into(),
+        message: "`Result<_, ()>` discards every error detail. Define a \
+                  real error type, or return `Option<T>` if absence is the \
+                  only failure mode."
+            .into(),
+        severity: Severity::Warning,
+    });
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
+    
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
-        let mut parser = tree_sitter::Parser::new();
-        parser.set_language(&tree_sitter_rust::LANGUAGE.into()).unwrap();
-        let tree = parser.parse(source, None).unwrap();
-        Check.check(
-            &CheckCtx::for_test(Path::new("t.rs"), source),
-            &tree,
-        )
+
+
+        crate::rules::test_helpers::run_rust(source, &Check)
+
+
     }
 
     #[test]

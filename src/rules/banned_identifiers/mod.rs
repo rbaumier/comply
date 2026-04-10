@@ -5,8 +5,6 @@
 mod typescript;
 
 use crate::diagnostic::Severity;
-use crate::files::Language;
-use crate::rules::backend::Backend;
 use crate::rules::meta::RuleMeta;
 use crate::rules::RuleDef;
 
@@ -17,18 +15,6 @@ pub const META: RuleMeta = RuleMeta {
                   `processOrder` → `fulfillOrder`, `handlePayment` → `chargeCustomer`.",
     severity: Severity::Warning,
     doc_url: None,
-};
-
-pub fn register() -> RuleDef {
-    RuleDef {
-        meta: META,
-        backends: vec![
-            (Language::TypeScript, Backend::TreeSitter(Box::new(typescript::Check))),
-            (Language::JavaScript, Backend::TreeSitter(Box::new(typescript::Check))),
-            (Language::Tsx, Backend::TreeSitter(Box::new(typescript::Check))),
-            // Rust: clippy::disallowed_names (configurable; doesn't do
-            // word-boundary matching out of the box). See rust.rs.
-            (Language::Rust, Backend::Clippy { lint: "clippy::disallowed_names" }),
-        ],
-    }
+};pub fn register() -> RuleDef {
+    crate::register_ts_family_with_clippy_marker!(META, typescript, "clippy::disallowed_names")
 }

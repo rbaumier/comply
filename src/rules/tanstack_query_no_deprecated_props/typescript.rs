@@ -90,18 +90,14 @@ fn inside_query_hook(node: tree_sitter::Node, source: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
+    
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
-        let mut parser = tree_sitter::Parser::new();
-        parser
-            .set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into())
-            .unwrap();
-        let tree = parser.parse(source, None).unwrap();
-        Check.check(
-            &CheckCtx::for_test(Path::new("t.ts"), source),
-            &tree,
-        )
+
+
+        crate::rules::test_helpers::run_ts(source, &Check)
+
+
     }
 
     #[test]
