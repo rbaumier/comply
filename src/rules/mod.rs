@@ -52,14 +52,17 @@ pub mod no_dangerously_set_inner_html;
 pub mod no_default_params;
 pub mod no_double_cast;
 pub mod no_enum;
+pub mod no_fire_event;
 pub mod no_focused_test;
 pub mod no_function_overloads;
 pub mod no_generic_names;
 pub mod no_hardcoded_secret;
 pub mod no_inline_param_type;
 pub mod no_json_parse_cast;
+pub mod no_manual_rtl_cleanup;
 pub mod no_match_snapshot;
 pub mod no_misleading_collection_name;
+pub mod no_mock_fetch_directly;
 pub mod object_literal;
 #[cfg(test)]
 pub mod test_helpers;
@@ -68,13 +71,16 @@ pub mod no_multi_op_oneliner;
 pub mod no_nested_ternary;
 pub mod no_new_regex_with_variable;
 pub mod no_nullish_default_on_input;
+pub mod no_page_click_deprecated;
 pub mod no_put_method;
 pub mod no_section_divider_comments;
 pub mod no_set_x_to_y;
 pub mod no_skipped_test_without_link;
+pub mod no_test_logic;
 pub mod no_throw;
 pub mod no_type_encoded_names;
 pub mod no_verb_in_rest_url;
+pub mod no_wait_for_timeout;
 pub mod prefer_switch_over_chained_if;
 pub mod prefer_type_over_interface;
 pub mod react_hoist_regex_outside_component;
@@ -373,6 +379,13 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         migration_needs_lock_timeout::register(),
         migration_needs_rollback::register(),
         drizzle_fk_needs_index::register(),
+        // Testing rules (extracted from the testing skill).
+        no_fire_event::register(),
+        no_wait_for_timeout::register(),
+        no_page_click_deprecated::register(),
+        no_manual_rtl_cleanup::register(),
+        no_mock_fetch_directly::register(),
+        no_test_logic::register(),
     ];
     rules.extend(delegated::register_all());
     rules
