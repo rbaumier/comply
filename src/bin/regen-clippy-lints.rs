@@ -36,11 +36,11 @@ use std::process::{Command, ExitCode};
 
 /// Capture stdout+stderr from `cargo clippy -- -W help`. Cargo emits the
 /// lint dump on stderr; we capture both to be safe across cargo versions.
-fn run_clippy_help() -> Result<String, String> {
+fn run_clippy_help() -> anyhow::Result<String> {
     let output = Command::new("cargo")
         .args(["clippy", "--quiet", "--", "-W", "help"])
         .output()
-        .map_err(|e| format!("failed to invoke `cargo clippy`: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("failed to invoke `cargo clippy`: {e}"))?;
     let mut combined = String::new();
     combined.push_str(&String::from_utf8_lossy(&output.stdout));
     combined.push('\n');
@@ -206,27 +206,27 @@ fn render_all_args() -> String {
 
 // Main
 
-fn repo_root_from_invocation() -> Result<PathBuf, String> {
+fn repo_root_from_invocation() -> anyhow::Result<PathBuf> {
     // The script is normally invoked via `cargo run --bin regen-clippy-lints`
     // from the repo root, so the cwd is already correct. We still
     // verify by checking for `Cargo.toml` and `src/clippy`.
     let cwd = env::current_dir()
-        .map_err(|e| format!("failed to read current_dir: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("failed to read current_dir: {e}"))?;
     if !cwd.join("Cargo.toml").is_file() || !cwd.join("src/clippy").is_dir() {
-        return Err(format!(
+        anyhow::bail!(
             "expected to run from comply repo root (got {})",
             cwd.display()
-        ));
+        );
     }
     Ok(cwd)
 }
 
-fn write_atomic(path: &Path, contents: &str) -> Result<(), String> {
+fn write_atomic(path: &Path, contents: &str) -> anyhow::Result<()> {
     fs::write(path, contents)
-        .map_err(|e| format!("failed to write {}: {e}", path.display()))
+        .map_err(|e| anyhow::anyhow!("failed to write {}: {e}", path.display()))
 }
 
-fn run() -> Result<(), String> {
+fn run() -> anyhow::Result<()> {
     let root = repo_root_from_invocation()?;
     let target_dir = root.join("src/clippy");
 
@@ -235,9 +235,7 @@ fn run() -> Result<(), String> {
     let lints = parse_lints(&text);
     println!("  found {} clippy lints", lints.len());
     if lints.is_empty() {
-        return Err(
-            "parser found zero lints — check the cargo clippy output format".into(),
-        );
+        anyhow::bail!("parser found zero lints — check the cargo clippy output format");
     }
 
     let all_lints_path = target_dir.join("all_lints.rs");

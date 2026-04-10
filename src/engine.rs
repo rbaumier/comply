@@ -53,44 +53,6 @@ pub fn lint_files(files: &[&SourceFile], config: &Config) -> Result<Vec<Diagnost
     Ok(diagnostics)
 }
 
-/// True if the diagnostic's rule fires on its OWN source directory,
-/// i.e. `rule_id = "banned-comment-words"` firing on a path containing
-/// `src/rules/banned_comment_words/`. Returns `false` for:
-///
-/// - Diagnostics from rules whose directory name can't be derived from
-///   the rule id (there are none today, but keep the mapping strict).
-/// - Paths that don't live under `src/rules/*/`.
-fn is_self_reference(d: &Diagnostic) -> bool {
-    let dir_fragment = d.rule_id.replace('-', "_");
-    // We match `src/rules/<dir>/` without a leading slash so BOTH
-    // absolute paths (`/Users/.../src/rules/todo_needs_issue_link/text.rs`)
-    // and relative paths (`src/rules/todo_needs_issue_link/text.rs`)
-    // get caught. Windows path separators are handled by the second
-    // needle.
-    let needle = format!("src/rules/{dir_fragment}/");
-    let alt_needle = format!("src\\rules\\{dir_fragment}\\");
-    let path_str = d.path.to_string_lossy();
-    path_str.contains(&needle) || path_str.contains(&alt_needle)
-}
-
-/// Apply every applicable rule to one file. Parses the AST once if any of
-/// the file's applicable backends is a TreeSitter backend.
-fn lint_one_file(
-    file: &SourceFile,
-    rule_defs: &[RuleDef],
-    parser: &mut Parser,
-    config: &Config,
-) -> Result<Vec<Diagnostic>> {
-    let source = fs::read_to_string(&file.path)
-        .with_context(|| format!("failed to read {}", file.path.display()))?;
-
-    let applicable = collect_applicable(rule_defs, file.language);
-    if applicable.is_empty() {
-        return Ok(vec![]);
-    }
-    Ok(dispatch_backends(file, &source, &applicable, parser, config))
-}
-
 /// Lint in-memory text against every registered rule for `language`.
 ///
 /// Used by the LSP server, where the editor sends us the current
@@ -232,4 +194,33 @@ fn parse_with_grammar(
     };
     parser.set_language(&lang).ok()?;
     parser.parse(source, None)
+}
+
+/// Apply every applicable rule to one file. Parses the AST once if any of
+/// the file's applicable backends is a TreeSitter backend.
+fn lint_one_file(
+    file: &SourceFile,
+    rule_defs: &[RuleDef],
+    parser: &mut Parser,
+    config: &Config,
+) -> Result<Vec<Diagnostic>> {
+    let source = fs::read_to_string(&file.path)
+        .with_context(|| format!("failed to read {}", file.path.display()))?;
+
+    let applicable = collect_applicable(rule_defs, file.language);
+    if applicable.is_empty() {
+        return Ok(vec![]);
+    }
+    Ok(dispatch_backends(file, &source, &applicable, parser, config))
+}
+
+/// True if the diagnostic's rule fires on its OWN source directory,
+/// i.e. `rule_id = "banned-comment-words"` firing on a path containing
+/// `src/rules/banned_comment_words/`.
+fn is_self_reference(d: &Diagnostic) -> bool {
+    let dir_fragment = d.rule_id.replace('-', "_");
+    let needle = format!("src/rules/{dir_fragment}/");
+    let alt_needle = format!("src\\rules\\{dir_fragment}\\");
+    let path_str = d.path.to_string_lossy();
+    path_str.contains(&needle) || path_str.contains(&alt_needle)
 }

@@ -39,6 +39,18 @@ use crate::diagnostic::{Diagnostic as ComplyDiagnostic, Severity};
 use crate::engine;
 use crate::files::Language;
 
+/// Spin up the LSP server on stdio. Blocks until the editor closes
+/// the channel; called from `main` when the user runs `comply lsp`.
+pub async fn run() {
+    let stdin = tokio::io::stdin();
+    let stdout = tokio::io::stdout();
+    let (service, socket) = LspService::new(|client| Backend {
+        client,
+        config: RwLock::new(Arc::new(Config::default())),
+    });
+    Server::new(stdin, stdout, socket).serve(service).await;
+}
+
 /// Server state shared between LSP request handlers. The Client lets
 /// us push notifications back to the editor (publishDiagnostics, log
 /// messages); the Config is loaded once at `initialize` and held
@@ -161,18 +173,6 @@ impl Backend {
     }
 }
 
-/// Spin up the LSP server on stdio. Blocks until the editor closes
-/// the channel; called from `main` when the user runs `comply lsp`.
-pub async fn run() {
-    let stdin = tokio::io::stdin();
-    let stdout = tokio::io::stdout();
-    let (service, socket) = LspService::new(|client| Backend {
-        client,
-        config: RwLock::new(Arc::new(Config::default())),
-    });
-    Server::new(stdin, stdout, socket).serve(service).await;
-}
-
 /// Pull the workspace root out of the LSP `initialize` params,
 /// preferring the modern `workspace_folders` field over the legacy
 /// `root_uri`. Returns `None` when the editor passed neither — the
@@ -205,8 +205,8 @@ fn uri_to_path(uri: &Url) -> Option<PathBuf> {
 /// a one-character range — the editor highlights the column where
 /// comply pointed, which is precise enough for the rules we have.
 fn comply_to_lsp_diagnostic(d: &ComplyDiagnostic) -> LspDiagnostic {
-    let line = d.line.saturating_sub(1) as u32;
-    let column = d.column.saturating_sub(1) as u32;
+    let line = u32::try_from(d.line.saturating_sub(1)).unwrap_or(u32::MAX);
+    let column = u32::try_from(d.column.saturating_sub(1)).unwrap_or(u32::MAX);
     LspDiagnostic {
         range: Range {
             start: Position { line, character: column },
