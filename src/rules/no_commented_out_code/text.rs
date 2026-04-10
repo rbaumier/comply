@@ -32,6 +32,7 @@ const CODE_KEYWORDS: &[&str] = &[
     "export ",
 ];
 
+#[derive(Debug)]
 pub struct Check;
 
 impl TextCheck for Check {

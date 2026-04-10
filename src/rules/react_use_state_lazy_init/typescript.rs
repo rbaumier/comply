@@ -2,75 +2,54 @@
 //! argument is a non-trivial function call.
 //!
 //! Why: `useState(getInitial())` evaluates `getInitial()` on every render,
-//! not just the first. The value is thrown away after mount but the cost
+//! not the first. The value is thrown away after mount but the cost
 //! stays. Worse, `useState(window.innerWidth)` crashes in SSR. The lazy
 //! form `useState(() => getInitial())` evaluates only once.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::walker::walk_tree;
 
-pub struct Check;
-
-impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
-        let source_bytes = ctx.source.as_bytes();
-        let mut diagnostics = Vec::new();
-        walk_tree(tree, |node| {
-            if node.kind() != "call_expression" {
-                return;
-            }
-            let Some(function) = node.child_by_field_name("function") else {
-                return;
-            };
-            let Ok(fn_text) = function.utf8_text(source_bytes) else {
-                return;
-            };
-            if fn_text != "useState" {
-                return;
-            }
-            let Some(args) = node.child_by_field_name("arguments") else {
-                return;
-            };
-            let Some(first_arg) = args.named_child(0) else {
-                return;
-            };
-            // Flag function calls and member expressions (window.innerWidth etc.).
-            if !matches!(first_arg.kind(), "call_expression" | "member_expression") {
-                return;
-            }
-            let pos = node.start_position();
-            diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
-                line: pos.row + 1,
-                column: pos.column + 1,
-                rule_id: "react-use-state-lazy-init".into(),
-                message: "`useState(expensive())` runs the initializer on \
-                          every render and crashes in SSR. Wrap in a lazy \
-                          function: `useState(() => expensive())`."
-                    .into(),
-                severity: Severity::Warning,
-            });
-        });
-        diagnostics
+crate::ast_check! { |node, source, ctx, diagnostics|
+    let Some(name) = crate::rules::call_expression::call_function_name(node, source) else {
+        return;
+    };
+    if name != "useState" {
+        return;
     }
+    let Some(args) = node.child_by_field_name("arguments") else {
+        return;
+    };
+    let Some(first_arg) = args.named_child(0) else {
+        return;
+    };
+    // Flag function calls and member expressions (window.innerWidth etc.).
+    if !matches!(first_arg.kind(), "call_expression" | "member_expression") {
+        return;
+    }
+    let pos = node.start_position();
+    diagnostics.push(Diagnostic {
+        path: ctx.path.to_path_buf(),
+        line: pos.row + 1,
+        column: pos.column + 1,
+        rule_id: "react-use-state-lazy-init".into(),
+        message: "`useState(expensive())` runs the initializer on every render \
+                  and crashes in SSR. Wrap in a lazy function: \
+                  `useState(() => expensive())`."
+            .into(),
+        severity: Severity::Warning,
+    });
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
+    
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
-        let mut parser = tree_sitter::Parser::new();
-        parser
-            .set_language(&tree_sitter_typescript::LANGUAGE_TSX.into())
-            .unwrap();
-        let tree = parser.parse(source, None).unwrap();
-        Check.check(
-            &CheckCtx::for_test(Path::new("t.tsx"), source),
-            &tree,
-        )
+
+
+        crate::rules::test_helpers::run_tsx(source, &Check)
+
+
     }
 
     #[test]

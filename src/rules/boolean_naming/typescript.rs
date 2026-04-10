@@ -13,9 +13,16 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::walker::walk_tree;
 
-const VALID_PREFIXES: &[&str] = &["is", "has", "should", "can", "will", "did", "was"];
+// See the Rust backend for the rationale — classic predicate prefixes
+// plus `in`/`seen`/`found` for loop/state-machine idioms
+// (`inString`, `seenFirst`, `foundTarget`).
+const VALID_PREFIXES: &[&str] = &[
+    "is", "has", "should", "can", "will", "did", "was",
+    "in", "seen", "found",
+];
 const NEGATIVE_SUBSTRINGS: &[&str] = &["Not", "Isnt", "Cannot", "Cant", "Shouldnt"];
 
+#[derive(Debug)]
 pub struct Check;
 
 impl AstCheck for Check {
@@ -55,7 +62,8 @@ fn check_node(
         rule_id: "boolean-naming".into(),
         message: format!(
             "Boolean '{name}' {problem}. Use a predicate prefix: \
-             `is*`, `has*`, `should*`, `can*`, `will*`, `did*`, `was*`."
+             `is*`, `has*`, `should*`, `can*`, `will*`, `did*`, `was*`, \
+             `in*`, `seen*`, `found*`."
         ),
         severity: Severity::Warning,
     })
@@ -122,18 +130,14 @@ fn classify_name(name: &str) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
+    
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
-        let mut parser = tree_sitter::Parser::new();
-        parser
-            .set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into())
-            .unwrap();
-        let tree = parser.parse(source, None).unwrap();
-        Check.check(
-            &CheckCtx::for_test(Path::new("t.ts"), source),
-            &tree,
-        )
+
+
+        crate::rules::test_helpers::run_ts(source, &Check)
+
+
     }
 
     #[test]

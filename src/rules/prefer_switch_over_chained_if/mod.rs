@@ -3,8 +3,6 @@
 mod typescript;
 
 use crate::diagnostic::Severity;
-use crate::files::Language;
-use crate::rules::backend::Backend;
 use crate::rules::meta::RuleMeta;
 use crate::rules::RuleDef;
 
@@ -16,19 +14,6 @@ pub const META: RuleMeta = RuleMeta {
                   lets TypeScript warn on missing cases for union types.",
     severity: Severity::Warning,
     doc_url: None,
-};
-
-pub fn register() -> RuleDef {
-    RuleDef {
-        meta: META,
-        backends: vec![
-            (Language::TypeScript, Backend::TreeSitter(Box::new(typescript::Check))),
-            (Language::JavaScript, Backend::TreeSitter(Box::new(typescript::Check))),
-            (Language::Tsx, Backend::TreeSitter(Box::new(typescript::Check))),
-            // Rust: partial coverage via clippy::comparison_chain for
-            // numeric 3-arm chains. Rustaceans idiomatically reach for
-            // `match` on longer chains.
-            (Language::Rust, Backend::Clippy { lint: "clippy::comparison_chain" }),
-        ],
-    }
+};pub fn register() -> RuleDef {
+    crate::register_ts_family_with_clippy_marker!(META, typescript, "clippy::comparison_chain")
 }

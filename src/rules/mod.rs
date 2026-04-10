@@ -7,28 +7,38 @@
 //!
 //! Backends can be:
 //! - `TreeSitter` — in-process Rust AST walk (the common case for opinionated rules)
-//! - `Text` — plain-text / regex / filesystem check (line count, TODO scan)
+//! - `Text` — plain-text / regex / filesystem check (line count, TODO scan) // comply-ignore: todo-needs-issue-link — mention, not marker.
 //! - `Oxlint` — delegation to an oxlint rule, with rule-id + message remap
 //! - `Clippy` — (v2) delegation to a clippy lint
 //! - `Tsc` — (v1.2) shell out to `tsc --noEmit`
 //!
-//! See TODO.md "Architecture" for the full rationale.
+//! See TODO.md "Architecture" for the full rationale. // comply-ignore: todo-needs-issue-link — file reference, not marker.
 
 pub mod backend;
+pub mod banned_comment_words;
+pub mod call_expression;
 pub mod banned_identifiers;
 pub mod boolean_naming;
+pub mod comment_paraphrases_code;
 pub mod delegated;
 pub mod drizzle_timestamp_with_timezone;
+pub mod error_without_cause;
 pub mod explicit_return_type_on_exported;
 pub mod explicit_units;
 pub mod exports_at_top;
+pub mod issue_link;
+pub mod jsx;
+pub mod jsdoc_missing_example;
 pub mod jsdoc_on_exported;
 pub mod law_of_demeter;
 pub mod max_file_lines;
 pub mod max_function_lines;
 pub mod meta;
+// rust_must_use_on_result intentionally not declared — see mod.rs
+// below for the rationale.
 pub mod module_header;
 pub mod no_abbreviated_names;
+pub mod no_and_in_function_name;
 pub mod no_auth_token_in_localstorage;
 pub mod no_boolean_flag_param;
 pub mod no_commented_out_code;
@@ -44,11 +54,18 @@ pub mod no_hardcoded_secret;
 pub mod no_inline_param_type;
 pub mod no_json_parse_cast;
 pub mod no_match_snapshot;
+pub mod no_misleading_collection_name;
+pub mod object_literal;
+#[cfg(test)]
+pub mod test_helpers;
+pub mod test_methods;
 pub mod no_multi_op_oneliner;
 pub mod no_nested_ternary;
 pub mod no_new_regex_with_variable;
 pub mod no_nullish_default_on_input;
 pub mod no_put_method;
+pub mod no_section_divider_comments;
+pub mod no_set_x_to_y;
 pub mod no_skipped_test_without_link;
 pub mod no_throw;
 pub mod no_type_encoded_names;
@@ -65,7 +82,6 @@ pub mod rust_helpers;
 pub mod rust_impl_debug_on_public_types;
 pub mod rust_large_enum_variant;
 pub mod rust_mod_tests_without_cfg_test;
-pub mod rust_must_use_on_result;
 pub mod rust_no_bool_return_from_fallible;
 pub mod rust_no_box_default;
 pub mod rust_no_dbg_macro;
@@ -112,10 +128,15 @@ use backend::Backend;
 use meta::RuleMeta;
 
 /// A rule: identity + per-language enforcement backends.
+#[derive(Debug)]
 pub struct RuleDef {
     pub meta: RuleMeta,
     pub backends: Vec<(Language, Backend)>,
 }
+
+// Registry helpers + macros — moved to `registry.rs` and re-exported below.
+mod registry;
+pub use registry::{build_rust_only_rule, build_ts_family_rule, RustBinding};
 
 /// Language slice for the TS-family. Used by rules that apply to all three
 /// variants identically (either via the TS grammar or oxlint delegation).
@@ -253,7 +274,12 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         // for the corresponding clippy lint name + setup.
         rust_no_unwrap::register(),
         rust_no_panic_macros::register(),
-        rust_must_use_on_result::register(),
+        // rust_must_use_on_result removed: std::result::Result is already
+        // `#[must_use]` and type aliases (`io::Result`, `anyhow::Result`)
+        // inherit it. Explicitly annotating Result-returning pub fns is
+        // redundant and trips clippy::double_must_use. The rule's use case
+        // collapsed down to hypothetical new types named Result that
+        // don't alias std — we've never seen one in the wild.
         rust_undocumented_unsafe::register(),
         rust_no_println_in_library::register(),
         rust_await_holding_lock::register(),
@@ -294,6 +320,17 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         rust_no_lossy_as_cast::register(),
         rust_no_format_in_debug_impl::register(),
         rust_no_empty_test_fn::register(),
+        // v2.7 — Cat A: mechanical AST rules from the coding-standards skill.
+        error_without_cause::register(),
+        no_set_x_to_y::register(),
+        no_and_in_function_name::register(),
+        // v2.8 — Comments: mechanical comment-quality rules.
+        banned_comment_words::register(),
+        no_section_divider_comments::register(),
+        jsdoc_missing_example::register(),
+        comment_paraphrases_code::register(),
+        // v2.9 — Naming: intent + collection-type alignment.
+        no_misleading_collection_name::register(),
     ];
     rules.extend(delegated::register_all());
     rules

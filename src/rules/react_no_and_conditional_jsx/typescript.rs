@@ -8,6 +8,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::walker::walk_tree;
 
+#[derive(Debug)]
 pub struct Check;
 
 impl AstCheck for Check {
@@ -61,18 +62,14 @@ impl AstCheck for Check {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
+    
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
-        let mut parser = tree_sitter::Parser::new();
-        parser
-            .set_language(&tree_sitter_typescript::LANGUAGE_TSX.into())
-            .unwrap();
-        let tree = parser.parse(source, None).unwrap();
-        Check.check(
-            &CheckCtx::for_test(Path::new("t.tsx"), source),
-            &tree,
-        )
+
+
+        crate::rules::test_helpers::run_tsx(source, &Check)
+
+
     }
 
     #[test]

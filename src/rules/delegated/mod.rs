@@ -2,7 +2,7 @@
 //!
 //! Each submodule defines rules that share the same oxlint plugin prefix.
 //! Every rule in this tree uses `Backend::Oxlint { rule }` exclusively —
-//! there's no per-language tree-sitter implementation, just a thin wrapper
+//! there's no per-language tree-sitter implementation, a thin wrapper
 //! that (a) contributes its config-key to the runtime-generated oxlintrc
 //! and (b) carries a RuleMeta so comply can remap the diagnostic rule-id
 //! and remediation message when oxlint reports a violation.

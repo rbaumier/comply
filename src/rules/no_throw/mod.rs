@@ -7,8 +7,6 @@
 mod typescript;
 
 use crate::diagnostic::Severity;
-use crate::files::Language;
-use crate::rules::backend::Backend;
 use crate::rules::meta::RuleMeta;
 use crate::rules::RuleDef;
 
@@ -19,19 +17,6 @@ pub const META: RuleMeta = RuleMeta {
                   not exceptions. Callers can't see thrown errors in the type signature.",
     severity: Severity::Error,
     doc_url: None,
-};
-
-pub fn register() -> RuleDef {
-    RuleDef {
-        meta: META,
-        backends: vec![
-            (Language::TypeScript, Backend::TreeSitter(Box::new(typescript::Check))),
-            (Language::JavaScript, Backend::TreeSitter(Box::new(typescript::Check))),
-            (Language::Tsx, Backend::TreeSitter(Box::new(typescript::Check))),
-            // Rust: clippy::panic is the representative; see rust.rs for
-            // the full `clippy::{panic,unwrap_used,expect_used,todo,
-            // unimplemented,unreachable}` bundle.
-            (Language::Rust, Backend::Clippy { lint: "clippy::panic" }),
-        ],
-    }
+};pub fn register() -> RuleDef {
+    crate::register_ts_family_with_clippy_marker!(META, typescript, "clippy::panic")
 }

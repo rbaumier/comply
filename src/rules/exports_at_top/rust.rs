@@ -1,26 +1,39 @@
 //! exports-at-top backend for Rust.
 //!
-//! Rust semantics: `pub` items should appear before private items at
-//! module scope. A reader opening the file should see the public API
-//! at the top. No clippy equivalent.
+//! Rust semantics: `pub` items (functions, structs, enums, traits, consts)
+//! should appear before private ones at module scope. A reader opening the
+//! file should see the public API at the top.
+//!
+//! **Intentionally excluded from the "item" set:** `mod` declarations and
+//! `use` imports. Those are infrastructure and the Rust idiom places them
+//! at the top of the file regardless of visibility (`mod foo;` above
+//! `pub use foo::Bar;` is the canonical shape). Counting them as "private
+//! items" would fire on every single file that follows idiomatic Rust
+//! module layout.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 
-/// Item kinds at module scope that have a visibility (pub / private).
+/// Item kinds at module scope that have a meaningful visibility for the
+/// "API first, helpers below" rule. Intentionally EXCLUDED:
+///
+/// - `mod_item` / `use_declaration` — infrastructure; always at the top.
+/// - `const_item` / `static_item` — module-level data/configuration,
+///   not API; commonly lives near the imports, not after the pub fns.
+/// - `impl_item` — inherent `impl` blocks have no direct visibility
+///   (they adopt the type's) and trait impls are driven by the trait.
+///
+/// What's LEFT is the actual public contract surface: fns, types,
+/// traits. Those are what the rule cares about.
 const ITEM_KINDS: &[&str] = &[
     "function_item",
     "struct_item",
     "enum_item",
     "trait_item",
-    "impl_item",
-    "const_item",
-    "static_item",
     "type_item",
-    "mod_item",
-    "use_declaration",
 ];
 
+#[derive(Debug)]
 pub struct Check;
 
 impl AstCheck for Check {
@@ -73,16 +86,14 @@ fn has_pub_visibility(node: tree_sitter::Node, source: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
+    
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
-        let mut parser = tree_sitter::Parser::new();
-        parser.set_language(&tree_sitter_rust::LANGUAGE.into()).unwrap();
-        let tree = parser.parse(source, None).unwrap();
-        Check.check(
-            &CheckCtx::for_test(Path::new("t.rs"), source),
-            &tree,
-        )
+
+
+        crate::rules::test_helpers::run_rust(source, &Check)
+
+
     }
 
     #[test]
@@ -105,5 +116,40 @@ mod tests {
     #[test]
     fn allows_all_private() {
         assert!(run_on("fn a() {}\nfn b() {}\n").is_empty());
+    }
+
+    #[test]
+    fn allows_private_mod_above_pub_use() {
+        // Canonical Rust module layout: private `mod` declarations at the
+        // top, then `pub use` re-exports. This is the idiom the rule
+        // previously fought with.
+        let source = "mod internal;\nmod schema;\npub use schema::Config;\n";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_mod_pub_use_then_pub_fn_then_private_fn() {
+        let source = "mod a;\npub use a::X;\npub fn exposed() {}\nfn helper() {}\n";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn still_flags_helper_before_pub_fn() {
+        let source = "mod a;\nfn helper() {}\npub fn exposed() {}\n";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn allows_private_const_above_pub_struct() {
+        // Private module-level constants are data, not "helpers" — they
+        // belong near the imports.
+        let source = "const MARKER: &str = \"TODO:\";\npub struct Parse { text: String }\n";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_private_static_above_pub_fn() {
+        let source = "static BUFFER: &[u8] = b\"\";\npub fn parse() {}\n";
+        assert!(run_on(source).is_empty());
     }
 }

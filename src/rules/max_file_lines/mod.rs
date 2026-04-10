@@ -1,7 +1,7 @@
 //! max-file-lines — caps every source file at 200 lines.
 //!
 //! Applies to TS, TSX, JS, and Rust. All four languages share the same
-//! text-only backend (`text.rs`) since the check is just a line count.
+//! text-only backend (`text.rs`) since the check is a line count.
 
 mod text;
 

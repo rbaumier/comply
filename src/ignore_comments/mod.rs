@@ -14,6 +14,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 /// Result of parsing comply-ignore comments in a source file.
+#[derive(Debug)]
 pub struct IgnoreResult {
     /// Map: line number → set of rule ids suppressed on that line. Keyed
     /// this way (instead of HashSet<(line, String)>) so the lookup in
@@ -75,7 +76,7 @@ pub fn apply_suppressions(
 
 /// Apply comply-ignore suppressions across every discovered file.
 ///
-/// Iterates over every discovered file (not just files with diagnostics) so
+/// Iterates over every discovered file (not files with diagnostics) so
 /// malformed `comply-ignore` comments in clean files are still flagged.
 ///
 /// **Path canonicalization**: oxlint reports paths it canonicalized

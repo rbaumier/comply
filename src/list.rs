@@ -9,10 +9,10 @@ use anyhow::{Context, Result};
 use crate::diagnostic::Severity;
 use crate::rules;
 
-/// Print the registry. `json` toggles between pretty and JSON output.
-pub fn run(json: bool) -> Result<()> {
+/// Print the registry. `should_emit_json` toggles between pretty and JSON output.
+pub fn run(should_emit_json: bool) -> Result<()> {
     let rules = rules::all_rule_defs();
-    if json {
+    if should_emit_json {
         print_json(&rules)
     } else {
         print_human(&rules);

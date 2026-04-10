@@ -8,13 +8,14 @@
 //!
 //! Detection: per-line regex scan for well-known token shapes. The rule
 //! is conservative — it only fires on patterns with a dedicated prefix
-//! (AWS, GitHub, Stripe, JWT, Bearer) or a clearly-keyed assignment
+//! (AWS, GitHub, Stripe, JWT, Bearer) or a -keyed assignment
 //! (API_KEY = "..."). False positives are acceptable; each one gets
 //! justified with a comply-ignore comment.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
 
+#[derive(Debug)]
 pub struct Check;
 
 impl TextCheck for Check {

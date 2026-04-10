@@ -4,8 +4,6 @@ mod rust;
 mod typescript;
 
 use crate::diagnostic::Severity;
-use crate::files::Language;
-use crate::rules::backend::Backend;
 use crate::rules::meta::RuleMeta;
 use crate::rules::RuleDef;
 
@@ -17,16 +15,6 @@ pub const META: RuleMeta = RuleMeta {
                   later. Untracked skips become permanent coverage holes.",
     severity: Severity::Warning,
     doc_url: None,
-};
-
-pub fn register() -> RuleDef {
-    RuleDef {
-        meta: META,
-        backends: vec![
-            (Language::TypeScript, Backend::TreeSitter(Box::new(typescript::Check))),
-            (Language::JavaScript, Backend::TreeSitter(Box::new(typescript::Check))),
-            (Language::Tsx, Backend::TreeSitter(Box::new(typescript::Check))),
-            (Language::Rust, Backend::TreeSitter(Box::new(rust::Check))),
-        ],
-    }
+};pub fn register() -> RuleDef {
+    crate::register_ts_family_with_rust!(META, typescript, rust)
 }

@@ -1,0 +1,31 @@
+# comply.toml — Comply's own configuration.
+#
+# The goal of this file is "as short as possible". Every entry here is a
+# real project-specific tuning, not a workaround for a broken rule. When
+# we found rules that produced false positives on idiomatic Rust, we
+# fixed the rule itself rather than disabling it from here. If this file
+# grows, that's a signal the rules need more work — not more overrides.
+
+# `no-multi-op-oneliner` catches cosmetic "expression-too-dense" lines.
+# Default `min_ops = 6` is aggressive; Comply's regex/parser helpers
+# legitimately chain 7-8 operators in a short-circuit. 10 is strict
+# enough to catch the truly obscene chains.
+[rules.no-multi-op-oneliner]
+min_ops = 10
+min_line_length = 100
+
+# Max file lines — Comply's clippy runner, config module, rule registry,
+# and main entry point each legitimately exceed 200 lines because each
+# is one cohesive unit. 450 is generous but still well under "no limit".
+[rules.max-file-lines]
+max = 450
+
+[overrides]
+# (intentionally empty)
+#
+# This block existed for `tests/**` overrides at one point — `id-length`,
+# `rust-no-unwrap`, etc. were silenced for fixture files. Those rules
+# all now respect `#[cfg(test)]` and `#![cfg(test)]` properly, so
+# integration tests no longer trip them. If a fixture file ever needs
+# special handling, prefer fixing the rule's test-context detection
+# over re-adding an override.

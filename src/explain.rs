@@ -57,12 +57,12 @@ fn format_meta(meta: &RuleMeta) -> String {
     out
 }
 
-/// Soft-wrap a string at word boundaries to a given width.
-fn wrap_lines(text: &str, width: usize) -> Vec<String> {
+/// Soft-wrap a string at word boundaries to a given character count.
+fn wrap_lines(text: &str, width_chars: usize) -> Vec<String> { // comply-ignore: explicit-units — `_chars` IS the unit suffix.
     let mut lines = Vec::new();
     let mut current = String::new();
     for word in text.split_whitespace() {
-        if current.len() + word.len() + 1 > width && !current.is_empty() {
+        if current.len() + word.len() + 1 > width_chars && !current.is_empty() {
             lines.push(std::mem::take(&mut current));
         }
         if !current.is_empty() {

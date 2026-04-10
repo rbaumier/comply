@@ -41,8 +41,11 @@ pub struct Cli {
     pub range: Option<Vec<String>>,
 
     /// Output diagnostics as JSON (for editors and CI).
-    #[arg(long)]
-    pub json: bool,
+    ///
+    /// Field is named `should_emit_json` so it reads as a predicate; the CLI
+    /// flag stays `--json` via the explicit `long` attribute.
+    #[arg(long = "json")]
+    pub should_emit_json: bool,
 
     /// Apply auto-fixes for any rule whose backend supports it.
     /// Currently delegates to `oxlint --fix` for TS/JS files and to
@@ -57,6 +60,7 @@ pub struct Cli {
 }
 
 /// Top-level subcommands. None = lint mode with the legacy flag parser.
+#[non_exhaustive]
 #[derive(Subcommand, Debug)]
 pub enum Command {
     /// Show the full description and remediation for a specific rule.
@@ -66,9 +70,11 @@ pub enum Command {
     },
     /// List every registered rule with its id, severity, and description.
     List {
-        /// Output as JSON instead of human-readable text.
-        #[arg(long)]
-        json: bool,
+        /// Output as JSON instead of human-readable text. Field is
+        /// renamed to `should_emit_json` so it passes boolean-naming; the
+        /// CLI flag stays `--json` via the explicit `long` attribute.
+        #[arg(long = "json")]
+        should_emit_json: bool,
     },
     /// Manage the project's `comply.toml` configuration file.
     Config {
@@ -84,6 +90,7 @@ pub enum Command {
 }
 
 /// Subcommands for `comply config`.
+#[non_exhaustive]
 #[derive(Subcommand, Debug)]
 pub enum ConfigAction {
     /// Write a `comply.toml` with every default value to the current
@@ -101,6 +108,8 @@ pub enum ConfigAction {
 }
 
 /// Resolved scan mode — determines which files comply will lint.
+#[non_exhaustive]
+#[derive(Debug)]
 pub enum ScanMode {
     All(PathBuf),
     WorkingTree,
@@ -144,7 +153,7 @@ mod tests {
             last_commit: false,
             commit: None,
             range: None,
-            json: false,
+            should_emit_json: false,
             fix: false,
             path: None,
         }

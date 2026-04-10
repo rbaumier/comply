@@ -45,6 +45,11 @@ pub struct ComplyToml {
 /// `enabled = true` flips one on by adding a `-W` flag to the clippy
 /// invocation. Tree-sitter rules ignore the field — they run as long
 /// as `disabled` isn't `true`.
+///
+/// `deny_unknown_fields` is intentionally OMITTED: `extra` uses
+/// `#[serde(flatten)]` to capture rule-specific threshold knobs
+/// without hardcoding each one. `deny_unknown_fields` would reject
+/// those threshold keys *before* the flatten could catch them.
 #[derive(Debug, Default, Clone, Deserialize)]
 pub struct RuleConfig {
     #[serde(default)]
@@ -71,6 +76,7 @@ pub struct OverrideConfig {
 /// Severity values accepted in TOML. Mirrors `crate::diagnostic::Severity`
 /// but kept separate so the wire format can evolve independently of the
 /// internal type.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SeverityToml {

@@ -27,6 +27,7 @@ pub fn format_eslint(diagnostics: &[Diagnostic]) -> String {
         };
         // writeln! writes directly into `out` without an intermediate String alloc.
         // unwrap is infallible here — writing to a String never fails.
+        // comply-ignore: rust-no-unwrap — String::write_fmt is infallible.
         writeln!(
             out,
             "{}:{}:{}: {} [{}] {}",

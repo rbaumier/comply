@@ -16,6 +16,7 @@ pub struct Diagnostic {
     pub severity: Severity,
 }
 
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Severity {
     Error,

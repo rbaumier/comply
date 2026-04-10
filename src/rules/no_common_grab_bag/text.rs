@@ -11,6 +11,7 @@ use crate::rules::backend::{CheckCtx, TextCheck};
 
 const BANNED_STEMS: &[&str] = &["common", "utils", "helpers", "shared", "misc", "util"];
 
+#[derive(Debug)]
 pub struct Check;
 
 impl TextCheck for Check {

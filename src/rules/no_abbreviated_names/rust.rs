@@ -8,33 +8,26 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::walker::walk_tree;
 
+// Match the TypeScript list: only flag GENUINELY obscure abbreviations,
+// not ecosystem idioms. `cfg`, `ctx`, `idx`, `err`, `fmt`, `ret`, `val`,
+// `num`, `str`, `obj`, `arr`, `req`, `res`, `msg`, `auth`, `db`, `dict`
+// are all part of the Rust vocabulary (cfg attributes, std::fmt, io
+// context, iteration index, …) and flagging them only adds noise. The
+// list targets abbreviations a reader genuinely has to guess about.
 const BANNED_ABBREVIATIONS: &[(&str, &str)] = &[
     ("acct", "account"),
     ("usr", "user"),
     ("btn", "button"),
-    ("cfg", "config"),
-    ("ctx", "context"),
     ("pwd", "password"),
-    ("msg", "message"),
-    ("req", "request"),
-    ("res", "response"),
-    ("auth", "authentication"),
-    ("idx", "index"),
     ("cnt", "count"),
-    ("tmp", "temporary"),
-    ("val", "value"),
-    ("ret", "return_value"),
-    ("num", "number"),
-    ("str", "string"),
-    ("obj", "object"),
-    ("arr", "array"),
-    ("dict", "dictionary"),
-    ("db", "database"),
-    ("err", "error"),
     ("desc", "description"),
     ("addr", "address"),
+    // `tmp` is intentionally NOT on the list — `std::env::temp_dir()`
+    // and `tempfile::NamedTempFile::new()?.path()` are idiomatic Rust
+    // and the `tmp` binding name follows std convention.
 ];
 
+#[derive(Debug)]
 pub struct Check;
 
 impl AstCheck for Check {
@@ -92,16 +85,14 @@ fn matches_banned(name: &str) -> Option<(&'static str, &'static str)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
+    
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
-        let mut parser = tree_sitter::Parser::new();
-        parser.set_language(&tree_sitter_rust::LANGUAGE.into()).unwrap();
-        let tree = parser.parse(source, None).unwrap();
-        Check.check(
-            &CheckCtx::for_test(Path::new("t.rs"), source),
-            &tree,
-        )
+
+
+        crate::rules::test_helpers::run_rust(source, &Check)
+
+
     }
 
     #[test]
@@ -112,13 +103,25 @@ mod tests {
 
     #[test]
     fn flags_bare_abbreviation() {
-        let diags = run_on("fn f() { let ctx = 1; }");
-        assert!(diags.iter().any(|d| d.message.contains("ctx")));
+        let diags = run_on("fn f() { let btn = 1; }");
+        assert!(diags.iter().any(|d| d.message.contains("btn")));
     }
 
     #[test]
     fn allows_full_words() {
         assert!(run_on("fn f() { let user_account = 1; }").is_empty());
         assert!(run_on("fn f() { let request_context = 1; }").is_empty());
+    }
+
+    #[test]
+    fn allows_rust_ecosystem_idioms() {
+        // cfg, ctx, idx, err, fmt, ret, val, num, str, obj, arr, req,
+        // res, msg, auth, db, dict — all part of the Rust vocabulary
+        // and intentionally NOT flagged.
+        assert!(run_on("fn f(ctx: &Context) {}").is_empty());
+        assert!(run_on("fn f(idx: usize) {}").is_empty());
+        assert!(run_on("fn f() { let cfg = 1; }").is_empty());
+        assert!(run_on("fn f(err: Error) {}").is_empty());
+        assert!(run_on("fn f() { let fmt = 1; }").is_empty());
     }
 }

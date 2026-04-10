@@ -41,8 +41,37 @@ pub fn is_inside_async_fn(node: Node, source: &[u8]) -> bool {
     false
 }
 
-// `is_inside_async_fn` is exercised end-to-end via the three rules
-// that depend on it (`rust-thread-sleep-in-async`, `rust-block-on-in-async`,
-// `rust-sync-io-in-async`). Their backend test suites cover both the
-// async-fn-positive and sync-fn-negative cases, so a unit test here
-// would just duplicate that coverage.
+/// If `node` is a `Result<T, E>` `generic_type`, return its second
+/// positional type argument (the error type `E`). Returns `None` for
+/// any other node, or for `Result<T>` aliases like `io::Result<T>`
+/// where the error type isn't visible from the AST.
+///
+/// Both `rust-string-as-error` and `rust-unit-error-result` need this
+/// "find the error type" walk — without it they reimplemented the
+/// same generic-arg traversal in two places.
+pub fn result_error_type<'a>(node: Node<'a>, source: &[u8]) -> Option<Node<'a>> {
+    if node.kind() != "generic_type" {
+        return None;
+    }
+    let type_node = node.child_by_field_name("type")?;
+    let type_text = type_node.utf8_text(source).ok()?;
+    if type_text != "Result" && !type_text.ends_with("::Result") {
+        return None;
+    }
+    let args = node.child_by_field_name("type_arguments")?;
+    let mut cursor = args.walk();
+    let positional: Vec<_> = args
+        .named_children(&mut cursor)
+        .filter(|c| c.kind() != "type_binding")
+        .collect();
+    if positional.len() < 2 {
+        return None;
+    }
+    Some(positional[1])
+}
+
+// Both helpers above are exercised end-to-end via the rules that
+// depend on them (`rust-thread-sleep-in-async`, `rust-block-on-in-async`,
+// `rust-sync-io-in-async`, `rust-string-as-error`, `rust-unit-error-result`).
+// Their backend test suites cover both the positive and negative cases,
+// so unit tests here would duplicate that coverage.

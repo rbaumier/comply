@@ -3,7 +3,7 @@
 //! `format!` builds a `String` by allocating, writing to it, then
 //! returns it. If you then `write!(f, "{}", that_string)`, you've
 //! done the work twice: once to build the temporary, once to copy
-//! it into the formatter's writer. Just `write!(f, "...", args)`
+//! it into the formatter's writer. `write!(f, "...", args)`
 //! directly — it streams into the writer with no intermediate.
 //!
 //! `Debug::fmt` is on the hot path for any structured logging
@@ -13,8 +13,6 @@
 mod rust;
 
 use crate::diagnostic::Severity;
-use crate::files::Language;
-use crate::rules::backend::Backend;
 use crate::rules::meta::RuleMeta;
 use crate::rules::RuleDef;
 
@@ -27,11 +25,6 @@ pub const META: RuleMeta = RuleMeta {
                   immediately throw away.",
     severity: Severity::Warning,
     doc_url: None,
-};
-
-pub fn register() -> RuleDef {
-    RuleDef {
-        meta: META,
-        backends: vec![(Language::Rust, Backend::TreeSitter(Box::new(rust::Check)))],
-    }
+};pub fn register() -> RuleDef {
+    crate::register_rust_only!(META, rust)
 }

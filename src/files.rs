@@ -29,6 +29,7 @@ pub struct SourceFile {
 /// The detected source language. TS and Tsx are kept distinct so the engine
 /// can pick the correct tree-sitter grammar — TSX requires `LANGUAGE_TSX`,
 /// otherwise JSX syntax produces ERROR nodes and bogus diagnostics.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Language {
     /// Plain `.ts` / `.mts`.

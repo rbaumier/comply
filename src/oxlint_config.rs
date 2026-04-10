@@ -12,7 +12,7 @@
 //!    a JSON object with `plugins` + `rules`, and writes it to a fresh
 //!    per-invocation temp file (`tempfile::NamedTempFile`).
 //! 3. The returned NamedTempFile deletes itself on drop, so the caller
-//!    just keeps it alive for as long as the oxlint subprocess runs.
+//!    keeps it alive for as long as the oxlint subprocess runs.
 //!
 //! Security note: NamedTempFile uses an unpredictable filename + O_EXCL
 //! mode, preventing the classic `/tmp` symlink attack.

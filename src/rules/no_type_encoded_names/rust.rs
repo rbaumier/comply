@@ -6,48 +6,32 @@
 //! type changes.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::walker::walk_tree;
 
-const TYPE_PREFIXES: &[&str] = &[
-    "str", "arr", "obj", "num", "bool", "int", "fn", "func", "vec",
-];
-
-pub struct Check;
-
-impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
-        let source_bytes = ctx.source.as_bytes();
-        let mut diagnostics = Vec::new();
-        walk_tree(tree, |node| {
-            if node.kind() != "identifier" {
-                return;
-            }
-            if !is_declaration_site(node) {
-                return;
-            }
-            let Ok(name) = node.utf8_text(source_bytes) else {
-                return;
-            };
-            let Some(prefix) = matched_type_prefix(name) else {
-                return;
-            };
-            let pos = node.start_position();
-            diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
-                line: pos.row + 1,
-                column: pos.column + 1,
-                rule_id: "no-type-encoded-names".into(),
-                message: format!(
-                    "'{name}' encodes a type prefix '{prefix}' — Hungarian \
-                     notation is obsolete. Remove the prefix; the type \
-                     system already tells you the type."
-                ),
-                severity: Severity::Warning,
-            });
-        });
-        diagnostics
+crate::ast_check! { |node, source, ctx, diagnostics|
+    if node.kind() != "identifier" {
+        return;
     }
+    if !is_declaration_site(node) {
+        return;
+    }
+    let Ok(name) = node.utf8_text(source) else {
+        return;
+    };
+    let Some(prefix) = super::type_prefix::matched_snake_case(name) else {
+        return;
+    };
+    let pos = node.start_position();
+    diagnostics.push(Diagnostic {
+        path: ctx.path.to_path_buf(),
+        line: pos.row + 1,
+        column: pos.column + 1,
+        rule_id: "no-type-encoded-names".into(),
+        message: format!(
+            "'{name}' encodes a type prefix '{prefix}' — Hungarian notation is \
+             obsolete. Remove the prefix; the type system already tells you the type."
+        ),
+        severity: Severity::Warning,
+    });
 }
 
 fn is_declaration_site(node: tree_sitter::Node) -> bool {
@@ -60,30 +44,17 @@ fn is_declaration_site(node: tree_sitter::Node) -> bool {
     )
 }
 
-/// Return the type prefix matched at a snake_case word boundary.
-/// `str_name` → Some("str"), `strawberry` → None (no underscore after "str").
-fn matched_type_prefix(name: &str) -> Option<&'static str> {
-    for &prefix in TYPE_PREFIXES {
-        if name.starts_with(&format!("{prefix}_")) {
-            return Some(prefix);
-        }
-    }
-    None
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
+    
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
-        let mut parser = tree_sitter::Parser::new();
-        parser.set_language(&tree_sitter_rust::LANGUAGE.into()).unwrap();
-        let tree = parser.parse(source, None).unwrap();
-        Check.check(
-            &CheckCtx::for_test(Path::new("t.rs"), source),
-            &tree,
-        )
+
+
+        crate::rules::test_helpers::run_rust(source, &Check)
+
+
     }
 
     #[test]

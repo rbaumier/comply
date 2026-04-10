@@ -18,6 +18,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::walker::walk_tree;
 
+#[derive(Debug)]
 pub struct Check;
 
 impl AstCheck for Check {
@@ -45,7 +46,7 @@ impl AstCheck for Check {
                 return;
             }
             // Skip test code — `.unwrap()` is fine there.
-            if is_in_test_context(node, source_bytes) {
+            if is_in_test_context(node, source_bytes) || is_under_tests_dir(ctx.path) {
                 return;
             }
             let pos = node.start_position();
@@ -66,10 +67,45 @@ impl AstCheck for Check {
     }
 }
 
-/// True if `node` is inside a `#[test]` function or a `#[cfg(test)]` module.
-/// Walks up the parent chain looking for function/module items with those
-/// attributes on an `attribute_item` sibling directly above the declaration.
+/// True if `path` lives under Cargo's `tests/` integration-test
+/// directory. Cargo compiles every `tests/*.rs` (and any modules
+/// they import via `tests/common/mod.rs`) as `cfg(test)`, so the
+/// rule treats them as test code without requiring an explicit
+/// `#[cfg(test)]` annotation.
+fn is_under_tests_dir(path: &std::path::Path) -> bool {
+    path.components().any(|c| c.as_os_str() == "tests")
+}
+
+/// True if `node` is in any test context the rule recognizes:
+///
+/// - inside a `#[test]` function
+/// - inside a `#[cfg(test)]` module
+/// - inside a file marked with `#![cfg(test)]`
+/// - inside a file under Cargo's `tests/` integration-test directory
+///   (cargo treats every `tests/*.rs` as cfg(test) implicitly, so the
+///   compiler exempts those files from test discipline — the rule
+///   should match that behavior)
 fn is_in_test_context(node: tree_sitter::Node, source: &[u8]) -> bool {
+    // First check the file-level inner attribute. We walk up to the
+    // root node and scan its top-level children for `#![cfg(test)]`.
+    let mut root = node;
+    while let Some(parent) = root.parent() {
+        root = parent;
+    }
+    let mut cursor = root.walk();
+    for child in root.children(&mut cursor) {
+        if child.kind() != "inner_attribute_item" {
+            continue;
+        }
+        if let Ok(text) = child.utf8_text(source)
+            && text.contains("cfg(test)")
+        {
+            return true;
+        }
+    }
+
+    // Then walk up for outer `#[test]` / `#[cfg(test)]` on enclosing
+    // items.
     let mut cur = node;
     while let Some(parent) = cur.parent() {
         if (parent.kind() == "function_item" || parent.kind() == "mod_item")
@@ -106,16 +142,14 @@ fn has_test_attribute(item: tree_sitter::Node, source: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
+    
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
-        let mut parser = tree_sitter::Parser::new();
-        parser.set_language(&tree_sitter_rust::LANGUAGE.into()).unwrap();
-        let tree = parser.parse(source, None).unwrap();
-        Check.check(
-            &CheckCtx::for_test(Path::new("t.rs"), source),
-            &tree,
-        )
+
+
+        crate::rules::test_helpers::run_rust(source, &Check)
+
+
     }
 
     #[test]

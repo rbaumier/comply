@@ -8,61 +8,39 @@
 //! answer is "don't".
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::walker::walk_tree;
 
-pub struct Check;
-
-impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
-        let source_bytes = ctx.source.as_bytes();
-        let mut diagnostics = Vec::new();
-        walk_tree(tree, |node| {
-            if node.kind() != "jsx_attribute" {
-                return;
-            }
-            let Some(name_node) = node.child(0) else {
-                return;
-            };
-            let Ok(name) = name_node.utf8_text(source_bytes) else {
-                return;
-            };
-            if name != "dangerouslySetInnerHTML" {
-                return;
-            }
-            let pos = node.start_position();
-            diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
-                line: pos.row + 1,
-                column: pos.column + 1,
-                rule_id: "no-dangerously-set-inner-html".into(),
-                message: "`dangerouslySetInnerHTML` is an XSS vector. If you \
-                          must render user-facing HTML, sanitize it with \
-                          DOMPurify first and add a comment explaining the \
-                          content's provenance."
-                    .into(),
-                severity: Severity::Error,
-            });
-        });
-        diagnostics
+crate::ast_check! { |node, source, ctx, diagnostics|
+    let Some(name) = crate::rules::jsx::jsx_attribute_name(node, source) else {
+        return;
+    };
+    if name != "dangerouslySetInnerHTML" {
+        return;
     }
+    let pos = node.start_position();
+    diagnostics.push(Diagnostic {
+        path: ctx.path.to_path_buf(),
+        line: pos.row + 1,
+        column: pos.column + 1,
+        rule_id: "no-dangerously-set-inner-html".into(),
+        message: "`dangerouslySetInnerHTML` is an XSS vector. If you must \
+                  render user-facing HTML, sanitize it with DOMPurify first \
+                  and add a comment explaining the content's provenance."
+            .into(),
+        severity: Severity::Error,
+    });
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
+    
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
-        let mut parser = tree_sitter::Parser::new();
-        parser
-            .set_language(&tree_sitter_typescript::LANGUAGE_TSX.into())
-            .unwrap();
-        let tree = parser.parse(source, None).unwrap();
-        Check.check(
-            &CheckCtx::for_test(Path::new("t.tsx"), source),
-            &tree,
-        )
+
+
+        crate::rules::test_helpers::run_tsx(source, &Check)
+
+
     }
 
     #[test]

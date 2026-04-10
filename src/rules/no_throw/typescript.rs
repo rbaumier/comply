@@ -6,49 +6,35 @@
 //! variant but exposes the same `throw_statement` kind.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::walker::walk_tree;
 
-pub struct Check;
-
-impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
-        let mut diagnostics = Vec::new();
-        walk_tree(tree, |node| {
-            if node.kind() != "throw_statement" {
-                return;
-            }
-            let pos = node.start_position();
-            diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
-                line: pos.row + 1,
-                column: pos.column + 1,
-                rule_id: "no-throw".into(),
-                message: "Use Result<T, E> instead of throw — surface errors as values, \
-                          not exceptions. Callers can't see thrown errors in the type signature."
-                    .into(),
-                severity: Severity::Error,
-            });
-        });
-        diagnostics
+crate::ast_check! { |node, _source, ctx, diagnostics|
+    if node.kind() != "throw_statement" {
+        return;
     }
+    let pos = node.start_position();
+    diagnostics.push(Diagnostic {
+        path: ctx.path.to_path_buf(),
+        line: pos.row + 1,
+        column: pos.column + 1,
+        rule_id: "no-throw".into(),
+        message: "Use Result<T, E> instead of throw — surface errors as values, \
+                  not exceptions. Callers can't see thrown errors in the type signature."
+            .into(),
+        severity: Severity::Error,
+    });
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
+    
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
-        let mut parser = tree_sitter::Parser::new();
-        parser
-            .set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into())
-            .unwrap();
-        let tree = parser.parse(source, None).unwrap();
-        Check.check(
-            &CheckCtx::for_test(Path::new("t.ts"), source),
-            &tree,
-        )
+
+
+        crate::rules::test_helpers::run_ts(source, &Check)
+
+
     }
 
     #[test]

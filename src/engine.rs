@@ -44,7 +44,33 @@ pub fn lint_files(files: &[&SourceFile], config: &Config) -> Result<Vec<Diagnost
         }
     }
 
+    // A rule's own source files (doc comments, tests, and fixture strings)
+    // legitimately mention the pattern the rule is designed to flag.
+    // Drop any diagnostic where rule R fires on a file under
+    // `src/rules/<R>/**` — the path mapping rule-id → directory is
+    // deterministic (replace dashes with underscores).
+    diagnostics.retain(|d| !is_self_reference(d));
     Ok(diagnostics)
+}
+
+/// True if the diagnostic's rule fires on its OWN source directory,
+/// i.e. `rule_id = "banned-comment-words"` firing on a path containing
+/// `src/rules/banned_comment_words/`. Returns `false` for:
+///
+/// - Diagnostics from rules whose directory name can't be derived from
+///   the rule id (there are none today, but keep the mapping strict).
+/// - Paths that don't live under `src/rules/*/`.
+fn is_self_reference(d: &Diagnostic) -> bool {
+    let dir_fragment = d.rule_id.replace('-', "_");
+    // We match `src/rules/<dir>/` without a leading slash so BOTH
+    // absolute paths (`/Users/.../src/rules/todo_needs_issue_link/text.rs`)
+    // and relative paths (`src/rules/todo_needs_issue_link/text.rs`)
+    // get caught. Windows path separators are handled by the second
+    // needle.
+    let needle = format!("src/rules/{dir_fragment}/");
+    let alt_needle = format!("src\\rules\\{dir_fragment}\\");
+    let path_str = d.path.to_string_lossy();
+    path_str.contains(&needle) || path_str.contains(&alt_needle)
 }
 
 /// Apply every applicable rule to one file. Parses the AST once if any of

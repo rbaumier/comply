@@ -11,6 +11,7 @@ const EM_DASH: char = '—';
 const ASCII_SEP: &str = " -- ";
 
 /// One parsed comply-ignore comment after splitting on the separator.
+#[derive(Debug)]
 pub struct ParsedIgnore {
     pub rule_id: String,
     /// Empty if no justification was provided.

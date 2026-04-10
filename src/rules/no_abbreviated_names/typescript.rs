@@ -2,7 +2,7 @@
 //!
 //! Why: `acct` / `usr` / `btn` / `cfg` saves 2 keystrokes at declaration
 //! and costs every future reader a moment of decoding. Modern editors
-//! auto-complete full words — there's no tradeoff, just tech debt.
+//! auto-complete full words — there's no tradeoff, tech debt.
 //!
 //! Detection: walk every `identifier` / `property_identifier` node, split
 //! into camelCase/snake_case words, and flag any word that matches the
@@ -12,33 +12,26 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::walker::walk_tree;
 
+// Keep this list short and focused on GENUINELY obscure abbreviations
+// that no reader recognizes without guessing. Common ecosystem idioms
+// (cfg, ctx, idx, err, fmt, ret, val, num, str, obj, arr, req, res,
+// msg, auth, db, dict) are NOT on the list: every working programmer
+// reads them at sight and expanding them to `config`/`context`/`index`
+// only adds typing overhead. The rule targets the 2-keystroke-savings
+// names that look like leetcode solution variables.
 const BANNED_ABBREVIATIONS: &[(&str, &str)] = &[
     ("acct", "account"),
     ("usr", "user"),
     ("btn", "button"),
-    ("cfg", "config"),
-    ("ctx", "context"),
     ("pwd", "password"),
-    ("msg", "message"),
-    ("req", "request"),
-    ("res", "response"),
-    ("auth", "authentication"),
-    ("idx", "index"),
     ("cnt", "count"),
-    ("tmp", "temporary"),
-    ("val", "value"),
-    ("ret", "returnValue"),
-    ("num", "number"),
-    ("str", "string"),
-    ("obj", "object"),
-    ("arr", "array"),
-    ("dict", "dictionary"),
-    ("db", "database"),
-    ("err", "error"),
     ("desc", "description"),
     ("addr", "address"),
+    // `tmp` is not on the list — `os.tmpdir()` / `fs.mkdtemp` bindings
+    // conventionally use `tmp` in both Node.js and browser JS.
 ];
 
+#[derive(Debug)]
 pub struct Check;
 
 impl AstCheck for Check {
@@ -108,18 +101,14 @@ fn split_words(name: &str) -> Vec<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
+    
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
-        let mut parser = tree_sitter::Parser::new();
-        parser
-            .set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into())
-            .unwrap();
-        let tree = parser.parse(source, None).unwrap();
-        Check.check(
-            &CheckCtx::for_test(Path::new("t.ts"), source),
-            &tree,
-        )
+
+
+        crate::rules::test_helpers::run_ts(source, &Check)
+
+
     }
 
     #[test]
@@ -136,8 +125,8 @@ mod tests {
 
     #[test]
     fn flags_full_abbreviation_as_name() {
-        let diags = run_on("const ctx = {};");
-        assert!(diags.iter().any(|d| d.message.contains("ctx")));
+        let diags = run_on("const btn = {};");
+        assert!(diags.iter().any(|d| d.message.contains("btn")));
     }
 
     #[test]
@@ -147,8 +136,21 @@ mod tests {
     }
 
     #[test]
+    fn allows_ecosystem_idioms() {
+        // ctx, idx, cfg, err, fmt, ret, val, num, str, obj, arr, req,
+        // res, msg, auth, db, dict are all idiomatic short names that
+        // every working programmer reads at sight. The rule deliberately
+        // doesn't flag them.
+        assert!(run_on("function f(ctx: any) {}").is_empty());
+        assert!(run_on("function f(idx: number) {}").is_empty());
+        assert!(run_on("const cfg = {};").is_empty());
+        assert!(run_on("function f(err: Error) {}").is_empty());
+        assert!(run_on("function f(req: Request, res: Response) {}").is_empty());
+    }
+
+    #[test]
     fn does_not_flag_word_containing_abbreviation_letters() {
-        // 'strawberry' contains 'str' letters but isn't the abbreviation.
-        assert!(run_on("const strawberry = 1;").is_empty());
+        // 'account' contains 'acct' letters but isn't the abbreviation.
+        assert!(run_on("const accountant = 1;").is_empty());
     }
 }

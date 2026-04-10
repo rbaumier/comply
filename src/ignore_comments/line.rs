@@ -17,6 +17,7 @@ use std::path::Path;
 const MARKER: &str = "// comply-ignore:";
 
 /// Outcome of parsing a single source line.
+#[derive(Debug)]
 pub struct LineParse {
     pub rule_id: String,
     /// Line number to insert into the suppressions map.

@@ -23,6 +23,7 @@ use crate::diagnostic::Severity;
 /// surface description/remediation/doc_url without re-plumbing.
 #[derive(Debug, Clone, Copy)]
 #[allow(dead_code)] // Fields read by JSON output / explain / remap (coming soon).
+// comply-ignore: rust-impl-debug-on-public-types — false positive: the derive above includes Debug; the rule's walker misses it through the multi-attribute block.
 pub struct RuleMeta {
     /// Stable id shown in diagnostics (e.g. "no-default-params").
     pub id: &'static str,

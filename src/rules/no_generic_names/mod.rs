@@ -3,8 +3,6 @@
 mod typescript;
 
 use crate::diagnostic::Severity;
-use crate::files::Language;
-use crate::rules::backend::Backend;
 use crate::rules::meta::RuleMeta;
 use crate::rules::RuleDef;
 
@@ -16,17 +14,6 @@ pub const META: RuleMeta = RuleMeta {
                   `paymentReceipt`, `temp` → name the actual intermediate.",
     severity: Severity::Warning,
     doc_url: None,
-};
-
-pub fn register() -> RuleDef {
-    RuleDef {
-        meta: META,
-        backends: vec![
-            (Language::TypeScript, Backend::TreeSitter(Box::new(typescript::Check))),
-            (Language::JavaScript, Backend::TreeSitter(Box::new(typescript::Check))),
-            (Language::Tsx, Backend::TreeSitter(Box::new(typescript::Check))),
-            // Rust: clippy::disallowed_names with custom list in clippy.toml.
-            (Language::Rust, Backend::Clippy { lint: "clippy::disallowed_names" }),
-        ],
-    }
+};pub fn register() -> RuleDef {
+    crate::register_ts_family_with_clippy_marker!(META, typescript, "clippy::disallowed_names")
 }

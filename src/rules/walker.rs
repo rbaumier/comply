@@ -16,7 +16,7 @@
 /// `throw_statement`, etc. children inside garbage subtrees, producing
 /// nonsense diagnostics on files with parse errors.
 ///
-/// The visitor receives the current node by value (cheap — `Node` is just a
+/// The visitor receives the current node by value (cheap — `Node` is a
 /// pointer pair) and decides whether to record a diagnostic for it.
 pub fn walk_tree<F>(tree: &tree_sitter::Tree, mut visit: F)
 where
