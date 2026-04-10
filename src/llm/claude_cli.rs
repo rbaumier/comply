@@ -70,8 +70,10 @@ pub fn invoke(req: &LlmRequest) -> Result<String> {
         anyhow::bail!("claude returned empty output");
     }
 
-    // claude --output-format json wraps the response in a JSON envelope.
-    // The structured output (from --json-schema) is in the "result" field.
+    // claude --output-format json wraps the response in a JSON envelope:
+    //   { "result": "...", "structured_output": { ... }, ... }
+    // When --json-schema is used, the structured data lives in
+    // "structured_output" (NOT "result", which is empty/text).
     let parsed: serde_json::Value = serde_json::from_str(&stdout)
         .with_context(|| {
             format!(
@@ -80,14 +82,18 @@ pub fn invoke(req: &LlmRequest) -> Result<String> {
             )
         })?;
 
-    if let Some(result) = parsed.get("result").and_then(|v| v.as_str()) {
-        Ok(result.to_string())
-    } else if let Some(result) = parsed.get("result") {
-        Ok(result.to_string())
-    } else {
-        // Fallback: the entire output IS the result.
-        Ok(stdout)
+    // Primary: structured_output (from --json-schema).
+    if let Some(structured) = parsed.get("structured_output") {
+        return Ok(structured.to_string());
     }
+    // Fallback: result field (text mode without --json-schema).
+    if let Some(result) = parsed.get("result").and_then(|v| v.as_str()) {
+        if !result.is_empty() {
+            return Ok(result.to_string());
+        }
+    }
+    // Last resort: the entire output.
+    Ok(stdout)
 }
 
 #[cfg(test)]
