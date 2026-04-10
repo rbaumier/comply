@@ -34,6 +34,11 @@ pub fn evaluate_file(
             intent_naming: vec![],
             pii_in_logs: vec![],
             mixed_abstraction: vec![],
+            define_errors_out_of_existence: vec![],
+            pull_complexity_downward: vec![],
+            barricade_pattern: vec![],
+            temporal_decomposition: vec![],
+            shallow_module: vec![],
         });
     convert_response(resp, file_path)
 }
@@ -97,7 +102,70 @@ const UNIFIED_SCHEMA: &str = r#"{
       }
     }
   },
-  "required": ["comment_quality", "intent_naming", "pii_in_logs", "mixed_abstraction"]
+    "define_errors_out_of_existence": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "line": { "type": "integer" },
+          "function_name": { "type": "string" },
+          "error_condition": { "type": "string" },
+          "redesign": { "type": "string" }
+        },
+        "required": ["function_name", "error_condition"]
+      }
+    },
+    "pull_complexity_downward": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "line": { "type": "integer" },
+          "function_name": { "type": "string" },
+          "pushed_complexity": { "type": "string" }
+        },
+        "required": ["function_name", "pushed_complexity"]
+      }
+    },
+    "barricade_pattern": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "line": { "type": "integer" },
+          "function_name": { "type": "string" },
+          "explanation": { "type": "string" }
+        },
+        "required": ["function_name", "explanation"]
+      }
+    },
+    "temporal_decomposition": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "line": { "type": "integer" },
+          "module_or_function": { "type": "string" },
+          "steps": { "type": "string" },
+          "hidden_decision": { "type": "string" }
+        },
+        "required": ["module_or_function", "steps"]
+      }
+    },
+    "shallow_module": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "line": { "type": "integer" },
+          "function_name": { "type": "string" },
+          "explanation": { "type": "string" }
+        },
+        "required": ["function_name", "explanation"]
+      }
+    }
+  },
+  "required": ["comment_quality", "intent_naming", "pii_in_logs", "mixed_abstraction", "define_errors_out_of_existence", "pull_complexity_downward", "barricade_pattern", "temporal_decomposition", "shallow_module"]
 }"#;
 
 fn build_prompt(source: &str) -> String {
@@ -127,6 +195,24 @@ For each logger/console call: does it output PII? (email, phone, SSN, password, 
 ## 4. MIXED ABSTRACTION LEVELS
 For functions >20 lines: does it mix high-level orchestration (calling well-named functions) with low-level detail (regex, byte manipulation, raw string parsing)?
 
+## 5. DEFINE ERRORS OUT OF EXISTENCE
+For each function that throws/returns an error on a condition the caller cannot prevent: could the API be redesigned so the error condition cannot arise? Example: `unset(key)` succeeds even if key is absent (guarantees "after call, key doesn't exist"). This is NOT ignoring errors — it's designing better contracts.
+Only flag functions where a clear redesign exists. Do NOT flag genuine failure modes (network, IO, auth).
+
+## 6. PULL COMPLEXITY DOWNWARD
+For each public function or module interface: does it push hard decisions to callers via config params, exceptions, or "you figure it out" interfaces? A module has more users than developers — better for the implementer to suffer once than for every caller to suffer repeatedly.
+Flag: config parameter that could be a decision inside the module, exception thrown for an uncertain condition that could be handled internally, return value requiring complex interpretation.
+
+## 7. BARRICADE PATTERN (SCATTERED VALIDATION)
+Is input validation scattered throughout inner logic instead of concentrated at trust boundaries? Look for the same validation check (null guard, type check, range check, format validation) repeated in multiple internal functions. Validation should happen ONCE at the module boundary; inner code should trust clean inputs.
+Do NOT flag security-critical checks (auth, crypto, PII) — those are intentionally redundant.
+
+## 8. TEMPORAL DECOMPOSITION
+Are modules/functions split by execution order (read → parse → validate → store) instead of by information hiding? Each step then knows about the data format, coupling them tightly. Flag when module boundaries mirror execution steps rather than encapsulate design decisions.
+
+## 9. SHALLOW MODULE
+Is a function's public interface as complex as its implementation? Flag pass-through methods that forward calls with identical signatures adding no value. Flag wrapper functions whose body is a single delegation. A module's interface should be simpler than its implementation.
+
 Return EMPTY arrays for categories with no issues. Be conservative — false negatives are better than false positives.
 
 Source file:
@@ -147,6 +233,16 @@ struct UnifiedResponse {
     pii_in_logs: Vec<PiiIssue>,
     #[serde(default)]
     mixed_abstraction: Vec<AbstractionIssue>,
+    #[serde(default)]
+    define_errors_out_of_existence: Vec<DefineErrorsIssue>,
+    #[serde(default)]
+    pull_complexity_downward: Vec<PullComplexityIssue>,
+    #[serde(default)]
+    barricade_pattern: Vec<BarricadeIssue>,
+    #[serde(default)]
+    temporal_decomposition: Vec<TemporalIssue>,
+    #[serde(default)]
+    shallow_module: Vec<ShallowModuleIssue>,
 }
 
 /// External wire format mirror — LLM JSON output.
@@ -195,6 +291,55 @@ struct AbstractionIssue {
     high_level: Option<String>,
     #[serde(default)]
     low_level: Option<String>,
+}
+
+/// External wire format mirror — LLM JSON output.
+#[derive(Debug, Deserialize)]
+struct DefineErrorsIssue {
+    #[serde(default)]
+    line: Option<usize>,
+    function_name: String,
+    error_condition: String,
+    #[serde(default)]
+    redesign: Option<String>,
+}
+
+/// External wire format mirror — LLM JSON output.
+#[derive(Debug, Deserialize)]
+struct PullComplexityIssue {
+    #[serde(default)]
+    line: Option<usize>,
+    function_name: String,
+    pushed_complexity: String,
+}
+
+/// External wire format mirror — LLM JSON output.
+#[derive(Debug, Deserialize)]
+struct BarricadeIssue {
+    #[serde(default)]
+    line: Option<usize>,
+    function_name: String,
+    explanation: String,
+}
+
+/// External wire format mirror — LLM JSON output.
+#[derive(Debug, Deserialize)]
+struct TemporalIssue {
+    #[serde(default)]
+    line: Option<usize>,
+    module_or_function: String,
+    steps: String,
+    #[serde(default)]
+    hidden_decision: Option<String>,
+}
+
+/// External wire format mirror — LLM JSON output.
+#[derive(Debug, Deserialize)]
+struct ShallowModuleIssue {
+    #[serde(default)]
+    line: Option<usize>,
+    function_name: String,
+    explanation: String,
 }
 
 fn convert_response(resp: UnifiedResponse, file_path: &Path) -> Result<Vec<Diagnostic>> {
@@ -271,6 +416,89 @@ fn convert_response(resp: UnifiedResponse, file_path: &Path) -> Result<Vec<Diagn
             line, column: 1,
             rule_id: "llm-function-abstraction-levels".into(),
             message: msg,
+            severity: Severity::Warning,
+        });
+    }
+
+    // Define errors out of existence.
+    for issue in &resp.define_errors_out_of_existence {
+        let line = issue.line.unwrap_or(1);
+        let mut msg = format!(
+            "Function `{}` throws/returns error on `{}` — redesign the API so this condition cannot arise.",
+            issue.function_name, issue.error_condition,
+        );
+        if let Some(ref r) = issue.redesign {
+            msg.push_str(&format!(" Suggestion: {r}"));
+        }
+        diagnostics.push(Diagnostic {
+            path: file_path.to_path_buf(),
+            line, column: 1,
+            rule_id: "llm-define-errors-out-of-existence".into(),
+            message: msg,
+            severity: Severity::Warning,
+        });
+    }
+
+    // Pull complexity downward.
+    for issue in &resp.pull_complexity_downward {
+        let line = issue.line.unwrap_or(1);
+        diagnostics.push(Diagnostic {
+            path: file_path.to_path_buf(),
+            line, column: 1,
+            rule_id: "llm-pull-complexity-downward".into(),
+            message: format!(
+                "Function `{}` pushes complexity to callers: {}. Absorb this decision inside the module.",
+                issue.function_name, issue.pushed_complexity,
+            ),
+            severity: Severity::Warning,
+        });
+    }
+
+    // Barricade pattern (scattered validation).
+    for issue in &resp.barricade_pattern {
+        let line = issue.line.unwrap_or(1);
+        diagnostics.push(Diagnostic {
+            path: file_path.to_path_buf(),
+            line, column: 1,
+            rule_id: "llm-barricade-pattern".into(),
+            message: format!(
+                "Function `{}`: {}. Move validation to the module boundary; inner code should trust clean inputs.",
+                issue.function_name, issue.explanation,
+            ),
+            severity: Severity::Warning,
+        });
+    }
+
+    // Temporal decomposition.
+    for issue in &resp.temporal_decomposition {
+        let line = issue.line.unwrap_or(1);
+        let mut msg = format!(
+            "`{}` is split by execution order ({}), not by information hiding.",
+            issue.module_or_function, issue.steps,
+        );
+        if let Some(ref h) = issue.hidden_decision {
+            msg.push_str(&format!(" Hidden decision that should define the boundary: {h}"));
+        }
+        diagnostics.push(Diagnostic {
+            path: file_path.to_path_buf(),
+            line, column: 1,
+            rule_id: "llm-temporal-decomposition".into(),
+            message: msg,
+            severity: Severity::Warning,
+        });
+    }
+
+    // Shallow module.
+    for issue in &resp.shallow_module {
+        let line = issue.line.unwrap_or(1);
+        diagnostics.push(Diagnostic {
+            path: file_path.to_path_buf(),
+            line, column: 1,
+            rule_id: "llm-shallow-module".into(),
+            message: format!(
+                "Function `{}` is a shallow wrapper: {}. A module's interface should be simpler than its implementation.",
+                issue.function_name, issue.explanation,
+            ),
             severity: Severity::Warning,
         });
     }

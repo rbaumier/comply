@@ -18,7 +18,7 @@ use crate::diagnostic::Diagnostic;
 /// Cache version — bump when the unified prompt changes materially.
 /// All cached entries with a different version are automatically
 /// invalidated (the version is part of the cache key hash).
-const PROMPT_VERSION: u32 = 1;
+const PROMPT_VERSION: u32 = 2;
 
 /// Configuration for an LLM lint pass.
 #[derive(Debug)]
@@ -45,8 +45,9 @@ pub fn lint_files(
     let mut all_diagnostics = Vec::new();
     let mut cache_hits = 0usize;
     let mut cache_misses = 0usize;
+    let total = files.len();
 
-    for file in files {
+    for (i, file) in files.iter().enumerate() {
         let source = match std::fs::read_to_string(&file.path) {
             Ok(s) => s,
             Err(_) => continue,
@@ -74,6 +75,12 @@ pub fn lint_files(
         }
 
         cache_misses += 1;
+        eprint!(
+            "\rcomply: LLM [{}/{}] {}…",
+            i + 1,
+            total,
+            file.path.display(),
+        );
 
         // Cache miss → single unified LLM call for ALL rules.
         match unified_prompt::evaluate_file(&source, &file.path, &config.model) {
@@ -87,13 +94,15 @@ pub fn lint_files(
             }
             Err(e) => {
                 eprintln!(
-                    "comply: LLM failed on {}: {e:#}",
+                    "\ncomply: LLM failed on {}: {e:#}",
                     file.path.display()
                 );
             }
         }
     }
 
+    // Clear progress line before summary.
+    eprint!("\r\x1b[2K");
     eprintln!(
         "comply: LLM pass — {cache_hits} cache hits, {cache_misses} misses ({} files skipped)",
         files.len() - cache_hits - cache_misses,
