@@ -160,13 +160,12 @@ fn lint_project(cli: &Cli) -> Result<bool> {
             );
         }
         let all_files: Vec<&SourceFile> = discovered.iter().collect();
-        let llm_rules = crate::rules::llm_rules();
         let llm_config = llm::LlmConfig {
             model: cli.model.clone(),
             concurrency: cli.llm_concurrency,
             project_root: config_anchor,
         };
-        diagnostics.extend(llm::lint_files(&all_files, &llm_rules, &llm_config)?);
+        diagnostics.extend(llm::lint_files(&all_files, &llm_config)?);
     }
 
     let after_overrides = apply_config_filters(diagnostics, &config);
