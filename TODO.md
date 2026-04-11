@@ -416,3 +416,9 @@ Express-specific. Need Hono equivalents:
 - [ ] `hono-x-powered-by` — detect missing `x-powered-by` removal
 
 These require studying Hono's middleware API and cookie patterns.
+
+
+---
+
+# Plugins to suppoort 
+- https://github.com/jsx-eslint/eslint-plugin-jsx-a11y

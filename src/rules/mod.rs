@@ -287,6 +287,14 @@ pub mod regex_prefer_char_class;
 pub mod regex_prefer_quantifier;
 pub mod regex_use_unicode_flag;
 pub mod too_many_break_or_continue;
+pub mod hono_cookie_no_httponly;
+pub mod hono_cookie_no_samesite;
+pub mod hono_cookie_no_secure;
+pub mod hono_cors_permissive;
+pub mod hono_csp_unsafe;
+pub mod hono_csrf_missing;
+pub mod hono_missing_secure_headers;
+pub mod hono_secure_headers_disabled;
 use crate::diagnostic::Severity;
 use crate::files::Language;
 use backend::Backend;
@@ -667,6 +675,14 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         regex_prefer_quantifier::register(),
         regex_use_unicode_flag::register(),
         too_many_break_or_continue::register(),
+        hono_cookie_no_httponly::register(),
+        hono_cookie_no_samesite::register(),
+        hono_cookie_no_secure::register(),
+        hono_cors_permissive::register(),
+        hono_csp_unsafe::register(),
+        hono_csrf_missing::register(),
+        hono_missing_secure_headers::register(),
+        hono_secure_headers_disabled::register(),
     ];
     rules.extend(delegated::register_all());
     rules
