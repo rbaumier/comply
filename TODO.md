@@ -114,17 +114,29 @@ Rules requiring capabilities comply does not have yet (scope analysis, per-modul
 
 ---
 
-# Plugins to suppoort/evaluate
+# eslint Plugins to suppoort/evaluate
 - https://github.com/jsx-eslint/eslint-plugin-jsx-a11y
 - https://github.com/jsx-eslint/eslint-plugin-react
-https://github.com/facebook/react/tree/main/packages/eslint-plugin-react-hooks
-https://github.com/ArnaudBarre/eslint-plugin-react-refresh
-https://github.com/michaelfaith/eslint-plugin-package-json
-https://github.com/eslint-community/eslint-plugin-n
-https://typescript-eslint.io/rules/
-https://github.com/gajus/eslint-plugin-jsdoc
-https://github.com/schoero/eslint-plugin-better-tailwindcss
-https://github.com/CodelyTV/eslint-plugin-hexagonal-architecture
-https://github.com/btford/write-good
-https://github.com/eslint-functional/eslint-plugin-functional?tab=readme-ov-file
-https://github.com/import-js/eslint-plugin-import
+- https://github.com/facebook/react/tree/main/packages/eslint-plugin-react-hooks
+- https://github.com/ArnaudBarre/eslint-plugin-react-refresh
+- https://github.com/michaelfaith/eslint-plugin-package-json
+- https://github.com/eslint-community/eslint-plugin-n
+- https://typescript-eslint.io/rules/
+- https://github.com/gajus/eslint-plugin-jsdoc
+- https://github.com/schoero/eslint-plugin-better-tailwindcss
+- https://github.com/CodelyTV/eslint-plugin-hexagonal-architecture
+- https://github.com/btford/write-good
+- https://github.com/eslint-functional/eslint-plugin-functional?tab=readme-ov-file
+- https://github.com/import-js/eslint-plugin-import
+- https://makenowjust-labs.github.io/recheck/docs/usage/as-eslint-plugin/
+- https://github.com/ota-meshi/eslint-plugin-regexp
+- https://github.com/nickdeis/eslint-plugin-no-secrets
+- https://github.com/mozilla/eslint-plugin-no-unsanitized
+- https://github.com/eslint-community/eslint-plugin-security
+- https://github.com/Rantanen/eslint-plugin-xss
+- https://github.com/lydell/eslint-plugin-simple-import-sort
+- https://github.com/mskelton/eslint-plugin-playwright
+- https://github.com/sindresorhus/globals
+- https://github.com/azat-io/eslint-plugin-de-morgan
+- https://github.com/aryelu/eslint-plugin-code-complete
+- https://github.com/xojs/eslint-config-xo

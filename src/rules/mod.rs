@@ -312,6 +312,39 @@ pub mod option_vs_result;
 pub mod pure_by_default;
 pub mod structured_api_error;
 pub mod symmetric_pairs;
+pub mod a11y_alt_text;
+pub mod a11y_anchor_ambiguous_text;
+pub mod a11y_anchor_has_content;
+pub mod a11y_anchor_is_valid;
+pub mod a11y_aria_activedescendant_has_tabindex;
+pub mod a11y_aria_props;
+pub mod a11y_aria_role;
+pub mod a11y_aria_unsupported_elements;
+pub mod a11y_autocomplete_valid;
+pub mod a11y_click_events_have_key_events;
+pub mod a11y_control_has_associated_label;
+pub mod a11y_heading_has_content;
+pub mod a11y_html_has_lang;
+pub mod a11y_iframe_has_title;
+pub mod a11y_img_redundant_alt;
+pub mod a11y_interactive_supports_focus;
+pub mod a11y_label_has_associated_control;
+pub mod a11y_media_has_caption;
+pub mod a11y_mouse_events_have_key_events;
+pub mod a11y_no_access_key;
+pub mod a11y_no_aria_hidden_on_focusable;
+pub mod a11y_no_autofocus;
+pub mod a11y_no_distracting_elements;
+pub mod a11y_no_interactive_element_to_noninteractive_role;
+pub mod a11y_no_noninteractive_element_interactions;
+pub mod a11y_no_noninteractive_element_to_interactive_role;
+pub mod a11y_no_noninteractive_tabindex;
+pub mod a11y_no_redundant_roles;
+pub mod a11y_no_static_element_interactions;
+pub mod a11y_prefer_tag_over_role;
+pub mod a11y_role_has_required_aria_props;
+pub mod a11y_scope;
+pub mod a11y_tabindex_no_positive;
 use crate::diagnostic::Severity;
 use crate::files::Language;
 use backend::Backend;
@@ -717,6 +750,39 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         pure_by_default::register(),
         structured_api_error::register(),
         symmetric_pairs::register(),
+        a11y_alt_text::register(),
+        a11y_anchor_ambiguous_text::register(),
+        a11y_anchor_has_content::register(),
+        a11y_anchor_is_valid::register(),
+        a11y_aria_activedescendant_has_tabindex::register(),
+        a11y_aria_props::register(),
+        a11y_aria_role::register(),
+        a11y_aria_unsupported_elements::register(),
+        a11y_autocomplete_valid::register(),
+        a11y_click_events_have_key_events::register(),
+        a11y_control_has_associated_label::register(),
+        a11y_heading_has_content::register(),
+        a11y_html_has_lang::register(),
+        a11y_iframe_has_title::register(),
+        a11y_img_redundant_alt::register(),
+        a11y_interactive_supports_focus::register(),
+        a11y_label_has_associated_control::register(),
+        a11y_media_has_caption::register(),
+        a11y_mouse_events_have_key_events::register(),
+        a11y_no_access_key::register(),
+        a11y_no_aria_hidden_on_focusable::register(),
+        a11y_no_autofocus::register(),
+        a11y_no_distracting_elements::register(),
+        a11y_no_interactive_element_to_noninteractive_role::register(),
+        a11y_no_noninteractive_element_interactions::register(),
+        a11y_no_noninteractive_element_to_interactive_role::register(),
+        a11y_no_noninteractive_tabindex::register(),
+        a11y_no_redundant_roles::register(),
+        a11y_no_static_element_interactions::register(),
+        a11y_prefer_tag_over_role::register(),
+        a11y_role_has_required_aria_props::register(),
+        a11y_scope::register(),
+        a11y_tabindex_no_positive::register(),
     ];
     rules.extend(delegated::register_all());
     rules
