@@ -24,7 +24,7 @@ pub fn register() -> RuleDef {
         backends: TS_FAMILY
             .iter()
             .copied()
-            .chain(std::iter::once(Language::Rust))
+            .chain([Language::Rust, Language::Vue])
             .map(|lang| (lang, Backend::Text(Box::new(text::Check))))
             .collect(),
     }

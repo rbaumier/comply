@@ -1,10 +1,6 @@
 //! no-and-in-function-name — flag function names like `getUserAndUpdateCache`.
-//!
-//! `And` in a function name is a CQS (Command-Query Separation) violation:
-//! the function does TWO things, so callers can't compose either one in
-//! isolation. The fix is to split into two functions and let the caller
-//! call them in sequence — `getUser()` then `updateCache(user)`.
 
+mod rust;
 mod typescript;
 
 use crate::diagnostic::Severity;
@@ -20,6 +16,8 @@ pub const META: RuleMeta = RuleMeta {
     severity: Severity::Error,
     doc_url: None,
     categories: &["naming"],
-};pub fn register() -> RuleDef {
-    crate::register_ts_family!(META, typescript)
+};
+
+pub fn register() -> RuleDef {
+    crate::register_ts_family_with_rust!(META, typescript, rust)
 }

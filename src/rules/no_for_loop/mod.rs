@@ -1,6 +1,7 @@
 //! no-for-loop — prefer `for-of` over classic indexed `for` loops.
 
 mod typescript;
+mod rust;
 
 use crate::diagnostic::Severity;
 use crate::rules::meta::RuleMeta;
@@ -18,5 +19,5 @@ pub const META: RuleMeta = RuleMeta {
 };
 
 pub fn register() -> RuleDef {
-    crate::register_ts_family!(META, typescript)
+    crate::register_ts_family_with_rust!(META, typescript, rust)
 }

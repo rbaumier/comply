@@ -1,11 +1,6 @@
 //! error-without-cause — flag `new Error(e.message)` without `{ cause: e }`.
-//!
-//! When wrapping a caught error in a new one, the original stack trace and
-//! `.cause` chain MUST be preserved. `new Error(e.message)` strips both —
-//! callers debugging at 2am will see the wrapped message but lose the
-//! original location, type, and any nested cause. The fix is the second
-//! argument: `new Error("...", { cause: e })`.
 
+mod rust;
 mod typescript;
 
 use crate::diagnostic::Severity;
@@ -22,6 +17,8 @@ pub const META: RuleMeta = RuleMeta {
     severity: Severity::Error,
     doc_url: None,
     categories: &["code-quality"],
-};pub fn register() -> RuleDef {
-    crate::register_ts_family!(META, typescript)
+};
+
+pub fn register() -> RuleDef {
+    crate::register_ts_family_with_rust!(META, typescript, rust)
 }
