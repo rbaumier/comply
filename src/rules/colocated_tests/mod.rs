@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Create a `.test.ts` or `.spec.ts` file next to the source file with the same base name.",
     severity: Severity::Warning,
     doc_url: None,
-    categories: &["testing"],
+    categories: &["code-quality"],
 };
 
 pub fn register() -> RuleDef {

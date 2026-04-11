@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Add the missing counterpart or remove the export if the pair is intentionally incomplete.",
     severity: Severity::Warning,
     doc_url: None,
-    categories: &["naming"],
+    categories: &["code-quality"],
 };
 
 pub fn register() -> RuleDef {

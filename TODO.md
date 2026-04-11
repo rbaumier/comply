@@ -4,17 +4,6 @@ Rules not yet implemented. The catalog (`comply catalog --json`) is the source o
 
 ---
 
-## Tier 2 — Remaining
-
-| Rule | Backend | Notes |
-|------|---------|-------|
-| `symmetric-pairs` — `getFoo`/`setFoo`, `addX`/`removeX` | tree-sitter | Cross-reference exports |
-| `pure-by-default` — no top-level mutable state reference | tree-sitter | Track top-level `let` + inner references |
-| `intermediate-variables` — 2+ ops inside arg/return | tree-sitter | Count operator depth in arguments |
-| `colocated-tests` — `foo.ts` needs `foo.test.ts` nearby | text | Filesystem check |
-
----
-
 ## Tier 3 — Needs type info (tsc pipeline)
 
 Requires a TypeScript type-aware pass (`comply typecheck` subcommand shelling out to `tsc --noEmit`).
@@ -29,20 +18,6 @@ Requires a TypeScript type-aware pass (`comply typecheck` subcommand shelling ou
 | `no-raw-db-entity-in-handler` — handler returning Prisma entity | tsc | Match against `@prisma/client` types |
 | `structured-api-error` — errors need `{type,code,status,detail}` | tsc | Shape match |
 | `api-first` — handler without zod/openapi schema alongside | text | Filesystem cross-reference |
-
----
-
-## Tier 4 — Heuristic / partial detection
-
-| Rule | Backend | Notes |
-|------|---------|-------|
-| `justify-inaction` — empty catch/else without comment | tree-sitter | Empty block + missing preceding comment |
-| `no-logger-in-business-logic` — `logger.info` in service/ | tree-sitter | Path-aware: flag in `services/`, `domain/`, `core/` |
-| `auth-on-mutation` — create/update/delete handler needs auth helper | tree-sitter | Cross-ref call graph |
-| `blank-line-between-blocks` — setup/validate/transform/return | text | Whitespace check (formatting) |
-| `error-message-is-remediation` — error strings need a verb | text | Sentence heuristic on `new Error(...)` |
-| `no-hidden-control-flow` — 3+ decorators stacked | tree-sitter | Count decorator nodes per function |
-| `factory-di-shape` — `create*` fns should take deps object | tree-sitter | AST shape on `create*` exports |
 
 ---
 
@@ -92,12 +67,6 @@ These are NOT yet covered:
 
 ---
 
-## Future: Plugins
-
-- [eslint-plugin-jsx-a11y](https://github.com/jsx-eslint/eslint-plugin-jsx-a11y)
-
----
-
 ## eslint-plugin-unicorn — non-implementable rules
 
 Rules requiring capabilities comply does not have yet (scope analysis, per-module config, advanced regex parsing).
@@ -114,29 +83,31 @@ Rules requiring capabilities comply does not have yet (scope analysis, per-modul
 
 ---
 
-# eslint Plugins to suppoort/evaluate
-- https://github.com/jsx-eslint/eslint-plugin-jsx-a11y
-- https://github.com/jsx-eslint/eslint-plugin-react
-- https://github.com/facebook/react/tree/main/packages/eslint-plugin-react-hooks
-- https://github.com/ArnaudBarre/eslint-plugin-react-refresh
-- https://github.com/michaelfaith/eslint-plugin-package-json
-- https://github.com/eslint-community/eslint-plugin-n
-- https://typescript-eslint.io/rules/
-- https://github.com/gajus/eslint-plugin-jsdoc
-- https://github.com/schoero/eslint-plugin-better-tailwindcss
-- https://github.com/CodelyTV/eslint-plugin-hexagonal-architecture
-- https://github.com/btford/write-good
-- https://github.com/eslint-functional/eslint-plugin-functional?tab=readme-ov-file
-- https://github.com/import-js/eslint-plugin-import
-- https://makenowjust-labs.github.io/recheck/docs/usage/as-eslint-plugin/
-- https://github.com/ota-meshi/eslint-plugin-regexp
-- https://github.com/nickdeis/eslint-plugin-no-secrets
-- https://github.com/mozilla/eslint-plugin-no-unsanitized
-- https://github.com/eslint-community/eslint-plugin-security
-- https://github.com/Rantanen/eslint-plugin-xss
-- https://github.com/lydell/eslint-plugin-simple-import-sort
-- https://github.com/mskelton/eslint-plugin-playwright
-- https://github.com/sindresorhus/globals
-- https://github.com/azat-io/eslint-plugin-de-morgan
-- https://github.com/aryelu/eslint-plugin-code-complete
-- https://github.com/xojs/eslint-config-xo
+## eslint Plugins — remaining to evaluate
+
+| Plugin | Notes |
+|--------|-------|
+| [eslint-plugin-package-json](https://github.com/michaelfaith/eslint-plugin-package-json) | Validate package.json structure |
+| [eslint-plugin-better-tailwindcss](https://github.com/schoero/eslint-plugin-better-tailwindcss) | Tailwind class ordering/validation |
+| [eslint-plugin-hexagonal-architecture](https://github.com/CodelyTV/eslint-plugin-hexagonal-architecture) | Enforce hex arch boundaries |
+| [write-good](https://github.com/btford/write-good) | Prose quality in comments/docs |
+| [eslint-plugin-no-secrets](https://github.com/nickdeis/eslint-plugin-no-secrets) | Detect hardcoded secrets (entropy-based) |
+| [eslint-plugin-xss](https://github.com/Rantanen/eslint-plugin-xss) | XSS prevention |
+
+### Already evaluated & implemented
+
+- ✅ eslint-plugin-unicorn (131 rules)
+- ✅ eslint-plugin-n (7 rules)
+- ✅ typescript-eslint (14 rules)
+- ✅ eslint-plugin-react (15 rules)
+- ✅ eslint-plugin-react-refresh (1 rule)
+- ✅ eslint-plugin-import (11 rules)
+- ✅ eslint-plugin-regexp (10 rules)
+- ✅ eslint-plugin-functional (3 rules)
+- ✅ eslint-plugin-security (4 rules)
+- ✅ eslint-plugin-no-unsanitized (patterns added)
+- ✅ eslint-plugin-jsdoc (7 rules)
+- ✅ eslint-plugin-playwright (10 rules)
+- ✅ eslint-plugin-de-morgan (1 rule)
+- ✅ eslint-plugin-simple-import-sort (covered by existing rules)
+- ✅ eslint-plugin-jsx-a11y (33 rules — separate commit)
