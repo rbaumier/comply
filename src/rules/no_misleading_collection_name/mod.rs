@@ -30,6 +30,7 @@ pub fn register() -> RuleDef {
         backends: vec![
             (Language::TypeScript, Backend::TreeSitter(Box::new(typescript::Check))),
             (Language::Tsx, Backend::TreeSitter(Box::new(typescript::Check))),
+            (Language::JavaScript, Backend::TreeSitter(Box::new(typescript::Check))),
         ],
     }
 }

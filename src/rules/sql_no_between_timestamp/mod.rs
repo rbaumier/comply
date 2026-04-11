@@ -24,6 +24,7 @@ pub fn register() -> RuleDef {
             (Language::TypeScript, Backend::Text(Box::new(text::Check))),
             (Language::JavaScript, Backend::Text(Box::new(text::Check))),
             (Language::Tsx, Backend::Text(Box::new(text::Check))),
+            (Language::Rust, Backend::Text(Box::new(text::Check))),
         ],
     }
 }

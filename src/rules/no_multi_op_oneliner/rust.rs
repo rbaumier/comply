@@ -43,4 +43,10 @@ mod tests {
     fn allows_simple_oneliner() {
         assert!(run_on("fn f() { let x = a + b; }").is_empty());
     }
+
+    #[test]
+    fn allows_short_but_dense_expression() {
+        // Dense but short — under the line-length floor.
+        assert!(run_on("fn f() { let x = a.b.c + d.e * f; }").is_empty());
+    }
 }

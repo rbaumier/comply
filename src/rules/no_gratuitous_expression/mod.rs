@@ -1,11 +1,12 @@
 //! no-gratuitous-expression
 
+mod rust;
 mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::rules::backend::Backend;
 use crate::rules::meta::RuleMeta;
-use crate::rules::{RuleDef, TS_FAMILY};
+use crate::rules::{Language, RuleDef, TS_FAMILY};
 
 pub const META: RuleMeta = RuleMeta {
     id: "no-gratuitous-expression",
@@ -17,11 +18,13 @@ pub const META: RuleMeta = RuleMeta {
 };
 
 pub fn register() -> RuleDef {
+    let mut backends: Vec<(Language, Backend)> = TS_FAMILY
+        .iter()
+        .map(|&lang| (lang, Backend::TreeSitter(Box::new(typescript::Check))))
+        .collect();
+    backends.push((Language::Rust, Backend::TreeSitter(Box::new(rust::Check))));
     RuleDef {
         meta: META,
-        backends: TS_FAMILY
-            .iter()
-            .map(|&lang| (lang, Backend::TreeSitter(Box::new(typescript::Check))))
-            .collect(),
+        backends,
     }
 }

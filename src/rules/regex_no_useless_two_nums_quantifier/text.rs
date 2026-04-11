@@ -6,7 +6,7 @@ pub struct Check;
 
 /// Detect `{n,n}` quantifiers where both numbers are the same.
 fn has_useless_two_nums_quantifier(line: &str) -> bool {
-    if !line.contains('/') && !line.contains("RegExp") {
+    if !line.contains('/') && !line.contains("RegExp") && !line.contains("Regex::") {
         return false;
     }
     let bytes = line.as_bytes();

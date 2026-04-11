@@ -595,6 +595,15 @@ pub use registry::{build_rust_only_rule, build_ts_family_rule, RustBinding};
 /// variants identically (either via the TS grammar or oxlint delegation).
 pub const TS_FAMILY: &[Language] = &[Language::TypeScript, Language::Tsx, Language::JavaScript];
 
+/// TS-family + Rust. Used by text-based rules (e.g. regex checks) that
+/// analyse patterns identically across JS/TS and Rust source files.
+pub const TS_FAMILY_AND_RUST: &[Language] = &[
+    Language::TypeScript,
+    Language::Tsx,
+    Language::JavaScript,
+    Language::Rust,
+];
+
 /// Helper for rules whose enforcement is 100% delegated to oxlint.
 /// Each entry in `languages` gets a `Backend::Oxlint { rule }` binding.
 pub fn oxlint_delegate(meta: RuleMeta, rule: &'static str, languages: &[Language]) -> RuleDef {

@@ -7,7 +7,7 @@ pub struct Check;
 const EMPTY_LOOKAROUNDS: &[&str] = &["(?=)", "(?!)", "(?<=)", "(?<!)"];
 
 fn has_empty_lookaround(line: &str) -> bool {
-    if !line.contains('/') && !line.contains("RegExp") {
+    if !line.contains('/') && !line.contains("RegExp") && !line.contains("Regex::") {
         return false;
     }
     for pattern in EMPTY_LOOKAROUNDS {

@@ -1,5 +1,6 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
+use crate::rules::rust_helpers::{extract_rust_regex_patterns, is_rust_file};
 
 #[derive(Debug)]
 pub struct Check;
@@ -64,6 +65,7 @@ fn complexity_score(pattern: &str) -> usize {
 impl TextCheck for Check {
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
+        let rust = is_rust_file(ctx.path);
         for (idx, line) in ctx.source.lines().enumerate() {
             if let Some(pattern) = extract_regex_pattern(line) {
                 let score = complexity_score(pattern);
@@ -78,6 +80,23 @@ impl TextCheck for Check {
                         ),
                         severity: Severity::Warning,
                     });
+                }
+            }
+            if rust {
+                for (col, pattern) in extract_rust_regex_patterns(line) {
+                    let score = complexity_score(pattern);
+                    if score > THRESHOLD {
+                        diagnostics.push(Diagnostic {
+                            path: ctx.path.to_path_buf(),
+                            line: idx + 1,
+                            column: col + 1,
+                            rule_id: "regex-complexity".into(),
+                            message: format!(
+                                "Regex complexity score is {score} (threshold: {THRESHOLD}) — consider breaking it into smaller patterns."
+                            ),
+                            severity: Severity::Warning,
+                        });
+                    }
                 }
             }
         }

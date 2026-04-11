@@ -1,5 +1,6 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
+use crate::rules::rust_helpers::{extract_rust_regex_patterns, is_rust_file};
 
 #[derive(Debug)]
 pub struct Check;
@@ -125,6 +126,7 @@ fn find_top_level_pipes(pattern: &str) -> Vec<usize> {
 impl TextCheck for Check {
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
+        let rust = is_rust_file(ctx.path);
         for (idx, line) in ctx.source.lines().enumerate() {
             for (pattern, col) in extract_regex_patterns(line) {
                 if has_anchor_precedence_issue(&pattern) {
@@ -136,6 +138,20 @@ impl TextCheck for Check {
                         message: "Anchor in alternation may not bind as expected \u{2014} use `/^(a|b)$/` instead of `/^a|b$/`.".into(),
                         severity: Severity::Warning,
                     });
+                }
+            }
+            if rust {
+                for (col, pattern) in extract_rust_regex_patterns(line) {
+                    if has_anchor_precedence_issue(pattern) {
+                        diagnostics.push(Diagnostic {
+                            path: ctx.path.to_path_buf(),
+                            line: idx + 1,
+                            column: col + 1,
+                            rule_id: "regex-anchor-precedence".into(),
+                            message: "Anchor in alternation may not bind as expected \u{2014} use `^(a|b)$` instead of `^a|b$`.".into(),
+                            severity: Severity::Warning,
+                        });
+                    }
                 }
             }
         }
@@ -176,5 +192,20 @@ mod tests {
     #[test]
     fn allows_no_alternation() {
         assert!(run(r#"const re = /^foo$/;"#).is_empty());
+    }
+
+    fn run_rs(source: &str) -> Vec<Diagnostic> {
+        Check.check(&CheckCtx::for_test(Path::new("t.rs"), source))
+    }
+
+    #[test]
+    fn flags_rust_regex_caret_only_on_first() {
+        let diags = run_rs(r#"let re = Regex::new(r"^foo|bar");"#);
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn allows_rust_regex_anchored_group() {
+        assert!(run_rs(r#"let re = Regex::new(r"^(foo|bar)$");"#).is_empty());
     }
 }

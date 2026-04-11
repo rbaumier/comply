@@ -9,7 +9,7 @@ pub struct Check;
 /// octal character code.
 fn has_octal_escape_in_regex(line: &str) -> bool {
     // Only check lines that look like they contain a regex literal or RegExp.
-    if !line.contains('/') && !line.contains("RegExp") {
+    if !line.contains('/') && !line.contains("RegExp") && !line.contains("Regex::") {
         return false;
     }
     let bytes = line.as_bytes();

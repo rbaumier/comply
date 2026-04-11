@@ -51,5 +51,17 @@ mod tests {
     #[test]
     fn allows_resource_url() {
         assert!(run_on("fn f() { let u = \"/api/orders\"; }").is_empty());
+        assert!(run_on("fn f() { let u = \"/api/orders/123\"; }").is_empty());
+    }
+
+    #[test]
+    fn flags_delete_user_url() {
+        assert_eq!(run_on("fn f() { let u = \"/api/deleteUser\"; }").len(), 1);
+    }
+
+    #[test]
+    fn allows_verb_in_non_api_string() {
+        // Not a URL — regular string.
+        assert!(run_on("fn f() { let label = \"createOrder\"; }").is_empty());
     }
 }

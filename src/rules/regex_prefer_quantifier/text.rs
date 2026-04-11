@@ -1,5 +1,6 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
+use crate::rules::rust_helpers::extract_rust_regex_patterns;
 
 #[derive(Debug)]
 pub struct Check;
@@ -126,6 +127,12 @@ fn has_prefer_quantifier(line: &str) -> bool {
                     return true;
                 }
             }
+        }
+    }
+    // Check Rust Regex::new(...)
+    for (_col, pattern) in extract_rust_regex_patterns(line) {
+        if has_repeated_tokens(pattern) {
+            return true;
         }
     }
     false

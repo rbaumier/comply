@@ -9,7 +9,7 @@ pub struct Check;
 /// Heuristic: flag patterns like `x??`, `x+?` at end of regex, or
 /// `{n}?` (exact quantifier + lazy is always useless).
 fn has_useless_lazy(line: &str) -> bool {
-    if !line.contains('/') && !line.contains("RegExp") {
+    if !line.contains('/') && !line.contains("RegExp") && !line.contains("Regex::") {
         return false;
     }
     let bytes = line.as_bytes();

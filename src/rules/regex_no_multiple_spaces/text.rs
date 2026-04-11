@@ -1,5 +1,6 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
+use crate::rules::rust_helpers::extract_rust_regex_patterns;
 
 #[derive(Debug)]
 pub struct Check;
@@ -58,6 +59,12 @@ fn has_multiple_spaces_in_regex(line: &str) -> bool {
             }
         }
     }
+    // Check Rust Regex::new(...)
+    for (_col, pattern) in extract_rust_regex_patterns(line) {
+        if pattern.contains("  ") {
+            return true;
+        }
+    }
     false
 }
 
@@ -106,5 +113,19 @@ mod tests {
     #[test]
     fn allows_quantifier() {
         assert!(run("const re = / {2}/;").is_empty());
+    }
+
+    fn run_rs(source: &str) -> Vec<Diagnostic> {
+        Check.check(&CheckCtx::for_test(Path::new("t.rs"), source))
+    }
+
+    #[test]
+    fn flags_rust_regex_double_space() {
+        assert_eq!(run_rs(r#"let re = Regex::new(r"foo  bar");"#).len(), 1);
+    }
+
+    #[test]
+    fn allows_rust_regex_single_space() {
+        assert!(run_rs(r#"let re = Regex::new(r"foo bar");"#).is_empty());
     }
 }

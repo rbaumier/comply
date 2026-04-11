@@ -155,4 +155,19 @@ mod tests {
     fn does_not_flag_non_boolean() {
         assert!(run_on("fn f() { let name: String = String::new(); }").is_empty());
     }
+
+    #[test]
+    fn allows_should_will_did_was() {
+        for name in ["should_retry", "will_succeed", "did_fire", "was_loaded"] {
+            let source = format!("fn f() {{ let {name}: bool = true; }}");
+            assert!(run_on(&source).is_empty(), "'{name}' should be allowed");
+        }
+    }
+
+    #[test]
+    fn does_not_flag_word_starting_with_prefix_letters() {
+        // `issuer` starts with `is` letters but is not a boolean predicate.
+        // It won't be flagged because its type isn't bool.
+        assert!(run_on("fn f() { let issuer: &str = \"ACME\"; }").is_empty());
+    }
 }

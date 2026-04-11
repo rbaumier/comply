@@ -26,7 +26,7 @@ fn is_invisible_char(c: char) -> bool {
 }
 
 fn has_invisible_in_regex(line: &str) -> bool {
-    if !line.contains('/') && !line.contains("RegExp") {
+    if !line.contains('/') && !line.contains("RegExp") && !line.contains("Regex::") {
         return false;
     }
     line.chars().any(is_invisible_char)

@@ -126,4 +126,16 @@ mod tests {
         let source = "async fn f() { let x = compute().await; }";
         assert!(run_on(source).is_empty());
     }
+
+    #[test]
+    fn flags_bare_sqlx_query() {
+        let source = "async fn f() { sqlx::query(\"SELECT *\").execute(&pool).await; }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn allows_timeout_with_duration() {
+        let source = "async fn f() { tokio::time::timeout(Duration::from_secs(5), client.get(url).send()).await; }";
+        assert!(run_on(source).is_empty());
+    }
 }

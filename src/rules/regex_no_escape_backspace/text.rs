@@ -7,7 +7,7 @@ pub struct Check;
 /// Detect `[\b]` inside regex — backspace escape inside character class.
 /// Also matches `[\\b]` as it appears in `new RegExp("...")` string literals.
 fn has_backspace_in_char_class(line: &str) -> bool {
-    if !line.contains('/') && !line.contains("RegExp") {
+    if !line.contains('/') && !line.contains("RegExp") && !line.contains("Regex::") {
         return false;
     }
     line.contains("[\\b]") || line.contains("[\\\\b]")

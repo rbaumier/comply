@@ -124,4 +124,16 @@ mod tests {
         assert!(run_on("fn f(err: Error) {}").is_empty());
         assert!(run_on("fn f() { let fmt = 1; }").is_empty());
     }
+
+    #[test]
+    fn flags_param_abbreviation() {
+        let diags = run_on("fn f(usr_id: usize) {}");
+        assert!(diags.iter().any(|d| d.message.contains("usr")));
+    }
+
+    #[test]
+    fn does_not_flag_word_containing_abbreviation_letters() {
+        // 'account' contains 'acct' letters but isn't the abbreviation.
+        assert!(run_on("fn f() { let accountant = 1; }").is_empty());
+    }
 }

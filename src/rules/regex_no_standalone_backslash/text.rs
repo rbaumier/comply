@@ -11,7 +11,7 @@ pub struct Check;
 const VALID_AFTER_BACKSLASH: &[u8] = b"dDwWsSnrtfvbB0kpPuxc.*+?^${}[]()|\\/123456789";
 
 fn has_standalone_backslash(line: &str) -> bool {
-    if !line.contains('/') && !line.contains("RegExp") {
+    if !line.contains('/') && !line.contains("RegExp") && !line.contains("Regex::") {
         return false;
     }
     let bytes = line.as_bytes();

@@ -3,9 +3,10 @@
 mod text;
 
 use crate::diagnostic::Severity;
+use crate::files::Language;
 use crate::rules::backend::Backend;
 use crate::rules::meta::RuleMeta;
-use crate::rules::{RuleDef, TS_FAMILY};
+use crate::rules::RuleDef;
 
 pub const META: RuleMeta = RuleMeta {
     id: "no-clear-text-protocol",
@@ -17,11 +18,17 @@ pub const META: RuleMeta = RuleMeta {
 };
 
 pub fn register() -> RuleDef {
+    let backends: Vec<_> = [
+        Language::TypeScript,
+        Language::Tsx,
+        Language::JavaScript,
+        Language::Rust,
+    ]
+    .into_iter()
+    .map(|lang| (lang, Backend::Text(Box::new(text::Check))))
+    .collect();
     RuleDef {
         meta: META,
-        backends: TS_FAMILY
-            .iter()
-            .map(|&lang| (lang, Backend::Text(Box::new(text::Check))))
-            .collect(),
+        backends,
     }
 }

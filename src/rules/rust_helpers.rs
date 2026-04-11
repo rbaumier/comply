@@ -70,6 +70,174 @@ pub fn result_error_type<'a>(node: Node<'a>, source: &[u8]) -> Option<Node<'a>> 
     Some(positional[1])
 }
 
+/// Extract regex pattern strings from a line of Rust source code.
+///
+/// Matches calls like `Regex::new("pat")`, `Regex::new(r"pat")`,
+/// `Regex::new(r#"pat"#)`, `RegexBuilder::new(...)`, and
+/// `regex::Regex::new(...)`. Returns `(column, pattern_content)` pairs
+/// where `column` is the byte offset of the opening quote/raw-string
+/// delimiter and `pattern_content` is the inner pattern without quotes.
+pub fn extract_rust_regex_patterns(line: &str) -> Vec<(usize, &str)> {
+    let mut results = Vec::new();
+    let bytes = line.as_bytes();
+    let len = bytes.len();
+
+    // Needle suffixes we search for — all end with `::new(`.
+    const NEEDLES: &[&str] = &["Regex::new(", "RegexBuilder::new("];
+
+    let mut search_start = 0;
+    while search_start < len {
+        // Find the earliest needle match in the remaining slice.
+        let mut best: Option<usize> = None; // byte position of the `(` + 1
+        for needle in NEEDLES {
+            if let Some(pos) = line[search_start..].find(needle) {
+                let abs = search_start + pos + needle.len();
+                best = Some(match best {
+                    None => abs,
+                    Some(prev) => prev.min(abs),
+                });
+            }
+        }
+        let after_paren = match best {
+            Some(p) => p,
+            None => break,
+        };
+
+        // `after_paren` points right after the `(`. Now extract the
+        // string literal argument.
+        if let Some((col, pat, consumed)) = extract_string_literal(line, after_paren) {
+            results.push((col, pat));
+            search_start = after_paren + consumed;
+        } else {
+            search_start = after_paren;
+        }
+    }
+    results
+}
+
+/// Parse a Rust string literal starting at `pos` in `line`.
+/// Handles `"..."`, `r"..."`, `r#"..."#`, `r##"..."##`, etc.
+/// Returns `(col_of_content_start, content_slice, bytes_consumed)`.
+fn extract_string_literal(line: &str, pos: usize) -> Option<(usize, &str, usize)> {
+    let rest = line.get(pos..)?;
+    let bytes = rest.as_bytes();
+    if bytes.is_empty() {
+        return None;
+    }
+
+    if bytes[0] == b'r' {
+        // Raw string: r"...", r#"..."#, r##"..."##, etc.
+        let mut hashes = 0;
+        let mut i = 1;
+        while i < bytes.len() && bytes[i] == b'#' {
+            hashes += 1;
+            i += 1;
+        }
+        if i >= bytes.len() || bytes[i] != b'"' {
+            return None;
+        }
+        i += 1; // skip opening `"`
+        let content_start = i;
+
+        // Build closing delimiter: `"` followed by `hashes` `#` chars.
+        let closing: String = format!("\"{}", "#".repeat(hashes));
+        let closing_bytes = closing.as_bytes();
+
+        while i + closing_bytes.len() <= bytes.len() {
+            if &bytes[i..i + closing_bytes.len()] == closing_bytes {
+                let content = &rest[content_start..i];
+                let total = i + closing_bytes.len();
+                return Some((pos + content_start, content, total));
+            }
+            i += 1;
+        }
+        None
+    } else if bytes[0] == b'"' {
+        // Regular string literal: "..."
+        let content_start = 1;
+        let mut i = content_start;
+        while i < bytes.len() {
+            if bytes[i] == b'\\' {
+                i += 2; // skip escape sequence
+                continue;
+            }
+            if bytes[i] == b'"' {
+                let content = &rest[content_start..i];
+                return Some((pos + content_start, content, i + 1));
+            }
+            i += 1;
+        }
+        None
+    } else {
+        None
+    }
+}
+
+/// Returns `true` when the file path ends with `.rs`.
+pub fn is_rust_file(path: &std::path::Path) -> bool {
+    path.extension().is_some_and(|e| e == "rs")
+}
+
+#[cfg(test)]
+mod tests_regex_extract {
+    use super::*;
+
+    #[test]
+    fn basic_regex_new() {
+        let line = r#"let re = Regex::new("[0-9]+");"#;
+        let pats = extract_rust_regex_patterns(line);
+        assert_eq!(pats.len(), 1);
+        assert_eq!(pats[0].1, "[0-9]+");
+    }
+
+    #[test]
+    fn raw_string() {
+        let line = r#"let re = Regex::new(r"\d+");"#;
+        let pats = extract_rust_regex_patterns(line);
+        assert_eq!(pats.len(), 1);
+        assert_eq!(pats[0].1, r"\d+");
+    }
+
+    #[test]
+    fn raw_string_with_hashes() {
+        let line = r###"let re = Regex::new(r#"foo"bar"#);"###;
+        let pats = extract_rust_regex_patterns(line);
+        assert_eq!(pats.len(), 1);
+        assert_eq!(pats[0].1, r#"foo"bar"#);
+    }
+
+    #[test]
+    fn regex_builder() {
+        let line = r#"let re = RegexBuilder::new(r"(?i)test");"#;
+        let pats = extract_rust_regex_patterns(line);
+        assert_eq!(pats.len(), 1);
+        assert_eq!(pats[0].1, "(?i)test");
+    }
+
+    #[test]
+    fn fully_qualified() {
+        let line = r#"let re = regex::Regex::new("[a-z]+");"#;
+        let pats = extract_rust_regex_patterns(line);
+        assert_eq!(pats.len(), 1);
+        assert_eq!(pats[0].1, "[a-z]+");
+    }
+
+    #[test]
+    fn no_match() {
+        let line = r#"let x = some_function("hello");"#;
+        assert!(extract_rust_regex_patterns(line).is_empty());
+    }
+
+    #[test]
+    fn multiple_on_one_line() {
+        let line = r#"let (a, b) = (Regex::new("a+"), Regex::new(r"b+"));"#;
+        let pats = extract_rust_regex_patterns(line);
+        assert_eq!(pats.len(), 2);
+        assert_eq!(pats[0].1, "a+");
+        assert_eq!(pats[1].1, "b+");
+    }
+}
+
 // Both helpers above are exercised end-to-end via the rules that
 // depend on them (`rust-thread-sleep-in-async`, `rust-block-on-in-async`,
 // `rust-sync-io-in-async`, `rust-string-as-error`, `rust-unit-error-result`).

@@ -13,7 +13,7 @@ const OBSCURE_RANGES: &[&str] = &[
 ];
 
 fn has_obscure_range(line: &str) -> bool {
-    if !line.contains('/') && !line.contains("RegExp") {
+    if !line.contains('/') && !line.contains("RegExp") && !line.contains("Regex::") {
         return false;
     }
     for range in OBSCURE_RANGES {

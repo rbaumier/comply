@@ -18,6 +18,8 @@ fn has_empty_char_class(line: &str) -> bool {
     // Match new RegExp("[]") or new RegExp('[]')
     line.contains("RegExp(\"[]\")") || line.contains("RegExp('[]')")
         || line.contains("RegExp(\"[\\\\]\")")
+        // Match Rust Regex::new("[]") or Regex::new(r"[]")
+        || line.contains("Regex::new(\"[]\")") || line.contains("Regex::new(r\"[]\")")
 }
 
 impl TextCheck for Check {

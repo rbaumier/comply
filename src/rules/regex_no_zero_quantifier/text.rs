@@ -6,7 +6,7 @@ pub struct Check;
 
 /// Detect `{0}` or `{0,0}` quantifiers in regex.
 fn has_zero_quantifier(line: &str) -> bool {
-    if !line.contains('/') && !line.contains("RegExp") {
+    if !line.contains('/') && !line.contains("RegExp") && !line.contains("Regex::") {
         return false;
     }
     line.contains("{0}") || line.contains("{0,0}")

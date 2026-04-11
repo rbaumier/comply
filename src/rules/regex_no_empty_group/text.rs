@@ -13,7 +13,7 @@ fn has_empty_group(line: &str) -> bool {
             let backslashes = bytes[..i].iter().rev().take_while(|&&b| b == b'\\').count();
             if backslashes % 2 == 0 {
                 // Check it's plausibly in a regex context (contains / or RegExp)
-                if line.contains('/') || line.contains("RegExp") {
+                if line.contains('/') || line.contains("RegExp") || line.contains("Regex::") {
                     return true;
                 }
             }

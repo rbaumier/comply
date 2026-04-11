@@ -144,4 +144,9 @@ mod tests {
     fn does_not_flag_string() {
         assert!(run_on("fn f() { let delay: &str = \"5m\"; }").is_empty());
     }
+
+    #[test]
+    fn does_not_flag_non_ambiguous_name() {
+        assert!(run_on("fn f() { let count: u64 = 5; }").is_empty());
+    }
 }

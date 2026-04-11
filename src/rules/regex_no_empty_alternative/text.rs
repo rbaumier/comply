@@ -1,5 +1,6 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
+use crate::rules::rust_helpers::extract_rust_regex_patterns;
 
 #[derive(Debug)]
 pub struct Check;
@@ -40,10 +41,14 @@ fn extract_regex_pattern(line: &str) -> Option<&str> {
     None
 }
 
+fn pattern_has_empty_alternative(pattern: &str) -> bool {
+    pattern.starts_with('|') || pattern.ends_with('|') || pattern.contains("||")
+}
+
 /// Check for empty alternatives: `|` at start, end, or consecutive `||`.
 fn has_empty_alternative(line: &str) -> bool {
     if let Some(pattern) = extract_regex_pattern(line)
-        && (pattern.starts_with('|') || pattern.ends_with('|') || pattern.contains("||")) {
+        && pattern_has_empty_alternative(pattern) {
             return true;
         }
     // Also check RegExp constructor
@@ -54,10 +59,16 @@ fn has_empty_alternative(line: &str) -> bool {
             let inner = &rest[q + 1..];
             if let Some(end) = inner.find(quote as char) {
                 let pattern = &inner[..end];
-                if pattern.starts_with('|') || pattern.ends_with('|') || pattern.contains("||") {
+                if pattern_has_empty_alternative(pattern) {
                     return true;
                 }
             }
+        }
+    }
+    // Check Rust Regex::new(...)
+    for (_col, pattern) in extract_rust_regex_patterns(line) {
+        if pattern_has_empty_alternative(pattern) {
+            return true;
         }
     }
     false
@@ -113,5 +124,19 @@ mod tests {
     #[test]
     fn allows_valid_alternatives() {
         assert!(run("const re = /foo|bar/;").is_empty());
+    }
+
+    fn run_rs(source: &str) -> Vec<Diagnostic> {
+        Check.check(&CheckCtx::for_test(Path::new("t.rs"), source))
+    }
+
+    #[test]
+    fn flags_rust_regex_leading_pipe() {
+        assert_eq!(run_rs(r#"let re = Regex::new(r"|foo");"#).len(), 1);
+    }
+
+    #[test]
+    fn allows_rust_regex_valid_alternatives() {
+        assert!(run_rs(r#"let re = Regex::new(r"foo|bar");"#).is_empty());
     }
 }
