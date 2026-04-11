@@ -84,6 +84,38 @@ const LintResultSchema = z.object({
     function_name: z.string(),
     explanation: z.string().describe('Why this is a shallow wrapper'),
   })),
+  parse_dont_validate: z.array(z.object({
+    line: z.number().describe('Line number'),
+    explanation: z.string(),
+  })),
+  invalid_states_unrepresentable: z.array(z.object({
+    line: z.number().describe('Line number'),
+    explanation: z.string(),
+  })),
+  functional_core_imperative_shell: z.array(z.object({
+    line: z.number().describe('Line number'),
+    explanation: z.string(),
+  })),
+  document_impossible_states: z.array(z.object({
+    line: z.number().describe('Line number'),
+    explanation: z.string(),
+  })),
+  bound_every_input: z.array(z.object({
+    line: z.number().describe('Line number'),
+    explanation: z.string(),
+  })),
+  crosscutting_via_wrapping: z.array(z.object({
+    line: z.number().describe('Line number'),
+    explanation: z.string(),
+  })),
+  map_db_entities_to_dtos: z.array(z.object({
+    line: z.number().describe('Line number'),
+    explanation: z.string(),
+  })),
+  error_messages_as_remediation: z.array(z.object({
+    line: z.number().describe('Line number'),
+    explanation: z.string(),
+  })),
 })
 
 

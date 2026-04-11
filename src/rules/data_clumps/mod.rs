@@ -1,0 +1,27 @@
+//! data-clumps
+
+mod text;
+
+use crate::diagnostic::Severity;
+use crate::rules::backend::Backend;
+use crate::rules::meta::RuleMeta;
+use crate::rules::{RuleDef, TS_FAMILY};
+
+pub const META: RuleMeta = RuleMeta {
+    id: "data-clumps",
+    description: "Same 3+ parameter names appear together in multiple function signatures.",
+    remediation: "Extract the repeated parameter group into a value object / options type. Data clumps indicate a missing abstraction — e.g. `(host, port, protocol)` should be a `ConnectionConfig`.",
+    severity: Severity::Warning,
+    doc_url: None,
+    categories: &["code-quality"],
+};
+
+pub fn register() -> RuleDef {
+    RuleDef {
+        meta: META,
+        backends: TS_FAMILY
+            .iter()
+            .map(|&lang| (lang, Backend::Text(Box::new(text::Check))))
+            .collect(),
+    }
+}

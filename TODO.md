@@ -111,3 +111,20 @@ Rules requiring capabilities comply does not have yet (scope analysis, per-modul
 | `no-unnecessary-polyfills` | Needs browserslist + polyfill DB | Browserslist integration |
 | `no-unused-properties` | Needs whole-program data flow analysis | Whole-program analysis |
 | `string-content` | User-configurable string pattern replacements | Config in comply.toml |
+
+---
+
+# Plugins to suppoort/evaluate
+- https://github.com/jsx-eslint/eslint-plugin-jsx-a11y
+- https://github.com/jsx-eslint/eslint-plugin-react
+https://github.com/facebook/react/tree/main/packages/eslint-plugin-react-hooks
+https://github.com/ArnaudBarre/eslint-plugin-react-refresh
+https://github.com/michaelfaith/eslint-plugin-package-json
+https://github.com/eslint-community/eslint-plugin-n
+https://typescript-eslint.io/rules/
+https://github.com/gajus/eslint-plugin-jsdoc
+https://github.com/schoero/eslint-plugin-better-tailwindcss
+https://github.com/CodelyTV/eslint-plugin-hexagonal-architecture
+https://github.com/btford/write-good
+https://github.com/eslint-functional/eslint-plugin-functional?tab=readme-ov-file
+https://github.com/import-js/eslint-plugin-import

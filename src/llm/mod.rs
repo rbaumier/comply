@@ -17,7 +17,7 @@ use anyhow::{Context, Result};
 use crate::diagnostic::Diagnostic;
 
 /// Cache version — bump when the unified prompt changes materially.
-const PROMPT_VERSION: u32 = 9;
+const PROMPT_VERSION: u32 = 10;
 
 /// Configuration for an LLM lint pass.
 #[derive(Debug)]

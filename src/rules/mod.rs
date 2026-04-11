@@ -295,6 +295,23 @@ pub mod hono_csp_unsafe;
 pub mod hono_csrf_missing;
 pub mod hono_missing_secure_headers;
 pub mod hono_secure_headers_disabled;
+pub mod api_first;
+pub mod auth_on_mutation;
+pub mod blank_line_between_blocks;
+pub mod colocated_tests;
+pub mod data_clumps;
+pub mod error_message_is_remediation;
+pub mod factory_di_shape;
+pub mod intermediate_variables;
+pub mod justify_inaction;
+pub mod no_hidden_control_flow;
+pub mod no_inferred_any;
+pub mod no_logger_in_business_logic;
+pub mod no_raw_db_entity_in_handler;
+pub mod option_vs_result;
+pub mod pure_by_default;
+pub mod structured_api_error;
+pub mod symmetric_pairs;
 use crate::diagnostic::Severity;
 use crate::files::Language;
 use backend::Backend;
@@ -683,6 +700,23 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         hono_csrf_missing::register(),
         hono_missing_secure_headers::register(),
         hono_secure_headers_disabled::register(),
+        api_first::register(),
+        auth_on_mutation::register(),
+        blank_line_between_blocks::register(),
+        colocated_tests::register(),
+        data_clumps::register(),
+        error_message_is_remediation::register(),
+        factory_di_shape::register(),
+        intermediate_variables::register(),
+        justify_inaction::register(),
+        no_hidden_control_flow::register(),
+        no_inferred_any::register(),
+        no_logger_in_business_logic::register(),
+        no_raw_db_entity_in_handler::register(),
+        option_vs_result::register(),
+        pure_by_default::register(),
+        structured_api_error::register(),
+        symmetric_pairs::register(),
     ];
     rules.extend(delegated::register_all());
     rules

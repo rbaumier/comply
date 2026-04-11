@@ -26,6 +26,14 @@ pub fn parse_response(raw: &str, file_path: &Path) -> Result<Vec<Diagnostic>> {
             barricade_pattern: vec![],
             temporal_decomposition: vec![],
             shallow_module: vec![],
+            parse_dont_validate: vec![],
+            invalid_states_unrepresentable: vec![],
+            functional_core_imperative_shell: vec![],
+            document_impossible_states: vec![],
+            bound_every_input: vec![],
+            crosscutting_via_wrapping: vec![],
+            map_db_entities_to_dtos: vec![],
+            error_messages_as_remediation: vec![],
         });
     convert_response(resp, file_path)
 }
@@ -200,6 +208,30 @@ Are modules/functions split by execution order (read → parse → validate → 
 ## 9. SHALLOW MODULE
 Is a function's public interface as complex as its implementation? Flag pass-through methods that forward calls with identical signatures adding no value. Flag wrapper functions whose body is a single delegation. A module's interface should be simpler than its implementation.
 
+## 10. PARSE DON'T VALIDATE
+Flag functions that validate data and then pass raw untyped values downstream. The validated data should be parsed into a typed representation (newtype, branded type, or validated struct) so the type system guarantees validity. Flag: `if (isEmail(str)) sendEmail(str)` — `str` is still `string` after validation.
+
+## 11. INVALID STATES UNREPRESENTABLE
+Flag types where invalid combinations of fields are possible at the type level. Example: `{{ status: 'pending', completedAt: Date }}` — a pending item with a completion date. Suggest discriminated unions or state machines.
+
+## 12. FUNCTIONAL CORE IMPERATIVE SHELL
+Flag functions that mix pure business logic with I/O (database calls, HTTP requests, file system, logging). The pure logic should be extractable into a function that takes data in and returns data out, with I/O at the edges.
+
+## 13. DOCUMENT IMPOSSIBLE STATES
+Flag assertions, panics, or unreachable branches that lack a comment explaining why the state is impossible. Every `assert`, `unreachable!`, `throw new Error('unreachable')` needs a `// Impossible because: ...` comment.
+
+## 14. BOUND EVERY INPUT
+Flag public function parameters from external boundaries (API handlers, CLI args, config parsing, user input) that are used without validation. External inputs must be validated and rejected if invalid — never silently defaulted with `?? 0` or `|| fallback`.
+
+## 15. CROSSCUTTING VIA WRAPPING
+Flag `logger.info()`, `metrics.record()`, `tracer.span()` calls inside business logic functions. Crosscutting concerns (logging, tracing, metrics) should be injected via wrapping (`withLogging(service)`) not inlined.
+
+## 16. MAP DB ENTITIES TO DTOS
+Flag route handlers or API functions that return raw database entities (Prisma models, TypeORM entities, Drizzle query results) directly. Database entities should be mapped to dedicated response DTOs at the boundary.
+
+## 17. ERROR MESSAGES AS REMEDIATION
+Flag `new Error("...")` or `throw new Error("...")` where the message just names the problem without telling the reader what to do. Good: `"API key expired. Generate a new one at /settings/api-keys"`. Bad: `"Invalid API key"`.
+
 Return EMPTY arrays for categories with no issues. Be conservative — false negatives are better than false positives.
 
 Source file:
@@ -230,6 +262,22 @@ struct UnifiedResponse {
     temporal_decomposition: Vec<TemporalIssue>,
     #[serde(default)]
     shallow_module: Vec<ShallowModuleIssue>,
+    #[serde(default)]
+    parse_dont_validate: Vec<GenericIssue>,
+    #[serde(default)]
+    invalid_states_unrepresentable: Vec<GenericIssue>,
+    #[serde(default)]
+    functional_core_imperative_shell: Vec<GenericIssue>,
+    #[serde(default)]
+    document_impossible_states: Vec<GenericIssue>,
+    #[serde(default)]
+    bound_every_input: Vec<GenericIssue>,
+    #[serde(default)]
+    crosscutting_via_wrapping: Vec<GenericIssue>,
+    #[serde(default)]
+    map_db_entities_to_dtos: Vec<GenericIssue>,
+    #[serde(default)]
+    error_messages_as_remediation: Vec<GenericIssue>,
 }
 
 /// External wire format mirror — LLM JSON output.
@@ -326,6 +374,14 @@ struct ShallowModuleIssue {
     #[serde(default)]
     line: Option<usize>,
     function_name: String,
+    explanation: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct GenericIssue {
+    #[serde(default)]
+    line: Option<usize>,
+    #[serde(default)]
     explanation: String,
 }
 
@@ -488,6 +544,32 @@ fn convert_response(resp: UnifiedResponse, file_path: &Path) -> Result<Vec<Diagn
             ),
             severity: Severity::Warning,
         });
+    }
+
+    // Generic issue categories (Tier 5 LLM rules).
+    let generic_categories = [
+        ("llm-parse-dont-validate", &resp.parse_dont_validate),
+        ("llm-invalid-states-unrepresentable", &resp.invalid_states_unrepresentable),
+        ("llm-functional-core-imperative-shell", &resp.functional_core_imperative_shell),
+        ("llm-document-impossible-states", &resp.document_impossible_states),
+        ("llm-bound-every-input", &resp.bound_every_input),
+        ("llm-crosscutting-via-wrapping", &resp.crosscutting_via_wrapping),
+        ("llm-map-db-entities-to-dtos", &resp.map_db_entities_to_dtos),
+        ("llm-error-messages-as-remediation", &resp.error_messages_as_remediation),
+    ];
+    for (rule_id, issues) in &generic_categories {
+        for issue in *issues {
+            let line = issue.line.unwrap_or(1);
+            if !issue.explanation.is_empty() {
+                diagnostics.push(Diagnostic {
+                    path: file_path.to_path_buf(),
+                    line, column: 1,
+                    rule_id: (*rule_id).into(),
+                    message: issue.explanation.clone(),
+                    severity: Severity::Warning,
+                });
+            }
+        }
     }
 
     Ok(diagnostics)
