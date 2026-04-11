@@ -15,6 +15,7 @@ pub const META: RuleMeta = RuleMeta {
                   original if you need to recover it.",
     severity: Severity::Warning,
     doc_url: None,
+    categories: &["comments"],
 };
 
 pub fn register() -> RuleDef {

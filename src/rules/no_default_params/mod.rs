@@ -16,6 +16,7 @@ pub const META: RuleMeta = RuleMeta {
                   and independently testable.",
     severity: Severity::Error,
     doc_url: None,
+    categories: &["typescript"],
 };
 
 pub fn register() -> RuleDef {

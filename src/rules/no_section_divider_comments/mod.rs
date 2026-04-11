@@ -22,6 +22,7 @@ pub const META: RuleMeta = RuleMeta {
                   hack around the real problem: the file should be smaller.",
     severity: Severity::Error,
     doc_url: None,
+    categories: &["comments"],
 };
 
 pub fn register() -> RuleDef {

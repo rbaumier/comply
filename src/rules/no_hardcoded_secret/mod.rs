@@ -16,6 +16,7 @@ pub const META: RuleMeta = RuleMeta {
                   already compromised if it reached a commit.",
     severity: Severity::Error,
     doc_url: None,
+    categories: &["security"],
 };
 
 pub fn register() -> RuleDef {

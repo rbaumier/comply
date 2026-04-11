@@ -14,6 +14,7 @@ pub const META: RuleMeta = RuleMeta {
                   caller types with no extra cost. Enable `clippy::ptr_arg`.",
     severity: Severity::Warning,
     doc_url: None,
+    categories: &["rust"],
 };
 
 pub fn register() -> RuleDef {

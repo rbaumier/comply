@@ -414,7 +414,7 @@ mod tests {
             description: "no unwrap",
             remediation: "use ?",
             severity: Severity::Error,
-            doc_url: None,
+            doc_url: None, categories: &[],
         };
         let mut remap: HashMap<String, &'static RuleMeta> = HashMap::new();
         remap.insert("clippy::unwrap_used".to_string(), &META);
@@ -439,7 +439,7 @@ mod tests {
             description: "no unwrap",
             remediation: "use ?",
             severity: Severity::Error,
-            doc_url: None,
+            doc_url: None, categories: &[],
         };
         let mut remap: HashMap<String, &'static RuleMeta> = HashMap::new();
         remap.insert("clippy::unwrap_used".to_string(), &META);

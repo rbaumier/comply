@@ -15,6 +15,7 @@ pub const META: RuleMeta = RuleMeta {
                   when memory corruption shows up.",
     severity: Severity::Error,
     doc_url: None,
+    categories: &["rust"],
 };pub fn register() -> RuleDef {
     crate::register_rust_only!(META, rust)
 }

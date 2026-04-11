@@ -21,6 +21,7 @@ pub const META: RuleMeta = RuleMeta {
                   worst of both worlds.",
     severity: Severity::Warning,
     doc_url: None,
+    categories: &["rust"],
 };pub fn register() -> RuleDef {
     crate::register_rust_only!(META, rust)
 }

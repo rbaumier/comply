@@ -14,6 +14,7 @@ pub const META: RuleMeta = RuleMeta {
                   they're never free. Enable `clippy::redundant_clone`.",
     severity: Severity::Warning,
     doc_url: None,
+    categories: &["rust"],
 };
 
 pub fn register() -> RuleDef {

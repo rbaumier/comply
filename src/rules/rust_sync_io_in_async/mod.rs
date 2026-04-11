@@ -22,6 +22,7 @@ pub const META: RuleMeta = RuleMeta {
                   so it runs on the dedicated blocking pool.",
     severity: Severity::Error,
     doc_url: None,
+    categories: &["rust"],
 };pub fn register() -> RuleDef {
     crate::register_rust_only!(META, rust)
 }

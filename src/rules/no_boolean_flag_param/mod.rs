@@ -16,6 +16,7 @@ pub const META: RuleMeta = RuleMeta {
                   must disappear from the signature.",
     severity: Severity::Error,
     doc_url: None,
+    categories: &["code-quality"],
 };pub fn register() -> RuleDef {
     crate::register_ts_family_with_clippy_marker!(META, typescript, "clippy::fn_params_excessive_bools")
 }

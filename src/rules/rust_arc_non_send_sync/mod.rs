@@ -26,6 +26,7 @@ pub const META: RuleMeta = RuleMeta {
                   `clippy::arc_with_non_send_sync` (correctness, on by default).",
     severity: Severity::Error,
     doc_url: None,
+    categories: &["rust"],
 };
 
 pub fn register() -> RuleDef {

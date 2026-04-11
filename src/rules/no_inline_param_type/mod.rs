@@ -15,6 +15,7 @@ pub const META: RuleMeta = RuleMeta {
                   shared across call sites, and shows up in IDE hover.",
     severity: Severity::Warning,
     doc_url: None,
+    categories: &["typescript"],
 };
 
 pub fn register() -> RuleDef {

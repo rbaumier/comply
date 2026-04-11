@@ -20,6 +20,7 @@ pub const META: RuleMeta = RuleMeta {
                   Examples are the fastest way for callers to understand the API.",
     severity: Severity::Warning,
     doc_url: None,
+    categories: &["typescript", "jsdoc"],
 };pub fn register() -> RuleDef {
     crate::register_ts_family!(META, typescript)
 }

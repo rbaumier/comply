@@ -21,6 +21,7 @@ pub const META: RuleMeta = RuleMeta {
                   the source location, type, and nested cause chain.",
     severity: Severity::Error,
     doc_url: None,
+    categories: &["code-quality"],
 };pub fn register() -> RuleDef {
     crate::register_ts_family!(META, typescript)
 }

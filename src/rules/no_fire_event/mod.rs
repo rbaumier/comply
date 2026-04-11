@@ -17,6 +17,7 @@ pub const META: RuleMeta = RuleMeta {
                   browsers fire, so tests pass but miss event-handler bugs.",
     severity: Severity::Warning,
     doc_url: None,
+    categories: &["testing"],
 };
 
 pub fn register() -> RuleDef {

@@ -13,6 +13,7 @@ pub const META: RuleMeta = RuleMeta {
                   tail of the body — one level of abstraction per function.",
     severity: Severity::Error,
     doc_url: None,
+    categories: &["code-quality"],
 };pub fn register() -> RuleDef {
     crate::register_ts_family_with_clippy_marker!(META, typescript, "clippy::too_many_lines")
 }

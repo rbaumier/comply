@@ -16,6 +16,7 @@ pub const META: RuleMeta = RuleMeta {
                   double cleanup which can mask unmount bugs.",
     severity: Severity::Warning,
     doc_url: None,
+    categories: &["testing"],
 };
 
 pub fn register() -> RuleDef {

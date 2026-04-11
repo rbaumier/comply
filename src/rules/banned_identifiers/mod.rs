@@ -15,6 +15,7 @@ pub const META: RuleMeta = RuleMeta {
                   `processOrder` → `fulfillOrder`, `handlePayment` → `chargeCustomer`.",
     severity: Severity::Warning,
     doc_url: None,
+    categories: &["naming"],
 };pub fn register() -> RuleDef {
     crate::register_ts_family_with_clippy_marker!(META, typescript, "clippy::disallowed_names")
 }

@@ -17,6 +17,7 @@ pub const META: RuleMeta = RuleMeta {
                   making failures hard to diagnose.",
     severity: Severity::Warning,
     doc_url: None,
+    categories: &["testing"],
 };
 
 pub fn register() -> RuleDef {

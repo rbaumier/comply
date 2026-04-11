@@ -14,6 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "List columns explicitly: `SELECT id, name, email` instead of `SELECT *`. Explicit columns enable index-only scans and make the API contract visible.",
     severity: Severity::Warning,
     doc_url: None,
+    categories: &["database", "sql"],
 };
 
 pub fn register() -> RuleDef {

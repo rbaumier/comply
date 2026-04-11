@@ -16,6 +16,7 @@ pub const META: RuleMeta = RuleMeta {
                   `extends` or declaration merging.",
     severity: Severity::Warning,
     doc_url: None,
+    categories: &["typescript"],
 };
 
 pub fn register() -> RuleDef {

@@ -18,6 +18,7 @@ pub const META: RuleMeta = RuleMeta {
                   helpers into a separate module.",
     severity: Severity::Error,
     doc_url: None,
+    categories: &["code-quality"],
 };
 
 /// Register the rule with every supported language.

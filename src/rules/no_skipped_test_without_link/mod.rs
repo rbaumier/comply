@@ -15,6 +15,7 @@ pub const META: RuleMeta = RuleMeta {
                   later. Untracked skips become permanent coverage holes.",
     severity: Severity::Warning,
     doc_url: None,
+    categories: &["testing"],
 };pub fn register() -> RuleDef {
     crate::register_ts_family_with_rust!(META, typescript, rust)
 }

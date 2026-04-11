@@ -17,6 +17,7 @@ pub const META: RuleMeta = RuleMeta {
                   neither does.",
     severity: Severity::Warning,
     doc_url: None,
+    categories: &["typescript", "vue"],
 };
 
 pub fn register() -> RuleDef {

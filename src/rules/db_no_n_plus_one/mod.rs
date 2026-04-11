@@ -14,6 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Move the query outside the loop: use a JOIN, `WHERE id IN (...)`, or batch fetch. N+1 queries scale linearly with result set size and are the #1 cause of slow pages.",
     severity: Severity::Error,
     doc_url: None,
+    categories: &["database"],
 };
 
 pub fn register() -> RuleDef {

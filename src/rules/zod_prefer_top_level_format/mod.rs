@@ -16,6 +16,7 @@ pub const META: RuleMeta = RuleMeta {
                   tree-shakeable.",
     severity: Severity::Warning,
     doc_url: None,
+    categories: &["typescript", "zod"],
 };
 
 pub fn register() -> RuleDef {

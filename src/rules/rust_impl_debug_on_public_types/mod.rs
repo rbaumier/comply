@@ -22,6 +22,7 @@ pub const META: RuleMeta = RuleMeta {
                   closure), implement `Debug` by hand instead.",
     severity: Severity::Warning,
     doc_url: None,
+    categories: &["rust"],
 };pub fn register() -> RuleDef {
     crate::register_rust_only!(META, rust)
 }

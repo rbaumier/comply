@@ -36,4 +36,7 @@ pub struct RuleMeta {
     pub severity: Severity,
     /// Optional link to the rule's documentation.
     pub doc_url: Option<&'static str>,
+    /// Hierarchical categories — general to specific (e.g. `&["typescript", "react"]`).
+    /// Used by `comply catalog` to group rules by domain.
+    pub categories: &'static [&'static str],
 }

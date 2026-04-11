@@ -16,6 +16,7 @@ pub const META: RuleMeta = RuleMeta {
                   against the last signature only, which hides bugs.",
     severity: Severity::Warning,
     doc_url: None,
+    categories: &["typescript"],
 };
 
 pub fn register() -> RuleDef {

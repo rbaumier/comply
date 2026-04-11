@@ -15,6 +15,7 @@ pub const META: RuleMeta = RuleMeta {
                   union with a `type`/`kind` field for tagged data.",
     severity: Severity::Error,
     doc_url: None,
+    categories: &["typescript"],
 };
 
 pub fn register() -> RuleDef {

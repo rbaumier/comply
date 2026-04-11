@@ -15,6 +15,7 @@ pub const META: RuleMeta = RuleMeta {
                   can trigger exponential backtracking and freeze the event loop.",
     severity: Severity::Error,
     doc_url: None,
+    categories: &["code-quality"],
 };pub fn register() -> RuleDef {
     crate::register_ts_family_with_rust!(META, typescript, rust)
 }

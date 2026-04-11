@@ -17,6 +17,7 @@ pub const META: RuleMeta = RuleMeta {
                   associate DOM state with the wrong item on reorder/filter.",
     severity: Severity::Warning,
     doc_url: None,
+    categories: &["typescript", "react"],
 };
 
 pub fn register() -> RuleDef {

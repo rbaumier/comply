@@ -15,6 +15,7 @@ pub const META: RuleMeta = RuleMeta {
                   (Zod) or a hand-written type guard that inspects the value.",
     severity: Severity::Error,
     doc_url: None,
+    categories: &["typescript"],
 };
 
 pub fn register() -> RuleDef {

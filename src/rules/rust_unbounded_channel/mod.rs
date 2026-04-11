@@ -24,6 +24,7 @@ pub const META: RuleMeta = RuleMeta {
                   will `.await` (or block) when full, providing backpressure.",
     severity: Severity::Error,
     doc_url: None,
+    categories: &["rust"],
 };pub fn register() -> RuleDef {
     crate::register_rust_only!(META, rust)
 }

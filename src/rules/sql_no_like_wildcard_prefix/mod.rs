@@ -14,6 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Replace `LIKE '%term%'` with a TSVECTOR + GIN index and `@@` operator. Leading wildcards force a sequential scan on every row.",
     severity: Severity::Warning,
     doc_url: None,
+    categories: &["database", "sql"],
 };
 
 pub fn register() -> RuleDef {

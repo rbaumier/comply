@@ -16,6 +16,7 @@ pub const META: RuleMeta = RuleMeta {
                   like `0` and `''` leak into the DOM.",
     severity: Severity::Warning,
     doc_url: None,
+    categories: &["typescript", "react"],
 };
 
 pub fn register() -> RuleDef {

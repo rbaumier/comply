@@ -16,6 +16,7 @@ pub const META: RuleMeta = RuleMeta {
                   silent wrong answers.",
     severity: Severity::Warning,
     doc_url: None,
+    categories: &["typescript"],
 };
 
 pub fn register() -> RuleDef {

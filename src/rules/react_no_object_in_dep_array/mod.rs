@@ -16,6 +16,7 @@ pub const META: RuleMeta = RuleMeta {
                   content is identical, causing infinite re-runs.",
     severity: Severity::Error,
     doc_url: None,
+    categories: &["typescript", "react"],
 };
 
 pub fn register() -> RuleDef {

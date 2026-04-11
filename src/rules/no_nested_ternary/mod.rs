@@ -12,6 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Nested ternary — extract to if/else or a named variable for each branch.",
     severity: Severity::Error,
     doc_url: None,
+    categories: &["code-quality"],
 };pub fn register() -> RuleDef {
     crate::register_ts_family!(META, typescript)
 }

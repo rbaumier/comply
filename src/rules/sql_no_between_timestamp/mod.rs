@@ -14,6 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Replace `BETWEEN start AND end` with `>= start AND < end`. BETWEEN is inclusive on both sides — midnight rows get counted twice.",
     severity: Severity::Warning,
     doc_url: None,
+    categories: &["database", "sql"],
 };
 
 pub fn register() -> RuleDef {

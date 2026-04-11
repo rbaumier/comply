@@ -16,6 +16,7 @@ pub const META: RuleMeta = RuleMeta {
                   and plain functions. Options API is legacy in Vue 3.",
     severity: Severity::Error,
     doc_url: None,
+    categories: &["typescript", "vue"],
 };
 
 pub fn register() -> RuleDef {

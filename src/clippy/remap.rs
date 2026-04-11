@@ -39,7 +39,7 @@ mod tests {
             description: "no unwrap",
             remediation: "use ?",
             severity: Severity::Error,
-            doc_url: None,
+            doc_url: None, categories: &[],
         };
         let bindings: Vec<(&'static str, &'static RuleMeta, Severity)> =
             vec![("clippy::unwrap_used", &META, Severity::Error)];

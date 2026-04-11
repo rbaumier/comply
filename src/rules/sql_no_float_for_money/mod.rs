@@ -14,6 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Replace `FLOAT`/`DOUBLE PRECISION`/`REAL` with `NUMERIC(precision, scale)` for any column that holds money, prices, or financial amounts. Floating-point arithmetic introduces rounding errors that compound over transactions.",
     severity: Severity::Error,
     doc_url: None,
+    categories: &["database", "sql"],
 };
 
 pub fn register() -> RuleDef {

@@ -16,6 +16,7 @@ pub const META: RuleMeta = RuleMeta {
                   that attract unrelated code over time.",
     severity: Severity::Warning,
     doc_url: None,
+    categories: &["code-quality"],
 };
 
 pub fn register() -> RuleDef {

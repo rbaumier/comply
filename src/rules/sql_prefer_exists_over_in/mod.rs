@@ -14,6 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Replace `WHERE col IN (SELECT ...)` with `WHERE EXISTS (SELECT 1 FROM ... WHERE ...)`. EXISTS short-circuits on the first match; IN must materialize the entire subquery.",
     severity: Severity::Warning,
     doc_url: None,
+    categories: &["database", "sql"],
 };
 
 pub fn register() -> RuleDef {

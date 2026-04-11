@@ -17,6 +17,7 @@ pub const META: RuleMeta = RuleMeta {
                   compiled-pattern cache.",
     severity: Severity::Warning,
     doc_url: None,
+    categories: &["typescript", "react"],
 };
 
 pub fn register() -> RuleDef {

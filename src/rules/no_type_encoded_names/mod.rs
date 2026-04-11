@@ -16,6 +16,7 @@ pub const META: RuleMeta = RuleMeta {
                   and lies when the type changes.",
     severity: Severity::Warning,
     doc_url: None,
+    categories: &["naming"],
 };pub fn register() -> RuleDef {
     crate::register_ts_family_with_rust!(META, typescript, rust)
 }

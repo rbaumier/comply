@@ -18,6 +18,7 @@ pub const META: RuleMeta = RuleMeta {
                   won't break your tests.",
     severity: Severity::Warning,
     doc_url: None,
+    categories: &["testing"],
 };
 
 pub fn register() -> RuleDef {

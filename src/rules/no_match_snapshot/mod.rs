@@ -16,6 +16,7 @@ pub const META: RuleMeta = RuleMeta {
                   value.",
     severity: Severity::Warning,
     doc_url: None,
+    categories: &["testing"],
 };
 
 pub fn register() -> RuleDef {

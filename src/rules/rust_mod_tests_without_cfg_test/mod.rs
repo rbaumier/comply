@@ -21,6 +21,7 @@ pub const META: RuleMeta = RuleMeta {
                   dev-dependencies that aren't built for release.",
     severity: Severity::Error,
     doc_url: None,
+    categories: &["rust"],
 };pub fn register() -> RuleDef {
     crate::register_rust_only!(META, rust)
 }

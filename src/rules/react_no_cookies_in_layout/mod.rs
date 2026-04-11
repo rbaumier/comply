@@ -18,6 +18,7 @@ pub const META: RuleMeta = RuleMeta {
                   static generation for the entire route segment.",
     severity: Severity::Error,
     doc_url: None,
+    categories: &["typescript", "react"],
 };
 
 pub fn register() -> RuleDef {

@@ -16,6 +16,7 @@ pub const META: RuleMeta = RuleMeta {
                   `clippy::explicit_iter_loop`.",
     severity: Severity::Warning,
     doc_url: None,
+    categories: &["rust"],
 };
 
 pub fn register() -> RuleDef {

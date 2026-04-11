@@ -15,6 +15,7 @@ pub const META: RuleMeta = RuleMeta {
                   at a glance without scanning through private helpers first.",
     severity: Severity::Warning,
     doc_url: None,
+    categories: &["code-quality"],
 };pub fn register() -> RuleDef {
     crate::register_ts_family_with_rust!(META, typescript, rust)
 }

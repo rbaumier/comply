@@ -19,6 +19,7 @@ pub const META: RuleMeta = RuleMeta {
                   compose them: `getUserAndUpdateCache` → `getUser()` + `updateCache(user)`.",
     severity: Severity::Error,
     doc_url: None,
+    categories: &["naming"],
 };pub fn register() -> RuleDef {
     crate::register_ts_family!(META, typescript)
 }

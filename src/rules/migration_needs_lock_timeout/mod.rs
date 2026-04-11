@@ -14,6 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Add `SET lock_timeout = '5s';` at the top of every DDL migration. Without it, an ALTER TABLE on a busy table queues all writes behind the lock indefinitely.",
     severity: Severity::Warning,
     doc_url: None,
+    categories: &["database", "migrations"],
 };
 
 pub fn register() -> RuleDef {

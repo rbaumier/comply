@@ -15,6 +15,7 @@ pub const META: RuleMeta = RuleMeta {
                   Enable `clippy::await_holding_lock`.",
     severity: Severity::Error,
     doc_url: None,
+    categories: &["rust"],
 };
 
 pub fn register() -> RuleDef {

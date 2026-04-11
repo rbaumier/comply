@@ -14,6 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Add `.index()` on every FK column. PostgreSQL does NOT auto-index FK columns — without an index, cascading deletes and JOIN lookups do sequential scans.",
     severity: Severity::Warning,
     doc_url: None,
+    categories: &["database", "drizzle"],
 };
 
 pub fn register() -> RuleDef {

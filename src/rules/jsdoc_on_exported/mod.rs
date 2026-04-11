@@ -15,6 +15,7 @@ pub const META: RuleMeta = RuleMeta {
                   isn't obvious.",
     severity: Severity::Warning,
     doc_url: None,
+    categories: &["typescript", "jsdoc"],
 };pub fn register() -> RuleDef {
     crate::register_ts_family_with_clippy_marker!(META, typescript, "missing_docs")
 }

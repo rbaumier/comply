@@ -89,6 +89,12 @@ pub enum Command {
         #[arg(long = "json")]
         should_emit_json: bool,
     },
+    /// Generate a full rule catalog grouped by category.
+    Catalog {
+        /// Output as JSON instead of markdown.
+        #[arg(long = "json")]
+        should_emit_json: bool,
+    },
     /// Manage the project's `comply.toml` configuration file.
     Config {
         #[command(subcommand)]

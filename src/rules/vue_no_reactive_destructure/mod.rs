@@ -17,6 +17,7 @@ pub const META: RuleMeta = RuleMeta {
                   or use `ref()` directly for each field.",
     severity: Severity::Error,
     doc_url: None,
+    categories: &["typescript", "vue"],
 };
 
 pub fn register() -> RuleDef {

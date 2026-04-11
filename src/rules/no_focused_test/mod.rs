@@ -15,6 +15,7 @@ pub const META: RuleMeta = RuleMeta {
                   while regressions slip through.",
     severity: Severity::Error,
     doc_url: None,
+    categories: &["testing"],
 };
 
 pub fn register() -> RuleDef {

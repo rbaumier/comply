@@ -17,6 +17,7 @@ pub const META: RuleMeta = RuleMeta {
                   `DELETE /api/orders/:id` to remove.",
     severity: Severity::Warning,
     doc_url: None,
+    categories: &["api"],
 };pub fn register() -> RuleDef {
     crate::register_ts_family_with_rust!(META, typescript, rust)
 }

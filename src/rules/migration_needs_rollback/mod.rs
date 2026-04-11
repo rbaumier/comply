@@ -14,6 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Add an explicit `down()` / `rollback()` function to every migration. Irreversible migrations prevent quick recovery from bad deploys. Make data migrations idempotent with `ON CONFLICT DO NOTHING`.",
     severity: Severity::Warning,
     doc_url: None,
+    categories: &["database", "migrations"],
 };
 
 pub fn register() -> RuleDef {

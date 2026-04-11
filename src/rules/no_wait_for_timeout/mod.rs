@@ -16,6 +16,7 @@ pub const META: RuleMeta = RuleMeta {
                   flaky tests on slow CI and waste time on fast machines.",
     severity: Severity::Error,
     doc_url: None,
+    categories: &["testing"],
 };
 
 pub fn register() -> RuleDef {

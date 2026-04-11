@@ -22,6 +22,7 @@ pub const META: RuleMeta = RuleMeta {
                   obvious idiom. Enforced by `clippy::box_default`.",
     severity: Severity::Warning,
     doc_url: None,
+    categories: &["rust"],
 };
 
 pub fn register() -> RuleDef {

@@ -15,6 +15,7 @@ pub const META: RuleMeta = RuleMeta {
                   on the server's zone, silently corrupting dates.",
     severity: Severity::Warning,
     doc_url: None,
+    categories: &["database", "drizzle"],
 };
 
 pub fn register() -> RuleDef {

@@ -37,6 +37,7 @@ pub const META: RuleMeta = RuleMeta {
                   Customer and Address are structured.",
     severity: Severity::Warning,
     doc_url: None,
+    categories: &["code-quality"],
 };pub fn register() -> RuleDef {
     crate::register_ts_family!(META, typescript)
 }

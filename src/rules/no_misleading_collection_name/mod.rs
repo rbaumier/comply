@@ -21,6 +21,7 @@ pub const META: RuleMeta = RuleMeta {
                   `nameList`. The name and the type must agree.",
     severity: Severity::Error,
     doc_url: None,
+    categories: &["naming"],
 };
 
 pub fn register() -> RuleDef {

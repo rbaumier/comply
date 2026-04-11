@@ -14,6 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Use parameterized queries (`$1`, `?`, or ORM methods) instead of string concatenation. Never interpolate user input into SQL strings.",
     severity: Severity::Error,
     doc_url: None,
+    categories: &["database"],
 };
 
 pub fn register() -> RuleDef {

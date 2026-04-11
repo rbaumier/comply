@@ -16,6 +16,7 @@ pub const META: RuleMeta = RuleMeta {
                   to narrow before using the value.",
     severity: Severity::Warning,
     doc_url: None,
+    categories: &["typescript", "zod"],
 };
 
 pub fn register() -> RuleDef {

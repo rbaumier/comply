@@ -24,6 +24,7 @@ pub const META: RuleMeta = RuleMeta {
                   know about are dropped, and the user finds out later.",
     severity: Severity::Warning,
     doc_url: None,
+    categories: &["rust"],
 };pub fn register() -> RuleDef {
     crate::register_rust_only!(META, rust)
 }

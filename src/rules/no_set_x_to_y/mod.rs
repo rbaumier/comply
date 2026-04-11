@@ -20,6 +20,7 @@ pub const META: RuleMeta = RuleMeta {
                   Callers should read like a story, not a database update.",
     severity: Severity::Error,
     doc_url: None,
+    categories: &["naming"],
 };pub fn register() -> RuleDef {
     crate::register_ts_family!(META, typescript)
 }

@@ -16,6 +16,7 @@ pub const META: RuleMeta = RuleMeta {
                   works on array keys.",
     severity: Severity::Error,
     doc_url: None,
+    categories: &["typescript", "tanstack"],
 };
 
 pub fn register() -> RuleDef {

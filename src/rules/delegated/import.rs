@@ -15,7 +15,7 @@ pub fn register_all() -> Vec<RuleDef> {
                      exports can be imported under any local name, which breaks \
                      grep-based code navigation and creates merge conflicts.",
                 severity: Severity::Error,
-                doc_url: None,
+                doc_url: None, categories: &["typescript"],
             },
             "import/no-default-export",
             TS_FAMILY,
@@ -29,7 +29,7 @@ pub fn register_all() -> Vec<RuleDef> {
                     "Replace `export let foo = ...` with `export const foo = ...`. \
                      Mutable exports create invisible cross-module coupling.",
                 severity: Severity::Error,
-                doc_url: None,
+                doc_url: None, categories: &["typescript"],
             },
             "import/no-mutable-exports",
             TS_FAMILY,

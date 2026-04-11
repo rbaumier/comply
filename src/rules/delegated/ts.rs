@@ -96,7 +96,7 @@ fn entry(
             description,
             remediation,
             severity,
-            doc_url: None,
+            doc_url: None, categories: &["typescript"],
         },
         oxlint_key,
         TS_FAMILY,

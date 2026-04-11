@@ -17,6 +17,7 @@ pub const META: RuleMeta = RuleMeta {
                   every render and crash in SSR for browser APIs.",
     severity: Severity::Warning,
     doc_url: None,
+    categories: &["typescript", "react"],
 };
 
 pub fn register() -> RuleDef {

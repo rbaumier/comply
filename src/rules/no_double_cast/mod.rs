@@ -16,6 +16,7 @@ pub const META: RuleMeta = RuleMeta {
                   or Zod schema that actually checks the runtime shape.",
     severity: Severity::Error,
     doc_url: None,
+    categories: &["typescript"],
 };
 
 pub fn register() -> RuleDef {

@@ -21,6 +21,7 @@ pub const META: RuleMeta = RuleMeta {
                   worker thread back to the runtime instead of parking it.",
     severity: Severity::Error,
     doc_url: None,
+    categories: &["rust"],
 };pub fn register() -> RuleDef {
     crate::register_rust_only!(META, rust)
 }

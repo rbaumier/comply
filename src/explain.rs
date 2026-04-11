@@ -100,7 +100,7 @@ mod tests {
             description: "A test rule.",
             remediation: "Fix the test.",
             severity: Severity::Warning,
-            doc_url: None,
+            doc_url: None, categories: &[],
         };
         let out = format_meta(&meta);
         assert!(out.contains("[test-rule]"));

@@ -16,6 +16,7 @@ pub const META: RuleMeta = RuleMeta {
                   strings, so `bg-${color}-500` never ships.",
     severity: Severity::Warning,
     doc_url: None,
+    categories: &["css", "tailwind"],
 };
 
 pub fn register() -> RuleDef {

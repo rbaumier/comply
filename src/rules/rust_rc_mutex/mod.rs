@@ -20,6 +20,7 @@ pub const META: RuleMeta = RuleMeta {
                   cross-thread sharing, use `Arc<Mutex<T>>` instead.",
     severity: Severity::Error,
     doc_url: None,
+    categories: &["rust"],
 };pub fn register() -> RuleDef {
     crate::register_rust_only!(META, rust)
 }

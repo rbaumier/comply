@@ -14,6 +14,7 @@ pub const META: RuleMeta = RuleMeta {
                   lets TypeScript warn on missing cases for union types.",
     severity: Severity::Warning,
     doc_url: None,
+    categories: &["code-quality"],
 };pub fn register() -> RuleDef {
     crate::register_ts_family_with_clippy_marker!(META, typescript, "clippy::comparison_chain")
 }

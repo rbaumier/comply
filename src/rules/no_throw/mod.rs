@@ -17,6 +17,7 @@ pub const META: RuleMeta = RuleMeta {
                   not exceptions. Callers can't see thrown errors in the type signature.",
     severity: Severity::Error,
     doc_url: None,
+    categories: &["code-quality"],
 };pub fn register() -> RuleDef {
     crate::register_ts_family_with_clippy_marker!(META, typescript, "clippy::panic")
 }

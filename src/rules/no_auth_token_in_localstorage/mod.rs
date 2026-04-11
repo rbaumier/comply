@@ -15,6 +15,7 @@ pub const META: RuleMeta = RuleMeta {
                   them, so a successful XSS can't steal the session.",
     severity: Severity::Error,
     doc_url: None,
+    categories: &["security"],
 };
 
 pub fn register() -> RuleDef {

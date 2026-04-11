@@ -72,7 +72,7 @@ fn entry(id: &'static str, oxlint_key: &'static str, remediation: &'static str) 
             description: "Promise discipline — avoid classic async footguns.",
             remediation,
             severity: Severity::Error,
-            doc_url: None,
+            doc_url: None, categories: &["typescript"],
         },
         oxlint_key,
         TS_FAMILY,

@@ -16,6 +16,7 @@ pub const META: RuleMeta = RuleMeta {
                   implementation changes.",
     severity: Severity::Warning,
     doc_url: None,
+    categories: &["typescript"],
 };
 
 pub fn register() -> RuleDef {

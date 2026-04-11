@@ -16,6 +16,7 @@ pub const META: RuleMeta = RuleMeta {
                   wrong DOM when items reorder, filter, or get inserted.",
     severity: Severity::Error,
     doc_url: None,
+    categories: &["typescript", "vue"],
 };
 
 pub fn register() -> RuleDef {

@@ -24,6 +24,7 @@ pub const META: RuleMeta = RuleMeta {
                   can't name a consequence, delete the comment instead.",
     severity: Severity::Warning,
     doc_url: None,
+    categories: &["comments"],
 };pub fn register() -> RuleDef {
     crate::register_ts_family!(META, typescript)
 }

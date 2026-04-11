@@ -22,6 +22,7 @@ pub const META: RuleMeta = RuleMeta {
                   Banned: obviously, simply, just, basically, clearly, trivially.",
     severity: Severity::Error,
     doc_url: None,
+    categories: &["comments"],
 };
 
 pub fn register() -> RuleDef {

@@ -15,6 +15,7 @@ pub const META: RuleMeta = RuleMeta {
                   timeouts: 5s for DB, 10s for external APIs, 30s for file ops.",
     severity: Severity::Warning,
     doc_url: None,
+    categories: &["api"],
 };pub fn register() -> RuleDef {
     crate::register_ts_family_with_rust!(META, typescript, rust)
 }

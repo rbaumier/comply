@@ -16,6 +16,7 @@ pub const META: RuleMeta = RuleMeta {
                   instead (mutation callbacks still work).",
     severity: Severity::Error,
     doc_url: None,
+    categories: &["typescript", "tanstack"],
 };
 
 pub fn register() -> RuleDef {

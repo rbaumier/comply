@@ -24,6 +24,7 @@ mod knip;
 mod llm;
 mod madge;
 mod runner_helpers;
+mod catalog;
 mod diagnostic;
 mod engine;
 mod explain;
@@ -70,6 +71,10 @@ fn run() -> Result<bool> {
         }
         Some(Command::List { should_emit_json }) => {
             list::run(should_emit_json)?;
+            Ok(false)
+        }
+        Some(Command::Catalog { should_emit_json }) => {
+            catalog::run(should_emit_json)?;
             Ok(false)
         }
         Some(Command::Config { ref action }) => {

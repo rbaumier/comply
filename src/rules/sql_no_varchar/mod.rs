@@ -14,6 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Replace `VARCHAR(N)` with `TEXT` + `CHECK(length(col) <= N)`. VARCHAR's length limit provides no performance benefit in PostgreSQL and silently truncates in some contexts.",
     severity: Severity::Error,
     doc_url: None,
+    categories: &["database", "sql"],
 };
 
 pub fn register() -> RuleDef {

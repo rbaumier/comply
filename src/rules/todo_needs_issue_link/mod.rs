@@ -16,6 +16,7 @@ pub const META: RuleMeta = RuleMeta {
                   XXX, HACK, and BUG.",
     severity: Severity::Warning,
     doc_url: None,
+    categories: &["comments"],
 };
 
 pub fn register() -> RuleDef {
