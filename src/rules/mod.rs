@@ -94,6 +94,16 @@ pub mod no_throw;
 pub mod no_type_encoded_names;
 pub mod no_verb_in_rest_url;
 pub mod no_sort_without_comparator;
+pub mod no_duplicate_string;
+pub mod no_ignored_exceptions;
+pub mod no_inverted_boolean_check;
+pub mod no_nested_switch;
+pub mod function_inside_loop;
+pub mod generator_without_yield;
+pub mod no_equals_in_for_termination;
+pub mod no_for_in_iterable;
+pub mod no_function_declaration_in_block;
+pub mod operation_returning_nan;
 pub mod no_wait_for_timeout;
 pub mod prefer_immediate_return;
 pub mod prefer_switch_over_chained_if;
@@ -162,7 +172,90 @@ pub mod todo_needs_issue_link;
 pub mod walker;
 pub mod zod_no_any;
 pub mod zod_prefer_top_level_format;
+pub mod no_try_promise;
+pub mod reduce_initial_value;
+pub mod no_unused_collection;
+pub mod prefer_while;
+pub mod expression_complexity;
 
+pub mod arguments_order;
+pub mod array_callback_without_return;
+pub mod assertions_in_tests;
+pub mod comma_or_logical_or_case;
+pub mod cyclomatic_complexity;
+pub mod elseif_without_else;
+pub mod for_loop_increment_sign;
+pub mod function_return_type;
+pub mod index_of_compare_to_positive;
+pub mod inverted_assertion_arguments;
+pub mod jsx_no_leaked_render;
+pub mod max_union_size;
+pub mod nested_control_flow;
+pub mod no_arguments_usage;
+pub mod no_array_constructor;
+pub mod no_array_delete;
+pub mod no_associative_arrays;
+pub mod no_async_constructor;
+pub mod no_bitwise_in_boolean;
+pub mod no_built_in_override;
+pub mod no_case_label_in_switch;
+pub mod no_collection_size_mischeck;
+pub mod no_confidential_logging;
+pub mod no_constructor_side_effects;
+pub mod no_duplicate_in_composite;
+pub mod no_duplicated_branches;
+pub mod no_dynamic_template;
+pub mod no_element_overwrite;
+pub mod no_hardcoded_secret_signature;
+pub mod no_hook_setter_in_body;
+pub mod no_identical_conditions;
+pub mod no_identical_expressions;
+pub mod no_ignored_return;
+pub mod no_in_misuse;
+pub mod no_incomplete_assertions;
+pub mod no_inconsistent_returns;
+pub mod no_incorrect_string_concat;
+pub mod no_insecure_jwt;
+pub mod no_invariant_returns;
+pub mod no_misleading_array_reverse;
+pub mod no_nested_assignment;
+pub mod no_nested_functions;
+pub mod no_os_command;
+pub mod no_post_message_star;
+pub mod no_primitive_wrappers;
+pub mod no_pseudo_random;
+pub mod no_redundant_jump;
+pub mod no_redundant_optional;
+pub mod no_return_type_any;
+pub mod no_same_argument_assert;
+pub mod no_small_switch;
+pub mod no_sql_string_format;
+pub mod no_undefined_argument;
+pub mod no_undefined_assignment;
+pub mod no_unenclosed_multiline_block;
+pub mod no_uniq_key;
+pub mod no_unthrown_error;
+pub mod no_unverified_certificate;
+pub mod no_useless_increment;
+pub mod no_useless_intersection;
+pub mod no_useless_react_setstate;
+pub mod no_weak_cipher;
+pub mod no_weak_hashing;
+pub mod no_weak_keys;
+pub mod no_weak_ssl;
+pub mod no_xml_external_entity;
+pub mod non_existent_operator;
+pub mod prefer_default_last;
+pub mod prefer_object_literal;
+pub mod prefer_promise_shorthand;
+pub mod prefer_read_only_props;
+pub mod prefer_type_guard;
+pub mod public_static_readonly;
+pub mod redundant_type_aliases;
+pub mod strings_comparison;
+pub mod test_check_exception;
+pub mod use_type_alias;
+pub mod useless_string_operation;
 use crate::diagnostic::Severity;
 use crate::files::Language;
 use backend::Backend;
@@ -409,6 +502,11 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         no_all_duplicated_branches::register(),
         no_redundant_assignment::register(),
         no_sort_without_comparator::register(),
+        generator_without_yield::register(),
+        no_equals_in_for_termination::register(),
+        no_for_in_iterable::register(),
+        no_function_declaration_in_block::register(),
+        operation_returning_nan::register(),
         no_collapsible_if::register(),
         no_redundant_boolean::register(),
         no_nested_template_literal::register(),
@@ -418,6 +516,95 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         no_eval::register(),
         // JSDoc description rule.
         jsdoc_needs_description::register(),
+        // Text-based code-quality rules.
+        no_try_promise::register(),
+        reduce_initial_value::register(),
+        no_unused_collection::register(),
+        prefer_while::register(),
+        expression_complexity::register(),
+        no_duplicate_string::register(),
+        no_ignored_exceptions::register(),
+        no_inverted_boolean_check::register(),
+        no_nested_switch::register(),
+        function_inside_loop::register(),
+        arguments_order::register(),
+        array_callback_without_return::register(),
+        assertions_in_tests::register(),
+        comma_or_logical_or_case::register(),
+        cyclomatic_complexity::register(),
+        elseif_without_else::register(),
+        for_loop_increment_sign::register(),
+        function_return_type::register(),
+        index_of_compare_to_positive::register(),
+        inverted_assertion_arguments::register(),
+        jsx_no_leaked_render::register(),
+        max_union_size::register(),
+        nested_control_flow::register(),
+        no_arguments_usage::register(),
+        no_array_constructor::register(),
+        no_array_delete::register(),
+        no_associative_arrays::register(),
+        no_async_constructor::register(),
+        no_bitwise_in_boolean::register(),
+        no_built_in_override::register(),
+        no_case_label_in_switch::register(),
+        no_collection_size_mischeck::register(),
+        no_confidential_logging::register(),
+        no_constructor_side_effects::register(),
+        no_duplicate_in_composite::register(),
+        no_duplicated_branches::register(),
+        no_dynamic_template::register(),
+        no_element_overwrite::register(),
+        no_hardcoded_secret_signature::register(),
+        no_hook_setter_in_body::register(),
+        no_identical_conditions::register(),
+        no_identical_expressions::register(),
+        no_ignored_return::register(),
+        no_in_misuse::register(),
+        no_incomplete_assertions::register(),
+        no_inconsistent_returns::register(),
+        no_incorrect_string_concat::register(),
+        no_insecure_jwt::register(),
+        no_invariant_returns::register(),
+        no_misleading_array_reverse::register(),
+        no_nested_assignment::register(),
+        no_nested_functions::register(),
+        no_os_command::register(),
+        no_post_message_star::register(),
+        no_primitive_wrappers::register(),
+        no_pseudo_random::register(),
+        no_redundant_jump::register(),
+        no_redundant_optional::register(),
+        no_return_type_any::register(),
+        no_same_argument_assert::register(),
+        no_small_switch::register(),
+        no_sql_string_format::register(),
+        no_undefined_argument::register(),
+        no_undefined_assignment::register(),
+        no_unenclosed_multiline_block::register(),
+        no_uniq_key::register(),
+        no_unthrown_error::register(),
+        no_unverified_certificate::register(),
+        no_useless_increment::register(),
+        no_useless_intersection::register(),
+        no_useless_react_setstate::register(),
+        no_weak_cipher::register(),
+        no_weak_hashing::register(),
+        no_weak_keys::register(),
+        no_weak_ssl::register(),
+        no_xml_external_entity::register(),
+        non_existent_operator::register(),
+        prefer_default_last::register(),
+        prefer_object_literal::register(),
+        prefer_promise_shorthand::register(),
+        prefer_read_only_props::register(),
+        prefer_type_guard::register(),
+        public_static_readonly::register(),
+        redundant_type_aliases::register(),
+        strings_comparison::register(),
+        test_check_exception::register(),
+        use_type_alias::register(),
+        useless_string_operation::register(),
     ];
     rules.extend(delegated::register_all());
     rules
