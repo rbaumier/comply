@@ -33,7 +33,7 @@ impl TextCheck for Check {
 
         let mut diagnostics = Vec::new();
         let mut in_test = false;
-        let mut test_indent: usize = 0;
+        let mut _test_indent: usize = 0;
         let mut brace_depth: i32 = 0;
         let mut in_hook = false;
         let mut hook_indent: usize = 0;
@@ -59,7 +59,7 @@ impl TextCheck for Check {
                     || trimmed.starts_with("test.each"))
             {
                 in_test = true;
-                test_indent = indent_level(line);
+                _test_indent = indent_level(line);
                 brace_depth = 0;
                 in_hook = false;
             }

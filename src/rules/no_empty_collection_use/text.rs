@@ -47,10 +47,10 @@ impl TextCheck for Check {
 
             // Scan forward up to 5 non-blank lines looking for read vs write
             let mut found_write = false;
-            let mut found_read_line = None;
+            let mut found_read = false;
 
-            for j in (idx + 1)..lines.len().min(idx + 6) {
-                let next = lines[j].trim();
+            for next_line in lines.iter().take(lines.len().min(idx + 6)).skip(idx + 1) {
+                let next = next_line.trim();
                 if next.is_empty() || next.starts_with("//") {
                     continue;
                 }
@@ -67,13 +67,13 @@ impl TextCheck for Check {
 
                 // Check if this line reads the collection
                 if READ_METHODS.iter().any(|r| next.contains(&format!("{name}{r}")) || (r.starts_with("for") && next.contains(name))) {
-                    found_read_line = Some(j);
+                    found_read = true;
                     break;
                 }
             }
 
-            if !found_write {
-                if let Some(_read_line) = found_read_line {
+            if !found_write
+                && found_read {
                     diagnostics.push(Diagnostic {
                         path: ctx.path.to_path_buf(),
                         line: idx + 1,
@@ -85,7 +85,6 @@ impl TextCheck for Check {
                         severity: Severity::Error,
                     });
                 }
-            }
         }
 
         diagnostics

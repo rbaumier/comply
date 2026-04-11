@@ -71,8 +71,8 @@ fn extract_function_name(line: &str) -> Option<String> {
 
     // const/let/var foo = (...) => {  or  const foo = function(...) {
     for kw in &["const ", "let ", "var "] {
-        if let Some(rest) = line.strip_prefix(kw) {
-            if let Some(eq) = rest.find('=') {
+        if let Some(rest) = line.strip_prefix(kw)
+            && let Some(eq) = rest.find('=') {
                 let name = rest[..eq].trim();
                 if !name.is_empty()
                     && name.chars().all(|c| c.is_alphanumeric() || c == '_')
@@ -81,7 +81,6 @@ fn extract_function_name(line: &str) -> Option<String> {
                     return Some(name.to_string());
                 }
             }
-        }
     }
 
     // Method shorthand: foo(...) {  (but not if/for/while/switch/catch)

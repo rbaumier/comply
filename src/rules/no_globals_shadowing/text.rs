@@ -25,10 +25,9 @@ fn shadows_global(line: &str) -> Option<&'static str> {
         .or_else(|| trimmed.strip_prefix("var "))?;
     let rest = rest.trim_start();
     for &g in SHADOWED_GLOBALS {
-        if rest.starts_with(g) {
-            let after = &rest[g.len()..];
+        if let Some(after) = rest.strip_prefix(g) {
             // Must be followed by whitespace, `=`, `:`, or `;` — not part of a longer ident
-            if after.starts_with(|c: char| c == ' ' || c == '=' || c == ':' || c == ';') {
+            if after.starts_with([' ', '=', ':', ';']) {
                 return Some(g);
             }
         }

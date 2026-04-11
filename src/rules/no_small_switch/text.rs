@@ -53,8 +53,8 @@ fn count_cases(switch_line: usize, lines: &[&str], len: usize) -> usize {
     let mut found_open = false;
     let mut cases = 0;
 
-    for i in switch_line..len {
-        for ch in lines[i].chars() {
+    for (i, line) in lines.iter().enumerate().take(len).skip(switch_line) {
+        for ch in line.chars() {
             if ch == '{' {
                 depth += 1;
                 found_open = true;
@@ -65,7 +65,7 @@ fn count_cases(switch_line: usize, lines: &[&str], len: usize) -> usize {
 
         // Count `case ` on lines inside the switch body (after opening brace).
         if found_open && i > switch_line {
-            let trimmed = lines[i].trim();
+            let trimmed = line.trim();
             if trimmed.starts_with("case ") || trimmed.starts_with("case\t") {
                 cases += 1;
             }

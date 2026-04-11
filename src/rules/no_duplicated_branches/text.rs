@@ -94,10 +94,9 @@ fn extract_branches(source: &str) -> Vec<Vec<(usize, String)>> {
             // Closing line might have `} else if (...) {` or `} else {`
             let after_close = close_line.trim_start_matches('}').trim();
 
-            if after_close.starts_with("else if") || after_close.starts_with("else if(") {
-                line_idx = j;
-                continue;
-            } else if after_close.starts_with("else") {
+            if after_close.starts_with("else if") || after_close.starts_with("else if(")
+                || after_close.starts_with("else")
+            {
                 line_idx = j;
                 continue;
             }

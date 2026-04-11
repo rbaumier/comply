@@ -6,21 +6,19 @@ pub struct Check;
 
 /// Returns true if arguments contain `expected` before `actual`.
 fn has_expected_before_actual(line: &str) -> bool {
-    if let Some(exp_pos) = line.find("expected") {
-        if let Some(act_pos) = line.find("actual") {
+    if let Some(exp_pos) = line.find("expected")
+        && let Some(act_pos) = line.find("actual") {
             return exp_pos < act_pos;
         }
-    }
     false
 }
 
 /// Returns true if arguments contain `max` before `min`.
 fn has_max_before_min(line: &str) -> bool {
-    if let Some(max_pos) = line.find("max") {
-        if let Some(min_pos) = line.find("min") {
+    if let Some(max_pos) = line.find("max")
+        && let Some(min_pos) = line.find("min") {
             return max_pos < min_pos;
         }
-    }
     false
 }
 

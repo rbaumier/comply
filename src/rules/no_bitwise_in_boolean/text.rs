@@ -55,8 +55,8 @@ impl TextCheck for Check {
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
         for (idx, line) in ctx.source.lines().enumerate() {
-            if let Some(cond) = extract_condition(line) {
-                if has_bitwise_op(cond) {
+            if let Some(cond) = extract_condition(line)
+                && has_bitwise_op(cond) {
                     diagnostics.push(Diagnostic {
                         path: ctx.path.to_path_buf(),
                         line: idx + 1,
@@ -67,7 +67,6 @@ impl TextCheck for Check {
                         severity: Severity::Warning,
                     });
                 }
-            }
         }
         diagnostics
     }

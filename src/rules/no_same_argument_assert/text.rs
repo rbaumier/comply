@@ -45,11 +45,10 @@ fn check_same_arg(line: &str) -> bool {
     for matcher in matchers {
         if let Some(pos) = line.find(matcher) {
             let after_matcher = &line[pos + matcher.len()..];
-            if let Some(matcher_arg) = extract_paren_content(after_matcher) {
-                if expect_arg == matcher_arg.trim() {
+            if let Some(matcher_arg) = extract_paren_content(after_matcher)
+                && expect_arg == matcher_arg.trim() {
                     return true;
                 }
-            }
         }
     }
     false

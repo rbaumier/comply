@@ -40,7 +40,7 @@ fn classify_return_value(value: &str) -> Option<LiteralType> {
         return Some(LiteralType::Object);
     }
     // Number: starts with digit or negative number
-    let numeric_candidate = if v.starts_with('-') { &v[1..] } else { v };
+    let numeric_candidate = v.strip_prefix('-').unwrap_or(v);
     if numeric_candidate.starts_with(|c: char| c.is_ascii_digit()) {
         return Some(LiteralType::Number);
     }
@@ -94,14 +94,13 @@ impl TextCheck for Check {
             }
 
             // Collect return statements inside a function
-            if func_start_line.is_some() {
-                if let Some(ret_pos) = trimmed.find("return ") {
+            if func_start_line.is_some()
+                && let Some(ret_pos) = trimmed.find("return ") {
                     let value = &trimmed[ret_pos + 7..];
                     if let Some(lit_type) = classify_return_value(value) {
                         return_types.push((idx + 1, lit_type));
                     }
                 }
-            }
 
             // Check if function ended
             if func_start_line.is_some() && brace_depth <= func_brace_depth {

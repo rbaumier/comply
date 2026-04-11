@@ -345,6 +345,139 @@ pub mod a11y_prefer_tag_over_role;
 pub mod a11y_role_has_required_aria_props;
 pub mod a11y_scope;
 pub mod a11y_tabindex_no_positive;
+
+// eslint-plugin-unicorn rules (native implementations).
+pub mod catch_error_name;
+pub mod consistent_assert;
+pub mod consistent_date_clone;
+pub mod consistent_destructuring;
+pub mod consistent_empty_array_spread;
+pub mod consistent_existence_index_check;
+pub mod consistent_template_literal_escape;
+pub mod custom_error_definition;
+pub mod empty_brace_spaces;
+pub mod error_message;
+pub mod escape_case;
+pub mod expiring_todo_comments;
+pub mod explicit_length_check;
+pub mod new_for_builtins;
+pub mod no_abusive_eslint_disable;
+pub mod no_accessor_recursion;
+pub mod no_anonymous_default_export;
+pub mod no_array_callback_reference;
+pub mod no_array_method_this_argument;
+pub mod no_array_reduce;
+pub mod no_array_reverse;
+pub mod no_array_sort_mutation;
+pub mod no_await_expression_member;
+pub mod no_await_in_promise_methods;
+pub mod no_console_spaces;
+pub mod no_document_cookie;
+pub mod no_empty_file;
+pub mod no_for_loop;
+pub mod no_hex_escape;
+pub mod no_immediate_mutation;
+pub mod no_instanceof_builtins;
+pub mod no_invalid_fetch_options;
+pub mod no_invalid_remove_event_listener;
+pub mod no_keyword_prefix;
+pub mod no_lonely_if;
+pub mod no_magic_array_flat_depth;
+pub mod no_named_default;
+pub mod no_negated_condition;
+pub mod no_negation_in_equality_check;
+pub mod no_null;
+pub mod no_object_as_default_parameter;
+pub mod no_process_exit;
+pub mod no_single_promise_in_promise_methods;
+pub mod no_static_only_class;
+pub mod no_thenable;
+pub mod no_this_assignment;
+pub mod no_typeof_undefined;
+pub mod no_unnecessary_array_flat_depth;
+pub mod no_unnecessary_array_splice_count;
+pub mod no_unnecessary_await;
+pub mod no_unnecessary_slice_end;
+pub mod no_unreadable_array_destructuring;
+pub mod no_unreadable_iife;
+pub mod no_useless_collection_argument;
+pub mod no_useless_error_capture_stack_trace;
+pub mod no_useless_fallback_in_spread;
+pub mod no_useless_iterator_to_array;
+pub mod no_useless_length_check;
+pub mod no_useless_promise_resolve_reject;
+pub mod no_useless_spread;
+pub mod no_useless_switch_case;
+pub mod no_useless_undefined;
+pub mod no_zero_fractions;
+pub mod number_literal_case;
+pub mod numeric_separators_style;
+pub mod prefer_add_event_listener;
+pub mod prefer_array_find;
+pub mod prefer_array_flat;
+pub mod prefer_array_index_of;
+pub mod prefer_array_some;
+pub mod prefer_at;
+pub mod prefer_bigint_literals;
+pub mod prefer_blob_reading_methods;
+pub mod prefer_class_fields;
+pub mod prefer_classlist_toggle;
+pub mod prefer_code_point;
+pub mod prefer_date_now;
+pub mod prefer_default_parameters;
+pub mod prefer_dom_node_append;
+pub mod prefer_dom_node_dataset;
+pub mod prefer_dom_node_remove;
+pub mod prefer_dom_node_text_content;
+pub mod prefer_event_target;
+pub mod prefer_export_from;
+pub mod prefer_global_this;
+pub mod prefer_import_meta_properties;
+pub mod prefer_includes;
+pub mod prefer_json_parse_buffer;
+pub mod prefer_keyboard_event_key;
+pub mod prefer_logical_operator_over_ternary;
+pub mod prefer_math_min_max;
+pub mod prefer_math_trunc;
+pub mod prefer_modern_dom_apis;
+pub mod prefer_modern_math_apis;
+pub mod prefer_module;
+pub mod prefer_native_coercion_functions;
+pub mod prefer_negative_index;
+pub mod prefer_node_protocol;
+pub mod prefer_number_properties;
+pub mod prefer_object_from_entries;
+pub mod prefer_optional_catch_binding;
+pub mod prefer_prototype_methods;
+pub mod prefer_query_selector;
+pub mod prefer_reflect_apply;
+pub mod prefer_regexp_test;
+pub mod prefer_response_static_json;
+pub mod prefer_set_has;
+pub mod prefer_set_size;
+pub mod prefer_simple_condition_first;
+pub mod prefer_single_call;
+pub mod prefer_spread;
+pub mod prefer_string_raw;
+pub mod prefer_string_replace_all;
+pub mod prefer_string_slice;
+pub mod prefer_string_starts_ends_with;
+pub mod prefer_string_trim_start_end;
+pub mod prefer_structured_clone;
+pub mod prefer_ternary;
+pub mod prefer_top_level_await;
+pub mod prefer_type_error;
+pub mod relative_url_style;
+pub mod require_array_join_separator;
+pub mod require_module_attributes;
+pub mod require_module_specifiers;
+pub mod require_number_to_fixed_digits_argument;
+pub mod require_post_message_target_origin;
+pub mod switch_case_braces;
+pub mod switch_case_break_position;
+pub mod template_indent;
+pub mod text_encoding_identifier_case;
+pub mod throw_new_error;
 use crate::diagnostic::Severity;
 use crate::files::Language;
 use backend::Backend;
@@ -783,6 +916,138 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         a11y_role_has_required_aria_props::register(),
         a11y_scope::register(),
         a11y_tabindex_no_positive::register(),
+        // eslint-plugin-unicorn rules (native implementations).
+        catch_error_name::register(),
+        consistent_assert::register(),
+        consistent_date_clone::register(),
+        consistent_destructuring::register(),
+        consistent_empty_array_spread::register(),
+        consistent_existence_index_check::register(),
+        consistent_template_literal_escape::register(),
+        custom_error_definition::register(),
+        empty_brace_spaces::register(),
+        error_message::register(),
+        escape_case::register(),
+        expiring_todo_comments::register(),
+        explicit_length_check::register(),
+        new_for_builtins::register(),
+        no_abusive_eslint_disable::register(),
+        no_accessor_recursion::register(),
+        no_anonymous_default_export::register(),
+        no_array_callback_reference::register(),
+        no_array_method_this_argument::register(),
+        no_array_reduce::register(),
+        no_array_reverse::register(),
+        no_array_sort_mutation::register(),
+        no_await_expression_member::register(),
+        no_await_in_promise_methods::register(),
+        no_console_spaces::register(),
+        no_document_cookie::register(),
+        no_empty_file::register(),
+        no_for_loop::register(),
+        no_hex_escape::register(),
+        no_immediate_mutation::register(),
+        no_instanceof_builtins::register(),
+        no_invalid_fetch_options::register(),
+        no_invalid_remove_event_listener::register(),
+        no_keyword_prefix::register(),
+        no_lonely_if::register(),
+        no_magic_array_flat_depth::register(),
+        no_named_default::register(),
+        no_negated_condition::register(),
+        no_negation_in_equality_check::register(),
+        no_null::register(),
+        no_object_as_default_parameter::register(),
+        no_process_exit::register(),
+        no_single_promise_in_promise_methods::register(),
+        no_static_only_class::register(),
+        no_thenable::register(),
+        no_this_assignment::register(),
+        no_typeof_undefined::register(),
+        no_unnecessary_array_flat_depth::register(),
+        no_unnecessary_array_splice_count::register(),
+        no_unnecessary_await::register(),
+        no_unnecessary_slice_end::register(),
+        no_unreadable_array_destructuring::register(),
+        no_unreadable_iife::register(),
+        no_useless_collection_argument::register(),
+        no_useless_error_capture_stack_trace::register(),
+        no_useless_fallback_in_spread::register(),
+        no_useless_iterator_to_array::register(),
+        no_useless_length_check::register(),
+        no_useless_promise_resolve_reject::register(),
+        no_useless_spread::register(),
+        no_useless_switch_case::register(),
+        no_useless_undefined::register(),
+        no_zero_fractions::register(),
+        number_literal_case::register(),
+        numeric_separators_style::register(),
+        prefer_add_event_listener::register(),
+        prefer_array_find::register(),
+        prefer_array_flat::register(),
+        prefer_array_index_of::register(),
+        prefer_array_some::register(),
+        prefer_at::register(),
+        prefer_bigint_literals::register(),
+        prefer_blob_reading_methods::register(),
+        prefer_class_fields::register(),
+        prefer_classlist_toggle::register(),
+        prefer_code_point::register(),
+        prefer_date_now::register(),
+        prefer_default_parameters::register(),
+        prefer_dom_node_append::register(),
+        prefer_dom_node_dataset::register(),
+        prefer_dom_node_remove::register(),
+        prefer_dom_node_text_content::register(),
+        prefer_event_target::register(),
+        prefer_export_from::register(),
+        prefer_global_this::register(),
+        prefer_import_meta_properties::register(),
+        prefer_includes::register(),
+        prefer_json_parse_buffer::register(),
+        prefer_keyboard_event_key::register(),
+        prefer_logical_operator_over_ternary::register(),
+        prefer_math_min_max::register(),
+        prefer_math_trunc::register(),
+        prefer_modern_dom_apis::register(),
+        prefer_modern_math_apis::register(),
+        prefer_module::register(),
+        prefer_native_coercion_functions::register(),
+        prefer_negative_index::register(),
+        prefer_node_protocol::register(),
+        prefer_number_properties::register(),
+        prefer_object_from_entries::register(),
+        prefer_optional_catch_binding::register(),
+        prefer_prototype_methods::register(),
+        prefer_query_selector::register(),
+        prefer_reflect_apply::register(),
+        prefer_regexp_test::register(),
+        prefer_response_static_json::register(),
+        prefer_set_has::register(),
+        prefer_set_size::register(),
+        prefer_simple_condition_first::register(),
+        prefer_single_call::register(),
+        prefer_spread::register(),
+        prefer_string_raw::register(),
+        prefer_string_replace_all::register(),
+        prefer_string_slice::register(),
+        prefer_string_starts_ends_with::register(),
+        prefer_string_trim_start_end::register(),
+        prefer_structured_clone::register(),
+        prefer_ternary::register(),
+        prefer_top_level_await::register(),
+        prefer_type_error::register(),
+        relative_url_style::register(),
+        require_array_join_separator::register(),
+        require_module_attributes::register(),
+        require_module_specifiers::register(),
+        require_number_to_fixed_digits_argument::register(),
+        require_post_message_target_origin::register(),
+        switch_case_braces::register(),
+        switch_case_break_position::register(),
+        template_indent::register(),
+        text_encoding_identifier_case::register(),
+        throw_new_error::register(),
     ];
     rules.extend(delegated::register_all());
     rules

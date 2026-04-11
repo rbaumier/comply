@@ -6,10 +6,15 @@
 //! the Vercel AI SDK + claude-code provider. Results stream back as
 //! NDJSON. Cached in SQLite per-project.
 
+#[allow(dead_code)]
 pub mod cache;
+#[allow(dead_code)]
 pub mod claude_cli;
+#[allow(dead_code)]
 pub mod extract;
+#[allow(dead_code)]
 pub mod pool;
+#[allow(dead_code)]
 pub mod unified_prompt;
 
 use anyhow::{Context, Result};
@@ -21,6 +26,7 @@ const PROMPT_VERSION: u32 = 10;
 
 /// Configuration for an LLM lint pass.
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct LlmConfig {
     pub model: String,
     pub concurrency: usize,
@@ -217,11 +223,10 @@ fn worker_script_path() -> Result<std::path::PathBuf> {
             .and_then(|p| p.parent())
             .and_then(|p| p.parent())
             .map(|p| p.join("tools/llm-worker.ts"));
-        if let Some(ref path) = from_exe {
-            if path.exists() {
+        if let Some(ref path) = from_exe
+            && path.exists() {
                 return Ok(path.clone());
             }
-        }
     }
 
     // Try relative to cwd.

@@ -13,28 +13,24 @@ fn has_control_chars(line: &str) -> bool {
             // Parse the two hex digits
             let h1 = bytes.get(i + 2).copied();
             let h2 = bytes.get(i + 3).copied();
-            if let (Some(d1), Some(d2)) = (h1, h2) {
-                if d1.is_ascii_hexdigit() && d2.is_ascii_hexdigit() {
+            if let (Some(d1), Some(d2)) = (h1, h2)
+                && d1.is_ascii_hexdigit() && d2.is_ascii_hexdigit() {
                     let val = hex_val(d1) * 16 + hex_val(d2);
                     if val <= 0x1f {
                         return true;
                     }
                 }
-            }
             // Also handle single-digit like \x0 (less common but mentioned in spec)
-            if let Some(d1) = h1 {
-                if d1.is_ascii_hexdigit() {
-                    if let Some(d2) = h2 {
-                        if !d2.is_ascii_hexdigit() {
+            if let Some(d1) = h1
+                && d1.is_ascii_hexdigit()
+                    && let Some(d2) = h2
+                        && !d2.is_ascii_hexdigit() {
                             // Single hex digit: \x0 through \xf
                             let val = hex_val(d1);
                             if val <= 0x1f {
                                 return true;
                             }
                         }
-                    }
-                }
-            }
         }
         i += 1;
     }

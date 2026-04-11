@@ -11,7 +11,7 @@ use serde::Deserialize;
 use std::path::Path;
 
 use crate::diagnostic::{Diagnostic, Severity};
-use super::claude_cli;
+
 
 /// Parse raw JSON from the Bun worker into diagnostics.
 pub fn parse_response(raw: &str, file_path: &Path) -> Result<Vec<Diagnostic>> {
@@ -38,6 +38,7 @@ pub fn parse_response(raw: &str, file_path: &Path) -> Result<Vec<Diagnostic>> {
     convert_response(resp, file_path)
 }
 
+#[allow(dead_code)]
 const UNIFIED_SCHEMA: &str = r#"{
   "type": "object",
   "properties": {

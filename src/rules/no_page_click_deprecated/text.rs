@@ -60,12 +60,7 @@ impl TextCheck for Check {
 /// Returns the matched deprecated call (e.g. `"page.click("`) if found on
 /// this line, or `None` when the line is clean.
 fn find_deprecated_call(line: &str) -> Option<&'static str> {
-    for &method in DEPRECATED_METHODS {
-        if line.contains(method) {
-            return Some(method);
-        }
-    }
-    None
+    DEPRECATED_METHODS.iter().find(|&&method| line.contains(method)).copied().map(|v| v as _)
 }
 
 #[cfg(test)]

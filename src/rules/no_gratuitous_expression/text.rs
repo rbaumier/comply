@@ -25,9 +25,9 @@ fn detect_self_comparison(line: &str) -> Option<&str> {
             let before = line[..pos].trim();
             let after = line[pos + op.len()..].trim();
             // Extract the last token before the operator
-            let lhs = before.rsplit(|c: char| c == '(' || c == ' ' || c == '!').next().unwrap_or("").trim();
+            let lhs = before.rsplit(['(', ' ', '!']).next().unwrap_or("").trim();
             // Extract the first token after the operator
-            let rhs = after.split(|c: char| c == ')' || c == ' ' || c == ';' || c == ',').next().unwrap_or("").trim();
+            let rhs = after.split([')', ' ', ';', ',']).next().unwrap_or("").trim();
             if !lhs.is_empty()
                 && lhs == rhs
                 && lhs.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '.')

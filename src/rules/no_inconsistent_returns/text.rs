@@ -15,9 +15,9 @@ impl TextCheck for Check {
         while i < lines.len() {
             let trimmed = lines[i].trim();
             // Detect function declarations / expressions
-            if is_function_head(trimmed) {
-                if let Some(body_start) = find_open_brace(&lines, i) {
-                    if let Some(body_end) = find_matching_close(&lines, body_start) {
+            if is_function_head(trimmed)
+                && let Some(body_start) = find_open_brace(&lines, i)
+                    && let Some(body_end) = find_matching_close(&lines, body_start) {
                         let (has_value_return, has_bare_return) =
                             scan_returns(&lines, body_start, body_end);
                         if has_value_return && has_bare_return {
@@ -34,8 +34,6 @@ impl TextCheck for Check {
                         i = body_end + 1;
                         continue;
                     }
-                }
-            }
             i += 1;
         }
         diagnostics
@@ -55,19 +53,14 @@ fn is_function_head(trimmed: &str) -> bool {
 
 /// Find the line index containing the opening `{` starting from `start`.
 fn find_open_brace(lines: &[&str], start: usize) -> Option<usize> {
-    for i in start..lines.len().min(start + 5) {
-        if lines[i].contains('{') {
-            return Some(i);
-        }
-    }
-    None
+    (start..lines.len().min(start + 5)).find(|&i| lines[i].contains('{'))
 }
 
 /// Find the matching `}` for a `{` on `open_line`, counting brace depth.
 fn find_matching_close(lines: &[&str], open_line: usize) -> Option<usize> {
     let mut depth: i32 = 0;
-    for i in open_line..lines.len() {
-        for ch in lines[i].chars() {
+    for (i, line) in lines.iter().enumerate().skip(open_line) {
+        for ch in line.chars() {
             if ch == '{' {
                 depth += 1;
             } else if ch == '}' {
@@ -89,8 +82,8 @@ fn scan_returns(lines: &[&str], start: usize, end: usize) -> (bool, bool) {
     let mut depth: i32 = 0;
     let mut skip_depth: Option<i32> = None;
 
-    for i in start..=end {
-        let trimmed = lines[i].trim();
+    for line in lines.iter().take(end + 1).skip(start) {
+        let trimmed = line.trim();
 
         // Detect nested function — skip its entire body
         if skip_depth.is_none() && depth >= 1 && is_function_head(trimmed) {
@@ -98,7 +91,7 @@ fn scan_returns(lines: &[&str], start: usize, end: usize) -> (bool, bool) {
             skip_depth = Some(depth);
         }
 
-        for ch in lines[i].chars() {
+        for ch in line.chars() {
             if ch == '{' {
                 depth += 1;
             } else if ch == '}' {

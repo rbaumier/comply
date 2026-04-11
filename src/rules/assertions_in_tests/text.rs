@@ -78,11 +78,10 @@ fn find_assertion_less_tests(source: &str) -> Vec<(usize, String)> {
 fn extract_test_name(line: &str) -> String {
     // Try to extract from quotes
     for delim in ['"', '\'', '`'] {
-        if let Some(start) = line.find(delim) {
-            if let Some(end) = line[start + 1..].find(delim) {
+        if let Some(start) = line.find(delim)
+            && let Some(end) = line[start + 1..].find(delim) {
                 return line[start + 1..start + 1 + end].to_string();
             }
-        }
     }
     "unnamed".to_string()
 }

@@ -47,8 +47,8 @@ fn extract_block(lines: &[&str], open_line: usize) -> Option<(String, usize)> {
 
     // Scan subsequent lines
     let mut body_lines: Vec<&str> = Vec::new();
-    for idx in (open_line + 1)..lines.len() {
-        for ch in lines[idx].chars() {
+    for (idx, line) in lines.iter().enumerate().skip(open_line + 1) {
+        for ch in line.chars() {
             match ch {
                 '{' => depth += 1,
                 '}' => {
@@ -62,7 +62,7 @@ fn extract_block(lines: &[&str], open_line: usize) -> Option<(String, usize)> {
             }
         }
         if depth > 0 {
-            body_lines.push(lines[idx]);
+            body_lines.push(line);
         }
     }
     None

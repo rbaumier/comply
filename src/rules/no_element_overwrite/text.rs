@@ -8,7 +8,7 @@ pub struct Check;
 fn bracket_target(line: &str) -> Option<&str> {
     let trimmed = line.trim();
     let bracket_end = trimmed.find(']')?;
-    let bracket_start = trimmed[..bracket_end].find('[')?;
+    let _bracket_start = trimmed[..bracket_end].find('[')?;
     // Must have ` = ` after the `]`
     let after = trimmed[bracket_end + 1..].trim_start();
     if after.starts_with('=') && !after.starts_with("==") {
@@ -38,8 +38,8 @@ impl TextCheck for Check {
 
         for i in 0..lines.len().saturating_sub(1) {
             // Check bracket notation: arr[x] = ... ; arr[x] = ...
-            if let (Some(t1), Some(t2)) = (bracket_target(lines[i]), bracket_target(lines[i + 1])) {
-                if t1 == t2 {
+            if let (Some(t1), Some(t2)) = (bracket_target(lines[i]), bracket_target(lines[i + 1]))
+                && t1 == t2 {
                     diagnostics.push(Diagnostic {
                         path: ctx.path.to_path_buf(),
                         line: i + 2, // second assignment
@@ -50,10 +50,9 @@ impl TextCheck for Check {
                     });
                     continue;
                 }
-            }
             // Check .set() calls
-            if let (Some(t1), Some(t2)) = (map_set_target(lines[i]), map_set_target(lines[i + 1])) {
-                if t1 == t2 {
+            if let (Some(t1), Some(t2)) = (map_set_target(lines[i]), map_set_target(lines[i + 1]))
+                && t1 == t2 {
                     diagnostics.push(Diagnostic {
                         path: ctx.path.to_path_buf(),
                         line: i + 2,
@@ -63,7 +62,6 @@ impl TextCheck for Check {
                         severity: Severity::Error,
                     });
                 }
-            }
         }
         diagnostics
     }

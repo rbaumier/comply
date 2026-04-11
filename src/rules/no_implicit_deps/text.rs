@@ -103,8 +103,8 @@ impl TextCheck for Check {
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
         for (idx, line) in ctx.source.lines().enumerate() {
-            if let Some(spec) = extract_import_specifier(line) {
-                if is_bare_specifier(spec) && !is_node_builtin(spec) {
+            if let Some(spec) = extract_import_specifier(line)
+                && is_bare_specifier(spec) && !is_node_builtin(spec) {
                     diagnostics.push(Diagnostic {
                         path: ctx.path.to_path_buf(),
                         line: idx + 1,
@@ -116,7 +116,6 @@ impl TextCheck for Check {
                         severity: Severity::Warning,
                     });
                 }
-            }
         }
         diagnostics
     }

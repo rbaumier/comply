@@ -12,8 +12,8 @@ fn collect_state_pairs(source: &str) -> Vec<(String, String)> {
         if !trimmed.contains("useState") {
             continue;
         }
-        if let Some(bracket_start) = trimmed.find('[') {
-            if let Some(bracket_end) = trimmed.find(']') {
+        if let Some(bracket_start) = trimmed.find('[')
+            && let Some(bracket_end) = trimmed.find(']') {
                 let inside = &trimmed[bracket_start + 1..bracket_end];
                 let parts: Vec<&str> = inside.split(',').collect();
                 if parts.len() == 2 {
@@ -24,7 +24,6 @@ fn collect_state_pairs(source: &str) -> Vec<(String, String)> {
                     }
                 }
             }
-        }
     }
     pairs
 }

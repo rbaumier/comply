@@ -84,8 +84,8 @@ impl TextCheck for Check {
             let current = extract_assignment_target(lines[i]);
             let next = extract_assignment_target(lines[i + 1]);
 
-            if let (Some(curr_var), Some(next_var)) = (current, next) {
-                if curr_var == next_var {
+            if let (Some(curr_var), Some(next_var)) = (current, next)
+                && curr_var == next_var {
                     // Don't flag `const` — reassigning a const would be a syntax error,
                     // so the second line is actually a different scope or destructuring.
                     let curr_trimmed = lines[i].trim();
@@ -107,7 +107,6 @@ impl TextCheck for Check {
                         severity: Severity::Error,
                     });
                 }
-            }
         }
 
         diagnostics

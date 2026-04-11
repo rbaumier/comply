@@ -54,13 +54,12 @@ impl TextCheck for Check {
                 let mut count = 1;
                 let mut j = i + 1;
                 while j < lines.len() {
-                    if let Some(next_obj) = extract_object_access(lines[j]) {
-                        if next_obj == obj {
+                    if let Some(next_obj) = extract_object_access(lines[j])
+                        && next_obj == obj {
                             count += 1;
                             j += 1;
                             continue;
                         }
-                    }
                     break;
                 }
                 if count >= 2 {

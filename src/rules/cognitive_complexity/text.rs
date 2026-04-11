@@ -107,9 +107,7 @@ fn compute_complexity(lines: &[&str], start: usize) -> (u32, usize) {
                     end = i;
                     return (complexity, end);
                 }
-                if nesting > 0 {
-                    nesting -= 1;
-                }
+                nesting = nesting.saturating_sub(1);
             }
         }
 

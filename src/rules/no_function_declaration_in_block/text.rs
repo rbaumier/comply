@@ -38,15 +38,14 @@ impl TextCheck for Check {
                     }
                     // Mark this depth as control-flow if the line introduced it
                     cf_depths[d] = is_cf_line || (d > 0 && cf_depths.get(d.wrapping_sub(1)).copied().unwrap_or(false) && !has_function_keyword(trimmed));
-                } else if ch == '}' {
-                    if depth > 0 {
+                } else if ch == '}'
+                    && depth > 0 {
                         let d = depth as usize;
                         if d < cf_depths.len() {
                             cf_depths[d] = false;
                         }
                         depth -= 1;
                     }
-                }
             }
 
             // Now check: is there a function declaration on this line at depth > 0

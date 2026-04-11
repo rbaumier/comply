@@ -64,9 +64,7 @@ impl TextCheck for Check {
             if b == b'{' {
                 brace_depth += 1;
             } else if b == b'}' {
-                if brace_depth > 0 {
-                    brace_depth -= 1;
-                }
+                brace_depth = brace_depth.saturating_sub(1);
                 // Check if we're exiting a switch block.
                 while let Some(&target) = brace_targets.last() {
                     if brace_depth <= target {

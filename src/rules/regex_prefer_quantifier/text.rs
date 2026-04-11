@@ -42,9 +42,6 @@ fn tokenize(pattern: &str) -> Vec<&str> {
                 i += 1;
             }
             tokens.push(&pattern[start..i]);
-        } else if bytes[i] == b'?' || bytes[i] == b'+' || bytes[i] == b'*' {
-            tokens.push(&pattern[i..i + 1]);
-            i += 1;
         } else {
             tokens.push(&pattern[i..i + 1]);
             i += 1;
@@ -120,7 +117,7 @@ fn has_prefer_quantifier(line: &str) -> bool {
     // Check RegExp constructor
     if let Some(pos) = line.find("RegExp(") {
         let rest = &line[pos + 7..];
-        if let Some(q) = rest.find(|c| c == '"' || c == '\'') {
+        if let Some(q) = rest.find(['"', '\'']) {
             let quote = rest.as_bytes()[q];
             let inner = &rest[q + 1..];
             if let Some(end) = inner.find(quote as char) {

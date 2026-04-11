@@ -22,7 +22,7 @@ fn has_weak_rsa_key(line: &str) -> bool {
                     && after[len.len()..]
                         .chars()
                         .next()
-                        .map_or(true, |c| !c.is_ascii_digit())
+                        .is_none_or(|c| !c.is_ascii_digit())
                 {
                     return true;
                 }
