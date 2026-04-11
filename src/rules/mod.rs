@@ -151,6 +151,22 @@ pub mod react_no_array_index_key;
 pub mod react_no_cookies_in_layout;
 pub mod react_no_object_in_dep_array;
 pub mod react_use_state_lazy_init;
+// eslint-plugin-react rules (native implementations).
+pub mod react_no_unstable_nested_components;
+pub mod react_no_constructed_context_values;
+pub mod react_no_object_type_as_default_prop;
+pub mod react_no_danger_with_children;
+pub mod react_void_dom_elements_no_children;
+pub mod react_jsx_no_duplicate_props;
+pub mod react_jsx_no_comment_textnodes;
+pub mod react_style_prop_object;
+pub mod react_jsx_no_target_blank;
+pub mod react_jsx_no_script_url;
+pub mod react_iframe_missing_sandbox;
+pub mod react_checked_requires_onchange;
+pub mod react_no_this_in_sfc;
+pub mod react_async_server_action;
+pub mod react_no_access_state_in_setstate;
 pub mod sql_no_between_timestamp;
 pub mod sql_no_float_for_money;
 pub mod sql_no_like_wildcard_prefix;
@@ -515,6 +531,21 @@ pub mod switch_case_break_position;
 pub mod template_indent;
 pub mod text_encoding_identifier_case;
 pub mod throw_new_error;
+// typescript-eslint rules (native implementations).
+pub mod ts_no_confusing_non_null_assertion;
+pub mod ts_no_duplicate_enum_values;
+pub mod ts_no_empty_object_type;
+pub mod ts_no_extra_non_null_assertion;
+pub mod ts_no_inferrable_types;
+pub mod ts_no_misused_new;
+pub mod ts_no_namespace;
+pub mod ts_no_non_null_asserted_nullish_coalescing;
+pub mod ts_no_non_null_asserted_optional_chain;
+pub mod ts_no_unnecessary_type_constraint;
+pub mod ts_no_unsafe_declaration_merging;
+pub mod ts_no_useless_empty_export;
+pub mod ts_no_wrapper_object_types;
+pub mod ts_prefer_literal_enum_member;
 use crate::diagnostic::Severity;
 use crate::files::Language;
 use backend::Backend;
@@ -1124,6 +1155,37 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         node_no_callback_literal::register(),
         node_handle_callback_err::register(),
         node_no_new_require::register(),
+        // eslint-plugin-react rules (native implementations).
+        react_no_unstable_nested_components::register(),
+        react_no_constructed_context_values::register(),
+        react_no_object_type_as_default_prop::register(),
+        react_no_danger_with_children::register(),
+        react_void_dom_elements_no_children::register(),
+        react_jsx_no_duplicate_props::register(),
+        react_jsx_no_comment_textnodes::register(),
+        react_style_prop_object::register(),
+        react_jsx_no_target_blank::register(),
+        react_jsx_no_script_url::register(),
+        react_iframe_missing_sandbox::register(),
+        react_checked_requires_onchange::register(),
+        react_no_this_in_sfc::register(),
+        react_async_server_action::register(),
+        react_no_access_state_in_setstate::register(),
+        // typescript-eslint rules (native implementations).
+        ts_no_duplicate_enum_values::register(),
+        ts_no_extra_non_null_assertion::register(),
+        ts_no_non_null_asserted_optional_chain::register(),
+        ts_no_wrapper_object_types::register(),
+        ts_no_unsafe_declaration_merging::register(),
+        ts_no_misused_new::register(),
+        ts_no_empty_object_type::register(),
+        ts_no_non_null_asserted_nullish_coalescing::register(),
+        ts_no_confusing_non_null_assertion::register(),
+        ts_no_unnecessary_type_constraint::register(),
+        ts_no_inferrable_types::register(),
+        ts_prefer_literal_enum_member::register(),
+        ts_no_useless_empty_export::register(),
+        ts_no_namespace::register(),
     ];
     rules.extend(delegated::register_all());
     rules
