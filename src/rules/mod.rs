@@ -83,7 +83,6 @@ pub mod no_nested_ternary;
 pub mod no_new_regex_with_variable;
 pub mod no_nullish_default_on_input;
 pub mod no_page_click_deprecated;
-pub mod no_put_method;
 pub mod no_redundant_assignment;
 pub mod no_redundant_boolean;
 pub mod no_section_divider_comments;
@@ -703,7 +702,6 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         prefer_type_over_interface::register(),
         no_function_overloads::register(),
         no_verb_in_rest_url::register(),
-        no_put_method::register(),
         // v1.4 — ecosystem rules (security / testing / react / tanstack / zod / drizzle / tailwind)
         no_new_regex_with_variable::register(),
         no_auth_token_in_localstorage::register(),

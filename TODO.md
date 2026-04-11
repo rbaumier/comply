@@ -83,18 +83,7 @@ Rules requiring capabilities comply does not have yet (scope analysis, per-modul
 
 ---
 
-## eslint Plugins — remaining to evaluate
-
-| Plugin | Notes |
-|--------|-------|
-| [eslint-plugin-package-json](https://github.com/michaelfaith/eslint-plugin-package-json) | Validate package.json structure |
-| [eslint-plugin-better-tailwindcss](https://github.com/schoero/eslint-plugin-better-tailwindcss) | Tailwind class ordering/validation |
-| [eslint-plugin-hexagonal-architecture](https://github.com/CodelyTV/eslint-plugin-hexagonal-architecture) | Enforce hex arch boundaries |
-| [write-good](https://github.com/btford/write-good) | Prose quality in comments/docs |
-| [eslint-plugin-no-secrets](https://github.com/nickdeis/eslint-plugin-no-secrets) | Detect hardcoded secrets (entropy-based) |
-| [eslint-plugin-xss](https://github.com/Rantanen/eslint-plugin-xss) | XSS prevention |
-
-### Already evaluated & implemented
+### All plugins evaluated & implemented
 
 - ✅ eslint-plugin-unicorn (131 rules)
 - ✅ eslint-plugin-n (7 rules)
@@ -104,6 +93,19 @@ Rules requiring capabilities comply does not have yet (scope analysis, per-modul
 - ✅ eslint-plugin-import (11 rules)
 - ✅ eslint-plugin-regexp (10 rules)
 - ✅ eslint-plugin-functional (3 rules)
+- ✅ eslint-plugin-security (4 rules)
+- ✅ eslint-plugin-no-unsanitized (patterns added)
+- ✅ eslint-plugin-jsdoc (7 rules)
+- ✅ eslint-plugin-playwright (10 rules)
+- ✅ eslint-plugin-de-morgan (1 rule)
+- ✅ eslint-plugin-simple-import-sort (covered by existing rules)
+- ✅ eslint-plugin-jsx-a11y (33 rules)
+- ✅ eslint-plugin-package-json (2 rules)
+- ✅ eslint-plugin-better-tailwindcss (2 rules)
+- ✅ eslint-plugin-hexagonal-architecture (1 rule)
+- ✅ write-good (1 rule)
+- ✅ eslint-plugin-no-secrets (patterns added to no-hardcoded-secret)
+- ✅ eslint-plugin-xss (patterns added to no-dynamic-template)
 - ✅ eslint-plugin-security (4 rules)
 - ✅ eslint-plugin-no-unsanitized (patterns added)
 - ✅ eslint-plugin-jsdoc (7 rules)

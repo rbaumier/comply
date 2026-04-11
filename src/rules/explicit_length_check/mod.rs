@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "explicit-length-check",
     description: "Enforce explicitly comparing the `length` or `size` property of a value.",
     remediation: "Use `arr.length > 0` instead of `arr.length` and `arr.length === 0` instead of `!arr.length`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 };
