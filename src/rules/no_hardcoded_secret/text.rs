@@ -60,6 +60,30 @@ fn scan_line(line: &str) -> Option<&'static str> {
     if contains_openai_key(line) {
         return Some("OpenAI key");
     }
+    // Slack token: xoxb-/xoxp-/xoxa-/xoxo- prefix.
+    if contains_slack_token(line) {
+        return Some("Slack token");
+    }
+    // Private key header (PEM / PGP).
+    if contains_private_key_header(line) {
+        return Some("private key");
+    }
+    // Slack webhook URL.
+    if line.contains("hooks.slack.com/services/") {
+        return Some("Slack webhook URL");
+    }
+    // Twilio API key: SK + 32 hex chars.
+    if contains_twilio_key(line) {
+        return Some("Twilio API key");
+    }
+    // Password in URL: ://user:password@host.
+    if contains_password_in_url(line) {
+        return Some("password in URL");
+    }
+    // GCP service account JSON.
+    if contains_gcp_service_account(line) {
+        return Some("GCP service account");
+    }
     // Generic high-entropy string assigned to a SECRET/PASSWORD/TOKEN/API_KEY.
     if contains_keyed_literal(line) {
         return Some("hardcoded credential");
@@ -113,6 +137,77 @@ fn contains_openai_key(line: &str) -> bool {
         }
     }
     false
+}
+
+fn contains_slack_token(line: &str) -> bool {
+    for prefix in ["xoxb-", "xoxp-", "xoxa-", "xoxo-"] {
+        if let Some(idx) = line.find(prefix) {
+            let rest = &line.as_bytes()[idx + prefix.len()..];
+            if rest.len() >= 10
+                && rest[..10]
+                    .iter()
+                    .all(|b| b.is_ascii_alphanumeric() || *b == b'-')
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn contains_private_key_header(line: &str) -> bool {
+    const HEADERS: &[&str] = &[
+        "-----BEGIN RSA PRIVATE KEY-----",
+        "-----BEGIN PRIVATE KEY-----",
+        "-----BEGIN EC PRIVATE KEY-----",
+        "-----BEGIN DSA PRIVATE KEY-----",
+        "-----BEGIN OPENSSH PRIVATE KEY-----",
+        "-----BEGIN PGP PRIVATE KEY BLOCK-----",
+    ];
+    HEADERS.iter().any(|h| line.contains(h))
+}
+
+fn contains_twilio_key(line: &str) -> bool {
+    let bytes = line.as_bytes();
+    for i in 0..bytes.len().saturating_sub(34) {
+        if bytes[i] == b'S'
+            && bytes[i + 1] == b'K'
+            && bytes[i + 2..i + 34]
+                .iter()
+                .all(|b| b.is_ascii_hexdigit())
+        {
+            // Ensure the char after the 34-char match is NOT hex (exact 32 hex after SK).
+            if i + 34 >= bytes.len() || !bytes[i + 34].is_ascii_hexdigit() {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn contains_password_in_url(line: &str) -> bool {
+    // Match ://...:.+@ — a password embedded in a URL.
+    let Some(proto_end) = line.find("://") else {
+        return false;
+    };
+    let after = &line[proto_end + 3..];
+    // Find a colon that's part of user:password@host.
+    if let Some(colon) = after.find(':') {
+        let rest = &after[colon + 1..];
+        if let Some(at) = rest.find('@') {
+            // Password must be non-empty (at > 0) and the part before colon
+            // (the username) must not contain '/' (which would mean a path).
+            if at > 0 && !after[..colon].contains('/') {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn contains_gcp_service_account(line: &str) -> bool {
+    let normalized: String = line.chars().filter(|c| !c.is_whitespace()).collect();
+    normalized.contains("\"type\":\"service_account\"")
 }
 
 /// Detect `CONST_NAME = "long-literal"` where CONST_NAME contains a secret-ish word.
@@ -175,5 +270,60 @@ mod tests {
     #[test]
     fn allows_template_literal_with_interpolation() {
         assert!(run("const API_KEY = `${process.env.KEY}`;").is_empty());
+    }
+
+    #[test]
+    fn flags_slack_token() {
+        assert_eq!(
+            run("const token = 'xoxb-1234567890-abcdefghij';").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn flags_private_key_header() {
+        assert_eq!(run("const k = '-----BEGIN RSA PRIVATE KEY-----';").len(), 1);
+        assert_eq!(run("-----BEGIN OPENSSH PRIVATE KEY-----").len(), 1);
+    }
+
+    #[test]
+    fn flags_slack_webhook() {
+        assert_eq!(
+            run("const url = 'https://hooks.slack.com/services/T00/B00/xxxx';").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn flags_twilio_key() {
+        assert_eq!(
+            run("const key = 'SK1234567890abcdef1234567890abcdef';").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn allows_sk_with_wrong_length() {
+        // SK followed by 31 hex chars (not 32) — should not match.
+        assert!(run("const key = 'SK1234567890abcdef1234567890abcde';").is_empty());
+    }
+
+    #[test]
+    fn flags_password_in_url() {
+        assert_eq!(
+            run("const db = 'postgres://admin:s3cret@localhost:5432/db';").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn allows_url_without_password() {
+        assert!(run("const url = 'https://example.com/path';").is_empty());
+    }
+
+    #[test]
+    fn flags_gcp_service_account() {
+        assert_eq!(run(r#""type": "service_account""#).len(), 1);
+        assert_eq!(run(r#""type":"service_account""#).len(), 1);
     }
 }

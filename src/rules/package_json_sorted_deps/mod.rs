@@ -1,0 +1,26 @@
+//! package-json-sorted-deps
+
+mod text;
+
+use crate::diagnostic::Severity;
+use crate::files::Language;
+use crate::rules::backend::Backend;
+use crate::rules::meta::RuleMeta;
+use crate::rules::RuleDef;
+
+pub const META: RuleMeta = RuleMeta {
+    id: "package-json-sorted-deps",
+    description: "Unsorted dependencies in package.json cause needless merge conflicts.",
+    remediation: "Sort dependency keys alphabetically in each section \
+                  (dependencies, devDependencies, peerDependencies).",
+    severity: Severity::Warning,
+    doc_url: None,
+    categories: &["package-json"],
+};
+
+pub fn register() -> RuleDef {
+    RuleDef {
+        meta: META,
+        backends: vec![(Language::JavaScript, Backend::Text(Box::new(text::Check)))],
+    }
+}

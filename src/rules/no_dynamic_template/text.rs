@@ -14,6 +14,7 @@ const PATTERNS: &[&str] = &[
     ".setHTMLUnsafe(",
     "v-html=",
     "dangerouslySetInnerHTML",
+    "location.href =",
 ];
 
 impl TextCheck for Check {
@@ -72,5 +73,10 @@ mod tests {
     #[test]
     fn allows_text_content() {
         assert!(run("el.textContent = name;").is_empty());
+    }
+
+    #[test]
+    fn flags_location_href() {
+        assert_eq!(run("location.href = userInput;").len(), 1);
     }
 }

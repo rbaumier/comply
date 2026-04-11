@@ -177,6 +177,8 @@ pub mod sql_no_timestamp_without_tz;
 pub mod sql_no_varchar;
 pub mod sql_prefer_exists_over_in;
 pub mod tailwind_no_dynamic_class;
+pub mod tailwind_no_duplicate_classes;
+pub mod tailwind_no_conflicting_classes;
 pub mod vue_no_duplicate_v_if;
 pub mod vue_no_options_api;
 pub mod vue_no_reactive_destructure;
@@ -570,6 +572,10 @@ pub mod de_morgan_simplify;
 pub mod react_refresh_only_export_components;
 // eslint-plugin-playwright (native implementation).
 pub mod playwright_missing_await;
+pub mod package_json_sorted_deps;
+pub mod package_json_unique_deps;
+pub mod comment_prose_quality;
+pub mod layer_import_boundary;
 use crate::diagnostic::Severity;
 use crate::files::Language;
 use backend::Backend;
@@ -1234,6 +1240,16 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         react_refresh_only_export_components::register(),
         // eslint-plugin-playwright (native implementation).
         playwright_missing_await::register(),
+        // eslint-plugin-better-tailwindcss rules.
+        tailwind_no_duplicate_classes::register(),
+        tailwind_no_conflicting_classes::register(),
+        // package-json rules.
+        package_json_sorted_deps::register(),
+        package_json_unique_deps::register(),
+        // comment prose quality.
+        comment_prose_quality::register(),
+        // architecture: hexagonal layer boundaries.
+        layer_import_boundary::register(),
     ];
     rules.extend(delegated::register_all());
     rules
