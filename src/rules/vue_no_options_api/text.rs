@@ -1,3 +1,8 @@
+// TextCheck is appropriate here: while these are JS/TS patterns, the engine
+// returns None for Vue SFCs (see engine.rs) — TreeSitter backends are skipped
+// entirely for .vue files. Migrating to AST would silently disable this rule.
+// The text-based pre-filter (<script setup>, export default {) works correctly.
+
 //! vue-no-options-api text backend.
 //!
 //! Detects `export default {` inside a `<script>` block (NOT `<script setup>`)

@@ -43,6 +43,18 @@ pub fn run_ts(source: &str, check: &dyn AstCheck) -> Vec<Diagnostic> {
     )
 }
 
+/// Same as `run_ts` but with a custom fake filename. Use this when
+/// the rule filters on the file path (e.g. Playwright `*.test.ts`).
+#[must_use]
+pub fn run_ts_with_path(source: &str, check: &dyn AstCheck, fake_path: &str) -> Vec<Diagnostic> {
+    run_with_grammar(
+        source,
+        check,
+        tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+        fake_path,
+    )
+}
+
 /// Same as `run_ts` but with the TSX/JSX grammar variant. Use this when
 /// the rule under test inspects JSX-specific node kinds.
 #[must_use]

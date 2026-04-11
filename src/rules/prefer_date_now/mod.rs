@@ -1,11 +1,10 @@
 //! prefer-date-now — prefer `Date.now()` over `new Date().getTime()` and similar patterns.
 
-mod text;
+mod typescript;
 
 use crate::diagnostic::Severity;
-use crate::rules::backend::Backend;
 use crate::rules::meta::RuleMeta;
-use crate::rules::{RuleDef, TS_FAMILY};
+use crate::rules::RuleDef;
 
 pub const META: RuleMeta = RuleMeta {
     id: "prefer-date-now",
@@ -17,11 +16,5 @@ pub const META: RuleMeta = RuleMeta {
 };
 
 pub fn register() -> RuleDef {
-    RuleDef {
-        meta: META,
-        backends: TS_FAMILY
-            .iter()
-            .map(|&lang| (lang, Backend::Text(Box::new(text::Check))))
-            .collect(),
-    }
+    crate::register_ts_family!(META, typescript)
 }

@@ -1,0 +1,113 @@
+//! hono-cors-permissive backend — flag permissive CORS configurations.
+
+use crate::diagnostic::{Diagnostic, Severity};
+
+crate::ast_check! { |node, source, ctx, diagnostics|
+    if node.kind() != "call_expression" {
+        return;
+    }
+
+    // Only check files that import from 'hono/cors'.
+    if !ctx.source.contains("hono/cors") {
+        return;
+    }
+
+    let Some(callee) = node.child_by_field_name("function") else { return };
+    let callee_text = callee.utf8_text(source).unwrap_or("");
+    if callee_text != "cors" {
+        return;
+    }
+
+    let Some(args) = node.child_by_field_name("arguments") else { return };
+    let args_text = args.utf8_text(source).unwrap_or("");
+    let pos = node.start_position();
+
+    // `cors()` with no arguments — defaults to `origin: '*'`.
+    if args_text == "()" {
+        diagnostics.push(Diagnostic {
+            path: ctx.path.to_path_buf(),
+            line: pos.row + 1,
+            column: pos.column + 1,
+            rule_id: "hono-cors-permissive".into(),
+            message: "`cors()` without arguments defaults to `origin: '*'` — any origin can access the API.".into(),
+            severity: Severity::Error,
+        });
+        return;
+    }
+
+    let norm: String = args_text.chars().filter(|c| !c.is_whitespace()).collect();
+
+    // `origin: '*'` or `origin: "*"`.
+    if norm.contains("origin:'*'") || norm.contains("origin:\"*\"") {
+        diagnostics.push(Diagnostic {
+            path: ctx.path.to_path_buf(),
+            line: pos.row + 1,
+            column: pos.column + 1,
+            rule_id: "hono-cors-permissive".into(),
+            message: "`origin: '*'` allows any origin to access the API.".into(),
+            severity: Severity::Error,
+        });
+    }
+
+    // `credentials: true` without a specific origin.
+    if norm.contains("credentials:true") {
+        let has_specific_origin = (norm.contains("origin:") || norm.contains("origin:"))
+            && !norm.contains("origin:'*'")
+            && !norm.contains("origin:\"*\"");
+        if !has_specific_origin {
+            diagnostics.push(Diagnostic {
+                path: ctx.path.to_path_buf(),
+                line: pos.row + 1,
+                column: pos.column + 1,
+                rule_id: "hono-cors-permissive".into(),
+                message: "`credentials: true` without a specific origin — any origin can make credentialed requests.".into(),
+                severity: Severity::Error,
+            });
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_ts(source, &Check)
+    }
+
+    #[test]
+    fn flags_bare_cors() {
+        let src = "import { cors } from 'hono/cors';\napp.use(cors());";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_wildcard_origin() {
+        let src = "import { cors } from 'hono/cors';\napp.use(cors({ origin: '*' }));";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_credentials_without_origin() {
+        let src = "import { cors } from 'hono/cors';\napp.use(cors({\n  credentials: true\n}));";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_specific_origin() {
+        let src = "import { cors } from 'hono/cors';\napp.use(cors({ origin: 'https://example.com' }));";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_credentials_with_specific_origin() {
+        let src = "import { cors } from 'hono/cors';\napp.use(cors({\n  origin: 'https://example.com',\n  credentials: true\n}));";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_non_hono_files() {
+        let src = "app.use(cors());";
+        assert!(run_on(src).is_empty());
+    }
+}

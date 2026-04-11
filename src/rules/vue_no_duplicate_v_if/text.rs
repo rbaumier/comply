@@ -1,3 +1,7 @@
+// TextCheck is appropriate here: Vue template directives are HTML-like syntax,
+// not parseable by tree-sitter-typescript. The engine returns None for Vue SFCs
+// (see engine.rs), so TreeSitter backends are skipped entirely for .vue files.
+
 //! vue-no-duplicate-v-if text backend.
 //!
 //! Scans for pairs of `v-if="X"` and `v-if="!X"` on consecutive

@@ -1,3 +1,7 @@
+// TextCheck is appropriate here: while this checks a JS/TS pattern, the engine
+// returns None for Vue SFCs (see engine.rs) — TreeSitter backends are skipped
+// entirely for .vue files. Migrating to AST would silently disable this rule.
+
 //! vue-no-reactive-destructure text backend.
 //!
 //! Detects `const { ... } = reactive(...)` which silently breaks

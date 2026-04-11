@@ -1,3 +1,8 @@
+// TextCheck is appropriate here: Vue template directives (v-for, :key) are
+// HTML-like syntax, not parseable by tree-sitter-typescript. The engine returns
+// None for Vue SFCs (see engine.rs), so TreeSitter backends are skipped entirely
+// for .vue files.
+
 //! vue-v-for-needs-stable-key text backend.
 //!
 //! Scans for lines that have both `v-for` and `:key="index"` or

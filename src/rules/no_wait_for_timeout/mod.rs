@@ -1,6 +1,6 @@
 //! no-wait-for-timeout — reject `waitForTimeout` in Playwright tests.
 
-mod text;
+mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::rules::backend::Backend;
@@ -24,7 +24,7 @@ pub fn register() -> RuleDef {
         meta: META,
         backends: TS_FAMILY
             .iter()
-            .map(|&lang| (lang, Backend::Text(Box::new(text::Check))))
+            .map(|&lang| (lang, Backend::TreeSitter(Box::new(typescript::Check))))
             .collect(),
     }
 }
