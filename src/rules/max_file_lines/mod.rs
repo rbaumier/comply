@@ -30,6 +30,7 @@ pub fn register() -> RuleDef {
             (Language::Tsx, Backend::Text(Box::new(text::Check))),
             (Language::JavaScript, Backend::Text(Box::new(text::Check))),
             (Language::Rust, Backend::Text(Box::new(text::Check))),
+            (Language::Vue, Backend::Text(Box::new(text::Check))),
         ],
     }
 }

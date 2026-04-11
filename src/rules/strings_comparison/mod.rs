@@ -1,5 +1,6 @@
 //! strings-comparison
 
+mod rust;
 mod typescript;
 
 use crate::diagnostic::Severity;
@@ -17,5 +18,5 @@ pub const META: RuleMeta = RuleMeta {
 };
 
 pub fn register() -> RuleDef {
-    crate::register_ts_family!(META, typescript)
+    crate::register_ts_family_with_rust!(META, typescript, rust)
 }

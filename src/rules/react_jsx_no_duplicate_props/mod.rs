@@ -1,5 +1,6 @@
 //! react-jsx-no-duplicate-props — duplicate props in JSX.
 
+mod text;
 mod typescript;
 
 use crate::diagnostic::Severity;
@@ -24,6 +25,7 @@ pub fn register() -> RuleDef {
         meta: META,
         backends: vec![
             (Language::Tsx, Backend::TreeSitter(Box::new(typescript::Check))),
+            (Language::Vue, Backend::Text(Box::new(text::Check))),
         ],
     }
 }

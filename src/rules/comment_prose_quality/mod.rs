@@ -25,6 +25,7 @@ pub fn register() -> RuleDef {
         Language::Tsx,
         Language::JavaScript,
         Language::Rust,
+        Language::Vue,
     ]
     .into_iter()
     .map(|lang| (lang, Backend::Text(Box::new(text::Check))))

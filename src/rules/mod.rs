@@ -31,6 +31,7 @@ pub mod explicit_units;
 pub mod exports_at_top;
 pub mod issue_link;
 pub mod jsx;
+pub mod vue_template_helpers;
 pub mod jsdoc_missing_example;
 pub mod jsdoc_on_exported;
 pub mod law_of_demeter;
@@ -595,13 +596,15 @@ pub use registry::{build_rust_only_rule, build_ts_family_rule, RustBinding};
 /// variants identically (either via the TS grammar or oxlint delegation).
 pub const TS_FAMILY: &[Language] = &[Language::TypeScript, Language::Tsx, Language::JavaScript];
 
-/// TS-family + Rust. Used by text-based rules (e.g. regex checks) that
-/// analyse patterns identically across JS/TS and Rust source files.
-pub const TS_FAMILY_AND_RUST: &[Language] = &[
+/// All text-scannable languages: TS-family + Rust + Vue. Used by universal
+/// text-based rules (regex checks, etc.) that apply identically to every
+/// language comply can read.
+pub const ALL_TEXT_LANGUAGES: &[Language] = &[
     Language::TypeScript,
     Language::Tsx,
     Language::JavaScript,
     Language::Rust,
+    Language::Vue,
 ];
 
 /// Helper for rules whose enforcement is 100% delegated to oxlint.

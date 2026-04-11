@@ -1,8 +1,10 @@
 //! react-void-dom-elements-no-children — void elements cannot have children.
 
+mod text;
 mod typescript;
 
 use crate::diagnostic::Severity;
+use crate::files::Language;
 use crate::rules::backend::Backend;
 use crate::rules::meta::RuleMeta;
 use crate::rules::{RuleDef, TS_FAMILY};
@@ -21,9 +23,13 @@ pub const META: RuleMeta = RuleMeta {
 pub fn register() -> RuleDef {
     RuleDef {
         meta: META,
-        backends: TS_FAMILY
-            .iter()
-            .map(|&lang| (lang, Backend::TreeSitter(Box::new(typescript::Check))))
-            .collect(),
+        backends: {
+            let mut b: Vec<_> = TS_FAMILY
+                .iter()
+                .map(|&lang| (lang, Backend::TreeSitter(Box::new(typescript::Check))))
+                .collect();
+            b.push((Language::Vue, Backend::Text(Box::new(text::Check))));
+            b
+        },
     }
 }

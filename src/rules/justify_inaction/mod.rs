@@ -5,6 +5,7 @@ mod text;
 use crate::diagnostic::Severity;
 use crate::rules::backend::Backend;
 use crate::rules::meta::RuleMeta;
+use crate::files::Language;
 use crate::rules::{RuleDef, TS_FAMILY};
 
 pub const META: RuleMeta = RuleMeta {
@@ -21,7 +22,9 @@ pub fn register() -> RuleDef {
         meta: META,
         backends: TS_FAMILY
             .iter()
-            .map(|&lang| (lang, Backend::Text(Box::new(text::Check))))
+            .copied()
+            .chain(std::iter::once(Language::Rust))
+            .map(|lang| (lang, Backend::Text(Box::new(text::Check))))
             .collect(),
     }
 }

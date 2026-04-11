@@ -1,5 +1,6 @@
 //! react-no-array-index-key — use stable ids, not indices.
 
+mod text;
 mod typescript;
 
 use crate::diagnostic::Severity;
@@ -23,6 +24,9 @@ pub const META: RuleMeta = RuleMeta {
 pub fn register() -> RuleDef {
     RuleDef {
         meta: META,
-        backends: vec![(Language::Tsx, Backend::TreeSitter(Box::new(typescript::Check)))],
+        backends: vec![
+            (Language::Tsx, Backend::TreeSitter(Box::new(typescript::Check))),
+            (Language::Vue, Backend::Text(Box::new(text::Check))),
+        ],
     }
 }
