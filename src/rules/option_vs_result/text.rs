@@ -22,7 +22,7 @@ fn is_find_or_get_function(line: &str) -> bool {
             if after_prefix
                 .chars()
                 .next()
-                .map_or(false, |c| c.is_uppercase())
+                .is_some_and(|c| c.is_uppercase())
                 && after_prefix.contains('(')
             {
                 return true;
@@ -48,6 +48,7 @@ impl TextCheck for Check {
                 let mut has_null_return = false;
 
                 // Scan the function body.
+                let mut end_idx = i;
                 for j in i..lines.len() {
                     for ch in lines[j].chars() {
                         if ch == '{' {
@@ -62,13 +63,14 @@ impl TextCheck for Check {
                         has_null_return = true;
                     }
                     if entered_body && brace_depth <= 0 {
-                        i = j + 1;
+                        end_idx = j + 1;
                         break;
                     }
                     if j == lines.len() - 1 {
-                        i = j + 1;
+                        end_idx = j + 1;
                     }
                 }
+                i = end_idx;
 
                 if has_null_return {
                     diagnostics.push(Diagnostic {

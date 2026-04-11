@@ -40,6 +40,7 @@ impl TextCheck for Check {
                 let mut found_db = false;
                 let mut db_line = 0;
 
+                let mut end_idx = i;
                 for j in i..lines.len() {
                     for ch in lines[j].chars() {
                         if ch == '{' {
@@ -54,13 +55,14 @@ impl TextCheck for Check {
                         db_line = j;
                     }
                     if entered && brace_depth <= 0 {
-                        i = j + 1;
+                        end_idx = j + 1;
                         break;
                     }
                     if j == lines.len() - 1 {
-                        i = j + 1;
+                        end_idx = j + 1;
                     }
                 }
+                i = end_idx;
 
                 if found_db {
                     diagnostics.push(Diagnostic {

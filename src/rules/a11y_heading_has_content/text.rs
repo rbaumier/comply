@@ -34,16 +34,7 @@ impl TextCheck for Check {
                 let close = format!("</{tag}>");
 
                 // Self-closing: <h1 ... /> or <h1/>
-                if line.contains(&self_close) && line.contains("/>") {
-                    diagnostics.push(Diagnostic {
-                        path: ctx.path.to_path_buf(),
-                        line: idx + 1,
-                        column: 1,
-                        rule_id: "a11y-heading-has-content".into(),
-                        message: format!("`<{tag}>` is self-closing and has no content."),
-                        severity: Severity::Error,
-                    });
-                } else if line.contains(&self_close2) {
+                if (line.contains(&self_close) && line.contains("/>")) || line.contains(&self_close2) {
                     diagnostics.push(Diagnostic {
                         path: ctx.path.to_path_buf(),
                         line: idx + 1,
@@ -54,21 +45,21 @@ impl TextCheck for Check {
                     });
                 }
                 // Empty: <h1></h1> on same line
-                else if line.contains(&open) && line.contains(&close) {
-                    if let Some(start) = line.find(&open) {
-                        let content_start = start + open.len();
-                        if let Some(end) = line[content_start..].find(&close) {
-                            let content = &line[content_start..content_start + end];
-                            if content.trim().is_empty() {
-                                diagnostics.push(Diagnostic {
-                                    path: ctx.path.to_path_buf(),
-                                    line: idx + 1,
-                                    column: 1,
-                                    rule_id: "a11y-heading-has-content".into(),
-                                    message: format!("`<{tag}>` is empty and has no content."),
-                                    severity: Severity::Error,
-                                });
-                            }
+                else if line.contains(&open) && line.contains(&close)
+                    && let Some(start) = line.find(&open)
+                {
+                    let content_start = start + open.len();
+                    if let Some(end) = line[content_start..].find(&close) {
+                        let content = &line[content_start..content_start + end];
+                        if content.trim().is_empty() {
+                            diagnostics.push(Diagnostic {
+                                path: ctx.path.to_path_buf(),
+                                line: idx + 1,
+                                column: 1,
+                                rule_id: "a11y-heading-has-content".into(),
+                                message: format!("`<{tag}>` is empty and has no content."),
+                                severity: Severity::Error,
+                            });
                         }
                     }
                 }

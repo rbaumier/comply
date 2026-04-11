@@ -43,45 +43,45 @@ impl TextCheck for Check {
 
         for (idx, line) in lines.iter().enumerate() {
             // <img without alt=
-            if line.contains("<img ") || line.contains("<img\n") || line.trim_end().ends_with("<img") {
-                if !has_attr_in_window(&lines, idx, "alt=") {
-                    diagnostics.push(Diagnostic {
-                        path: ctx.path.to_path_buf(),
-                        line: idx + 1,
-                        column: 1,
-                        rule_id: "a11y-alt-text".into(),
-                        message: "`<img>` is missing an `alt` attribute.".into(),
-                        severity: Severity::Error,
-                    });
-                }
+            if (line.contains("<img ") || line.contains("<img\n") || line.trim_end().ends_with("<img"))
+                && !has_attr_in_window(&lines, idx, "alt=")
+            {
+                diagnostics.push(Diagnostic {
+                    path: ctx.path.to_path_buf(),
+                    line: idx + 1,
+                    column: 1,
+                    rule_id: "a11y-alt-text".into(),
+                    message: "`<img>` is missing an `alt` attribute.".into(),
+                    severity: Severity::Error,
+                });
             }
 
             // <area without alt=
-            if line.contains("<area ") || line.trim_end().ends_with("<area") {
-                if !has_attr_in_window(&lines, idx, "alt=") {
-                    diagnostics.push(Diagnostic {
-                        path: ctx.path.to_path_buf(),
-                        line: idx + 1,
-                        column: 1,
-                        rule_id: "a11y-alt-text".into(),
-                        message: "`<area>` is missing an `alt` attribute.".into(),
-                        severity: Severity::Error,
-                    });
-                }
+            if (line.contains("<area ") || line.trim_end().ends_with("<area"))
+                && !has_attr_in_window(&lines, idx, "alt=")
+            {
+                diagnostics.push(Diagnostic {
+                    path: ctx.path.to_path_buf(),
+                    line: idx + 1,
+                    column: 1,
+                    rule_id: "a11y-alt-text".into(),
+                    message: "`<area>` is missing an `alt` attribute.".into(),
+                    severity: Severity::Error,
+                });
             }
 
             // <input type="image" without alt=
-            if line.contains("<input") && line.contains("type=\"image\"") {
-                if !has_attr_in_window(&lines, idx, "alt=") {
-                    diagnostics.push(Diagnostic {
-                        path: ctx.path.to_path_buf(),
-                        line: idx + 1,
-                        column: 1,
-                        rule_id: "a11y-alt-text".into(),
-                        message: "`<input type=\"image\">` is missing an `alt` attribute.".into(),
-                        severity: Severity::Error,
-                    });
-                }
+            if line.contains("<input") && line.contains("type=\"image\"")
+                && !has_attr_in_window(&lines, idx, "alt=")
+            {
+                diagnostics.push(Diagnostic {
+                    path: ctx.path.to_path_buf(),
+                    line: idx + 1,
+                    column: 1,
+                    rule_id: "a11y-alt-text".into(),
+                    message: "`<input type=\"image\">` is missing an `alt` attribute.".into(),
+                    severity: Severity::Error,
+                });
             }
         }
         diagnostics

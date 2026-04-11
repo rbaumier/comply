@@ -37,27 +37,27 @@ impl TextCheck for Check {
                 continue;
             }
             for &tag in NON_INTERACTIVE {
-                if lower.contains(tag) {
-                    if let Some(pos) = lower.find(tag) {
-                        let after = pos + tag.len();
-                        if after >= lower.len()
-                            || matches!(
-                                lower.as_bytes()[after],
-                                b' ' | b'>' | b'/' | b'\t' | b'\n'
-                            )
-                        {
-                            diagnostics.push(Diagnostic {
-                                path: ctx.path.to_path_buf(),
-                                line: idx + 1,
-                                column: pos + 1,
-                                rule_id: "a11y-no-noninteractive-tabindex".into(),
-                                message: format!(
-                                    "Non-interactive element `{tag}>` should not have `tabIndex`."
-                                ),
-                                severity: Severity::Warning,
-                            });
-                            break;
-                        }
+                if lower.contains(tag)
+                    && let Some(pos) = lower.find(tag)
+                {
+                    let after = pos + tag.len();
+                    if after >= lower.len()
+                        || matches!(
+                            lower.as_bytes()[after],
+                            b' ' | b'>' | b'/' | b'\t' | b'\n'
+                        )
+                    {
+                        diagnostics.push(Diagnostic {
+                            path: ctx.path.to_path_buf(),
+                            line: idx + 1,
+                            column: pos + 1,
+                            rule_id: "a11y-no-noninteractive-tabindex".into(),
+                            message: format!(
+                                "Non-interactive element `{tag}>` should not have `tabIndex`."
+                            ),
+                            severity: Severity::Warning,
+                        });
+                        break;
                     }
                 }
             }

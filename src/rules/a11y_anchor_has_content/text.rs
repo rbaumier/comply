@@ -27,37 +27,37 @@ impl TextCheck for Check {
 
         for (idx, line) in ctx.source.lines().enumerate() {
             // Self-closing: <a ... />
-            if line.contains("<a ") || line.contains("<a\t") {
-                if line.contains("/>") && !line.contains("aria-label") {
-                    diagnostics.push(Diagnostic {
-                        path: ctx.path.to_path_buf(),
-                        line: idx + 1,
-                        column: 1,
-                        rule_id: "a11y-anchor-has-content".into(),
-                        message: "Anchor is self-closing and has no content for screen readers.".into(),
-                        severity: Severity::Error,
-                    });
-                }
+            if (line.contains("<a ") || line.contains("<a\t"))
+                && line.contains("/>") && !line.contains("aria-label")
+            {
+                diagnostics.push(Diagnostic {
+                    path: ctx.path.to_path_buf(),
+                    line: idx + 1,
+                    column: 1,
+                    rule_id: "a11y-anchor-has-content".into(),
+                    message: "Anchor is self-closing and has no content for screen readers.".into(),
+                    severity: Severity::Error,
+                });
             }
 
             // Empty: <a ...></a> on the same line
-            if let Some(open_pos) = line.find("<a ").or_else(|| line.find("<a>")) {
-                if let Some(close_pos) = line.find("</a>") {
-                    // Find the end of the opening tag.
-                    if let Some(gt) = line[open_pos..].find('>') {
-                        let content_start = open_pos + gt + 1;
-                        if content_start <= close_pos {
-                            let content = line[content_start..close_pos].trim();
-                            if content.is_empty() && !line.contains("aria-label") {
-                                diagnostics.push(Diagnostic {
-                                    path: ctx.path.to_path_buf(),
-                                    line: idx + 1,
-                                    column: 1,
-                                    rule_id: "a11y-anchor-has-content".into(),
-                                    message: "Anchor has no content — screen readers cannot announce it.".into(),
-                                    severity: Severity::Error,
-                                });
-                            }
+            if let Some(open_pos) = line.find("<a ").or_else(|| line.find("<a>"))
+                && let Some(close_pos) = line.find("</a>")
+            {
+                // Find the end of the opening tag.
+                if let Some(gt) = line[open_pos..].find('>') {
+                    let content_start = open_pos + gt + 1;
+                    if content_start <= close_pos {
+                        let content = line[content_start..close_pos].trim();
+                        if content.is_empty() && !line.contains("aria-label") {
+                            diagnostics.push(Diagnostic {
+                                path: ctx.path.to_path_buf(),
+                                line: idx + 1,
+                                column: 1,
+                                rule_id: "a11y-anchor-has-content".into(),
+                                message: "Anchor has no content — screen readers cannot announce it.".into(),
+                                severity: Severity::Error,
+                            });
                         }
                     }
                 }

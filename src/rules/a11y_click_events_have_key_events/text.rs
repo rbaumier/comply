@@ -22,10 +22,10 @@ fn is_jsx(ctx: &CheckCtx) -> bool {
 fn has_key_handler_nearby(lines: &[&str], idx: usize) -> bool {
     let start = idx.saturating_sub(1);
     let end = (idx + 2).min(lines.len());
-    for i in start..end {
-        if lines[i].contains("onKeyDown")
-            || lines[i].contains("onKeyUp")
-            || lines[i].contains("onKeyPress")
+    for line in lines.iter().take(end).skip(start) {
+        if line.contains("onKeyDown")
+            || line.contains("onKeyUp")
+            || line.contains("onKeyPress")
         {
             return true;
         }
@@ -42,17 +42,17 @@ impl TextCheck for Check {
         let lines: Vec<&str> = ctx.source.lines().collect();
 
         for (idx, line) in lines.iter().enumerate() {
-            if line.contains("onClick=") || line.contains("onClick ") {
-                if !has_key_handler_nearby(&lines, idx) {
-                    diagnostics.push(Diagnostic {
-                        path: ctx.path.to_path_buf(),
-                        line: idx + 1,
-                        column: 1,
-                        rule_id: "a11y-click-events-have-key-events".into(),
-                        message: "Element has `onClick` without a corresponding keyboard event handler (`onKeyDown`/`onKeyUp`/`onKeyPress`).".into(),
-                        severity: Severity::Warning,
-                    });
-                }
+            if (line.contains("onClick=") || line.contains("onClick "))
+                && !has_key_handler_nearby(&lines, idx)
+            {
+                diagnostics.push(Diagnostic {
+                    path: ctx.path.to_path_buf(),
+                    line: idx + 1,
+                    column: 1,
+                    rule_id: "a11y-click-events-have-key-events".into(),
+                    message: "Element has `onClick` without a corresponding keyboard event handler (`onKeyDown`/`onKeyUp`/`onKeyPress`).".into(),
+                    severity: Severity::Warning,
+                });
             }
         }
         diagnostics

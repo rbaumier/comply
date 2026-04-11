@@ -44,17 +44,17 @@ impl TextCheck for Check {
             if !has_non_interactive {
                 continue;
             }
-            if let Some(role) = extract_role(line) {
-                if INTERACTIVE_ROLES.contains(&role.as_str()) {
-                    diagnostics.push(Diagnostic {
-                        path: ctx.path.to_path_buf(),
-                        line: idx + 1,
-                        column: 1,
-                        rule_id: "a11y-no-noninteractive-element-to-interactive-role".into(),
-                        message: format!("Non-interactive element should not have interactive `role=\"{}\"`.", role),
-                        severity: Severity::Warning,
-                    });
-                }
+            if let Some(role) = extract_role(line)
+                && INTERACTIVE_ROLES.contains(&role.as_str())
+            {
+                diagnostics.push(Diagnostic {
+                    path: ctx.path.to_path_buf(),
+                    line: idx + 1,
+                    column: 1,
+                    rule_id: "a11y-no-noninteractive-element-to-interactive-role".into(),
+                    message: format!("Non-interactive element should not have interactive `role=\"{}\"`.", role),
+                    severity: Severity::Warning,
+                });
             }
         }
         diagnostics

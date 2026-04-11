@@ -6,8 +6,12 @@ pub struct Check;
 
 const PATTERNS: &[&str] = &[
     ".innerHTML =",
+    ".outerHTML =",
     "document.write(",
+    "document.writeln(",
     ".insertAdjacentHTML(",
+    ".createContextualFragment(",
+    ".setHTMLUnsafe(",
     "v-html=",
     "dangerouslySetInnerHTML",
 ];

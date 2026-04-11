@@ -52,19 +52,18 @@ impl TextCheck for Check {
         let mut diagnostics = Vec::new();
 
         for (idx, line) in ctx.source.lines().enumerate() {
-            if line.contains("<img") {
-                if let Some(alt) = extract_alt_value(line) {
-                    if has_redundant_word(alt) {
-                        diagnostics.push(Diagnostic {
-                            path: ctx.path.to_path_buf(),
-                            line: idx + 1,
-                            column: 1,
-                            rule_id: "a11y-img-redundant-alt".into(),
-                            message: "`alt` text should not contain words like \"image\", \"picture\", or \"photo\" — describe the content instead.".into(),
-                            severity: Severity::Warning,
-                        });
-                    }
-                }
+            if line.contains("<img")
+                && let Some(alt) = extract_alt_value(line)
+                && has_redundant_word(alt)
+            {
+                diagnostics.push(Diagnostic {
+                    path: ctx.path.to_path_buf(),
+                    line: idx + 1,
+                    column: 1,
+                    rule_id: "a11y-img-redundant-alt".into(),
+                    message: "`alt` text should not contain words like \"image\", \"picture\", or \"photo\" — describe the content instead.".into(),
+                    severity: Severity::Warning,
+                });
             }
         }
         diagnostics

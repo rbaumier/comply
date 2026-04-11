@@ -27,7 +27,7 @@ fn has_positive_tabindex(line: &str) -> bool {
         if abs < line.len() {
             let ch = line.as_bytes()[abs];
             // Positive: digit 1-9 as the first char after `{`.
-            if ch >= b'1' && ch <= b'9' {
+            if (b'1'..=b'9').contains(&ch) {
                 return true;
             }
         }

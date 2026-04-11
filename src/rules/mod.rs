@@ -286,6 +286,23 @@ pub mod regex_no_unused_groups;
 pub mod regex_prefer_char_class;
 pub mod regex_prefer_quantifier;
 pub mod regex_use_unicode_flag;
+pub mod regex_no_octal;
+pub mod regex_no_escape_backspace;
+pub mod regex_sort_flags;
+pub mod regex_no_useless_two_nums_quantifier;
+pub mod regex_no_zero_quantifier;
+pub mod regex_no_obscure_range;
+pub mod regex_no_useless_lazy;
+pub mod regex_no_empty_lookaround;
+pub mod regex_no_standalone_backslash;
+pub mod regex_no_invisible_character;
+pub mod no_bidi_characters;
+pub mod no_timing_attack;
+pub mod no_disable_mustache_escape;
+pub mod no_non_literal_fs_filename;
+pub mod no_class_inheritance;
+pub mod no_promise_reject;
+pub mod no_try_statements;
 pub mod too_many_break_or_continue;
 pub mod hono_cookie_no_httponly;
 pub mod hono_cookie_no_samesite;
@@ -346,6 +363,19 @@ pub mod a11y_role_has_required_aria_props;
 pub mod a11y_scope;
 pub mod a11y_tabindex_no_positive;
 
+// eslint-plugin-import rules (native implementations).
+pub mod group_exports;
+pub mod imports_first;
+pub mod max_dependencies;
+pub mod newline_after_import;
+pub mod no_absolute_path;
+pub mod no_duplicate_imports;
+pub mod no_import_module_exports;
+pub mod no_mutable_exports;
+pub mod no_namespace_import;
+pub mod no_self_import;
+pub mod no_unassigned_import;
+
 // eslint-plugin-unicorn rules (native implementations).
 pub mod catch_error_name;
 pub mod consistent_assert;
@@ -389,6 +419,13 @@ pub mod no_negation_in_equality_check;
 pub mod no_null;
 pub mod no_object_as_default_parameter;
 pub mod no_process_exit;
+pub mod node_handle_callback_err;
+pub mod node_no_callback_literal;
+pub mod node_no_new_require;
+pub mod node_no_path_concat;
+pub mod node_no_sync;
+pub mod node_prefer_promises_dns;
+pub mod node_prefer_promises_fs;
 pub mod no_single_promise_in_promise_methods;
 pub mod no_static_only_class;
 pub mod no_thenable;
@@ -857,6 +894,25 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         regex_prefer_char_class::register(),
         regex_prefer_quantifier::register(),
         regex_use_unicode_flag::register(),
+        regex_no_octal::register(),
+        regex_no_escape_backspace::register(),
+        regex_sort_flags::register(),
+        regex_no_useless_two_nums_quantifier::register(),
+        regex_no_zero_quantifier::register(),
+        regex_no_obscure_range::register(),
+        regex_no_useless_lazy::register(),
+        regex_no_empty_lookaround::register(),
+        regex_no_standalone_backslash::register(),
+        regex_no_invisible_character::register(),
+        // eslint-plugin-security rules (native implementations).
+        no_bidi_characters::register(),
+        no_timing_attack::register(),
+        no_disable_mustache_escape::register(),
+        no_non_literal_fs_filename::register(),
+        // eslint-plugin-functional rules (native implementations).
+        no_class_inheritance::register(),
+        no_promise_reject::register(),
+        no_try_statements::register(),
         too_many_break_or_continue::register(),
         hono_cookie_no_httponly::register(),
         hono_cookie_no_samesite::register(),
@@ -916,6 +972,18 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         a11y_role_has_required_aria_props::register(),
         a11y_scope::register(),
         a11y_tabindex_no_positive::register(),
+        // eslint-plugin-import rules (native implementations).
+        group_exports::register(),
+        imports_first::register(),
+        max_dependencies::register(),
+        newline_after_import::register(),
+        no_absolute_path::register(),
+        no_duplicate_imports::register(),
+        no_import_module_exports::register(),
+        no_mutable_exports::register(),
+        no_namespace_import::register(),
+        no_self_import::register(),
+        no_unassigned_import::register(),
         // eslint-plugin-unicorn rules (native implementations).
         catch_error_name::register(),
         consistent_assert::register(),
@@ -1048,6 +1116,14 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         template_indent::register(),
         text_encoding_identifier_case::register(),
         throw_new_error::register(),
+        // eslint-plugin-n (Node.js) rules.
+        node_no_path_concat::register(),
+        node_no_sync::register(),
+        node_prefer_promises_fs::register(),
+        node_prefer_promises_dns::register(),
+        node_no_callback_literal::register(),
+        node_handle_callback_err::register(),
+        node_no_new_require::register(),
     ];
     rules.extend(delegated::register_all());
     rules

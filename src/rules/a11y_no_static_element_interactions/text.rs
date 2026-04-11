@@ -26,28 +26,28 @@ impl TextCheck for Check {
                 continue;
             }
             for &tag in STATIC_ELEMENTS {
-                if lower.contains(tag) {
-                    if let Some(pos) = lower.find(tag) {
-                        let after = pos + tag.len();
-                        if after >= lower.len()
-                            || matches!(
-                                lower.as_bytes()[after],
-                                b' ' | b'>' | b'/' | b'\t' | b'\n'
-                            )
-                        {
-                            let element = &tag[1..]; // strip '<'
-                            diagnostics.push(Diagnostic {
-                                path: ctx.path.to_path_buf(),
-                                line: idx + 1,
-                                column: pos + 1,
-                                rule_id: "a11y-no-static-element-interactions".into(),
-                                message: format!(
-                                    "Static element `<{element}>` has `onClick` without a `role` attribute."
-                                ),
-                                severity: Severity::Warning,
-                            });
-                            break;
-                        }
+                if lower.contains(tag)
+                    && let Some(pos) = lower.find(tag)
+                {
+                    let after = pos + tag.len();
+                    if after >= lower.len()
+                        || matches!(
+                            lower.as_bytes()[after],
+                            b' ' | b'>' | b'/' | b'\t' | b'\n'
+                        )
+                    {
+                        let element = &tag[1..]; // strip '<'
+                        diagnostics.push(Diagnostic {
+                            path: ctx.path.to_path_buf(),
+                            line: idx + 1,
+                            column: pos + 1,
+                            rule_id: "a11y-no-static-element-interactions".into(),
+                            message: format!(
+                                "Static element `<{element}>` has `onClick` without a `role` attribute."
+                            ),
+                            severity: Severity::Warning,
+                        });
+                        break;
                     }
                 }
             }

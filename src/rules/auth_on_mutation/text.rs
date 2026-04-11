@@ -27,8 +27,8 @@ impl TextCheck for Check {
             let handler_line = i;
             let mut brace_depth: i32 = 0;
             let mut entered = false;
-            let mut has_auth = false;
             let mut body = String::new();
+            let mut end_idx = i;
 
             for j in i..lines.len() {
                 body.push_str(lines[j]);
@@ -42,16 +42,17 @@ impl TextCheck for Check {
                     }
                 }
                 if entered && brace_depth <= 0 {
-                    i = j + 1;
+                    end_idx = j + 1;
                     break;
                 }
                 if j == lines.len() - 1 {
-                    i = j + 1;
+                    end_idx = j + 1;
                 }
             }
+            i = end_idx;
 
             let body_lower = body.to_lowercase();
-            has_auth = AUTH_KEYWORDS.iter().any(|k| body_lower.contains(k));
+            let has_auth = AUTH_KEYWORDS.iter().any(|k| body_lower.contains(k));
 
             if !has_auth {
                 diagnostics.push(Diagnostic {
