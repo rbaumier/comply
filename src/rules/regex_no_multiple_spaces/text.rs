@@ -47,7 +47,7 @@ fn has_multiple_spaces_in_regex(line: &str) -> bool {
     // Check RegExp constructor
     if let Some(pos) = line.find("RegExp(") {
         let rest = &line[pos + 7..];
-        if let Some(q) = rest.find(|c| c == '"' || c == '\'') {
+        if let Some(q) = rest.find(['"', '\'']) {
             let quote = rest.as_bytes()[q];
             let inner = &rest[q + 1..];
             if let Some(end) = inner.find(quote as char) {

@@ -42,15 +42,14 @@ fn extract_regex_pattern(line: &str) -> Option<&str> {
 
 /// Check for empty alternatives: `|` at start, end, or consecutive `||`.
 fn has_empty_alternative(line: &str) -> bool {
-    if let Some(pattern) = extract_regex_pattern(line) {
-        if pattern.starts_with('|') || pattern.ends_with('|') || pattern.contains("||") {
+    if let Some(pattern) = extract_regex_pattern(line)
+        && (pattern.starts_with('|') || pattern.ends_with('|') || pattern.contains("||")) {
             return true;
         }
-    }
     // Also check RegExp constructor
     if let Some(pos) = line.find("RegExp(") {
         let rest = &line[pos + 7..];
-        if let Some(q) = rest.find(|c| c == '"' || c == '\'') {
+        if let Some(q) = rest.find(['"', '\'']) {
             let quote = rest.as_bytes()[q];
             let inner = &rest[q + 1..];
             if let Some(end) = inner.find(quote as char) {

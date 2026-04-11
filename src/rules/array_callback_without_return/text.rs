@@ -32,8 +32,8 @@ impl TextCheck for Check {
                 // Scan up to 10 lines ahead for `return` or `}`.
                 let mut found_return = false;
                 let end = (i + 11).min(len);
-                for j in (i + 1)..end {
-                    let trimmed = lines[j].trim();
+                for line in lines.iter().take(end).skip(i + 1) {
+                    let trimmed = line.trim();
                     if trimmed.contains("return ")
                         || trimmed.starts_with("return;")
                         || trimmed == "return"

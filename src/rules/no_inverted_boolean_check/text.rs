@@ -37,12 +37,12 @@ fn has_inverted_check(line: &str) -> bool {
                     k += 1;
                 }
                 // Check for `===` or `!==`.
-                if k + 2 < len {
-                    if (bytes[k] == b'=' && bytes[k + 1] == b'=' && bytes[k + 2] == b'=')
-                        || (bytes[k] == b'!' && bytes[k + 1] == b'=' && bytes[k + 2] == b'=')
-                    {
-                        return true;
-                    }
+                if k + 2 < len
+                    && (bytes[k] == b'=' || bytes[k] == b'!')
+                    && bytes[k + 1] == b'='
+                    && bytes[k + 2] == b'='
+                {
+                    return true;
                 }
             }
         }

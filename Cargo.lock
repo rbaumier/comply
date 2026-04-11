@@ -227,6 +227,7 @@ dependencies = [
  "hex",
  "ignore",
  "predicates",
+ "regex",
  "rusqlite",
  "serde",
  "serde_json",

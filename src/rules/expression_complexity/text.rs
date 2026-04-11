@@ -10,6 +10,7 @@ const THRESHOLD: usize = 4;
 ///
 /// We skip `?` that is part of `?.` (optional chaining) or `??` (nullish coalescing,
 /// counted separately).
+#[allow(clippy::if_same_then_else)]
 fn count_operators(line: &str) -> usize {
     let mut count = 0;
     let bytes = line.as_bytes();

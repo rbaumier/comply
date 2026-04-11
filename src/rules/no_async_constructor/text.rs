@@ -10,9 +10,8 @@ fn has_async_constructor(line: &str) -> bool {
     // Match: `async constructor(` with any whitespace between tokens
     if let Some(pos) = trimmed.find("async") {
         let after = trimmed[pos + 5..].trim_start();
-        if after.starts_with("constructor") {
-            let after_ctor = after["constructor".len()..].trim_start();
-            return after_ctor.starts_with('(');
+        if let Some(rest) = after.strip_prefix("constructor") {
+            return rest.trim_start().starts_with('(');
         }
     }
     false

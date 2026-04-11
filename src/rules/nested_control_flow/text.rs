@@ -66,11 +66,10 @@ impl TextCheck for Check {
                         }
                     }
                     '}' => {
-                        if let Some(was_cf) = brace_stack.pop() {
-                            if was_cf {
+                        if let Some(was_cf) = brace_stack.pop()
+                            && was_cf {
                                 cf_depth = cf_depth.saturating_sub(1);
                             }
-                        }
                     }
                     _ => {}
                 }

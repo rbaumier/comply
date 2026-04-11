@@ -17,9 +17,7 @@ impl TextCheck for Check {
                         line: idx + 1,
                         column: 1,
                         rule_id: "no-arguments-usage".into(),
-                        message: format!(
-                            "Avoid direct use of `arguments` — use rest parameters (`...args`) instead."
-                        ),
+                        message: "Avoid direct use of `arguments` — use rest parameters (`...args`) instead.".to_string(),
                         severity: Severity::Error,
                     });
                     break; // one diagnostic per line

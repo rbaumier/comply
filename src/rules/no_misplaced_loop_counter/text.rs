@@ -19,7 +19,7 @@ fn extract_condition_var(condition: &str) -> Option<&str> {
                 && ident
                     .chars()
                     .next()
-                    .map_or(false, |c| c.is_alphabetic() || c == '_' || c == '$')
+                    .is_some_and(|c| c.is_alphabetic() || c == '_' || c == '$')
             {
                 return Some(ident);
             }

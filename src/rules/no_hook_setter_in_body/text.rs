@@ -13,8 +13,8 @@ fn collect_setters(source: &str) -> Vec<String> {
         if !trimmed.contains("useState") {
             continue;
         }
-        if let Some(bracket_start) = trimmed.find('[') {
-            if let Some(bracket_end) = trimmed.find(']') {
+        if let Some(bracket_start) = trimmed.find('[')
+            && let Some(bracket_end) = trimmed.find(']') {
                 let inside = &trimmed[bracket_start + 1..bracket_end];
                 let parts: Vec<&str> = inside.split(',').collect();
                 if parts.len() == 2 {
@@ -24,7 +24,6 @@ fn collect_setters(source: &str) -> Vec<String> {
                     }
                 }
             }
-        }
     }
     setters
 }
@@ -54,7 +53,7 @@ fn find_body_setter_calls(source: &str, setters: &[String]) -> Vec<(usize, Strin
             // Heuristic: component names start with uppercase
             let is_component = trimmed
                 .split_whitespace()
-                .find(|w| w.chars().next().map_or(false, |c| c.is_ascii_uppercase()))
+                .find(|w| w.chars().next().is_some_and(|c| c.is_ascii_uppercase()))
                 .is_some();
             if is_component {
                 in_component = true;
@@ -108,7 +107,7 @@ fn find_body_setter_calls(source: &str, setters: &[String]) -> Vec<(usize, Strin
             let call = format!("{setter}(");
             if trimmed.contains(&call) {
                 // Make sure this isn't the declaration line
-                if !trimmed.contains("useState") && !trimmed.contains(&format!("[")) {
+                if !trimmed.contains("useState") && !trimmed.contains(&"[".to_string()) {
                     results.push((idx + 1, setter.clone()));
                 }
             }

@@ -69,13 +69,12 @@ impl TextCheck for Check {
             for ch in line.chars() {
                 if ch == '{' {
                     // Already counted via fn_depth for function lines.
-                } else if ch == '}' {
-                    if fn_depth > 0 {
+                } else if ch == '}'
+                    && fn_depth > 0 {
                         fn_depth = fn_depth.saturating_sub(0);
                         // We can't perfectly track which `}` closes which function,
                         // but we decrement on net-close.
                     }
-                }
             }
 
             // Simple heuristic: count open/close braces to track depth.

@@ -88,11 +88,10 @@ pub fn invoke(req: &LlmRequest) -> Result<String> {
         return Ok(structured.to_string());
     }
     // Fallback: result field (text mode without --json-schema).
-    if let Some(result) = parsed.get("result").and_then(|v| v.as_str()) {
-        if !result.is_empty() {
+    if let Some(result) = parsed.get("result").and_then(|v| v.as_str())
+        && !result.is_empty() {
             return Ok(result.to_string());
         }
-    }
     // Last resort: the entire output.
     Ok(stdout)
 }

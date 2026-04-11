@@ -9,13 +9,12 @@ fn has_large_union(line: &str) -> bool {
     let trimmed = line.trim();
 
     // type alias: `type X = A | B | C | D | E | F`
-    if trimmed.starts_with("type ") {
-        if let Some(eq_pos) = trimmed.find('=') {
+    if trimmed.starts_with("type ")
+        && let Some(eq_pos) = trimmed.find('=') {
             let rhs = &trimmed[eq_pos + 1..];
             let pipes = rhs.chars().filter(|&c| c == '|').count();
             return pipes >= 5;
         }
-    }
 
     // type annotation after `:` — e.g. `param: A | B | C | D | E | F`
     if let Some(colon_pos) = trimmed.find(':') {

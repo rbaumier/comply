@@ -70,11 +70,10 @@ fn check_inverted(line: &str) -> bool {
     for matcher in matchers {
         if let Some(pos) = line.find(matcher) {
             let after_matcher = &line[pos + matcher.len()..];
-            if let Some(matcher_arg) = extract_paren_content(after_matcher) {
-                if is_literal(expect_arg) && is_variable(matcher_arg) {
+            if let Some(matcher_arg) = extract_paren_content(after_matcher)
+                && is_literal(expect_arg) && is_variable(matcher_arg) {
                     return true;
                 }
-            }
         }
     }
     false

@@ -74,21 +74,20 @@ pub fn extract_snippets(source: &str) -> String {
         } else if start > 0 {
             out.push_str(&format!("... (lines 1-{} omitted)\n", start));
         }
-        for i in start..=end {
-            out.push_str(&format!("{}: {}\n", i + 1, lines[i]));
+        for (i, line) in lines.iter().enumerate().take(end + 1).skip(start) {
+            out.push_str(&format!("{}: {}\n", i + 1, line));
         }
         last_end = Some(end);
     }
 
-    if let Some(prev) = last_end {
-        if prev + 1 < total {
+    if let Some(prev) = last_end
+        && prev + 1 < total {
             out.push_str(&format!(
                 "... (lines {}-{} omitted)\n",
                 prev + 2,
                 total,
             ));
         }
-    }
 
     out
 }
@@ -96,7 +95,7 @@ pub fn extract_snippets(source: &str) -> String {
 // ── Range helpers ───────────────────────────────────────────────────
 
 /// Sort ranges by start, then merge overlapping/contained ones.
-fn merge_ranges(ranges: &mut Vec<(usize, usize)>) -> Vec<(usize, usize)> {
+fn merge_ranges(ranges: &mut [(usize, usize)]) -> Vec<(usize, usize)> {
     if ranges.is_empty() {
         return vec![];
     }
@@ -229,8 +228,8 @@ fn block_end(lines: &[&str], start: usize) -> usize {
     let mut depth: i32 = 0;
     let mut found_open = false;
 
-    for i in start..total {
-        for ch in lines[i].chars() {
+    for (i, line) in lines.iter().enumerate().take(total).skip(start) {
+        for ch in line.chars() {
             if ch == '{' {
                 depth += 1;
                 found_open = true;
@@ -252,8 +251,8 @@ fn block_end(lines: &[&str], start: usize) -> usize {
 /// Find the end of a function signature (up to and including the `{`).
 fn signature_end(lines: &[&str], start: usize) -> usize {
     let total = lines.len();
-    for i in start..total {
-        if lines[i].contains('{') {
+    for (i, line) in lines.iter().enumerate().take(total).skip(start) {
+        if line.contains('{') {
             return i;
         }
         if i > start + 3 {

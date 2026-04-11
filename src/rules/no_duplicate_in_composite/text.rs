@@ -26,11 +26,10 @@ fn has_duplicate_members(segment: &str, sep: char) -> bool {
 /// Extract the type expression from a line (after `=` for type aliases, after `:` for annotations).
 fn type_expr(line: &str) -> Option<String> {
     let trimmed = line.trim();
-    if trimmed.starts_with("type ") {
-        if let Some(eq_pos) = trimmed.find('=') {
+    if trimmed.starts_with("type ")
+        && let Some(eq_pos) = trimmed.find('=') {
             return Some(trimmed[eq_pos + 1..].to_string());
         }
-    }
     if let Some(colon_pos) = trimmed.find(':') {
         let after_colon = &trimmed[colon_pos + 1..];
         // For annotations like `x: A | B)`, cut at the closing `)` that

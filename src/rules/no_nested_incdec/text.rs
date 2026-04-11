@@ -99,12 +99,10 @@ fn is_for_loop_update(line: &str) -> bool {
 
     // ++ or -- must NOT be in the body part after the for header (on this line)
     let body = after_close.trim_start_matches(')').trim();
-    if body.starts_with('{') {
-        let body_rest = &body[1..];
-        if body_rest.contains("++") || body_rest.contains("--") {
+    if let Some(body_rest) = body.strip_prefix('{')
+        && (body_rest.contains("++") || body_rest.contains("--")) {
             return false;
         }
-    }
 
     true
 }

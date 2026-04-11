@@ -88,9 +88,7 @@ impl TextCheck for Check {
             if b == b'{' {
                 brace_depth += 1;
             } else if b == b'}' {
-                if brace_depth > 0 {
-                    brace_depth -= 1;
-                }
+                brace_depth = brace_depth.saturating_sub(1);
                 while let Some(&target) = loop_brace_targets.last() {
                     if brace_depth <= target {
                         loop_brace_targets.pop();

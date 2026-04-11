@@ -183,9 +183,13 @@ macro_rules! ast_check {
                 let ast_check_source = ast_check_ctx.source.as_bytes();
                 let mut ast_check_diagnostics: Vec<$crate::diagnostic::Diagnostic> = Vec::new();
                 $crate::rules::walker::walk_tree(tree, |ast_check_node| {
+                    #[allow(unused_variables)]
                     let $node = ast_check_node;
+                    #[allow(unused_variables)]
                     let $source: &[u8] = ast_check_source;
+                    #[allow(unused_variables)]
                     let $ctx: &$crate::rules::backend::CheckCtx = ast_check_ctx;
+                    #[allow(unused_variables)]
                     let $diagnostics: &mut Vec<$crate::diagnostic::Diagnostic> = &mut ast_check_diagnostics;
                     $($body)*
                 });

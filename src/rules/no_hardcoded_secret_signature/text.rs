@@ -35,11 +35,10 @@ fn has_hardcoded_secret(line: &str) -> bool {
         while let Some(pos) = lower[search_from..].find(func) {
             let abs = search_from + pos + func.len();
             // Look for a string literal argument (the secret/key) in the arguments
-            if let Some(secret) = extract_quoted_string(line, abs) {
-                if looks_like_secret(secret) {
+            if let Some(secret) = extract_quoted_string(line, abs)
+                && looks_like_secret(secret) {
                     return true;
                 }
-            }
             search_from = abs;
         }
     }

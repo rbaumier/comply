@@ -24,7 +24,7 @@ impl TextCheck for Check {
                 }
             }
             // Also check `<op> undefined` on the right side
-            if !diagnostics.last().is_some_and(|d| d.line == idx + 1) {
+            if diagnostics.last().is_none_or(|d| d.line != idx + 1) {
                 for op in &[" +", " -", " *", " /"] {
                     let pattern = format!("{op} undefined");
                     if line.contains(&pattern) {
@@ -38,7 +38,7 @@ impl TextCheck for Check {
             // Pattern: `"..." - `, `"..." * `, `'...' / `, or on right side
             if has_string_arithmetic(line) {
                 // Avoid duplicate if we already flagged this line
-                if !diagnostics.last().is_some_and(|d| d.line == idx + 1) {
+                if diagnostics.last().is_none_or(|d| d.line != idx + 1) {
                     diagnostics.push(Diagnostic {
                         path: ctx.path.to_path_buf(),
                         line: idx + 1,

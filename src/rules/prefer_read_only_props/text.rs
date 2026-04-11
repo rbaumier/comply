@@ -55,7 +55,7 @@ fn is_function_decl_component(line: &str) -> bool {
         return name_start
             .chars()
             .next()
-            .map_or(false, |c| c.is_ascii_uppercase());
+            .is_some_and(|c| c.is_ascii_uppercase());
     }
     false
 }
@@ -71,7 +71,7 @@ fn is_arrow_component(line: &str) -> bool {
         if name
             .chars()
             .next()
-            .map_or(false, |c| c.is_ascii_uppercase())
+            .is_some_and(|c| c.is_ascii_uppercase())
         {
             // Must contain `=>` or `= (`
             return rest.contains("=>");
