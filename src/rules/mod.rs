@@ -546,6 +546,30 @@ pub mod ts_no_unsafe_declaration_merging;
 pub mod ts_no_useless_empty_export;
 pub mod ts_no_wrapper_object_types;
 pub mod ts_prefer_literal_enum_member;
+// eslint-plugin-playwright rules (native implementations).
+pub mod playwright_no_force_option;
+pub mod playwright_no_page_pause;
+pub mod playwright_no_networkidle;
+pub mod playwright_no_element_handle;
+pub mod playwright_prefer_web_first_assertions;
+pub mod playwright_no_unsafe_references;
+pub mod playwright_no_raw_locators;
+pub mod playwright_no_conditional_expect;
+pub mod playwright_prefer_native_locators;
+// eslint-plugin-jsdoc rules (native implementations).
+pub mod jsdoc_check_param_names;
+pub mod jsdoc_require_param;
+pub mod jsdoc_require_returns;
+pub mod jsdoc_returns_check;
+pub mod jsdoc_complete_sentence;
+pub mod jsdoc_no_undefined_types;
+pub mod jsdoc_sort_tags;
+// eslint-plugin-de-morgan (native implementation).
+pub mod de_morgan_simplify;
+// eslint-plugin-react-refresh (native implementation).
+pub mod react_refresh_only_export_components;
+// eslint-plugin-playwright (native implementation).
+pub mod playwright_missing_await;
 use crate::diagnostic::Severity;
 use crate::files::Language;
 use backend::Backend;
@@ -1186,6 +1210,30 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         ts_prefer_literal_enum_member::register(),
         ts_no_useless_empty_export::register(),
         ts_no_namespace::register(),
+        // eslint-plugin-playwright rules (native implementations).
+        playwright_no_force_option::register(),
+        playwright_no_page_pause::register(),
+        playwright_no_networkidle::register(),
+        playwright_no_element_handle::register(),
+        playwright_prefer_web_first_assertions::register(),
+        playwright_no_unsafe_references::register(),
+        playwright_no_raw_locators::register(),
+        playwright_no_conditional_expect::register(),
+        playwright_prefer_native_locators::register(),
+        // eslint-plugin-jsdoc rules (native implementations).
+        jsdoc_check_param_names::register(),
+        jsdoc_require_param::register(),
+        jsdoc_require_returns::register(),
+        jsdoc_returns_check::register(),
+        jsdoc_complete_sentence::register(),
+        jsdoc_no_undefined_types::register(),
+        jsdoc_sort_tags::register(),
+        // eslint-plugin-de-morgan (native implementation).
+        de_morgan_simplify::register(),
+        // eslint-plugin-react-refresh (native implementation).
+        react_refresh_only_export_components::register(),
+        // eslint-plugin-playwright (native implementation).
+        playwright_missing_await::register(),
     ];
     rules.extend(delegated::register_all());
     rules

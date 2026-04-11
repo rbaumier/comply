@@ -110,4 +110,47 @@ app.delete("/users/:id", async (c) => {
 "#;
         assert!(run(src).is_empty());
     }
+
+    #[test]
+    fn flags_put_without_auth() {
+        let src = r#"
+app.put("/users/:id", async (c) => {
+    const body = await c.req.json();
+    return c.json({ ok: true });
+});
+"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_patch_without_auth() {
+        let src = r#"
+app.patch("/users/:id", async (c) => {
+    const body = await c.req.json();
+    return c.json({ ok: true });
+});
+"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_post_with_session_check() {
+        let src = r#"
+app.post("/orders", async (c) => {
+    const session = getSession(c);
+    return c.json({ ok: true });
+});
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_get_without_auth() {
+        let src = r#"
+app.get("/users", async (c) => {
+    return c.json({ users: [] });
+});
+"#;
+        assert!(run(src).is_empty());
+    }
 }

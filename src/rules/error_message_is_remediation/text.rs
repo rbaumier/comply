@@ -86,4 +86,26 @@ mod tests {
     fn allows_message_with_verb() {
         assert!(run(r#"throw new Error("Cannot connect to the database server");"#).is_empty());
     }
+
+    #[test]
+    fn flags_single_word_error() {
+        assert_eq!(run(r#"throw new Error("Error");"#).len(), 1);
+    }
+
+    #[test]
+    fn allows_template_literal_fallback() {
+        // Template literals with backticks are extracted correctly.
+        assert!(run(r#"throw new Error(`User ${id} not found — check the ID`);"#).is_empty());
+    }
+
+    #[test]
+    fn ignores_non_error_constructor() {
+        assert!(run(r#"const msg = "Invalid";"#).is_empty());
+    }
+
+    #[test]
+    fn flags_short_message_with_verb() {
+        // Short (<15 chars) even with a verb should flag.
+        assert_eq!(run(r#"throw new Error("is bad");"#).len(), 1);
+    }
 }

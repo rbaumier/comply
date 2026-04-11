@@ -84,4 +84,24 @@ mod tests {
         let src = "function createHelper(a: A, b: B, c: C) {}";
         assert!(run(src).is_empty());
     }
+
+    #[test]
+    fn allows_create_with_no_params() {
+        let src = "export function createApp() {}";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_create_with_four_params() {
+        let src = "export function createRouter(db: DB, cache: Cache, logger: Logger, config: Config) {}";
+        let diags = run(src);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains('4'));
+    }
+
+    #[test]
+    fn ignores_non_create_export() {
+        let src = "export function getUser(db: DB, cache: Cache, logger: Logger) {}";
+        assert!(run(src).is_empty());
+    }
 }

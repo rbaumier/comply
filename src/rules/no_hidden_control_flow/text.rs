@@ -78,4 +78,27 @@ mod tests {
         let src = "@ts-ignore\n@ts-expect-error\n@Auth()\nclass X {}";
         assert!(run(src).is_empty());
     }
+
+    #[test]
+    fn flags_separate_decorator_groups() {
+        // Two separate groups — one with 3, one with 1.
+        let src = "@A\n@B\n@C\nfunction f() {}\n\n@D\nfunction g() {}";
+        let diags = run(src);
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].line, 1);
+    }
+
+    #[test]
+    fn allows_one_decorator() {
+        let src = "@Injectable()\nclass Service {}";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn five_decorators_reports_correct_count() {
+        let src = "@A\n@B\n@C\n@D\n@E\nclass X {}";
+        let diags = run(src);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains('5'));
+    }
 }

@@ -12,19 +12,22 @@ impl TextCheck for Check {
         for (idx, line) in lines.iter().enumerate() {
             let trimmed = line.trim();
 
-            // Pattern 1: empty blocks — `catch {}`, `else {}`, `{ }` etc.
+            // Pattern 1: empty blocks — `catch {}`, `else {}`, `default:`, `{ }` etc.
             // Detect lines where `{` and `}` appear with only whitespace between.
-            for keyword in &["catch", "else"] {
+            for keyword in &["catch", "else", "default"] {
                 if let Some(pos) = trimmed.find(keyword) {
                     let after = trimmed[pos + keyword.len()..].trim();
                     // Handle single-line empty block: `catch {}` or `catch { }`
                     let after_paren = if after.starts_with('(') {
                         // skip catch(e) part
                         after.find(')').map(|p| after[p + 1..].trim()).unwrap_or(after)
+                    } else if let Some(rest) = after.strip_prefix(':') {
+                        // skip `default:` colon
+                        rest.trim()
                     } else {
                         after
                     };
-                    if (after_paren == "{}" || after_paren == "{ }") && !prev_line_has_comment(&lines, idx) {
+                    if (after_paren == "{}" || after_paren == "{ }") && !has_nearby_comment(&lines, idx, trimmed) {
                         diagnostics.push(Diagnostic {
                             path: ctx.path.to_path_buf(),
                             line: idx + 1,
@@ -43,8 +46,8 @@ impl TextCheck for Check {
             if idx + 1 < lines.len() {
                 let next_trimmed = lines[idx + 1].trim();
                 if next_trimmed == "}" {
-                    for keyword in &["catch", "else"] {
-                        if trimmed.contains(keyword) && trimmed.ends_with('{') && !prev_line_has_comment(&lines, idx) {
+                    for keyword in &["catch", "else", "default"] {
+                        if trimmed.contains(keyword) && trimmed.ends_with('{') && !has_nearby_comment(&lines, idx, trimmed) {
                             // Make sure there's nothing between { and }
                             diagnostics.push(Diagnostic {
                                 path: ctx.path.to_path_buf(),
@@ -60,7 +63,7 @@ impl TextCheck for Check {
             }
 
             // Pattern 2: bare `return;` without preceding comment.
-            if trimmed == "return;" && !prev_line_has_comment(&lines, idx) {
+            if trimmed == "return;" && !has_nearby_comment(&lines, idx, trimmed) {
                 diagnostics.push(Diagnostic {
                     path: ctx.path.to_path_buf(),
                     line: idx + 1,
@@ -75,11 +78,19 @@ impl TextCheck for Check {
     }
 }
 
-fn prev_line_has_comment(lines: &[&str], idx: usize) -> bool {
-    if idx == 0 {
-        return false;
+fn has_nearby_comment(lines: &[&str], idx: usize, line: &str) -> bool {
+    // Inline comment on the same line.
+    if line.contains("//") || line.contains("/*") {
+        return true;
     }
-    lines[idx - 1].trim().contains("//")
+    // Comment on the preceding line.
+    if idx > 0 {
+        let prev = lines[idx - 1].trim();
+        if prev.contains("//") || prev.ends_with("*/") || prev.starts_with("/*") || prev.starts_with('*') {
+            return true;
+        }
+    }
+    false
 }
 
 #[cfg(test)]
@@ -118,5 +129,35 @@ mod tests {
     fn flags_empty_else() {
         let src = "if (x) { doA(); } else {}";
         assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_catch_with_inline_comment() {
+        let src = "try { x(); } catch(e) {} // swallowed intentionally";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_multiline_empty_catch() {
+        let src = "try { x(); } catch(e) {\n}";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_multiline_catch_with_comment_above() {
+        let src = "// We retry elsewhere.\ntry { x(); } catch(e) {\n}";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_empty_default_block() {
+        let src = "    default: {}";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_block_comment_above() {
+        let src = "/* intentional no-op */\ntry { x(); } catch(e) {}";
+        assert!(run(src).is_empty());
     }
 }

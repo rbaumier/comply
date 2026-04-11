@@ -6,7 +6,10 @@ pub struct Check;
 
 const BUSINESS_DIRS: &[&str] = &["service", "domain", "core", "model", "entity"];
 
-const LOG_PATTERNS: &[&str] = &["logger.", "console.log", "console.info"];
+const LOG_PATTERNS: &[&str] = &[
+    "logger.", "console.log", "console.info", "console.warn",
+    "console.error", "console.debug", "console.trace",
+];
 
 fn is_business_logic_path(path: &std::path::Path) -> bool {
     let path_str = path.to_string_lossy();
@@ -78,5 +81,29 @@ mod tests {
     fn allows_comments_mentioning_logger() {
         let diags = run_path("src/service/user.ts", "// logger.info was removed");
         assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn flags_console_warn_in_core() {
+        let diags = run_path("src/core/pricing.ts", "console.warn('price is zero');");
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn flags_console_error_in_model() {
+        let diags = run_path("src/model/user.ts", "console.error('invalid state');");
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn allows_logging_in_infrastructure() {
+        let diags = run_path("src/infrastructure/http.ts", "logger.info('request');");
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn flags_logger_in_entity() {
+        let diags = run_path("src/entity/product.ts", "logger.warn('deprecated field');");
+        assert_eq!(diags.len(), 1);
     }
 }

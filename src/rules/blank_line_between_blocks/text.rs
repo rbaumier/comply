@@ -70,9 +70,6 @@ impl TextCheck for Check {
             }
 
             // Rule 2: declaration immediately followed by a function call without blank line.
-            if is_declaration(line) && idx + 1 < lines.len() {
-                // Check the line AFTER the current declaration line.
-            }
             if is_function_call(line) && is_declaration(prev) {
                 diagnostics.push(Diagnostic {
                     path: ctx.path.to_path_buf(),
@@ -124,5 +121,23 @@ mod tests {
     fn allows_declaration_then_call_with_blank() {
         let src = "  const x = getX();\n\n  doSomething(x);";
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_return_after_comment() {
+        let src = "  const x = 1;\n  // done\n  return x;";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_consecutive_declarations() {
+        let src = "  const a = 1;\n  const b = 2;";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_let_then_call() {
+        let src = "  let items = [];\n  populateItems(items);";
+        assert_eq!(run(src).len(), 1);
     }
 }
