@@ -167,6 +167,21 @@ pub mod react_checked_requires_onchange;
 pub mod react_no_this_in_sfc;
 pub mod react_async_server_action;
 pub mod react_no_access_state_in_setstate;
+pub mod react_button_has_type;
+pub mod react_jsx_key;
+pub mod react_jsx_no_useless_fragment;
+pub mod react_jsx_pascal_case;
+pub mod react_jsx_props_no_spread_multi;
+pub mod react_no_children_prop;
+pub mod react_no_namespace;
+pub mod react_no_string_refs;
+pub mod react_no_unescaped_entities;
+pub mod react_self_closing_comp;
+pub mod react_no_invalid_html_attribute;
+pub mod react_no_adjacent_inline_elements;
+pub mod react_forward_ref_uses_ref;
+pub mod react_no_typos;
+pub mod react_jsx_no_bind;
 pub mod sql_no_between_timestamp;
 pub mod sql_no_float_for_money;
 pub mod sql_no_like_wildcard_prefix;
@@ -314,6 +329,33 @@ pub mod regex_no_useless_lazy;
 pub mod regex_no_empty_lookaround;
 pub mod regex_no_standalone_backslash;
 pub mod regex_no_invisible_character;
+pub mod regex_no_contradiction_with_assertion;
+pub mod regex_no_dupe_disjunctions;
+pub mod regex_no_misleading_capturing_group;
+pub mod regex_no_missing_g_flag;
+pub mod regex_no_optional_assertion;
+pub mod regex_no_potentially_useless_backreference;
+pub mod regex_no_super_linear_move;
+pub mod regex_no_useless_assertions;
+pub mod regex_no_useless_backreference;
+pub mod regex_no_useless_dollar_replacements;
+pub mod regex_confusing_quantifier;
+pub mod regex_no_empty_string_literal_v;
+pub mod regex_no_extra_lookaround_assertions;
+pub mod regex_no_legacy_features;
+pub mod regex_no_non_standard_flag;
+pub mod regex_no_trivially_nested_assertion;
+pub mod regex_no_trivially_nested_quantifier;
+pub mod regex_no_useless_flag;
+pub mod regex_no_useless_quantifier;
+pub mod regex_no_useless_set_operand;
+pub mod regex_no_useless_string_literal;
+pub mod regex_optimal_lookaround_quantifier;
+pub mod regex_prefer_predefined_assertion;
+pub mod regex_prefer_set_operation;
+pub mod jsdoc_informative_docs;
+pub mod jsdoc_reject_any_type;
+pub mod jsdoc_reject_function_type;
 pub mod no_bidi_characters;
 pub mod no_timing_attack;
 pub mod no_disable_mustache_escape;
@@ -393,6 +435,16 @@ pub mod no_mutable_exports;
 pub mod no_namespace_import;
 pub mod no_self_import;
 pub mod no_unassigned_import;
+pub mod import_exports_last;
+pub mod import_no_named_export;
+pub mod import_no_commonjs;
+pub mod import_no_amd;
+pub mod import_no_webpack_loader_syntax;
+pub mod import_no_empty_named_blocks;
+pub mod import_no_dynamic_require;
+pub mod import_dynamic_import_chunkname;
+pub mod import_consistent_type_specifier_style;
+pub mod import_prefer_default_export;
 
 // eslint-plugin-unicorn rules (native implementations).
 pub mod catch_error_name;
@@ -440,6 +492,14 @@ pub mod no_process_exit;
 pub mod node_handle_callback_err;
 pub mod node_no_callback_literal;
 pub mod node_no_new_require;
+pub mod node_no_process_env;
+pub mod node_callback_return;
+pub mod node_global_require;
+pub mod node_no_mixed_requires;
+pub mod node_exports_style;
+pub mod node_hashbang;
+pub mod node_no_exports_assign;
+pub mod node_no_top_level_await;
 pub mod node_no_path_concat;
 pub mod node_no_sync;
 pub mod node_prefer_promises_dns;
@@ -548,6 +608,51 @@ pub mod ts_no_unsafe_declaration_merging;
 pub mod ts_no_useless_empty_export;
 pub mod ts_no_wrapper_object_types;
 pub mod ts_prefer_literal_enum_member;
+pub mod ts_max_params;
+pub mod ts_no_redeclare;
+pub mod ts_no_restricted_imports;
+pub mod ts_no_restricted_types;
+pub mod ts_no_shadow;
+pub mod ts_no_unused_expressions;
+pub mod ts_no_unused_private_class_members;
+pub mod ts_no_unused_vars;
+pub mod ts_no_use_before_define;
+pub mod ts_prefer_namespace_keyword;
+pub mod ts_triple_slash_reference;
+pub mod ts_unified_signatures;
+pub mod ts_method_signature_style;
+pub mod ts_member_ordering;
+pub mod ts_init_declarations;
+pub mod ts_class_methods_use_this;
+pub mod ts_no_array_constructor;
+pub mod ts_no_dupe_class_members;
+pub mod ts_no_invalid_this;
+pub mod ts_no_loop_func;
+pub mod ts_no_magic_numbers;
+pub mod ts_no_dynamic_delete;
+pub mod ts_no_empty_function;
+pub mod ts_no_extraneous_class;
+pub mod ts_no_import_type_side_effects;
+pub mod ts_no_invalid_void_type;
+pub mod ts_no_this_alias;
+pub mod ts_no_unnecessary_parameter_property_assignment;
+pub mod ts_no_useless_constructor;
+pub mod ts_parameter_properties;
+pub mod ts_prefer_enum_initializers;
+pub mod ts_prefer_for_of;
+pub mod ts_prefer_function_type;
+pub mod ts_adjacent_overload_signatures;
+pub mod ts_ban_ts_comment;
+pub mod ts_ban_tslint_comment;
+pub mod ts_class_literal_property_style;
+pub mod ts_consistent_generic_constructors;
+pub mod ts_consistent_indexed_object_style;
+pub mod ts_consistent_type_assertions;
+pub mod ts_consistent_type_definitions;
+pub mod ts_default_param_last;
+pub mod ts_explicit_function_return_type;
+pub mod ts_explicit_member_accessibility;
+pub mod ts_explicit_module_boundary_types;
 // eslint-plugin-playwright rules (native implementations).
 pub mod playwright_no_force_option;
 pub mod playwright_no_page_pause;
@@ -558,6 +663,28 @@ pub mod playwright_no_unsafe_references;
 pub mod playwright_no_raw_locators;
 pub mod playwright_no_conditional_expect;
 pub mod playwright_prefer_native_locators;
+pub mod playwright_expect_expect;
+pub mod playwright_max_expects;
+pub mod playwright_max_nested_describe;
+pub mod playwright_no_commented_out_tests;
+pub mod playwright_no_conditional_in_test;
+pub mod playwright_no_duplicate_hooks;
+pub mod playwright_no_hooks;
+pub mod playwright_no_nested_step;
+pub mod playwright_no_nth_methods;
+pub mod playwright_no_skipped_test;
+pub mod playwright_no_standalone_expect;
+pub mod playwright_no_useless_await;
+pub mod playwright_no_useless_not;
+pub mod playwright_no_wait_for_selector;
+pub mod playwright_no_wait_for_navigation;
+pub mod playwright_prefer_comparison_matcher;
+pub mod playwright_prefer_equality_matcher;
+pub mod playwright_prefer_hooks_in_order;
+pub mod playwright_prefer_hooks_on_top;
+pub mod playwright_prefer_strict_equal;
+pub mod playwright_prefer_to_be;
+pub mod playwright_prefer_to_contain;
 // eslint-plugin-jsdoc rules (native implementations).
 pub mod jsdoc_check_param_names;
 pub mod jsdoc_require_param;
@@ -566,6 +693,30 @@ pub mod jsdoc_returns_check;
 pub mod jsdoc_complete_sentence;
 pub mod jsdoc_no_undefined_types;
 pub mod jsdoc_sort_tags;
+pub mod jsdoc_check_property_names;
+pub mod jsdoc_check_tag_names;
+pub mod jsdoc_check_template_names;
+pub mod jsdoc_check_types;
+pub mod jsdoc_check_values;
+pub mod jsdoc_valid_types;
+pub mod jsdoc_require_param_description;
+pub mod jsdoc_require_param_name;
+pub mod jsdoc_require_returns_description;
+pub mod jsdoc_require_file_overview;
+pub mod jsdoc_require_hyphen_before_param_description;
+pub mod jsdoc_require_property;
+pub mod jsdoc_require_property_description;
+pub mod jsdoc_require_property_name;
+pub mod jsdoc_require_rejects;
+pub mod jsdoc_require_throws;
+pub mod jsdoc_require_yields;
+pub mod jsdoc_require_yields_check;
+pub mod jsdoc_require_tags;
+pub mod jsdoc_require_template;
+pub mod jsdoc_require_next_description;
+pub mod jsdoc_require_template_description;
+pub mod jsdoc_require_throws_description;
+pub mod jsdoc_require_yields_description;
 // eslint-plugin-de-morgan (native implementation).
 pub mod de_morgan_simplify;
 // eslint-plugin-react-refresh (native implementation).
@@ -975,6 +1126,33 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         regex_no_empty_lookaround::register(),
         regex_no_standalone_backslash::register(),
         regex_no_invisible_character::register(),
+        regex_no_contradiction_with_assertion::register(),
+        regex_no_dupe_disjunctions::register(),
+        regex_no_misleading_capturing_group::register(),
+        regex_no_missing_g_flag::register(),
+        regex_no_optional_assertion::register(),
+        regex_no_potentially_useless_backreference::register(),
+        regex_no_super_linear_move::register(),
+        regex_no_useless_assertions::register(),
+        regex_no_useless_backreference::register(),
+        regex_no_useless_dollar_replacements::register(),
+        regex_confusing_quantifier::register(),
+        regex_no_empty_string_literal_v::register(),
+        regex_no_extra_lookaround_assertions::register(),
+        regex_no_legacy_features::register(),
+        regex_no_non_standard_flag::register(),
+        regex_no_trivially_nested_assertion::register(),
+        regex_no_trivially_nested_quantifier::register(),
+        regex_no_useless_flag::register(),
+        regex_no_useless_quantifier::register(),
+        regex_no_useless_set_operand::register(),
+        regex_no_useless_string_literal::register(),
+        regex_optimal_lookaround_quantifier::register(),
+        regex_prefer_predefined_assertion::register(),
+        regex_prefer_set_operation::register(),
+        jsdoc_informative_docs::register(),
+        jsdoc_reject_any_type::register(),
+        jsdoc_reject_function_type::register(),
         // eslint-plugin-security rules (native implementations).
         no_bidi_characters::register(),
         no_timing_attack::register(),
@@ -1055,6 +1233,16 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         no_namespace_import::register(),
         no_self_import::register(),
         no_unassigned_import::register(),
+        import_exports_last::register(),
+        import_no_named_export::register(),
+        import_no_commonjs::register(),
+        import_no_amd::register(),
+        import_no_webpack_loader_syntax::register(),
+        import_no_empty_named_blocks::register(),
+        import_no_dynamic_require::register(),
+        import_dynamic_import_chunkname::register(),
+        import_consistent_type_specifier_style::register(),
+        import_prefer_default_export::register(),
         // eslint-plugin-unicorn rules (native implementations).
         catch_error_name::register(),
         consistent_assert::register(),
@@ -1195,6 +1383,14 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         node_no_callback_literal::register(),
         node_handle_callback_err::register(),
         node_no_new_require::register(),
+        node_no_process_env::register(),
+        node_callback_return::register(),
+        node_global_require::register(),
+        node_no_mixed_requires::register(),
+        node_exports_style::register(),
+        node_hashbang::register(),
+        node_no_exports_assign::register(),
+        node_no_top_level_await::register(),
         // eslint-plugin-react rules (native implementations).
         react_no_unstable_nested_components::register(),
         react_no_constructed_context_values::register(),
@@ -1211,6 +1407,21 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         react_no_this_in_sfc::register(),
         react_async_server_action::register(),
         react_no_access_state_in_setstate::register(),
+        react_button_has_type::register(),
+        react_jsx_key::register(),
+        react_jsx_no_useless_fragment::register(),
+        react_jsx_pascal_case::register(),
+        react_jsx_props_no_spread_multi::register(),
+        react_no_children_prop::register(),
+        react_no_namespace::register(),
+        react_no_string_refs::register(),
+        react_no_unescaped_entities::register(),
+        react_self_closing_comp::register(),
+        react_no_invalid_html_attribute::register(),
+        react_no_adjacent_inline_elements::register(),
+        react_forward_ref_uses_ref::register(),
+        react_no_typos::register(),
+        react_jsx_no_bind::register(),
         // typescript-eslint rules (native implementations).
         ts_no_duplicate_enum_values::register(),
         ts_no_extra_non_null_assertion::register(),
@@ -1226,6 +1437,51 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         ts_prefer_literal_enum_member::register(),
         ts_no_useless_empty_export::register(),
         ts_no_namespace::register(),
+        ts_max_params::register(),
+        ts_no_redeclare::register(),
+        ts_no_restricted_imports::register(),
+        ts_no_restricted_types::register(),
+        ts_no_shadow::register(),
+        ts_no_unused_expressions::register(),
+        ts_no_unused_private_class_members::register(),
+        ts_no_unused_vars::register(),
+        ts_no_use_before_define::register(),
+        ts_prefer_namespace_keyword::register(),
+        ts_triple_slash_reference::register(),
+        ts_unified_signatures::register(),
+        ts_method_signature_style::register(),
+        ts_member_ordering::register(),
+        ts_init_declarations::register(),
+        ts_class_methods_use_this::register(),
+        ts_no_array_constructor::register(),
+        ts_no_dupe_class_members::register(),
+        ts_no_invalid_this::register(),
+        ts_no_loop_func::register(),
+        ts_no_magic_numbers::register(),
+        ts_no_dynamic_delete::register(),
+        ts_no_empty_function::register(),
+        ts_no_extraneous_class::register(),
+        ts_no_import_type_side_effects::register(),
+        ts_no_invalid_void_type::register(),
+        ts_no_this_alias::register(),
+        ts_no_unnecessary_parameter_property_assignment::register(),
+        ts_no_useless_constructor::register(),
+        ts_parameter_properties::register(),
+        ts_prefer_enum_initializers::register(),
+        ts_prefer_for_of::register(),
+        ts_prefer_function_type::register(),
+        ts_adjacent_overload_signatures::register(),
+        ts_ban_ts_comment::register(),
+        ts_ban_tslint_comment::register(),
+        ts_class_literal_property_style::register(),
+        ts_consistent_generic_constructors::register(),
+        ts_consistent_indexed_object_style::register(),
+        ts_consistent_type_assertions::register(),
+        ts_consistent_type_definitions::register(),
+        ts_default_param_last::register(),
+        ts_explicit_function_return_type::register(),
+        ts_explicit_member_accessibility::register(),
+        ts_explicit_module_boundary_types::register(),
         // eslint-plugin-playwright rules (native implementations).
         playwright_no_force_option::register(),
         playwright_no_page_pause::register(),
@@ -1236,6 +1492,28 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         playwright_no_raw_locators::register(),
         playwright_no_conditional_expect::register(),
         playwright_prefer_native_locators::register(),
+        playwright_expect_expect::register(),
+        playwright_max_expects::register(),
+        playwright_max_nested_describe::register(),
+        playwright_no_commented_out_tests::register(),
+        playwright_no_conditional_in_test::register(),
+        playwright_no_duplicate_hooks::register(),
+        playwright_no_hooks::register(),
+        playwright_no_nested_step::register(),
+        playwright_no_nth_methods::register(),
+        playwright_no_skipped_test::register(),
+        playwright_no_standalone_expect::register(),
+        playwright_no_useless_await::register(),
+        playwright_no_useless_not::register(),
+        playwright_no_wait_for_selector::register(),
+        playwright_no_wait_for_navigation::register(),
+        playwright_prefer_comparison_matcher::register(),
+        playwright_prefer_equality_matcher::register(),
+        playwright_prefer_hooks_in_order::register(),
+        playwright_prefer_hooks_on_top::register(),
+        playwright_prefer_strict_equal::register(),
+        playwright_prefer_to_be::register(),
+        playwright_prefer_to_contain::register(),
         // eslint-plugin-jsdoc rules (native implementations).
         jsdoc_check_param_names::register(),
         jsdoc_require_param::register(),
@@ -1244,6 +1522,30 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         jsdoc_complete_sentence::register(),
         jsdoc_no_undefined_types::register(),
         jsdoc_sort_tags::register(),
+        jsdoc_check_property_names::register(),
+        jsdoc_check_tag_names::register(),
+        jsdoc_check_template_names::register(),
+        jsdoc_check_types::register(),
+        jsdoc_check_values::register(),
+        jsdoc_valid_types::register(),
+        jsdoc_require_param_description::register(),
+        jsdoc_require_param_name::register(),
+        jsdoc_require_returns_description::register(),
+        jsdoc_require_file_overview::register(),
+        jsdoc_require_hyphen_before_param_description::register(),
+        jsdoc_require_property::register(),
+        jsdoc_require_property_description::register(),
+        jsdoc_require_property_name::register(),
+        jsdoc_require_rejects::register(),
+        jsdoc_require_throws::register(),
+        jsdoc_require_yields::register(),
+        jsdoc_require_yields_check::register(),
+        jsdoc_require_tags::register(),
+        jsdoc_require_template::register(),
+        jsdoc_require_next_description::register(),
+        jsdoc_require_template_description::register(),
+        jsdoc_require_throws_description::register(),
+        jsdoc_require_yields_description::register(),
         // eslint-plugin-de-morgan (native implementation).
         de_morgan_simplify::register(),
         // eslint-plugin-react-refresh (native implementation).

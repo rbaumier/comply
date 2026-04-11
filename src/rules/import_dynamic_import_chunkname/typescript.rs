@@ -1,0 +1,61 @@
+//! import-dynamic-import-chunkname backend — enforce webpackChunkName on dynamic imports.
+
+use crate::diagnostic::{Diagnostic, Severity};
+
+crate::ast_check! { |node, source, ctx, diagnostics|
+    // Match `import(...)` expressions — tree-sitter parses these as `call_expression`
+    // with callee kind `import`.
+    if node.kind() != "call_expression" {
+        return;
+    }
+
+    let Some(callee) = node.child_by_field_name("function") else { return };
+    if callee.kind() != "import" {
+        return;
+    }
+
+    // Check the full text of the call expression for a webpackChunkName comment.
+    // The comment `/* webpackChunkName: "foo" */` lives inside the arguments.
+    let call_text = node.utf8_text(source).unwrap_or("");
+    if call_text.contains("webpackChunkName") {
+        return;
+    }
+
+    let pos = node.start_position();
+    diagnostics.push(Diagnostic {
+        path: ctx.path.to_path_buf(),
+        line: pos.row + 1,
+        column: pos.column + 1,
+        rule_id: "import-dynamic-import-chunkname".into(),
+        message: "Dynamic imports require a leading comment with the webpack chunkname.".into(),
+        severity: Severity::Warning,
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_ts(source, &Check)
+    }
+
+    #[test]
+    fn flags_missing_chunkname() {
+        let d = run_on("const Foo = import('./foo');");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("chunkname"));
+    }
+
+    #[test]
+    fn allows_chunkname_comment() {
+        let src = r#"const Foo = import(/* webpackChunkName: "foo" */ './foo');"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_wrong_comment() {
+        let d = run_on("const Foo = import(/* some comment */ './foo');");
+        assert_eq!(d.len(), 1);
+    }
+}
