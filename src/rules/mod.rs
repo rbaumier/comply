@@ -256,6 +256,37 @@ pub mod strings_comparison;
 pub mod test_check_exception;
 pub mod use_type_alias;
 pub mod useless_string_operation;
+pub mod no_deprecated_api;
+pub mod no_deprecated_cipher;
+pub mod no_ecb_mode;
+pub mod no_empty_test_file;
+pub mod no_globals_shadowing;
+pub mod no_implicit_deps;
+pub mod no_loop_counter_reassign;
+pub mod no_misplaced_loop_counter;
+pub mod no_nested_incdec;
+pub mod no_unverified_hostname;
+pub mod prefer_destructuring_assignment;
+pub mod prefer_regexp_exec;
+pub mod regex_anchor_precedence;
+pub mod regex_complexity;
+pub mod regex_no_control_chars;
+pub mod regex_no_duplicate_chars;
+pub mod regex_no_empty_after_reluctant;
+pub mod regex_no_empty_alternative;
+pub mod regex_no_empty_character_class;
+pub mod regex_no_empty_group;
+pub mod regex_no_empty_string_match;
+pub mod regex_no_misleading_char_class;
+pub mod regex_no_multiple_spaces;
+pub mod regex_no_single_char_class;
+pub mod regex_no_slow_pattern;
+pub mod regex_no_stateful_global;
+pub mod regex_no_unused_groups;
+pub mod regex_prefer_char_class;
+pub mod regex_prefer_quantifier;
+pub mod regex_use_unicode_flag;
+pub mod too_many_break_or_continue;
 use crate::diagnostic::Severity;
 use crate::files::Language;
 use backend::Backend;
@@ -605,6 +636,37 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         test_check_exception::register(),
         use_type_alias::register(),
         useless_string_operation::register(),
+        no_deprecated_api::register(),
+        no_deprecated_cipher::register(),
+        no_ecb_mode::register(),
+        no_empty_test_file::register(),
+        no_globals_shadowing::register(),
+        no_implicit_deps::register(),
+        no_loop_counter_reassign::register(),
+        no_misplaced_loop_counter::register(),
+        no_nested_incdec::register(),
+        no_unverified_hostname::register(),
+        prefer_destructuring_assignment::register(),
+        prefer_regexp_exec::register(),
+        regex_anchor_precedence::register(),
+        regex_complexity::register(),
+        regex_no_control_chars::register(),
+        regex_no_duplicate_chars::register(),
+        regex_no_empty_after_reluctant::register(),
+        regex_no_empty_alternative::register(),
+        regex_no_empty_character_class::register(),
+        regex_no_empty_group::register(),
+        regex_no_empty_string_match::register(),
+        regex_no_misleading_char_class::register(),
+        regex_no_multiple_spaces::register(),
+        regex_no_single_char_class::register(),
+        regex_no_slow_pattern::register(),
+        regex_no_stateful_global::register(),
+        regex_no_unused_groups::register(),
+        regex_prefer_char_class::register(),
+        regex_prefer_quantifier::register(),
+        regex_use_unicode_flag::register(),
+        too_many_break_or_continue::register(),
     ];
     rules.extend(delegated::register_all());
     rules

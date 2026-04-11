@@ -1,0 +1,27 @@
+//! regex-no-single-char-class
+
+mod text;
+
+use crate::diagnostic::Severity;
+use crate::rules::backend::Backend;
+use crate::rules::meta::RuleMeta;
+use crate::rules::{RuleDef, TS_FAMILY};
+
+pub const META: RuleMeta = RuleMeta {
+    id: "regex-no-single-char-class",
+    description: "Character class with a single character is unnecessary.",
+    remediation: "Replace `[x]` with `x` (or `\\.` for `[.]`). Single-character classes add visual noise without changing semantics.",
+    severity: Severity::Warning,
+    doc_url: None,
+    categories: &["code-quality", "regex"],
+};
+
+pub fn register() -> RuleDef {
+    RuleDef {
+        meta: META,
+        backends: TS_FAMILY
+            .iter()
+            .map(|&lang| (lang, Backend::Text(Box::new(text::Check))))
+            .collect(),
+    }
+}

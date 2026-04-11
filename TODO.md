@@ -397,3 +397,22 @@ Top 10 by bang-for-buck:
 8. **R048 `no-sequential-await`** (oxlint) — flip a config flag
 9. **R046 `no-boolean-flag-param`** (tree-sitter) — catches real design smell
 10. **R066 `no-commented-out-code`** (text) — heuristic but high-signal
+
+---
+
+# Future: Framework-specific security rules
+
+## Hono middleware security
+Browser security rules from sonarjs (CORS, CSRF, cookies, CSP, etc.) are
+Express-specific. Need Hono equivalents:
+
+- [ ] `hono-cors-permissive` — detect `cors({ origin: '*' })` or missing CORS middleware
+- [ ] `hono-csrf-missing` — detect missing CSRF protection middleware
+- [ ] `hono-cookie-no-httponly` — detect `setCookie()` without `httpOnly: true`
+- [ ] `hono-cookie-no-secure` — detect `setCookie()` without `secure: true`
+- [ ] `hono-csp-missing` — detect missing Content-Security-Policy header middleware
+- [ ] `hono-hsts-missing` — detect missing Strict-Transport-Security header
+- [ ] `hono-session-regeneration` — detect missing session regeneration after auth
+- [ ] `hono-x-powered-by` — detect missing `x-powered-by` removal
+
+These require studying Hono's middleware API and cookie patterns.
