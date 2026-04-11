@@ -42,21 +42,31 @@ pub mod migration_needs_rollback;
 // rust_must_use_on_result intentionally not declared — see mod.rs
 // below for the rationale.
 pub mod module_header;
+pub mod cognitive_complexity;
+pub mod jsdoc_needs_description;
 pub mod no_abbreviated_names;
+pub mod no_all_duplicated_branches;
 pub mod no_and_in_function_name;
 pub mod no_auth_token_in_localstorage;
 pub mod no_boolean_flag_param;
+pub mod no_clear_text_protocol;
+pub mod no_collapsible_if;
 pub mod no_commented_out_code;
 pub mod no_common_grab_bag;
 pub mod no_dangerously_set_inner_html;
 pub mod no_default_params;
 pub mod no_double_cast;
+pub mod no_empty_collection_use;
 pub mod no_enum;
+pub mod no_eval;
 pub mod no_fire_event;
 pub mod no_focused_test;
 pub mod no_function_overloads;
 pub mod no_generic_names;
+pub mod no_gratuitous_expression;
+pub mod no_hardcoded_ip;
 pub mod no_hardcoded_secret;
+pub mod no_identical_functions;
 pub mod no_inline_param_type;
 pub mod no_json_parse_cast;
 pub mod no_manual_rtl_cleanup;
@@ -68,11 +78,14 @@ pub mod object_literal;
 pub mod test_helpers;
 pub mod test_methods;
 pub mod no_multi_op_oneliner;
+pub mod no_nested_template_literal;
 pub mod no_nested_ternary;
 pub mod no_new_regex_with_variable;
 pub mod no_nullish_default_on_input;
 pub mod no_page_click_deprecated;
 pub mod no_put_method;
+pub mod no_redundant_assignment;
+pub mod no_redundant_boolean;
 pub mod no_section_divider_comments;
 pub mod no_set_x_to_y;
 pub mod no_skipped_test_without_link;
@@ -80,7 +93,9 @@ pub mod no_test_logic;
 pub mod no_throw;
 pub mod no_type_encoded_names;
 pub mod no_verb_in_rest_url;
+pub mod no_sort_without_comparator;
 pub mod no_wait_for_timeout;
+pub mod prefer_immediate_return;
 pub mod prefer_switch_over_chained_if;
 pub mod prefer_type_over_interface;
 pub mod react_hoist_regex_outside_component;
@@ -386,6 +401,23 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         no_manual_rtl_cleanup::register(),
         no_mock_fetch_directly::register(),
         no_test_logic::register(),
+        // SonarJS-equivalent rules (native implementations).
+        cognitive_complexity::register(),
+        no_identical_functions::register(),
+        no_empty_collection_use::register(),
+        no_gratuitous_expression::register(),
+        no_all_duplicated_branches::register(),
+        no_redundant_assignment::register(),
+        no_sort_without_comparator::register(),
+        no_collapsible_if::register(),
+        no_redundant_boolean::register(),
+        no_nested_template_literal::register(),
+        prefer_immediate_return::register(),
+        no_hardcoded_ip::register(),
+        no_clear_text_protocol::register(),
+        no_eval::register(),
+        // JSDoc description rule.
+        jsdoc_needs_description::register(),
     ];
     rules.extend(delegated::register_all());
     rules

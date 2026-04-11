@@ -1,0 +1,27 @@
+//! no-nested-template-literal
+
+mod text;
+
+use crate::diagnostic::Severity;
+use crate::rules::backend::Backend;
+use crate::rules::meta::RuleMeta;
+use crate::rules::{RuleDef, TS_FAMILY};
+
+pub const META: RuleMeta = RuleMeta {
+    id: "no-nested-template-literal",
+    description: "Nested template literal — extract to a named variable.",
+    remediation: "Extract the inner template to a named variable. Nested backticks are hard to read and easy to misparse.",
+    severity: Severity::Error,
+    doc_url: None,
+    categories: &["code-quality"],
+};
+
+pub fn register() -> RuleDef {
+    RuleDef {
+        meta: META,
+        backends: TS_FAMILY
+            .iter()
+            .map(|&lang| (lang, Backend::Text(Box::new(text::Check))))
+            .collect(),
+    }
+}
