@@ -12,7 +12,7 @@ On les prend dans l'ordre. Pour chaque entrée :
 
 ---
 
-## 1. `max-function-lines` — configurabilité + version Rust
+## 1. `max-function-lines` — configurabilité + version Rust ✅
 
 **Source :** `mod.rs:838`
 **Observation :**
@@ -20,10 +20,23 @@ On les prend dans l'ordre. Pour chaque entrée :
 src/rules/no_useless_error_capture_stack_trace/typescript.rs:28:5:
 warning [max-function-lines] this function has too many lines (124/120)
 ```
-- Le seuil doit être **configurable**, **30 par défaut**.
-- Il faut une **version Rust** de la règle.
 
-**Décision :** _à compléter_
+**Investigation :**
+- La règle était **déjà configurable** (`defaults.rs:21` → `max = 30`). Le `124/120` du log ne venait PAS de la règle native TS — elle était déléguée pour Rust à `clippy::too_many_lines` via `register_ts_family_with_clippy_marker!`, et clippy utilisait son propre seuil (120) indépendamment.
+- Deuxième problème révélé : TS comptait les **lignes physiques** (y compris blanches et commentaires), clippy comptait les **lignes logiques**. Deux backends, deux sémantiques.
+
+**Décision : fix (backend Rust natif + NCLOC partout).**
+- Remplacer le marker clippy par un backend Rust tree-sitter natif (`src/rules/max_function_lines/rust.rs`).
+- Nouvelle métrique : **NCLOC** (Non-Commented Lines Of Code) — lignes physiques moins blanches moins commentaires pur. Helper partagé `count_ncloc` dans `mod.rs`, scanner ligne par ligne avec tracking des `/* … */` depuis le début du fichier.
+- Un seul seuil global (`max = 30`), pas d'override par langage.
+- Kinds flaggés en Rust : `function_item` (incluant `impl`, `async`, trait defaults) et `closure_expression`.
+- Tests partagés dans `shared_tests.rs` qui cross-check les deux backends sur les mêmes scénarios.
+
+**Résultat :**
+- 23 tests verts pour la règle (dont 9 unit tests pour `count_ncloc` et 1 test de cohérence cross-backend sur 6 scénarios).
+- Le faux positif initial à `no_useless_error_capture_stack_trace/typescript.rs:28` est maintenant flaggé à **126 NCLOC** (cohérent avec la sémantique NCLOC), comme une vraie violation.
+- Le diagnostic sur `all_rule_defs` (src/rules/mod.rs:832) tombe à **667 NCLOC** — c'est une table de données plate, à gérer séparément (override dans `comply.toml` ou split en helpers).
+- 3473 tests passent au total, aucune régression.
 
 ---
 

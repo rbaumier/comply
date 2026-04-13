@@ -832,7 +832,6 @@ pub fn collect_clippy_bindings() -> Vec<(&'static str, &'static RuleMeta, Severi
 pub fn all_rule_defs() -> Vec<RuleDef> {
     let mut rules = vec![
         max_file_lines::register(),
-        // @TODO: src/rules/no_useless_error_capture_stack_trace/typescript.rs:28:5: warning [max-function-lines] this function has too many lines (124/120) -> il faut que ce soit configurable et 30 par défaut et qu'on ait une version rust
         max_function_lines::register(),
         no_throw::register(),
         no_nested_ternary::register(),
