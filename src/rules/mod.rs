@@ -59,7 +59,6 @@ pub mod no_dangerously_set_inner_html;
 pub mod no_default_params;
 pub mod no_double_cast;
 pub mod no_duplicate_string;
-pub mod no_empty_collection_use;
 pub mod no_enum;
 pub mod no_equals_in_for_termination;
 pub mod no_eval;
@@ -985,10 +984,6 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         // SonarJS-equivalent rules (native implementations).
         cognitive_complexity::register(),
         no_identical_functions::register(),
-        // @TODO:
-        // flagged:
-        // let mut rules: HashMap<String, RuleConfig> = HashMap::new();
-        // no_empty_collection_use::register(),
         no_gratuitous_expression::register(),
         no_all_duplicated_branches::register(),
         no_redundant_assignment::register(),

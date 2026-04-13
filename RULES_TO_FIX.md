@@ -102,16 +102,9 @@ warning [max-function-lines] this function has too many lines (124/120)
 
 ---
 
-## 12. `no-empty-collection-use` — flag `HashMap::new()` ?
+## 12. `no-empty-collection-use` — flag `HashMap::new()` ✅
 
-**Source :** `mod.rs:1035`
-**Observation :** flagged sur :
-```rust
-let mut rules: HashMap<String, RuleConfig> = HashMap::new();
-```
-Règle commentée pour l'instant.
-
-**Décision :** _à compléter_
+**Décision : règle supprimée.** Le pattern « empty collection → never written → read » demande une vraie analyse de flux intra-procédurale. Ni clippy, ni oxlint, ni eslint ne l'ont : ils délèguent au compilateur (`unused_mut`, `dead_code`, `noUnusedLocals`). L'implémentation précédente était une heuristique lexicale à window de 5 lignes qui produisait le FP user sur un pattern idiomatique. Règle supprimée entièrement (`src/rules/no_empty_collection_use/`).
 
 ---
 
