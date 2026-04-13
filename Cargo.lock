@@ -240,6 +240,7 @@ dependencies = [
  "tree-sitter",
  "tree-sitter-rust",
  "tree-sitter-typescript",
+ "tree-sitter-vue-updated",
 ]
 
 [[package]]
@@ -1468,6 +1469,16 @@ checksum = "6c5f76ed8d947a75cc446d5fccd8b602ebf0cde64ccf2ffa434d873d7a575eff"
 dependencies = [
  "cc",
  "tree-sitter-language",
+]
+
+[[package]]
+name = "tree-sitter-vue-updated"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "78cced828e25f82c788b240454a9def2a29f58f8f78214c20f51032a2b840dde"
+dependencies = [
+ "cc",
+ "tree-sitter",
 ]
 
 [[package]]

@@ -201,9 +201,12 @@ fn parse_with_grammar(
         // Rust grammar — enables in-process Rust rules for checks clippy
         // doesn't cover (boolean-naming, explicit-units, …).
         Language::Rust => tree_sitter_rust::LANGUAGE.into(),
-        // Vue SFCs: no bundled grammar. Text-based rules only —
-        // returning None skips all TreeSitter backends.
-        Language::Vue => return None,
+        // Vue SFC grammar — parses `.vue` files as a component with
+        // `<template>` / `<script>` / `<style>` blocks. Script contents
+        // are exposed as a single `raw_text` node; rules that want to
+        // lint the TS/JS inside a `<script>` section must extract that
+        // text and re-parse it themselves (see `rules::vue_sfc`).
+        Language::Vue => tree_sitter_vue_updated::language(),
     };
     parser.set_language(&lang).ok()?;
     parser.parse(source, None)

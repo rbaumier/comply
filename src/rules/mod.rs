@@ -37,6 +37,7 @@ pub mod max_function_lines;
 pub mod meta;
 pub mod migration_needs_lock_timeout;
 pub mod migration_needs_rollback;
+pub mod vue_sfc;
 pub mod vue_template_helpers;
 // rust_must_use_on_result intentionally not declared — see mod.rs
 // below for the rationale.

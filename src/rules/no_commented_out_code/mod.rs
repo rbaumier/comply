@@ -58,10 +58,14 @@
 //!   React components — JSX and TSX — go through the TSX grammar and
 //!   are covered by the same backend.
 //! - **Rust**: handled by the `rust` backend.
-//! - **Vue**: not covered. Comply does not bundle `tree-sitter-vue`,
-//!   so `.vue` files are never AST-parsed (see `engine.rs::parse_with_grammar`).
-//!   Adding Vue support is an infra change that affects every
-//!   AstCheck, not a per-rule decision.
+//! - **Vue**: handled by the `vue` backend. The Vue SFC is parsed
+//!   with `tree-sitter-vue-updated`, each `<script>` block's
+//!   `raw_text` is extracted via `crate::rules::vue_sfc`, and the
+//!   text is re-parsed with the TS grammar. The same comment-grouping
+//!   and mini-parse logic runs on the inner TS tree, and diagnostic
+//!   `(row, column)` values are translated back to Vue file
+//!   coordinates before being emitted. HTML comments inside
+//!   `<template>` are NOT inspected — they rarely carry JavaScript.
 //!
 //! ## Intentional false negatives
 //!
@@ -75,11 +79,14 @@
 
 mod rust;
 mod typescript;
+mod vue;
 
 #[cfg(test)]
 mod shared_tests;
 
 use crate::diagnostic::Severity;
+use crate::files::Language;
+use crate::rules::backend::Backend;
 use crate::rules::meta::RuleMeta;
 use crate::rules::RuleDef;
 
@@ -94,7 +101,21 @@ pub const META: RuleMeta = RuleMeta {
 };
 
 pub fn register() -> RuleDef {
-    crate::register_ts_family_with_rust!(META, typescript, rust)
+    // Built manually (instead of `register_ts_family_with_rust!`) so we
+    // can attach a dedicated Vue backend on top of the TS/JS/TSX/Rust
+    // set. The Vue backend walks the outer Vue SFC tree, extracts
+    // `<script>` blocks, and re-parses their contents with the TS
+    // grammar before applying the same NCOC logic.
+    RuleDef {
+        meta: META,
+        backends: vec![
+            (Language::TypeScript, Backend::TreeSitter(Box::new(typescript::Check))),
+            (Language::JavaScript, Backend::TreeSitter(Box::new(typescript::Check))),
+            (Language::Tsx, Backend::TreeSitter(Box::new(typescript::Check))),
+            (Language::Rust, Backend::TreeSitter(Box::new(rust::Check))),
+            (Language::Vue, Backend::TreeSitter(Box::new(vue::Check))),
+        ],
+    }
 }
 
 /// Strip the comment delimiters (`//`, `/*`, `*/`) from a raw comment
