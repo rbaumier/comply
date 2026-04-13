@@ -67,22 +67,31 @@ fn has_bad_template_escape(text: &str) -> bool {
             && bytes[i + 1] == b'$'
             && bytes[i + 2] == b'\\'
             && bytes[i + 3] == b'{'
-            && !is_preceded_by_odd_backslashes(bytes, i) {
-                return true;
-            }
+            && !is_preceded_by_odd_backslashes(bytes, i)
+        {
+            return true;
+        }
 
         // `$\{` -- dollar-backslash-brace (bad: escapes only the brace)
-        if b == b'$' && i + 2 < len && bytes[i + 1] == b'\\' && bytes[i + 2] == b'{'
-            && !is_preceded_by_odd_backslashes(bytes, i) {
-                return true;
-            }
+        if b == b'$'
+            && i + 2 < len
+            && bytes[i + 1] == b'\\'
+            && bytes[i + 2] == b'{'
+            && !is_preceded_by_odd_backslashes(bytes, i)
+        {
+            return true;
+        }
 
         // `\${` -- correct pattern, skip past it
-        if b == b'\\' && i + 2 < len && bytes[i + 1] == b'$' && bytes[i + 2] == b'{'
-            && !is_preceded_by_odd_backslashes(bytes, i) {
-                i += 3;
-                continue;
-            }
+        if b == b'\\'
+            && i + 2 < len
+            && bytes[i + 1] == b'$'
+            && bytes[i + 2] == b'{'
+            && !is_preceded_by_odd_backslashes(bytes, i)
+        {
+            i += 3;
+            continue;
+        }
 
         // Skip other escape sequences
         if b == b'\\' && i + 1 < len {

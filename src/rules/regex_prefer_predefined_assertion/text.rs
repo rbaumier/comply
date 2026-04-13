@@ -28,8 +28,12 @@ fn find_replaceable_assertions(line: &str) -> Vec<usize> {
 
     let mut i = 0;
     while i < len {
+        if !line.is_char_boundary(i) {
+            i += 1;
+            continue;
+        }
         for pat in replaceable.iter().chain(anchor_replaceable.iter()) {
-            if i + pat.len() <= len && &line[i..i + pat.len()] == *pat {
+            if line.get(i..i + pat.len()) == Some(*pat) {
                 hits.push(i);
                 break;
             }

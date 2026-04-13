@@ -9,12 +9,20 @@ use tempfile::TempDir;
 
 #[test]
 fn exit_code_zero_on_clean_file() {
-    // Exported so oxlint's no-unused-vars doesn't fire on us.
-    // Module-header JSDoc added so the v1.1 module-header rule is satisfied.
+    // No exports (satisfies both `import/no-default-export` and
+    // `import-no-named-export`), a const used by `console.log` (satisfies
+    // `no-unused-vars`), and a module-level JSDoc with prose + `@file` tag
+    // (satisfies `jsdoc-require-file-overview` and `jsdoc-needs-description`).
     let (_dir, path) = write_ts_file(
         "clean.ts",
-        "/** Sample clean file for the comply exit-code test. */\n\
-         export const totalCount = 1;\n",
+        "/**\n\
+         \x20* Sample clean file for the comply exit-code test.\n\
+         \x20*\n\
+         \x20* @file Sample clean file for the comply exit-code test.\n\
+         \x20*/\n\
+         \n\
+         const GREETING = \"hello\";\n\
+         console.log(GREETING);\n",
     );
     // Colocated test file so the colocated-tests rule doesn't fire.
     std::fs::write(path.with_file_name("clean.test.ts"), "test('ok', () => {});\n").unwrap();

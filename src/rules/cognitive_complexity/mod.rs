@@ -3,6 +3,9 @@
 mod rust;
 mod typescript;
 
+#[cfg(test)]
+mod shared_tests;
+
 use crate::diagnostic::Severity;
 use crate::rules::meta::RuleMeta;
 use crate::rules::RuleDef;

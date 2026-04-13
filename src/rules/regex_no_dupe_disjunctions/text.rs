@@ -40,7 +40,8 @@ fn find_dupe_disjunctions(line: &str) -> Vec<usize> {
             }
         }
         // Check RegExp constructor
-        if i + 7 < len && &line[i..i + 7] == "RegExp("
+        if i + 7 <= len && line.is_char_boundary(i) && line.is_char_boundary(i + 7)
+            && &line[i..i + 7] == "RegExp("
             && let Some(pattern) = extract_string_arg(&line[i + 7..])
                 && has_dupe_alternatives(pattern) {
                     hits.push(i);

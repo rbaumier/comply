@@ -29,7 +29,6 @@ use std::path::Path;
 /// Read-only context handed to in-process check implementations.
 ///
 /// `config` is the resolved per-project configuration. Rules that
-/// expose thresholds (max-function-lines, law-of-demeter depth, …)
 /// read their knobs from here via `config.threshold(rule_id, key, fallback)`,
 /// so a project's `comply.toml` can override the defaults without
 /// touching any rule code.

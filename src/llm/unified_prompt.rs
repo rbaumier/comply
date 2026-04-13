@@ -12,29 +12,27 @@ use std::path::Path;
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-
 /// Parse raw JSON from the Bun worker into diagnostics.
 pub fn parse_response(raw: &str, file_path: &Path) -> Result<Vec<Diagnostic>> {
-    let resp: UnifiedResponse = serde_json::from_str(raw)
-        .unwrap_or_else(|_| UnifiedResponse {
-            comment_quality: CommentQuality::default(),
-            intent_naming: vec![],
-            pii_in_logs: vec![],
-            mixed_abstraction: vec![],
-            define_errors_out_of_existence: vec![],
-            pull_complexity_downward: vec![],
-            barricade_pattern: vec![],
-            temporal_decomposition: vec![],
-            shallow_module: vec![],
-            parse_dont_validate: vec![],
-            invalid_states_unrepresentable: vec![],
-            functional_core_imperative_shell: vec![],
-            document_impossible_states: vec![],
-            bound_every_input: vec![],
-            crosscutting_via_wrapping: vec![],
-            map_db_entities_to_dtos: vec![],
-            error_messages_as_remediation: vec![],
-        });
+    let resp: UnifiedResponse = serde_json::from_str(raw).unwrap_or_else(|_| UnifiedResponse {
+        comment_quality: CommentQuality::default(),
+        intent_naming: vec![],
+        pii_in_logs: vec![],
+        mixed_abstraction: vec![],
+        define_errors_out_of_existence: vec![],
+        pull_complexity_downward: vec![],
+        barricade_pattern: vec![],
+        temporal_decomposition: vec![],
+        shallow_module: vec![],
+        parse_dont_validate: vec![],
+        invalid_states_unrepresentable: vec![],
+        functional_core_imperative_shell: vec![],
+        document_impossible_states: vec![],
+        bound_every_input: vec![],
+        crosscutting_via_wrapping: vec![],
+        map_db_entities_to_dtos: vec![],
+        error_messages_as_remediation: vec![],
+    });
     convert_response(resp, file_path)
 }
 
@@ -398,12 +396,14 @@ fn convert_response(resp: UnifiedResponse, file_path: &Path) -> Result<Vec<Diagn
             issue.explanation,
         );
         if let Some(ref s) = issue.suggestion
-            && !s.is_empty() {
-                msg.push_str(&format!(" Rewrite: {s}"));
-            }
+            && !s.is_empty()
+        {
+            msg.push_str(&format!(" Rewrite: {s}"));
+        }
         diagnostics.push(Diagnostic {
             path: file_path.to_path_buf(),
-            line, column: 1,
+            line,
+            column: 1,
             rule_id: "llm-comment-quality".into(),
             message: msg,
             severity: Severity::Warning,
@@ -422,7 +422,8 @@ fn convert_response(resp: UnifiedResponse, file_path: &Path) -> Result<Vec<Diagn
         }
         diagnostics.push(Diagnostic {
             path: file_path.to_path_buf(),
-            line, column: 1,
+            line,
+            column: 1,
             rule_id: "llm-intent-naming".into(),
             message: msg,
             severity: Severity::Warning,
@@ -435,7 +436,8 @@ fn convert_response(resp: UnifiedResponse, file_path: &Path) -> Result<Vec<Diagn
         let fields = issue.fields.join(", ");
         diagnostics.push(Diagnostic {
             path: file_path.to_path_buf(),
-            line, column: 1,
+            line,
+            column: 1,
             rule_id: "llm-pii-in-logs".into(),
             message: format!("PII in log output: {fields}. Redact before logging."),
             severity: Severity::Error,
@@ -457,7 +459,8 @@ fn convert_response(resp: UnifiedResponse, file_path: &Path) -> Result<Vec<Diagn
         }
         diagnostics.push(Diagnostic {
             path: file_path.to_path_buf(),
-            line, column: 1,
+            line,
+            column: 1,
             rule_id: "llm-function-abstraction-levels".into(),
             message: msg,
             severity: Severity::Warning,
@@ -476,7 +479,8 @@ fn convert_response(resp: UnifiedResponse, file_path: &Path) -> Result<Vec<Diagn
         }
         diagnostics.push(Diagnostic {
             path: file_path.to_path_buf(),
-            line, column: 1,
+            line,
+            column: 1,
             rule_id: "llm-define-errors-out-of-existence".into(),
             message: msg,
             severity: Severity::Warning,
@@ -521,11 +525,14 @@ fn convert_response(resp: UnifiedResponse, file_path: &Path) -> Result<Vec<Diagn
             issue.module_or_function, issue.steps,
         );
         if let Some(ref h) = issue.hidden_decision {
-            msg.push_str(&format!(" Hidden decision that should define the boundary: {h}"));
+            msg.push_str(&format!(
+                " Hidden decision that should define the boundary: {h}"
+            ));
         }
         diagnostics.push(Diagnostic {
             path: file_path.to_path_buf(),
-            line, column: 1,
+            line,
+            column: 1,
             rule_id: "llm-temporal-decomposition".into(),
             message: msg,
             severity: Severity::Warning,
@@ -550,13 +557,28 @@ fn convert_response(resp: UnifiedResponse, file_path: &Path) -> Result<Vec<Diagn
     // Generic issue categories (Tier 5 LLM rules).
     let generic_categories = [
         ("llm-parse-dont-validate", &resp.parse_dont_validate),
-        ("llm-invalid-states-unrepresentable", &resp.invalid_states_unrepresentable),
-        ("llm-functional-core-imperative-shell", &resp.functional_core_imperative_shell),
-        ("llm-document-impossible-states", &resp.document_impossible_states),
+        (
+            "llm-invalid-states-unrepresentable",
+            &resp.invalid_states_unrepresentable,
+        ),
+        (
+            "llm-functional-core-imperative-shell",
+            &resp.functional_core_imperative_shell,
+        ),
+        (
+            "llm-document-impossible-states",
+            &resp.document_impossible_states,
+        ),
         ("llm-bound-every-input", &resp.bound_every_input),
-        ("llm-crosscutting-via-wrapping", &resp.crosscutting_via_wrapping),
+        (
+            "llm-crosscutting-via-wrapping",
+            &resp.crosscutting_via_wrapping,
+        ),
         ("llm-map-db-entities-to-dtos", &resp.map_db_entities_to_dtos),
-        ("llm-error-messages-as-remediation", &resp.error_messages_as_remediation),
+        (
+            "llm-error-messages-as-remediation",
+            &resp.error_messages_as_remediation,
+        ),
     ];
     for (rule_id, issues) in &generic_categories {
         for issue in *issues {
@@ -564,7 +586,8 @@ fn convert_response(resp: UnifiedResponse, file_path: &Path) -> Result<Vec<Diagn
             if !issue.explanation.is_empty() {
                 diagnostics.push(Diagnostic {
                     path: file_path.to_path_buf(),
-                    line, column: 1,
+                    line,
+                    column: 1,
                     rule_id: (*rule_id).into(),
                     message: issue.explanation.clone(),
                     severity: Severity::Warning,

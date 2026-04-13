@@ -19,7 +19,6 @@ pub fn build_default_config() -> ComplyToml {
 
     insert_threshold(&mut rules, "max-file-lines", "max", 200);
     insert_threshold(&mut rules, "max-function-lines", "max", 30);
-    insert_threshold(&mut rules, "law-of-demeter", "max_depth", 3);
     insert_threshold(&mut rules, "no-multi-op-oneliner", "min_ops", 6);
     insert_threshold(&mut rules, "no-multi-op-oneliner", "min_line_length", 80);
     insert_threshold(&mut rules, "prefer-switch-over-chained-if", "min_arms", 4);
@@ -41,14 +40,11 @@ pub fn build_default_config() -> ComplyToml {
 /// Insert a `<key> = <value>` knob into the rule's `extra` map. Creates
 /// the rule's entry if it doesn't exist yet, so multiple thresholds
 /// for the same rule (e.g. `min_ops` + `min_line_length`) compose.
-fn insert_threshold(
-    rules: &mut HashMap<String, RuleConfig>,
-    rule_id: &str,
-    key: &str,
-    value: i64,
-) {
+fn insert_threshold(rules: &mut HashMap<String, RuleConfig>, rule_id: &str, key: &str, value: i64) {
     let entry = rules.entry(rule_id.to_string()).or_default();
-    entry.extra.insert(key.to_string(), toml::Value::Integer(value));
+    entry
+        .extra
+        .insert(key.to_string(), toml::Value::Integer(value));
 }
 
 #[cfg(test)]
@@ -75,7 +71,9 @@ mod tests {
             Some(6)
         );
         assert_eq!(
-            rule.extra.get("min_line_length").and_then(toml::Value::as_integer),
+            rule.extra
+                .get("min_line_length")
+                .and_then(toml::Value::as_integer),
             Some(80)
         );
     }

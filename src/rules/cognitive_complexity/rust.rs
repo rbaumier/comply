@@ -5,13 +5,16 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
+// Per SonarSource Cognitive Complexity: only the match/switch EXPRESSION adds
+// +1 — the individual arms/cases are continuations and add nothing on their
+// own. Nesting still applies to whatever lives inside an arm.
 const FLOW_KINDS: &[&str] = &[
     "if_expression",
     "else_clause",
     "for_expression",
     "while_expression",
     "loop_expression",
-    "match_arm",
+    "match_expression",
 ];
 
 const LOGICAL_OPS: &[&str] = &["&&", "||"];
@@ -98,6 +101,35 @@ crate::ast_check! { |node, source, ctx, diagnostics|
     }
 }
 
+/// Test-only: parse a Rust source snippet, locate the first `fn`, and
+/// return its body's cognitive complexity as computed by this backend.
+/// Used by the shared-scenarios tests in `mod.rs` to assert exact scores
+/// across both the Rust and TypeScript backends.
+#[cfg(test)]
+pub(super) fn compute_source(source: &str) -> u32 {
+    let mut parser = tree_sitter::Parser::new();
+    let lang: tree_sitter::Language = tree_sitter_rust::LANGUAGE.into();
+    parser.set_language(&lang).expect("grammar should load");
+    let tree = parser.parse(source, None).expect("parser should produce a tree");
+    find_first_fn_body(tree.root_node())
+        .map(|body| compute(body, source.as_bytes(), 0))
+        .unwrap_or(0)
+}
+
+#[cfg(test)]
+fn find_first_fn_body(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
+    if node.kind() == "function_item" {
+        return node.child_by_field_name("body");
+    }
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if let Some(body) = find_first_fn_body(child) {
+            return Some(body);
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -107,40 +139,35 @@ mod tests {
     }
 
     #[test]
-    fn flags_complex_function() {
-        let src = r#"fn process(items: &[Item]) {
+    fn flags_when_complexity_exceeds_threshold() {
+        // for (+1, nesting 0) → nest 1
+        //   if (+1 + 1 = 2, nesting 1) → nest 2
+        //     if (+1 + 2 = 3, nesting 2) → nest 3
+        //       match (+1 + 3 = 4, nesting 3)
+        // Initial if at top level (+1) → total 1 + 1 + 2 + 3 + 4 = 11
+        let src = r#"fn process(items: &[i32]) {
     if items.is_empty() {
         return;
     }
     for item in items {
-        if item.active {
-            if item.value > 10 {
-                match item.kind {
-                    Kind::A => {},
-                    Kind::B => {},
+        if *item > 0 {
+            if *item > 10 {
+                match *item {
+                    1 => {},
+                    _ => {},
                 }
             }
         }
     }
 }"#;
         let d = run_on(src);
-        assert!(!d.is_empty(), "should flag complex function");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("11"), "got: {}", d[0].message);
     }
 
     #[test]
-    fn allows_simple_function() {
-        let src = "fn add(a: i32, b: i32) -> i32 {\n    a + b\n}";
-        assert!(run_on(src).is_empty());
-    }
-
-    #[test]
-    fn allows_moderate_function() {
-        let src = r#"fn check(x: i32) -> bool {
-    if x > 0 {
-        return true;
-    }
-    false
-}"#;
+    fn clean_function_below_threshold_is_not_flagged() {
+        let src = "fn add(a: i32, b: i32) -> i32 { a + b }";
         assert!(run_on(src).is_empty());
     }
 }

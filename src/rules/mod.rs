@@ -16,9 +16,9 @@
 
 pub mod backend;
 pub mod banned_comment_words;
-pub mod call_expression;
 pub mod banned_identifiers;
 pub mod boolean_naming;
+pub mod call_expression;
 pub mod comment_paraphrases_code;
 pub mod db_no_n_plus_one;
 pub mod db_no_string_concat_sql;
@@ -29,22 +29,22 @@ pub mod error_without_cause;
 pub mod explicit_return_type_on_exported;
 pub mod explicit_units;
 pub mod exports_at_top;
-pub mod issue_link;
-pub mod jsx;
-pub mod vue_template_helpers;
 pub mod jsdoc_missing_example;
 pub mod jsdoc_on_exported;
-pub mod law_of_demeter;
+pub mod jsx;
 pub mod max_file_lines;
 pub mod max_function_lines;
 pub mod meta;
 pub mod migration_needs_lock_timeout;
 pub mod migration_needs_rollback;
+pub mod vue_template_helpers;
 // rust_must_use_on_result intentionally not declared — see mod.rs
 // below for the rationale.
-pub mod module_header;
 pub mod cognitive_complexity;
+pub mod function_inside_loop;
+pub mod generator_without_yield;
 pub mod jsdoc_needs_description;
+pub mod module_header;
 pub mod no_abbreviated_names;
 pub mod no_all_duplicated_branches;
 pub mod no_and_in_function_name;
@@ -57,28 +57,31 @@ pub mod no_common_grab_bag;
 pub mod no_dangerously_set_inner_html;
 pub mod no_default_params;
 pub mod no_double_cast;
+pub mod no_duplicate_string;
 pub mod no_empty_collection_use;
 pub mod no_enum;
+pub mod no_equals_in_for_termination;
 pub mod no_eval;
 pub mod no_fire_event;
 pub mod no_focused_test;
+pub mod no_for_in_iterable;
+pub mod no_function_declaration_in_block;
 pub mod no_function_overloads;
 pub mod no_generic_names;
 pub mod no_gratuitous_expression;
 pub mod no_hardcoded_ip;
 pub mod no_hardcoded_secret;
 pub mod no_identical_functions;
+pub mod no_ignored_exceptions;
 pub mod no_inline_param_type;
+pub mod no_inverted_boolean_check;
 pub mod no_json_parse_cast;
 pub mod no_manual_rtl_cleanup;
 pub mod no_match_snapshot;
 pub mod no_misleading_collection_name;
 pub mod no_mock_fetch_directly;
-pub mod object_literal;
-#[cfg(test)]
-pub mod test_helpers;
-pub mod test_methods;
 pub mod no_multi_op_oneliner;
+pub mod no_nested_switch;
 pub mod no_nested_template_literal;
 pub mod no_nested_ternary;
 pub mod no_new_regex_with_variable;
@@ -88,27 +91,23 @@ pub mod no_redundant_assignment;
 pub mod no_redundant_boolean;
 pub mod no_section_divider_comments;
 pub mod no_set_x_to_y;
-pub mod no_skipped_test_without_link;
+pub mod no_sort_without_comparator;
 pub mod no_test_logic;
 pub mod no_throw;
 pub mod no_type_encoded_names;
 pub mod no_verb_in_rest_url;
-pub mod no_sort_without_comparator;
-pub mod no_duplicate_string;
-pub mod no_ignored_exceptions;
-pub mod no_inverted_boolean_check;
-pub mod no_nested_switch;
-pub mod function_inside_loop;
-pub mod generator_without_yield;
-pub mod no_equals_in_for_termination;
-pub mod no_for_in_iterable;
-pub mod no_function_declaration_in_block;
-pub mod operation_returning_nan;
 pub mod no_wait_for_timeout;
+pub mod object_literal;
+pub mod operation_returning_nan;
 pub mod prefer_immediate_return;
 pub mod prefer_switch_over_chained_if;
 pub mod prefer_type_over_interface;
 pub mod react_hoist_regex_outside_component;
+pub mod react_no_and_conditional_jsx;
+pub mod react_no_array_index_key;
+pub mod react_no_cookies_in_layout;
+pub mod react_no_object_in_dep_array;
+pub mod react_use_state_lazy_init;
 pub mod rust_arc_non_send_sync;
 pub mod rust_await_holding_lock;
 pub mod rust_block_on_in_async;
@@ -146,42 +145,45 @@ pub mod rust_unbounded_channel;
 pub mod rust_undocumented_unsafe;
 pub mod rust_unit_error_result;
 pub mod rust_unsafe_impl_without_comment;
-pub mod react_no_and_conditional_jsx;
-pub mod react_no_array_index_key;
-pub mod react_no_cookies_in_layout;
-pub mod react_no_object_in_dep_array;
-pub mod react_use_state_lazy_init;
+#[cfg(test)]
+pub mod test_helpers;
+pub mod test_methods;
 // eslint-plugin-react rules (native implementations).
-pub mod react_no_unstable_nested_components;
-pub mod react_no_constructed_context_values;
-pub mod react_no_object_type_as_default_prop;
-pub mod react_no_danger_with_children;
-pub mod react_void_dom_elements_no_children;
-pub mod react_jsx_no_duplicate_props;
-pub mod react_jsx_no_comment_textnodes;
-pub mod react_style_prop_object;
-pub mod react_jsx_no_target_blank;
-pub mod react_jsx_no_script_url;
-pub mod react_iframe_missing_sandbox;
-pub mod react_checked_requires_onchange;
-pub mod react_no_this_in_sfc;
+pub mod expression_complexity;
+pub mod no_try_promise;
+pub mod no_unused_collection;
+pub mod prefer_while;
 pub mod react_async_server_action;
-pub mod react_no_access_state_in_setstate;
 pub mod react_button_has_type;
+pub mod react_checked_requires_onchange;
+pub mod react_forward_ref_uses_ref;
+pub mod react_iframe_missing_sandbox;
 pub mod react_jsx_key;
+pub mod react_jsx_no_bind;
+pub mod react_jsx_no_comment_textnodes;
+pub mod react_jsx_no_duplicate_props;
+pub mod react_jsx_no_script_url;
+pub mod react_jsx_no_target_blank;
 pub mod react_jsx_no_useless_fragment;
 pub mod react_jsx_pascal_case;
 pub mod react_jsx_props_no_spread_multi;
-pub mod react_no_children_prop;
-pub mod react_no_namespace;
-pub mod react_no_string_refs;
-pub mod react_no_unescaped_entities;
-pub mod react_self_closing_comp;
-pub mod react_no_invalid_html_attribute;
+pub mod react_no_access_state_in_setstate;
 pub mod react_no_adjacent_inline_elements;
-pub mod react_forward_ref_uses_ref;
+pub mod react_no_children_prop;
+pub mod react_no_constructed_context_values;
+pub mod react_no_danger_with_children;
+pub mod react_no_invalid_html_attribute;
+pub mod react_no_namespace;
+pub mod react_no_object_type_as_default_prop;
+pub mod react_no_string_refs;
+pub mod react_no_this_in_sfc;
 pub mod react_no_typos;
-pub mod react_jsx_no_bind;
+pub mod react_no_unescaped_entities;
+pub mod react_no_unstable_nested_components;
+pub mod react_self_closing_comp;
+pub mod react_style_prop_object;
+pub mod react_void_dom_elements_no_children;
+pub mod reduce_initial_value;
 pub mod sql_no_between_timestamp;
 pub mod sql_no_float_for_money;
 pub mod sql_no_like_wildcard_prefix;
@@ -191,204 +193,20 @@ pub mod sql_no_select_star;
 pub mod sql_no_timestamp_without_tz;
 pub mod sql_no_varchar;
 pub mod sql_prefer_exists_over_in;
-pub mod tailwind_no_dynamic_class;
-pub mod tailwind_no_duplicate_classes;
 pub mod tailwind_no_conflicting_classes;
+pub mod tailwind_no_duplicate_classes;
+pub mod tailwind_no_dynamic_class;
+pub mod tanstack_query_array_key;
+pub mod tanstack_query_no_deprecated_props;
+pub mod timeout_on_io;
 pub mod vue_no_duplicate_v_if;
 pub mod vue_no_options_api;
 pub mod vue_no_reactive_destructure;
 pub mod vue_v_for_needs_stable_key;
-pub mod tanstack_query_array_key;
-pub mod tanstack_query_no_deprecated_props;
-pub mod timeout_on_io;
-pub mod todo_needs_issue_link;
 pub mod walker;
 pub mod zod_no_any;
 pub mod zod_prefer_top_level_format;
-pub mod no_try_promise;
-pub mod reduce_initial_value;
-pub mod no_unused_collection;
-pub mod prefer_while;
-pub mod expression_complexity;
 
-pub mod arguments_order;
-pub mod array_callback_without_return;
-pub mod assertions_in_tests;
-pub mod comma_or_logical_or_case;
-pub mod cyclomatic_complexity;
-pub mod elseif_without_else;
-pub mod for_loop_increment_sign;
-pub mod function_return_type;
-pub mod index_of_compare_to_positive;
-pub mod inverted_assertion_arguments;
-pub mod jsx_no_leaked_render;
-pub mod max_union_size;
-pub mod nested_control_flow;
-pub mod no_arguments_usage;
-pub mod no_array_constructor;
-pub mod no_array_delete;
-pub mod no_associative_arrays;
-pub mod no_async_constructor;
-pub mod no_bitwise_in_boolean;
-pub mod no_built_in_override;
-pub mod no_case_label_in_switch;
-pub mod no_collection_size_mischeck;
-pub mod no_confidential_logging;
-pub mod no_constructor_side_effects;
-pub mod no_duplicate_in_composite;
-pub mod no_duplicated_branches;
-pub mod no_dynamic_template;
-pub mod no_element_overwrite;
-pub mod no_hardcoded_secret_signature;
-pub mod no_hook_setter_in_body;
-pub mod no_identical_conditions;
-pub mod no_identical_expressions;
-pub mod no_ignored_return;
-pub mod no_in_misuse;
-pub mod no_incomplete_assertions;
-pub mod no_inconsistent_returns;
-pub mod no_incorrect_string_concat;
-pub mod no_insecure_jwt;
-pub mod no_invariant_returns;
-pub mod no_misleading_array_reverse;
-pub mod no_nested_assignment;
-pub mod no_nested_functions;
-pub mod no_os_command;
-pub mod no_post_message_star;
-pub mod no_primitive_wrappers;
-pub mod no_pseudo_random;
-pub mod no_redundant_jump;
-pub mod no_redundant_optional;
-pub mod no_return_type_any;
-pub mod no_same_argument_assert;
-pub mod no_small_switch;
-pub mod no_sql_string_format;
-pub mod no_undefined_argument;
-pub mod no_undefined_assignment;
-pub mod no_unenclosed_multiline_block;
-pub mod no_uniq_key;
-pub mod no_unthrown_error;
-pub mod no_unverified_certificate;
-pub mod no_useless_increment;
-pub mod no_useless_intersection;
-pub mod no_useless_react_setstate;
-pub mod no_weak_cipher;
-pub mod no_weak_hashing;
-pub mod no_weak_keys;
-pub mod no_weak_ssl;
-pub mod no_xml_external_entity;
-pub mod non_existent_operator;
-pub mod prefer_default_last;
-pub mod prefer_object_literal;
-pub mod prefer_promise_shorthand;
-pub mod prefer_read_only_props;
-pub mod prefer_type_guard;
-pub mod public_static_readonly;
-pub mod redundant_type_aliases;
-pub mod strings_comparison;
-pub mod test_check_exception;
-pub mod use_type_alias;
-pub mod useless_string_operation;
-pub mod no_deprecated_api;
-pub mod no_deprecated_cipher;
-pub mod no_ecb_mode;
-pub mod no_empty_test_file;
-pub mod no_globals_shadowing;
-pub mod no_implicit_deps;
-pub mod no_loop_counter_reassign;
-pub mod no_misplaced_loop_counter;
-pub mod no_nested_incdec;
-pub mod no_unverified_hostname;
-pub mod prefer_destructuring_assignment;
-pub mod prefer_regexp_exec;
-pub mod regex_anchor_precedence;
-pub mod regex_complexity;
-pub mod regex_no_control_chars;
-pub mod regex_no_duplicate_chars;
-pub mod regex_no_empty_after_reluctant;
-pub mod regex_no_empty_alternative;
-pub mod regex_no_empty_character_class;
-pub mod regex_no_empty_group;
-pub mod regex_no_empty_string_match;
-pub mod regex_no_misleading_char_class;
-pub mod regex_no_multiple_spaces;
-pub mod regex_no_single_char_class;
-pub mod regex_no_slow_pattern;
-pub mod regex_no_stateful_global;
-pub mod regex_no_unused_groups;
-pub mod regex_prefer_char_class;
-pub mod regex_prefer_quantifier;
-pub mod regex_use_unicode_flag;
-pub mod regex_no_octal;
-pub mod regex_no_escape_backspace;
-pub mod regex_sort_flags;
-pub mod regex_no_useless_two_nums_quantifier;
-pub mod regex_no_zero_quantifier;
-pub mod regex_no_obscure_range;
-pub mod regex_no_useless_lazy;
-pub mod regex_no_empty_lookaround;
-pub mod regex_no_standalone_backslash;
-pub mod regex_no_invisible_character;
-pub mod regex_no_contradiction_with_assertion;
-pub mod regex_no_dupe_disjunctions;
-pub mod regex_no_misleading_capturing_group;
-pub mod regex_no_missing_g_flag;
-pub mod regex_no_optional_assertion;
-pub mod regex_no_potentially_useless_backreference;
-pub mod regex_no_super_linear_move;
-pub mod regex_no_useless_assertions;
-pub mod regex_no_useless_backreference;
-pub mod regex_no_useless_dollar_replacements;
-pub mod regex_confusing_quantifier;
-pub mod regex_no_empty_string_literal_v;
-pub mod regex_no_extra_lookaround_assertions;
-pub mod regex_no_legacy_features;
-pub mod regex_no_non_standard_flag;
-pub mod regex_no_trivially_nested_assertion;
-pub mod regex_no_trivially_nested_quantifier;
-pub mod regex_no_useless_flag;
-pub mod regex_no_useless_quantifier;
-pub mod regex_no_useless_set_operand;
-pub mod regex_no_useless_string_literal;
-pub mod regex_optimal_lookaround_quantifier;
-pub mod regex_prefer_predefined_assertion;
-pub mod regex_prefer_set_operation;
-pub mod jsdoc_informative_docs;
-pub mod jsdoc_reject_any_type;
-pub mod jsdoc_reject_function_type;
-pub mod no_bidi_characters;
-pub mod no_timing_attack;
-pub mod no_disable_mustache_escape;
-pub mod no_non_literal_fs_filename;
-pub mod no_class_inheritance;
-pub mod no_promise_reject;
-pub mod no_try_statements;
-pub mod too_many_break_or_continue;
-pub mod hono_cookie_no_httponly;
-pub mod hono_cookie_no_samesite;
-pub mod hono_cookie_no_secure;
-pub mod hono_cors_permissive;
-pub mod hono_csp_unsafe;
-pub mod hono_csrf_missing;
-pub mod hono_missing_secure_headers;
-pub mod hono_secure_headers_disabled;
-pub mod api_first;
-pub mod auth_on_mutation;
-pub mod blank_line_between_blocks;
-pub mod colocated_tests;
-pub mod data_clumps;
-pub mod error_message_is_remediation;
-pub mod factory_di_shape;
-pub mod intermediate_variables;
-pub mod justify_inaction;
-pub mod no_hidden_control_flow;
-pub mod no_inferred_any;
-pub mod no_logger_in_business_logic;
-pub mod no_raw_db_entity_in_handler;
-pub mod option_vs_result;
-pub mod pure_by_default;
-pub mod structured_api_error;
-pub mod symmetric_pairs;
 pub mod a11y_alt_text;
 pub mod a11y_anchor_ambiguous_text;
 pub mod a11y_anchor_has_content;
@@ -422,9 +240,197 @@ pub mod a11y_prefer_tag_over_role;
 pub mod a11y_role_has_required_aria_props;
 pub mod a11y_scope;
 pub mod a11y_tabindex_no_positive;
+pub mod api_first;
+pub mod arguments_order;
+pub mod array_callback_without_return;
+pub mod assertions_in_tests;
+pub mod auth_on_mutation;
+pub mod blank_line_between_blocks;
+pub mod colocated_tests;
+pub mod comma_or_logical_or_case;
+pub mod cyclomatic_complexity;
+pub mod data_clumps;
+pub mod elseif_without_else;
+pub mod error_message_is_remediation;
+pub mod factory_di_shape;
+pub mod for_loop_increment_sign;
+pub mod function_return_type;
+pub mod hono_cookie_no_httponly;
+pub mod hono_cookie_no_samesite;
+pub mod hono_cookie_no_secure;
+pub mod hono_cors_permissive;
+pub mod hono_csp_unsafe;
+pub mod hono_csrf_missing;
+pub mod hono_missing_secure_headers;
+pub mod hono_secure_headers_disabled;
+pub mod index_of_compare_to_positive;
+pub mod intermediate_variables;
+pub mod inverted_assertion_arguments;
+pub mod jsdoc_informative_docs;
+pub mod jsdoc_reject_any_type;
+pub mod jsdoc_reject_function_type;
+pub mod jsx_no_leaked_render;
+pub mod justify_inaction;
+pub mod max_union_size;
+pub mod nested_control_flow;
+pub mod no_arguments_usage;
+pub mod no_array_constructor;
+pub mod no_array_delete;
+pub mod no_associative_arrays;
+pub mod no_async_constructor;
+pub mod no_bidi_characters;
+pub mod no_bitwise_in_boolean;
+pub mod no_built_in_override;
+pub mod no_case_label_in_switch;
+pub mod no_class_inheritance;
+pub mod no_collection_size_mischeck;
+pub mod no_confidential_logging;
+pub mod no_constructor_side_effects;
+pub mod no_deprecated_api;
+pub mod no_deprecated_cipher;
+pub mod no_disable_mustache_escape;
+pub mod no_duplicate_in_composite;
+pub mod no_duplicated_branches;
+pub mod no_dynamic_template;
+pub mod no_ecb_mode;
+pub mod no_element_overwrite;
+pub mod no_empty_test_file;
+pub mod no_globals_shadowing;
+pub mod no_hardcoded_secret_signature;
+pub mod no_hidden_control_flow;
+pub mod no_hook_setter_in_body;
+pub mod no_identical_conditions;
+pub mod no_identical_expressions;
+pub mod no_ignored_return;
+pub mod no_implicit_deps;
+pub mod no_in_misuse;
+pub mod no_incomplete_assertions;
+pub mod no_inconsistent_returns;
+pub mod no_incorrect_string_concat;
+pub mod no_inferred_any;
+pub mod no_insecure_jwt;
+pub mod no_invariant_returns;
+pub mod no_logger_in_business_logic;
+pub mod no_loop_counter_reassign;
+pub mod no_misleading_array_reverse;
+pub mod no_misplaced_loop_counter;
+pub mod no_nested_assignment;
+pub mod no_nested_functions;
+pub mod no_nested_incdec;
+pub mod no_non_literal_fs_filename;
+pub mod no_os_command;
+pub mod no_post_message_star;
+pub mod no_primitive_wrappers;
+pub mod no_promise_reject;
+pub mod no_pseudo_random;
+pub mod no_raw_db_entity_in_handler;
+pub mod no_redundant_jump;
+pub mod no_redundant_optional;
+pub mod no_return_type_any;
+pub mod no_same_argument_assert;
+pub mod no_small_switch;
+pub mod no_sql_string_format;
+pub mod no_timing_attack;
+pub mod no_try_statements;
+pub mod no_undefined_argument;
+pub mod no_undefined_assignment;
+pub mod no_unenclosed_multiline_block;
+pub mod no_uniq_key;
+pub mod no_unthrown_error;
+pub mod no_unverified_certificate;
+pub mod no_unverified_hostname;
+pub mod no_useless_increment;
+pub mod no_useless_intersection;
+pub mod no_useless_react_setstate;
+pub mod no_weak_cipher;
+pub mod no_weak_hashing;
+pub mod no_weak_keys;
+pub mod no_weak_ssl;
+pub mod no_xml_external_entity;
+pub mod non_existent_operator;
+pub mod option_vs_result;
+pub mod prefer_default_last;
+pub mod prefer_destructuring_assignment;
+pub mod prefer_object_literal;
+pub mod prefer_promise_shorthand;
+pub mod prefer_read_only_props;
+pub mod prefer_regexp_exec;
+pub mod prefer_type_guard;
+pub mod public_static_readonly;
+pub mod pure_by_default;
+pub mod redundant_type_aliases;
+pub mod regex_anchor_precedence;
+pub mod regex_complexity;
+pub mod regex_confusing_quantifier;
+pub mod regex_no_contradiction_with_assertion;
+pub mod regex_no_control_chars;
+pub mod regex_no_dupe_disjunctions;
+pub mod regex_no_duplicate_chars;
+pub mod regex_no_empty_after_reluctant;
+pub mod regex_no_empty_alternative;
+pub mod regex_no_empty_character_class;
+pub mod regex_no_empty_group;
+pub mod regex_no_empty_lookaround;
+pub mod regex_no_empty_string_literal_v;
+pub mod regex_no_empty_string_match;
+pub mod regex_no_escape_backspace;
+pub mod regex_no_extra_lookaround_assertions;
+pub mod regex_no_invisible_character;
+pub mod regex_no_legacy_features;
+pub mod regex_no_misleading_capturing_group;
+pub mod regex_no_misleading_char_class;
+pub mod regex_no_missing_g_flag;
+pub mod regex_no_multiple_spaces;
+pub mod regex_no_non_standard_flag;
+pub mod regex_no_obscure_range;
+pub mod regex_no_octal;
+pub mod regex_no_optional_assertion;
+pub mod regex_no_potentially_useless_backreference;
+pub mod regex_no_single_char_class;
+pub mod regex_no_slow_pattern;
+pub mod regex_no_standalone_backslash;
+pub mod regex_no_stateful_global;
+pub mod regex_no_super_linear_move;
+pub mod regex_no_trivially_nested_assertion;
+pub mod regex_no_trivially_nested_quantifier;
+pub mod regex_no_unused_groups;
+pub mod regex_no_useless_assertions;
+pub mod regex_no_useless_backreference;
+pub mod regex_no_useless_dollar_replacements;
+pub mod regex_no_useless_flag;
+pub mod regex_no_useless_lazy;
+pub mod regex_no_useless_quantifier;
+pub mod regex_no_useless_set_operand;
+pub mod regex_no_useless_string_literal;
+pub mod regex_no_useless_two_nums_quantifier;
+pub mod regex_no_zero_quantifier;
+pub mod regex_optimal_lookaround_quantifier;
+pub mod regex_prefer_char_class;
+pub mod regex_prefer_predefined_assertion;
+pub mod regex_prefer_quantifier;
+pub mod regex_prefer_set_operation;
+pub mod regex_sort_flags;
+pub mod regex_use_unicode_flag;
+pub mod strings_comparison;
+pub mod structured_api_error;
+pub mod symmetric_pairs;
+pub mod test_check_exception;
+pub mod too_many_break_or_continue;
+pub mod use_type_alias;
+pub mod useless_string_operation;
 
 // eslint-plugin-import rules (native implementations).
 pub mod group_exports;
+pub mod import_consistent_type_specifier_style;
+pub mod import_dynamic_import_chunkname;
+pub mod import_exports_last;
+pub mod import_no_amd;
+pub mod import_no_commonjs;
+pub mod import_no_dynamic_require;
+pub mod import_no_empty_named_blocks;
+pub mod import_no_named_export;
+pub mod import_no_webpack_loader_syntax;
+pub mod import_prefer_default_export;
 pub mod imports_first;
 pub mod max_dependencies;
 pub mod newline_after_import;
@@ -435,16 +441,6 @@ pub mod no_mutable_exports;
 pub mod no_namespace_import;
 pub mod no_self_import;
 pub mod no_unassigned_import;
-pub mod import_exports_last;
-pub mod import_no_named_export;
-pub mod import_no_commonjs;
-pub mod import_no_amd;
-pub mod import_no_webpack_loader_syntax;
-pub mod import_no_empty_named_blocks;
-pub mod import_no_dynamic_require;
-pub mod import_dynamic_import_chunkname;
-pub mod import_consistent_type_specifier_style;
-pub mod import_prefer_default_export;
 
 // eslint-plugin-unicorn rules (native implementations).
 pub mod catch_error_name;
@@ -489,21 +485,6 @@ pub mod no_negation_in_equality_check;
 pub mod no_null;
 pub mod no_object_as_default_parameter;
 pub mod no_process_exit;
-pub mod node_handle_callback_err;
-pub mod node_no_callback_literal;
-pub mod node_no_new_require;
-pub mod node_no_process_env;
-pub mod node_callback_return;
-pub mod node_global_require;
-pub mod node_no_mixed_requires;
-pub mod node_exports_style;
-pub mod node_hashbang;
-pub mod node_no_exports_assign;
-pub mod node_no_top_level_await;
-pub mod node_no_path_concat;
-pub mod node_no_sync;
-pub mod node_prefer_promises_dns;
-pub mod node_prefer_promises_fs;
 pub mod no_single_promise_in_promise_methods;
 pub mod no_static_only_class;
 pub mod no_thenable;
@@ -525,6 +506,21 @@ pub mod no_useless_spread;
 pub mod no_useless_switch_case;
 pub mod no_useless_undefined;
 pub mod no_zero_fractions;
+pub mod node_callback_return;
+pub mod node_exports_style;
+pub mod node_global_require;
+pub mod node_handle_callback_err;
+pub mod node_hashbang;
+pub mod node_no_callback_literal;
+pub mod node_no_exports_assign;
+pub mod node_no_mixed_requires;
+pub mod node_no_new_require;
+pub mod node_no_path_concat;
+pub mod node_no_process_env;
+pub mod node_no_sync;
+pub mod node_no_top_level_await;
+pub mod node_prefer_promises_dns;
+pub mod node_prefer_promises_fs;
 pub mod number_literal_case;
 pub mod numeric_separators_style;
 pub mod prefer_add_event_listener;
@@ -594,57 +590,11 @@ pub mod template_indent;
 pub mod text_encoding_identifier_case;
 pub mod throw_new_error;
 // typescript-eslint rules (native implementations).
-pub mod ts_no_confusing_non_null_assertion;
-pub mod ts_no_duplicate_enum_values;
-pub mod ts_no_empty_object_type;
-pub mod ts_no_extra_non_null_assertion;
-pub mod ts_no_inferrable_types;
-pub mod ts_no_misused_new;
-pub mod ts_no_namespace;
-pub mod ts_no_non_null_asserted_nullish_coalescing;
-pub mod ts_no_non_null_asserted_optional_chain;
-pub mod ts_no_unnecessary_type_constraint;
-pub mod ts_no_unsafe_declaration_merging;
-pub mod ts_no_useless_empty_export;
-pub mod ts_no_wrapper_object_types;
-pub mod ts_prefer_literal_enum_member;
-pub mod ts_max_params;
-pub mod ts_no_redeclare;
-pub mod ts_no_restricted_imports;
-pub mod ts_no_restricted_types;
-pub mod ts_no_shadow;
-pub mod ts_no_unused_expressions;
-pub mod ts_no_unused_private_class_members;
-pub mod ts_no_unused_vars;
-pub mod ts_no_use_before_define;
-pub mod ts_prefer_namespace_keyword;
-pub mod ts_triple_slash_reference;
-pub mod ts_unified_signatures;
-pub mod ts_method_signature_style;
-pub mod ts_member_ordering;
-pub mod ts_init_declarations;
-pub mod ts_class_methods_use_this;
-pub mod ts_no_array_constructor;
-pub mod ts_no_dupe_class_members;
-pub mod ts_no_invalid_this;
-pub mod ts_no_loop_func;
-pub mod ts_no_magic_numbers;
-pub mod ts_no_dynamic_delete;
-pub mod ts_no_empty_function;
-pub mod ts_no_extraneous_class;
-pub mod ts_no_import_type_side_effects;
-pub mod ts_no_invalid_void_type;
-pub mod ts_no_this_alias;
-pub mod ts_no_unnecessary_parameter_property_assignment;
-pub mod ts_no_useless_constructor;
-pub mod ts_parameter_properties;
-pub mod ts_prefer_enum_initializers;
-pub mod ts_prefer_for_of;
-pub mod ts_prefer_function_type;
 pub mod ts_adjacent_overload_signatures;
 pub mod ts_ban_ts_comment;
 pub mod ts_ban_tslint_comment;
 pub mod ts_class_literal_property_style;
+pub mod ts_class_methods_use_this;
 pub mod ts_consistent_generic_constructors;
 pub mod ts_consistent_indexed_object_style;
 pub mod ts_consistent_type_assertions;
@@ -653,80 +603,126 @@ pub mod ts_default_param_last;
 pub mod ts_explicit_function_return_type;
 pub mod ts_explicit_member_accessibility;
 pub mod ts_explicit_module_boundary_types;
+pub mod ts_init_declarations;
+pub mod ts_max_params;
+pub mod ts_member_ordering;
+pub mod ts_method_signature_style;
+pub mod ts_no_array_constructor;
+pub mod ts_no_confusing_non_null_assertion;
+pub mod ts_no_dupe_class_members;
+pub mod ts_no_duplicate_enum_values;
+pub mod ts_no_dynamic_delete;
+pub mod ts_no_empty_function;
+pub mod ts_no_empty_object_type;
+pub mod ts_no_extra_non_null_assertion;
+pub mod ts_no_extraneous_class;
+pub mod ts_no_import_type_side_effects;
+pub mod ts_no_inferrable_types;
+pub mod ts_no_invalid_this;
+pub mod ts_no_invalid_void_type;
+pub mod ts_no_loop_func;
+pub mod ts_no_magic_numbers;
+pub mod ts_no_misused_new;
+pub mod ts_no_namespace;
+pub mod ts_no_non_null_asserted_nullish_coalescing;
+pub mod ts_no_non_null_asserted_optional_chain;
+pub mod ts_no_redeclare;
+pub mod ts_no_restricted_imports;
+pub mod ts_no_restricted_types;
+pub mod ts_no_shadow;
+pub mod ts_no_this_alias;
+pub mod ts_no_unnecessary_parameter_property_assignment;
+pub mod ts_no_unnecessary_type_constraint;
+pub mod ts_no_unsafe_declaration_merging;
+pub mod ts_no_unused_expressions;
+pub mod ts_no_unused_private_class_members;
+pub mod ts_no_unused_vars;
+pub mod ts_no_use_before_define;
+pub mod ts_no_useless_constructor;
+pub mod ts_no_useless_empty_export;
+pub mod ts_no_wrapper_object_types;
+pub mod ts_parameter_properties;
+pub mod ts_prefer_enum_initializers;
+pub mod ts_prefer_for_of;
+pub mod ts_prefer_function_type;
+pub mod ts_prefer_literal_enum_member;
+pub mod ts_prefer_namespace_keyword;
+pub mod ts_triple_slash_reference;
+pub mod ts_unified_signatures;
 // eslint-plugin-playwright rules (native implementations).
-pub mod playwright_no_force_option;
-pub mod playwright_no_page_pause;
-pub mod playwright_no_networkidle;
-pub mod playwright_no_element_handle;
-pub mod playwright_prefer_web_first_assertions;
-pub mod playwright_no_unsafe_references;
-pub mod playwright_no_raw_locators;
-pub mod playwright_no_conditional_expect;
-pub mod playwright_prefer_native_locators;
 pub mod playwright_expect_expect;
 pub mod playwright_max_expects;
 pub mod playwright_max_nested_describe;
 pub mod playwright_no_commented_out_tests;
+pub mod playwright_no_conditional_expect;
 pub mod playwright_no_conditional_in_test;
 pub mod playwright_no_duplicate_hooks;
+pub mod playwright_no_element_handle;
+pub mod playwright_no_force_option;
 pub mod playwright_no_hooks;
 pub mod playwright_no_nested_step;
+pub mod playwright_no_networkidle;
 pub mod playwright_no_nth_methods;
+pub mod playwright_no_page_pause;
+pub mod playwright_no_raw_locators;
 pub mod playwright_no_skipped_test;
 pub mod playwright_no_standalone_expect;
+pub mod playwright_no_unsafe_references;
 pub mod playwright_no_useless_await;
 pub mod playwright_no_useless_not;
-pub mod playwright_no_wait_for_selector;
 pub mod playwright_no_wait_for_navigation;
+pub mod playwright_no_wait_for_selector;
 pub mod playwright_prefer_comparison_matcher;
 pub mod playwright_prefer_equality_matcher;
 pub mod playwright_prefer_hooks_in_order;
 pub mod playwright_prefer_hooks_on_top;
+pub mod playwright_prefer_native_locators;
 pub mod playwright_prefer_strict_equal;
 pub mod playwright_prefer_to_be;
 pub mod playwright_prefer_to_contain;
+pub mod playwright_prefer_web_first_assertions;
 // eslint-plugin-jsdoc rules (native implementations).
 pub mod jsdoc_check_param_names;
-pub mod jsdoc_require_param;
-pub mod jsdoc_require_returns;
-pub mod jsdoc_returns_check;
-pub mod jsdoc_complete_sentence;
-pub mod jsdoc_no_undefined_types;
-pub mod jsdoc_sort_tags;
 pub mod jsdoc_check_property_names;
 pub mod jsdoc_check_tag_names;
 pub mod jsdoc_check_template_names;
 pub mod jsdoc_check_types;
 pub mod jsdoc_check_values;
-pub mod jsdoc_valid_types;
-pub mod jsdoc_require_param_description;
-pub mod jsdoc_require_param_name;
-pub mod jsdoc_require_returns_description;
+pub mod jsdoc_complete_sentence;
+pub mod jsdoc_no_undefined_types;
 pub mod jsdoc_require_file_overview;
 pub mod jsdoc_require_hyphen_before_param_description;
+pub mod jsdoc_require_next_description;
+pub mod jsdoc_require_param;
+pub mod jsdoc_require_param_description;
+pub mod jsdoc_require_param_name;
 pub mod jsdoc_require_property;
 pub mod jsdoc_require_property_description;
 pub mod jsdoc_require_property_name;
 pub mod jsdoc_require_rejects;
-pub mod jsdoc_require_throws;
-pub mod jsdoc_require_yields;
-pub mod jsdoc_require_yields_check;
+pub mod jsdoc_require_returns;
+pub mod jsdoc_require_returns_description;
 pub mod jsdoc_require_tags;
 pub mod jsdoc_require_template;
-pub mod jsdoc_require_next_description;
 pub mod jsdoc_require_template_description;
+pub mod jsdoc_require_throws;
 pub mod jsdoc_require_throws_description;
+pub mod jsdoc_require_yields;
+pub mod jsdoc_require_yields_check;
 pub mod jsdoc_require_yields_description;
+pub mod jsdoc_returns_check;
+pub mod jsdoc_sort_tags;
+pub mod jsdoc_valid_types;
 // eslint-plugin-de-morgan (native implementation).
 pub mod de_morgan_simplify;
 // eslint-plugin-react-refresh (native implementation).
 pub mod react_refresh_only_export_components;
 // eslint-plugin-playwright (native implementation).
-pub mod playwright_missing_await;
-pub mod package_json_sorted_deps;
-pub mod package_json_unique_deps;
 pub mod comment_prose_quality;
 pub mod layer_import_boundary;
+pub mod package_json_sorted_deps;
+pub mod package_json_unique_deps;
+pub mod playwright_missing_await;
 use crate::diagnostic::Severity;
 use crate::files::Language;
 use backend::Backend;
@@ -741,20 +737,22 @@ pub struct RuleDef {
 
 // Registry helpers + macros — moved to `registry.rs` and re-exported below.
 mod registry;
-pub use registry::{build_rust_only_rule, build_ts_family_rule, RustBinding};
+pub use registry::{RustBinding, build_rust_only_rule, build_ts_family_rule};
 
 /// Language slice for the TS-family. Used by rules that apply to all three
 /// variants identically (either via the TS grammar or oxlint delegation).
 pub const TS_FAMILY: &[Language] = &[Language::TypeScript, Language::Tsx, Language::JavaScript];
 
-/// All text-scannable languages: TS-family + Rust + Vue. Used by universal
-/// text-based rules (regex checks, etc.) that apply identically to every
-/// language comply can read.
+/// Text-scannable languages with JS-like syntax: TS-family + Vue.
+/// Used by rules that scan source text for JS-specific constructs — regex
+/// literals (`/pattern/flags`), JSDoc blocks (`/** */`) — which do NOT exist
+/// in Rust (regex is string-based via `Regex::new`, doc comments are `///`).
+/// Adding Rust here causes category-error false positives (URLs misread as
+/// regex literals, closures `|x|` misread as alternations, etc.).
 pub const ALL_TEXT_LANGUAGES: &[Language] = &[
     Language::TypeScript,
     Language::Tsx,
     Language::JavaScript,
-    Language::Rust,
     Language::Vue,
 ];
 
@@ -834,27 +832,54 @@ pub fn collect_clippy_bindings() -> Vec<(&'static str, &'static RuleMeta, Severi
 pub fn all_rule_defs() -> Vec<RuleDef> {
     let mut rules = vec![
         max_file_lines::register(),
+        // @TODO: src/rules/no_useless_error_capture_stack_trace/typescript.rs:28:5: warning [max-function-lines] this function has too many lines (124/120) -> il faut que ce soit configurable et 30 par défaut et qu'on ait une version rust
         max_function_lines::register(),
         no_throw::register(),
         no_nested_ternary::register(),
         banned_identifiers::register(),
-        todo_needs_issue_link::register(),
+        // @TODO: il a flag le commentaire suivant :
+        // // const foo =, let foo =, var foo =
         no_commented_out_code::register(),
         no_common_grab_bag::register(),
         no_default_params::register(),
         boolean_naming::register(),
-        exports_at_top::register(),
+        // @TODO:
+        // One NDJSON line read from the Bun worker stdout.
+        // #[derive(serde::Deserialize)]
+        // struct WorkerResult {
+        //     id: String,
+        //     result: Option<String>,
+        //     error: Option<String>,
+        // }
+
+        // /// Run the unified LLM prompt on every file via the Bun worker.
+        // pub fn lint_files(
+        //     files: &[&crate::files::SourceFile],
+        //     config: &LlmConfig,
+        // ) -> Result<Vec<Diagnostic>> {
+
+        // -> il faut mieux avoir les fonctions après les struct, meme après les struct privées non ?
+        // -> oui il faut désactiver cette règle pour rust:
+        //         En Rust, on n'a pas de bloc d'export séparé (comme export { A, B } en fin ou début de fichier en JS). La visibilité (pub) est attachée directement à la définition de l'élément.
+        // La convention absolue en Rust est de regrouper le code par logique, pas par visibilité.
+        // exports_at_top::register(),
         jsdoc_on_exported::register(),
         module_header::register(),
         no_boolean_flag_param::register(),
         explicit_units::register(),
         no_abbreviated_names::register(),
         no_generic_names::register(),
+        // @TODO: flagged:
+        // src/rules/comment_paraphrases_code/text.rs:31:17: warning [no-type-encoded-names] 'fn_name' encodes a type prefix 'fn' — Hungarian notation is obsolete. Remove the prefix; the type system already tells you the type.
+        // let fn_name = extract_fn_name(trimmed);
+        // -> ne pas faire les fonctions ? le faire que si le type est vraiment le meme que le nom ?
         no_type_encoded_names::register(),
-        law_of_demeter::register(),
         timeout_on_io::register(),
         no_nullish_default_on_input::register(),
         prefer_switch_over_chained_if::register(),
+        // @TODO: flagged:
+        // src/rules/no_empty_test_file/text.rs:62:1: warning [no-multi-op-oneliner] Line has 11 chained operations — extract intermediate named bindings so each step's purpose is visible.
+        // assert_eq!(run("utils.spec.ts", "// TODO: add tests").len(), 1); // comply-ignore: todo-needs-issue-link — test content, not a real marker.
         no_multi_op_oneliner::register(),
         // v1.2 — api-design + language-typescript rules
         no_enum::register(),
@@ -871,7 +896,6 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         no_dangerously_set_inner_html::register(),
         no_hardcoded_secret::register(),
         no_focused_test::register(),
-        no_skipped_test_without_link::register(),
         no_match_snapshot::register(),
         react_no_array_index_key::register(),
         react_use_state_lazy_init::register(),
@@ -900,6 +924,9 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         rust_await_holding_lock::register(),
         rust_large_enum_variant::register(),
         rust_ptr_arg::register(),
+        // @TODO flagged:
+        // /Users/rbaumier/www/comply/src/rules/no_unreadable_array_destructuring/typescript.rs:61:15: warning [rust-explicit-iter-loop] it is more concise to loop over references to containers instead of using explicit iteration methods
+        // for &b in bytes.iter() {
         rust_explicit_iter_loop::register(),
         rust_no_linkedlist::register(),
         rust_redundant_clone::register(),
@@ -955,16 +982,35 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         vue_no_duplicate_v_if::register(),
         // Database rules (extracted from the database skill).
         sql_no_select_star::register(),
-        sql_no_between_timestamp::register(),
-        sql_no_offset_pagination::register(),
-        sql_no_varchar::register(),
+        // @TODO flagged:
+        // il prend tous les between dans le code, meme les commentaires
+        // sql_no_between_timestamp::register(),
+        // @TODO flagged:
+        // src/rules/explicit_units/typescript.rs:21:1: warning [sql-no-offset-pagination] `OFFSET` pagination is O(N) on deep pages — use cursor-based (keyset) pagination: `WHERE id > :last_id ORDER BY id LIMIT N`.
+        //         const AMBIGUOUS_BASES: &[&str] = &[
+        //     "delay", "timeout", "interval", "duration", "elapsed", "age", "wait",
+        //     "size", "length", "distance", "offset", "width", "height", "limit",
+        //     "rate", "frequency", "threshold",
+        // ];
+        // sql_no_offset_pagination::register(),
+        // @TODO: flagged sur:
+        //         fn flags_negative_lookahead_same_char() {
+        //     assert_eq!(run(r#"const re = /(?!a)a/;"#).len(), 1);
+        // }
+        // sql_no_varchar::register(),
         sql_no_float_for_money::register(),
         sql_no_timestamp_without_tz::register(),
         sql_no_like_wildcard_prefix::register(),
         sql_no_pg_enum::register(),
         sql_prefer_exists_over_in::register(),
         db_no_n_plus_one::register(),
-        db_no_string_concat_sql::register(),
+        // @TODO: flagged les formats
+        // src/oxlint/mod.rs:106:9: error [db-no-string-concat-sql] String interpolation with SQL keywords — use parameterized queries.
+        //         format!(
+        //     "failed to parse oxlint JSON output. oxlint stderr: {}",
+        //     String::from_utf8_lossy(stderr)
+        // )
+        // db_no_string_concat_sql::register(),
         migration_needs_lock_timeout::register(),
         migration_needs_rollback::register(),
         drizzle_fk_needs_index::register(),
@@ -978,7 +1024,10 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         // SonarJS-equivalent rules (native implementations).
         cognitive_complexity::register(),
         no_identical_functions::register(),
-        no_empty_collection_use::register(),
+        // @TODO:
+        // flagged:
+        // let mut rules: HashMap<String, RuleConfig> = HashMap::new();
+        // no_empty_collection_use::register(),
         no_gratuitous_expression::register(),
         no_all_duplicated_branches::register(),
         no_redundant_assignment::register(),
@@ -991,8 +1040,18 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         no_collapsible_if::register(),
         no_redundant_boolean::register(),
         no_nested_template_literal::register(),
-        prefer_immediate_return::register(),
+        // @TODO flagged:
+        // src/rules/playwright_no_networkidle/typescript.rs:60:1: warning [prefer-immediate-return] Variable `parser` is assigned and immediately returned — return the expression directly.
+        // fn run(path: &str, source: &str) -> Vec<Diagnostic> {
+        // let mut parser = tree_sitter::Parser::new();
+        // parser
+        //     .set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into())
+        //     .unwrap();
+        // prefer_immediate_return::register(),
         no_hardcoded_ip::register(),
+        // @TODO: ça flagged:
+        //  if text.contains("http://") || text.contains("https://")
+        // ET aussi les http:// dans les commentaires
         no_clear_text_protocol::register(),
         no_eval::register(),
         // JSDoc description rule.
@@ -1003,11 +1062,83 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         no_unused_collection::register(),
         prefer_while::register(),
         expression_complexity::register(),
-        no_duplicate_string::register(),
+        // @TODO: ça prend en compte les commentaires ça ne devrait pas :
+        //     // When --json-schema is used, the structured data lives in
+        // // "structured_output" (NOT "result", which is empty/text).
+        // let parsed: serde_json::Value = serde_json::from_str(&stdout)
+        //     .with_context(|| {
+        //         format!(
+        //             "failed to parse claude JSON: {}",
+        //             &stdout[..stdout.len().min(200)]
+        //         )
+        //     })?;
+
+        // // Primary: structured_output (from --json-schema).
+        // if let Some(structured) = parsed.get("structured_output") {
+
+        // ET AUSSI quan c'est du schema/json, il faudrait que ce soit que quand c'est le seul string non ? :
+        //         #[allow(dead_code)]
+        // const UNIFIED_SCHEMA: &str = r#"{
+        //   "type": "object",
+        //   "properties": {
+        //     "comment_quality": {
+        //       "type": "object",
+        //       "properties": {
+        //         "issues": {
+        //           "type": "array",
+        //           "items": {
+        //             "type": "object",
+        //             "properties": {
+        //               "line": { "type": "integer" },
+        //               "criterion": { "type": "string" },
+        //               "explanation": { "type": "string" },
+        //               "suggestion": { "type": "string" }
+        //             },
+        // no_duplicate_string::register(),
+        // @TODO: on veut peut-être l'ignorer dans les tests ?
+        //     //     #[test]
+        // fn missing_config_falls_back_to_defaults() {
+        //     let tmp = TempDir::new().unwrap();
+        //     // No comply.toml in tmp or any ancestor (we may walk up to a
+        //     // real one, that's fine — what we test is "no panic").
+        //     let cfg = Config::load_from(tmp.path()).unwrap();
+        //     // The default for max-function-lines is 30, regardless of
+        //     // whether we walked into a real workspace.
+        //     let _ = cfg.threshold("max-function-lines", "max", 30);
+        // }
         no_ignored_exceptions::register(),
         no_inverted_boolean_check::register(),
+        // @TODO: il le fait aussi sur les match, peut-être que sur les match on peut créer une autre règle max_match_depth ? ou alors on ne fait rien en rust vu qu'on a déjà la complexité cyclomatic/cognitive/etc. ?
+        // src/rules/no_misleading_collection_name/typescript.rs:118:13: error [no-nested-switch] Nested `match` — extract the inner match into a separate function.
+        //         fn initializer_shape(value: tree_sitter::Node, source: &[u8]) -> Option<Shape> {
+        //     match value.kind() {
+        //         "array" => Some(Shape::Array),
+        //         "new_expression" => {
+        //             let ctor = value.child_by_field_name("constructor")?;
+        //             let ctor_name = ctor.utf8_text(source).ok()?;
+        //             match ctor_name {
+        //                 "Set" => Some(Shape::Set),
+        //                 "Map" => Some(Shape::Map),
+        //                 "Array" => Some(Shape::Array),
+        //                 _ => None,
+        //             }
+        //         }
+        //         _ => None,
+        //     }
+        // }
         no_nested_switch::register(),
-        function_inside_loop::register(),
+        // @TODO:
+        // for job in &jobs {
+        // let file_id = job.path.display().to_string();
+
+        // let wr = match worker_results.iter().find(|r| r.id == file_id) {
+        //     Some(r) => r,
+        //     None => continue,
+        // };
+        // -> peut-être qu'on veut garder ça ?
+        // -> Non, ce lint est techniquement invalide en Rust.
+        // Il se trompe de langage (c'est souvent le cas avec des linters multi-langages génériques). En Rust, une closure n'est pas un objet dynamique comme en JavaScript ou en C#. C'est une simple structure anonyme allouée sur la pile (stack) à coût zéro. Il n'y a aucune allocation sur le tas (heap).
+        // function_inside_loop::register(),
         arguments_order::register(),
         array_callback_without_return::register(),
         assertions_in_tests::register(),
@@ -1020,6 +1151,49 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         inverted_assertion_arguments::register(),
         jsx_no_leaked_render::register(),
         max_union_size::register(),
+        // @TODO: ça prend aussi les impl/etc. il faudrait que ce soit uniquement dans une fonction non ?
+        //     impl Language {
+        // /// True if the language is a TypeScript/JavaScript variant — used by the
+        // /// orchestrator to dispatch to oxlint.
+        // pub fn is_typescript_family(self) -> bool {
+        //     matches!(
+        //         self,
+        //         Language::TypeScript | Language::Tsx | Language::JavaScript
+        //     )
+        // }
+
+        // /// Detect the language from a file path's extension. Returns `None`
+        // /// for extensions comply doesn't recognize. Used by the LSP server,
+        // /// which receives URIs from the editor and needs to decide whether
+        // /// the buffer is in scope before running the lint pass.
+        // pub fn from_path(path: &Path) -> Option<Self> {
+        //     let ext = path.extension()?.to_str()?;
+        //     if TS_EXTENSIONS.contains(&ext) {
+        //         Some(Language::TypeScript)
+        //
+        // ET AUSSI flagged:
+        //         /// Classify a file path into a Language based on its extension.
+        // /// Returns None for unsupported extensions (silently skipped).
+        // fn classify(path: &Path) -> Option<SourceFile> {
+        //     let ext = path.extension()?.to_str()?;
+        //     let language = if TS_EXTENSIONS.contains(&ext) {
+        //         Language::TypeScript
+        //     } else if TSX_EXTENSIONS.contains(&ext) {
+        //         Language::Tsx
+        //     } else if JS_EXTENSIONS.contains(&ext) {
+        //         Language::JavaScript
+        //     } else if RUST_EXTENSIONS.contains(&ext) {
+        //         Language::Rust
+        //     } else if VUE_EXTENSIONS.contains(&ext) {
+        //         Language::Vue
+        //     } else {
+        //         return None;
+        //     };
+        //     Some(SourceFile {
+        //         path: path.to_path_buf(),
+        //         language,
+        //     })
+        // }
         nested_control_flow::register(),
         no_arguments_usage::register(),
         no_array_constructor::register(),
@@ -1033,6 +1207,18 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         no_confidential_logging::register(),
         no_constructor_side_effects::register(),
         no_duplicate_in_composite::register(),
+        // @TODO: flagged:
+        //     let rest = if let Some(r) = trimmed.strip_prefix("let ") {
+        //     r.trim_start()
+        // } else if let Some(r) = trimmed.strip_prefix("const ") {
+        //     r.trim_start()
+        // } else if let Some(r) = trimmed.strip_prefix("var ") {
+        //     r.trim_start()
+        // alors que c'est 2 trucs différents non ?
+        // + l'erreur est reportée plusieurs fois :
+        //         src/rules/no_redundant_assignment/typescript.rs:32:1: warning [no-duplicated-branches] This branch has the same body as another branch — merge conditions or remove the duplicate.
+        // src/rules/no_redundant_assignment/typescript.rs:34:1: warning [no-duplicated-branches] This branch has the same body as another branch — merge conditions or remove the duplicate.
+        // src/rules/no_redundant_assignment/typescript.rs:34:1: warning [no-duplicated-branches] This branch has the same body as another branch — merge conditions or remove the duplicate.
         no_duplicated_branches::register(),
         no_dynamic_template::register(),
         no_element_overwrite::register(),
@@ -1046,20 +1232,90 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         no_inconsistent_returns::register(),
         no_incorrect_string_concat::register(),
         no_insecure_jwt::register(),
+        // @TODO: flagged alors que non:
+        //         fn is_function_decl(trimmed: &str) -> bool {
+        //     // Rust
+        //     if trimmed.starts_with("pub fn ")
+        //         || trimmed.starts_with("pub async fn ")
+        //         || trimmed.starts_with("fn ")
+        //         || trimmed.starts_with("async fn ")
+        //         || trimmed.starts_with("pub(crate) fn ")
+        //     {
+        //         return true;
+        //     }
+        //     // TypeScript/JavaScript
+        //     if trimmed.starts_with("export function ")
+        //         || trimmed.starts_with("export async function ")
+        //         || trimmed.starts_with("export default function ")
+        //         || trimmed.starts_with("function ")
+        //         || trimmed.starts_with("async function ")
+        //     {
+        //         return true;
+        //     }
+        //     // Arrow/method patterns
+        //     if (trimmed.contains("=> {") || trimmed.contains("=> ("))
+        //         && (trimmed.starts_with("export const ") || trimmed.starts_with("const "))
+        //     {
+        //         return true;
+        //     }
+        //     false
+        // }
+        //
+        // IDEM:
+        //         pub fn is_rule_enabled(&self, rule_id: &str, file_path: &Path) -> bool {
+        //     if let Some(rule) = self.raw.rules.get(rule_id)
+        //         && rule.disabled == Some(true)
+        //     {
+        //         return false;
+        //     }
+        //     for idx in self.glob_matcher.matches(file_path) {
+        //         if self.disable_lists[idx].iter().any(|d| d == rule_id) {
+        //             return false;
+        //         }
+        //     }
+        //     true
+        // }
         no_invariant_returns::register(),
         no_misleading_array_reverse::register(),
         no_nested_assignment::register(),
         no_nested_functions::register(),
-        no_os_command::register(),
+        // @TODO: on est parfois obligé non ?
+        // no_os_command::register(),
         no_post_message_star::register(),
         no_primitive_wrappers::register(),
         no_pseudo_random::register(),
-        no_redundant_jump::register(),
+        // @TODO flagged:
+        // src/rules/react_no_object_type_as_default_prop/typescript.rs:102:1: warning [no-redundant-jump] Redundant `return;` — execution already falls through here.
+        //         if is_arrow {
+        //     let Some(parent) = node.parent() else { return };
+        //     if parent.kind() != "variable_declarator" { return; }
+        //     let Some(name) = parent.child_by_field_name("name") else { return };
+        //     let Ok(t) = name.utf8_text(source) else { return };
+        //     if !t.starts_with(|c: char| c.is_ascii_uppercase()) {
+        //         return;
+        //     }
+        // }
+
+        // // Find the formal_parameters → object_pattern with defaults.
+        // let mut stack = vec![node];
+        // while let Some(current) = stack.pop() {
+
+        // no_redundant_jump::register(),
         no_redundant_optional::register(),
         no_return_type_any::register(),
         no_same_argument_assert::register(),
         no_small_switch::register(),
-        no_sql_string_format::register(),
+        // @TODO: ça prend des format! qui ne sont pas des requêtes sql:
+        //         pub fn build_prompt(source: &str) -> String {
+        //     format!(
+        //         r#"You are a code quality auditor. Analyze the following source file and evaluate it against these 4 categories. Be strict but fair
+        // Source file:
+        // ```
+        // {source}
+        // ```"#
+        //     )
+        // }
+        // no_sql_string_format::register(),
         no_undefined_argument::register(),
         no_undefined_assignment::register(),
         no_unenclosed_multiline_block::register(),
@@ -1069,7 +1325,11 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         no_useless_increment::register(),
         no_useless_intersection::register(),
         no_useless_react_setstate::register(),
-        no_weak_cipher::register(),
+        // @TODO flagged:
+        // id: "jsdoc-require-throws-description",
+        // ET
+        // doc_url: Some("https://github.com/gajus/eslint-plugin-jsdoc/blob/main/docs/rules/require-throws-description.md"),
+        // no_weak_cipher::register(),
         no_weak_hashing::register(),
         no_weak_keys::register(),
         no_weak_ssl::register(),
@@ -1092,8 +1352,31 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         no_empty_test_file::register(),
         no_globals_shadowing::register(),
         no_implicit_deps::register(),
+        // @TODO: flagged alors que c'est un while:
+        //         while i + 2 < len {
+        //     if bytes[i] == b'/' && bytes[i + 1] == b'*' && bytes[i + 2] == b'*' {
+        //         let start = i;
+        //         let start_line = source[..start].matches('\n').count();
+        //         // find closing */
+        //         if let Some(end_rel) = source[i + 3..].find("*/") {
+        //             let end = i + 3 + end_rel + 2;
+        //             blocks.push((start_line, &source[start..end]));
+        //             i = end;
+        //         } else {
+        //             break;
+        //         }
+        //     } else {
+        //         i += 1;
+        //     }
+        // }
         no_loop_counter_reassign::register(),
-        no_misplaced_loop_counter::register(),
+        // @TODO flagged:
+        //     while p > 0 && bytes[p - 1] == b'\\' {
+        //     count += 1;
+        //     p -= 1;
+        // }
+        // src/rules/consistent_template_literal_escape/typescript.rs:102:5: error [no-misplaced-loop-counter] Condition uses `p` but update modifies `count`.
+        // no_misplaced_loop_counter::register(),
         no_nested_incdec::register(),
         no_unverified_hostname::register(),
         prefer_destructuring_assignment::register(),
@@ -1155,9 +1438,16 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         jsdoc_reject_function_type::register(),
         // eslint-plugin-security rules (native implementations).
         no_bidi_characters::register(),
+        // @TODO: pourquoi ça a été flagged ?
+        // src/rules/ts_consistent_indexed_object_style/typescript.rs:27:1: error [no-timing-attack] Direct comparison of a security-sensitive value — use constant-time comparison instead.
+        // let member = named_children[0];
+        // if member.kind() != "index_signature" {
+        //     return;
+        // }
         no_timing_attack::register(),
         no_disable_mustache_escape::register(),
-        no_non_literal_fs_filename::register(),
+        // @TODO: impossible de passer que des string litteral en file name non ?
+        // no_non_literal_fs_filename::register(),
         // eslint-plugin-functional rules (native implementations).
         no_class_inheritance::register(),
         no_promise_reject::register(),
@@ -1173,14 +1463,29 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         hono_secure_headers_disabled::register(),
         api_first::register(),
         auth_on_mutation::register(),
-        blank_line_between_blocks::register(),
+        // @TODO (TODO_AFTER_REVIEW)
+        // blank_line_between_blocks::register(),
         colocated_tests::register(),
         data_clumps::register(),
         error_message_is_remediation::register(),
         factory_di_shape::register(),
+        // @TODO flagged:
+        // src/rules/no_skipped_test_without_link/rust.rs:19:9: warning [intermediate-variables] Expression is deeply nested — extract into named intermediate variables.
+        //     impl AstCheck for Check {
+        // fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
+        //     let source_bytes = ctx.source.as_bytes();
+        //     let mut diagnostics = Vec::new();
+        //     walk_tree(tree, |node| {
+        //         if node.kind() != "attribute_item" {
+        //             return;
+        //         }
         intermediate_variables::register(),
-        justify_inaction::register(),
-        no_hidden_control_flow::register(),
+        // @TODO (TODO_AFTER_REVIEW)
+        // justify_inaction::register(),
+        // @TODO:
+        // flagged alors qu'il y a que 2 conditions:
+        // if !output.status.success() && output.status.code() != Some(1) {
+        // no_hidden_control_flow::register(),
         no_inferred_any::register(),
         no_logger_in_business_logic::register(),
         no_raw_db_entity_in_handler::register(),
@@ -1244,8 +1549,11 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         import_consistent_type_specifier_style::register(),
         import_prefer_default_export::register(),
         // eslint-plugin-unicorn rules (native implementations).
-        catch_error_name::register(),
-        consistent_assert::register(),
+        // @TODO (TODO_AFTER_REVIEW)
+        // catch_error_name::register(),
+        //
+        // @TODO: src/rules/strings_comparison/typescript.rs:69:9: warning [consistent-assert] Use `assert_eq!(a, b)` instead of `assert!(a == b)` for better error messages. ça doit pas flagged dans les tests si ?
+        // consistent_assert::register(),
         consistent_date_clone::register(),
         consistent_destructuring::register(),
         consistent_empty_array_spread::register(),
@@ -1306,6 +1614,11 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         no_useless_spread::register(),
         no_useless_switch_case::register(),
         no_useless_undefined::register(),
+        // @TODO flagged:
+        // src/rules/no_magic_array_flat_depth/typescript.rs:40:23: warning [no-zero-fractions] Don't use a zero fraction in the number.
+        // if (val - 1.0).abs() < f64::EPSILON {
+        // ET
+        // format!("{:>7.1}ms", d.as_secs_f64() * 1000.0)
         no_zero_fractions::register(),
         number_literal_case::register(),
         numeric_separators_style::register(),
@@ -1352,7 +1665,11 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         prefer_response_static_json::register(),
         prefer_set_has::register(),
         prefer_set_size::register(),
-        prefer_simple_condition_first::register(),
+        // @TODO flagged:
+        // if ch as u32 > 0xFFFF || ch == ZWJ {
+        // ET
+        // if b == b'"' || b == b'\'' || b == b'`' {
+        // prefer_simple_condition_first::register(),
         prefer_single_call::register(),
         prefer_spread::register(),
         prefer_string_raw::register(),
@@ -1559,7 +1876,15 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         package_json_sorted_deps::register(),
         package_json_unique_deps::register(),
         // comment prose quality.
-        comment_prose_quality::register(),
+        // @TODO:
+        //         src/main.rs:3:1: warning [comment-prose-quality] Lexical illusion: `!` repeated across lines.
+        // //! comply — your code will comply.
+        // //!
+        // //! Enforces coding-standards rules via syntactic analysis. Dispatches to oxlint
+        // //! for TS/JS linting, applies custom tree-sitter rules in-process, and unifies
+
+        // -> c'est de la rustdoc valide, ne devrait pas flag
+        // comment_prose_quality::register(),
         // architecture: hexagonal layer boundaries.
         layer_import_boundary::register(),
     ];

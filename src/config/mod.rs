@@ -277,7 +277,6 @@ mod tests {
         let cfg = Config::default();
         assert_eq!(cfg.threshold("max-function-lines", "max", 999), 30);
         assert_eq!(cfg.threshold("max-file-lines", "max", 999), 200);
-        assert_eq!(cfg.threshold("law-of-demeter", "max_depth", 999), 3);
     }
 
     #[test]
