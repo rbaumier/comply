@@ -1200,12 +1200,6 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         jsdoc_reject_function_type::register(),
         // eslint-plugin-security rules (native implementations).
         no_bidi_characters::register(),
-        // @TODO: pourquoi ça a été flagged ?
-        // src/rules/ts_consistent_indexed_object_style/typescript.rs:27:1: error [no-timing-attack] Direct comparison of a security-sensitive value — use constant-time comparison instead.
-        // let member = named_children[0];
-        // if member.kind() != "index_signature" {
-        //     return;
-        // }
         no_timing_attack::register(),
         no_disable_mustache_escape::register(),
         // @TODO: impossible de passer que des string litteral en file name non ?
