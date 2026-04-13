@@ -1,15 +1,77 @@
 //! no-commented-out-code — delete dead comments, git history keeps originals.
 //!
-//! Detection strategy: walk the AST for comment nodes, group consecutive
-//! ones (adjacent line comments form one virtual block), strip the comment
-//! syntax, then re-parse the resulting text with the SAME tree-sitter
-//! grammar the file was parsed with. If the inner parse has no errors and
-//! contains at least one "rich" code construct (declaration, call,
-//! assignment, control flow), flag the outermost comment of the group.
+//! ## Why this rule was rewritten
 //!
-//! Doc comments (`///`, `//!`, `/**`, `/*!`) are excluded — they
-//! legitimately contain example code. Bare prose is excluded by a fast
-//! structural filter (`;` or `{` must appear) and by the rich-code check.
+//! The previous implementation was a text heuristic: a `//` comment was
+//! flagged if its body started with a code keyword (`const`, `let`, …)
+//! AND contained at least two "code-shaped" punctuation characters
+//! (`;`, `=`, `{`, `}`, `(`, `)`). That flagged prose like
+//! `// const foo =, let foo =, var foo =` — three `=` is enough
+//! punctuation, `const` is a keyword, verdict "commented code". It's
+//! not: it's a pattern list enumerating declaration shapes, each one
+//! incomplete (`=` with no RHS).
+//!
+//! The distinction that the old heuristic missed is the core one: real
+//! commented-out code is complete, parseable syntax. Prose-describing-
+//! syntax is a salad of tokens that cannot compile.
+//!
+//! ## How the new rule works
+//!
+//! 1. **Collect `comment` nodes** from the already-parsed AST (TS) or
+//!    `line_comment` + `block_comment` nodes (Rust). Uses a manual
+//!    cursor walk — `walker::walk_tree`'s closure has a higher-ranked
+//!    lifetime that prevents us from pushing nodes into a Vec, so we
+//!    re-do the walk locally to preserve the tree lifetime on each
+//!    node.
+//!
+//! 2. **Group consecutive comments** into virtual blocks. Two comments
+//!    are adjacent if the second one starts on the same row as, or
+//!    the row right after, the first one ends. A block of three `//`
+//!    lines commenting out a three-line function is analyzed as one
+//!    3-line body, not three 1-line bodies — the single-line view
+//!    would never parse successfully.
+//!
+//! 3. **Strip the delimiters** (`//`, `/*`, `*/`). Doc comments
+//!    (`///`, `//!`, `/**`, `/*!`) are dropped up front: they
+//!    legitimately carry example snippets, and `/** @returns cost */`
+//!    is absolutely not dead code.
+//!
+//! 4. **Fast filter**: the joined body must contain `;` or `{`. Pure
+//!    prose almost never does. This short-circuits the common case
+//!    without paying for a parse.
+//!
+//! 5. **Re-parse the body** with the SAME tree-sitter grammar the
+//!    outer file was parsed with. The Rust side wraps the body in
+//!    `fn __probe__() { ... }` because most commented-out Rust is
+//!    statement-level and a bare `let x = 5;` is a hard parse error
+//!    at module scope; wrapped, it's a legal function body.
+//!
+//! 6. **Verdict**: the re-parse must have zero errors (`!root.has_error()`)
+//!    AND contain at least one "rich" node — a declaration, a call,
+//!    an assignment, a control-flow structure. Bare prose like
+//!    `hello world.` parses as two expression_statements of
+//!    identifiers with no rich children and is NOT flagged.
+//!
+//! ## Language coverage
+//!
+//! - **TS / JS / TSX (React)**: handled by the `typescript` backend.
+//!   React components — JSX and TSX — go through the TSX grammar and
+//!   are covered by the same backend.
+//! - **Rust**: handled by the `rust` backend.
+//! - **Vue**: not covered. Comply does not bundle `tree-sitter-vue`,
+//!   so `.vue` files are never AST-parsed (see `engine.rs::parse_with_grammar`).
+//!   Adding Vue support is an infra change that affects every
+//!   AstCheck, not a per-rule decision.
+//!
+//! ## Intentional false negatives
+//!
+//! - A commented block where the first `//` line starts inside a
+//!   multi-line comment region that `walk_tree`'s error recovery
+//!   decided to skip will be missed. This is rare and matches the
+//!   global error-subtree skip policy.
+//! - `/* const x = 5 */` without a trailing `;` does parse cleanly
+//!   in TS (ASI) and DOES flag. This is intentional.
+//! - `//  const  x  =  5 ;  ` (excess whitespace) flags. Intentional.
 
 mod rust;
 mod typescript;

@@ -48,22 +48,7 @@ warning [max-function-lines] this function has too many lines (124/120)
 
 ## 3. `no-commented-out-code` — flag des commentaires de syntaxe ✅
 
-**Décision : réécriture complète avec mini-parsing tree-sitter.**
-L'heuristique précédente (keyword start + punct_count ≥ 2) flagguait `// const foo =, let foo =, var foo =` parce que 3 `=` atteignent le seuil de ponctuation. Remplacé par :
-
-1. Walk des nodes `comment` (TS) / `line_comment`+`block_comment` (Rust).
-2. Groupement des commentaires consécutifs en blocs virtuels.
-3. Strip des délimiteurs `//` / `/* */`.
-4. Skip des doc comments (`///`, `//!`, `/**`, `/*!`) — ils portent légitimement des exemples.
-5. Fast filter : le body doit contenir `;` ou `{`.
-6. **Re-parse du body** avec la même grammaire tree-sitter. Le body Rust est wrappé dans `fn __probe__() { … }` parce que les statements Rust ne sont pas valides au niveau module.
-7. `!root.has_error()` AND au moins un node « riche » (déclaration, call, assignment, flow control).
-
-Le FP du user parse avec erreurs (`const foo =,` sans RHS) → non flagué. Un vrai `// const x = 5;` parse proprement en `lexical_declaration` → flagué.
-
-**Coverage :** TS/JS/TSX + Rust. Vue retiré (pas de grammaire tree-sitter bundle).
-
-**Tests :** 32 passent. Les deux FP exemples (TS + Rust) sont cross-testés dans `shared_tests.rs`.
+**Décision : réécriture complète avec mini-parsing tree-sitter.** Détails de l'approche, des limitations et des faux-négatifs acceptés : voir le docblock de `src/rules/no_commented_out_code/mod.rs`.
 
 ---
 
