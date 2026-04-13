@@ -438,7 +438,6 @@ pub mod no_unassigned_import;
 
 // eslint-plugin-unicorn rules (native implementations).
 pub mod catch_error_name;
-pub mod consistent_assert;
 pub mod consistent_date_clone;
 pub mod consistent_destructuring;
 pub mod consistent_empty_array_spread;
@@ -1285,9 +1284,6 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         // eslint-plugin-unicorn rules (native implementations).
         // @TODO (TODO_AFTER_REVIEW)
         // catch_error_name::register(),
-        //
-        // @TODO: src/rules/strings_comparison/typescript.rs:69:9: warning [consistent-assert] Use `assert_eq!(a, b)` instead of `assert!(a == b)` for better error messages. ça doit pas flagged dans les tests si ?
-        // consistent_assert::register(),
         consistent_date_clone::register(),
         consistent_destructuring::register(),
         consistent_empty_array_spread::register(),

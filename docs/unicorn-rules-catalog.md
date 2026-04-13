@@ -1279,20 +1279,6 @@ console.log(age);
 
 ---
 
-### 78. `consistent-assert`
-Force un style d'assertion cohérent avec `node:assert`.
-
-```js
-// ❌
-assert(x === 42);
-
-// ✅
-assert.strictEqual(x, 42);
-```
-**Pourquoi :** `assert(expr)` ne donne aucun détail sur l'échec. `assert.strictEqual` montre la valeur attendue vs reçue.
-
----
-
 ### 79. `consistent-empty-array-spread`
 Préfère un style cohérent pour le spread de ternaire dans un tableau.
 
@@ -2365,7 +2351,7 @@ Pour être exhaustif, voici les dernières manquantes :
 ## Résumé par difficulté d'implémentation
 
 ### Facile (TextCheck / pattern simple) — ~50 règles
-`catch-error-name`, `empty-brace-spaces`, `error-message`, `escape-case`, `filename-case`, `no-abusive-eslint-disable`, `no-console-spaces`, `no-document-cookie`, `no-empty-file`, `no-hex-escape`, `no-new-buffer`, `no-null`, `no-process-exit`, `no-this-assignment`, `no-typeof-undefined`, `no-useless-undefined`, `no-zero-fractions`, `number-literal-case`, `numeric-separators-style`, `prefer-date-now`, `prefer-math-trunc`, `prefer-node-protocol`, `prefer-string-raw`, `prefer-string-replace-all`, `prefer-string-slice`, `prefer-string-starts-ends-with`, `prefer-string-trim-start-end`, `text-encoding-identifier-case`, `throw-new-error`, `require-array-join-separator`, `require-number-to-fixed-digits-argument`, `no-keyword-prefix`, `no-named-default`, `consistent-assert`, `consistent-template-literal-escape`, `switch-case-braces`, `prefer-regexp-test`, `prefer-optional-catch-binding`, `prefer-module`, `no-unreadable-iife`, `explicit-length-check`, `no-magic-array-flat-depth`, `no-unnecessary-array-flat-depth`, `no-unnecessary-array-splice-count`, `no-unnecessary-slice-end`
+`catch-error-name`, `empty-brace-spaces`, `error-message`, `escape-case`, `filename-case`, `no-abusive-eslint-disable`, `no-console-spaces`, `no-document-cookie`, `no-empty-file`, `no-hex-escape`, `no-new-buffer`, `no-null`, `no-process-exit`, `no-this-assignment`, `no-typeof-undefined`, `no-useless-undefined`, `no-zero-fractions`, `number-literal-case`, `numeric-separators-style`, `prefer-date-now`, `prefer-math-trunc`, `prefer-node-protocol`, `prefer-string-raw`, `prefer-string-replace-all`, `prefer-string-slice`, `prefer-string-starts-ends-with`, `prefer-string-trim-start-end`, `text-encoding-identifier-case`, `throw-new-error`, `require-array-join-separator`, `require-number-to-fixed-digits-argument`, `no-keyword-prefix`, `no-named-default`, `consistent-template-literal-escape`, `switch-case-braces`, `prefer-regexp-test`, `prefer-optional-catch-binding`, `prefer-module`, `no-unreadable-iife`, `explicit-length-check`, `no-magic-array-flat-depth`, `no-unnecessary-array-flat-depth`, `no-unnecessary-array-splice-count`, `no-unnecessary-slice-end`
 
 ### Moyen (AstCheck / logique modérée) — ~60 règles
 `consistent-destructuring`, `consistent-empty-array-spread`, `consistent-existence-index-check`, `consistent-function-scoping`, `no-array-callback-reference`, `no-array-for-each`, `no-array-method-this-argument`, `no-array-reduce`, `no-array-reverse`, `no-array-sort`, `no-await-expression-member`, `no-await-in-promise-methods`, `no-for-loop`, `no-lonely-if`, `no-negated-condition`, `no-negation-in-equality-check`, `no-nested-ternary`, `no-new-array`, `no-object-as-default-parameter`, `no-single-promise-in-promise-methods`, `no-static-only-class`, `no-thenable`, `no-unnecessary-await`, `no-unreadable-array-destructuring`, `no-useless-fallback-in-spread`, `no-useless-length-check`, `no-useless-promise-resolve-reject`, `no-useless-spread`, `no-useless-switch-case`, `new-for-builtins`, `prefer-add-event-listener`, `prefer-array-find`, `prefer-array-flat`, `prefer-array-flat-map`, `prefer-array-index-of`, `prefer-array-some`, `prefer-at`, `prefer-class-fields`, `prefer-classlist-toggle`, `prefer-code-point`, `prefer-default-parameters`, `prefer-dom-node-append`, `prefer-dom-node-dataset`, `prefer-dom-node-remove`, `prefer-dom-node-text-content`, `prefer-export-from`, `prefer-includes`, `prefer-logical-operator-over-ternary`, `prefer-math-min-max`, `prefer-modern-dom-apis`, `prefer-modern-math-apis`, `prefer-native-coercion-functions`, `prefer-negative-index`, `prefer-number-properties`, `prefer-object-from-entries`, `prefer-query-selector`, `prefer-set-has`, `prefer-set-size`, `prefer-spread`, `prefer-switch`, `prefer-ternary`, `prefer-type-error`
