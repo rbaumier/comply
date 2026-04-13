@@ -1282,8 +1282,7 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         import_consistent_type_specifier_style::register(),
         import_prefer_default_export::register(),
         // eslint-plugin-unicorn rules (native implementations).
-        // @TODO (TODO_AFTER_REVIEW)
-        // catch_error_name::register(),
+        catch_error_name::register(),
         consistent_date_clone::register(),
         consistent_destructuring::register(),
         consistent_empty_array_spread::register(),

@@ -1,53 +1,32 @@
-//! catch-error-name backend — flag catch parameters not named `error`.
+//! catch-error-name TypeScript / JavaScript / TSX backend.
 
 use crate::diagnostic::{Diagnostic, Severity};
-
-const EXPECTED: &str = "error";
 
 crate::ast_check! { |node, source, ctx, diagnostics|
     if node.kind() != "catch_clause" {
         return;
     }
 
-    // The catch clause's parameter is in a `catch_parameter` wrapper node
-    // that may or may not exist (bare `catch {}` has no parameter).
-    // tree-sitter-typescript grammar: catch_clause -> "catch" "(" catch_parameter ")" block
-    // The `catch_parameter` wraps the actual identifier/pattern.
-    // We look for the identifier directly via named children.
+    // The catch parameter lives in the `parameter` field. A bare
+    // `catch {}` with no parens exposes no parameter node, which is
+    // fine — nothing to check.
+    let Some(param) = node.child_by_field_name("parameter") else { return };
 
-    // Try field-based access first (some grammars expose `parameter`).
-    let param = node.child_by_field_name("parameter");
-    let param = match param {
-        Some(p) => p,
-        None => return, // bare `catch {}` — nothing to check
-    };
-
-    // The parameter might be a destructuring pattern — only check simple identifiers.
+    // Destructuring patterns (`catch ({ message })`, `catch ([e])`)
+    // aren't simple identifiers — the rule only applies to the
+    // simple case. We skip anything that isn't a direct identifier.
     let ident = if param.kind() == "identifier" {
         param
     } else {
-        // Could be wrapped in a node; look for identifier child.
         match find_identifier(param) {
             Some(id) => id,
             None => return,
         }
     };
 
-    let name = match ident.utf8_text(source) {
-        Ok(n) => n,
-        Err(_) => return,
-    };
+    let Ok(name) = ident.utf8_text(source) else { return };
 
-    // Allow `_` for unused catch parameters.
-    if name == "_" {
-        return;
-    }
-
-    // Allow names that are or end with `error` / `Error`.
-    if name == EXPECTED
-        || name.ends_with(EXPECTED)
-        || name.ends_with("Error")
-    {
+    if super::is_acceptable_name(name) {
         return;
     }
 
@@ -58,20 +37,24 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         column: pos.column + 1,
         rule_id: "catch-error-name".into(),
         message: format!(
-            "The catch parameter `{name}` should be named `{EXPECTED}`."
+            "The catch parameter `{name}` should be named `{}`.",
+            super::EXPECTED
         ),
         severity: Severity::Warning,
     });
 }
 
-/// Walk immediate children to find the first `identifier` node.
+/// Scan direct named children of `node` for the first `identifier`.
+/// Used when the parameter is wrapped in a grammar-specific node
+/// (for example, `catch_parameter` on some tree-sitter versions).
 fn find_identifier(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
     let count = node.named_child_count();
     for i in 0..count {
         if let Some(child) = node.named_child(i)
-            && child.kind() == "identifier" {
-                return Some(child);
-            }
+            && child.kind() == "identifier"
+        {
+            return Some(child);
+        }
     }
     None
 }
@@ -106,6 +89,12 @@ mod tests {
     }
 
     #[test]
+    fn flags_catch_exception() {
+        let d = run_on("try {} catch (exception) {}");
+        assert_eq!(d.len(), 1);
+    }
+
+    #[test]
     fn allows_catch_error() {
         assert!(run_on("try {} catch (error) { throw error; }").is_empty());
     }
@@ -116,12 +105,28 @@ mod tests {
     }
 
     #[test]
-    fn allows_name_ending_with_error() {
+    fn allows_name_ending_with_error_lower() {
+        assert!(run_on("try {} catch (networkerror) {}").is_empty());
+    }
+
+    #[test]
+    fn allows_name_ending_with_error_camel() {
         assert!(run_on("try {} catch (networkError) {}").is_empty());
+    }
+
+    #[test]
+    fn allows_inner_error_for_nested_catches() {
+        let src = "try { try { a(); } catch (innerError) { b(); } } catch (error) {}";
+        assert!(run_on(src).is_empty());
     }
 
     #[test]
     fn allows_bare_catch() {
         assert!(run_on("try {} catch {}").is_empty());
+    }
+
+    #[test]
+    fn ignores_destructured_catch() {
+        assert!(run_on("try {} catch ({ message }) {}").is_empty());
     }
 }
