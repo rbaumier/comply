@@ -295,7 +295,6 @@ pub mod no_element_overwrite;
 pub mod no_empty_test_file;
 pub mod no_globals_shadowing;
 pub mod no_hardcoded_secret_signature;
-pub mod no_hidden_control_flow;
 pub mod no_hook_setter_in_body;
 pub mod no_identical_conditions;
 pub mod no_identical_expressions;
@@ -1221,10 +1220,6 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         factory_di_shape::register(),
         intermediate_variables::register(),
         justify_inaction::register(),
-        // @TODO:
-        // flagged alors qu'il y a que 2 conditions:
-        // if !output.status.success() && output.status.code() != Some(1) {
-        // no_hidden_control_flow::register(),
         no_inferred_any::register(),
         no_logger_in_business_logic::register(),
         no_raw_db_entity_in_handler::register(),
