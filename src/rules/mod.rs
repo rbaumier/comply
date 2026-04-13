@@ -36,6 +36,7 @@ pub mod max_function_lines;
 pub mod meta;
 pub mod migration_needs_lock_timeout;
 pub mod migration_needs_rollback;
+pub mod sql_helpers;
 pub mod vue_sfc;
 pub mod vue_template_helpers;
 // rust_must_use_on_result intentionally not declared — see mod.rs
@@ -961,9 +962,7 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         vue_no_duplicate_v_if::register(),
         // Database rules (extracted from the database skill).
         sql_no_select_star::register(),
-        // @TODO flagged:
-        // il prend tous les between dans le code, meme les commentaires
-        // sql_no_between_timestamp::register(),
+        sql_no_between_timestamp::register(),
         // @TODO flagged:
         // src/rules/explicit_units/typescript.rs:21:1: warning [sql-no-offset-pagination] `OFFSET` pagination is O(N) on deep pages — use cursor-based (keyset) pagination: `WHERE id > :last_id ORDER BY id LIMIT N`.
         //         const AMBIGUOUS_BASES: &[&str] = &[

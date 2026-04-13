@@ -16,8 +16,10 @@ pub struct Check;
 impl AstCheck for Check {
     fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
         let source_bytes = ctx.source.as_bytes();
-        let mut comments =
-            super::collect_nodes_of_kinds(tree, &["line_comment", "block_comment"]);
+        let mut comments = crate::rules::walker::collect_nodes_of_kinds(
+            tree,
+            &["line_comment", "block_comment"],
+        );
         comments.sort_by_key(|n| (n.start_position().row, n.start_position().column));
 
         let groups = super::group_adjacent(&comments);

@@ -51,7 +51,7 @@ fn lint_script_block(block: &ScriptBlock<'_>, ctx: &CheckCtx, diagnostics: &mut 
     };
     let source_bytes = block.text.as_bytes();
 
-    let mut comments = super::collect_nodes_of_kinds(&inner_tree, &["comment"]);
+    let mut comments = crate::rules::walker::collect_nodes_of_kinds(&inner_tree, &["comment"]);
     comments.sort_by_key(|n| (n.start_position().row, n.start_position().column));
     let groups = super::group_adjacent(&comments);
 

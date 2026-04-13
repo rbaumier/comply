@@ -78,13 +78,9 @@ warning [max-function-lines] this function has too many lines (124/120)
 
 ---
 
-## 8. `sql-no-between-timestamp` — flag les `BETWEEN` dans les commentaires
+## 8. `sql-no-between-timestamp` — flag les `BETWEEN` dans les commentaires ✅
 
-**Source :** `mod.rs:993`
-**Observation :** prend tous les `between` du code, **y compris dans les
-commentaires**. Règle commentée pour l'instant.
-
-**Décision :** _à compléter_
+**Décision : réécriture en AstCheck ciblant les string literals SQL.** TextCheck → AstCheck (TS + Rust + Vue), détection SQL via helper partagé `sql_helpers::is_sql_string` (DML keyword + `WHERE`/`FROM`, whole-word matching). Détails dans le docblock de `src/rules/sql_no_between_timestamp/mod.rs`. Helper `walker::collect_nodes_of_kinds` promu pour réutilisation cross-rule. Règle re-activée dans le registry.
 
 ---
 

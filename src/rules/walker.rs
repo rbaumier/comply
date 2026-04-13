@@ -47,6 +47,45 @@ where
     }
 }
 
+/// Collect every node whose kind is in `kinds` into a Vec whose
+/// lifetime is tied to the tree. Use this instead of `walk_tree`
+/// when you need to keep node references after the walk completes —
+/// `walk_tree`'s closure has a higher-ranked lifetime that prevents
+/// nodes from escaping the closure body, so trying to push them into
+/// a Vec defined outside the closure does not type-check. The manual
+/// cursor walk here preserves the tree lifetime `'t` on each node.
+///
+/// Matches `walk_tree`'s error-skipping semantics: subtrees rooted at
+/// ERROR or MISSING nodes are skipped entirely so callers don't pull
+/// phantom nodes out of a parse-error region.
+pub fn collect_nodes_of_kinds<'t>(
+    tree: &'t tree_sitter::Tree,
+    kinds: &[&str],
+) -> Vec<tree_sitter::Node<'t>> {
+    let mut out: Vec<tree_sitter::Node<'t>> = Vec::new();
+    let mut cursor = tree.walk();
+    'outer: loop {
+        let node = cursor.node();
+        let bad = node.is_error() || node.is_missing();
+        if !bad {
+            if kinds.contains(&node.kind()) {
+                out.push(node);
+            }
+            if cursor.goto_first_child() {
+                continue;
+            }
+        }
+        loop {
+            if cursor.goto_next_sibling() {
+                continue 'outer;
+            }
+            if !cursor.goto_parent() {
+                return out;
+            }
+        }
+    }
+}
+
 /// Advance the cursor to the next sibling, walking up the tree if needed.
 /// Returns false if we walked back to the root with no more siblings — the
 /// caller should stop iterating.

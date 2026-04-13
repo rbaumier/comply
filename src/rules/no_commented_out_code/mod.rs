@@ -147,43 +147,6 @@ pub(super) fn has_code_shape(text: &str) -> bool {
     text.contains(';') || text.contains('{')
 }
 
-/// Collect every node whose kind is in `kinds` into a Vec whose
-/// lifetime matches the tree. Can't use `walker::walk_tree` for this
-/// because its closure argument has a higher-ranked lifetime and
-/// nodes can't escape the closure; the manual cursor walk here
-/// preserves the tree lifetime `'t` on each node we push.
-///
-/// Matches `walk_tree`'s error-skipping semantics: subtrees rooted
-/// at ERROR or MISSING nodes are skipped entirely so we don't pull
-/// phantom comment nodes out of a parse-error region.
-pub(super) fn collect_nodes_of_kinds<'t>(
-    tree: &'t tree_sitter::Tree,
-    kinds: &[&'static str],
-) -> Vec<tree_sitter::Node<'t>> {
-    let mut out: Vec<tree_sitter::Node<'t>> = Vec::new();
-    let mut cursor = tree.walk();
-    'outer: loop {
-        let node = cursor.node();
-        let bad = node.is_error() || node.is_missing();
-        if !bad {
-            if kinds.contains(&node.kind()) {
-                out.push(node);
-            }
-            if cursor.goto_first_child() {
-                continue;
-            }
-        }
-        loop {
-            if cursor.goto_next_sibling() {
-                continue 'outer;
-            }
-            if !cursor.goto_parent() {
-                return out;
-            }
-        }
-    }
-}
-
 /// Group adjacent comment nodes into virtual blocks. Two comments are
 /// considered adjacent if the second one starts on the same line as,
 /// or the line immediately after, the first one ends.

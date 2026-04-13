@@ -131,34 +131,16 @@ fn compute_line_offsets(source: &str) -> Vec<(usize, &str)> {
 }
 
 /// Collect `(start_byte, end_byte)` ranges for every comment node in
-/// the tree. Uses a manual cursor walk so node lifetimes stay tied to
-/// the tree and we can push them out of the closure.
+/// the tree. Delegates the cursor walk to `walker::collect_nodes_of_kinds`
+/// and maps each node to its byte range.
 fn collect_comment_ranges(
     tree: &tree_sitter::Tree,
     comment_kinds: &[&str],
 ) -> Vec<(usize, usize)> {
-    let mut out: Vec<(usize, usize)> = Vec::new();
-    let mut cursor = tree.walk();
-    'outer: loop {
-        let node = cursor.node();
-        let bad = node.is_error() || node.is_missing();
-        if !bad {
-            if comment_kinds.contains(&node.kind()) {
-                out.push((node.start_byte(), node.end_byte()));
-            }
-            if cursor.goto_first_child() {
-                continue;
-            }
-        }
-        loop {
-            if cursor.goto_next_sibling() {
-                continue 'outer;
-            }
-            if !cursor.goto_parent() {
-                return out;
-            }
-        }
-    }
+    crate::rules::walker::collect_nodes_of_kinds(tree, comment_kinds)
+        .into_iter()
+        .map(|n| (n.start_byte(), n.end_byte()))
+        .collect()
 }
 
 /// Return a copy of `line_text` with every byte that falls inside any
