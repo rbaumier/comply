@@ -64,21 +64,9 @@ warning [max-function-lines] this function has too many lines (124/120)
 
 ---
 
-## 6. `no-multi-op-oneliner` — flag un `assert_eq!` de test
+## 6. `no-multi-op-oneliner` — flag un `assert_eq!` de test ✅
 
-**Source :** `mod.rs:887`
-**Observation :**
-```
-src/rules/no_empty_test_file/text.rs:62:1:
-warning [no-multi-op-oneliner] Line has 11 chained operations
-```
-Ligne :
-```rust
-assert_eq!(run("utils.spec.ts", "// TODO: add tests").len(), 1);
-```
-C'est un test idiomatique.
-
-**Décision :** _à compléter_
+**Décision : ignorer les ranges de comment nodes (tree-sitter) avant compter les opérateurs.** Le scanner naïf comptait les `/`, `-`, `.` dans le trailing `// comment` (4 ops réels + 7 noise = 11 reportés). Détails dans le docblock de `src/rules/no_multi_op_oneliner/dense_lines.rs`.
 
 ---
 

@@ -25,6 +25,7 @@ impl AstCheck for Check {
             ctx,
             tree,
             &["expression_statement", "variable_declarator"],
+            &["comment"],
         )
     }
 }
@@ -57,5 +58,31 @@ mod tests {
     fn allows_short_but_dense_expression() {
         // Dense but short — under the line-length floor.
         assert!(run_on("const x = a.b.c + d.e * f;").is_empty());
+    }
+
+    #[test]
+    fn does_not_count_operators_inside_trailing_line_comment() {
+        // TS equivalent of the Rust FP from RULES_TO_FIX.md #6.
+        let source =
+            "expect(run(\"utils.spec.ts\", \"// TODO: add tests\").length).toBe(1); // eslint-disable-next-line — test content not a real marker";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn does_not_count_operators_inside_trailing_block_comment() {
+        let source = "const x = a + b; /* note: a - b * c / d - e + f */";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn still_flags_dense_code_with_trailing_comment() {
+        let source = "const total = items.filter(i => i.active).map(i => i.price).reduce((a, b) => a + b, 0) * tax + discount; // total";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn does_not_flag_short_code_with_long_trailing_comment() {
+        let source = "const x = a + b; // a fairly long explanation that the result is the sum of a and b and not anything more interesting at all";
+        assert!(run_on(source).is_empty());
     }
 }
