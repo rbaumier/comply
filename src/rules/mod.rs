@@ -1026,49 +1026,6 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         inverted_assertion_arguments::register(),
         jsx_no_leaked_render::register(),
         max_union_size::register(),
-        // @TODO: ça prend aussi les impl/etc. il faudrait que ce soit uniquement dans une fonction non ?
-        //     impl Language {
-        // /// True if the language is a TypeScript/JavaScript variant — used by the
-        // /// orchestrator to dispatch to oxlint.
-        // pub fn is_typescript_family(self) -> bool {
-        //     matches!(
-        //         self,
-        //         Language::TypeScript | Language::Tsx | Language::JavaScript
-        //     )
-        // }
-
-        // /// Detect the language from a file path's extension. Returns `None`
-        // /// for extensions comply doesn't recognize. Used by the LSP server,
-        // /// which receives URIs from the editor and needs to decide whether
-        // /// the buffer is in scope before running the lint pass.
-        // pub fn from_path(path: &Path) -> Option<Self> {
-        //     let ext = path.extension()?.to_str()?;
-        //     if TS_EXTENSIONS.contains(&ext) {
-        //         Some(Language::TypeScript)
-        //
-        // ET AUSSI flagged:
-        //         /// Classify a file path into a Language based on its extension.
-        // /// Returns None for unsupported extensions (silently skipped).
-        // fn classify(path: &Path) -> Option<SourceFile> {
-        //     let ext = path.extension()?.to_str()?;
-        //     let language = if TS_EXTENSIONS.contains(&ext) {
-        //         Language::TypeScript
-        //     } else if TSX_EXTENSIONS.contains(&ext) {
-        //         Language::Tsx
-        //     } else if JS_EXTENSIONS.contains(&ext) {
-        //         Language::JavaScript
-        //     } else if RUST_EXTENSIONS.contains(&ext) {
-        //         Language::Rust
-        //     } else if VUE_EXTENSIONS.contains(&ext) {
-        //         Language::Vue
-        //     } else {
-        //         return None;
-        //     };
-        //     Some(SourceFile {
-        //         path: path.to_path_buf(),
-        //         language,
-        //     })
-        // }
         nested_control_flow::register(),
         no_arguments_usage::register(),
         no_array_constructor::register(),

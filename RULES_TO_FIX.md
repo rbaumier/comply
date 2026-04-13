@@ -144,33 +144,9 @@ warning [max-function-lines] this function has too many lines (124/120)
 
 ---
 
-## 19. `nested-control-flow` — compte les `impl` comme niveau d'imbrication
+## 19. `nested-control-flow` — compte les `impl` comme niveau d'imbrication ✅
 
-**Source :** `mod.rs:1162`
-**Observation :** prend aussi les `impl`/etc. — il faudrait que ce soit
-uniquement à l'intérieur d'une fonction. Code flaggé :
-```rust
-impl Language {
-    pub fn is_typescript_family(self) -> bool {
-        matches!(
-            self,
-            Language::TypeScript | Language::Tsx | Language::JavaScript
-        )
-    }
-    // …
-}
-```
-Et aussi sur :
-```rust
-fn classify(path: &Path) -> Option<SourceFile> {
-    let ext = path.extension()?.to_str()?;
-    let language = if TS_EXTENSIONS.contains(&ext) {
-        // …
-    } else if /* … */;
-}
-```
-
-**Décision :** _à compléter_
+**Décision : collapse des `else if` cascades + reset de depth à la frontière de fonction/closure, aligné sur eslint `max-depth`.** La vraie cause du FP n'était pas `impl` (jamais compté) mais la cascade `else if` : tree-sitter-{rust,typescript} parse `else if` comme `if_* → else_clause → if_*`, gonflant la profondeur artificiellement. Le backend collapse ces cascades (même logique qu'eslint `if (node.parent.type !== "IfStatement")`) et reset la profondeur à chaque `function_item`/`closure_expression` en Rust et chaque callable en TS, comme le `functionStack` d'eslint. MAX_DEPTH reste à 3. Détails dans le docblock de `src/rules/nested_control_flow/mod.rs`. 21 tests verts (rust + typescript + shared_tests). Les 4 FPs sur `src/files.rs` disparaissent.
 
 ---
 
