@@ -1014,24 +1014,6 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         no_duplicate_string::register(),
         no_ignored_exceptions::register(),
         no_inverted_boolean_check::register(),
-        // @TODO: il le fait aussi sur les match, peut-être que sur les match on peut créer une autre règle max_match_depth ? ou alors on ne fait rien en rust vu qu'on a déjà la complexité cyclomatic/cognitive/etc. ?
-        // src/rules/no_misleading_collection_name/typescript.rs:118:13: error [no-nested-switch] Nested `match` — extract the inner match into a separate function.
-        //         fn initializer_shape(value: tree_sitter::Node, source: &[u8]) -> Option<Shape> {
-        //     match value.kind() {
-        //         "array" => Some(Shape::Array),
-        //         "new_expression" => {
-        //             let ctor = value.child_by_field_name("constructor")?;
-        //             let ctor_name = ctor.utf8_text(source).ok()?;
-        //             match ctor_name {
-        //                 "Set" => Some(Shape::Set),
-        //                 "Map" => Some(Shape::Map),
-        //                 "Array" => Some(Shape::Array),
-        //                 _ => None,
-        //             }
-        //         }
-        //         _ => None,
-        //     }
-        // }
         no_nested_switch::register(),
         // @TODO:
         // for job in &jobs {

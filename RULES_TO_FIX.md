@@ -132,37 +132,9 @@ warning [max-function-lines] this function has too many lines (124/120)
 
 ---
 
-## 17. `no-nested-switch` — flag les `match` Rust imbriqués
+## 17. `no-nested-switch` — flag les `match` Rust imbriqués ✅
 
-**Source :** `mod.rs:1119`
-**Observation :**
-```
-src/rules/no_misleading_collection_name/typescript.rs:118:13:
-error [no-nested-switch] Nested `match` — extract the inner match
-```
-Code flaggé :
-```rust
-fn initializer_shape(value: tree_sitter::Node, source: &[u8]) -> Option<Shape> {
-    match value.kind() {
-        "array" => Some(Shape::Array),
-        "new_expression" => {
-            let ctor = value.child_by_field_name("constructor")?;
-            let ctor_name = ctor.utf8_text(source).ok()?;
-            match ctor_name {
-                "Set" => Some(Shape::Set),
-                "Map" => Some(Shape::Map),
-                "Array" => Some(Shape::Array),
-                _ => None,
-            }
-        }
-        _ => None,
-    }
-}
-```
-Question : peut-être une règle dédiée `max-match-depth` pour Rust ? Ou
-ne rien faire en Rust car la complexité cyclomatic/cognitive couvre déjà ?
-
-**Décision :** _à compléter_
+**Décision : drop le backend Rust, garder TS/JSX uniquement.** Rust `match` est l'idiome de dispatch (exhaustif, pas de fall-through, scope par arm) et un `match` imbriqué dans une arm est une refinement hiérarchique normale. Les cas où une vraie explosion de complexité justifierait une extraction sont déjà couverts par `cognitive-complexity` et `cyclomatic-complexity` (qui ont tous deux des backends Rust). Détails dans le docblock de `src/rules/no_nested_switch/mod.rs`.
 
 ---
 
