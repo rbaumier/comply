@@ -1101,23 +1101,7 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         no_post_message_star::register(),
         no_primitive_wrappers::register(),
         no_pseudo_random::register(),
-        // @TODO flagged:
-        // src/rules/react_no_object_type_as_default_prop/typescript.rs:102:1: warning [no-redundant-jump] Redundant `return;` — execution already falls through here.
-        //         if is_arrow {
-        //     let Some(parent) = node.parent() else { return };
-        //     if parent.kind() != "variable_declarator" { return; }
-        //     let Some(name) = parent.child_by_field_name("name") else { return };
-        //     let Ok(t) = name.utf8_text(source) else { return };
-        //     if !t.starts_with(|c: char| c.is_ascii_uppercase()) {
-        //         return;
-        //     }
-        // }
-
-        // // Find the formal_parameters → object_pattern with defaults.
-        // let mut stack = vec![node];
-        // while let Some(current) = stack.pop() {
-
-        // no_redundant_jump::register(),
+        no_redundant_jump::register(),
         no_redundant_optional::register(),
         no_return_type_any::register(),
         no_same_argument_assert::register(),

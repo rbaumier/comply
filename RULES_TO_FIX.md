@@ -162,34 +162,9 @@ warning [max-function-lines] this function has too many lines (124/120)
 
 ---
 
-## 22. `no-redundant-jump` — flag un return non redondant
+## 22. `no-redundant-jump` — flag un return non redondant ✅
 
-**Source :** `mod.rs:1295`
-**Observation :**
-```
-src/rules/react_no_object_type_as_default_prop/typescript.rs:102:1:
-warning [no-redundant-jump] Redundant `return;` — execution already falls through
-```
-Code flaggé :
-```rust
-if is_arrow {
-    let Some(parent) = node.parent() else { return };
-    if parent.kind() != "variable_declarator" { return; }
-    let Some(name) = parent.child_by_field_name("name") else { return };
-    let Ok(t) = name.utf8_text(source) else { return };
-    if !t.starts_with(|c: char| c.is_ascii_uppercase()) {
-        return;
-    }
-}
-
-// Find the formal_parameters → object_pattern with defaults.
-let mut stack = vec![node];
-while let Some(current) = stack.pop() {
-```
-Le `return;` n'est pas redondant : il sort tôt avant la suite. Règle
-commentée pour l'instant.
-
-**Décision :** _à compléter_
+**Décision : réécriture complète en vrai AstCheck.** L'ancienne impl était un scanner ligne-par-ligne déguisé : trouver `return;`, next non-blank line doit être `}`, next non-blank line après ce `}` doit être EOF ou un autre `}`. Ce heuristique traitait deux `}` consécutifs comme « fin de scope » même quand le scope *extérieur* avait encore du code. Le nouvel algo walk up depuis le nœud jusqu'à une frontière de fonction (pour `return;`) ou de loop (pour `continue;`), exigeant une position de queue à chaque `block`/`statement_block` (dernier `named_child`) et traitant `if`/`else`/`match`/`switch_case` comme des wrappers transparents (branches parallèles = tails parallèles). `return;` avec valeur et `continue label;` skippés (seules les formes nues sont considérées). Détails dans le docblock de `src/rules/no_redundant_jump/mod.rs`. 23 tests verts, 0 FP sur le fichier initial. Règle re-activée.
 
 ---
 
