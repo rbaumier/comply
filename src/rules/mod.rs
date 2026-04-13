@@ -244,7 +244,6 @@ pub mod arguments_order;
 pub mod array_callback_without_return;
 pub mod assertions_in_tests;
 pub mod auth_on_mutation;
-pub mod blank_line_between_blocks;
 pub mod colocated_tests;
 pub mod comma_or_logical_or_case;
 pub mod cyclomatic_complexity;
@@ -1216,8 +1215,6 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         hono_secure_headers_disabled::register(),
         api_first::register(),
         auth_on_mutation::register(),
-        // @TODO (TODO_AFTER_REVIEW)
-        // blank_line_between_blocks::register(),
         colocated_tests::register(),
         data_clumps::register(),
         error_message_is_remediation::register(),
