@@ -327,7 +327,6 @@ pub mod no_redundant_optional;
 pub mod no_return_type_any;
 pub mod no_same_argument_assert;
 pub mod no_small_switch;
-pub mod no_sql_string_format;
 pub mod no_timing_attack;
 pub mod no_try_statements;
 pub mod no_undefined_argument;
@@ -1106,17 +1105,6 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         no_return_type_any::register(),
         no_same_argument_assert::register(),
         no_small_switch::register(),
-        // @TODO: ça prend des format! qui ne sont pas des requêtes sql:
-        //         pub fn build_prompt(source: &str) -> String {
-        //     format!(
-        //         r#"You are a code quality auditor. Analyze the following source file and evaluate it against these 4 categories. Be strict but fair
-        // Source file:
-        // ```
-        // {source}
-        // ```"#
-        //     )
-        // }
-        // no_sql_string_format::register(),
         no_undefined_argument::register(),
         no_undefined_assignment::register(),
         no_unenclosed_multiline_block::register(),

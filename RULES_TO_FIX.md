@@ -168,24 +168,9 @@ warning [max-function-lines] this function has too many lines (124/120)
 
 ---
 
-## 23. `no-sql-string-format` — flag un `format!()` qui n'est pas SQL
+## 23. `no-sql-string-format` — flag un `format!()` qui n'est pas SQL ✅
 
-**Source :** `mod.rs:1316`
-**Observation :** prend des `format!` qui ne sont pas des requêtes SQL :
-```rust
-pub fn build_prompt(source: &str) -> String {
-    format!(
-        r#"You are a code quality auditor. Analyze the following source file…
-Source file:
-```
-{source}
-```"#
-    )
-}
-```
-Règle commentée pour l'instant.
-
-**Décision :** _à compléter_
+**Décision : règle supprimée entièrement — doublon (strictement inférieur) de `db-no-string-concat-sql`.** Le backend Rust matchait n'importe quel substring uppercased (`SELECT`/`INSERT`/`UPDATE`/`DELETE`/`WHERE`), donc le prompt LLM de `build_prompt` dans `src/llm/unified_prompt.rs` — qui contient de la prose anglaise avec « delete this », « updateRoleField » etc. — était flaggé. `db-no-string-concat-sql` (résolu en #11) couvre déjà les mêmes macros Rust avec le helper robuste `is_sql_string` (whole-word + DML keyword + WHERE/FROM confirmation). Le backend TS était un scanner ligne-par-ligne équivalent, tout aussi fragile. Gap restant sur les template literals TS (ex: `` `SELECT ... ${id}` ``) adressé dans l'entrée suivante en étendant `db-no-string-concat-sql`. `src/rules/no_sql_string_format/` supprimé.
 
 ---
 
