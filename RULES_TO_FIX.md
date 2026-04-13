@@ -84,26 +84,9 @@ warning [max-function-lines] this function has too many lines (124/120)
 
 ---
 
-## 9. `sql-no-offset-pagination` — flag le mot `offset` dans une liste
+## 9. `sql-no-offset-pagination` — flag le mot `offset` dans une liste ✅
 
-**Source :** `mod.rs:996`
-**Observation :**
-```
-src/rules/explicit_units/typescript.rs:21:1:
-warning [sql-no-offset-pagination] `OFFSET` pagination is O(N)…
-```
-Code flaggé :
-```rust
-const AMBIGUOUS_BASES: &[&str] = &[
-    "delay", "timeout", "interval", "duration", "elapsed", "age", "wait",
-    "size", "length", "distance", "offset", "width", "height", "limit",
-    "rate", "frequency", "threshold",
-];
-```
-Le mot `offset` apparaît comme literal dans une liste de bases ambiguës,
-pas dans une requête SQL. Règle commentée pour l'instant.
-
-**Décision :** _à compléter_
+**Décision : réécriture en AstCheck ciblant les string literals SQL** (même infra que #8). Détails dans le docblock de `src/rules/sql_no_offset_pagination/mod.rs`. Règle re-activée.
 
 ---
 

@@ -963,14 +963,7 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         // Database rules (extracted from the database skill).
         sql_no_select_star::register(),
         sql_no_between_timestamp::register(),
-        // @TODO flagged:
-        // src/rules/explicit_units/typescript.rs:21:1: warning [sql-no-offset-pagination] `OFFSET` pagination is O(N) on deep pages — use cursor-based (keyset) pagination: `WHERE id > :last_id ORDER BY id LIMIT N`.
-        //         const AMBIGUOUS_BASES: &[&str] = &[
-        //     "delay", "timeout", "interval", "duration", "elapsed", "age", "wait",
-        //     "size", "length", "distance", "offset", "width", "height", "limit",
-        //     "rate", "frequency", "threshold",
-        // ];
-        // sql_no_offset_pagination::register(),
+        sql_no_offset_pagination::register(),
         // @TODO: flagged sur:
         //         fn flags_negative_lookahead_same_char() {
         //     assert_eq!(run(r#"const re = /(?!a)a/;"#).len(), 1);
