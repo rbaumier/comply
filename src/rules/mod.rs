@@ -964,11 +964,7 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         sql_no_select_star::register(),
         sql_no_between_timestamp::register(),
         sql_no_offset_pagination::register(),
-        // @TODO: flagged sur:
-        //         fn flags_negative_lookahead_same_char() {
-        //     assert_eq!(run(r#"const re = /(?!a)a/;"#).len(), 1);
-        // }
-        // sql_no_varchar::register(),
+        sql_no_varchar::register(),
         sql_no_float_for_money::register(),
         sql_no_timestamp_without_tz::register(),
         sql_no_like_wildcard_prefix::register(),

@@ -48,7 +48,7 @@ pub fn contains_word(text: &str, word: &str) -> bool {
     false
 }
 
-fn is_ident_byte(b: u8) -> bool {
+pub(crate) fn is_ident_byte(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_'
 }
 
@@ -65,6 +65,53 @@ pub fn is_sql_string(text: &str) -> bool {
         return false;
     }
     contains_word(&lower, "where") || contains_word(&lower, "from")
+}
+
+/// Returns true if `text` looks like a SQL DDL statement (schema
+/// management) — `CREATE TABLE`, `ALTER TABLE`, etc. Used by rules
+/// that look for column type smells (`VARCHAR`, `TIMESTAMP` without
+/// timezone, …) which only appear in DDL, never in DML.
+///
+/// Heuristic: requires `CREATE` or `ALTER` AND `TABLE` or `TYPE`,
+/// both whole-word matched. This catches the common schema
+/// statements while rejecting English prose and identifiers.
+pub fn is_sql_ddl(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    let has_verb = contains_word(&lower, "create") || contains_word(&lower, "alter");
+    if !has_verb {
+        return false;
+    }
+    contains_word(&lower, "table") || contains_word(&lower, "type")
+}
+
+/// Returns true if `lower_text` (already lowercase) contains `word`
+/// (lowercase) at a word boundary AND the next non-whitespace
+/// character is `(`. Use this to detect SQL function/type calls
+/// like `VARCHAR(255)`, `DECIMAL(10, 2)`, etc., without matching
+/// identifiers like `same_char(` or `bpchar_value`.
+pub fn word_followed_by_open_paren(lower_text: &str, word: &str) -> bool {
+    let bytes = lower_text.as_bytes();
+    let needle = word.as_bytes();
+    if needle.is_empty() || bytes.len() < needle.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i + needle.len() <= bytes.len() {
+        if bytes[i..i + needle.len()] == *needle {
+            let before_ok = i == 0 || !is_ident_byte(bytes[i - 1]);
+            if before_ok {
+                let mut j = i + needle.len();
+                while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+                    j += 1;
+                }
+                if j < bytes.len() && bytes[j] == b'(' {
+                    return true;
+                }
+            }
+        }
+        i += 1;
+    }
+    false
 }
 
 /// Tree-sitter node kinds that represent string literals in TS / TSX / JS.
@@ -123,5 +170,50 @@ mod tests {
         assert!(!contains_word("select_id", "select"));
         assert!(!contains_word("id_select", "select"));
         assert!(contains_word("select id", "select"));
+    }
+
+    #[test]
+    fn detects_create_table_ddl() {
+        assert!(is_sql_ddl("CREATE TABLE users (id INT)"));
+    }
+
+    #[test]
+    fn detects_alter_table_ddl() {
+        assert!(is_sql_ddl("ALTER TABLE users ADD COLUMN name TEXT"));
+    }
+
+    #[test]
+    fn detects_create_type_ddl() {
+        assert!(is_sql_ddl("CREATE TYPE status AS ENUM ('a', 'b')"));
+    }
+
+    #[test]
+    fn rejects_dml_as_ddl() {
+        assert!(!is_sql_ddl("SELECT * FROM users"));
+    }
+
+    #[test]
+    fn word_followed_by_open_paren_matches_varchar() {
+        assert!(word_followed_by_open_paren("name varchar(255)", "varchar"));
+    }
+
+    #[test]
+    fn word_followed_by_open_paren_matches_with_space() {
+        assert!(word_followed_by_open_paren("name varchar (255)", "varchar"));
+    }
+
+    #[test]
+    fn word_followed_by_open_paren_rejects_identifier_prefix() {
+        // `same_char(` should NOT match `char`.
+        assert!(!word_followed_by_open_paren(
+            "fn flags_negative_lookahead_same_char()",
+            "char"
+        ));
+    }
+
+    #[test]
+    fn word_followed_by_open_paren_rejects_identifier_suffix() {
+        // `varchar_value` should NOT match `varchar`.
+        assert!(!word_followed_by_open_paren("varchar_value(arg)", "varchar"));
     }
 }

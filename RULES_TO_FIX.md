@@ -90,18 +90,9 @@ warning [max-function-lines] this function has too many lines (124/120)
 
 ---
 
-## 10. `sql-no-varchar` — flag dans un test de regex
+## 10. `sql-no-varchar` — flag dans un test de regex ✅
 
-**Source :** `mod.rs:1004`
-**Observation :** flagged sur :
-```rust
-fn flags_negative_lookahead_same_char() {
-    assert_eq!(run(r#"const re = /(?!a)a/;"#).len(), 1);
-}
-```
-Règle commentée pour l'instant.
-
-**Décision :** _à compléter_
+**Décision : réécriture en AstCheck ciblant les string literals DDL.** Nouveau filtre `sql_helpers::is_sql_ddl` (CREATE/ALTER + TABLE/TYPE) + `word_followed_by_open_paren` pour matcher `VARCHAR(` / `CHAR(` au mot près. Détails dans le docblock de `src/rules/sql_no_varchar/mod.rs`. Règle re-activée.
 
 ---
 
