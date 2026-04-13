@@ -138,27 +138,9 @@ warning [max-function-lines] this function has too many lines (124/120)
 
 ---
 
-## 18. `function-inside-loop` — non pertinent en Rust
+## 18. `function-inside-loop` — règle supprimée entièrement ✅
 
-**Source :** `mod.rs:1138`
-**Observation :** flagged sur :
-```rust
-for job in &jobs {
-    let file_id = job.path.display().to_string();
-    let wr = match worker_results.iter().find(|r| r.id == file_id) {
-        Some(r) => r,
-        None => continue,
-    };
-}
-```
-Note que j'ai laissée :
-> Ce lint est techniquement invalide en Rust. En Rust, une closure n'est
-> pas un objet dynamique. C'est une simple structure anonyme allouée sur
-> la pile à coût zéro. Il n'y a aucune allocation sur le tas.
-
-Règle commentée pour l'instant.
-
-**Décision :** _à compléter_
+**Décision : règle supprimée (TS + Rust).** En Rust, les closures compilent vers des structs anonymes stack-allouées à coût zéro ; le FP user (`|r| r.id == file_id` passé à `find()` avec capture d'une var loop-scoped) est l'idiome pur de prédicat sur combinator et ne peut pas être déplacé hors du loop. Côté JS/TS, le rationale de la règle s'est largement érodé avec les JIT modernes, et eslint couvre déjà le sous-cas réellement bogué (`no-loop-func` sur capture de var mutée). Pas assez de valeur pour justifier le maintien. `src/rules/function_inside_loop/` supprimé, registration retirée de `mod.rs`.
 
 ---
 

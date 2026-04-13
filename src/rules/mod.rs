@@ -42,7 +42,6 @@ pub mod vue_template_helpers;
 // rust_must_use_on_result intentionally not declared — see mod.rs
 // below for the rationale.
 pub mod cognitive_complexity;
-pub mod function_inside_loop;
 pub mod generator_without_yield;
 pub mod jsdoc_needs_description;
 pub mod module_header;
@@ -1015,18 +1014,6 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         no_ignored_exceptions::register(),
         no_inverted_boolean_check::register(),
         no_nested_switch::register(),
-        // @TODO:
-        // for job in &jobs {
-        // let file_id = job.path.display().to_string();
-
-        // let wr = match worker_results.iter().find(|r| r.id == file_id) {
-        //     Some(r) => r,
-        //     None => continue,
-        // };
-        // -> peut-être qu'on veut garder ça ?
-        // -> Non, ce lint est techniquement invalide en Rust.
-        // Il se trompe de langage (c'est souvent le cas avec des linters multi-langages génériques). En Rust, une closure n'est pas un objet dynamique comme en JavaScript ou en C#. C'est une simple structure anonyme allouée sur la pile (stack) à coût zéro. Il n'y a aucune allocation sur le tas (heap).
-        // function_inside_loop::register(),
         arguments_order::register(),
         array_callback_without_return::register(),
         assertions_in_tests::register(),
