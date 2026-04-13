@@ -1,10 +1,8 @@
 //! no-duplicate-string — TS / JS / TSX backend.
 
-use crate::diagnostic::{Diagnostic, Severity};
+use crate::diagnostic::Diagnostic;
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::sql_helpers::TS_STRING_KINDS;
-use crate::rules::walker::collect_nodes_of_kinds;
-use std::collections::HashMap;
 
 #[derive(Debug)]
 pub struct Check;

@@ -52,11 +52,10 @@ crate::ast_check! { |node, source, ctx, diagnostics|
     let mut fragments = String::new();
     let mut fragment_cursor = first_arg.walk();
     for child in first_arg.named_children(&mut fragment_cursor) {
-        if child.kind() == "string_fragment" {
-            if let Ok(t) = child.utf8_text(source) {
+        if child.kind() == "string_fragment"
+            && let Ok(t) = child.utf8_text(source) {
                 fragments.push_str(t);
             }
-        }
     }
     let lowered = fragments.to_ascii_lowercase();
     if !is_weak_cipher_spec(&lowered) {

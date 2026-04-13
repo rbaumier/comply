@@ -63,7 +63,7 @@ pub fn extract_scripts<'src>(
 
 fn script_block_from_element<'src>(
     node: tree_sitter::Node,
-    source: &'src str,
+    _source: &'src str,
     source_bytes: &[u8],
 ) -> Option<ScriptBlock<'src>> {
     // The `script_element` has children: start_tag, raw_text, end_tag.

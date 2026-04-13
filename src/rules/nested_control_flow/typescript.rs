@@ -68,13 +68,11 @@ impl AstCheck for Check {
             }
             // Skip the inner `if_statement` of an `else if` cascade — it is
             // the same cognitive level as the outer `if`, counted once.
-            if node.kind() == "if_statement" {
-                if let Some(parent) = node.parent() {
-                    if parent.kind() == "else_clause" {
+            if node.kind() == "if_statement"
+                && let Some(parent) = node.parent()
+                    && parent.kind() == "else_clause" {
                         return;
                     }
-                }
-            }
             let depth = control_flow_depth(node) + 1;
             if depth > MAX_DEPTH {
                 let line = node.start_position().row + 1;

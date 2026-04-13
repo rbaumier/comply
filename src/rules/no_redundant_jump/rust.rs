@@ -204,7 +204,7 @@ fn f(xs: &[i32]) {
         // block via the if, walking up: block(if) → if_expression →
         // expression_statement → block(for body) → for_expression.
         // The if is last-child of for body → REDUNDANT.
-        assert_eq!(run_on(&src).len(), 1);
+        assert_eq!(run_on(src).len(), 1);
     }
 
     #[test]
@@ -219,7 +219,7 @@ fn f(xs: &[i32]) {
     }
 }
 "#;
-        assert!(run_on(&src).is_empty());
+        assert!(run_on(src).is_empty());
     }
 
     #[test]
@@ -235,7 +235,7 @@ fn f(x: u8) {
     }
 }
 "#;
-        assert_eq!(run_on(&src).len(), 1);
+        assert_eq!(run_on(src).len(), 1);
     }
 
     #[test]
@@ -252,6 +252,6 @@ fn f(x: u8) {
     bar();
 }
 "#;
-        assert!(run_on(&src).is_empty());
+        assert!(run_on(src).is_empty());
     }
 }
