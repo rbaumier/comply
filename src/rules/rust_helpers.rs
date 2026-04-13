@@ -178,6 +178,68 @@ pub fn is_rust_file(path: &std::path::Path) -> bool {
     path.extension().is_some_and(|e| e == "rs")
 }
 
+/// True if `node` is inside any form of Rust test context:
+///
+/// - inside a `#[test]` function
+/// - inside a `#[cfg(test)]` / `#[cfg_attr(test, …)]` module
+/// - inside a file marked with `#![cfg(test)]`
+///
+/// Rules that want to relax their discipline for test code (allow
+/// `unwrap`, `panic!`, `let _ = fallible()`, etc.) call this helper
+/// to decide whether a candidate should be skipped.
+pub fn is_in_test_context(node: Node, source: &[u8]) -> bool {
+    // File-level inner attribute: `#![cfg(test)]` on the crate root.
+    let mut root = node;
+    while let Some(parent) = root.parent() {
+        root = parent;
+    }
+    let mut cursor = root.walk();
+    for child in root.children(&mut cursor) {
+        if child.kind() != "inner_attribute_item" {
+            continue;
+        }
+        if let Ok(text) = child.utf8_text(source)
+            && text.contains("cfg(test)")
+        {
+            return true;
+        }
+    }
+
+    // Outer `#[test]` / `#[cfg(test)]` on an enclosing function or module.
+    let mut cur = node;
+    while let Some(parent) = cur.parent() {
+        if (parent.kind() == "function_item" || parent.kind() == "mod_item")
+            && has_test_attribute(parent, source)
+        {
+            return true;
+        }
+        cur = parent;
+    }
+    false
+}
+
+/// True if the item has `#[test]`, `#[cfg(test)]`, or `#[cfg_attr(test, …)]`
+/// as a preceding `attribute_item` sibling. In tree-sitter-rust, outer
+/// attributes on an item appear as `attribute_item` nodes immediately
+/// before the item they decorate.
+pub fn has_test_attribute(item: Node, source: &[u8]) -> bool {
+    let mut sibling = item.prev_named_sibling();
+    while let Some(s) = sibling {
+        if s.kind() != "attribute_item" {
+            break;
+        }
+        if let Ok(text) = s.utf8_text(source)
+            && (text.contains("#[test]")
+                || text.contains("cfg(test)")
+                || text.contains("cfg_attr(test"))
+        {
+            return true;
+        }
+        sibling = s.prev_named_sibling();
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests_regex_extract {
     use super::*;

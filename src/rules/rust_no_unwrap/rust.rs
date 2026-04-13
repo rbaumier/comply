@@ -16,6 +16,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
+use crate::rules::rust_helpers::is_in_test_context;
 use crate::rules::walker::walk_tree;
 
 #[derive(Debug)]
@@ -74,69 +75,6 @@ impl AstCheck for Check {
 /// `#[cfg(test)]` annotation.
 fn is_under_tests_dir(path: &std::path::Path) -> bool {
     path.components().any(|c| c.as_os_str() == "tests")
-}
-
-/// True if `node` is in any test context the rule recognizes:
-///
-/// - inside a `#[test]` function
-/// - inside a `#[cfg(test)]` module
-/// - inside a file marked with `#![cfg(test)]`
-/// - inside a file under Cargo's `tests/` integration-test directory
-///   (cargo treats every `tests/*.rs` as cfg(test) implicitly, so the
-///   compiler exempts those files from test discipline — the rule
-///   should match that behavior)
-fn is_in_test_context(node: tree_sitter::Node, source: &[u8]) -> bool {
-    // First check the file-level inner attribute. We walk up to the
-    // root node and scan its top-level children for `#![cfg(test)]`.
-    let mut root = node;
-    while let Some(parent) = root.parent() {
-        root = parent;
-    }
-    let mut cursor = root.walk();
-    for child in root.children(&mut cursor) {
-        if child.kind() != "inner_attribute_item" {
-            continue;
-        }
-        if let Ok(text) = child.utf8_text(source)
-            && text.contains("cfg(test)")
-        {
-            return true;
-        }
-    }
-
-    // Then walk up for outer `#[test]` / `#[cfg(test)]` on enclosing
-    // items.
-    let mut cur = node;
-    while let Some(parent) = cur.parent() {
-        if (parent.kind() == "function_item" || parent.kind() == "mod_item")
-            && has_test_attribute(parent, source)
-        {
-            return true;
-        }
-        cur = parent;
-    }
-    false
-}
-
-/// True if the item has `#[test]` or `#[cfg(test)]` as a preceding
-/// `attribute_item` sibling. In tree-sitter-rust, attributes on an item
-/// appear as `attribute_item` nodes immediately before the item.
-fn has_test_attribute(item: tree_sitter::Node, source: &[u8]) -> bool {
-    let mut sibling = item.prev_named_sibling();
-    while let Some(s) = sibling {
-        if s.kind() != "attribute_item" {
-            break;
-        }
-        if let Ok(text) = s.utf8_text(source)
-            && (text.contains("#[test]")
-                || text.contains("cfg(test)")
-                || text.contains("cfg_attr(test"))
-        {
-            return true;
-        }
-        sibling = s.prev_named_sibling();
-    }
-    false
 }
 
 #[cfg(test)]

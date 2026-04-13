@@ -126,21 +126,9 @@ warning [max-function-lines] this function has too many lines (124/120)
 
 ---
 
-## 16. ??? — règle non identifiée, question d'exclusion des tests
+## 16. `no-ignored-exceptions` — flag `let _ = …` dans un `#[test]` ✅
 
-**Source :** `mod.rs:1106`
-**Observation :** `on veut peut-être l'ignorer dans les tests ?` Suit un
-extrait de test :
-```rust
-fn missing_config_falls_back_to_defaults() {
-    let tmp = TempDir::new().unwrap();
-    let cfg = Config::load_from(tmp.path()).unwrap();
-    let _ = cfg.threshold("max-function-lines", "max", 30);
-}
-```
-Le commentaire ne nomme pas la règle déclenchée — **à retrouver**.
-
-**Décision :** _à compléter_
+**Décision : skip dans le test context.** La règle Rust flagge `let _ = fallible()` parce que `let _ =` discard explicite un Result. Mais dans un `#[test]`, c'est l'idiome pour « call and don't care, juste vérifier qu'il n'y a pas de panic ». Le helper partagé `rust_helpers::is_in_test_context` (déjà utilisé par `rust_no_unwrap` et `rust_no_panic_macros`, dont les copies locales sont retirées au passage) est appelé en début de check pour skip les `#[test]` fns et `#[cfg(test)]` mods.
 
 ---
 

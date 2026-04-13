@@ -14,6 +14,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
+use crate::rules::rust_helpers::is_in_test_context;
 use crate::rules::walker::walk_tree;
 
 const BANNED_MACROS: &[&str] = &["panic", "todo", "unimplemented", "unreachable"];
@@ -59,38 +60,6 @@ impl AstCheck for Check {
         });
         diagnostics
     }
-}
-
-/// Walks up parents looking for a `#[test]` fn or `#[cfg(test)]` mod.
-fn is_in_test_context(node: tree_sitter::Node, source: &[u8]) -> bool {
-    let mut cur = node;
-    while let Some(parent) = cur.parent() {
-        if (parent.kind() == "function_item" || parent.kind() == "mod_item")
-            && has_test_attribute(parent, source)
-        {
-            return true;
-        }
-        cur = parent;
-    }
-    false
-}
-
-fn has_test_attribute(item: tree_sitter::Node, source: &[u8]) -> bool {
-    let mut sibling = item.prev_named_sibling();
-    while let Some(s) = sibling {
-        if s.kind() != "attribute_item" {
-            break;
-        }
-        if let Ok(text) = s.utf8_text(source)
-            && (text.contains("#[test]")
-                || text.contains("cfg(test)")
-                || text.contains("cfg_attr(test"))
-        {
-            return true;
-        }
-        sibling = s.prev_named_sibling();
-    }
-    false
 }
 
 #[cfg(test)]

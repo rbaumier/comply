@@ -1012,17 +1012,6 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         prefer_while::register(),
         expression_complexity::register(),
         no_duplicate_string::register(),
-        // @TODO: on veut peut-être l'ignorer dans les tests ?
-        //     //     #[test]
-        // fn missing_config_falls_back_to_defaults() {
-        //     let tmp = TempDir::new().unwrap();
-        //     // No comply.toml in tmp or any ancestor (we may walk up to a
-        //     // real one, that's fine — what we test is "no panic").
-        //     let cfg = Config::load_from(tmp.path()).unwrap();
-        //     // The default for max-function-lines is 30, regardless of
-        //     // whether we walked into a real workspace.
-        //     let _ = cfg.threshold("max-function-lines", "max", 30);
-        // }
         no_ignored_exceptions::register(),
         no_inverted_boolean_check::register(),
         // @TODO: il le fait aussi sur les match, peut-être que sur les match on peut créer une autre règle max_match_depth ? ou alors on ne fait rien en rust vu qu'on a déjà la complexité cyclomatic/cognitive/etc. ?
