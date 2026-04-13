@@ -29,6 +29,7 @@ impl TextCheck for Check {
                     rule_id: "regex-no-escape-backspace".into(),
                     message: "`[\\b]` matches backspace, not a word boundary — use `\\b` outside a character class for word boundaries.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

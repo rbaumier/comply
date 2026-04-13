@@ -49,6 +49,7 @@ fn check_block(
                             rule_id: "playwright-prefer-hooks-on-top".into(),
                             message: "Hooks should come before test cases.".into(),
                             severity: Severity::Warning,
+                            span: None,
                         });
                     }
                 }

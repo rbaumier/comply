@@ -83,6 +83,7 @@ impl AstCheck for Check {
                     actual.label()
                 ),
                 severity: Severity::Error,
+                span: None,
             });
         });
         diagnostics

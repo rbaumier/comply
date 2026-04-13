@@ -50,6 +50,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "prefer-structured-clone".into(),
         message: "Prefer `structuredClone(…)` over `JSON.parse(JSON.stringify(…))` to create a deep clone.".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

@@ -68,6 +68,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             "Type-only import from `{module_path}` — ensure this module is not restricted."
         ),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

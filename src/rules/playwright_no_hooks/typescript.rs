@@ -45,6 +45,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "playwright-no-hooks".into(),
         message: format!("Unexpected '{name}' hook."),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

@@ -31,6 +31,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             rule_id: "hono-cors-permissive".into(),
             message: "`cors()` without arguments defaults to `origin: '*'` — any origin can access the API.".into(),
             severity: Severity::Error,
+            span: None,
         });
         return;
     }
@@ -46,6 +47,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             rule_id: "hono-cors-permissive".into(),
             message: "`origin: '*'` allows any origin to access the API.".into(),
             severity: Severity::Error,
+            span: None,
         });
     }
 
@@ -62,6 +64,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 rule_id: "hono-cors-permissive".into(),
                 message: "`credentials: true` without a specific origin — any origin can make credentialed requests.".into(),
                 severity: Severity::Error,
+                span: None,
             });
         }
     }

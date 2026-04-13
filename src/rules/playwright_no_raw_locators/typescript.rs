@@ -56,6 +56,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                   semantic locators."
             .into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

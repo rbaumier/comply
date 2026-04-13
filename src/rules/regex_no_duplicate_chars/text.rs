@@ -82,6 +82,7 @@ impl TextCheck for Check {
                     rule_id: "regex-no-duplicate-chars".into(),
                     message: "Duplicate character in regex character class — remove the redundant character.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

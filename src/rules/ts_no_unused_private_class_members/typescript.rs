@@ -121,6 +121,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 rule_id: "ts-no-unused-private-class-members".into(),
                 message: format!("Private member `{name}` is declared but never used."),
                 severity: Severity::Warning,
+                span: None,
             });
         }
     }

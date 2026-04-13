@@ -41,6 +41,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             rule_id: "a11y-anchor-has-content".into(),
             message: "Anchor is self-closing and has no content for screen readers.".into(),
             severity: Severity::Error,
+            span: None,
         });
         return;
     }
@@ -67,6 +68,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             rule_id: "a11y-anchor-has-content".into(),
             message: "Anchor has no content — screen readers cannot announce it.".into(),
             severity: Severity::Error,
+            span: None,
         });
     }
 }

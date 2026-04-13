@@ -45,6 +45,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "ts-explicit-function-return-type".into(),
         message: "Missing return type on function.".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

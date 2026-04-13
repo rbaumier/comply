@@ -73,6 +73,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             rule_id: "array-callback-without-return".into(),
             message: "Iterator callback with block body but no return value.".into(),
             severity: Severity::Error,
+            span: None,
         });
     }
 }

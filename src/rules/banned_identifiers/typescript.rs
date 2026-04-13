@@ -52,6 +52,7 @@ fn check_identifier_node(
              Try: what does this actually accomplish?"
         ),
         severity: Severity::Warning,
+        span: None,
     })
 }
 

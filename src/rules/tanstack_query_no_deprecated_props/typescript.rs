@@ -64,6 +64,7 @@ impl AstCheck for Check {
                 rule_id: "tanstack-query-no-deprecated-props".into(),
                 message: format!("`{key_text}` is deprecated — {reason}."),
                 severity: Severity::Error,
+                span: None,
             });
         });
         diagnostics

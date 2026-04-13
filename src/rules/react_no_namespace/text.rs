@@ -50,6 +50,7 @@ impl TextCheck for Check {
                                 "Namespaced element `<{tag}>` — use a different naming pattern."
                             ),
                             severity: Severity::Error,
+                            span: None,
                         });
                     }
                 }

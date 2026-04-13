@@ -27,6 +27,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                           `children` prop."
                     .into(),
                 severity: Severity::Warning,
+                span: None,
             });
         }
     }

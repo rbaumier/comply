@@ -42,6 +42,7 @@ impl TextCheck for Check {
                          line is genuinely self-explanatory."
                     ),
                     severity: Severity::Error,
+                    span: None,
                 });
                 break; // one diagnostic per line is enough
             }

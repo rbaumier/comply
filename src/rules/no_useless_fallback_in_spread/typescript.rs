@@ -63,6 +63,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
              `undefined`/`null` in an object literal is a no-op."
         ),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

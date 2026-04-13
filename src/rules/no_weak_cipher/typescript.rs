@@ -71,6 +71,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             "Weak cipher `{fragments}` passed to `createCipheriv` \u{2014} use `aes-256-gcm` or ChaCha20-Poly1305."
         ),
         severity: Severity::Error,
+        span: None,
     });
 }
 

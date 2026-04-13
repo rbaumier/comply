@@ -121,6 +121,7 @@ impl AstCheck for Check {
                                  of setting `this.name` in the constructor."
                             ),
                             severity: Severity::Warning,
+                            span: None,
                         });
                     }
 
@@ -136,6 +137,7 @@ impl AstCheck for Check {
                                       of setting `this.message`."
                                 .into(),
                             severity: Severity::Warning,
+                            span: None,
                         });
                     }
                 }

@@ -41,6 +41,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 message:
                     "Disabled SSL certificate verification — enables MITM attacks.".into(),
                 severity: Severity::Error,
+                span: None,
             });
         }
     }

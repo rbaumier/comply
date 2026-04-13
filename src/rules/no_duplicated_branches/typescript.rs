@@ -43,6 +43,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                     rule_id: "no-duplicated-branches".into(),
                     message: "This branch has the same body as another branch — merge conditions or remove the duplicate.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
                 break;
             }

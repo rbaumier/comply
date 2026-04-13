@@ -52,6 +52,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "prefer-set-size".into(),
         message: "Prefer `Set#size` instead of `[...set].length` or `Array.from(set).length`.".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

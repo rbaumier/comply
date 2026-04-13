@@ -85,6 +85,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                         trimmed.split('(').next().unwrap_or("?"),
                     ),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
 

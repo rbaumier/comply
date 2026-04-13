@@ -32,6 +32,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                     "Weak hashing algorithm `{callee_text}` — use SHA-256 or stronger.",
                 ),
                 severity: Severity::Error,
+                span: None,
             });
             return;
         }

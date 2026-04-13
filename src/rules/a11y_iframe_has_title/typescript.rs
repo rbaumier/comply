@@ -35,6 +35,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             rule_id: "a11y-iframe-has-title".into(),
             message: "`<iframe>` is missing a `title` attribute.".into(),
             severity: Severity::Error,
+            span: None,
         });
     }
 }

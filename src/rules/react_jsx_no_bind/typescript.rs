@@ -31,6 +31,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                               on every render — extract to a stable reference."
                         .into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
             "call_expression" => {
@@ -51,6 +52,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                                           a stable reference."
                                     .into(),
                                 severity: Severity::Warning,
+                                span: None,
                             });
                         }
                     }

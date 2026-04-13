@@ -53,6 +53,7 @@ fn flag_empty(
             "Empty `{what}` block \u{2014} add a comment inside explaining why the inaction is intentional."
         ),
         severity: Severity::Warning,
+        span: None,
     });
 }
 
@@ -109,6 +110,7 @@ crate::ast_check! { |node, _source, ctx, diagnostics|
                     rule_id: "justify-inaction".into(),
                     message: "Empty `default` case \u{2014} add a comment inside explaining why the inaction is intentional.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

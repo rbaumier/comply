@@ -77,6 +77,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             rule_id: "inverted-assertion-arguments".into(),
             message: "Expected and actual are inverted — put the literal in `.toBe()`/`.toEqual()`, not in `expect()`.".into(),
             severity: Severity::Warning,
+            span: None,
         });
     }
 }

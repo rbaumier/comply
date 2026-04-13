@@ -37,6 +37,7 @@ impl TextCheck for Check {
                 "Test file contains no test assertions (`test(`, `it(`, `describe(`, `expect(`)."
                     .into(),
             severity: Severity::Error,
+            span: None,
         }]
     }
 }

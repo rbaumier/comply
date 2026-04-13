@@ -66,6 +66,7 @@ impl TextCheck for Check {
                 rule_id: "jsdoc-require-file-overview".into(),
                 message: "File is missing a `@file` or `@fileoverview` JSDoc comment.".into(),
                 severity: Severity::Warning,
+                span: None,
             }]
         } else {
             Vec::new()

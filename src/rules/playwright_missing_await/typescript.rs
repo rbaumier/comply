@@ -93,6 +93,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                         "`expect(...).{method_name}` is an async Playwright method — add `await` to prevent flaky tests."
                     ),
                     severity: Severity::Error,
+                    span: None,
                 });
                 return;
             }
@@ -118,6 +119,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                                 "`expect(...).not.{method_name}` is an async Playwright method — add `await` to prevent flaky tests."
                             ),
                             severity: Severity::Error,
+                            span: None,
                         });
                         return;
                     }
@@ -138,6 +140,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                     "`{obj_text}.{method_name}` is an async Playwright method — add `await` to prevent flaky tests."
                 ),
                 severity: Severity::Error,
+                span: None,
             });
         }
     }

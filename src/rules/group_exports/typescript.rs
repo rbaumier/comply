@@ -40,6 +40,7 @@ impl AstCheck for Check {
                           a single export block."
                     .into(),
                 severity: Severity::Warning,
+                span: None,
             })
             .collect()
     }

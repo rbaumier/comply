@@ -51,6 +51,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "node-no-path-concat".into(),
         message: "Use `path.join()` or `path.resolve()` instead of string concatenation with `__dirname`/`__filename`.".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

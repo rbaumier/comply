@@ -48,6 +48,7 @@ fn visit_named_default(
                  — prefer the default import syntax."
             ),
             severity: Severity::Warning,
+            span: None,
         });
         return;
     }

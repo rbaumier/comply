@@ -77,6 +77,7 @@ fn check_declaration(
                 rule_id: "no-misleading-array-reverse".into(),
                 message: "Assigning the result of a mutating array method is misleading — it returns the same reference, not a copy.".into(),
                 severity: Severity::Error,
+                span: None,
             });
         }
     }
@@ -99,6 +100,7 @@ fn check_return(
                 rule_id: "no-misleading-array-reverse".into(),
                 message: "Returning the result of a mutating array method is misleading — it returns the same reference, not a copy.".into(),
                 severity: Severity::Error,
+                span: None,
             });
         }
     }

@@ -107,6 +107,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 rule_id: "no-accessor-recursion".into(),
                 message: "Recursive access to `this` within getter causes infinite recursion.".into(),
                 severity: Severity::Warning,
+                span: None,
             });
         }
     } else if accessor_kind == "set" {
@@ -132,6 +133,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 rule_id: "no-accessor-recursion".into(),
                 message: "Recursive access to `this` within setter causes infinite recursion.".into(),
                 severity: Severity::Warning,
+                span: None,
             });
         }
     }

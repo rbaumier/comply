@@ -41,6 +41,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                     rule_id: "no-gratuitous-expression".into(),
                     message: "Gratuitous expression: condition is always true.".into(),
                     severity: Severity::Error,
+                    span: None,
                 });
             } else if inner == "false" {
                 let pos = node.start_position();
@@ -51,6 +52,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                     rule_id: "no-gratuitous-expression".into(),
                     message: "Gratuitous expression: condition is always false.".into(),
                     severity: Severity::Error,
+                    span: None,
                 });
             }
         }
@@ -66,6 +68,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                     rule_id: "no-gratuitous-expression".into(),
                     message: "Gratuitous expression: expression is always false (short-circuited by `&& false`).".into(),
                     severity: Severity::Error,
+                    span: None,
                 });
                 return;
             }
@@ -78,6 +81,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                     rule_id: "no-gratuitous-expression".into(),
                     message: "Gratuitous expression: expression is always true (short-circuited by `|| true`).".into(),
                     severity: Severity::Error,
+                    span: None,
                 });
                 return;
             }
@@ -91,6 +95,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                     rule_id: "no-gratuitous-expression".into(),
                     message: format!("Gratuitous expression: {}.", message),
                     severity: Severity::Error,
+                    span: None,
                 });
             }
         }

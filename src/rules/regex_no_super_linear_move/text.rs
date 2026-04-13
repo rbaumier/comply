@@ -47,6 +47,7 @@ impl TextCheck for Check {
                     rule_id: "regex-no-super-linear-move".into(),
                     message: "Quantifier followed by the same element can cause quadratic runtime.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

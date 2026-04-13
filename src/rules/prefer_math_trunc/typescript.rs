@@ -95,6 +95,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 rule_id: "prefer-math-trunc".into(),
                 message: msg.into(),
                 severity: Severity::Warning,
+                span: None,
             });
         }
     }

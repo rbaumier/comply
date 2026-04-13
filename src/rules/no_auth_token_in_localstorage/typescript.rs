@@ -74,6 +74,7 @@ impl AstCheck for Check {
                      automatically, JavaScript can't read it, XSS can't steal it."
                 ),
                 severity: Severity::Error,
+                span: None,
             });
         });
         diagnostics

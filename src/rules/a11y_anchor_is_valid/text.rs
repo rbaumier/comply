@@ -25,6 +25,7 @@ impl TextCheck for Check {
                     rule_id: "a11y-anchor-is-valid".into(),
                     message: "Anchor is missing an `href` attribute.".into(),
                     severity: Severity::Error,
+                    span: None,
                 });
                 continue;
             }
@@ -37,6 +38,7 @@ impl TextCheck for Check {
                         rule_id: "a11y-anchor-is-valid".into(),
                         message: "Anchor has `href=\"#\"` — use a `<button>` or a real URL.".into(),
                         severity: Severity::Error,
+                        span: None,
                     });
                 } else if val.contains("javascript:") {
                     diagnostics.push(Diagnostic {
@@ -46,6 +48,7 @@ impl TextCheck for Check {
                         rule_id: "a11y-anchor-is-valid".into(),
                         message: "Anchor has `href=\"javascript:\"` — use a `<button>` or a real URL.".into(),
                         severity: Severity::Error,
+                        span: None,
                     });
                 }
             }

@@ -88,6 +88,7 @@ impl TextCheck for Check {
                         rule_id: "jsdoc-require-tags".into(),
                         message: "JSDoc comment on a function should include `@param` or `@returns` tags.".into(),
                         severity: Severity::Warning,
+                        span: None,
                     });
                 }
             }

@@ -86,6 +86,7 @@ impl TextCheck for Check {
                     rule_id: "regex-sort-flags".into(),
                     message: "Regex flags are not sorted alphabetically — reorder them (e.g. `dgimsvy`).".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

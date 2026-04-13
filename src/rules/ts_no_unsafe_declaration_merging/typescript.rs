@@ -50,6 +50,7 @@ impl AstCheck for Check {
                          shares a name with a class."
                     ),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }
@@ -66,6 +67,7 @@ impl AstCheck for Check {
                          shares a name with an interface."
                     ),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

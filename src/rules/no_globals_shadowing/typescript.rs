@@ -33,6 +33,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             "Local variable shadows global `{name}` — rename to avoid confusion."
         ),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

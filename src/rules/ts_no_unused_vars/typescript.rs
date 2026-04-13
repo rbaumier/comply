@@ -115,6 +115,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             rule_id: "ts-no-unused-vars".into(),
             message: format!("`{name}` is declared but never used."),
             severity: Severity::Warning,
+            span: None,
         });
     }
 }

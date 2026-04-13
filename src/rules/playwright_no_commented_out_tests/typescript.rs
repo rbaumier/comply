@@ -54,6 +54,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 rule_id: "playwright-no-commented-out-tests".into(),
                 message: "Some tests seem to be commented.".into(),
                 severity: Severity::Warning,
+                span: None,
             });
             return;
         }

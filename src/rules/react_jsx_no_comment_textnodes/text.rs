@@ -38,6 +38,7 @@ impl TextCheck for Check {
                     rule_id: "react-jsx-no-comment-textnodes".into(),
                     message: "JS comment syntax in template renders as text — use `<!-- -->`.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

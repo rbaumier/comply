@@ -33,6 +33,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 rule_id: "no-duplicate-in-composite".into(),
                 message: "Duplicate type in composite — remove the repeated member.".into(),
                 severity: Severity::Warning,
+                span: None,
             });
             return; // one diagnostic per composite
         }

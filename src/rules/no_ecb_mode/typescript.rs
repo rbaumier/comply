@@ -34,6 +34,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "no-ecb-mode".into(),
         message: "ECB cipher mode is insecure — use CBC, CTR, or GCM instead.".into(),
         severity: Severity::Error,
+        span: None,
     });
 }
 

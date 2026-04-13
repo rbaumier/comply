@@ -48,6 +48,7 @@ impl AstCheck for Check {
                      `Atomic*` for primitive counters."
                 ),
                 severity: Severity::Error,
+                span: None,
             });
         });
         diagnostics

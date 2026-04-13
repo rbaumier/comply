@@ -125,6 +125,7 @@ impl TextCheck for Check {
                     rule_id: "regex-no-useless-flag".into(),
                     message: "Regex flag has no effect on this pattern \u{2014} remove it.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

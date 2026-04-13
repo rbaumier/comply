@@ -63,6 +63,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
              not the primitive."
         ),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

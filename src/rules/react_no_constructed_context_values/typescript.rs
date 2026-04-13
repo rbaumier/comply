@@ -55,6 +55,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                       consumers to re-render. Memoize with `useMemo`."
                 .into(),
             severity: Severity::Warning,
+            span: None,
         });
     }
 }

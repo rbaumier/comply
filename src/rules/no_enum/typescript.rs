@@ -38,6 +38,7 @@ impl AstCheck for Check {
                      Enums emit runtime code and don't narrow cleanly."
                 ),
                 severity: Severity::Error,
+                span: None,
             });
         });
         diagnostics

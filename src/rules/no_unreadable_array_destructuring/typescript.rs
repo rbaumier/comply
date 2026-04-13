@@ -111,6 +111,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "no-unreadable-array-destructuring".into(),
         message: "Array destructuring may not contain consecutive ignored values.".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

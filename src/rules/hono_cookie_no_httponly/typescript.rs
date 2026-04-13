@@ -41,6 +41,7 @@ impl AstCheck for Check {
                               accessible to JavaScript (XSS vector)."
                         .into(),
                     severity: Severity::Error,
+                    span: None,
                 });
             }
         }

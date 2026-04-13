@@ -95,6 +95,7 @@ impl TextCheck for Check {
                     "`{pkg}` appears in both `dependencies` and `devDependencies` — pick one."
                 ),
                 severity: Severity::Warning,
+                span: None,
             })
             .collect()
     }

@@ -42,6 +42,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 rule_id: "no-unverified-certificate".into(),
                 message: "Disabled SSL certificate verification — enables MITM attacks.".into(),
                 severity: Severity::Error,
+                span: None,
             });
         }
     }

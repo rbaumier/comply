@@ -36,6 +36,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "playwright-no-wait-for-navigation".into(),
         message: "Unexpected use of page.waitForNavigation().".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

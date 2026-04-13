@@ -62,6 +62,7 @@ impl TextCheck for Check {
                     rule_id: "regex-no-empty-string-literal-v".into(),
                     message: "Empty string literal in v-flag character class is unexpected.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

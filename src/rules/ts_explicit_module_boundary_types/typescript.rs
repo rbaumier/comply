@@ -72,6 +72,7 @@ fn check_function_return_type(
         rule_id: "ts-explicit-module-boundary-types".into(),
         message: "Missing return type on exported function.".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

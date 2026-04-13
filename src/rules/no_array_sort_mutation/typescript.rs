@@ -26,6 +26,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "no-array-sort-mutation".into(),
         message: "Use `.toSorted()` instead of `.sort()` — `sort()` mutates the array in place.".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

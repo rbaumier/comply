@@ -25,6 +25,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "prefer-dom-node-remove".into(),
         message: "Prefer `childNode.remove()` over `parentNode.removeChild(childNode)`.".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

@@ -24,6 +24,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                     rule_id: "import-no-empty-named-blocks".into(),
                     message: "Unexpected empty named import block.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

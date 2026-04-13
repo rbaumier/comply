@@ -41,6 +41,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "redundant-type-aliases".into(),
         message: "Type alias is just renaming \u{2014} use the original type directly or add structure.".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

@@ -41,6 +41,7 @@ impl AstCheck for Check {
                      Add the attribute to keep the API future-proof."
                 ),
                 severity: Severity::Warning,
+                span: None,
             });
         });
         diagnostics

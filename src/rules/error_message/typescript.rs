@@ -48,6 +48,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                             "Pass a message to the `{ctor_name}` constructor."
                         ),
                         severity: Severity::Warning,
+                        span: None,
                     });
                     return;
                 }
@@ -111,6 +112,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                     "Pass a message to the `{ctor_name}` constructor."
                 ),
                 severity: Severity::Warning,
+                span: None,
             });
         }
         Some(arg) => {
@@ -127,6 +129,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                     rule_id: "error-message".into(),
                     message: "Error message should be a string.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
                 return;
             }
@@ -141,6 +144,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                     rule_id: "error-message".into(),
                     message: "Error message should not be an empty string.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
                 return;
             }
@@ -155,6 +159,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                     rule_id: "error-message".into(),
                     message: "Error message should not be an empty string.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
                 return;
             }
@@ -169,6 +174,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                     rule_id: "error-message".into(),
                     message: "Error message should be a string.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

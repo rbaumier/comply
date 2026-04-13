@@ -30,6 +30,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                     rule_id: "no-thenable".into(),
                     message: "Do not add `then` to an object.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }
@@ -50,6 +51,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                         rule_id: "no-thenable".into(),
                         message: "Do not add `then` to a class.".into(),
                         severity: Severity::Warning,
+                        span: None,
                     });
                 }
                 return;
@@ -69,6 +71,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                     rule_id: "no-thenable".into(),
                     message: "Do not add `then` to an object.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }
@@ -88,6 +91,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                     rule_id: "no-thenable".into(),
                     message: "Do not add `then` to a class.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }
@@ -107,6 +111,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                                     rule_id: "no-thenable".into(),
                                     message: "Do not export `then`.".into(),
                                     severity: Severity::Warning,
+                                    span: None,
                                 });
                             }
                     }
@@ -129,6 +134,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                         rule_id: "no-thenable".into(),
                         message: "Do not export `then`.".into(),
                         severity: Severity::Warning,
+                        span: None,
                     });
                 }
         }

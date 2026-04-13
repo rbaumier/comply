@@ -40,6 +40,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "ts-consistent-indexed-object-style".into(),
         message: format!("A `Record<{key_type}, {value_type}>` is preferred over an index signature."),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

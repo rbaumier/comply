@@ -140,6 +140,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                     "Collection `{name}` is populated but never read."
                 ),
                 severity: Severity::Warning,
+                span: None,
             });
         }
     }

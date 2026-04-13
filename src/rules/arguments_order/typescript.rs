@@ -41,6 +41,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             rule_id: "arguments-order".into(),
             message: "Arguments appear to be in the wrong order — `expected` should come after `actual`, `min` before `max`.".into(),
             severity: Severity::Warning,
+            span: None,
         });
     }
 }

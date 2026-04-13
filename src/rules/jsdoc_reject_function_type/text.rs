@@ -49,6 +49,7 @@ impl TextCheck for Check {
                     rule_id: "jsdoc-reject-function-type".into(),
                     message: "JSDoc uses bare `Function` type \u{2014} provide a specific function signature instead.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

@@ -71,6 +71,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                         "{count} consecutive property accesses on `{obj_name}` — use destructuring instead."
                     ),
                     severity: Severity::Warning,
+                    span: None,
                 });
                 i = j;
                 continue;

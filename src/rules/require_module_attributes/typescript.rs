@@ -38,6 +38,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                                  add the required attributes or remove the clause."
                             ),
                             severity: Severity::Warning,
+                            span: None,
                         });
                         return;
                     }
@@ -66,6 +67,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                          add the required attributes or remove the clause."
                     ),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

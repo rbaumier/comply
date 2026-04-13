@@ -25,6 +25,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "no-fire-event".into(),
         message: "Prefer `userEvent` over `fireEvent` — `fireEvent` dispatches a single synthetic event and skips intermediate browser events.".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

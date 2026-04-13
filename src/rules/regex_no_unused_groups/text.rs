@@ -65,6 +65,7 @@ impl TextCheck for Check {
                             name, name,
                         ),
                         severity: Severity::Warning,
+                        span: None,
                     });
                 }
             }

@@ -40,6 +40,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "import-no-amd".into(),
         message: format!("Expected imports instead of AMD `{name}()`."),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

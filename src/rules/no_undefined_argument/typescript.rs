@@ -18,6 +18,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 rule_id: "no-undefined-argument".into(),
                 message: "Do not pass `undefined` as an argument \u{2014} omit the argument instead.".into(),
                 severity: Severity::Warning,
+                span: None,
             });
         }
     }

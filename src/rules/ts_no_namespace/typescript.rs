@@ -35,6 +35,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                   use ES module `export` / `import` instead."
             .into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

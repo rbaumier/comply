@@ -27,6 +27,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                   and add a comment explaining the content's provenance."
             .into(),
         severity: Severity::Error,
+        span: None,
     });
 }
 

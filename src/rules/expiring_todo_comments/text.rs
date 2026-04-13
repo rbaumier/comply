@@ -132,6 +132,7 @@ impl TextCheck for Check {
                          resolve it or update the expiration date."
                     ),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

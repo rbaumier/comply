@@ -73,6 +73,7 @@ impl TextCheck for Check {
                     rule_id: "regex-no-optional-assertion".into(),
                     message: "Assertion inside an optional group is effectively ignored.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

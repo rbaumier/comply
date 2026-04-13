@@ -32,6 +32,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             rule_id: "no-for-loop".into(),
             message: "Manual index loop — use `for item in collection` or `.iter().enumerate()`.".into(),
             severity: Severity::Warning,
+            span: None,
         });
     }
 }

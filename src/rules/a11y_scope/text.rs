@@ -25,6 +25,7 @@ impl TextCheck for Check {
                     rule_id: "a11y-scope".into(),
                     message: "`scope` attribute should only be used on `<th>` elements.".into(),
                     severity: Severity::Error,
+                    span: None,
                 });
             }
         }

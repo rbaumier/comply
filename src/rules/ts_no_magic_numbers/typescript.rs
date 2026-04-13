@@ -92,6 +92,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             "Magic number `{text}` — extract into a named constant."
         ),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

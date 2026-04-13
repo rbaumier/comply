@@ -57,6 +57,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "prefer-default-parameters".into(),
         message: "Prefer default parameters over reassignment.".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

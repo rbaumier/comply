@@ -64,6 +64,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             neg_op = negate_op(op),
         ),
         severity: Severity::Error,
+        span: None,
     });
 }
 

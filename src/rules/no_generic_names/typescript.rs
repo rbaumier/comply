@@ -55,6 +55,7 @@ impl AstCheck for Check {
                      `userProfile`, `paymentReceipt`)."
                 ),
                 severity: Severity::Warning,
+                span: None,
             });
         });
         diagnostics

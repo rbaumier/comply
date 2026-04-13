@@ -62,6 +62,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                  sequence: `{matched}` -> `{uppercased}`."
             ),
             severity: Severity::Warning,
+            span: None,
         });
     }
 }

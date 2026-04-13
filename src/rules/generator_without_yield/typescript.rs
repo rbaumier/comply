@@ -92,6 +92,7 @@ impl AstCheck for Check {
                                   add one or use a regular function."
                             .into(),
                         severity: Severity::Warning,
+                        span: None,
                     });
                 }
                 i = k + 1;

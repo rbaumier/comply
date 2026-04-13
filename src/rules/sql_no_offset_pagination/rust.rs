@@ -33,6 +33,7 @@ impl AstCheck for Check {
                           `WHERE id > :last_id ORDER BY id LIMIT N`."
                     .into(),
                 severity: Severity::Warning,
+                span: None,
             });
         }
         diagnostics

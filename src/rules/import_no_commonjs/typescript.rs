@@ -17,6 +17,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 rule_id: "import-no-commonjs".into(),
                 message: "Expected `import` instead of `require()`.".into(),
                 severity: Severity::Warning,
+                span: None,
             });
         }
         return;
@@ -38,6 +39,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 rule_id: "import-no-commonjs".into(),
                 message: "Expected `export` or `export default` instead of `module.exports`.".into(),
                 severity: Severity::Warning,
+                span: None,
             });
         }
     }

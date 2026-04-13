@@ -88,6 +88,7 @@ fn lint_script_block(block: &ScriptBlock<'_>, ctx: &CheckCtx, diagnostics: &mut 
                       delete it. Git history preserves the original."
                 .into(),
             severity: Severity::Warning,
+            span: None,
         });
     }
 }

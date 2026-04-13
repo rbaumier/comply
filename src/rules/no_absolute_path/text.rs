@@ -39,6 +39,7 @@ impl TextCheck for Check {
                         source
                     ),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

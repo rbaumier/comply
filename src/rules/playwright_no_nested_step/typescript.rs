@@ -65,6 +65,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "playwright-no-nested-step".into(),
         message: "Do not nest `test.step()` methods.".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

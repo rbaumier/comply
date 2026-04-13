@@ -67,6 +67,7 @@ impl AstCheck for Check {
                      boundary and return a Result error instead."
                 ),
                 severity: Severity::Warning,
+                span: None,
             });
         });
         diagnostics

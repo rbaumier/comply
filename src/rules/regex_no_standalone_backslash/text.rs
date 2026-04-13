@@ -52,6 +52,7 @@ impl TextCheck for Check {
                     rule_id: "regex-no-standalone-backslash".into(),
                     message: "Backslash followed by non-special character is an identity escape — likely a mistake.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

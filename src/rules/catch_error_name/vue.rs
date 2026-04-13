@@ -91,6 +91,7 @@ fn inspect_catch(
             super::EXPECTED
         ),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

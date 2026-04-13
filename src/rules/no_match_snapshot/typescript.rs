@@ -48,6 +48,7 @@ impl AstCheck for Check {
                      snapshots. Assert on specific fields instead."
                 ),
                 severity: Severity::Warning,
+                span: None,
             });
         });
         diagnostics

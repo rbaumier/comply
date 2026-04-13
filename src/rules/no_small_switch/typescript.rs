@@ -69,6 +69,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                     case_count
                 ),
                 severity: Severity::Warning,
+                span: None,
             });
         }
     }

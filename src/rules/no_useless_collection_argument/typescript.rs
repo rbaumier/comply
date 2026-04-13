@@ -47,6 +47,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 rule_id: "no-useless-collection-argument".into(),
                 message: format!("The {desc} argument is useless — remove it."),
                 severity: Severity::Warning,
+                span: None,
             });
         }
     }

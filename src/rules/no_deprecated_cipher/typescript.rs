@@ -37,6 +37,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "no-deprecated-cipher".into(),
         message: "`createCipher()` is deprecated — use `createCipheriv()` with an explicit IV.".into(),
         severity: Severity::Error,
+        span: None,
     });
 }
 

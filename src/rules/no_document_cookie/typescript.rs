@@ -28,6 +28,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "no-document-cookie".into(),
         message: "Do not use `document.cookie` directly — use a cookie library instead.".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

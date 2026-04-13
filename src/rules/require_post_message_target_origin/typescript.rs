@@ -35,6 +35,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "require-post-message-target-origin".into(),
         message: "`postMessage()` called without `targetOrigin` \u{2014} provide an explicit origin.".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

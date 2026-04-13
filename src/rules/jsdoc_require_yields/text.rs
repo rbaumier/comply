@@ -81,6 +81,7 @@ impl TextCheck for Check {
                     rule_id: "jsdoc-require-yields".into(),
                     message: "Generator function is missing a `@yields` tag.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

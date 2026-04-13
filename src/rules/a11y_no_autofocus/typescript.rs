@@ -22,6 +22,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "a11y-no-autofocus".into(),
         message: "Avoid `autoFocus` — it is disorienting for screen reader users.".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

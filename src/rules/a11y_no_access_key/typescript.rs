@@ -22,6 +22,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "a11y-no-access-key".into(),
         message: "Avoid `accessKey` — it conflicts with screen reader keyboard shortcuts.".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

@@ -24,6 +24,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "no-undefined-assignment".into(),
         message: "Do not assign `undefined` \u{2014} use `let x;` or `delete obj.prop` instead.".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

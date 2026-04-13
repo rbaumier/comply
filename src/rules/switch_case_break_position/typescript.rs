@@ -81,6 +81,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             "Move `{keyword}` inside the block statement."
         ),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

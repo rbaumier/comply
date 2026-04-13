@@ -73,6 +73,7 @@ impl LlmRule for Rule {
             rule_id: "llm-pii-in-logs".into(),
             message: format!("PII detected in log output: {fields}. Remove PII fields or redact before logging."),
             severity: Severity::Error,
+            span: None,
         }])
     }
 }

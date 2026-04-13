@@ -89,6 +89,7 @@ impl TextCheck for Check {
                     rule_id: "regex-no-useless-set-operand".into(),
                     message: "Useless operand in character class set operation.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

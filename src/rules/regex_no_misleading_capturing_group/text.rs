@@ -61,6 +61,7 @@ impl TextCheck for Check {
                     rule_id: "regex-no-misleading-capturing-group".into(),
                     message: "Capturing group with alternation and quantifier is misleading \u{2014} the capture may match different things.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

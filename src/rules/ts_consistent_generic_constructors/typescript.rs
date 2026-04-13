@@ -71,6 +71,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "ts-consistent-generic-constructors".into(),
         message: "Generic type arguments should be specified on the constructor, not the type annotation.".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

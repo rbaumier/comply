@@ -100,6 +100,7 @@ impl TextCheck for Check {
                     rule_id: "regex-no-useless-dollar-replacements".into(),
                     message: "Replacement string references a capturing group that does not exist in the regex.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

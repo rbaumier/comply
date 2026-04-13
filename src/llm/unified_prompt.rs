@@ -407,6 +407,7 @@ fn convert_response(resp: UnifiedResponse, file_path: &Path) -> Result<Vec<Diagn
             rule_id: "llm-comment-quality".into(),
             message: msg,
             severity: Severity::Warning,
+            span: None,
         });
     }
 
@@ -427,6 +428,7 @@ fn convert_response(resp: UnifiedResponse, file_path: &Path) -> Result<Vec<Diagn
             rule_id: "llm-intent-naming".into(),
             message: msg,
             severity: Severity::Warning,
+            span: None,
         });
     }
 
@@ -441,6 +443,7 @@ fn convert_response(resp: UnifiedResponse, file_path: &Path) -> Result<Vec<Diagn
             rule_id: "llm-pii-in-logs".into(),
             message: format!("PII in log output: {fields}. Redact before logging."),
             severity: Severity::Error,
+            span: None,
         });
     }
 
@@ -464,6 +467,7 @@ fn convert_response(resp: UnifiedResponse, file_path: &Path) -> Result<Vec<Diagn
             rule_id: "llm-function-abstraction-levels".into(),
             message: msg,
             severity: Severity::Warning,
+            span: None,
         });
     }
 
@@ -484,6 +488,7 @@ fn convert_response(resp: UnifiedResponse, file_path: &Path) -> Result<Vec<Diagn
             rule_id: "llm-define-errors-out-of-existence".into(),
             message: msg,
             severity: Severity::Warning,
+            span: None,
         });
     }
 
@@ -499,6 +504,7 @@ fn convert_response(resp: UnifiedResponse, file_path: &Path) -> Result<Vec<Diagn
                 issue.function_name, issue.pushed_complexity,
             ),
             severity: Severity::Warning,
+            span: None,
         });
     }
 
@@ -514,6 +520,7 @@ fn convert_response(resp: UnifiedResponse, file_path: &Path) -> Result<Vec<Diagn
                 issue.function_name, issue.explanation,
             ),
             severity: Severity::Warning,
+            span: None,
         });
     }
 
@@ -536,6 +543,7 @@ fn convert_response(resp: UnifiedResponse, file_path: &Path) -> Result<Vec<Diagn
             rule_id: "llm-temporal-decomposition".into(),
             message: msg,
             severity: Severity::Warning,
+            span: None,
         });
     }
 
@@ -551,6 +559,7 @@ fn convert_response(resp: UnifiedResponse, file_path: &Path) -> Result<Vec<Diagn
                 issue.function_name, issue.explanation,
             ),
             severity: Severity::Warning,
+            span: None,
         });
     }
 
@@ -591,6 +600,7 @@ fn convert_response(resp: UnifiedResponse, file_path: &Path) -> Result<Vec<Diagn
                     rule_id: (*rule_id).into(),
                     message: issue.explanation.clone(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

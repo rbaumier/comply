@@ -61,6 +61,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             "Weak cipher `Cipher::{method_name}` \u{2014} use `Cipher::aes_256_gcm()` or ChaCha20-Poly1305."
         ),
         severity: Severity::Error,
+        span: None,
     });
 }
 

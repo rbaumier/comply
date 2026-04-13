@@ -61,6 +61,7 @@ impl TextCheck for Check {
                     rule_id: "regex-no-slow-pattern".into(),
                     message: "Nested quantifier detected \u{2014} this pattern can cause catastrophic backtracking (ReDoS).".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

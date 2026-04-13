@@ -39,6 +39,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             message: "`forwardRef` component is missing the `ref` parameter."
                 .into(),
             severity: Severity::Warning,
+            span: None,
         });
         return;
     };
@@ -64,6 +65,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             message: "`forwardRef` component is missing the `ref` parameter."
                 .into(),
             severity: Severity::Warning,
+            span: None,
         });
     }
 }

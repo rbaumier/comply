@@ -46,6 +46,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                         rule_id: "react-void-dom-elements-no-children".into(),
                         message: format!("`<{tag_name}>` is a void element and cannot have children."),
                         severity: Severity::Error,
+                        span: None,
                     });
                     return;
                 }
@@ -71,6 +72,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 rule_id: "react-void-dom-elements-no-children".into(),
                 message: format!("`<{tag_name}>` is a void element and cannot have children."),
                 severity: Severity::Error,
+                span: None,
             });
             return;
         }

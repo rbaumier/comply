@@ -19,6 +19,7 @@ impl TextCheck for Check {
             rule_id: "migration-needs-rollback".into(),
             message: "Migration has `up()` but no `down()` / rollback — every migration must be reversible for quick recovery from bad deploys.".into(),
             severity: Severity::Warning,
+            span: None,
         }]
     }
 }

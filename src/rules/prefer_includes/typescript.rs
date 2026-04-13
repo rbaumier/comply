@@ -57,6 +57,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 rule_id: "prefer-includes".into(),
                 message: "Prefer `.includes(x)` over `.indexOf(x) !== -1` — more readable.".into(),
                 severity: Severity::Warning,
+                span: None,
             });
         }
     }

@@ -28,6 +28,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
              future instead."
         ),
         severity: Severity::Error,
+        span: None,
     });
 }
 

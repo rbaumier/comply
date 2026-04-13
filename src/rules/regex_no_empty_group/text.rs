@@ -34,6 +34,7 @@ impl TextCheck for Check {
                     rule_id: "regex-no-empty-group".into(),
                     message: "Empty capturing group `()` in regex — add a pattern or remove it.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

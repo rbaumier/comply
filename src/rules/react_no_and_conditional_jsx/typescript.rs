@@ -53,6 +53,7 @@ impl AstCheck for Check {
                           `{expr ? <X /> : null}`."
                     .into(),
                 severity: Severity::Warning,
+                span: None,
             });
         });
         diagnostics

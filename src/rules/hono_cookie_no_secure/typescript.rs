@@ -41,6 +41,7 @@ impl AstCheck for Check {
                               sent over unencrypted HTTP."
                         .into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

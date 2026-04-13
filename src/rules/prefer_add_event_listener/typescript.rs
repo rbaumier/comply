@@ -52,6 +52,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             "Prefer `addEventListener('{event_name}', handler)` over `.{prop_name} = handler`."
         ),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

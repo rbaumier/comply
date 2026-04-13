@@ -35,6 +35,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "prefer-regexp-exec".into(),
         message: "`.match(/regex/)` is slower — use `regex.exec(string)` instead.".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

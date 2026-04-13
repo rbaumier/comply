@@ -25,6 +25,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             rule_id: "ts-ban-tslint-comment".into(),
             message: format!("TSLint comment detected: `{}`.", text.trim()),
             severity: Severity::Warning,
+            span: None,
         });
     }
 }

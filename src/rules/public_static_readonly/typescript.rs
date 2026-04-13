@@ -33,6 +33,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "public-static-readonly".into(),
         message: "`public static` field is missing `readonly` \u{2014} add it to prevent mutation.".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

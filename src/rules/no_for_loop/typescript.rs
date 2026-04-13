@@ -172,6 +172,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "no-for-loop".into(),
         message: "Use a `for-of` loop instead of this `for` loop.".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

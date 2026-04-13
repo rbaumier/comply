@@ -156,6 +156,7 @@ impl AstCheck for Check {
                                     "Use destructured variable for `{prop_text}` instead of `{obj_text}.{prop_text}`."
                                 ),
                                 severity: Severity::Warning,
+                                span: None,
                             });
                             break;
                         }

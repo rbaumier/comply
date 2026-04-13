@@ -56,6 +56,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             message: "`export {}` is unnecessary — the file already has other exports."
                 .into(),
             severity: Severity::Warning,
+            span: None,
         });
     }
 }

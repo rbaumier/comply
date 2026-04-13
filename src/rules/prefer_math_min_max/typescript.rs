@@ -92,6 +92,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 "Prefer `Math.{method}({left_text}, {right_text})` over this ternary."
             ),
             severity: Severity::Warning,
+            span: None,
         });
     }
 }

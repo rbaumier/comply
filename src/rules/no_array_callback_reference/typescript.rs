@@ -83,6 +83,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                     name, method_name, name
                 ),
                 severity: Severity::Warning,
+                span: None,
             });
         }
         "member_expression" => {
@@ -100,6 +101,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                     text, method_name
                 ),
                 severity: Severity::Warning,
+                span: None,
             });
         }
         _ => {}

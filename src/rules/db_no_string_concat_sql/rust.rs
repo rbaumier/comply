@@ -62,6 +62,7 @@ impl AstCheck for Check {
                           parameterized queries (`$1`, `?`) instead."
                     .into(),
                 severity: Severity::Error,
+                span: None,
             });
         }
         diagnostics

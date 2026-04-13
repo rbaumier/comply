@@ -29,6 +29,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             rule_id: "hono-csp-unsafe".into(),
             message: "`'unsafe-inline'` in CSP defeats its purpose — use nonces instead.".into(),
             severity: Severity::Error,
+            span: None,
         });
     }
 
@@ -41,6 +42,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             rule_id: "hono-csp-unsafe".into(),
             message: "`'unsafe-eval'` in CSP enables code injection.".into(),
             severity: Severity::Error,
+            span: None,
         });
     }
 
@@ -62,6 +64,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                             rule_id: "hono-csp-unsafe".into(),
                             message: "`defaultSrc: ['*']` allows loading resources from any origin.".into(),
                             severity: Severity::Error,
+                            span: None,
                         });
                         break;
                     }

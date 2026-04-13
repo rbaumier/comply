@@ -87,6 +87,7 @@ impl TextCheck for Check {
                     rule_id: "jsdoc-require-throws".into(),
                     message: "Function appears to throw — add a `@throws` tag.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

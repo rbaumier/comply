@@ -42,6 +42,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 rule_id: "no-useless-increment".into(),
                 message: "`return x++` / `return x--` returns the value before the mutation — use prefix or separate statements.".into(),
                 severity: Severity::Error,
+                span: None,
             });
         }
     }

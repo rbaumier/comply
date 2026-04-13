@@ -55,6 +55,7 @@ impl AstCheck for Check {
                      name and refactors don't break every caller."
                 ),
                 severity: Severity::Warning,
+                span: None,
             });
         });
         diagnostics

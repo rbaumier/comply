@@ -150,6 +150,7 @@ impl TextCheck for Check {
                     rule_id: "regex-prefer-quantifier".into(),
                     message: "Repeated identical pattern in regex — use a quantifier like `a{3}` or `\\d{4}`.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

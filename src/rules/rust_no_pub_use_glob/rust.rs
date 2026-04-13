@@ -51,6 +51,7 @@ impl AstCheck for Check {
                           `pub use foo::{Bar, Baz};`."
                     .into(),
                 severity: Severity::Warning,
+                span: None,
             });
         });
         diagnostics

@@ -93,6 +93,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             "Unnecessary `Promise.{prop_text}()` in async function — {replacement}."
         ),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

@@ -25,6 +25,7 @@ impl TextCheck for Check {
                     rule_id: "a11y-heading-has-content".into(),
                     message: format!("`<{}>` is empty and has no content.", elem.tag),
                     severity: Severity::Error,
+                    span: None,
                 });
             }
         }

@@ -44,6 +44,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "no-in-misuse".into(),
         message: "`in` operator checks object keys, not array values — use `.includes()` instead.".into(),
         severity: Severity::Error,
+        span: None,
     });
 }
 

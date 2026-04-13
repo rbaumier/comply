@@ -42,6 +42,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                             rule_id: "prefer-modern-dom-apis".into(),
                             message: message.into(),
                             severity: Severity::Warning,
+                            span: None,
                         });
                         break;
                     }

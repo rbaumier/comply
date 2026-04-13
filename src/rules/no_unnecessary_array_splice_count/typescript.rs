@@ -47,6 +47,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             rule_id: "no-unnecessary-array-splice-count".into(),
             message: "The count argument is unnecessary \u{2014} `.splice(start)` already removes all elements from `start`.".into(),
             severity: Severity::Warning,
+            span: None,
         });
     }
 }

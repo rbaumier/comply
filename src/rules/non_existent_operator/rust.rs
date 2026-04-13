@@ -52,6 +52,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "non-existent-operator".into(),
         message: format!("Typo: `={unary_text}` should be `{suggested}`."),
         severity: Severity::Error,
+        span: None,
     });
 }
 

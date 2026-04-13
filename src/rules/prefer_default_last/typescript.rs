@@ -37,6 +37,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                     rule_id: "prefer-default-last".into(),
                     message: "`default` clause should be the last clause in the switch statement.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
 }

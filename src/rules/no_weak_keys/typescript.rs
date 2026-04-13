@@ -64,6 +64,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             rule_id: "no-weak-keys".into(),
             message: msg.into(),
             severity: Severity::Error,
+            span: None,
         });
     }
 }

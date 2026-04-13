@@ -17,6 +17,7 @@ impl TextCheck for Check {
                     rule_id: "sql-prefer-exists-over-in".into(),
                     message: "`IN (SELECT ...)` materializes the entire subquery — use `EXISTS (SELECT 1 ...)` which short-circuits on first match.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

@@ -48,6 +48,7 @@ impl TextCheck for Check {
                     rule_id: "regex-no-invisible-character".into(),
                     message: "Invisible Unicode character in regex — use an explicit `\\u{...}` escape instead.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

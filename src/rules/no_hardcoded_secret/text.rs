@@ -34,6 +34,7 @@ impl TextCheck for Check {
                          false positive, add a comply-ignore comment explaining."
                     ),
                     severity: Severity::Error,
+                    span: None,
                 });
             }
         }

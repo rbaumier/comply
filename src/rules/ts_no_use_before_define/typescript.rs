@@ -99,6 +99,7 @@ fn check_block(
                         rule_id: "ts-no-use-before-define".into(),
                         message: format!("`{name}` is used before its definition."),
                         severity: Severity::Warning,
+                        span: None,
                     });
                     already_flagged.insert(name);
                 }

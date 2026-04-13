@@ -44,6 +44,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "auth-on-mutation".into(),
         message: "Mutation route without auth check — add authentication/authorization.".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

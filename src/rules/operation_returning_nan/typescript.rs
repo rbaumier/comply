@@ -39,6 +39,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             rule_id: "operation-returning-nan".into(),
             message: "Arithmetic with `undefined` will produce `NaN`.".into(),
             severity: Severity::Error,
+            span: None,
         });
         return;
     }
@@ -54,6 +55,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             rule_id: "operation-returning-nan".into(),
             message: "Arithmetic on a string literal will produce `NaN`.".into(),
             severity: Severity::Error,
+            span: None,
         });
     }
 }

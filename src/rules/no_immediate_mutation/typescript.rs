@@ -162,6 +162,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "no-immediate-mutation".into(),
         message: "Immediate mutation after variable assignment \u{2014} chain onto the initialiser instead.".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

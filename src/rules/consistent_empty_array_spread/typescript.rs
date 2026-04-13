@@ -24,6 +24,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             message: "Parenthesize the ternary in array spread: \
                       `[...(condition ? ['a'] : [])]`.".into(),
             severity: Severity::Warning,
+            span: None,
         });
     }
 }

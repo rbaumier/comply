@@ -59,6 +59,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "playwright-no-useless-not".into(),
         message: format!("Unexpected usage of not.{matcher_name}(). Use {inverse}() instead."),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

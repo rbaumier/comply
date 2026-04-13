@@ -72,6 +72,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "no-raw-db-entity-in-handler".into(),
         message: "Direct DB call in route handler — map to a DTO before returning.".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

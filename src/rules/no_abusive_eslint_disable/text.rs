@@ -64,6 +64,7 @@ impl TextCheck for Check {
                     rule_id: "no-abusive-eslint-disable".into(),
                     message: "Specify the rules you want to disable.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

@@ -34,6 +34,7 @@ impl TextCheck for Check {
                     rule_id: "regex-no-empty-character-class".into(),
                     message: "Empty character class `[]` matches nothing — add characters or remove it.".into(),
                     severity: Severity::Error,
+                    span: None,
                 });
             }
         }

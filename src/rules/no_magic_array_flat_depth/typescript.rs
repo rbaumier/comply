@@ -65,6 +65,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 rule_id: "no-magic-array-flat-depth".into(),
                 message: "Magic number as `.flat()` depth is not allowed. Use a named constant or `Infinity`.".into(),
                 severity: Severity::Warning,
+                span: None,
             });
         }
     }

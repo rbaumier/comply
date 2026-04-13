@@ -49,6 +49,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 rule_id: "prefer-array-flat".into(),
                 message: "Prefer `.flat()` over legacy array flattening patterns.".into(),
                 severity: Severity::Warning,
+                span: None,
             });
         }
         "reduce" => {
@@ -92,6 +93,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 rule_id: "prefer-array-flat".into(),
                 message: "Prefer `.flat()` over legacy array flattening patterns.".into(),
                 severity: Severity::Warning,
+                span: None,
             });
         }
         _ => {}

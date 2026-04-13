@@ -39,6 +39,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                   on JOINs and cascading deletes."
             .into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

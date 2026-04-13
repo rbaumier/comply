@@ -70,6 +70,7 @@ impl AstCheck for Check {
                      or `crossbeam::channel::bounded(N)` to get backpressure."
                 ),
                 severity: Severity::Error,
+                span: None,
             });
         });
         diagnostics

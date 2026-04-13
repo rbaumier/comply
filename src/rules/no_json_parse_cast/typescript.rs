@@ -50,6 +50,7 @@ impl AstCheck for Check {
                           or a type guard function that inspects the value."
                     .into(),
                 severity: Severity::Error,
+                span: None,
             });
         });
         diagnostics

@@ -70,6 +70,7 @@ crate::ast_check! { |node, _source, ctx, diagnostics|
                   likely a bug."
             .into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

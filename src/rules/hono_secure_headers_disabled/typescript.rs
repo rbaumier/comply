@@ -39,6 +39,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             rule_id: "hono-secure-headers-disabled".into(),
             message: format!("`{}` is explicitly disabled — this removes a security protection.", key_text),
             severity: Severity::Error,
+            span: None,
         });
     }
 }

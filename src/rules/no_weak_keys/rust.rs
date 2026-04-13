@@ -41,6 +41,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             rule_id: "no-weak-keys".into(),
             message: format!("Weak RSA key length ({text} bits) — use at least 2048 bits."),
             severity: Severity::Error,
+            span: None,
         });
     }
 }

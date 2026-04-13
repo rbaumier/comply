@@ -51,6 +51,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "no-equals-in-for-termination".into(),
         message: "`for` loop uses equality (`==`/`===`) in termination — use `<`, `<=`, `>`, or `>=` instead.".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

@@ -58,6 +58,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             rule_id: "prefer-string-raw".into(),
             message: "`String.raw` should be used to avoid escaping `\\`.".into(),
             severity: Severity::Warning,
+            span: None,
         });
     }
 }

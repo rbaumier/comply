@@ -59,6 +59,7 @@ impl AstCheck for Check {
                           or pass `{ signal: AbortSignal.timeout(5_000) }`."
                     .into(),
                 severity: Severity::Warning,
+                span: None,
             });
         });
         diagnostics

@@ -42,6 +42,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 rule_id: "a11y-tabindex-no-positive".into(),
                 message: "`tabIndex` must not be positive — use `0` or `-1` only.".into(),
                 severity: Severity::Error,
+                span: None,
             });
         }
     }

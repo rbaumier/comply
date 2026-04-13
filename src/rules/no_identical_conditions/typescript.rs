@@ -39,6 +39,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                                 cond_text.trim_start_matches('(').trim_end_matches(')')
                             ),
                             severity: Severity::Error,
+                            span: None,
                         });
                         break;
                     }

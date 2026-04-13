@@ -56,6 +56,7 @@ impl TextCheck for Check {
                     rule_id: "regex-no-useless-two-nums-quantifier".into(),
                     message: "Redundant quantifier `{n,n}` — simplify to `{n}`.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

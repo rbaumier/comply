@@ -46,6 +46,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 "Non-interactive element `<{tag}>` has an event handler without a `role` attribute."
             ),
             severity: Severity::Warning,
+            span: None,
         });
     }
 }

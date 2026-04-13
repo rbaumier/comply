@@ -49,6 +49,7 @@ impl TextCheck for Check {
             rule_id: "no-empty-file".into(),
             message: "File has no meaningful content — remove it or add code.".into(),
             severity: Severity::Warning,
+            span: None,
         }]
     }
 }

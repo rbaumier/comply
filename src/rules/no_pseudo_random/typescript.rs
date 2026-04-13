@@ -28,6 +28,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "no-pseudo-random".into(),
         message: "`Math.random()` is not cryptographically secure — use `crypto.randomUUID()` or `crypto.getRandomValues()`.".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

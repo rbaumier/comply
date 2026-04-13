@@ -43,6 +43,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "node-no-exports-assign".into(),
         message: "Unexpected assignment to `exports` variable. Use `module.exports` instead.".into(),
         severity: Severity::Error,
+        span: None,
     });
 }
 

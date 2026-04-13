@@ -124,6 +124,7 @@ impl TextCheck for Check {
                     rule_id: "regex-no-dupe-disjunctions".into(),
                     message: "Duplicate alternative in regex disjunction \u{2014} remove the redundant branch.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

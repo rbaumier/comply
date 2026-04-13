@@ -33,6 +33,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "node-no-callback-literal".into(),
         message: "Unexpected string literal in error position of callback. Pass `new Error(...)` or `null` instead.".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

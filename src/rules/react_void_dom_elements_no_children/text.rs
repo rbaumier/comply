@@ -31,6 +31,7 @@ impl TextCheck for Check {
                     rule_id: "react-void-dom-elements-no-children".into(),
                     message: format!("`<{}>` is a void element and cannot have children.", elem.tag),
                     severity: Severity::Error,
+                    span: None,
                 });
             }
         }

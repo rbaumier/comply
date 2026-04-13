@@ -100,6 +100,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 "Non-component export `{name}` alongside component exports breaks React Fast Refresh. Move it to a separate module."
             ),
             severity: Severity::Warning,
+            span: None,
         });
     }
 }

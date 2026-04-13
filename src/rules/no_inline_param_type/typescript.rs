@@ -42,6 +42,7 @@ impl AstCheck for Check {
                      the shape has an identity and can't silently drift."
                 ),
                 severity: Severity::Warning,
+                span: None,
             });
         });
         diagnostics

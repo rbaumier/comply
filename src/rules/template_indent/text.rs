@@ -104,6 +104,7 @@ impl TextCheck for Check {
                      inherited from the surrounding code — strip it or use a dedent helper."
                 ),
                 severity: Severity::Warning,
+                span: None,
             })
             .collect()
     }

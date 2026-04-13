@@ -67,6 +67,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                   to avoid scope leaking."
             .into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

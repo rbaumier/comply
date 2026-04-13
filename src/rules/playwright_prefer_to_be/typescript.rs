@@ -107,6 +107,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "playwright-prefer-to-be".into(),
         message: format!("Use `{suggested}` when expecting primitive literals."),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

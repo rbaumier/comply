@@ -56,6 +56,7 @@ impl TextCheck for Check {
                         "Comment above `{fn_name}` paraphrases the function name."
                     ),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

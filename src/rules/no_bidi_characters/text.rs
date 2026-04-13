@@ -33,6 +33,7 @@ impl TextCheck for Check {
                     rule_id: "no-bidi-characters".into(),
                     message: "Invisible bidi control character detected — potential trojan-source attack.".into(),
                     severity: Severity::Error,
+                    span: None,
                 });
             }
         }

@@ -30,6 +30,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 rule_id: "prefer-module".into(),
                 message: "Use `import` instead of `require()` — prefer ESM over CommonJS.".into(),
                 severity: Severity::Warning,
+                span: None,
             });
         }
         // `__dirname` / `__filename` identifiers
@@ -49,6 +50,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 rule_id: "prefer-module".into(),
                 message: msg.into(),
                 severity: Severity::Warning,
+                span: None,
             });
         }
         // `module.exports` or `exports.foo`
@@ -81,6 +83,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                     rule_id: "prefer-module".into(),
                     message: "Use `export` instead of `module.exports` — prefer ESM over CommonJS.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             } else if obj_name == "exports" && object.kind() == "identifier" {
                 // `exports.foo` but NOT `module.exports`
@@ -92,6 +95,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                     rule_id: "prefer-module".into(),
                     message: "Use `export` instead of `exports.x = …` — prefer ESM over CommonJS.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

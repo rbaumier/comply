@@ -38,6 +38,7 @@ impl TextCheck for Check {
                         rule_id: "imports-first".into(),
                         message: "Import in body of module — reorder to top.".into(),
                         severity: Severity::Warning,
+                        span: None,
                     });
                 }
             } else {

@@ -33,6 +33,7 @@ impl TextCheck for Check {
                               keep them connected, or use `ref()` directly."
                         .into(),
                     severity: Severity::Error,
+                    span: None,
                 });
             }
         }

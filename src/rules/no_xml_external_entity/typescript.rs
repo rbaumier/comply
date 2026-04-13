@@ -91,6 +91,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "no-xml-external-entity".into(),
         message: "XML parser without XXE protection — set `noent: false` or `externalEntities: false`.".into(),
         severity: Severity::Error,
+        span: None,
     });
 }
 

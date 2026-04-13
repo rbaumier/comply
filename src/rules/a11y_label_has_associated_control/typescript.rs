@@ -35,6 +35,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             rule_id: "a11y-label-has-associated-control".into(),
             message: "`<label>` is missing `htmlFor` — associate it with a form control.".into(),
             severity: Severity::Warning,
+            span: None,
         });
     }
 }

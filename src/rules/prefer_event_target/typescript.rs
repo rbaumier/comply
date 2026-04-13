@@ -52,6 +52,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 rule_id: "prefer-event-target".into(),
                 message: "Prefer `EventTarget` over `EventEmitter`.".into(),
                 severity: Severity::Warning,
+                span: None,
             });
         }
     }

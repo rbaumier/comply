@@ -62,6 +62,7 @@ impl AstCheck for Check {
                      a meaningful fallback. Tests are exempted."
                 ),
                 severity: Severity::Error,
+                span: None,
             });
         });
         diagnostics

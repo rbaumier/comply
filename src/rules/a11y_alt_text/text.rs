@@ -24,6 +24,7 @@ impl TextCheck for Check {
                             rule_id: "a11y-alt-text".into(),
                             message: "`<img>` is missing an `alt` attribute.".into(),
                             severity: Severity::Error,
+                            span: None,
                         });
                     }
                 }
@@ -36,6 +37,7 @@ impl TextCheck for Check {
                             rule_id: "a11y-alt-text".into(),
                             message: "`<area>` is missing an `alt` attribute.".into(),
                             severity: Severity::Error,
+                            span: None,
                         });
                     }
                 }
@@ -49,6 +51,7 @@ impl TextCheck for Check {
                             message: "`<input type=\"image\">` is missing an `alt` attribute."
                                 .into(),
                             severity: Severity::Error,
+                            span: None,
                         });
                     }
                 }

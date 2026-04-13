@@ -97,6 +97,7 @@ fn make_bad_ignore_diagnostic(
              is needed: `// comply-ignore: {rule_id} — <reason>`"
         ),
         severity: Severity::Error,
+        span: None,
     }
 }
 

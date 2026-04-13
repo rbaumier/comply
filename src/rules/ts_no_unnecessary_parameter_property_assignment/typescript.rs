@@ -113,6 +113,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         message: "This assignment is unnecessary — the parameter property already assigns it."
             .into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

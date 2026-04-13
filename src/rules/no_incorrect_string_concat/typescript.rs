@@ -66,6 +66,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 rule_id: "no-incorrect-string-concat".into(),
                 message: "Suspicious string concatenation with a numeric variable \u{2014} use explicit conversion or template literals.".into(),
                 severity: Severity::Warning,
+                span: None,
             });
         }
     }

@@ -74,6 +74,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "playwright-no-force-option".into(),
         message: "`force: true` bypasses actionability checks — fix the underlying page state instead.".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

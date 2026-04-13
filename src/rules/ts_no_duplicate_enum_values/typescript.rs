@@ -39,6 +39,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 rule_id: "ts-no-duplicate-enum-values".into(),
                 message: format!("Duplicate enum member value `{val}`."),
                 severity: Severity::Warning,
+                span: None,
             });
         } else {
             seen.push(val.to_string());

@@ -166,6 +166,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             "Prefer simple condition first in `{op}` expression."
         ),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

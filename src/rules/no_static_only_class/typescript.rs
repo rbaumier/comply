@@ -73,6 +73,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "no-static-only-class".into(),
         message: "Use an object or plain functions instead of a class with only static members.".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

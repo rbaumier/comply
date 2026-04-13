@@ -66,6 +66,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 "`<{tag}></{tag}>` has no children — use `<{tag} />` instead."
             ),
             severity: Severity::Warning,
+            span: None,
         });
     }
 }

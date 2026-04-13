@@ -47,6 +47,7 @@ impl AstCheck for Check {
                      callers to understand the API."
                 ),
                 severity: Severity::Warning,
+                span: None,
             });
         }
         diagnostics

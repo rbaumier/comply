@@ -38,6 +38,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             rule_id: "playwright-no-page-pause".into(),
             message: "`page.pause()` is a debug-only API — remove before committing.".into(),
             severity: Severity::Error,
+            span: None,
         });
     }
 }

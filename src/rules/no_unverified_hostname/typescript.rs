@@ -36,6 +36,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 message: "`checkServerIdentity` override disables TLS hostname verification."
                     .into(),
                 severity: Severity::Error,
+                span: None,
             });
         }
     }

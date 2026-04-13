@@ -43,6 +43,7 @@ impl AstCheck for Check {
                           that justification when memory corruption hits."
                     .into(),
                 severity: Severity::Error,
+                span: None,
             });
         });
         diagnostics

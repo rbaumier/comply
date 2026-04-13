@@ -29,6 +29,7 @@ crate::ast_check! { |node, _source, ctx, diagnostics|
         rule_id: "no-class-inheritance".into(),
         message: "Class inheritance via `extends` — prefer composition over inheritance.".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

@@ -105,6 +105,7 @@ pub(super) fn collect_diagnostics(
                     count = nodes.len()
                 ),
                 severity: Severity::Warning,
+                span: None,
             });
         }
     }

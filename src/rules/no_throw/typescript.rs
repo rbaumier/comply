@@ -21,6 +21,7 @@ crate::ast_check! { |node, _source, ctx, diagnostics|
                   not exceptions. Callers can't see thrown errors in the type signature."
             .into(),
         severity: Severity::Error,
+        span: None,
     });
 }
 

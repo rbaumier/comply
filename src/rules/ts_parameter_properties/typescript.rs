@@ -62,6 +62,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             "Property `{param_name}` should be declared as a class property."
         ),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

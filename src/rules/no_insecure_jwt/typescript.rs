@@ -34,6 +34,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                         pattern,
                     ),
                     severity: Severity::Error,
+                    span: None,
                 });
                 flagged = true;
                 break;
@@ -47,6 +48,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 rule_id: "no-insecure-jwt".into(),
                 message: "HS256 in JWT context — prefer asymmetric algorithms (RS256, ES256).".into(),
                 severity: Severity::Error,
+                span: None,
             });
         }
     }

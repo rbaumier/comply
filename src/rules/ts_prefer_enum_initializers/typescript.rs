@@ -31,6 +31,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                     "The value of the member `{name}` should be explicitly defined."
                 ),
                 severity: Severity::Warning,
+                span: None,
             });
         }
     }

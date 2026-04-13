@@ -34,6 +34,7 @@ impl TextCheck for Check {
                             "Ambiguous link text \"{ambiguous}\". Use descriptive text that indicates the link's purpose."
                         ),
                         severity: Severity::Warning,
+                        span: None,
                     });
                     break;
                 }

@@ -73,6 +73,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "playwright-no-conditional-in-test".into(),
         message: "Avoid having conditionals in tests.".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

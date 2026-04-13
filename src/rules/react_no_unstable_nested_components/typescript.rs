@@ -77,6 +77,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                                   the parent component."
                             .into(),
                         severity: Severity::Warning,
+                        span: None,
                     });
                     return;
                 }

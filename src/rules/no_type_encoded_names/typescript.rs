@@ -36,6 +36,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
              knows the type."
         ),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

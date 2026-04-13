@@ -50,6 +50,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "no-zero-fractions".into(),
         message: msg.into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

@@ -49,6 +49,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                             "Function `{fn_name}` references `static mut {static_var}`."
                         ),
                         severity: Severity::Warning,
+                        span: None,
                     });
                     break;
                 }

@@ -58,6 +58,7 @@ impl AstCheck for Check {
                      is provably total."
                 ),
                 severity: Severity::Warning,
+                span: None,
             });
         });
         diagnostics

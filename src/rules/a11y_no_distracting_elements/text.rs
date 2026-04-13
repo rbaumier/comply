@@ -24,6 +24,7 @@ impl TextCheck for Check {
                     rule_id: "a11y-no-distracting-elements".into(),
                     message: format!("Do not use `<{}>`. It is deprecated and distracting.", elem.tag),
                     severity: Severity::Error,
+                    span: None,
                 });
             }
         }

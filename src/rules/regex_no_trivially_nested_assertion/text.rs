@@ -74,6 +74,7 @@ impl TextCheck for Check {
                     rule_id: "regex-no-trivially-nested-assertion".into(),
                     message: "Trivially nested lookaround assertion \u{2014} merge with parent or simplify.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

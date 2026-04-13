@@ -30,6 +30,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "comma-or-logical-or-case".into(),
         message: "Match arm uses `||` (logical OR) \u{2014} use `|` for pattern alternatives.".into(),
         severity: Severity::Error,
+        span: None,
     });
 }
 

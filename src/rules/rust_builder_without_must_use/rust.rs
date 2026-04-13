@@ -46,6 +46,7 @@ impl AstCheck for Check {
                      silent no-op."
                 ),
                 severity: Severity::Warning,
+                span: None,
             });
         });
         diagnostics

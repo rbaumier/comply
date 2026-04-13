@@ -31,6 +31,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                   Vitest runs cleanup automatically after each test."
             .into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

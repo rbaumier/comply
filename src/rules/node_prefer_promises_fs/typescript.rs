@@ -51,6 +51,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "node-prefer-promises-fs".into(),
         message: format!("Use `fs.promises.{method}()` instead of callback-based `fs.{method}()`."),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

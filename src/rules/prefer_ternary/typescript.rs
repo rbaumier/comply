@@ -119,6 +119,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 op = op_display,
             ),
             severity: Severity::Warning,
+            span: None,
         });
         return;
     }
@@ -133,6 +134,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             rule_id: "prefer-ternary".into(),
             message: "This `if` statement can be replaced by `return cond ? a : b;`.".into(),
             severity: Severity::Warning,
+            span: None,
         });
     }
 }

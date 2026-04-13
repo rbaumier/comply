@@ -60,6 +60,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             rule_id: "error-message-is-remediation".into(),
             message: "Error message is too vague — describe what went wrong and what to do.".into(),
             severity: Severity::Warning,
+            span: None,
         });
     }
 }

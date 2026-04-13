@@ -105,6 +105,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             rule_id: "node-handle-callback-err".into(),
             message: format!("Callback error parameter `{param_name}` is declared but never used — handle the error."),
             severity: Severity::Warning,
+            span: None,
         });
     }
 }

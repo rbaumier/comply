@@ -51,6 +51,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             "Spreading an {label} literal in {container} is unnecessary."
         ),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

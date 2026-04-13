@@ -67,6 +67,7 @@ impl TextCheck for Check {
                     rule_id: "regex-no-missing-g-flag".into(),
                     message: "Regex passed to a method that requires the `g` flag but it is missing.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

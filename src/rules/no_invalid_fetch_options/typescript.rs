@@ -81,6 +81,7 @@ fn analyze_call_block(
         rule_id: "no-invalid-fetch-options".into(),
         message: format!("`body` is not allowed when method is \"{}\".", method),
         severity: Severity::Error,
+        span: None,
     })
 }
 

@@ -64,6 +64,7 @@ impl TextCheck for Check {
                     rule_id: "regex-no-useless-quantifier".into(),
                     message: "Useless quantifier \u{2014} it can only match once or matches an empty element.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

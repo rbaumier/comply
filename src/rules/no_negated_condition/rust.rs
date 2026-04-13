@@ -42,6 +42,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                       and remove the negation."
                 .into(),
             severity: Severity::Warning,
+            span: None,
         });
     }
 }

@@ -36,6 +36,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                   `useState(() => expensive())`."
             .into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

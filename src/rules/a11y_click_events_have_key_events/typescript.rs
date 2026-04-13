@@ -30,6 +30,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             rule_id: "a11y-click-events-have-key-events".into(),
             message: "Element has `onClick` without a corresponding keyboard event handler (`onKeyDown`/`onKeyUp`/`onKeyPress`).".into(),
             severity: Severity::Warning,
+            span: None,
         });
     }
 }

@@ -35,6 +35,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "node-no-sync".into(),
         message: format!("Unexpected sync method: `{full_name}()`. Use the async variant instead."),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

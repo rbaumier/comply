@@ -59,6 +59,7 @@ fn lint_block(block: &ScriptBlock<'_>, ctx: &CheckCtx, diagnostics: &mut Vec<Dia
                       `CHECK(length(col) <= N)`."
                 .into(),
             severity: Severity::Error,
+            span: None,
         });
     }
 }

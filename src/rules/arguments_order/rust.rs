@@ -38,6 +38,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             rule_id: "arguments-order".into(),
             message: "Arguments appear to be in the wrong order.".into(),
             severity: Severity::Warning,
+            span: None,
         });
     }
 }

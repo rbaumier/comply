@@ -58,6 +58,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "no-instanceof-builtins".into(),
         message: suggestion,
         severity: Severity::Warning,
+        span: None,
     });
 }
 

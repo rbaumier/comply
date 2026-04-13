@@ -43,6 +43,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 rule_id: "no-useless-intersection".into(),
                 message: "Intersection with `any` or `unknown` is useless — remove it.".into(),
                 severity: Severity::Warning,
+                span: None,
             });
         }
     }

@@ -45,6 +45,7 @@ impl AstCheck for Check {
                           audit trail for the unsafe contract."
                     .into(),
                 severity: Severity::Error,
+                span: None,
             });
         });
         diagnostics

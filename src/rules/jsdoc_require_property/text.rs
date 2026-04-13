@@ -74,6 +74,7 @@ impl TextCheck for Check {
                     rule_id: "jsdoc-require-property".into(),
                     message: "`@typedef` is missing `@property` tags.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

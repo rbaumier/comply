@@ -26,6 +26,7 @@ impl TextCheck for Check {
                               event handler instead."
                         .into(),
                     severity: Severity::Error,
+                    span: None,
                 });
             }
         }

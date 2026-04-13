@@ -45,6 +45,7 @@ impl TextCheck for Check {
                             source, first_line
                         ),
                         severity: Severity::Warning,
+                        span: None,
                     });
                 } else {
                     seen.insert(source_owned, line_num);

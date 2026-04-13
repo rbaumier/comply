@@ -72,6 +72,7 @@ fn scan_siblings(
                                 rule_id: "prefer-single-call".into(),
                                 message: format!("Combine consecutive `{key}()` calls into one."),
                                 severity: Severity::Warning,
+                                span: None,
                             });
                         }
                     prev_key = Some(key);

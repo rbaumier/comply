@@ -41,6 +41,7 @@ impl TextCheck for Check {
                         snippet,
                     ),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

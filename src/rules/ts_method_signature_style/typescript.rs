@@ -36,6 +36,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
              use a property signature: `{name}: (...) => ReturnType`."
         ),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

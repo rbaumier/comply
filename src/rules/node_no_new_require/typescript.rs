@@ -23,6 +23,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "node-no-new-require".into(),
         message: "Unexpected `new require(...)`. Separate the require call: `const Mod = require('...'); new Mod()`.".into(),
         severity: Severity::Error,
+        span: None,
     });
 }
 

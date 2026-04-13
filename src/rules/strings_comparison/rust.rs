@@ -37,6 +37,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "strings-comparison".into(),
         message: "Relational comparison with string literal uses lexicographic order \u{2014} this is rarely the intent.".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

@@ -88,6 +88,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                       Use hooks instead."
                 .into(),
             severity: Severity::Error,
+            span: None,
         });
     }
 }

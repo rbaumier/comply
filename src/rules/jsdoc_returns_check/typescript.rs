@@ -122,6 +122,7 @@ impl AstCheck for Check {
                               Remove the stale tag."
                         .into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         });

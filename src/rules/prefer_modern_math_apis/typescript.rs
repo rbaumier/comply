@@ -42,6 +42,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 rule_id: "prefer-modern-math-apis".into(),
                 message: msg.into(),
                 severity: Severity::Warning,
+                span: None,
             });
         }
     }

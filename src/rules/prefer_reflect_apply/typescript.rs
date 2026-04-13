@@ -37,6 +37,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             rule_id: "prefer-reflect-apply".into(),
             message: "Prefer `Reflect.apply(fn, thisArg, args)` over `Function.prototype.apply.call(fn, thisArg, args)`.".into(),
             severity: Severity::Warning,
+            span: None,
         });
         return;
     }
@@ -48,6 +49,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "prefer-reflect-apply".into(),
         message: "Prefer `Reflect.apply(fn, thisArg, args)` over `fn.apply(thisArg, args)`.".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

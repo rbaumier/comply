@@ -61,6 +61,7 @@ fn check_function_node(
              Extract a named helper — one level of abstraction per function."
         ),
         severity: Severity::Error,
+        span: None,
     })
 }
 

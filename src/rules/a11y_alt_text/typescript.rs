@@ -51,6 +51,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             rule_id: "a11y-alt-text".into(),
             message: msg.into(),
             severity: Severity::Error,
+            span: None,
         });
     }
 }

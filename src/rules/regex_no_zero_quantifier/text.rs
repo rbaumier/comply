@@ -28,6 +28,7 @@ impl TextCheck for Check {
                     rule_id: "regex-no-zero-quantifier".into(),
                     message: "Zero quantifier `{0}` or `{0,0}` matches nothing — remove or fix the quantifier.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

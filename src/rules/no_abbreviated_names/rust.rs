@@ -66,6 +66,7 @@ impl AstCheck for Check {
                      readers don't."
                 ),
                 severity: Severity::Warning,
+                span: None,
             });
         });
         diagnostics

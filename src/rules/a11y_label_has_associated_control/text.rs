@@ -25,6 +25,7 @@ impl TextCheck for Check {
                     rule_id: "a11y-label-has-associated-control".into(),
                     message: "`<label>` is missing `for` — associate it with a form control.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

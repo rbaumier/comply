@@ -94,6 +94,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             "`{name}()` called directly in component body — causes infinite re-renders. Move to `useEffect` or an event handler."
         ),
         severity: Severity::Error,
+        span: None,
     });
 }
 

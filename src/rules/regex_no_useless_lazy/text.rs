@@ -52,6 +52,7 @@ impl TextCheck for Check {
                     rule_id: "regex-no-useless-lazy".into(),
                     message: "Useless lazy quantifier — the `?` after a fixed quantifier has no effect.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

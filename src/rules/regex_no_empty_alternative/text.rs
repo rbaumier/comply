@@ -86,6 +86,7 @@ impl TextCheck for Check {
                     rule_id: "regex-no-empty-alternative".into(),
                     message: "Empty alternative in regex — remove leading, trailing, or consecutive `|`.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

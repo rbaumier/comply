@@ -55,6 +55,7 @@ crate::ast_check! { |node, _source, ctx, diagnostics|
                   capture the loop variable by reference. Move it outside."
             .into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

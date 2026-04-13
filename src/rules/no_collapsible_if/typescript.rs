@@ -49,6 +49,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "no-collapsible-if".into(),
         message: "Nested `if` without `else` can be merged into a single `if (a && b)`.".into(),
         severity: Severity::Error,
+        span: None,
     });
 }
 

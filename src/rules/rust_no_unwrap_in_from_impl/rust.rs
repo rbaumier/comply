@@ -79,6 +79,7 @@ fn collect_unwraps_in(
                      so callers can handle the failure mode."
                 ),
                 severity: Severity::Error,
+                span: None,
             });
         }
         let mut cursor = node.walk();

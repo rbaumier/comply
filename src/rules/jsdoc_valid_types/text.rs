@@ -69,6 +69,7 @@ impl TextCheck for Check {
                                 rule_id: "jsdoc-valid-types".into(),
                                 message: "Malformed JSDoc type expression — unbalanced braces.".into(),
                                 severity: Severity::Warning,
+                                span: None,
                             });
                         }
                         search = &search[open + close + 1..];
@@ -81,6 +82,7 @@ impl TextCheck for Check {
                             rule_id: "jsdoc-valid-types".into(),
                             message: "Unclosed `{` in JSDoc type expression.".into(),
                             severity: Severity::Warning,
+                            span: None,
                         });
                         break;
                     }

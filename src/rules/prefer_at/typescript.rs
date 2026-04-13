@@ -48,6 +48,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 rule_id: "prefer-at".into(),
                 message: "Prefer `.at(…)` over `[….length - index]`.".into(),
                 severity: Severity::Warning,
+                span: None,
             });
         }
         // Pattern 2: `.charAt(…)`
@@ -69,6 +70,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 rule_id: "prefer-at".into(),
                 message: "Prefer `String#at(…)` over `String#charAt(…)`.".into(),
                 severity: Severity::Warning,
+                span: None,
             });
         }
         _ => {}

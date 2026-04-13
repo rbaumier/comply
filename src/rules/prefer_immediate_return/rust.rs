@@ -77,6 +77,7 @@ impl AstCheck for Check {
                          returned — return the expression directly."
                     ),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

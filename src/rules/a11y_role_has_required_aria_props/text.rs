@@ -46,6 +46,7 @@ impl TextCheck for Check {
                         missing.join(", ")
                     ),
                     severity: Severity::Error,
+                    span: None,
                 });
             }
         }

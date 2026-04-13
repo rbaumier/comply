@@ -40,6 +40,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "no-timing-attack".into(),
         message: "Direct comparison of a security-sensitive value \u{2014} use a constant-time comparison (`constant_time_eq::constant_time_eq`, `subtle::ConstantTimeEq`).".into(),
         severity: Severity::Error,
+        span: None,
     });
 }
 

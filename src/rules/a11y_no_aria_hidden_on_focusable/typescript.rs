@@ -75,6 +75,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             rule_id: "a11y-no-aria-hidden-on-focusable".into(),
             message: "`aria-hidden=\"true\"` must not be set on focusable elements.".into(),
             severity: Severity::Error,
+            span: None,
         });
     }
 }

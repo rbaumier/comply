@@ -51,6 +51,7 @@ impl AstCheck for Check {
                           actually share across threads."
                     .into(),
                 severity: Severity::Error,
+                span: None,
             });
         });
         diagnostics

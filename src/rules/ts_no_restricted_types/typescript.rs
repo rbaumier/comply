@@ -49,6 +49,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                     rule_id: "ts-no-restricted-types".into(),
                     message: msg.to_string(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         return;
@@ -65,6 +66,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 rule_id: "ts-no-restricted-types".into(),
                 message: "Use `object` or `Record<string, unknown>` instead of `{}`.".into(),
                 severity: Severity::Warning,
+                span: None,
             });
         }
 }

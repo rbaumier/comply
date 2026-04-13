@@ -25,6 +25,7 @@ impl TextCheck for Check {
                     rule_id: "a11y-tabindex-no-positive".into(),
                     message: "`tabindex` must not be positive — use `0` or `-1` only.".into(),
                     severity: Severity::Error,
+                    span: None,
                 });
             }
         }

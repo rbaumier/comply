@@ -108,6 +108,7 @@ fn check_params(
             rule_id: "prefer-read-only-props".into(),
             message: "Props type should be wrapped in `Readonly<>` to prevent mutation.".into(),
             severity: Severity::Warning,
+            span: None,
         });
     }
 }

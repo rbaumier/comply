@@ -33,6 +33,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                           web-first assertion or `waitForResponse`."
                     .into(),
                 severity: Severity::Error,
+                span: None,
             });
         }
     }

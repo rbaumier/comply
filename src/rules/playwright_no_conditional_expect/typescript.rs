@@ -57,6 +57,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "playwright-no-conditional-expect".into(),
         message: "`expect()` inside a conditional may silently skip — assert unconditionally.".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

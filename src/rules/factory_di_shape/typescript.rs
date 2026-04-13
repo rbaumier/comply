@@ -47,6 +47,7 @@ impl AstCheck for Check {
                          `createService({{ db, cache, logger }})`."
                     ),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

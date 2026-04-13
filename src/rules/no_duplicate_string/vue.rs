@@ -73,6 +73,7 @@ impl AstCheck for Check {
                         count = hits.len()
                     ),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

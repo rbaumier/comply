@@ -63,6 +63,7 @@ fn lint_block(block: &ScriptBlock<'_>, ctx: &CheckCtx, diagnostics: &mut Vec<Dia
                       sides — use `>= start AND < end` instead."
                 .into(),
             severity: Severity::Warning,
+            span: None,
         });
     }
 }

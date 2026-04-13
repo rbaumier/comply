@@ -47,6 +47,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             rule_id: "no-import-module-exports".into(),
             message: "Cannot use `module.exports`/`exports` in a module that uses `import` declarations — pick one module system.".into(),
             severity: Severity::Warning,
+            span: None,
         });
     }
 }

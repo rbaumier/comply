@@ -56,6 +56,7 @@ crate::ast_check! { |node, _source, ctx, diagnostics|
                   \u{2014} use `else if` instead."
             .into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

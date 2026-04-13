@@ -101,6 +101,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                     rule_id: "no-inconsistent-returns".into(),
                     message: "Function has inconsistent returns \u{2014} some paths return a value, others return nothing.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
             i = body_end + 1;

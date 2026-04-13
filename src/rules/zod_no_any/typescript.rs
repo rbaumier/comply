@@ -25,6 +25,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                   using the value."
             .into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

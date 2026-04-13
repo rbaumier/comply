@@ -44,6 +44,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             rule_id: "a11y-autocomplete-valid".into(),
             message: format!("`autoComplete=\"{value}\"` is not a valid autocomplete value."),
             severity: Severity::Error,
+            span: None,
         });
     }
 }

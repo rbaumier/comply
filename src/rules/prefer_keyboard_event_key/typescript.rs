@@ -53,6 +53,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 rule_id: "prefer-keyboard-event-key".into(),
                 message: format!("Use `.key` instead of `.{prop}`."),
                 severity: Severity::Warning,
+                span: None,
             });
         }
     }

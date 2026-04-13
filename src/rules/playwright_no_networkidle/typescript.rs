@@ -29,6 +29,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                     rule_id: "playwright-no-networkidle".into(),
                     message: "`networkidle` is timing-based and flaky — use a web-first assertion or `waitForResponse` instead.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }
@@ -46,6 +47,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             rule_id: "playwright-no-networkidle".into(),
             message: "`networkidle` is timing-based and flaky — use a web-first assertion or `waitForResponse` instead.".into(),
             severity: Severity::Warning,
+            span: None,
         });
     }
 }

@@ -31,6 +31,7 @@ crate::ast_check! { |node, _source, ctx, diagnostics|
         rule_id: "no-case-label-in-switch".into(),
         message: "Label inside switch statement \u{2014} this is a JS label, not a case branch. Use `case <value>:` instead.".into(),
         severity: Severity::Error,
+        span: None,
     });
 }
 

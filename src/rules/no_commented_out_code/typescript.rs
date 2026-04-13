@@ -42,6 +42,7 @@ impl AstCheck for Check {
                           delete it. Git history preserves the original."
                     .into(),
                 severity: Severity::Warning,
+                span: None,
             });
         }
         diagnostics

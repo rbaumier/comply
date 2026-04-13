@@ -54,6 +54,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                   `readOnly`."
             .into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

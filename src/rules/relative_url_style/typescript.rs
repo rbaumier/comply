@@ -45,6 +45,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "relative-url-style".into(),
         message: "Remove the `./` prefix from the relative URL in `new URL()`.".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

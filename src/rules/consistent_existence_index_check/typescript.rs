@@ -47,6 +47,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "consistent-existence-index-check".into(),
         message: message.into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

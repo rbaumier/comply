@@ -100,6 +100,7 @@ impl TextCheck for Check {
                     rule_id: "regex-no-empty-string-match".into(),
                     message: "Regex can match the empty string in `.split()` or `.replace()` — this may cause unexpected results.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

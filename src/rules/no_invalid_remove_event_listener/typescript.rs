@@ -71,6 +71,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 message: "The listener argument should be a function reference — inline functions and `.bind()` create a new reference each call."
                     .into(),
                 severity: Severity::Warning,
+                span: None,
             });
         }
     }

@@ -118,6 +118,7 @@ impl AstCheck for Check {
                             func_name
                         ),
                         severity: Severity::Warning,
+                        span: None,
                     });
                 }
                 func_start_line = None;

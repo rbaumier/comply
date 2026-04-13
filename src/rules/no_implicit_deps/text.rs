@@ -114,6 +114,7 @@ impl TextCheck for Check {
                             "Bare import `{spec}` is not a Node.js builtin — ensure it is listed in package.json."
                         ),
                         severity: Severity::Warning,
+                        span: None,
                     });
                 }
         }

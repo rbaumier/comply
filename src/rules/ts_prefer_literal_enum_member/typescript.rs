@@ -58,6 +58,7 @@ crate::ast_check! { |node, _source, ctx, diagnostics|
                   (string or number), not a computed expression."
             .into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

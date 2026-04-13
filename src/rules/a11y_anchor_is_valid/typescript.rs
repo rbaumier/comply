@@ -35,6 +35,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             rule_id: "a11y-anchor-is-valid".into(),
             message: "Anchor is missing an `href` attribute.".into(),
             severity: Severity::Error,
+            span: None,
         });
         return;
     }
@@ -48,6 +49,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 rule_id: "a11y-anchor-is-valid".into(),
                 message: "Anchor has `href=\"#\"` — use a `<button>` or a real URL.".into(),
                 severity: Severity::Error,
+                span: None,
             });
         } else if val.contains("javascript:") {
             diagnostics.push(Diagnostic {
@@ -57,6 +59,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 rule_id: "a11y-anchor-is-valid".into(),
                 message: "Anchor has `href=\"javascript:\"` — use a `<button>` or a real URL.".into(),
                 severity: Severity::Error,
+                span: None,
             });
         }
     }

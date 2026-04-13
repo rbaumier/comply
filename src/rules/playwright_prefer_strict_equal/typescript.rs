@@ -42,6 +42,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "playwright-prefer-strict-equal".into(),
         message: "Use toStrictEqual() instead.".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

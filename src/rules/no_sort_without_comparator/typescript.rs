@@ -33,6 +33,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 rule_id: "no-sort-without-comparator".into(),
                 message: "`.sort()` without comparator sorts lexicographically — pass an explicit compare function.".into(),
                 severity: Severity::Error,
+                span: None,
             });
         }
     }

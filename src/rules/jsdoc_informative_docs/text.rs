@@ -105,6 +105,7 @@ impl TextCheck for Check {
                 rule_id: "jsdoc-informative-docs".into(),
                 message: "JSDoc description merely repeats the symbol name without adding useful information.".into(),
                 severity: Severity::Warning,
+                span: None,
             });
         }
         diagnostics

@@ -49,6 +49,7 @@ impl TextCheck for Check {
                     rule_id: "regex-no-misleading-char-class".into(),
                     message: "Character class contains multi-codepoint graphemes — they will be split into individual code points.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

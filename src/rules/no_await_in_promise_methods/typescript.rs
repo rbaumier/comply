@@ -57,6 +57,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                      — this serializes the calls."
                 ),
                 severity: Severity::Warning,
+                span: None,
             });
         }
     }

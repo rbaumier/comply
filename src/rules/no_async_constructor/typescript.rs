@@ -40,6 +40,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "no-async-constructor".into(),
         message: "Constructors cannot be `async` — use a static async factory method instead.".into(),
         severity: Severity::Error,
+        span: None,
     });
 }
 

@@ -35,6 +35,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             "Do not prefix identifiers with keyword `{keyword}`."
         ),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

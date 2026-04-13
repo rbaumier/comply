@@ -74,6 +74,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "no-bitwise-in-boolean".into(),
         message: "Bitwise operator in boolean context — did you mean `&&` or `||`?".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

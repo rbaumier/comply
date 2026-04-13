@@ -128,6 +128,7 @@ impl TextCheck for Check {
                         ctx.path.file_name().unwrap_or_default().to_string_lossy(),
                     ),
                     severity: Severity::Warning,
+                    span: None,
                 }];
             }
         }

@@ -69,6 +69,7 @@ impl AstCheck for Check {
                              Canonical order: @param, @returns, @throws, @example."
                         ),
                         severity: Severity::Warning,
+                        span: None,
                     });
                 }
             }

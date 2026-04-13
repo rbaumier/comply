@@ -36,6 +36,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                     rule_id: "import-consistent-type-specifier-style".into(),
                     message: "Prefer using a top-level `import type` instead of inline `type` specifiers.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

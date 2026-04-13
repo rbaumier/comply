@@ -33,6 +33,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                              remove the statement."
                         ),
                         severity: Severity::Warning,
+                        span: None,
                     });
                     return;
                 }
@@ -58,6 +59,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                          remove the statement."
                     ),
                     severity: Severity::Warning,
+                    span: None,
                 });
                 return;
             }

@@ -20,6 +20,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "no-eval".into(),
         message: "`eval()` enables arbitrary code injection — remove it.".into(),
         severity: Severity::Error,
+        span: None,
     });
 }
 

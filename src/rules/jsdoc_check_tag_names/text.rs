@@ -83,6 +83,7 @@ impl TextCheck for Check {
                         rule_id: "jsdoc-check-tag-names".into(),
                         message: format!("Unknown JSDoc tag `@{tag_name}`.",),
                         severity: Severity::Warning,
+                        span: None,
                     });
                 }
             }

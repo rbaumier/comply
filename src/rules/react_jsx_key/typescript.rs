@@ -82,6 +82,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                       React needs stable keys to reconcile lists."
                 .into(),
             severity: Severity::Warning,
+            span: None,
         });
     }
 }

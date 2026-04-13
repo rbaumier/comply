@@ -41,6 +41,7 @@ impl AstCheck for Check {
                           schema that actually checks the shape at runtime."
                     .into(),
                 severity: Severity::Error,
+                span: None,
             });
         });
         diagnostics

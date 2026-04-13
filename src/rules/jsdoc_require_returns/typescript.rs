@@ -130,6 +130,7 @@ impl AstCheck for Check {
                               Document what the function returns."
                         .into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         });

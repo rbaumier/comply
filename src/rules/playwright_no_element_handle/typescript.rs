@@ -42,6 +42,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 "`{label}` returns a deprecated ElementHandle — use `page.locator()` instead."
             ),
             severity: Severity::Warning,
+            span: None,
         });
     }
 }

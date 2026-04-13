@@ -25,6 +25,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "no-constructor-side-effects".into(),
         message: "`new X()` without assignment — constructors should not be called for side effects.".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

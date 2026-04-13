@@ -49,6 +49,7 @@ fn check_describe_depth(
                     "Describe depth {new_depth} exceeds maximum allowed {MAX_DEPTH}."
                 ),
                 severity: Severity::Warning,
+                span: None,
             });
         }
         // Walk children at increased depth

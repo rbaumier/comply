@@ -57,6 +57,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 rule_id: "prefer-string-starts-ends-with".into(),
                 message: "Prefer `String#startsWith()` over a regex with `^`.".into(),
                 severity: Severity::Warning,
+                span: None,
             });
             return;
         }
@@ -72,6 +73,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 rule_id: "prefer-string-starts-ends-with".into(),
                 message: "Prefer `String#endsWith()` over a regex with `$`.".into(),
                 severity: Severity::Warning,
+                span: None,
             });
         }
 }

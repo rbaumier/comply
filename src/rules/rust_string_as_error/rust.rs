@@ -29,6 +29,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                   (use `thiserror::Error`)."
             .into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

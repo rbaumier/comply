@@ -42,6 +42,7 @@ impl TextCheck for Check {
                  Extract helpers below line {max_lines} into a separate module."
             ),
             severity: Severity::Error,
+            span: None,
         }]
     }
 }

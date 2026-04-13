@@ -32,6 +32,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                       use ES `import` instead."
                 .into(),
             severity: Severity::Warning,
+            span: None,
         });
     }
 }

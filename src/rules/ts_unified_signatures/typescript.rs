@@ -61,6 +61,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                      with a union or optional parameter."
                 ),
                 severity: Severity::Warning,
+                span: None,
             });
         }
     }

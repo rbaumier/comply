@@ -49,6 +49,7 @@ impl TextCheck for Check {
                             elem.tag,
                         ),
                         severity: Severity::Warning,
+                        span: None,
                     });
                 }
             }

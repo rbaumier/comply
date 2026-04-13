@@ -68,6 +68,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "prefer-regexp-test".into(),
         message: "Prefer `RegExp#test()` over `String#match()` in boolean contexts.".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

@@ -46,6 +46,7 @@ impl AstCheck for Check {
                      delete it."
                 ),
                 severity: Severity::Error,
+                span: None,
             });
         });
         diagnostics

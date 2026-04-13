@@ -80,6 +80,7 @@ impl LlmRule for Rule {
             rule_id: "llm-function-abstraction-levels".into(),
             message: msg,
             severity: Severity::Warning,
+            span: None,
         }])
     }
 }

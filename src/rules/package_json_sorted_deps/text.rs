@@ -79,6 +79,7 @@ impl TextCheck for Check {
                             w[1], w[0],
                         ),
                         severity: Severity::Warning,
+                        span: None,
                     });
                     break; // One diagnostic per section.
                 }

@@ -65,6 +65,7 @@ impl TextCheck for Check {
                             rule_id: "jsdoc-require-param-name".into(),
                             message: "`@param` tag is missing a parameter name.".into(),
                             severity: Severity::Warning,
+                            span: None,
                         });
                     }
                 }

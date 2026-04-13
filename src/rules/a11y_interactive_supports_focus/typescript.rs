@@ -35,6 +35,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             rule_id: "a11y-interactive-supports-focus".into(),
             message: "Element with interactive handler and `role` must have `tabIndex` to be focusable.".into(),
             severity: Severity::Warning,
+            span: None,
         });
     }
 }

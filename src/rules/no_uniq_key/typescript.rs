@@ -46,6 +46,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "no-uniq-key".into(),
         message: "Non-unique key \u{2014} `Math.random()`, `Date.now()`, or `uuid()` create new keys every render, breaking reconciliation.".into(),
         severity: Severity::Error,
+        span: None,
     });
 }
 

@@ -26,6 +26,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "prefer-while".into(),
         message: "Use `while` instead of `for` without init/update.".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

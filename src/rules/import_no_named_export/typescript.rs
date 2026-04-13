@@ -28,6 +28,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             rule_id: "import-no-named-export".into(),
             message: "Named exports are not allowed.".into(),
             severity: Severity::Warning,
+            span: None,
         });
     }
 }

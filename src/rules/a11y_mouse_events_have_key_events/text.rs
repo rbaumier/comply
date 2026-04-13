@@ -31,6 +31,7 @@ impl TextCheck for Check {
                     rule_id: "a11y-mouse-events-have-key-events".into(),
                     message: "`@mouseover` must be accompanied by `@focus` for keyboard accessibility.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
             if has_mouseout && !has_blur {
@@ -41,6 +42,7 @@ impl TextCheck for Check {
                     rule_id: "a11y-mouse-events-have-key-events".into(),
                     message: "`@mouseout` must be accompanied by `@blur` for keyboard accessibility.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

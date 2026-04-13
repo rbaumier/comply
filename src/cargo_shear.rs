@@ -115,6 +115,7 @@ fn convert_findings(findings: Vec<Finding>, workspace: &Path) -> Result<Vec<Diag
                 "error" => Severity::Error,
                 _ => Severity::Warning,
             },
+            span: None,
         });
     }
     Ok(diagnostics)

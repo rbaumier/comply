@@ -67,6 +67,7 @@ impl AstCheck for Check {
                      `{name}Bytes`, `{name}Count`, or similar."
                 ),
                 severity: Severity::Warning,
+                span: None,
             });
         });
         diagnostics

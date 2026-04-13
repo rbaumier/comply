@@ -68,6 +68,7 @@ impl TextCheck for Check {
                     rule_id: "regex-no-non-standard-flag".into(),
                     message: "Non-standard regex flag detected \u{2014} standard flags are: d, g, i, m, s, u, v, y.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

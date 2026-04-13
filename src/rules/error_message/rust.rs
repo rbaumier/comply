@@ -61,6 +61,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             rule_id: "error-message".into(),
             message: format!("Pass a message to `{name}!()`."),
             severity: Severity::Warning,
+            span: None,
         });
     }
 }

@@ -38,6 +38,7 @@ impl TextCheck for Check {
                 message: "`checked` without `@change` or `v-model` renders a frozen input."
                     .into(),
                 severity: Severity::Warning,
+                span: None,
             });
         }
         diagnostics

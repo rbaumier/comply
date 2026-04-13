@@ -26,6 +26,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                   only failure mode."
             .into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

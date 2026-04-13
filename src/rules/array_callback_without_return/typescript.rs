@@ -69,6 +69,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             rule_id: "array-callback-without-return".into(),
             message: "Array method callback uses block body `=> { ... }` without a `return` statement.".into(),
             severity: Severity::Error,
+            span: None,
         });
     }
 }

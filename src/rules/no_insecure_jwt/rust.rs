@@ -30,6 +30,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 rule_id: "no-insecure-jwt".into(),
                 message: "Insecure JWT algorithm `none` — use RS256 or ES256.".into(),
                 severity: Severity::Error,
+                span: None,
             });
             return;
         }
@@ -50,6 +51,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 rule_id: "no-insecure-jwt".into(),
                 message: "HS256 in JWT context — prefer asymmetric algorithms (RS256, ES256).".into(),
                 severity: Severity::Error,
+                span: None,
             });
         }
     }

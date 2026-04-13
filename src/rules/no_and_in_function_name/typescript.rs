@@ -51,6 +51,7 @@ impl AstCheck for Check {
                      sequence them."
                 ),
                 severity: Severity::Error,
+                span: None,
             });
         });
         diagnostics

@@ -93,6 +93,7 @@ impl TextCheck for Check {
                             "Weasel word `{weasel}` in comment — be specific."
                         ),
                         severity: Severity::Warning,
+                        span: None,
                     });
                     break; // One weasel diagnostic per line.
                 }
@@ -110,6 +111,7 @@ impl TextCheck for Check {
                             "Passive voice `{passive}` in comment — use active voice."
                         ),
                         severity: Severity::Warning,
+                        span: None,
                     });
                     break;
                 }
@@ -131,6 +133,7 @@ impl TextCheck for Check {
                         "Lexical illusion: `{first}` repeated across lines."
                     ),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
             prev_last_word = words.last().map(|w| w.to_lowercase());

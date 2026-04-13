@@ -32,6 +32,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             rule_id: "comma-or-logical-or-case".into(),
             message: "Switch `case` uses comma or `||` — use separate `case` clauses with fall-through instead.".into(),
             severity: Severity::Error,
+            span: None,
         });
     }
 }

@@ -62,6 +62,7 @@ impl TextCheck for Check {
                                     rule_id: "jsdoc-check-types".into(),
                                     message: format!("Use `{good}` instead of `{bad}` in JSDoc type."),
                                     severity: Severity::Warning,
+                                    span: None,
                                 });
                             }
                         }

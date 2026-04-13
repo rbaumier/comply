@@ -79,6 +79,7 @@ impl TextCheck for Check {
                     rule_id: "jsdoc-require-yields-check".into(),
                     message: "Function uses `yield` but JSDoc is missing a `@yields` tag.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

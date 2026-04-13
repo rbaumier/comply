@@ -39,6 +39,7 @@ impl AstCheck for Check {
                           `const` so it compiles once."
                     .into(),
                 severity: Severity::Warning,
+                span: None,
             });
         });
         diagnostics

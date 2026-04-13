@@ -75,6 +75,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "playwright-prefer-to-contain".into(),
         message: "Prefer using `toContain()` instead.".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

@@ -40,6 +40,7 @@ impl TextCheck for Check {
                              the wrong DOM. Use `:key=\"item.id\"` instead."
                         ),
                         severity: Severity::Error,
+                        span: None,
                     });
                     break;
                 }

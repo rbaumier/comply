@@ -32,6 +32,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                           callback ref instead."
                     .into(),
                 severity: Severity::Error,
+                span: None,
             });
         }
     }

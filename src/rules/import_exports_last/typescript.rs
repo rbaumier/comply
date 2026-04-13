@@ -40,6 +40,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 rule_id: "import-exports-last".into(),
                 message: "Export statements should appear at the end of the file.".into(),
                 severity: Severity::Warning,
+                span: None,
             });
         }
     }

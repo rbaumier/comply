@@ -165,6 +165,7 @@ impl AstCheck for Check {
                                   trace automatically via `super()`."
                             .into(),
                         severity: Severity::Warning,
+                        span: None,
                     });
                 }
             }

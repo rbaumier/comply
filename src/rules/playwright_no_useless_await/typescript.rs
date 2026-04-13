@@ -111,6 +111,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "playwright-no-useless-await".into(),
         message: "Unnecessary await expression. This method does not return a Promise.".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

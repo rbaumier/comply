@@ -80,6 +80,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             rule_id: "playwright-max-expects".into(),
             message: format!("Too many assertion calls ({count}) — maximum allowed is {MAX_EXPECTS}."),
             severity: Severity::Warning,
+            span: None,
         });
     }
 }

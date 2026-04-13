@@ -29,6 +29,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "no-array-delete".into(),
         message: "`delete arr[i]` creates a sparse hole — use `arr.splice(i, 1)` instead.".into(),
         severity: Severity::Error,
+        span: None,
     });
 }
 

@@ -34,6 +34,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
              `PATCH /api/orders/:id` updates, `DELETE /api/orders/:id` removes."
         ),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

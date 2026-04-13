@@ -43,6 +43,7 @@ impl AstCheck for Check {
                      `#[cfg(test)]` immediately above the module declaration."
                 ),
                 severity: Severity::Error,
+                span: None,
             });
         });
         diagnostics

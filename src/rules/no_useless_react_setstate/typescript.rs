@@ -54,6 +54,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                         "`{setter}({state})` is a no-op — setting state to its current value."
                     ),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

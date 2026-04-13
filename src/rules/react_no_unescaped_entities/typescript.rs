@@ -27,6 +27,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                     "Unescaped `{ch}` in JSX text — use the HTML entity instead."
                 ),
                 severity: Severity::Warning,
+                span: None,
             });
             // Report once per node, not once per character.
             return;

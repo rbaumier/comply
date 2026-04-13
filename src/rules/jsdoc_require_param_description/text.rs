@@ -67,6 +67,7 @@ impl TextCheck for Check {
                             rule_id: "jsdoc-require-param-description".into(),
                             message: "`@param` tag is missing a description.".into(),
                             severity: Severity::Warning,
+                            span: None,
                         });
                     }
                 }

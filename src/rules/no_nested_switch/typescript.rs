@@ -19,6 +19,7 @@ crate::ast_check! { |node, _source, ctx, diagnostics|
                 rule_id: "no-nested-switch".into(),
                 message: "Nested `switch` — extract the inner switch into a separate function.".into(),
                 severity: Severity::Error,
+                span: None,
             });
             return;
         }

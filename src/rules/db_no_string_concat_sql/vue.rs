@@ -80,6 +80,7 @@ fn lint_block(block: &ScriptBlock<'_>, ctx: &CheckCtx, diagnostics: &mut Vec<Dia
                       (`$1`, `?`) instead."
                 .into(),
             severity: Severity::Error,
+            span: None,
         });
     }
 }

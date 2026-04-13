@@ -20,6 +20,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "prefer-dom-node-text-content".into(),
         message: "Prefer `.textContent` over `.innerText`.".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

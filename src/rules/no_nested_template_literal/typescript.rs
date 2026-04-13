@@ -15,6 +15,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             rule_id: "no-nested-template-literal".into(),
             message: "Nested template literal — extract the inner expression to a named variable.".into(),
             severity: Severity::Error,
+            span: None,
         });
     }
 }

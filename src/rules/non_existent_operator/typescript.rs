@@ -50,6 +50,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "non-existent-operator".into(),
         message: "Typo operator — did you mean `+=`, `-=`, or `!=`?".into(),
         severity: Severity::Error,
+        span: None,
     });
 }
 

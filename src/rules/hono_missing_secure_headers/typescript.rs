@@ -53,6 +53,7 @@ impl AstCheck for Check {
             rule_id: "hono-missing-secure-headers".into(),
             message: "Hono app defines routes without `secureHeaders()` middleware — security headers are missing.".into(),
             severity: Severity::Warning,
+            span: None,
         }]
     }
 }

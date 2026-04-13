@@ -45,6 +45,7 @@ crate::ast_check! { |node, _source, ctx, diagnostics|
                   the chain can return `undefined` by design."
             .into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

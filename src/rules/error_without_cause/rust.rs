@@ -43,6 +43,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             rule_id: "error-without-cause".into(),
             message: "Error wraps message without preserving cause — use `.context()` or pass `source`.".into(),
             severity: Severity::Error,
+            span: None,
         });
     }
 }

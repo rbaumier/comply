@@ -28,6 +28,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "no-promise-reject".into(),
         message: "`Promise.reject()` — prefer returning error values or throwing typed errors.".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

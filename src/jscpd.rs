@@ -128,6 +128,7 @@ fn convert_duplicates(duplicates: Vec<Duplicate>) -> Vec<Diagnostic> {
                 other_line = d.second_file.start_loc.line
             ),
             severity: Severity::Warning,
+            span: None,
         })
         .collect()
 }

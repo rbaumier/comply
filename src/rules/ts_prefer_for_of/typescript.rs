@@ -165,6 +165,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "ts-prefer-for-of".into(),
         message: "Use `for-of` instead of an index-only `for` loop.".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

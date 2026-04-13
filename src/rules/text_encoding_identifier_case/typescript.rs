@@ -37,6 +37,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 rule_id: "text-encoding-identifier-case".into(),
                 message: format!("Prefer `'{good}'` over `'{bad}'`."),
                 severity: Severity::Warning,
+                span: None,
             });
         }
     }

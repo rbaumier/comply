@@ -25,6 +25,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 rule_id: "prefer-spread".into(),
                 message: "Prefer the spread operator over `Array.from(...)`.".into(),
                 severity: Severity::Warning,
+                span: None,
             });
             return;
         }
@@ -39,6 +40,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 rule_id: "prefer-spread".into(),
                 message: "Prefer the spread operator over `Array#concat(...)`.".into(),
                 severity: Severity::Warning,
+                span: None,
             });
             return;
         }
@@ -64,6 +66,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                     rule_id: "prefer-spread".into(),
                     message: "Prefer the spread operator over `Array#slice()`.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

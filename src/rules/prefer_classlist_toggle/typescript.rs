@@ -47,6 +47,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                         rule_id: "prefer-classlist-toggle".into(),
                         message: "Prefer `classList.toggle('class', condition)` over conditional `classList.add/remove`.".into(),
                         severity: Severity::Warning,
+                        span: None,
                     });
                     return;
                 }
@@ -76,6 +77,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                         rule_id: "prefer-classlist-toggle".into(),
                         message: "Prefer `classList.toggle('class', condition)` over conditional `classList.add/remove`.".into(),
                         severity: Severity::Warning,
+                        span: None,
                     });
                     return;
                 }
@@ -110,6 +112,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 rule_id: "prefer-classlist-toggle".into(),
                 message: "Prefer `classList.toggle('class', condition)` over conditional `classList.add/remove`.".into(),
                 severity: Severity::Warning,
+                span: None,
             });
         }
     }

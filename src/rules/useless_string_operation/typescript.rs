@@ -56,6 +56,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                   the return value must be used."
             .into(),
         severity: Severity::Error,
+        span: None,
     });
 }
 

@@ -89,6 +89,7 @@ fn make_diagnostic(
              newtype around `i64` representing cents."
         ),
         severity: Severity::Error,
+        span: None,
     }
 }
 

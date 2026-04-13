@@ -65,6 +65,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                  remove the type annotation."
             ),
             severity: Severity::Warning,
+            span: None,
         });
     }
 }

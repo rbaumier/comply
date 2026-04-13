@@ -86,6 +86,7 @@ impl TextCheck for Check {
                             "Adjacent inline elements without whitespace — add a space."
                                 .into(),
                         severity: Severity::Warning,
+                        span: None,
                     });
                 }
                 i = tag_end + 1;

@@ -113,6 +113,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             rule_id: "prefer-class-fields".into(),
             message: "Prefer a class field declaration over `this` assignment in constructor for static values.".into(),
             severity: Severity::Warning,
+            span: None,
         });
     }
 }

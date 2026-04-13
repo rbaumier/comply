@@ -54,6 +54,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                         "`{pattern}` in business logic \u{2014} use a wrapper or domain events instead."
                     ),
                     severity: Severity::Warning,
+                    span: None,
                 });
                 break;
             }

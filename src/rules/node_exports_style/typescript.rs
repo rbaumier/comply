@@ -19,6 +19,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             rule_id: "node-exports-style".into(),
             message: "Unexpected assignment to `exports`. Use `module.exports` instead.".into(),
             severity: Severity::Warning,
+            span: None,
         });
         return;
     }
@@ -34,6 +35,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 rule_id: "node-exports-style".into(),
                 message: "Unexpected access to `exports`. Use `module.exports` instead.".into(),
                 severity: Severity::Warning,
+                span: None,
             });
         }
     }

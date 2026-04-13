@@ -76,6 +76,7 @@ impl AstCheck for Check {
                             "Control-flow nesting depth is {depth} (max: {MAX_DEPTH})."
                         ),
                         severity: Severity::Error,
+                        span: None,
                     });
                 }
             }

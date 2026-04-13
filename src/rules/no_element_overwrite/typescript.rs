@@ -50,6 +50,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 rule_id: "no-element-overwrite".into(),
                 message: format!("`{}` is assigned on the previous line and immediately overwritten.", t1),
                 severity: Severity::Error,
+                span: None,
             });
             return;
         }
@@ -65,6 +66,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 rule_id: "no-element-overwrite".into(),
                 message: "`.set()` with the same key on the previous line — first write is dead.".into(),
                 severity: Severity::Error,
+                span: None,
             });
         }
 }

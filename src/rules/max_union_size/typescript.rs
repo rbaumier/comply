@@ -47,6 +47,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 "Union type has {count} members (max: 5) — consider extracting a type alias."
             ),
             severity: Severity::Warning,
+            span: None,
         });
     }
 }

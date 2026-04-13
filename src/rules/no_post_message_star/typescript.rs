@@ -32,6 +32,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             rule_id: "no-post-message-star".into(),
             message: "`postMessage` with `\"*\"` target origin — specify an explicit origin.".into(),
             severity: Severity::Error,
+            span: None,
         });
     }
 }

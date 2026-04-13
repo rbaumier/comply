@@ -27,6 +27,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             base = m.base,
         ),
         severity: Severity::Error,
+        span: None,
     });
 }
 

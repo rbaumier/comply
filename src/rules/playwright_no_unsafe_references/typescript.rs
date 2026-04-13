@@ -63,6 +63,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                   second argument."
             .into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

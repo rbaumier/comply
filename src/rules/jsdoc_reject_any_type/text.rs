@@ -50,6 +50,7 @@ impl TextCheck for Check {
                     rule_id: "jsdoc-reject-any-type".into(),
                     message: "JSDoc uses `*` or `any` type \u{2014} provide a specific type instead.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

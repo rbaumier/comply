@@ -90,6 +90,7 @@ impl TextCheck for Check {
                     rule_id: "regex-no-useless-backreference".into(),
                     message: "Backreference always resolves to the empty string \u{2014} it references itself or a forward group.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

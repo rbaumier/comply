@@ -65,6 +65,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
              — use the value directly."
         ),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

@@ -99,6 +99,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             "Array `{var_name}` is used as an associative array — use a Map or plain object instead."
         ),
         severity: Severity::Error,
+        span: None,
     });
 }
 

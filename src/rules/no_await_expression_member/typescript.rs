@@ -38,6 +38,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                   — extract to a variable first."
             .into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

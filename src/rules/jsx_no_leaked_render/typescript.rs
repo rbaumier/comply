@@ -81,6 +81,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                       falsy value (`0`, `\"\"`) instead of nothing."
                 .into(),
             severity: Severity::Error,
+            span: None,
         });
     }
 }

@@ -90,6 +90,7 @@ impl TextCheck for Check {
                         rule_id: "jsdoc-check-template-names".into(),
                         message: format!("`@template {name}` is declared but not referenced in any type expression.",),
                         severity: Severity::Warning,
+                        span: None,
                     });
                 }
             }

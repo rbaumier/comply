@@ -143,6 +143,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                          importing then re-exporting `{name}`."
                     ),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

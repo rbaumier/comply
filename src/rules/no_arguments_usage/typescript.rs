@@ -34,6 +34,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         message: "Avoid direct use of `arguments` — use rest parameters (`...args`) instead."
             .into(),
         severity: Severity::Error,
+        span: None,
     });
 }
 

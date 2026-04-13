@@ -68,6 +68,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "ts-no-invalid-void-type".into(),
         message: "`void` is only valid as a return type or generic type argument.".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

@@ -58,6 +58,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "no-unreadable-iife".into(),
         message: "IIFE with parenthesized arrow function body is considered unreadable.".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

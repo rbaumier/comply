@@ -33,6 +33,7 @@ impl AstCheck for Check {
                 message: "Nested ternary — extract to if/else or a named variable for each branch."
                     .into(),
                 severity: Severity::Error,
+                span: None,
             });
         });
         diagnostics

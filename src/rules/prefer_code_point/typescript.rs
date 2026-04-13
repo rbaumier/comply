@@ -25,6 +25,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 rule_id: "prefer-code-point".into(),
                 message: "Prefer `String#codePointAt()` over `String#charCodeAt()`.".into(),
                 severity: Severity::Warning,
+                span: None,
             });
         }
         "fromCharCode" => {
@@ -41,6 +42,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 rule_id: "prefer-code-point".into(),
                 message: "Prefer `String.fromCodePoint()` over `String.fromCharCode()`.".into(),
                 severity: Severity::Warning,
+                span: None,
             });
         }
         _ => {}

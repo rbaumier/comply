@@ -17,6 +17,7 @@ impl TextCheck for Check {
                     rule_id: "sql-no-select-star".into(),
                     message: "`SELECT *` wastes bandwidth — list columns explicitly so the API contract is visible and covering indexes can work.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

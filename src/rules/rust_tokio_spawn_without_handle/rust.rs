@@ -51,6 +51,7 @@ impl AstCheck for Check {
                      logging helper."
                 ),
                 severity: Severity::Warning,
+                span: None,
             });
         });
         diagnostics

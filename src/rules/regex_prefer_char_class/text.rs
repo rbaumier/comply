@@ -54,6 +54,7 @@ impl TextCheck for Check {
                     rule_id: "regex-prefer-char-class".into(),
                     message: "Single-character alternation \u{2014} use a character class like `[abc]` instead of `a|b|c`.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

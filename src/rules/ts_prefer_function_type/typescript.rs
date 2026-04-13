@@ -75,6 +75,7 @@ fn check_body(
             "{label} only has a call signature — use a function type instead."
         ),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

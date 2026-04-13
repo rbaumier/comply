@@ -36,6 +36,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "ts-consistent-type-definitions".into(),
         message: format!("Use an `interface` instead of a `type` for `{name}`."),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

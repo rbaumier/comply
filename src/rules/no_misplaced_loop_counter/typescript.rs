@@ -30,6 +30,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             rule_id: "no-misplaced-loop-counter".into(),
             message: "`for` loop condition and update use different variables — likely a copy-paste bug.".into(),
             severity: Severity::Error,
+            span: None,
         });
     }
 }

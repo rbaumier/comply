@@ -51,6 +51,7 @@ impl TextCheck for Check {
                     rule_id: "regex-no-legacy-features".into(),
                     message: "Avoid legacy RegExp static properties \u{2014} use capturing groups and match results instead.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

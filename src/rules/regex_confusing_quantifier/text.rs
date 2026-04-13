@@ -83,6 +83,7 @@ impl TextCheck for Check {
                     rule_id: "regex-confusing-quantifier".into(),
                     message: "Confusing quantifier \u{2014} minimum is non-zero but the element can match empty string.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

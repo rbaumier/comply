@@ -51,6 +51,7 @@ crate::ast_check! { |node, _source, ctx, diagnostics|
             "Redundant `{keyword}` \u{2014} execution already falls through here."
         ),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

@@ -67,6 +67,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                               add `{' '}` or a wrapper."
                         .into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

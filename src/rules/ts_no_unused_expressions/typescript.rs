@@ -124,6 +124,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "ts-no-unused-expressions".into(),
         message: "Expected an assignment or function call, got an expression with no side effects.".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

@@ -62,6 +62,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 "Function `{name}` has {count} parameters (maximum allowed is {MAX_PARAMS})."
             ),
             severity: Severity::Warning,
+            span: None,
         });
     }
 }

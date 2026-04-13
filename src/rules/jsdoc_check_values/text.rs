@@ -74,6 +74,7 @@ impl TextCheck for Check {
                             rule_id: "jsdoc-check-values".into(),
                             message: format!("`@{tag}` must contain a valid semver value (e.g. `1.0.0`)."),
                             severity: Severity::Warning,
+                            span: None,
                         });
                     }
             }

@@ -67,6 +67,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "a11y-aria-props".into(),
         message: format!("Invalid ARIA attribute `{name}`. Use a valid WAI-ARIA attribute."),
         severity: Severity::Error,
+        span: None,
     });
 }
 

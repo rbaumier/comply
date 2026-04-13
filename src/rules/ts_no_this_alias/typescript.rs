@@ -29,6 +29,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             rule_id: "ts-no-this-alias".into(),
             message: "Unexpected aliasing of `this` to a local variable.".into(),
             severity: Severity::Warning,
+            span: None,
         });
     } else if kind == "assignment_expression" {
         let Some(right) = node.child_by_field_name("right") else {
@@ -51,6 +52,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             rule_id: "ts-no-this-alias".into(),
             message: "Unexpected aliasing of `this` to a local variable.".into(),
             severity: Severity::Warning,
+            span: None,
         });
     }
 }

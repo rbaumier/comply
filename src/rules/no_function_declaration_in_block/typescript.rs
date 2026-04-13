@@ -46,6 +46,7 @@ crate::ast_check! { |node, _source, ctx, diagnostics|
         rule_id: "no-function-declaration-in-block".into(),
         message: "Function declaration inside a control-flow block — move it to the top level or use a function expression.".into(),
         severity: Severity::Error,
+        span: None,
     });
 }
 

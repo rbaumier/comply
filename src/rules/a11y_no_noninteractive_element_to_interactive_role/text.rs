@@ -36,6 +36,7 @@ impl TextCheck for Check {
                     rule_id: "a11y-no-noninteractive-element-to-interactive-role".into(),
                     message: format!("Non-interactive element should not have interactive `role=\"{role}\"`."),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

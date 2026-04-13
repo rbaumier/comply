@@ -87,6 +87,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                   consider using an Option type to make absence explicit."
             .into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

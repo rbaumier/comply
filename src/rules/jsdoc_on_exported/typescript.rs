@@ -46,6 +46,7 @@ impl AstCheck for Check {
                      and what it returns — this is the public API contract."
                 ),
                 severity: Severity::Warning,
+                span: None,
             });
         }
         diagnostics

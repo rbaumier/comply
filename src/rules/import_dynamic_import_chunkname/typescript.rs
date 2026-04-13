@@ -29,6 +29,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "import-dynamic-import-chunkname".into(),
         message: "Dynamic imports require a leading comment with the webpack chunkname.".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

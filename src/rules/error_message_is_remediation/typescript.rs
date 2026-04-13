@@ -70,6 +70,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                  — describe what went wrong and what to do about it."
             ),
             severity: Severity::Warning,
+            span: None,
         });
     }
 }

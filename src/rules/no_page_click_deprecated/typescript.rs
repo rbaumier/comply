@@ -44,6 +44,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
              `page.locator(selector).{method}()` instead.",
         ),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

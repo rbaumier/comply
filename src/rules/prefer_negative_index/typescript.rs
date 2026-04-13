@@ -34,6 +34,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 rule_id: "prefer-negative-index".into(),
                 message: "Prefer negative index over `.length - index`.".into(),
                 severity: Severity::Warning,
+                span: None,
             });
             return; // one diagnostic per call
         }

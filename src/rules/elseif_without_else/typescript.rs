@@ -62,6 +62,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                   — add an `else` block to handle remaining cases."
             .into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

@@ -53,6 +53,7 @@ impl AstCheck for Check {
                      implementation changes. Add an explicit `: ReturnType`."
                 ),
                 severity: Severity::Warning,
+                span: None,
             });
         }
         diagnostics

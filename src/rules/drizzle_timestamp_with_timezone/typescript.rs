@@ -48,6 +48,7 @@ impl AstCheck for Check {
                           `timestamp('col', { withTimezone: true })`."
                     .into(),
                 severity: Severity::Warning,
+                span: None,
             });
         });
         diagnostics

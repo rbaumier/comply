@@ -34,6 +34,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 rule_id: "no-return-type-any".into(),
                 message: "Function has explicit `: any` return type — use a specific type or `unknown`.".into(),
                 severity: Severity::Error,
+                span: None,
             });
         }
     }

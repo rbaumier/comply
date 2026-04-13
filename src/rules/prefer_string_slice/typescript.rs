@@ -27,6 +27,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "prefer-string-slice".into(),
         message: format!("Prefer `String#slice()` over `String#{method}()`."),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

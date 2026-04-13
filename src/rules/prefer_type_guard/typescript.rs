@@ -90,6 +90,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "prefer-type-guard".into(),
         message: "Function `isX` returns `boolean` with type checks \u{2014} use a type predicate (`x is Type`) instead.".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

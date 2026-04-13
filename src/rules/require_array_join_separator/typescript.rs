@@ -33,6 +33,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "require-array-join-separator".into(),
         message: "Missing the separator argument in `.join()` \u{2014} use `.join(',')` explicitly.".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

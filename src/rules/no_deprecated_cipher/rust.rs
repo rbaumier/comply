@@ -34,6 +34,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                     "`{callee_text}()` uses a deprecated crypto API — use the `aead` or `cipher` crate with explicit IV/nonce.",
                 ),
                 severity: Severity::Error,
+                span: None,
             });
             return;
         }

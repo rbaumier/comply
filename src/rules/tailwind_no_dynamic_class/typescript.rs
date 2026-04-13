@@ -58,6 +58,7 @@ impl AstCheck for Check {
                           `const colors = { blue: 'bg-blue-500', ... }`."
                     .into(),
                 severity: Severity::Warning,
+                span: None,
             });
         });
         diagnostics

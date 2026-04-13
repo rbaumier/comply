@@ -50,6 +50,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "test-check-exception".into(),
         message: "`.toThrow()` without specifying error type or message — any error will pass.".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

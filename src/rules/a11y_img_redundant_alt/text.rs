@@ -34,6 +34,7 @@ impl TextCheck for Check {
                         "Redundant word in `alt=\"{alt}\"` — screen readers already announce images."
                     ),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

@@ -73,6 +73,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "prefer-number-properties".into(),
         message: chk.message.into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

@@ -40,6 +40,7 @@ impl TextCheck for Check {
                     rule_id: "regex-no-obscure-range".into(),
                     message: "Character class range crosses ASCII groups (e.g. `[A-z]`) — use `[A-Za-z]` instead.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

@@ -53,6 +53,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "ts-no-array-constructor".into(),
         message: "Use array literal `[]` instead of `Array()` constructor.".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

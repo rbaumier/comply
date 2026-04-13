@@ -37,6 +37,7 @@ impl TextCheck for Check {
                 "Invalid hashbang: `{first_line}`. Expected `#!/usr/bin/env node`."
             ),
             severity: Severity::Warning,
+            span: None,
         }]
     }
 }

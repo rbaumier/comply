@@ -53,6 +53,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                             inner,
                         ),
                         severity: Severity::Error,
+                        span: None,
                     });
                 }
             }
@@ -79,6 +80,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 callee_name,
             ),
             severity: Severity::Error,
+            span: None,
         });
     }
 }

@@ -55,6 +55,7 @@ impl TextCheck for Check {
                     rule_id: "regex-prefer-predefined-assertion".into(),
                     message: "This lookaround can be replaced with a predefined assertion like `\\b`, `^`, or `$`.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

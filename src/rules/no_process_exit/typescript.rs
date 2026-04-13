@@ -33,6 +33,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "no-process-exit".into(),
         message: "`process.exit()` terminates abruptly — throw an error instead.".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

@@ -34,6 +34,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "reduce-initial-value".into(),
         message: "`.reduce()` without initial value \u{2014} throws on empty arrays.".into(),
         severity: Severity::Error,
+        span: None,
     });
 }
 

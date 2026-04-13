@@ -28,6 +28,7 @@ impl TextCheck for Check {
                     rule_id: "a11y-anchor-has-content".into(),
                     message: "Anchor has no content — screen readers cannot announce it.".into(),
                     severity: Severity::Error,
+                    span: None,
                 });
             }
         }

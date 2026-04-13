@@ -62,6 +62,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                         "Invalid `rel` value `{token}` on `<{tag}>`."
                     ),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

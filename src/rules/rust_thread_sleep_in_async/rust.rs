@@ -30,6 +30,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
              instead."
         ),
         severity: Severity::Error,
+        span: None,
     });
 }
 

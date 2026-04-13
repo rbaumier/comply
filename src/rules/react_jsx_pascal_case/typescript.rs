@@ -54,6 +54,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 "Component `{tag}` is not PascalCase — rename to PascalCase."
             ),
             severity: Severity::Warning,
+            span: None,
         });
     }
 }

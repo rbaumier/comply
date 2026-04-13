@@ -70,6 +70,7 @@ impl AstCheck for Check {
                          Use a union parameter type or a generic signature instead."
                     ),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

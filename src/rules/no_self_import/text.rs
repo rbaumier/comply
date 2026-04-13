@@ -80,6 +80,7 @@ impl TextCheck for Check {
                         source
                     ),
                     severity: Severity::Error,
+                    span: None,
                 });
             }
         }

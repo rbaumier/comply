@@ -64,6 +64,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             rule_id: "data-clumps".into(),
             message,
             severity: Severity::Warning,
+            span: None,
         });
     }
 }

@@ -30,6 +30,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "prefer-query-selector".into(),
         message: format!("Prefer `.{replacement}()` over `.{method_name}()`."),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

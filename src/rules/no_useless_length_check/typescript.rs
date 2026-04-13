@@ -101,6 +101,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                         rule_id: "no-useless-length-check".into(),
                         message: "The non-empty check is useless as `Array#some()` returns `false` for an empty array.".into(),
                         severity: Severity::Warning,
+                        span: None,
                     });
                     return;
                 }
@@ -118,6 +119,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                         rule_id: "no-useless-length-check".into(),
                         message: "The empty check is useless as `Array#every()` returns `true` for an empty array.".into(),
                         severity: Severity::Warning,
+                        span: None,
                     });
                     return;
                 }

@@ -56,6 +56,7 @@ impl AstCheck for Check {
                      explain WHY, not WHAT — or delete the comment."
                 ),
                 severity: Severity::Warning,
+                span: None,
             });
         });
         diagnostics

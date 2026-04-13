@@ -53,6 +53,7 @@ impl TextCheck for Check {
                              Use a stable id from the data."
                         ),
                         severity: Severity::Warning,
+                        span: None,
                     });
                     break;
                 }

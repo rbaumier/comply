@@ -44,6 +44,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "prefer-string-replace-all".into(),
         message: "Prefer `String#replaceAll()` over `String#replace()` with a global regex.".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

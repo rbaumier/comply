@@ -42,6 +42,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                   while `??` handles null. Remove the `!`."
             .into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

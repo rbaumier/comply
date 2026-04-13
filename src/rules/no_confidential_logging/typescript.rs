@@ -50,6 +50,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "no-confidential-logging".into(),
         message: "Logging call contains sensitive data — redact secrets before logging.".into(),
         severity: Severity::Error,
+        span: None,
     });
 }
 

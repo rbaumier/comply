@@ -49,6 +49,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             rule_id: "prefer-array-index-of".into(),
             message: "Prefer `.indexOf(val)` over `.findIndex(x => x === val)`.".into(),
             severity: Severity::Warning,
+            span: None,
         });
         return;
     };
@@ -80,6 +81,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "prefer-array-index-of".into(),
         message: "Prefer `.indexOf(val)` over `.findIndex(x => x === val)`.".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

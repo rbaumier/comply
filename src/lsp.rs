@@ -236,6 +236,7 @@ mod tests {
             rule_id: "no-throw".into(),
             message: "uses throw".into(),
             severity: Severity::Error,
+            span: None,
         };
         let lsp = comply_to_lsp_diagnostic(&d);
         assert_eq!(lsp.range.start.line, 9);
@@ -252,6 +253,7 @@ mod tests {
             rule_id: "x".into(),
             message: "y".into(),
             severity: Severity::Warning,
+            span: None,
         };
         let lsp = comply_to_lsp_diagnostic(&d);
         assert_eq!(lsp.range.start.line, 0);

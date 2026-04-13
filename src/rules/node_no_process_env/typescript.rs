@@ -25,6 +25,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "node-no-process-env".into(),
         message: "Unexpected use of `process.env`. Centralize environment access in a config module.".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

@@ -35,6 +35,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                   stable id from the data."
             .into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

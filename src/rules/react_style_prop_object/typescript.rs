@@ -30,6 +30,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                       not a CSS string. Use `style={{ ... }}` instead."
                 .into(),
             severity: Severity::Error,
+            span: None,
         });
     }
 }

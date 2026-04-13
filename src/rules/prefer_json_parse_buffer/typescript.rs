@@ -61,6 +61,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                     "Prefer reading the JSON file as a buffer — remove the encoding argument."
                         .into(),
                 severity: Severity::Warning,
+                span: None,
             });
         }
     }

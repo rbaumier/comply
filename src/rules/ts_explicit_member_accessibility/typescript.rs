@@ -83,6 +83,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             "Missing accessibility modifier on {member_type} `{member_name}`."
         ),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

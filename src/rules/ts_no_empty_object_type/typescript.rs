@@ -27,6 +27,7 @@ crate::ast_check! { |node, _source, ctx, diagnostics|
                   or `object` / `unknown`."
             .into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

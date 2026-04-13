@@ -110,6 +110,7 @@ pub fn scan_dense_lines(
                  named bindings so each step's purpose is visible."
             ),
             severity: Severity::Warning,
+            span: None,
         });
     });
     diagnostics

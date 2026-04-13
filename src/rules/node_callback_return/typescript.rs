@@ -59,6 +59,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "node-callback-return".into(),
         message: "Expected `return` with your callback function.".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

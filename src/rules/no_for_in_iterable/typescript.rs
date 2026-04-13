@@ -41,6 +41,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "no-for-in-iterable".into(),
         message: "`for...in` on an array/iterable — use `for...of` instead.".into(),
         severity: Severity::Error,
+        span: None,
     });
 }
 

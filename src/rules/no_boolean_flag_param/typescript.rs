@@ -46,6 +46,7 @@ impl AstCheck for Check {
                      the signature entirely."
                 ),
                 severity: Severity::Error,
+                span: None,
             });
         });
         diagnostics

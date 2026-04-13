@@ -63,6 +63,7 @@ impl AstCheck for Check {
                      an explicit unit suffix like `_ms`, `_bytes`, `_count`."
                 ),
                 severity: Severity::Warning,
+                span: None,
             });
         });
         diagnostics

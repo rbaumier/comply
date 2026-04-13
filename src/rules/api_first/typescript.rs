@@ -55,6 +55,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "api-first".into(),
         message: "Route handler without schema definition — define the API schema (e.g. `z.object`, `zodValidator`) before the handler.".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

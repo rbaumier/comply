@@ -57,6 +57,7 @@ impl AstCheck for Check {
                      missing cases for union-typed values."
                 ),
                 severity: Severity::Warning,
+                span: None,
             });
         });
         diagnostics

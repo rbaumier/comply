@@ -38,6 +38,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "hono-csrf-missing".into(),
         message: "Mutation route without CSRF protection — add `app.use(csrf())`.".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

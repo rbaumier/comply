@@ -49,6 +49,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "node-global-require".into(),
         message: "Unexpected `require()`. Move it to the top-level module scope.".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

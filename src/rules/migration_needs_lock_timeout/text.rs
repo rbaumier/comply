@@ -21,6 +21,7 @@ impl TextCheck for Check {
                     rule_id: "migration-needs-lock-timeout".into(),
                     message: "DDL without `SET lock_timeout` — add `SET lock_timeout = '5s';` at the top to prevent write queue pileups.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
                 break; // One diagnostic per file is enough.
             }

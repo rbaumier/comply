@@ -77,6 +77,7 @@ impl LlmRule for Rule {
             rule_id: "llm-intent-naming".into(),
             message: msg,
             severity: Severity::Warning,
+            span: None,
         }])
     }
 }

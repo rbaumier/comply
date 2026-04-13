@@ -47,6 +47,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                     rule_id: "a11y-img-redundant-alt".into(),
                     message: "`alt` text should not contain words like \"image\", \"picture\", or \"photo\" — describe the content instead.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
     }

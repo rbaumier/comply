@@ -79,6 +79,7 @@ impl TextCheck for Check {
                             "Regex complexity score is {score} (threshold: {THRESHOLD}) — consider breaking it into smaller patterns."
                         ),
                         severity: Severity::Warning,
+                        span: None,
                     });
                 }
             }
@@ -95,6 +96,7 @@ impl TextCheck for Check {
                                 "Regex complexity score is {score} (threshold: {THRESHOLD}) — consider breaking it into smaller patterns."
                             ),
                             severity: Severity::Warning,
+                            span: None,
                         });
                     }
                 }

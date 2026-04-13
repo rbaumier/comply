@@ -60,6 +60,7 @@ impl TextCheck for Check {
                         "Hardcoded secret in signing/verification — use env vars or a secrets manager."
                             .into(),
                     severity: Severity::Error,
+                    span: None,
                 });
             }
         }

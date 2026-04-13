@@ -34,6 +34,7 @@ impl TextCheck for Check {
                     rule_id: "a11y-click-events-have-key-events".into(),
                     message: "Element has `@click` without a corresponding keyboard event handler (`@keydown`/`@keyup`/`@keypress`).".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

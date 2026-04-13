@@ -42,6 +42,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                         functions[j].1,
                     ),
                     severity: Severity::Error,
+                    span: None,
                 });
                 break;
             }

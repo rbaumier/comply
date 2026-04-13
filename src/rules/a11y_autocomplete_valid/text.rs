@@ -42,6 +42,7 @@ impl TextCheck for Check {
                         rule_id: "a11y-autocomplete-valid".into(),
                         message: format!("`autocomplete=\"{value}\"` is not a valid autocomplete value."),
                         severity: Severity::Error,
+                        span: None,
                     });
                 }
             }

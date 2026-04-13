@@ -57,6 +57,7 @@ fn check_if_returning_bool(
             rule_id: "no-redundant-boolean".into(),
             message: "Redundant if/else returning boolean literals \u{2014} return the condition directly.".into(),
             severity: Severity::Error,
+            span: None,
         });
     }
 }
@@ -110,6 +111,7 @@ fn check_bool_comparison(
             rule_id: "no-redundant-boolean".into(),
             message: "Redundant boolean comparison \u{2014} use the value directly.".into(),
             severity: Severity::Error,
+            span: None,
         });
     }
 }

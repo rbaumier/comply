@@ -19,6 +19,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "no-null".into(),
         message: "Use `undefined` instead of `null`.".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

@@ -122,6 +122,7 @@ impl TextCheck for Check {
                     rule_id: "regex-use-unicode-flag".into(),
                     message: "Unicode property escape (`\\p{...}`) requires the `u` or `v` flag.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

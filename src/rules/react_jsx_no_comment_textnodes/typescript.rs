@@ -29,6 +29,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                   visible text. Use `{/* comment */}` instead."
             .into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

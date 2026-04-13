@@ -90,6 +90,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "prefer-promise-shorthand".into(),
         message: "`new Promise` wrapping a single resolve/reject — use `Promise.resolve()`/`Promise.reject()` instead.".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

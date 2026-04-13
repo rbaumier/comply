@@ -80,6 +80,7 @@ fn check_hook_order(
                                         HOOK_ORDER[prev]
                                     ),
                                     severity: Severity::Warning,
+                                    span: None,
                                 });
                             }
                         prev_index = Some(idx);

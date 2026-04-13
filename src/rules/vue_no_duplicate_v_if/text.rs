@@ -53,6 +53,7 @@ impl TextCheck for Check {
                             lines[0]
                         ),
                         severity: Severity::Warning,
+                        span: None,
                     });
                 }
             }

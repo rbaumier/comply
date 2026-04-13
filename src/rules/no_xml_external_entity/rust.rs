@@ -46,6 +46,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 rule_id: "no-xml-external-entity".into(),
                 message: "XML parser without explicit XXE protection — disable external entity resolution.".into(),
                 severity: Severity::Error,
+                span: None,
             });
             return;
         }

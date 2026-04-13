@@ -32,6 +32,7 @@ impl AstCheck for Check {
                           sides — use `>= start AND < end` instead."
                     .into(),
                 severity: Severity::Warning,
+                span: None,
             });
         }
         diagnostics

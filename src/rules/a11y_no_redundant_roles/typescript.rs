@@ -68,6 +68,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                     "The element `<{tag}>` has an implicit role of `{pair_role}`. Setting `role=\"{pair_role}\"` is redundant."
                 ),
                 severity: Severity::Warning,
+                span: None,
             });
             return;
         }
@@ -83,6 +84,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             rule_id: "a11y-no-redundant-roles".into(),
             message: "The element `<a>` with `href` has an implicit role of `link`. Setting `role=\"link\"` is redundant.".into(),
             severity: Severity::Warning,
+            span: None,
         });
     }
 }

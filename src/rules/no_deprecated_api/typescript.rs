@@ -37,6 +37,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                     rule_id: "no-deprecated-api".into(),
                     message: "Use `Buffer.from()` or `Buffer.alloc()` instead of `new Buffer()`.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }
@@ -61,6 +62,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                                     rule_id: "no-deprecated-api".into(),
                                     message: message.into(),
                                     severity: Severity::Warning,
+                                    span: None,
                                 });
                             }
                         }
@@ -85,6 +87,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                             rule_id: "no-deprecated-api".into(),
                             message: message.into(),
                             severity: Severity::Warning,
+                            span: None,
                         });
                     }
                 }
@@ -115,6 +118,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                         rule_id: "no-deprecated-api".into(),
                         message: message.into(),
                         severity: Severity::Warning,
+                        span: None,
                     });
                 }
             }

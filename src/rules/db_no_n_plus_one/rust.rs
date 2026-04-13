@@ -50,6 +50,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "db-no-n-plus-one".into(),
         message: "Awaited DB query inside a loop — use a batch query or JOIN.".into(),
         severity: Severity::Error,
+        span: None,
     });
 }
 

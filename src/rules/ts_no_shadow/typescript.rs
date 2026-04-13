@@ -86,6 +86,7 @@ fn walk_scope(
                 rule_id: "ts-no-shadow".into(),
                 message: format!("`{name}` is already declared in an outer scope."),
                 severity: Severity::Warning,
+                span: None,
             });
         }
     }

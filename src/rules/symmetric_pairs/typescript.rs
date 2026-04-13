@@ -100,6 +100,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                         expected_names.join(" or "),
                     ),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

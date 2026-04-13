@@ -94,6 +94,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "playwright-prefer-comparison-matcher".into(),
         message: format!("Prefer using `{preferred}` instead."),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

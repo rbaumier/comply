@@ -68,6 +68,7 @@ impl AstCheck for Check {
                      if there's no success payload."
                 ),
                 severity: Severity::Warning,
+                span: None,
             });
         });
         diagnostics

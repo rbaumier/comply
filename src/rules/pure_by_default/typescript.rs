@@ -82,6 +82,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                         func_name, var,
                     ),
                     severity: Severity::Warning,
+                    span: None,
                 });
                 break; // one diagnostic per function is enough
             }

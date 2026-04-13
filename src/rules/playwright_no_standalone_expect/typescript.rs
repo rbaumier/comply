@@ -85,6 +85,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "playwright-no-standalone-expect".into(),
         message: "Expect must be inside of a test block.".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

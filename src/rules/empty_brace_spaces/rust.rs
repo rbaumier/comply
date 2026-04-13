@@ -46,6 +46,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "empty-brace-spaces".into(),
         message: format!("Do not add spaces between braces: `{text}` -> `{{}}`.",),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

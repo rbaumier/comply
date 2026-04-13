@@ -82,6 +82,7 @@ fn find_includes_calls(
                                     "`{obj_text}` is a const array used with `.includes()` — consider using a `Set` with `.has()` for O(1) lookups."
                                 ),
                                 severity: Severity::Warning,
+                                span: None,
                             });
                         }
                     }

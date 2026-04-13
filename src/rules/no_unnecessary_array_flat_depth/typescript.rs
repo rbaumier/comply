@@ -38,6 +38,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             rule_id: "no-unnecessary-array-flat-depth".into(),
             message: "Passing `1` as the `depth` argument of `.flat()` is unnecessary \u{2014} it is the default.".into(),
             severity: Severity::Warning,
+            span: None,
         });
     }
 }

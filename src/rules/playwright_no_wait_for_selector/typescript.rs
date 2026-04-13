@@ -36,6 +36,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "playwright-no-wait-for-selector".into(),
         message: "Unexpected use of page.waitForSelector().".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

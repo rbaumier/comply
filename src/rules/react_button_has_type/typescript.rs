@@ -59,6 +59,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                       form submissions."
                 .into(),
             severity: Severity::Warning,
+            span: None,
         });
     }
 }

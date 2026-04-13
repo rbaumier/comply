@@ -34,6 +34,7 @@ impl TextCheck for Check {
                     rule_id: "regex-no-empty-lookaround".into(),
                     message: "Empty lookaround always matches or always fails — add a pattern or remove it.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

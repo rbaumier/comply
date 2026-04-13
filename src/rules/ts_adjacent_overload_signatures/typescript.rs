@@ -48,6 +48,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 rule_id: "ts-adjacent-overload-signatures".into(),
                 message: format!("All `{name}` signatures should be adjacent."),
                 severity: Severity::Warning,
+                span: None,
             });
         } else if !was_seen {
             seen.push(name.clone());

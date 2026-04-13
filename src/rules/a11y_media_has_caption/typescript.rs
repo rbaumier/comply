@@ -61,6 +61,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             rule_id: "a11y-media-has-caption".into(),
             message: format!("`<{tag}>` elements must have a `<track kind=\"captions\">` child for accessibility."),
             severity: Severity::Warning,
+            span: None,
         });
         return;
     }
@@ -82,6 +83,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             rule_id: "a11y-media-has-caption".into(),
             message: format!("`<{tag}>` elements must have a `<track kind=\"captions\">` child for accessibility."),
             severity: Severity::Warning,
+            span: None,
         });
     }
 }

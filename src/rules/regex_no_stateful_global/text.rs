@@ -109,6 +109,7 @@ impl TextCheck for Check {
                             idx + 1,
                         ),
                         severity: Severity::Warning,
+                        span: None,
                     });
                     break;
                 }

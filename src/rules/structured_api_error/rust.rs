@@ -40,6 +40,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "structured-api-error".into(),
         message: "Bare `panic!` in route handler — use structured error types.".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

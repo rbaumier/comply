@@ -47,6 +47,7 @@ impl TextCheck for Check {
                                       the HTML entity instead."
                                 .into(),
                             severity: Severity::Warning,
+                            span: None,
                         });
                     }
                 }

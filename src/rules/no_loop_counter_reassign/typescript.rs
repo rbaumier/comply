@@ -72,6 +72,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                                 "Loop counter `{var_name}` is reassigned inside the loop body."
                             ),
                             severity: Severity::Error,
+                            span: None,
                         });
                     }
                 }

@@ -38,6 +38,7 @@ impl TextCheck for Check {
                     rule_id: "a11y-aria-role".into(),
                     message: format!("Invalid ARIA role `{role}`. Use a valid WAI-ARIA role."),
                     severity: Severity::Error,
+                    span: None,
                 });
             }
         }

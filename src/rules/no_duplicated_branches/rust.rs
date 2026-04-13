@@ -91,6 +91,7 @@ fn check_if_branches(
                     rule_id: "no-duplicated-branches".into(),
                     message: "This branch has the same body as another branch \u{2014} merge conditions or remove the duplicate.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
                 break;
             }
@@ -198,6 +199,7 @@ fn check_match_arms(
                     rule_id: "no-duplicated-branches".into(),
                     message: "This match arm has the same body as another arm \u{2014} merge patterns or remove the duplicate.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
                 break;
             }

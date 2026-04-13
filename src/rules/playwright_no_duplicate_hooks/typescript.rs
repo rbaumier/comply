@@ -49,6 +49,7 @@ fn check_block(
                             rule_id: "playwright-no-duplicate-hooks".into(),
                             message: format!("Duplicate {name} in describe block."),
                             severity: Severity::Warning,
+                            span: None,
                         });
                     }
                 }

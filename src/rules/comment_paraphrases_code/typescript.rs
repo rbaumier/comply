@@ -90,6 +90,7 @@ impl AstCheck for Check {
                      the comment if no consequence comes to mind."
                 ),
                 severity: Severity::Warning,
+                span: None,
             });
         });
         diagnostics

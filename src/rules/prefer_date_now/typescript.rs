@@ -34,6 +34,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                         rule_id: "prefer-date-now".into(),
                         message: "Prefer `Date.now()` over `new Date().getTime()`/`.valueOf()`.".into(),
                         severity: Severity::Warning,
+                        span: None,
                     });
                     return;
                 }
@@ -58,6 +59,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                         rule_id: "prefer-date-now".into(),
                         message: "Prefer `Date.now()` over `Number(new Date())`.".into(),
                         severity: Severity::Warning,
+                        span: None,
                     });
                     return;
                 }
@@ -81,6 +83,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                     rule_id: "prefer-date-now".into(),
                     message: "Prefer `Date.now()` over `+new Date()`.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

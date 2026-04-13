@@ -81,6 +81,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "prefer-bigint-literals".into(),
         message: format!("Prefer `{}` over `{}`.", replacement, full),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

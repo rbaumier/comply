@@ -92,6 +92,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             rule_id: "assertions-in-tests".into(),
             message: format!("Test `{name}` has no assertion — add `expect(...)` or similar."),
             severity: Severity::Error,
+            span: None,
         });
     }
 }

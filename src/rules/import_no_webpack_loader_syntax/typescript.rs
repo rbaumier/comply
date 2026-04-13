@@ -27,6 +27,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                     "Unexpected `!` in {text}. Do not use import syntax to configure webpack loaders."
                 ),
                 severity: Severity::Warning,
+                span: None,
             });
         }
         return;
@@ -56,6 +57,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                         "Unexpected `!` in {text}. Do not use import syntax to configure webpack loaders."
                     ),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

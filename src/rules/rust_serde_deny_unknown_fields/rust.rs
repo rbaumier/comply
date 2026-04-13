@@ -63,6 +63,7 @@ impl AstCheck for Check {
                      to catch unknown keys at parse time."
                 ),
                 severity: Severity::Warning,
+                span: None,
             });
         });
         diagnostics

@@ -70,6 +70,7 @@ fn collect_format_macros_in(
                           ...)` to stream directly into the formatter."
                     .into(),
                 severity: Severity::Warning,
+                span: None,
             });
         }
         let mut cursor = node.walk();

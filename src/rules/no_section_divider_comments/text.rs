@@ -36,6 +36,7 @@ impl TextCheck for Check {
                           of decorating the boundary with `===` or `***`."
                     .into(),
                 severity: Severity::Error,
+                span: None,
             });
         }
         diagnostics

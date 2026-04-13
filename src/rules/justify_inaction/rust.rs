@@ -55,6 +55,7 @@ fn flag_empty(
             "Empty `{what}` block \u{2014} add a comment inside explaining why the inaction is intentional."
         ),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

@@ -26,6 +26,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                           a value already returns `undefined`."
                     .into(),
                 severity: Severity::Warning,
+                span: None,
             });
         }
 
@@ -44,6 +45,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                               a value already yields `undefined`."
                         .into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }
@@ -83,6 +85,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                           default to `undefined`."
                     .into(),
                 severity: Severity::Warning,
+                span: None,
             });
         }
 
@@ -99,6 +102,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                           values already default to `undefined`."
                     .into(),
                 severity: Severity::Warning,
+                span: None,
             });
         }
 
@@ -114,6 +118,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                           values already default to `undefined`."
                     .into(),
                 severity: Severity::Warning,
+                span: None,
             });
         }
 
@@ -131,6 +136,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                               values already default to `undefined`."
                         .into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

@@ -27,6 +27,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             "Primitive wrapper object detected — `new {name}(...)` creates an object, not a primitive. Use `{name}(...)` without `new`.",
         ),
         severity: Severity::Error,
+        span: None,
     });
 }
 

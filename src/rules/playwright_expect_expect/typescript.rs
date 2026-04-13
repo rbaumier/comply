@@ -86,6 +86,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             rule_id: "playwright-expect-expect".into(),
             message: "Test has no assertions.".into(),
             severity: Severity::Warning,
+            span: None,
         });
     }
 }

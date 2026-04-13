@@ -21,6 +21,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                     "`?:` already implies `| undefined` — remove the redundant union member."
                         .into(),
                 severity: Severity::Warning,
+                span: None,
             });
         }
     }

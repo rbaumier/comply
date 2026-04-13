@@ -80,6 +80,7 @@ impl TextCheck for Check {
                     rule_id: "regex-no-multiple-spaces".into(),
                     message: "Multiple consecutive spaces in regex — use a quantifier like ` {2}` instead.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

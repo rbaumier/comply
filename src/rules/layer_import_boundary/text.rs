@@ -118,6 +118,7 @@ impl TextCheck for Check {
                         layer_name(import_layer),
                     ),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

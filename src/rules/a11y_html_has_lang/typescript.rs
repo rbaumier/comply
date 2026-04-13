@@ -36,6 +36,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             rule_id: "a11y-html-has-lang".into(),
             message: "`<html>` is missing a `lang` attribute.".into(),
             severity: Severity::Error,
+            span: None,
         });
     }
 }

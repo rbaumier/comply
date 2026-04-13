@@ -112,6 +112,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "no-object-as-default-parameter".into(),
         message,
         severity: Severity::Warning,
+        span: None,
     });
 }
 

@@ -47,6 +47,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "prefer-response-static-json".into(),
         message: "Prefer `Response.json(data)` over `new Response(JSON.stringify(data))`.".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

@@ -66,6 +66,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             rule_id: "ts-no-useless-constructor".into(),
             message: "Useless constructor — remove it.".into(),
             severity: Severity::Warning,
+            span: None,
         });
         return;
     }
@@ -150,6 +151,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             message: "Useless constructor — it only calls `super()` with the same arguments."
                 .into(),
             severity: Severity::Warning,
+            span: None,
         });
     }
 }

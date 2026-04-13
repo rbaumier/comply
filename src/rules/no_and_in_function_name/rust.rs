@@ -29,6 +29,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             "Function `{name}` has `_and_` in its name — split into two functions."
         ),
         severity: Severity::Error,
+        span: None,
     });
 }
 

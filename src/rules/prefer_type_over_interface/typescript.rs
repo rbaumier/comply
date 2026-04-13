@@ -47,6 +47,7 @@ impl AstCheck for Check {
                      merging only."
                 ),
                 severity: Severity::Warning,
+                span: None,
             });
         });
         diagnostics

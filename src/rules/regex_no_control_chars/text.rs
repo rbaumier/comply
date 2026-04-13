@@ -58,6 +58,7 @@ impl TextCheck for Check {
                     rule_id: "regex-no-control-chars".into(),
                     message: "Control character escape (`\\x00`-`\\x1f`) in regex — likely unintended.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

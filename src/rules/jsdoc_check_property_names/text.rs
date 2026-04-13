@@ -62,6 +62,7 @@ impl TextCheck for Check {
                             rule_id: "jsdoc-check-property-names".into(),
                             message: format!("Duplicate `@property` name `{name}`.",),
                             severity: Severity::Warning,
+                            span: None,
                         });
                     }
                 }

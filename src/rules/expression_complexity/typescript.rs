@@ -61,6 +61,7 @@ impl AstCheck for Check {
                          extract to named variables."
                     ),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

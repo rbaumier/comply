@@ -34,6 +34,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             rule_id: "prefer-array-find".into(),
             message: "Prefer `.find(…)` over `.filter(…)[0]` — `.find()` short-circuits on the first match.".into(),
             severity: Severity::Warning,
+            span: None,
         });
         return;
     }
@@ -89,6 +90,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "prefer-array-find".into(),
         message: "Prefer `.find(…)` over `.filter(…)[0]` — `.find()` short-circuits on the first match.".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

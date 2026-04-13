@@ -21,6 +21,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "no-namespace-import".into(),
         message: "Namespace import (`import * as …`) — prefer named imports.".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

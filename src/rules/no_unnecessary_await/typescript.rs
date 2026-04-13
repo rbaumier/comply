@@ -77,6 +77,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "no-unnecessary-await".into(),
         message: "Do not `await` a non-promise value.".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

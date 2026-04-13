@@ -115,6 +115,7 @@ impl AstCheck for Check {
                         branches.len()
                     ),
                     severity: Severity::Error,
+                    span: None,
                 });
             }
         });

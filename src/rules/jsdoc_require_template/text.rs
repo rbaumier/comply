@@ -84,6 +84,7 @@ impl TextCheck for Check {
                     rule_id: "jsdoc-require-template".into(),
                     message: "Generic declaration is missing `@template` tags for type parameters.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

@@ -47,6 +47,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "no-unassigned-import".into(),
         message: format!("Side-effect import `{}` \u{2014} imported module should be assigned.", unquoted),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

@@ -81,6 +81,7 @@ impl TextCheck for Check {
                     rule_id: "jsdoc-require-rejects".into(),
                     message: "Function appears to reject — add a `@rejects` tag.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

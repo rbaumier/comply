@@ -32,6 +32,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             rule_id: "a11y-heading-has-content".into(),
             message: format!("`<{tag}>` is self-closing and has no content."),
             severity: Severity::Error,
+            span: None,
         });
         return;
     }
@@ -71,6 +72,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             rule_id: "a11y-heading-has-content".into(),
             message: format!("`<{tag}>` is empty and has no content."),
             severity: Severity::Error,
+            span: None,
         });
     }
 }

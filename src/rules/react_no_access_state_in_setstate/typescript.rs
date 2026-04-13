@@ -49,6 +49,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                       `setState(prev => ...)`."
                 .into(),
             severity: Severity::Warning,
+            span: None,
         });
     }
 }

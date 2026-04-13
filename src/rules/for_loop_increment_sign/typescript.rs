@@ -60,6 +60,7 @@ impl AstCheck for Check {
                               loop may be infinite or never execute."
                         .into(),
                     severity: Severity::Error,
+                    span: None,
                 });
             }
         }

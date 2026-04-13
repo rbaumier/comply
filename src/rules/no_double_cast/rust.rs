@@ -20,6 +20,7 @@ crate::ast_check! { |node, _source, ctx, diagnostics|
         message: "Double cast `as X as Y` hides misaligned types. \
                   Fix the real problem: align the types or use `From`/`Into`.".into(),
         severity: Severity::Error,
+        span: None,
     });
 }
 

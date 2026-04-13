@@ -27,6 +27,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
              (POST /api/orders, GET /api/orders/:id…)."
         ),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

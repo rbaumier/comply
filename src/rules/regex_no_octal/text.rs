@@ -68,6 +68,7 @@ impl TextCheck for Check {
                     rule_id: "regex-no-octal".into(),
                     message: "Octal escape in regex is ambiguous — use a named backreference or Unicode escape instead.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

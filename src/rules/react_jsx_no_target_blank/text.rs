@@ -31,6 +31,7 @@ impl TextCheck for Check {
                               Add `rel=\"noreferrer\"`."
                         .into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

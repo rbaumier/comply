@@ -41,6 +41,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                     "Non-interactive element `<{tag}>` should not have `tabIndex`."
                 ),
                 severity: Severity::Warning,
+                span: None,
             });
         }
     }

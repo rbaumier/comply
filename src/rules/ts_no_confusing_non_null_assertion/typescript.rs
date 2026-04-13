@@ -50,6 +50,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                   wrap in parentheses."
             .into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

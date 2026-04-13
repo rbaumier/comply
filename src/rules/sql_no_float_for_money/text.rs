@@ -21,6 +21,7 @@ impl TextCheck for Check {
                     rule_id: "sql-no-float-for-money".into(),
                     message: format!("`{ft}` near a monetary column — use `NUMERIC(precision, scale)` to avoid floating-point rounding errors."),
                     severity: Severity::Error,
+                    span: None,
                 });
             }
         }

@@ -88,6 +88,7 @@ fn convert_cycles(cycles: Vec<Vec<String>>, root: &Path) -> Vec<Diagnostic> {
                      a leaf module."
                 ),
                 severity: Severity::Error,
+                span: None,
             }
         })
         .collect()

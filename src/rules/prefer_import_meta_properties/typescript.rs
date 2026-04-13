@@ -63,6 +63,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 rule_id: "prefer-import-meta-properties".into(),
                 message: "Use `import.meta.dirname` instead of `path.dirname(fileURLToPath(import.meta.url))`.".into(),
                 severity: Severity::Warning,
+                span: None,
             });
         }
 
@@ -79,6 +80,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 rule_id: "prefer-import-meta-properties".into(),
                 message: "Use `import.meta.dirname` instead of `dirname(fileURLToPath(import.meta.url))`.".into(),
                 severity: Severity::Warning,
+                span: None,
             });
         }
 
@@ -96,6 +98,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                     "Use `import.meta.filename` instead of `fileURLToPath(import.meta.url)`."
                         .into(),
                 severity: Severity::Warning,
+                span: None,
             });
         }
     }

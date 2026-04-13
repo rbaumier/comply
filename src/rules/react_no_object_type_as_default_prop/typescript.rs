@@ -119,6 +119,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                               the default to a module-level constant."
                         .into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
             return;

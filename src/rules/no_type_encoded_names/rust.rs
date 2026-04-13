@@ -31,6 +31,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
              obsolete. Remove the prefix; the type system already tells you the type."
         ),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

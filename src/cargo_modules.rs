@@ -95,6 +95,7 @@ fn parse_orphans(text: &str, workspace: &Path) -> Vec<Diagnostic> {
                  the file. Orphan files are dead code that grep still finds."
             ),
             severity: Severity::Warning,
+            span: None,
         });
     }
     diagnostics

@@ -16,6 +16,7 @@ impl TextCheck for Check {
                     rule_id: "sql-no-timestamp-without-tz".into(),
                     message: "`TIMESTAMP` without timezone — use `TIMESTAMPTZ`. Without TZ, the same instant is interpreted differently depending on the server's timezone setting.".into(),
                     severity: Severity::Error,
+                    span: None,
                 });
             }
         }

@@ -47,6 +47,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "import-no-dynamic-require".into(),
         message: "Calls to `require()` should use string literals.".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

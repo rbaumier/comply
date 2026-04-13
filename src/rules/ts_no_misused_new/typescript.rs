@@ -38,6 +38,7 @@ impl AstCheck for Check {
                         message: "Class cannot have method named `new` — use `constructor` instead."
                             .into(),
                         severity: Severity::Warning,
+                        span: None,
                     });
                 }
                 // Flag `constructor()` in interface body (TSMethodSignature or construct_signature)
@@ -63,6 +64,7 @@ impl AstCheck for Check {
                         message: "Interfaces cannot be constructed — use `new(): Type` instead of `constructor()`."
                             .into(),
                         severity: Severity::Warning,
+                        span: None,
                     });
                 }
                 _ => {}

@@ -29,6 +29,7 @@ impl AstCheck for Check {
                     "Clear-text protocol `{prefix}` detected — use the encrypted equivalent."
                 ),
                 severity: Severity::Error,
+                span: None,
             });
         }
         diagnostics

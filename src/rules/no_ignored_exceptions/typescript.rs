@@ -36,6 +36,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "no-ignored-exceptions".into(),
         message: "Empty `catch` block silently swallows the exception — log or re-throw it.".into(),
         severity: Severity::Error,
+        span: None,
     });
 }
 

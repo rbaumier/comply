@@ -50,6 +50,7 @@ impl AstCheck for Check {
                           backtracking. Use a literal `r\"...\"` pattern."
                     .into(),
                 severity: Severity::Error,
+                span: None,
             });
         });
         diagnostics

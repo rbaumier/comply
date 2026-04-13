@@ -32,6 +32,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "no-array-reverse".into(),
         message: "`Array#reverse()` mutates in place — use `.toReversed()` to avoid mutation.".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

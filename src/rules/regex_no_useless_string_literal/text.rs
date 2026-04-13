@@ -78,6 +78,7 @@ impl TextCheck for Check {
                     rule_id: "regex-no-useless-string-literal".into(),
                     message: "String disjunction of single characters can be simplified to a character class.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

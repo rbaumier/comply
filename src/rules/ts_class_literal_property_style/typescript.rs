@@ -74,6 +74,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "ts-class-literal-property-style".into(),
         message: format!("Getter `{name}` returns a literal — use a `readonly` field instead."),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

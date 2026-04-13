@@ -43,6 +43,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 rule_id: "no-try-promise".into(),
                 message: "Promise inside try/catch without `await` \u{2014} rejection won't be caught.".into(),
                 severity: Severity::Error,
+                span: None,
             });
         }
     }

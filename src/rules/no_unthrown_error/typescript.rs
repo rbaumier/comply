@@ -47,6 +47,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 rule_id: "no-unthrown-error".into(),
                 message: "`new Error(...)` is created but never thrown — add `throw` or assign the error.".into(),
                 severity: Severity::Error,
+                span: None,
             });
         }
     }

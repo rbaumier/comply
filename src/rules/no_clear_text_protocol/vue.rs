@@ -55,6 +55,7 @@ fn lint_block(block: &ScriptBlock<'_>, ctx: &CheckCtx, diagnostics: &mut Vec<Dia
                 "Clear-text protocol `{prefix}` detected — use the encrypted equivalent."
             ),
             severity: Severity::Error,
+            span: None,
         });
     }
 }

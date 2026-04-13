@@ -61,6 +61,7 @@ impl AstCheck for Check {
                      instead; the subscriber is the consumer's responsibility."
                 ),
                 severity: Severity::Error,
+                span: None,
             });
         });
         diagnostics

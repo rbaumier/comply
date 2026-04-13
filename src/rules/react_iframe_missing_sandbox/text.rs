@@ -25,6 +25,7 @@ impl TextCheck for Check {
                               capabilities."
                         .into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

@@ -39,6 +39,7 @@ impl AstCheck for Check {
                      behavior and create invisible coupling."
                 ),
                 severity: Severity::Error,
+                span: None,
             });
         });
         diagnostics

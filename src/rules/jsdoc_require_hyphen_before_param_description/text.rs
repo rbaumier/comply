@@ -66,6 +66,7 @@ impl TextCheck for Check {
                             rule_id: "jsdoc-require-hyphen-before-param-description".into(),
                             message: "`@param` description must be preceded by a hyphen (`-`).".into(),
                             severity: Severity::Warning,
+                            span: None,
                         });
                     }
                 }

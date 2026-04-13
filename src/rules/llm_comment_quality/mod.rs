@@ -157,6 +157,7 @@ impl LlmRule for Rule {
                 rule_id: "llm-comment-quality".into(),
                 message: msg,
                 severity: Severity::Warning,
+                span: None,
             });
         }
 

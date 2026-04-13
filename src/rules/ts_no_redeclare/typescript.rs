@@ -91,6 +91,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                         rule_id: "ts-no-redeclare".into(),
                         message: format!("`{name}` is already defined."),
                         severity: Severity::Warning,
+                        span: None,
                     });
                 }
             }

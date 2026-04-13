@@ -74,6 +74,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                     "Asserting a value equals itself — this is always true and tests nothing."
                         .into(),
                 severity: Severity::Error,
+                span: None,
             });
         }
     }

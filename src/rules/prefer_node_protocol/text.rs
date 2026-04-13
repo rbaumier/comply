@@ -122,6 +122,7 @@ impl TextCheck for Check {
                          makes it unambiguous that this is a Node.js builtin."
                     ),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

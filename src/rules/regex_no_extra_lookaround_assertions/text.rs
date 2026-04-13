@@ -70,6 +70,7 @@ impl TextCheck for Check {
                     rule_id: "regex-no-extra-lookaround-assertions".into(),
                     message: "Useless nested lookaround assertion \u{2014} it can be inlined.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

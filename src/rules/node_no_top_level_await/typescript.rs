@@ -31,6 +31,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "node-no-top-level-await".into(),
         message: "Top-level `await` is forbidden in published modules.".into(),
         severity: Severity::Error,
+        span: None,
     });
 }
 

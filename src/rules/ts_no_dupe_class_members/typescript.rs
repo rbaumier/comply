@@ -67,6 +67,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                     "Duplicate class member `{name}` — this shadows the earlier definition."
                 ),
                 severity: Severity::Error,
+                span: None,
             });
         }
     }

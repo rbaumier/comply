@@ -64,6 +64,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                       Add `rel=\"noreferrer\"`."
                 .into(),
             severity: Severity::Warning,
+            span: None,
         });
     }
 }

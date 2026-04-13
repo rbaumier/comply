@@ -40,6 +40,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 "Prefer `{test_text} || {alternate_text}` (or `??`) over `{test_text} ? {test_text} : {alternate_text}`."
             ),
             severity: Severity::Warning,
+            span: None,
         });
         return;
     }
@@ -65,6 +66,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                              `!{alternate_text} ? {consequent_text} : {alternate_text}`."
                         ),
                         severity: Severity::Warning,
+                        span: None,
                     });
                 }
             }

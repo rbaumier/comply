@@ -172,6 +172,7 @@ impl AstCheck for Check {
                             actual_params.join(", ")
                         ),
                         severity: Severity::Warning,
+                        span: None,
                     });
                 }
             }

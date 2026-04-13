@@ -45,6 +45,7 @@ impl TextCheck for Check {
                              with Composition API instead. Options API is legacy in Vue 3."
                         ),
                         severity: Severity::Error,
+                        span: None,
                     }];
                 }
             }

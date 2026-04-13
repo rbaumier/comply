@@ -61,6 +61,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "prefer-array-some".into(),
         message: "Prefer `.some(…)` over `.filter(…).length` check — `.some()` short-circuits.".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

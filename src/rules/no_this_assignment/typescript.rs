@@ -25,6 +25,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 rule_id: "no-this-assignment".into(),
                 message: format!("Do not assign `this` to `{var_name}`. Use an arrow function instead."),
                 severity: Severity::Warning,
+                span: None,
             });
         }
         // `self = this;` (reassignment)
@@ -44,6 +45,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 rule_id: "no-this-assignment".into(),
                 message: format!("Do not assign `this` to `{var_name}`. Use an arrow function instead."),
                 severity: Severity::Warning,
+                span: None,
             });
         }
         _ => {}

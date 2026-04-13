@@ -42,6 +42,7 @@ impl TextCheck for Check {
                                 "Duplicate class `{class}` — remove the repetition."
                             ),
                             severity: Severity::Warning,
+                            span: None,
                         });
                     }
                 }

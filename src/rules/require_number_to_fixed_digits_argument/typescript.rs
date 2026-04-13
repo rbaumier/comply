@@ -33,6 +33,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "require-number-to-fixed-digits-argument".into(),
         message: "Missing the digits argument in `.toFixed()` \u{2014} use `.toFixed(0)` explicitly.".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

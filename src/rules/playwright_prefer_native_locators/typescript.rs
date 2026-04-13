@@ -59,6 +59,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                      use `{replacement}()` instead."
                 ),
                 severity: Severity::Warning,
+                span: None,
             });
             break; // One diagnostic per locator call.
         }

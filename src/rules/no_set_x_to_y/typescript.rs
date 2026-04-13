@@ -54,6 +54,7 @@ impl AstCheck for Check {
                      perspective — `setStatusToClosed` → `closeAccount`."
                 ),
                 severity: Severity::Error,
+                span: None,
             });
         });
         diagnostics

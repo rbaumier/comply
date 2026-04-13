@@ -50,6 +50,7 @@ impl AstCheck for Check {
                           `tokio::time::timeout(Duration::from_secs(5), ...)`."
                     .into(),
                 severity: Severity::Warning,
+                span: None,
             });
         });
         diagnostics

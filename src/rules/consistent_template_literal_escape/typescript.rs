@@ -25,6 +25,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             rule_id: "consistent-template-literal-escape".into(),
             message: "Use `\\${` instead of `$\\{` to escape in template literals.".into(),
             severity: Severity::Warning,
+            span: None,
         });
     }
 }

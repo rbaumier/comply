@@ -118,6 +118,7 @@ impl TextCheck for Check {
                     rule_id: "regex-no-potentially-useless-backreference".into(),
                     message: "Backreference may be useless \u{2014} some paths do not go through the referenced group.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

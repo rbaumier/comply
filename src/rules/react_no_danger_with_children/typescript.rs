@@ -72,6 +72,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                       React will throw at runtime."
                 .into(),
             severity: Severity::Error,
+            span: None,
         });
     }
 }

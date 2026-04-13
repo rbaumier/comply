@@ -59,6 +59,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                       to `default` with no own code."
                 .into(),
             severity: Severity::Warning,
+            span: None,
         });
 
         if i == 0 {

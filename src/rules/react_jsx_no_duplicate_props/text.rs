@@ -28,6 +28,7 @@ impl TextCheck for Check {
                             "Duplicate attribute `{name}` — the last value silently wins."
                         ),
                         severity: Severity::Error,
+                        span: None,
                     });
                 }
             }

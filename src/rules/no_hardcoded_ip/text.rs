@@ -72,6 +72,7 @@ impl TextCheck for Check {
                     rule_id: "no-hardcoded-ip".into(),
                     message: format!("Hardcoded IP address `{ip}` — move to configuration."),
                     severity: Severity::Error,
+                    span: None,
                 });
             }
         }

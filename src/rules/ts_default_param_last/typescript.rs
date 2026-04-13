@@ -55,6 +55,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 rule_id: "ts-default-param-last".into(),
                 message: "Default parameters should be last.".into(),
                 severity: Severity::Warning,
+                span: None,
             });
         }
     }

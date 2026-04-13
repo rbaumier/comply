@@ -46,6 +46,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             rule_id: "no-unnecessary-slice-end".into(),
             message: "The `end` argument is unnecessary \u{2014} `.slice(start)` already goes to the end.".into(),
             severity: Severity::Warning,
+            span: None,
         });
     }
 }

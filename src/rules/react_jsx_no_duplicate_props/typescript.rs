@@ -35,6 +35,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                     "Duplicate JSX prop `{name}` — the last value silently wins."
                 ),
                 severity: Severity::Error,
+                span: None,
             });
         }
     }

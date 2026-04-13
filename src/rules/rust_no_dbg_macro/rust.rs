@@ -39,6 +39,7 @@ impl AstCheck for Check {
                           `tracing::debug!` with structured fields."
                     .into(),
                 severity: Severity::Error,
+                span: None,
             });
         });
         diagnostics

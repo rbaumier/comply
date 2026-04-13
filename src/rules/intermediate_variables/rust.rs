@@ -55,6 +55,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "intermediate-variables".into(),
         message: "`if` condition chains three or more boolean operands \u{2014} extract parts into named local variables.".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

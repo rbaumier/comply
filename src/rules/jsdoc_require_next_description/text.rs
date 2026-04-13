@@ -66,6 +66,7 @@ impl TextCheck for Check {
                             rule_id: "jsdoc-require-next-description".into(),
                             message: "`@next` tag is missing a description.".into(),
                             severity: Severity::Warning,
+                            span: None,
                         });
                     }
                 }

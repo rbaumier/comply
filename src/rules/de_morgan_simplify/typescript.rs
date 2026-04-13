@@ -44,6 +44,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 "Apply De Morgan's law: `!(a {op_str} b)` simplifies to `!a {suggested} !b`."
             ),
             severity: Severity::Warning,
+            span: None,
         });
     }
 }

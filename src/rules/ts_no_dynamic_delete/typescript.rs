@@ -51,6 +51,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "ts-no-dynamic-delete".into(),
         message: "Do not delete dynamically computed property keys — use `Map` or `Set`.".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

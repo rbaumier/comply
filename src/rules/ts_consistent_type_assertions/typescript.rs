@@ -32,6 +32,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "ts-consistent-type-assertions".into(),
         message: format!("Use `as {cast_text}` instead of `<{cast_text}>`."),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

@@ -82,6 +82,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                   awaited locator methods — they auto-retry."
             .into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

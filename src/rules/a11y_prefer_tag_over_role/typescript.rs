@@ -55,6 +55,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                             "Prefer `{suggested}` over `<{tag} role=\"{role}\">` for semantic HTML."
                         ),
                         severity: Severity::Warning,
+                        span: None,
                     });
                 }
             }

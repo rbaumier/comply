@@ -102,6 +102,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                             rule_id: "no-inconsistent-returns".into(),
                             message: "Function has inconsistent returns — some paths return a value, others return nothing.".into(),
                             severity: Severity::Warning,
+                            span: None,
                         });
                     }
                     i = body_end + 1;

@@ -102,6 +102,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 "`{name}` is a probable typo — did you mean `{correction}`?"
             ),
             severity: Severity::Error,
+            span: None,
         });
     }
 }

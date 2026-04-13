@@ -18,6 +18,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 rule_id: "prefer-object-literal".into(),
                 message: "Use `{}` instead of `new Object()`.".into(),
                 severity: Severity::Warning,
+                span: None,
             });
         }
         // `Object.create(null)`
@@ -45,6 +46,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 rule_id: "prefer-object-literal".into(),
                 message: "Prefer an object literal over `Object.create(null)`.".into(),
                 severity: Severity::Warning,
+                span: None,
             });
         }
         _ => {}

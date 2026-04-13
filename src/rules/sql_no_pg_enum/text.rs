@@ -17,6 +17,7 @@ impl TextCheck for Check {
                     rule_id: "sql-no-pg-enum".into(),
                     message: "PostgreSQL `CREATE TYPE ... AS ENUM` is append-only — you can\'t remove values. Use `TEXT CHECK(col IN (...))` or a lookup table instead.".into(),
                     severity: Severity::Error,
+                    span: None,
                 });
             }
         }

@@ -145,6 +145,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 rule_id: "prefer-global-this".into(),
                 message: msg,
                 severity: Severity::Warning,
+                span: None,
             });
         }
     }

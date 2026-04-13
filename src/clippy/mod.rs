@@ -360,6 +360,7 @@ fn parse_clippy_jsonl(
             rule_id,
             message: diag.message,
             severity,
+            span: None,
         });
     }
 

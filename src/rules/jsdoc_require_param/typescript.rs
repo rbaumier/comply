@@ -141,6 +141,7 @@ impl AstCheck for Check {
                              parameter so callers understand the API."
                         ),
                         severity: Severity::Warning,
+                        span: None,
                     });
                 }
             }

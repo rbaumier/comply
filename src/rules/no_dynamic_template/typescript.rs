@@ -31,6 +31,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                             prop,
                         ),
                         severity: Severity::Warning,
+                        span: None,
                     });
                     return;
                 }
@@ -45,6 +46,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                     rule_id: "no-dynamic-template".into(),
                     message: "Dynamic HTML construction via `location.href =` — use safe DOM APIs or framework escaping instead.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }
@@ -64,6 +66,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                             method,
                         ),
                         severity: Severity::Warning,
+                        span: None,
                     });
                     return;
                 }
@@ -81,6 +84,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                     rule_id: "no-dynamic-template".into(),
                     message: "Dynamic HTML construction via `dangerouslySetInnerHTML` — use safe DOM APIs or framework escaping instead.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

@@ -96,6 +96,7 @@ impl TextCheck for Check {
                     rule_id: "regex-no-useless-assertions".into(),
                     message: "Assertion is always true or always false and has no effect.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

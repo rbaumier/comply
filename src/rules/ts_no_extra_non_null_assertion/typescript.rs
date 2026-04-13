@@ -24,6 +24,7 @@ crate::ast_check! { |node, _source, ctx, diagnostics|
         rule_id: "ts-no-extra-non-null-assertion".into(),
         message: "Extra non-null assertion — `x!!` is redundant, use `x!`.".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

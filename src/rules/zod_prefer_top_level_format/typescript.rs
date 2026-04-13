@@ -65,6 +65,7 @@ impl AstCheck for Check {
                          faster, and tree-shakeable."
                     ),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
             // Check z.number().int()
@@ -78,6 +79,7 @@ impl AstCheck for Check {
                     message: "`z.number().int()` — use `z.int()` directly."
                         .into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         });

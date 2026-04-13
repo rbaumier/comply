@@ -28,6 +28,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                     "`{callee_text}()` is not cryptographically secure — use `OsRng` or `rand::rngs::OsRng`.",
                 ),
                 severity: Severity::Warning,
+                span: None,
             });
             return;
         }

@@ -73,6 +73,7 @@ fn check_mock_call(
                      use MSW to intercept at the network level instead."
                 ),
                 severity: Severity::Warning,
+                span: None,
             });
         }
     }
@@ -119,6 +120,7 @@ fn check_fetch_assignment(
                  use MSW to intercept at the network level instead."
             ),
             severity: Severity::Warning,
+            span: None,
         });
     }
 }

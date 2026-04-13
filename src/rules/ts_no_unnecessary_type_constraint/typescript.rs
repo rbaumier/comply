@@ -53,6 +53,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
              all types already extend `{text}`."
         ),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

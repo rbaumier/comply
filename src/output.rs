@@ -78,6 +78,7 @@ mod tests {
             rule_id: "no-throw".into(),
             message: "use Result".into(),
             severity,
+            span: None,
         }
     }
 

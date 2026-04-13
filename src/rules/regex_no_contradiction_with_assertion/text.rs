@@ -81,6 +81,7 @@ impl TextCheck for Check {
                     rule_id: "regex-no-contradiction-with-assertion".into(),
                     message: "Assertion contradicts the pattern around it \u{2014} this branch can never match.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

@@ -126,6 +126,7 @@ impl TextCheck for Check {
                     rule_id: "regex-no-trivially-nested-quantifier".into(),
                     message: "Trivially nested quantifiers can be merged into a single quantifier.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

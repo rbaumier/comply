@@ -62,6 +62,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                       child adds no value."
                 .into(),
             severity: Severity::Warning,
+            span: None,
         });
     }
 }

@@ -51,6 +51,7 @@ impl TextCheck for Check {
                     rule_id: "newline-after-import".into(),
                     message: "Expected a blank line after the last import statement.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 }];
             }
         }

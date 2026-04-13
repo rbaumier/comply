@@ -63,6 +63,7 @@ fn lint_block(block: &ScriptBlock<'_>, ctx: &CheckCtx, diagnostics: &mut Vec<Dia
                       `WHERE id > :last_id ORDER BY id LIMIT N`."
                 .into(),
             severity: Severity::Warning,
+            span: None,
         });
     }
 }

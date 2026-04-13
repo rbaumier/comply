@@ -63,6 +63,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             rule_id: "no-useless-iterator-to-array".into(),
             message: msg.into(),
             severity: Severity::Warning,
+            span: None,
         });
     }
 }

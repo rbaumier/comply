@@ -160,6 +160,7 @@ impl AstCheck for Check {
                                      Check for typos or add an import/typedef."
                                 ),
                                 severity: Severity::Warning,
+                                span: None,
                             });
                         }
                     }

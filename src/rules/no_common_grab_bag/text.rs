@@ -34,6 +34,7 @@ impl TextCheck for Check {
                  `helpers`/`shared`/`misc` magnetize unrelated code."
             ),
             severity: Severity::Warning,
+            span: None,
         }]
     }
 }

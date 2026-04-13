@@ -42,6 +42,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             "Function `{name}` encodes implementation — name it after the intent."
         ),
         severity: Severity::Error,
+        span: None,
     });
 }
 

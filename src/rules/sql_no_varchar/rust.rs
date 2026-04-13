@@ -33,6 +33,7 @@ impl AstCheck for Check {
                           `CHECK(length(col) <= N)`."
                     .into(),
                 severity: Severity::Error,
+                span: None,
             });
         }
         diagnostics

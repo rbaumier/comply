@@ -36,6 +36,7 @@ impl TextCheck for Check {
                               form submissions."
                         .into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

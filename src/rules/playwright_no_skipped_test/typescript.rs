@@ -42,6 +42,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             rule_id: "playwright-no-skipped-test".into(),
             message: "Unexpected use of the `.skip()` annotation.".into(),
             severity: Severity::Warning,
+            span: None,
         });
         return;
     }
@@ -61,6 +62,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                         rule_id: "playwright-no-skipped-test".into(),
                         message: "Unexpected use of the `.skip()` annotation.".into(),
                         severity: Severity::Warning,
+                        span: None,
                     });
                 }
             }

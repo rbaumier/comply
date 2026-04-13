@@ -58,6 +58,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 rule_id: "ts-no-empty-function".into(),
                 message: "Unexpected empty function.".into(),
                 severity: Severity::Warning,
+                span: None,
             });
             return;
         };
@@ -92,6 +93,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "ts-no-empty-function".into(),
         message: "Unexpected empty function.".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

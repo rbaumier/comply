@@ -46,6 +46,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             rule_id: "jsdoc-needs-description".into(),
             message: "JSDoc block contains only tags — add a prose description explaining what this does and why.".into(),
             severity: Severity::Warning,
+            span: None,
         });
     }
 }

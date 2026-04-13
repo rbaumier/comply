@@ -56,6 +56,7 @@ impl AstCheck for Check {
                      comment. Tests are exempted."
                 ),
                 severity: Severity::Error,
+                span: None,
             });
         });
         diagnostics

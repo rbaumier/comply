@@ -71,6 +71,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                   top-level `import type` to avoid a runtime side-effect import."
             .into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

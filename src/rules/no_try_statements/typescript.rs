@@ -15,6 +15,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "no-try-statements".into(),
         message: "`try` block \u{2014} prefer Result types or explicit error handling.".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

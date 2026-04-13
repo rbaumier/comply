@@ -52,6 +52,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                      {loop_line}). Use a JOIN, `WHERE id IN (...)`, or batch fetch."
                 ),
                 severity: Severity::Error,
+                span: None,
             });
             return;
         }
@@ -76,6 +77,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                                      `WHERE id IN (...)`, or batch fetch."
                                 ),
                                 severity: Severity::Error,
+                                span: None,
                             });
                             return;
                         }

@@ -66,6 +66,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 missing.join(", ")
             ),
             severity: Severity::Error,
+            span: None,
         });
     }
 }

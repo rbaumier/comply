@@ -39,6 +39,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             rule_id: "ts-no-extraneous-class".into(),
             message: "Unexpected empty class.".into(),
             severity: Severity::Warning,
+            span: None,
         });
         return;
     }
@@ -116,6 +117,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "ts-no-extraneous-class".into(),
         message: msg.into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

@@ -61,6 +61,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                  better stack traces and refactoring support."
             ),
             severity: Severity::Warning,
+            span: None,
         });
         return;
     }

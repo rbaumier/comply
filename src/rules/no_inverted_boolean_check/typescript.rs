@@ -67,6 +67,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 rule_id: "no-inverted-boolean-check".into(),
                 message: "`!a === b` negates `a` before comparing — use `a !== b` or `!(a === b)`.".into(),
                 severity: Severity::Warning,
+                span: None,
             });
         }
     }

@@ -65,6 +65,7 @@ impl TextCheck for Check {
                             rule_id: "jsdoc-require-property-name".into(),
                             message: "`@property` tag is missing a property name.".into(),
                             severity: Severity::Warning,
+                            span: None,
                         });
                     }
                 }

@@ -57,6 +57,7 @@ impl TextCheck for Check {
                     "`<{tag}></{tag}>` has no children — use `<{tag} />` instead."
                 ),
                 severity: Severity::Warning,
+                span: None,
             });
         }
 

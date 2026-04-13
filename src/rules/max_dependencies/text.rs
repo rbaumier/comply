@@ -51,6 +51,7 @@ impl TextCheck for Check {
                     deps.len()
                 ),
                 severity: Severity::Warning,
+                span: None,
             }];
         }
 

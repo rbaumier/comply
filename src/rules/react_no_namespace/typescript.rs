@@ -23,6 +23,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                     "Namespaced JSX element `{name}` is not supported by React."
                 ),
                 severity: Severity::Error,
+                span: None,
             });
         }
 
@@ -45,6 +46,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                     "Namespaced JSX attribute `{name}` is not supported by React."
                 ),
                 severity: Severity::Error,
+                span: None,
             });
         }
     }

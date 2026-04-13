@@ -97,6 +97,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 "Cognitive complexity is {complexity} (threshold {threshold}). Simplify this function."
             ),
             severity: Severity::Error,
+            span: None,
         });
     }
 }

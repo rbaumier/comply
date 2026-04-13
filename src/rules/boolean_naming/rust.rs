@@ -66,6 +66,7 @@ fn check_node(
              `in_*`, `seen_*`, `found_*`."
         ),
         severity: Severity::Warning,
+        span: None,
     })
 }
 

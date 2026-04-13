@@ -137,6 +137,7 @@ impl TextCheck for Check {
                         rule_id: "regex-anchor-precedence".into(),
                         message: "Anchor in alternation may not bind as expected \u{2014} use `/^(a|b)$/` instead of `/^a|b$/`.".into(),
                         severity: Severity::Warning,
+                        span: None,
                     });
                 }
             }
@@ -150,6 +151,7 @@ impl TextCheck for Check {
                             rule_id: "regex-anchor-precedence".into(),
                             message: "Anchor in alternation may not bind as expected \u{2014} use `^(a|b)$` instead of `^a|b$`.".into(),
                             severity: Severity::Warning,
+                            span: None,
                         });
                     }
                 }

@@ -33,6 +33,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             rule_id: "operation-returning-nan".into(),
             message: "Arithmetic with NaN will propagate NaN.".into(),
             severity: Severity::Error,
+            span: None,
         });
         return;
     }
@@ -47,6 +48,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             rule_id: "operation-returning-nan".into(),
             message: "Division by zero literal.".into(),
             severity: Severity::Error,
+            span: None,
         });
     }
 }

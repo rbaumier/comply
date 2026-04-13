@@ -174,6 +174,7 @@ impl TextCheck for Check {
                             expected_names.join(" or "),
                         ),
                         severity: Severity::Warning,
+                        span: None,
                     });
                 }
             }

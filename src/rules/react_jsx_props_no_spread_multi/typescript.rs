@@ -35,6 +35,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                             "`{arg_text}` is spread multiple times on this element."
                         ),
                         severity: Severity::Warning,
+                        span: None,
                     });
                 }
             }

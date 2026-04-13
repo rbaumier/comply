@@ -86,6 +86,7 @@ fn convert_report(report: KnipReport, root: &Path) -> Vec<Diagnostic> {
                  Either delete it or add the missing import."
             ),
             severity: Severity::Error,
+            span: None,
         });
     }
 
@@ -100,6 +101,7 @@ fn convert_report(report: KnipReport, root: &Path) -> Vec<Diagnostic> {
                  widens the supply chain and slows install. Remove it."
             ),
             severity: Severity::Error,
+            span: None,
         });
     }
 
@@ -116,6 +118,7 @@ fn convert_report(report: KnipReport, root: &Path) -> Vec<Diagnostic> {
                      symbol is only used internally."
                 ),
                 severity: Severity::Warning,
+                span: None,
             });
         }
     }

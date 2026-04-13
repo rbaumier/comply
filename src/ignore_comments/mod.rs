@@ -136,6 +136,7 @@ mod tests {
             rule_id: rule_id.into(),
             message: "test".into(),
             severity: Severity::Error,
+            span: None,
         }
     }
 

@@ -20,6 +20,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             rule_id: "a11y-no-distracting-elements".into(),
             message: format!("Do not use `<{tag}>`. It is deprecated and distracting."),
             severity: Severity::Error,
+            span: None,
         });
     }
 }

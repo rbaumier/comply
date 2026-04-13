@@ -65,6 +65,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                           fields, constructors, methods."
                     .into(),
                 severity: Severity::Warning,
+                span: None,
             });
         } else {
             max_rank = rank;

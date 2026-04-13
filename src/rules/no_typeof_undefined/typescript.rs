@@ -43,6 +43,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         message: "Compare with `undefined` directly instead of using `typeof`. \
                   Replace `typeof x === 'undefined'` with `x === undefined`.".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

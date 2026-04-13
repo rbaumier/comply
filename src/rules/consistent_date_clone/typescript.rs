@@ -51,6 +51,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "consistent-date-clone".into(),
         message: "Unnecessary `.getTime()`/`.valueOf()` — use `new Date(date)` directly.".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

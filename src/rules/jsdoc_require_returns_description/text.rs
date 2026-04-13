@@ -68,6 +68,7 @@ impl TextCheck for Check {
                             rule_id: "jsdoc-require-returns-description".into(),
                             message: "`@returns` tag is missing a description.".into(),
                             severity: Severity::Warning,
+                            span: None,
                         });
                     }
                 }

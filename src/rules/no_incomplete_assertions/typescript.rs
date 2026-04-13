@@ -44,6 +44,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                             rule_id: "no-incomplete-assertions".into(),
                             message: "Incomplete assertion — `expect()` without a matcher tests nothing.".into(),
                             severity: Severity::Error,
+                            span: None,
                         });
                         return;
                     }
@@ -60,6 +61,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 rule_id: "no-incomplete-assertions".into(),
                 message: "Incomplete assertion — `expect()` without a matcher tests nothing.".into(),
                 severity: Severity::Error,
+                span: None,
             });
         }
     }

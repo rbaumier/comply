@@ -61,6 +61,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
              assign a value at declaration."
         ),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

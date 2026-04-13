@@ -70,6 +70,7 @@ impl AstCheck for Check {
                      `tokio::task::spawn_blocking`."
                 ),
                 severity: Severity::Error,
+                span: None,
             });
         });
         diagnostics

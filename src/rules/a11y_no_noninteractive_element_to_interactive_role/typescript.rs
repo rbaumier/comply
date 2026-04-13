@@ -50,6 +50,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                         "Non-interactive element should not have interactive `role=\"{role}\"`."
                     ),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
     }

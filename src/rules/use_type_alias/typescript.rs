@@ -65,6 +65,7 @@ impl AstCheck for Check {
                             lines.len()
                         ),
                         severity: Severity::Warning,
+                        span: None,
                     });
                 }
             }

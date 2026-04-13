@@ -67,6 +67,7 @@ impl AstCheck for Check {
                         rule_id: "jsdoc-complete-sentence".into(),
                         message: "JSDoc description must start with a capital letter.".into(),
                         severity: Severity::Warning,
+                        span: None,
                     });
                 }
 
@@ -81,6 +82,7 @@ impl AstCheck for Check {
                         rule_id: "jsdoc-complete-sentence".into(),
                         message: "JSDoc description must end with `.`, `!`, or `?`.".into(),
                         severity: Severity::Warning,
+                        span: None,
                     });
                 }
         });

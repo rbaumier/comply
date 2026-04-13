@@ -143,6 +143,7 @@ fn into_diagnostic(d: OxlintDiag, remap: &HashMap<String, &'static RuleMeta>) ->
         rule_id,
         message: d.message,
         severity,
+        span: None,
     }
 }
 

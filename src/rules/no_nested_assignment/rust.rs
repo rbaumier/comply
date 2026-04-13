@@ -22,6 +22,7 @@ crate::ast_check! { |node, source, _ctx, diagnostics|
             rule_id: "no-nested-assignment".into(),
             message: "Assignment inside a condition \u{2014} likely a bug, use `==` for comparison or move the assignment out.".into(),
             severity: Severity::Error,
+            span: None,
         });
     }
 }

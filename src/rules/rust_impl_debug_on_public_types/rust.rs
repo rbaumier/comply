@@ -59,6 +59,7 @@ impl AstCheck for Check {
                      Add `#[derive(Debug)]` or implement `Debug` by hand."
                 ),
                 severity: Severity::Warning,
+                span: None,
             });
         });
         diagnostics

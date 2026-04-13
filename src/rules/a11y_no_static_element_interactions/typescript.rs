@@ -44,6 +44,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 "Static element `<{tag}>` has `onClick` without a `role` attribute."
             ),
             severity: Severity::Warning,
+            span: None,
         });
     }
 }

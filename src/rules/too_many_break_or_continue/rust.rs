@@ -48,6 +48,7 @@ crate::ast_check! { |node, _source, ctx, diagnostics|
                 "Loop contains {bc_count} `break`/`continue` statements \u{2014} consider refactoring."
             ),
             severity: Severity::Warning,
+            span: None,
         });
     }
 }

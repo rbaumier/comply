@@ -17,6 +17,7 @@ impl TextCheck for Check {
                     rule_id: "sql-no-like-wildcard-prefix".into(),
                     message: "`LIKE '%...'` forces a sequential scan — use TSVECTOR + GIN index with `@@` for full-text search.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

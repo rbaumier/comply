@@ -67,6 +67,7 @@ impl AstCheck for Check {
                      stack trace and cause chain — debuggers and `error.cause` rely on it."
                 ),
                 severity: Severity::Error,
+                span: None,
             });
         });
         diagnostics

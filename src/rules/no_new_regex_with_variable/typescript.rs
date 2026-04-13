@@ -56,6 +56,7 @@ impl AstCheck for Check {
                           safe-regex library."
                     .into(),
                 severity: Severity::Error,
+                span: None,
             });
         });
         diagnostics

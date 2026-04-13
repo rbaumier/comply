@@ -52,6 +52,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "prefer-object-from-entries".into(),
         message: "Prefer `Object.fromEntries()` over `Array#reduce()` to build an object.".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

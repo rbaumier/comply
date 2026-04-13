@@ -270,6 +270,7 @@ impl AstCheck for Check {
                           Use `new TypeError()` instead."
                     .into(),
                 severity: Severity::Warning,
+                span: None,
             });
         });
 

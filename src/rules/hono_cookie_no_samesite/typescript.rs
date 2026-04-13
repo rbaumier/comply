@@ -45,6 +45,7 @@ impl AstCheck for Check {
                               `sameSite: 'None'` — vulnerable to CSRF."
                         .into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

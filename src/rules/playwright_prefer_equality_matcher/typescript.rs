@@ -80,6 +80,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "playwright-prefer-equality-matcher".into(),
         message: "Prefer using one of the equality matchers instead.".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

@@ -42,6 +42,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "no-weak-ssl".into(),
         message: "Weak SSL/TLS protocol detected — use TLSv1.2 or TLSv1.3.".into(),
         severity: Severity::Error,
+        span: None,
     });
 }
 

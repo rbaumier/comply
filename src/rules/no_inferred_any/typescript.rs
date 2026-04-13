@@ -40,6 +40,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 rule_id: "no-inferred-any".into(),
                 message: "Explicit `any` annotation — use a concrete type or `unknown`.".into(),
                 severity: Severity::Warning,
+                span: None,
             });
             continue;
         }
@@ -55,6 +56,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                     rule_id: "no-inferred-any".into(),
                     message: "`JSON.parse()` returns `any` — add a type assertion or `satisfies` clause.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
                 continue;
             }
@@ -71,6 +73,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                     rule_id: "no-inferred-any".into(),
                     message: "`.json()` returns `any` — add a type assertion or `satisfies` clause.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

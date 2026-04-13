@@ -42,6 +42,7 @@ impl TextCheck for Check {
                     rule_id: "regex-prefer-set-operation".into(),
                     message: "This lookaround + character pattern can be expressed using a v-flag set operation.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

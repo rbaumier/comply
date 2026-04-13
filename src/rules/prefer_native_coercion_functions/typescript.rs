@@ -115,6 +115,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
              Use `.map({func_name})` instead of `.map(x => {func_name}(x))`."
         ),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

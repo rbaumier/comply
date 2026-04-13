@@ -31,6 +31,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
              instead of `'todos'`. Array keys enable hierarchical invalidation."
         ),
         severity: Severity::Error,
+        span: None,
     });
 }
 

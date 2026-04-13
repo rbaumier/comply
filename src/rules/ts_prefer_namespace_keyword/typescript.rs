@@ -48,6 +48,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                       custom TypeScript modules."
                 .into(),
             severity: Severity::Warning,
+            span: None,
         });
     }
 }

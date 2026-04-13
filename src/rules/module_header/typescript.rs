@@ -37,6 +37,7 @@ impl AstCheck for Check {
                       readers know what they're looking at immediately."
                 .into(),
             severity: Severity::Warning,
+            span: None,
         }]
     }
 }

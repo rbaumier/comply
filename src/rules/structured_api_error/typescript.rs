@@ -47,6 +47,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "structured-api-error".into(),
         message: "Bare `new Error()` in route handler \u{2014} use a structured error with `{ type, code, status, detail }`.".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

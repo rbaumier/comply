@@ -55,6 +55,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                                       functions must be async."
                                 .into(),
                             severity: Severity::Error,
+                            span: None,
                         });
                     }
                 }
@@ -87,6 +88,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                                           contains `\"use server\"` but is not async."
                                     .into(),
                                 severity: Severity::Error,
+                                span: None,
                             });
                             break;
                         }

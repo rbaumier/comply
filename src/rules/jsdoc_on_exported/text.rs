@@ -47,6 +47,7 @@ impl TextCheck for Check {
                     rule_id: "jsdoc-on-exported".into(),
                     message: "Exported function is missing a JSDoc block.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

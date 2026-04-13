@@ -147,6 +147,7 @@ fn push_diag(
         rule_id: "justify-inaction".into(),
         message: msg,
         severity: Severity::Warning,
+        span: None,
     });
 }
 

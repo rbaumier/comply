@@ -33,6 +33,7 @@ impl TextCheck for Check {
                     rule_id: "regex-no-empty-after-reluctant".into(),
                     message: "Reluctant quantifier before end-of-pattern is useless — it always matches the minimum.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

@@ -45,6 +45,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                       `onClick` handler instead."
                 .into(),
             severity: Severity::Error,
+            span: None,
         });
     }
 }

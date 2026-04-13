@@ -147,6 +147,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "prefer-simple-condition-first".into(),
         message: format!("Prefer simple condition first in `{op}` expression."),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

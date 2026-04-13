@@ -48,6 +48,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             rule_id: "node-no-mixed-requires".into(),
             message: "Do not mix `require` and other declarations.".into(),
             severity: Severity::Warning,
+            span: None,
         });
     }
 }

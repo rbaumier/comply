@@ -89,6 +89,7 @@ impl TextCheck for Check {
                                 members.join(", "),
                             ),
                             severity: Severity::Warning,
+                            span: None,
                         });
                     }
                 }

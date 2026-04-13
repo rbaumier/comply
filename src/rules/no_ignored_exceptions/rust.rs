@@ -47,6 +47,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "no-ignored-exceptions".into(),
         message: "`let _ = ...` discards a potentially fallible result \u{2014} handle the error or use `drop()`.".into(),
         severity: Severity::Error,
+        span: None,
     });
 }
 

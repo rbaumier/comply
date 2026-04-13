@@ -26,6 +26,7 @@ impl TextCheck for Check {
                     rule_id: "react-jsx-props-no-spread-multi".into(),
                     message: "Same `v-bind` spread used multiple times on this element.".into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

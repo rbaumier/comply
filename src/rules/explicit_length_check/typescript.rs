@@ -132,6 +132,7 @@ impl AstCheck for Check {
                               `arr.length`, or `arr.length === 0` instead of `!arr.length`."
                         .into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

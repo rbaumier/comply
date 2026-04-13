@@ -40,6 +40,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "playwright-no-nth-methods".into(),
         message: format!("Unexpected use of {method}()."),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

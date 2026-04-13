@@ -84,6 +84,7 @@ impl AstCheck for Check {
                                 "`pub fn {name}` has no `{expected}` counterpart."
                             ),
                             severity: Severity::Warning,
+                            span: None,
                         });
                         break;
                     }

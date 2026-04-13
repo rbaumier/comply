@@ -37,6 +37,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             rule_id: "a11y-mouse-events-have-key-events".into(),
             message: "`onMouseOver` must be accompanied by `onFocus` for keyboard accessibility.".into(),
             severity: Severity::Warning,
+            span: None,
         });
     }
 
@@ -48,6 +49,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             rule_id: "a11y-mouse-events-have-key-events".into(),
             message: "`onMouseOut` must be accompanied by `onBlur` for keyboard accessibility.".into(),
             severity: Severity::Warning,
+            span: None,
         });
     }
 }

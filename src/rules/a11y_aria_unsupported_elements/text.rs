@@ -30,6 +30,7 @@ impl TextCheck for Check {
                     rule_id: "a11y-aria-unsupported-elements".into(),
                     message: "ARIA attributes and `role` are not supported on this element.".into(),
                     severity: Severity::Error,
+                    span: None,
                 });
             }
         }

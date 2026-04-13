@@ -24,6 +24,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "no-array-constructor".into(),
         message: "Avoid `new Array()` — use array literals `[]` instead.".into(),
         severity: Severity::Error,
+        span: None,
     });
 }
 

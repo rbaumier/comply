@@ -25,6 +25,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 rule_id: "no-redundant-boolean".into(),
                 message: "Redundant ternary — simplify to the condition itself (or its negation).".into(),
                 severity: Severity::Error,
+                span: None,
             });
             continue;
         }
@@ -42,6 +43,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 rule_id: "no-redundant-boolean".into(),
                 message: "Redundant boolean comparison — use the value directly.".into(),
                 severity: Severity::Error,
+                span: None,
             });
             continue;
         }
@@ -64,6 +66,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                     rule_id: "no-redundant-boolean".into(),
                     message: "Redundant if/else returning boolean literals — return the condition directly.".into(),
                     severity: Severity::Error,
+                    span: None,
                 });
                 continue;
             }
@@ -88,6 +91,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                     rule_id: "no-redundant-boolean".into(),
                     message: "Redundant if/else returning boolean literals — return the condition directly.".into(),
                     severity: Severity::Error,
+                    span: None,
                 });
             }
         }

@@ -34,6 +34,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "no-built-in-override".into(),
         message: format!("Overriding built-in `{}` — rename this variable.", name),
         severity: Severity::Error,
+        span: None,
     });
 }
 

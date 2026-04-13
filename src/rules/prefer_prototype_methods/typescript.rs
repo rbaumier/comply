@@ -99,6 +99,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
              Use `{constructor}.prototype.{method}` instead."
         ),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

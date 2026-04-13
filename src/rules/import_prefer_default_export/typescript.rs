@@ -52,6 +52,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             rule_id: "import-prefer-default-export".into(),
             message: "Prefer default export on a file with single export.".into(),
             severity: Severity::Warning,
+            span: None,
         });
     }
 }

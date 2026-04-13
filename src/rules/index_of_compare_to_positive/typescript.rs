@@ -48,6 +48,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "index-of-compare-to-positive".into(),
         message: "`.indexOf(…) > 0` misses index 0 — use `>= 0` or `!== -1`.".into(),
         severity: Severity::Error,
+        span: None,
     });
 }
 

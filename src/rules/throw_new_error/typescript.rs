@@ -59,6 +59,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         rule_id: "throw-new-error".into(),
         message: "Use `new` when creating an error.".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

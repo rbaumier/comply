@@ -32,6 +32,7 @@ impl TextCheck for Check {
                               Vue needs stable keys to reconcile lists."
                         .into(),
                     severity: Severity::Warning,
+                    span: None,
                 });
             }
         }

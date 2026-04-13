@@ -33,6 +33,7 @@ crate::ast_check! { |node, _source, ctx, diagnostics|
         rule_id: "no-nested-incdec".into(),
         message: "`++`/`--` inside an expression — separate into its own statement for clarity.".into(),
         severity: Severity::Warning,
+        span: None,
     });
 }
 

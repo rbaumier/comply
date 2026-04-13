@@ -48,6 +48,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 rule_id: "new-for-builtins".into(),
                 message: format!("Use `new {name}()` instead of `{name}()`."),
                 severity: Severity::Error,
+                span: None,
             });
         }
         // `new Symbol()` — should be `Symbol()`.
@@ -66,6 +67,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 rule_id: "new-for-builtins".into(),
                 message: format!("Use `{name}()` instead of `new {name}()`. `{name}` is not a constructor."),
                 severity: Severity::Error,
+                span: None,
             });
         }
         _ => {}

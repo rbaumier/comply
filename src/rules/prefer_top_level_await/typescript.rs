@@ -72,6 +72,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 rule_id: "prefer-top-level-await".into(),
                 message: "Prefer top-level await over an async IIFE.".into(),
                 severity: Severity::Warning,
+                span: None,
             });
             return;
         }
@@ -136,6 +137,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                             "Prefer top-level await over calling async function `{func_name}()`."
                         ),
                         severity: Severity::Warning,
+                        span: None,
                     });
                     return;
                 }
