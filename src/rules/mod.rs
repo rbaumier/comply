@@ -317,7 +317,6 @@ pub mod no_nested_assignment;
 pub mod no_nested_functions;
 pub mod no_nested_incdec;
 pub mod no_non_literal_fs_filename;
-pub mod no_os_command;
 pub mod no_post_message_star;
 pub mod no_primitive_wrappers;
 pub mod no_promise_reject;
@@ -1099,8 +1098,6 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         no_misleading_array_reverse::register(),
         no_nested_assignment::register(),
         no_nested_functions::register(),
-        // @TODO: on est parfois obligé non ?
-        // no_os_command::register(),
         no_post_message_star::register(),
         no_primitive_wrappers::register(),
         no_pseudo_random::register(),

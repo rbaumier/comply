@@ -156,13 +156,9 @@ warning [max-function-lines] this function has too many lines (124/120)
 
 ---
 
-## 21. `no-os-command` — parfois inévitable
+## 21. `no-os-command` — parfois inévitable ✅
 
-**Source :** `mod.rs:1290`
-**Observation :** « on est parfois obligé non ? » Règle commentée pour
-l'instant.
-
-**Décision :** _à compléter_
+**Décision : règle supprimée (TS + Rust).** L'implémentation flaggait littéralement tous les `Command::new` / `exec` / `spawn` sans aucune analyse de dataflow — l'équivalent d'une règle « no-fs-write » qui flaggerait tous les `fs::write`. Comply lui-même a 13+ usages légitimes (orchestrator git/oxlint/clippy/knip/jscpd/llm-cli). Sans mécanisme « security hotspot / review » côté comply, et sans taint analysis, c'est pure friction. Le backend TS avait en plus un bug latent : il scannait les string literals contenant `"child_process"` et flaggerait des commentaires de doc. **Réorienté vers la liste LLM** : la détection d'injection de commande demande de raisonner sur l'origine des arguments, ce que seul un LLM peut faire en l'absence de dataflow. Ajouté à `project_comply_next_steps.md`. `src/rules/no_os_command/` supprimé.
 
 ---
 
