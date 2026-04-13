@@ -52,18 +52,9 @@ warning [max-function-lines] this function has too many lines (124/120)
 
 ---
 
-## 4. `exports-at-top` — désactivée pour Rust ?
+## 4. `exports-at-top` — désactivée pour Rust ? ✅
 
-**Source :** `mod.rs:853-872`
-**Observation :** la règle a été commentée. Note que j'ai laissée :
-> En Rust, on n'a pas de bloc d'export séparé. La visibilité (`pub`) est
-> attachée directement à la définition. La convention absolue est de
-> regrouper le code par logique, pas par visibilité. Donc règle à
-> désactiver pour Rust.
-
-Question ouverte : faut-il la garder pour TS, ou la supprimer entièrement ?
-
-**Décision :** _à compléter_
+**Décision : règle supprimée entièrement (TS + Rust).** Le principe « regrouper par logique, pas par visibilité » vaut aussi bien pour TypeScript que pour Rust. Forcer tous les exports en tête casse le flux naturel d'un fichier (type exporté → helpers privés → fonction publique utilisant les deux). `src/rules/exports_at_top/` supprimé, registration et module declaration retirés de `mod.rs`.
 
 ---
 

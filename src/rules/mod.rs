@@ -28,7 +28,6 @@ pub mod drizzle_timestamp_with_timezone;
 pub mod error_without_cause;
 pub mod explicit_return_type_on_exported;
 pub mod explicit_units;
-pub mod exports_at_top;
 pub mod jsdoc_missing_example;
 pub mod jsdoc_on_exported;
 pub mod jsx;
@@ -843,26 +842,6 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         no_common_grab_bag::register(),
         no_default_params::register(),
         boolean_naming::register(),
-        // @TODO:
-        // One NDJSON line read from the Bun worker stdout.
-        // #[derive(serde::Deserialize)]
-        // struct WorkerResult {
-        //     id: String,
-        //     result: Option<String>,
-        //     error: Option<String>,
-        // }
-
-        // /// Run the unified LLM prompt on every file via the Bun worker.
-        // pub fn lint_files(
-        //     files: &[&crate::files::SourceFile],
-        //     config: &LlmConfig,
-        // ) -> Result<Vec<Diagnostic>> {
-
-        // -> il faut mieux avoir les fonctions après les struct, meme après les struct privées non ?
-        // -> oui il faut désactiver cette règle pour rust:
-        //         En Rust, on n'a pas de bloc d'export séparé (comme export { A, B } en fin ou début de fichier en JS). La visibilité (pub) est attachée directement à la définition de l'élément.
-        // La convention absolue en Rust est de regrouper le code par logique, pas par visibilité.
-        // exports_at_top::register(),
         jsdoc_on_exported::register(),
         module_header::register(),
         no_boolean_flag_param::register(),
