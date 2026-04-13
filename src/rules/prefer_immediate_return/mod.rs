@@ -1,7 +1,15 @@
-//! prefer-immediate-return
+//! prefer-immediate-return — `let X = expr; return X;` → `return expr;`.
+//!
+//! Detection is AST-based: each backend walks `block` (Rust) /
+//! `statement_block` (TS) nodes and looks at consecutive *named
+//! children*, never at consecutive source lines. See the backend
+//! docblocks for the full matching logic and rationale.
 
 mod rust;
 mod typescript;
+
+#[cfg(test)]
+mod shared_tests;
 
 use crate::diagnostic::Severity;
 use crate::rules::meta::RuleMeta;

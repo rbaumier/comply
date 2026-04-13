@@ -996,14 +996,7 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         no_collapsible_if::register(),
         no_redundant_boolean::register(),
         no_nested_template_literal::register(),
-        // @TODO flagged:
-        // src/rules/playwright_no_networkidle/typescript.rs:60:1: warning [prefer-immediate-return] Variable `parser` is assigned and immediately returned — return the expression directly.
-        // fn run(path: &str, source: &str) -> Vec<Diagnostic> {
-        // let mut parser = tree_sitter::Parser::new();
-        // parser
-        //     .set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into())
-        //     .unwrap();
-        // prefer_immediate_return::register(),
+        prefer_immediate_return::register(),
         no_hardcoded_ip::register(),
         // @TODO: ça flagged:
         //  if text.contains("http://") || text.contains("https://")

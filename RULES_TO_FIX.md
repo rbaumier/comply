@@ -108,28 +108,9 @@ warning [max-function-lines] this function has too many lines (124/120)
 
 ---
 
-## 13. `prefer-immediate-return` — flag un parser muté avant return
+## 13. `prefer-immediate-return` — flag un parser muté avant return ✅
 
-**Source :** `mod.rs:1051`
-**Observation :**
-```
-src/rules/playwright_no_networkidle/typescript.rs:60:1:
-warning [prefer-immediate-return] Variable `parser` is assigned and immediately returned
-```
-Code flaggé :
-```rust
-fn run(path: &str, source: &str) -> Vec<Diagnostic> {
-    let mut parser = tree_sitter::Parser::new();
-    parser
-        .set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into())
-        .unwrap();
-    // ...
-}
-```
-Le parser est muté entre l'assignation et le return — pas un cas
-"assigned and immediately returned". Règle commentée pour l'instant.
-
-**Décision :** _à compléter_
+**Décision : réécrit en vrai AstCheck.** L'ancienne version était text-based (paires de lignes non-blanches lexicales) et matchait `parser` comme tail expression alors que c'était le début d'une méthode chain formatée sur plusieurs lignes. Le nouveau walker itère les *named children* consécutifs des `block` (Rust) / `statement_block` (TS) et match exactement `(let_declaration, return_expression/tail(identifier=X))`. Détails dans le docblock de `src/rules/prefer_immediate_return/rust.rs`. Règle re-activée.
 
 ---
 
