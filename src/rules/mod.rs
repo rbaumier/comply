@@ -1220,8 +1220,7 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         error_message_is_remediation::register(),
         factory_di_shape::register(),
         intermediate_variables::register(),
-        // @TODO (TODO_AFTER_REVIEW)
-        // justify_inaction::register(),
+        justify_inaction::register(),
         // @TODO:
         // flagged alors qu'il y a que 2 conditions:
         // if !output.status.success() && output.status.code() != Some(1) {
