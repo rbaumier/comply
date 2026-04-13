@@ -96,24 +96,9 @@ warning [max-function-lines] this function has too many lines (124/120)
 
 ---
 
-## 11. `db-no-string-concat-sql` — flag des `format!()` qui ne sont pas SQL
+## 11. `db-no-string-concat-sql` — flag des `format!()` qui ne sont pas SQL ✅
 
-**Source :** `mod.rs:1015`
-**Observation :**
-```
-src/oxlint/mod.rs:106:9:
-error [db-no-string-concat-sql] String interpolation with SQL keywords
-```
-Code flaggé :
-```rust
-format!(
-    "failed to parse oxlint JSON output. oxlint stderr: {}",
-    String::from_utf8_lossy(stderr)
-)
-```
-Pas du SQL. Règle commentée pour l'instant.
-
-**Décision :** _à compléter_
+**Décision : isoler le scope de détection au format string seul** (Rust : 1ʳᵉ string literal du token_tree ; TS : seules les sides string du `binary_expression`), puis filtrer via `is_sql_string` (whole-word). Le scan du texte complet de la macro voyait `String::from_utf8_lossy` → `FROM` substring. Détails dans le docblock de `src/rules/db_no_string_concat_sql/mod.rs`. Règle re-activée.
 
 ---
 

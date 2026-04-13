@@ -971,13 +971,7 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         sql_no_pg_enum::register(),
         sql_prefer_exists_over_in::register(),
         db_no_n_plus_one::register(),
-        // @TODO: flagged les formats
-        // src/oxlint/mod.rs:106:9: error [db-no-string-concat-sql] String interpolation with SQL keywords — use parameterized queries.
-        //         format!(
-        //     "failed to parse oxlint JSON output. oxlint stderr: {}",
-        //     String::from_utf8_lossy(stderr)
-        // )
-        // db_no_string_concat_sql::register(),
+        db_no_string_concat_sql::register(),
         migration_needs_lock_timeout::register(),
         migration_needs_rollback::register(),
         drizzle_fk_needs_index::register(),
