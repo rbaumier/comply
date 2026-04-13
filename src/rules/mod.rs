@@ -1138,13 +1138,7 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         no_globals_shadowing::register(),
         no_implicit_deps::register(),
         no_loop_counter_reassign::register(),
-        // @TODO flagged:
-        //     while p > 0 && bytes[p - 1] == b'\\' {
-        //     count += 1;
-        //     p -= 1;
-        // }
-        // src/rules/consistent_template_literal_escape/typescript.rs:102:5: error [no-misplaced-loop-counter] Condition uses `p` but update modifies `count`.
-        // no_misplaced_loop_counter::register(),
+        no_misplaced_loop_counter::register(),
         no_nested_incdec::register(),
         no_unverified_hostname::register(),
         prefer_destructuring_assignment::register(),

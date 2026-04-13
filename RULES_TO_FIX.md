@@ -186,25 +186,9 @@ warning [max-function-lines] this function has too many lines (124/120)
 
 ---
 
-## 26. `no-misplaced-loop-counter` — flag un `while` avec `count` et `p` distincts
+## 26. `no-misplaced-loop-counter` — flag un `while` avec `count` et `p` distincts ✅
 
-**Source :** `mod.rs:1381`
-**Observation :**
-```
-src/rules/consistent_template_literal_escape/typescript.rs:102:5:
-error [no-misplaced-loop-counter] Condition uses `p` but update modifies `count`
-```
-Code flaggé :
-```rust
-while p > 0 && bytes[p - 1] == b'\\' {
-    count += 1;
-    p -= 1;
-}
-```
-Les deux variables sont mutées, c'est un compteur de slashes en parallèle.
-Règle commentée pour l'instant.
-
-**Décision :** _à compléter_
+**Décision : drop le backend Rust, garder TS/JSX, re-activer la règle.** Même traitement que #17 / #25. Le backend Rust extrayait le premier identifier du condition texte et matchait le **premier** ` += 1` du body — donc sur `while p > 0 && bytes[p - 1] == b'\\' { count += 1; p -= 1; }`, il croyait que `count` était « le update » et flaggait le mismatch avec `p`. Mais `while`/`loop` Rust n'ont pas de clause d'update séparée, et les boucles à état composé (count + p pour scanner les `\` en arrière, lo/hi/mid en binary search, two-pointers) mutent légitimement plusieurs variables. Le backend TS cible le vrai bug (`for (let i = 0; i < n; j++)` — typique copy-paste) via les fields tree-sitter propres (`condition`/`increment`) et est conservé tel quel. Détails dans le docblock de `src/rules/no_misplaced_loop_counter/mod.rs`. 4 tests TS verts, 0 FP sur `src/rules/consistent_template_literal_escape/typescript.rs`. Règle re-activée.
 
 ---
 
