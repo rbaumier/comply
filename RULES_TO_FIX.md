@@ -150,28 +150,9 @@ warning [max-function-lines] this function has too many lines (124/120)
 
 ---
 
-## 20. `no-duplicated-branches` — heuristique fausse + diagnostic dupliqué
+## 20. `no-duplicated-branches` — heuristique fausse + diagnostic dupliqué ✅
 
-**Source :** `mod.rs:1218`
-**Observation :** flag des branches qui ne diffèrent que par un literal
-différent :
-```rust
-let rest = if let Some(r) = trimmed.strip_prefix("let ") {
-    r.trim_start()
-} else if let Some(r) = trimmed.strip_prefix("const ") {
-    r.trim_start()
-} else if let Some(r) = trimmed.strip_prefix("var ") {
-    r.trim_start()
-}
-```
-**Et** l'erreur est reportée plusieurs fois sur les mêmes lignes :
-```
-src/rules/no_redundant_assignment/typescript.rs:32:1: warning [no-duplicated-branches] …
-src/rules/no_redundant_assignment/typescript.rs:34:1: warning [no-duplicated-branches] …
-src/rules/no_redundant_assignment/typescript.rs:34:1: warning [no-duplicated-branches] …
-```
-
-**Décision :** _à compléter_
+**Décision : pattern-binding mode + dedup, plus fix d'un bug latent sur les match arms.** Quand une chaîne `if/else if` Rust contient au moins une `let_condition` (`if let PAT = EXPR`), la clé de comparaison passe de `body` seul à `(condition, body)` — deux `if let` peuvent partager un body textuellement identique référençant un binding `r` qui est en réalité distinct dans chaque branche. Si **les deux** sont identiques (condition ET body), c'est encore flaggé (vrai duplicate). Côté dedup, chaque ligne dup est rapportée au plus une fois (les anciens loops O(n²) émettaient `j` une fois par match antérieur, donc 3 diagnostics pour 3 branches identiques au lieu de 2). Bug latent corrigé : la version précédente itérait les children de `match_expression` au lieu de descendre dans `match_block` — aucun match arm n'était en réalité comparé. Détails dans le docblock de `src/rules/no_duplicated_branches/mod.rs`. 16 tests verts, 0 FP sur le fichier où le bug a été initialement observé.
 
 ---
 

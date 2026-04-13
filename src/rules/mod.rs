@@ -1039,18 +1039,6 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         no_confidential_logging::register(),
         no_constructor_side_effects::register(),
         no_duplicate_in_composite::register(),
-        // @TODO: flagged:
-        //     let rest = if let Some(r) = trimmed.strip_prefix("let ") {
-        //     r.trim_start()
-        // } else if let Some(r) = trimmed.strip_prefix("const ") {
-        //     r.trim_start()
-        // } else if let Some(r) = trimmed.strip_prefix("var ") {
-        //     r.trim_start()
-        // alors que c'est 2 trucs différents non ?
-        // + l'erreur est reportée plusieurs fois :
-        //         src/rules/no_redundant_assignment/typescript.rs:32:1: warning [no-duplicated-branches] This branch has the same body as another branch — merge conditions or remove the duplicate.
-        // src/rules/no_redundant_assignment/typescript.rs:34:1: warning [no-duplicated-branches] This branch has the same body as another branch — merge conditions or remove the duplicate.
-        // src/rules/no_redundant_assignment/typescript.rs:34:1: warning [no-duplicated-branches] This branch has the same body as another branch — merge conditions or remove the duplicate.
         no_duplicated_branches::register(),
         no_dynamic_template::register(),
         no_element_overwrite::register(),

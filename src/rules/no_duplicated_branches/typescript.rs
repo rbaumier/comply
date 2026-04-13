@@ -24,10 +24,18 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         return;
     }
 
-    // Compare all pairs
-    for i in 0..bodies.len() {
-        for j in (i + 1)..bodies.len() {
-            if !bodies[i].1.is_empty() && bodies[i].1 == bodies[j].1 {
+    // Report each duplicate line once: for each j >= 1, if bodies[j]
+    // matches any earlier bodies[i], emit exactly one diagnostic at line j.
+    let mut reported: std::collections::HashSet<usize> = std::collections::HashSet::new();
+    for j in 1..bodies.len() {
+        if bodies[j].1.is_empty() {
+            continue;
+        }
+        for i in 0..j {
+            if bodies[i].1.is_empty() {
+                continue;
+            }
+            if bodies[i].1 == bodies[j].1 && reported.insert(bodies[j].0) {
                 diagnostics.push(Diagnostic {
                     path: ctx.path.to_path_buf(),
                     line: bodies[j].0,
@@ -36,6 +44,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                     message: "This branch has the same body as another branch — merge conditions or remove the duplicate.".into(),
                     severity: Severity::Warning,
                 });
+                break;
             }
         }
     }
@@ -147,5 +156,21 @@ if (a) {
   foo();
 }";
         assert!(run_on(src).is_empty());
+    }
+
+    /// Three branches with the same body should emit 2 diagnostics (one
+    /// per duplicate line), not 3 — the previous pairwise loop reported
+    /// line `j` once per earlier match.
+    #[test]
+    fn dedups_three_identical_branches() {
+        let src = "\
+if (a) {
+  foo();
+} else if (b) {
+  foo();
+} else {
+  foo();
+}";
+        assert_eq!(run_on(src).len(), 2);
     }
 }
