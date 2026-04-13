@@ -58,22 +58,9 @@ warning [max-function-lines] this function has too many lines (124/120)
 
 ---
 
-## 5. `no-type-encoded-names` — flag `fn_name`
+## 5. `no-type-encoded-names` — flag `fn_name` ✅
 
-**Source :** `mod.rs:879`
-**Observation :**
-```
-src/rules/comment_paraphrases_code/text.rs:31:17:
-warning [no-type-encoded-names] 'fn_name' encodes a type prefix 'fn'
-```
-Ligne :
-```rust
-let fn_name = extract_fn_name(trimmed);
-```
-Note : faut-il ne pas faire ça sur les fonctions ? Ou seulement quand le
-type est vraiment le même que le nom ?
-
-**Décision :** _à compléter_
+**Décision : nettoyage du set `TYPE_PREFIXES` (faux amis retirés, legacy ajoutés).** Détails dans le docblock de `src/rules/no_type_encoded_names/type_prefix.rs`.
 
 ---
 

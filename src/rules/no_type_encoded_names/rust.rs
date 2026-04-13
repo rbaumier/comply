@@ -83,4 +83,40 @@ mod tests {
         assert!(run_on("fn f() { let strawberry = 1; }").is_empty());
         assert!(run_on("fn f() { let array_of_things = vec![]; }").is_empty());
     }
+
+    #[test]
+    fn does_not_flag_fn_name() {
+        // The original false positive: `fn_name` literally means
+        // "function name", and `fn` is also a Rust keyword. Flagging
+        // it as Hungarian-prefixed is wrong.
+        assert!(run_on("fn f() { let fn_name = String::new(); }").is_empty());
+    }
+
+    #[test]
+    fn does_not_flag_func_callback() {
+        assert!(run_on("fn f() { let func_callback = || {}; }").is_empty());
+    }
+
+    #[test]
+    fn does_not_flag_num_items() {
+        // `num_items` is "number of items", not Hungarian for a u64.
+        assert!(run_on("fn f() { let num_items = 5; }").is_empty());
+    }
+
+    #[test]
+    fn does_not_flag_int_count() {
+        // Rust has no `int` type. `int_count` is descriptive prose.
+        assert!(run_on("fn f() { let int_count = 0; }").is_empty());
+    }
+
+    #[test]
+    fn does_not_flag_vec_indices() {
+        // `vec_indices` reads as "vector of indices" in Rust prose.
+        assert!(run_on("fn f() { let vec_indices: Vec<usize> = vec![]; }").is_empty());
+    }
+
+    #[test]
+    fn flags_legacy_dbl_prefix() {
+        assert_eq!(run_on("fn f() { let dbl_value = 3.14; }").len(), 1);
+    }
 }

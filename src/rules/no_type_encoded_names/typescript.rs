@@ -91,4 +91,31 @@ mod tests {
         // 'array' starts with 'arr' but 'a' is lowercase after.
         assert!(run_on("const arrayList = 1;").is_empty());
     }
+
+    #[test]
+    fn does_not_flag_descriptive_fn_callback() {
+        // `fn` was previously in the prefix list; flagging `fnCallback`
+        // is wrong because it's a descriptive name for a function-typed
+        // variable, not Hungarian for some primitive type.
+        assert!(run_on("const fnCallback = () => {};").is_empty());
+    }
+
+    #[test]
+    fn does_not_flag_num_items() {
+        // `num_items` / `numItems` is "number of items", not Hungarian
+        // for a primitive number variable.
+        assert!(run_on("const numItems = 5;").is_empty());
+    }
+
+    #[test]
+    fn does_not_flag_int_count() {
+        // TypeScript has no `int` type — `intCount` is descriptive.
+        assert!(run_on("const intCount = 0;").is_empty());
+    }
+
+    #[test]
+    fn flags_legacy_dbl_prefix() {
+        // `dbl` is a legacy C/C++ Hungarian prefix for `double`.
+        assert_eq!(run_on("const dblValue = 3.14;").len(), 1);
+    }
 }
