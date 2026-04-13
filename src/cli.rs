@@ -68,6 +68,12 @@ pub struct Cli {
     #[arg(long, default_value = "30")]
     pub llm_concurrency: usize,
 
+    /// Print per-phase timing breakdown to stderr (discovery, oxlint,
+    /// clippy, cargo-shear, cargo-modules, engine, ...). Dev-only flag
+    /// used to profile where comply spends its wall-clock.
+    #[arg(long)]
+    pub timings: bool,
+
     /// Path to lint (default: current directory).
     pub path: Option<PathBuf>,
 }
@@ -177,6 +183,7 @@ mod tests {
             with_llm: false,
             model: "sonnet".to_string(),
             llm_concurrency: 30,
+            timings: false,
             path: None,
         }
     }

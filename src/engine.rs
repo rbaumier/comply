@@ -13,6 +13,7 @@
 //!    their diagnostics are remapped post-hoc.
 
 use anyhow::{Context, Result};
+use rayon::prelude::*;
 use std::fs;
 use tree_sitter::Parser;
 
@@ -31,18 +32,30 @@ use crate::rules::{self, backend::Backend, backend::CheckCtx, meta::RuleMeta, Ru
 #[must_use = "diagnostics from custom rules must be reported"]
 pub fn lint_files(files: &[&SourceFile], config: &Config) -> Result<Vec<Diagnostic>> {
     let rule_defs = rules::all_rule_defs();
-    let mut diagnostics = Vec::with_capacity(files.len());
-    let mut parser = Parser::new();
 
-    for file in files {
-        match lint_one_file(file, &rule_defs, &mut parser, config) {
-            Ok(file_diags) => diagnostics.extend(file_diags),
-            Err(e) => {
-                // Skip-and-warn — one bad file shouldn't kill the whole scan.
-                eprintln!("comply: skipping {}: {e:#}", file.path.display());
+    // Parallel per-file fan-out. `map_init` gives each rayon worker its
+    // own `Parser` — tree_sitter::Parser is !Sync, so we can't share one
+    // across threads, but rayon's worker-local init solves this by
+    // allocating a Parser per worker thread and reusing it across the
+    // files that worker processes. The rule registry (`rule_defs`) and
+    // config are read-only and Send+Sync via the trait bounds in
+    // `src/rules/backend.rs`.
+    //
+    // A file that fails to read is logged to stderr and contributes zero
+    // diagnostics — same skip-and-warn behavior as the sequential path.
+    let mut diagnostics: Vec<Diagnostic> = files
+        .par_iter()
+        .map_init(Parser::new, |parser, file| {
+            match lint_one_file(file, &rule_defs, parser, config) {
+                Ok(file_diags) => file_diags,
+                Err(e) => {
+                    eprintln!("comply: skipping {}: {e:#}", file.path.display());
+                    Vec::new()
+                }
             }
-        }
-    }
+        })
+        .flatten()
+        .collect();
 
     // A rule's own source files (doc comments, tests, and fixture strings)
     // legitimately mention the pattern the rule is designed to flag.

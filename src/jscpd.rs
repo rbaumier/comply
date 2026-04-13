@@ -1,21 +1,26 @@
 //! jscpd subprocess — copy/paste detection across the codebase.
 //!
-//! Why this lives in Comply: the coding-standards skill flags duplication
-//! as a Rule of Three signal — three similar snippets are a pattern that
-//! should be extracted, two are coincidence. jscpd
-//! (https://github.com/kucherenko/jscpd) ships a language-agnostic
-//! tokenizer that detects exact and near-exact clones across ~150
-//! languages, including TypeScript, JavaScript, and Rust.
+//! **STATUS: DISABLED** as of the perf audit — benchmarks showed jscpd
+//! was responsible for 92% of wall-clock on a 216-file run (~105ms/file)
+//! because it respawns a Node.js runtime on every call. The module is
+//! kept compiled so we have a reference implementation to port to a
+//! native Rust rule. See TODO.md "jscpd native replacement" for the
+//! plan. Once the native rule is in place, delete this file.
 //!
-//! How it works:
-//! 1. `is_available()` probes `jscpd --version`. Cached in a `OnceLock`.
-//! 2. `lint_files()` collects the unique parent directories of the input
-//!    files (jscpd scans directories, not individual files), runs jscpd
-//!    on each, and parses the JSON report. The default min-tokens
-//!    threshold (50) keeps false positives low.
-//! 3. Each `duplicate` becomes one Comply diagnostic on the FIRST file of
-//!    the pair, pointing to the start of the duplicated block. The
-//!    message names the second file so the user can navigate.
+//! Why clone detection lives in Comply: the coding-standards skill flags
+//! duplication as a Rule of Three signal — three similar snippets are a
+//! pattern that should be extracted, two are coincidence.
+//!
+//! Original behaviour (for reference):
+//! 1. `is_available()` probed `jscpd --version`, cached in a `OnceLock`.
+//! 2. `lint_files()` collected the unique parent directories of the input
+//!    files (jscpd scans directories, not individual files), ran jscpd on
+//!    each, and parsed the JSON report. The default min-tokens threshold
+//!    was 50.
+//! 3. Each `duplicate` became one Comply diagnostic on the FIRST file of
+//!    the pair, pointing to the start of the duplicated block.
+
+#![allow(dead_code)]
 
 use anyhow::{Context, Result};
 use serde::Deserialize;

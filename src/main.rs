@@ -39,6 +39,7 @@ mod oxlint_config;
 mod rules;
 
 use std::process::ExitCode;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use clap::Parser;
@@ -119,16 +120,85 @@ fn run_config_action(action: &ConfigAction) -> Result<()> {
     Ok(())
 }
 
+/// Per-phase wall-clock collected when `--timings` is set.
+///
+/// Dev-only instrumentation — lets us see exactly which subprocess or
+/// in-process phase dominates a given run before touching optimization.
+/// All fields default to `Duration::ZERO` so unused phases (e.g. no Rust
+/// files → clippy unused) render as `0ms`.
+#[derive(Default, Debug)]
+struct Timings {
+    discovery: Duration,
+    config: Duration,
+    fix: Duration,
+    oxlint: Duration,
+    jscpd_ts: Duration,
+    knip: Duration,
+    madge: Duration,
+    engine_ts: Duration,
+    clippy: Duration,
+    cargo_shear: Duration,
+    cargo_modules: Duration,
+    jscpd_rs: Duration,
+    engine_rs: Duration,
+    engine_vue: Duration,
+    llm: Duration,
+    post: Duration,
+    total: Duration,
+}
+
+fn fmt_ms(d: Duration) -> String {
+    format!("{:>7.1}ms", d.as_secs_f64() * 1000.0)
+}
+
+fn print_timings(t: &Timings) {
+    eprintln!("comply: timings breakdown");
+    eprintln!("  discovery     {}", fmt_ms(t.discovery));
+    eprintln!("  config        {}", fmt_ms(t.config));
+    if t.fix > Duration::ZERO {
+        eprintln!("  fix           {}", fmt_ms(t.fix));
+    }
+    eprintln!("  -- typescript --");
+    eprintln!("  oxlint        {}", fmt_ms(t.oxlint));
+    eprintln!("  jscpd (ts)    {}", fmt_ms(t.jscpd_ts));
+    eprintln!("  knip          {}", fmt_ms(t.knip));
+    eprintln!("  madge         {}", fmt_ms(t.madge));
+    eprintln!("  engine (ts)   {}", fmt_ms(t.engine_ts));
+    eprintln!("  -- rust --");
+    eprintln!("  clippy        {}", fmt_ms(t.clippy));
+    eprintln!("  cargo-shear   {}", fmt_ms(t.cargo_shear));
+    eprintln!("  cargo-modules {}", fmt_ms(t.cargo_modules));
+    eprintln!("  jscpd (rs)    {}", fmt_ms(t.jscpd_rs));
+    eprintln!("  engine (rs)   {}", fmt_ms(t.engine_rs));
+    eprintln!("  -- vue --");
+    eprintln!("  engine (vue)  {}", fmt_ms(t.engine_vue));
+    if t.llm > Duration::ZERO {
+        eprintln!("  llm           {}", fmt_ms(t.llm));
+    }
+    eprintln!("  post-filter   {}", fmt_ms(t.post));
+    eprintln!("  -----");
+    eprintln!("  TOTAL         {}", fmt_ms(t.total));
+}
+
 /// Top-level lint orchestrator. Returns `true` if any violation was reported.
 fn lint_project(cli: &Cli) -> Result<bool> {
+    let mut timings = Timings::default();
+    let t_total = Instant::now();
+
     let mode = cli.scan_mode();
+    let t_discovery = Instant::now();
     let discovered = files::discover(&mode)?;
+    timings.discovery = t_discovery.elapsed();
 
     if discovered.is_empty() {
         if !cli.should_emit_json {
             println!("comply: no files to lint");
         } else {
             println!("[]");
+        }
+        timings.total = t_total.elapsed();
+        if cli.timings {
+            print_timings(&timings);
         }
         return Ok(false);
     }
@@ -137,12 +207,14 @@ fn lint_project(cli: &Cli) -> Result<bool> {
     // directory rather than from `cwd`. This makes `comply some/path/x.ts`
     // pick up `some/path/comply.toml` (or a parent's) without requiring
     // the user to `cd` into the project first.
+    let t_config = Instant::now();
     let config_anchor = discovered
         .first()
         .and_then(|f| f.path.parent())
         .map(std::path::Path::to_path_buf)
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
     let config = Config::load_from(&config_anchor)?;
+    timings.config = t_config.elapsed();
 
     // --fix runs the upstream fixers (oxlint --fix, cargo clippy
     // --fix) over the discovered files BEFORE the lint pass. After
@@ -150,11 +222,13 @@ fn lint_project(cli: &Cli) -> Result<bool> {
     // pipeline so the user sees what's left — typically the
     // architectural diagnostics no fixer can address.
     if cli.fix {
+        let t_fix = Instant::now();
         let runs = fix::apply_fixes(&discovered, &config)?;
+        timings.fix = t_fix.elapsed();
         eprintln!("comply: ran {runs} fixer(s); re-linting");
     }
 
-    let mut diagnostics = collect_all_diagnostics(&discovered, &config)?;
+    let mut diagnostics = collect_all_diagnostics(&discovered, &config, &mut timings)?;
 
     // Phase 3: LLM rules (opt-in via --with-llm).
     if cli.with_llm {
@@ -170,16 +244,24 @@ fn lint_project(cli: &Cli) -> Result<bool> {
             concurrency: cli.llm_concurrency,
             project_root: config_anchor,
         };
+        let t_llm = Instant::now();
         diagnostics.extend(llm::lint_files(&all_files, &llm_config)?);
+        timings.llm = t_llm.elapsed();
     }
 
+    let t_post = Instant::now();
     let after_overrides = apply_config_filters(diagnostics, &config);
     let after_suppressions = ignore_comments::apply_to_all(after_overrides, &discovered);
+    timings.post = t_post.elapsed();
 
     if cli.should_emit_json {
         report_diagnostics_json(&after_suppressions)?;
     } else {
         report_diagnostics(&after_suppressions);
+    }
+    timings.total = t_total.elapsed();
+    if cli.timings {
+        print_timings(&timings);
     }
     Ok(!after_suppressions.is_empty())
 }
@@ -188,19 +270,23 @@ fn lint_project(cli: &Cli) -> Result<bool> {
 fn collect_all_diagnostics(
     discovered: &[SourceFile],
     config: &Config,
+    timings: &mut Timings,
 ) -> Result<Vec<Diagnostic>> {
     let by_lang = partition_by_language(discovered);
     let mut diagnostics = Vec::with_capacity(discovered.len());
 
     if !by_lang.ts.is_empty() {
-        diagnostics.extend(lint_typescript(&by_lang.ts, config)?);
+        diagnostics.extend(lint_typescript(&by_lang.ts, config, timings)?);
     }
     if !by_lang.rs.is_empty() {
-        diagnostics.extend(lint_rust(&by_lang.rs, config)?);
+        diagnostics.extend(lint_rust(&by_lang.rs, config, timings)?);
     }
     // Vue SFCs: text-based rules only (no tree-sitter grammar, no oxlint).
     if !by_lang.vue.is_empty() {
-        diagnostics.extend(engine::lint_files(&by_lang.vue, config)?);
+        let t = Instant::now();
+        let vue_diags = engine::lint_files(&by_lang.vue, config)?;
+        timings.engine_vue = t.elapsed();
+        diagnostics.extend(vue_diags);
     }
 
     Ok(diagnostics)
@@ -230,43 +316,108 @@ fn apply_config_filters(
 /// The two passes are complementary: clippy catches type-aware lints
 /// and the standard library footguns; custom rules catch the architecture
 /// and naming concerns that clippy doesn't model.
-fn lint_rust(rs_files: &[&SourceFile], config: &Config) -> Result<Vec<Diagnostic>> {
-    let mut diagnostics = Vec::new();
+fn lint_rust(
+    rs_files: &[&SourceFile],
+    config: &Config,
+    timings: &mut Timings,
+) -> Result<Vec<Diagnostic>> {
+    // Phase availability is cached in OnceLock inside each module, so
+    // these is_available() calls are ~free and safe to call outside the
+    // parallel region.
+    let clippy_avail = clippy::is_available();
+    let shear_avail = cargo_shear::is_available();
+    let modules_avail = cargo_modules::is_available();
 
-    if clippy::is_available() {
-        diagnostics.extend(clippy::lint_files(rs_files, config)?);
-    } else {
+    if !clippy_avail {
         eprintln!(
             "comply: cargo clippy not found — skipping clippy-backed rules. \
              Install with: rustup component add clippy"
         );
     }
-
-    if cargo_shear::is_available() {
-        diagnostics.extend(cargo_shear::lint_files(rs_files)?);
-    } else {
+    if !shear_avail {
         eprintln!(
             "comply: cargo shear not found — skipping unused-dependency rule. \
              Install with: cargo install cargo-shear"
         );
     }
-
-    if cargo_modules::is_available() {
-        diagnostics.extend(cargo_modules::lint_files(rs_files)?);
-    } else {
+    if !modules_avail {
         eprintln!(
             "comply: cargo modules not found — skipping orphan-module rule. \
              Install with: cargo install cargo-modules"
         );
     }
 
-    if jscpd::is_available() {
-        diagnostics.extend(jscpd::lint_files(rs_files)?);
-    } else {
-        // jscpd is also used by lint_typescript — only warn once.
-    }
+    // jscpd (Node.js clone-detection subprocess) is DISABLED — it
+    // dominated wall-clock at 92% on a 216-file benchmark. A native Rust
+    // replacement is tracked in TODO.md.
 
-    diagnostics.extend(engine::lint_files(rs_files, config)?);
+    // All four phases below are independent: they read the same input
+    // slice but never mutate shared state and each spawns its own
+    // subprocess (clippy/shear/modules) or runs a pure in-process AST
+    // walk (engine). Running them in parallel is a straightforward win.
+    //
+    // Caveat: clippy/shear/modules all shell out to `cargo`, which grabs
+    // a file-based lock on `target/`. Under contention they partially
+    // serialize on that lock — benchmarks still show a meaningful gain
+    // because cargo-metadata parsing and I/O overlap between the three.
+    //
+    // Each closure measures its own wall-clock via `Instant::now()` and
+    // returns `(Result<Vec<Diagnostic>>, Duration)` so the main thread
+    // can feed phase durations back into `Timings` after the join.
+    type PhaseOut = (Result<Vec<Diagnostic>>, Duration);
+
+    let clippy_phase = || -> PhaseOut {
+        if !clippy_avail {
+            return (Ok(Vec::new()), Duration::ZERO);
+        }
+        let t = Instant::now();
+        (clippy::lint_files(rs_files, config), t.elapsed())
+    };
+    let shear_phase = || -> PhaseOut {
+        if !shear_avail {
+            return (Ok(Vec::new()), Duration::ZERO);
+        }
+        let t = Instant::now();
+        (cargo_shear::lint_files(rs_files), t.elapsed())
+    };
+    let modules_phase = || -> PhaseOut {
+        if !modules_avail {
+            return (Ok(Vec::new()), Duration::ZERO);
+        }
+        let t = Instant::now();
+        (cargo_modules::lint_files(rs_files), t.elapsed())
+    };
+    let engine_phase = || -> PhaseOut {
+        let t = Instant::now();
+        (engine::lint_files(rs_files, config), t.elapsed())
+    };
+
+    // rayon::join(|| join(a, b), || join(c, d)) fans out into a
+    // balanced binary tree so all four closures execute on rayon's
+    // worker pool in parallel when workers are available.
+    let ((clippy_out, shear_out), (modules_out, engine_out)) = rayon::join(
+        || rayon::join(clippy_phase, shear_phase),
+        || rayon::join(modules_phase, engine_phase),
+    );
+
+    let mut diagnostics = Vec::new();
+
+    let (clippy_res, clippy_dur) = clippy_out;
+    timings.clippy = clippy_dur;
+    diagnostics.extend(clippy_res?);
+
+    let (shear_res, shear_dur) = shear_out;
+    timings.cargo_shear = shear_dur;
+    diagnostics.extend(shear_res?);
+
+    let (modules_res, modules_dur) = modules_out;
+    timings.cargo_modules = modules_dur;
+    diagnostics.extend(modules_res?);
+
+    let (engine_res, engine_dur) = engine_out;
+    timings.engine_rs = engine_dur;
+    diagnostics.extend(engine_res?);
+
     Ok(diagnostics)
 }
 
@@ -289,50 +440,97 @@ fn partition_by_language(discovered: &[SourceFile]) -> FilesByLanguage<'_> {
 }
 
 /// Lint TypeScript/JavaScript files via oxlint subprocess + custom rules.
-fn lint_typescript(ts_files: &[&SourceFile], config: &Config) -> Result<Vec<Diagnostic>> {
-    let mut diagnostics = Vec::new();
+///
+/// oxlint / knip / madge / engine are independent — none of them mutates
+/// shared state and they each spawn their own Node/oxlint subprocess or
+/// run an in-process AST walk (engine). The four phases run in parallel
+/// on rayon's worker pool via nested `rayon::join` calls, just like the
+/// Rust pipeline in `lint_rust`.
+///
+/// jscpd is DISABLED (see `lint_rust` and TODO.md).
+fn lint_typescript(
+    ts_files: &[&SourceFile],
+    config: &Config,
+    timings: &mut Timings,
+) -> Result<Vec<Diagnostic>> {
+    let oxlint_avail = oxlint::is_available();
+    let knip_avail = knip::is_available();
+    let madge_avail = madge::is_available();
 
-    if oxlint::is_available() {
-        // oxlint::lint_files now owns its own temp-config lifecycle —
-        // it collects Backend::Oxlint bindings from the rule registry,
-        // generates the oxlintrc, and holds the NamedTempFile until the
-        // subprocess finishes reading it.
-        diagnostics.extend(oxlint::lint_files(ts_files)?);
-    } else {
+    if !oxlint_avail {
         eprintln!(
             "comply: oxlint not found — skipping oxlint rules. \
              Install with: npm install -g oxlint"
         );
     }
-
-    if jscpd::is_available() {
-        diagnostics.extend(jscpd::lint_files(ts_files)?);
-    } else {
-        eprintln!(
-            "comply: jscpd not found — skipping clone-detection rule. \
-             Install with: npm install -g jscpd"
-        );
-    }
-
-    if knip::is_available() {
-        diagnostics.extend(knip::lint_files(ts_files)?);
-    } else {
+    if !knip_avail {
         eprintln!(
             "comply: knip not found — skipping dead-code rules. \
              Install with: npm install -g knip"
         );
     }
-
-    if madge::is_available() {
-        diagnostics.extend(madge::lint_files(ts_files)?);
-    } else {
+    if !madge_avail {
         eprintln!(
             "comply: madge not found — skipping circular-import rule. \
              Install with: npm install -g madge"
         );
     }
 
-    diagnostics.extend(engine::lint_files(ts_files, config)?);
+    type PhaseOut = (Result<Vec<Diagnostic>>, Duration);
+
+    let oxlint_phase = || -> PhaseOut {
+        if !oxlint_avail {
+            return (Ok(Vec::new()), Duration::ZERO);
+        }
+        // oxlint::lint_files owns its own temp-config lifecycle — it
+        // collects Backend::Oxlint bindings from the rule registry,
+        // generates the oxlintrc, and holds the NamedTempFile until the
+        // subprocess finishes reading it.
+        let t = Instant::now();
+        (oxlint::lint_files(ts_files), t.elapsed())
+    };
+    let knip_phase = || -> PhaseOut {
+        if !knip_avail {
+            return (Ok(Vec::new()), Duration::ZERO);
+        }
+        let t = Instant::now();
+        (knip::lint_files(ts_files), t.elapsed())
+    };
+    let madge_phase = || -> PhaseOut {
+        if !madge_avail {
+            return (Ok(Vec::new()), Duration::ZERO);
+        }
+        let t = Instant::now();
+        (madge::lint_files(ts_files), t.elapsed())
+    };
+    let engine_phase = || -> PhaseOut {
+        let t = Instant::now();
+        (engine::lint_files(ts_files, config), t.elapsed())
+    };
+
+    let ((oxlint_out, knip_out), (madge_out, engine_out)) = rayon::join(
+        || rayon::join(oxlint_phase, knip_phase),
+        || rayon::join(madge_phase, engine_phase),
+    );
+
+    let mut diagnostics = Vec::new();
+
+    let (oxlint_res, oxlint_dur) = oxlint_out;
+    timings.oxlint = oxlint_dur;
+    diagnostics.extend(oxlint_res?);
+
+    let (knip_res, knip_dur) = knip_out;
+    timings.knip = knip_dur;
+    diagnostics.extend(knip_res?);
+
+    let (madge_res, madge_dur) = madge_out;
+    timings.madge = madge_dur;
+    diagnostics.extend(madge_res?);
+
+    let (engine_res, engine_dur) = engine_out;
+    timings.engine_ts = engine_dur;
+    diagnostics.extend(engine_res?);
+
     Ok(diagnostics)
 }
 
