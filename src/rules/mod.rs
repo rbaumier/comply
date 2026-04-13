@@ -1137,23 +1137,6 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         no_empty_test_file::register(),
         no_globals_shadowing::register(),
         no_implicit_deps::register(),
-        // @TODO: flagged alors que c'est un while:
-        //         while i + 2 < len {
-        //     if bytes[i] == b'/' && bytes[i + 1] == b'*' && bytes[i + 2] == b'*' {
-        //         let start = i;
-        //         let start_line = source[..start].matches('\n').count();
-        //         // find closing */
-        //         if let Some(end_rel) = source[i + 3..].find("*/") {
-        //             let end = i + 3 + end_rel + 2;
-        //             blocks.push((start_line, &source[start..end]));
-        //             i = end;
-        //         } else {
-        //             break;
-        //         }
-        //     } else {
-        //         i += 1;
-        //     }
-        // }
         no_loop_counter_reassign::register(),
         // @TODO flagged:
         //     while p > 0 && bytes[p - 1] == b'\\' {

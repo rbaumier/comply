@@ -180,29 +180,9 @@ warning [max-function-lines] this function has too many lines (124/120)
 
 ---
 
-## 25. `no-loop-counter-reassign` — flag un `while` valide
+## 25. `no-loop-counter-reassign` — flag un `while` valide ✅
 
-**Source :** `mod.rs:1363`
-**Observation :** flagged alors que c'est un `while` :
-```rust
-while i + 2 < len {
-    if bytes[i] == b'/' && bytes[i + 1] == b'*' && bytes[i + 2] == b'*' {
-        let start = i;
-        // …
-        if let Some(end_rel) = source[i + 3..].find("*/") {
-            let end = i + 3 + end_rel + 2;
-            blocks.push((start_line, &source[start..end]));
-            i = end;
-        } else {
-            break;
-        }
-    } else {
-        i += 1;
-    }
-}
-```
-
-**Décision :** _à compléter_
+**Décision : drop le backend Rust, garder TS/JSX.** Même traitement que #17. Le concept « loop counter reassign » n'a pas d'équivalent en Rust : `for x in iter` est une pattern binding immutable (réassignation rejetée par le compiler), et `while`/`loop` n'ont pas de counter — l'avancement variable de `i` via `i = end` / `i += 1` est l'idiome normal d'une boucle while-avec-state. Le backend TS cible le vrai anti-pattern (C-style `for (let i=0; i<n; i++) { i = 5; }` qui casse le contrat d'itération comptée) et est conservé tel quel. Détails dans le docblock de `src/rules/no_loop_counter_reassign/mod.rs`. 4 tests TS verts, 0 FP sur le fichier initial.
 
 ---
 
