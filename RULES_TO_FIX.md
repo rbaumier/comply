@@ -114,16 +114,9 @@ warning [max-function-lines] this function has too many lines (124/120)
 
 ---
 
-## 14. `no-clear-text-protocol` — flag `http://` dans les commentaires
+## 14. `no-clear-text-protocol` — flag `http://` dans les commentaires ✅
 
-**Source :** `mod.rs:1060`
-**Observation :** flag :
-```rust
-if text.contains("http://") || text.contains("https://")
-```
-ET aussi les `http://` dans les commentaires.
-
-**Décision :** _à compléter_
+**Décision : réécriture en AstCheck sur string literals + filtre length-strictly-greater-than-prefix.** Élimine les FP de commentaires (jamais visités par l'AST walk) et les FP de prefixes nus (`"http://".len() == 7` → ne flag pas, c'est une needle de détection). Détails dans le docblock de `src/rules/no_clear_text_protocol/mod.rs`.
 
 ---
 
