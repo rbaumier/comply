@@ -1011,39 +1011,7 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         no_unused_collection::register(),
         prefer_while::register(),
         expression_complexity::register(),
-        // @TODO: ça prend en compte les commentaires ça ne devrait pas :
-        //     // When --json-schema is used, the structured data lives in
-        // // "structured_output" (NOT "result", which is empty/text).
-        // let parsed: serde_json::Value = serde_json::from_str(&stdout)
-        //     .with_context(|| {
-        //         format!(
-        //             "failed to parse claude JSON: {}",
-        //             &stdout[..stdout.len().min(200)]
-        //         )
-        //     })?;
-
-        // // Primary: structured_output (from --json-schema).
-        // if let Some(structured) = parsed.get("structured_output") {
-
-        // ET AUSSI quan c'est du schema/json, il faudrait que ce soit que quand c'est le seul string non ? :
-        //         #[allow(dead_code)]
-        // const UNIFIED_SCHEMA: &str = r#"{
-        //   "type": "object",
-        //   "properties": {
-        //     "comment_quality": {
-        //       "type": "object",
-        //       "properties": {
-        //         "issues": {
-        //           "type": "array",
-        //           "items": {
-        //             "type": "object",
-        //             "properties": {
-        //               "line": { "type": "integer" },
-        //               "criterion": { "type": "string" },
-        //               "explanation": { "type": "string" },
-        //               "suggestion": { "type": "string" }
-        //             },
-        // no_duplicate_string::register(),
+        no_duplicate_string::register(),
         // @TODO: on veut peut-être l'ignorer dans les tests ?
         //     //     #[test]
         // fn missing_config_falls_back_to_defaults() {

@@ -120,16 +120,9 @@ warning [max-function-lines] this function has too many lines (124/120)
 
 ---
 
-## 15. `no-duplicate-string` — flag des fragments de schéma JSON commenté
+## 15. `no-duplicate-string` — flag des fragments de schéma JSON commenté ✅
 
-**Source :** `mod.rs:1073`
-**Observation :** prend en compte le contenu d'un schéma JSON
-qui se trouve à la fois dans des commentaires (rustdoc d'exemples) et
-dans une `const UNIFIED_SCHEMA: &str = r#"{ ... }"#;`. Sous-question
-laissée : « il faudrait que ce soit déclenché uniquement quand c'est le
-seul contexte d'apparition ? » Règle commentée pour l'instant.
-
-**Décision :** _à compléter_
+**Décision : réécriture en AstCheck sur les string literals.** Les raw strings Rust (`r#"{…}"#`) sont vues comme un seul node ; leur contenu n'est pas ré-analysé quote par quote. Les commentaires ne sont jamais visités. Détails dans le docblock de `src/rules/no_duplicate_string/mod.rs`. Règle re-activée.
 
 ---
 
