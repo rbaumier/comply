@@ -1114,11 +1114,7 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         no_useless_increment::register(),
         no_useless_intersection::register(),
         no_useless_react_setstate::register(),
-        // @TODO flagged:
-        // id: "jsdoc-require-throws-description",
-        // ET
-        // doc_url: Some("https://github.com/gajus/eslint-plugin-jsdoc/blob/main/docs/rules/require-throws-description.md"),
-        // no_weak_cipher::register(),
+        no_weak_cipher::register(),
         no_weak_hashing::register(),
         no_weak_keys::register(),
         no_weak_ssl::register(),

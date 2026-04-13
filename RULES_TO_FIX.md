@@ -174,18 +174,9 @@ warning [max-function-lines] this function has too many lines (124/120)
 
 ---
 
-## 24. `no-weak-cipher` — règle qui flag son propre `id`/`doc_url`
+## 24. `no-weak-cipher` — règle qui flag son propre `id`/`doc_url` ✅
 
-**Source :** `mod.rs:1336`
-**Observation :** flagged sur ces lignes :
-```rust
-id: "jsdoc-require-throws-description",
-// et
-doc_url: Some("https://github.com/gajus/eslint-plugin-jsdoc/blob/main/docs/rules/require-throws-description.md"),
-```
-Règle commentée pour l'instant.
-
-**Décision :** _à compléter_
+**Décision : réécriture complète des deux backends, alignée sur SonarJS `S5547`.** L'ancienne impl Rust scannait tous les string literals avec un `contains("-des")` qui matchait le `-des` prefix de `-description`. Le nouvel algo est **narrow par contexte, loose par contenu** : TS walk `call_expression` dont le callee trailing name est `createCipheriv` et check si le 1er arg string literal commence par l'un des 5 prefixes `bf`/`blowfish`/`des`/`rc2`/`rc4` ; Rust walk `call_expression` dont le function est un `scoped_identifier` de la forme `[<path>::]Cipher::<weak_name>` où `<weak_name>` commence par un de ces prefixes suivi de `_` ou end-of-identifier. Le backend Rust ne regarde plus du tout les string literals — c'était structurellement faux parce que les crypto crates Rust (`openssl::symm::Cipher::des_ecb()`, etc.) dispatchent le cipher par **nom de méthode**, pas par string. Pas de const-propagation v1 (gap connu, à ajouter plus tard). Détails dans le docblock de `src/rules/no_weak_cipher/mod.rs`. 20 tests verts, 0 FP sur le fichier initial. Règle re-activée.
 
 ---
 

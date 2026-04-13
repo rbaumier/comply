@@ -1,30 +1,53 @@
-//! no-weak-cipher
+//! no-weak-cipher — flag the use of weak symmetric ciphers
+//! (DES, 3DES, RC2, RC4, Blowfish) in crypto APIs.
+//!
+//! Detection is **narrow by call context, loose by content**, which is
+//! the shape SonarJS's `S5547` uses for the JS/TS equivalent:
+//!
+//! - **TypeScript / JavaScript**: walk `call_expression` nodes, match
+//!   a callee whose trailing name is `createCipheriv` (Node.js's modern
+//!   crypto cipher API), and check if the first string-literal argument
+//!   starts with one of `bf`, `blowfish`, `des`, `rc2`, `rc4`.
+//!
+//! - **Rust**: walk `call_expression` nodes, match a
+//!   `scoped_identifier` function of the form
+//!   `[<path>::]Cipher::<weak_name>` where `<weak_name>` starts with a
+//!   weak-cipher family prefix (`des`, `rc4`, `rc2`, `bf`, `blowfish`)
+//!   followed by `_` or end-of-identifier. This matches the `openssl`
+//!   crate's `openssl::symm::Cipher::des_ecb()` / `Cipher::rc4()` /
+//!   etc. — Rust crypto libraries select the cipher by method name
+//!   rather than by a string argument, which is why the TS backend's
+//!   approach doesn't transfer directly.
+//!
+//! The previous implementation scanned every string literal in every
+//! Rust file for cipher-like substrings, producing false positives on
+//! unrelated strings (`"jsdoc-require-throws-description"` matched the
+//! `-des` prefix inside `-description`). The new design cannot
+//! false-positive on arbitrary strings because it never looks at
+//! strings outside `createCipheriv(...)` arguments or at calls outside
+//! `Cipher::<method>` shapes.
+//!
+//! Known gap: TS backend does not do constant propagation, so
+//! `const ALGO = "des-cbc"; createCipheriv(ALGO, ...)` is not flagged.
+//! SonarJS handles this via `getValueOfExpression`; we can add a
+//! file-level binding scan later if needed.
 
 mod rust;
 mod typescript;
 
 use crate::diagnostic::Severity;
-use crate::rules::backend::Backend;
 use crate::rules::meta::RuleMeta;
-use crate::rules::{Language, RuleDef, TS_FAMILY};
+use crate::rules::RuleDef;
 
 pub const META: RuleMeta = RuleMeta {
     id: "no-weak-cipher",
-    description: "Weak ciphers (DES, RC4, RC2, Blowfish) are cryptographically broken.",
-    remediation: "Use AES-256-GCM or ChaCha20-Poly1305 instead of legacy ciphers.",
+    description: "Weak symmetric cipher (DES, RC2, RC4, Blowfish) used in a crypto API call.",
+    remediation: "Use AES-256-GCM or ChaCha20-Poly1305 instead.",
     severity: Severity::Error,
-    doc_url: None,
+    doc_url: Some("https://sonarsource.github.io/rspec/#/rspec/S5547/javascript"),
     categories: &["security"],
 };
 
 pub fn register() -> RuleDef {
-    let mut backends: Vec<(Language, Backend)> = TS_FAMILY
-        .iter()
-        .map(|&lang| (lang, Backend::TreeSitter(Box::new(typescript::Check))))
-        .collect();
-    backends.push((Language::Rust, Backend::TreeSitter(Box::new(rust::Check))));
-    RuleDef {
-        meta: META,
-        backends,
-    }
+    crate::register_ts_family_with_rust!(META, typescript, rust)
 }
