@@ -1219,16 +1219,6 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         data_clumps::register(),
         error_message_is_remediation::register(),
         factory_di_shape::register(),
-        // @TODO flagged:
-        // src/rules/no_skipped_test_without_link/rust.rs:19:9: warning [intermediate-variables] Expression is deeply nested — extract into named intermediate variables.
-        //     impl AstCheck for Check {
-        // fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
-        //     let source_bytes = ctx.source.as_bytes();
-        //     let mut diagnostics = Vec::new();
-        //     walk_tree(tree, |node| {
-        //         if node.kind() != "attribute_item" {
-        //             return;
-        //         }
         intermediate_variables::register(),
         // @TODO (TODO_AFTER_REVIEW)
         // justify_inaction::register(),
