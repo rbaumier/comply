@@ -70,22 +70,11 @@ warning [max-function-lines] this function has too many lines (124/120)
 
 ---
 
-## 7. `rust-explicit-iter-loop` — flag `for &b in bytes.iter()`
+## 7. `rust-explicit-iter-loop` — flag `for &b in bytes.iter()` ⏸
 
-**Source :** `mod.rs:935`
-**Observation :**
-```
-src/rules/no_unreadable_array_destructuring/typescript.rs:61:15:
-warning [rust-explicit-iter-loop] it is more concise to loop over references
-```
-Ligne :
-```rust
-for &b in bytes.iter() {
-```
-Le `&b` binde par valeur — clippy se trompe-t-il ici, ou la règle est
-mal portée ?
+**Décision : pas un bug — clippy a raison, le code est sub-optimal.** La règle est une pure délégation à `clippy::explicit_iter_loop`. En Rust 2021+, `&[T]: IntoIterator<Item = &T>`, donc `for &b in bytes.iter()` est strictement équivalent à `for &b in bytes` en plus verbeux. Le binding par valeur via `&b` est préservé dans les deux cas.
 
-**Décision :** _à compléter_
+**Action déférée** : nettoyer toutes les occurrences `for X in Y.iter() {` de la codebase en un batch séparé (pas un fix de règle).
 
 ---
 
