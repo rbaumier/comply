@@ -316,7 +316,6 @@ pub mod no_misplaced_loop_counter;
 pub mod no_nested_assignment;
 pub mod no_nested_functions;
 pub mod no_nested_incdec;
-pub mod no_non_literal_fs_filename;
 pub mod no_post_message_star;
 pub mod no_primitive_wrappers;
 pub mod no_promise_reject;
@@ -1202,8 +1201,6 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         no_bidi_characters::register(),
         no_timing_attack::register(),
         no_disable_mustache_escape::register(),
-        // @TODO: impossible de passer que des string litteral en file name non ?
-        // no_non_literal_fs_filename::register(),
         // eslint-plugin-functional rules (native implementations).
         no_class_inheritance::register(),
         no_promise_reject::register(),
