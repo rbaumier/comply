@@ -489,7 +489,6 @@ pub mod no_useless_length_check;
 pub mod no_useless_promise_resolve_reject;
 pub mod no_useless_spread;
 pub mod no_useless_switch_case;
-pub mod no_useless_undefined;
 pub mod no_zero_fractions;
 pub mod node_callback_return;
 pub mod node_exports_style;
@@ -585,7 +584,6 @@ pub mod ts_consistent_indexed_object_style;
 pub mod ts_consistent_type_assertions;
 pub mod ts_consistent_type_definitions;
 pub mod ts_default_param_last;
-pub mod ts_explicit_member_accessibility;
 pub mod ts_init_declarations;
 pub mod ts_max_params;
 pub mod ts_member_ordering;
@@ -1332,7 +1330,6 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         no_useless_promise_resolve_reject::register(),
         no_useless_spread::register(),
         no_useless_switch_case::register(),
-        no_useless_undefined::register(),
         // @TODO flagged:
         // src/rules/no_magic_array_flat_depth/typescript.rs:40:23: warning [no-zero-fractions] Don't use a zero fraction in the number.
         // if (val - 1.0).abs() < f64::EPSILON {
@@ -1514,7 +1511,6 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         ts_consistent_type_assertions::register(),
         ts_consistent_type_definitions::register(),
         ts_default_param_last::register(),
-        ts_explicit_member_accessibility::register(),
         // eslint-plugin-playwright rules (native implementations).
         playwright_no_force_option::register(),
         playwright_no_page_pause::register(),
