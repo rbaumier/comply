@@ -7,8 +7,14 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-/// Common numeric values that are universally understood.
-const ALLOWED: &[&str] = &["0", "1", "-1", "2", "0.0", "1.0"];
+/// Numeric values so idiomatic that flagging them is pure noise:
+/// `-1` (not-found sentinel), `0` (index / false / identity), `1`
+/// (increment / true / first element). Any other value — including
+/// `2` — must still be extracted into a named constant. Numbers
+/// embedded in string literals (e.g. Tailwind classes like `"p-4"`)
+/// are already ignored because this check only visits `number` AST
+/// nodes, never string contents.
+const ALLOWED: &[&str] = &["-1", "0", "1"];
 
 fn is_allowed_context(node: tree_sitter::Node) -> bool {
     let mut current = node.parent();
@@ -124,5 +130,62 @@ mod tests {
     #[test]
     fn allows_enum_values() {
         assert!(run_on("enum Status { Active = 200, Error = 500 }").is_empty());
+    }
+
+    // Allowlist covers the three universally-idiomatic literals.
+    #[test]
+    fn allowlist_zero() {
+        assert!(run_on("function f(x) { return x + 0; }").is_empty());
+    }
+
+    #[test]
+    fn allowlist_one() {
+        assert!(run_on("function f(x) { return x + 1; }").is_empty());
+    }
+
+    #[test]
+    fn allowlist_minus_one_unary() {
+        // `-1` parses as unary_expression(- , number(1)) — the walker
+        // must recognise the wrapped form, not just a literal token.
+        assert!(run_on("function f(x) { return x + -1; }").is_empty());
+    }
+
+    // Anything outside the allowlist is still a magic number.
+    #[test]
+    fn flags_bare_forty_two() {
+        let diags = run_on("function f(x) { return x + 42; }");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("42"));
+    }
+
+    #[test]
+    fn flags_negative_forty_two() {
+        let diags = run_on("function f(x) { return x + -42; }");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("42"));
+    }
+
+    #[test]
+    fn flags_two_now_that_it_is_out_of_allowlist() {
+        // `2` was previously allowlisted; narrowed to {-1, 0, 1}
+        // because halving/doubling factors are still meaningful
+        // constants worth naming.
+        let diags = run_on("function f(x) { return x + 2; }");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("2"));
+    }
+
+    #[test]
+    fn ignores_numbers_inside_string_literals() {
+        // Tailwind utilities like `"p-4"` are CSS class names, not
+        // programmatic magic numbers. The AST only exposes a `string`
+        // node here — no `number` child is walked, so nothing to skip.
+        assert!(run_on(r#"function f() { return "p-4 mb-6 h-2.5"; }"#).is_empty());
+    }
+
+    #[test]
+    fn flags_both_operands_of_arithmetic() {
+        let diags = run_on("function f(x) { return x + 5 * 60; }");
+        assert_eq!(diags.len(), 2);
     }
 }
