@@ -189,7 +189,6 @@ pub mod sql_no_like_wildcard_prefix;
 pub mod sql_no_offset_pagination;
 pub mod sql_no_pg_enum;
 pub mod sql_no_select_star;
-pub mod sql_no_timestamp_without_tz;
 pub mod sql_no_varchar;
 pub mod sql_prefer_exists_over_in;
 pub mod tailwind_no_conflicting_classes;
@@ -952,7 +951,6 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         sql_no_offset_pagination::register(),
         sql_no_varchar::register(),
         sql_no_float_for_money::register(),
-        sql_no_timestamp_without_tz::register(),
         sql_no_like_wildcard_prefix::register(),
         sql_no_pg_enum::register(),
         sql_prefer_exists_over_in::register(),
