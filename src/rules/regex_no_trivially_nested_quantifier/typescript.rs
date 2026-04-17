@@ -1,19 +1,24 @@
+//! regex-no-trivially-nested-quantifier TypeScript / JavaScript / TSX backend.
+//!
+//! Visits tree-sitter `regex` nodes only — never scans raw text — so
+//! parenthesised strings like `"(?:a+)?"` inside code, Tailwind classes,
+//! or URLs cannot false-positive. Detection operates on the extracted
+//! `pattern` of the regex literal.
+
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::rules::backend::{CheckCtx, TextCheck};
+use crate::rules::regex_ast::pattern_and_flags;
 
-#[derive(Debug)]
-pub struct Check;
-
-/// Detects trivially nested quantifiers that can be merged.
+/// Detects trivially nested quantifiers that can be merged, returning
+/// byte offsets (within the pattern) where each nested group starts.
 /// Example: `(?:a{2}){3}` can be `a{6}`, or `(?:a+)?` can be `a*`.
-fn find_trivially_nested_quantifiers(line: &str) -> Vec<usize> {
+fn find_trivially_nested_quantifiers(pattern: &str) -> Vec<usize> {
     let mut hits = Vec::new();
-    let bytes = line.as_bytes();
+    let bytes = pattern.as_bytes();
     let len = bytes.len();
     let mut i = 0;
 
     while i < len {
-        // Look for `(?:` non-capturing group
+        // Look for `(?:` non-capturing group.
         if bytes[i] == b'('
             && i + 2 < len
             && bytes[i + 1] == b'?'
@@ -33,13 +38,13 @@ fn find_trivially_nested_quantifiers(line: &str) -> Vec<usize> {
                 }
                 j += 1;
             }
-            // j is now one past the closing paren
+            // j is now one past the closing paren.
             let close = j - 1; // position of ')'
             if depth == 0 {
-                let content = &line[content_start..close];
+                let content = &pattern[content_start..close];
                 // Check: single element with quantifier, e.g. `a+`, `a*`, `a?`, `a{2}`
                 let has_inner_quantifier = is_single_quantified_element(content);
-                // Check outer quantifier
+                // Check outer quantifier.
                 if has_inner_quantifier && close + 1 < len {
                     let next = bytes[close + 1];
                     if next == b'+' || next == b'*' || next == b'?' || next == b'{' {
@@ -54,7 +59,7 @@ fn find_trivially_nested_quantifiers(line: &str) -> Vec<usize> {
 }
 
 /// Returns true if the content is a single element followed by a quantifier.
-/// E.g. `a+`, `a*`, `.?`, `a{2,3}`, `\d+`
+/// E.g. `a+`, `a*`, `.?`, `a{2,3}`, `\d+`.
 fn is_single_quantified_element(content: &str) -> bool {
     let bytes = content.as_bytes();
     let clen = bytes.len();
@@ -62,13 +67,13 @@ fn is_single_quantified_element(content: &str) -> bool {
         return false;
     }
 
-    // Determine element length
+    // Determine element length.
     let elem_len;
     if bytes[0] == b'\\' {
-        // Escaped char like `\d`, `\w`, `\s`
+        // Escaped char like `\d`, `\w`, `\s`.
         elem_len = 2;
     } else if bytes[0] == b'[' {
-        // Character class
+        // Character class.
         if let Some(close) = find_char_class_close(bytes, 0) {
             elem_len = close + 1;
         } else {
@@ -84,10 +89,12 @@ fn is_single_quantified_element(content: &str) -> bool {
         return false;
     }
 
-    // Rest must be a quantifier
+    // Rest must be a quantifier.
     let rest = bytes[elem_len];
     match rest {
-        b'+' | b'*' | b'?' => elem_len + 1 == clen || (elem_len + 2 == clen && bytes[elem_len + 1] == b'?'),
+        b'+' | b'*' | b'?' => {
+            elem_len + 1 == clen || (elem_len + 2 == clen && bytes[elem_len + 1] == b'?')
+        }
         b'{' => bytes[elem_len..].contains(&b'}'),
         _ => false,
     }
@@ -114,46 +121,63 @@ fn find_char_class_close(bytes: &[u8], start: usize) -> Option<usize> {
     None
 }
 
-impl TextCheck for Check {
-    fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
-        let mut diagnostics = Vec::new();
-        for (idx, line) in ctx.source.lines().enumerate() {
-            for col in find_trivially_nested_quantifiers(line) {
-                diagnostics.push(Diagnostic {
-                    path: ctx.path.to_path_buf(),
-                    line: idx + 1,
-                    column: col + 1,
-                    rule_id: "regex-no-trivially-nested-quantifier".into(),
-                    message: "Trivially nested quantifiers can be merged into a single quantifier.".into(),
-                    severity: Severity::Warning,
-                    span: None,
-                });
-            }
-        }
-        diagnostics
+crate::ast_check! { |node, source, ctx, diagnostics|
+    if node.kind() != "regex" {
+        return;
     }
+    let Some((pattern, _flags)) = pattern_and_flags(&node, source) else { return };
+    if find_trivially_nested_quantifiers(pattern).is_empty() {
+        return;
+    }
+    diagnostics.push(Diagnostic::at_node(
+        ctx.path,
+        &node,
+        "regex-no-trivially-nested-quantifier",
+        "Trivially nested quantifiers can be merged into a single quantifier.".into(),
+        Severity::Warning,
+    ));
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
-    fn run(source: &str) -> Vec<Diagnostic> {
-        Check.check(&CheckCtx::for_test(Path::new("t.ts"), source))
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_ts(source, &Check)
     }
 
     #[test]
     fn flags_nested_plus_optional() {
-        assert_eq!(run(r#"const re = /(?:a+)?/;"#).len(), 1);
+        assert_eq!(run_on(r#"const re = /(?:a+)?/;"#).len(), 1);
     }
 
     #[test]
     fn allows_multi_element_group() {
-        assert!(run(r#"const re = /(?:ab)+/;"#).is_empty());
+        assert!(run_on(r#"const re = /(?:ab)+/;"#).is_empty());
     }
 
     #[test]
     fn flags_nested_star_plus() {
-        assert_eq!(run(r#"const re = /(?:a*)+/;"#).len(), 1);
+        assert_eq!(run_on(r#"const re = /(?:a*)+/;"#).len(), 1);
+    }
+
+    // --- Regression tests for the TextCheck false-positive class. ---
+
+    #[test]
+    fn ignores_quantifier_lookalike_in_tailwind_string() {
+        let src = r#"const x = "has-[(?:a+)?]:block";"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_quantifier_lookalike_in_url() {
+        let src = r#"const u = "http://ex/(?:a+)?";"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_empty_scoped_import_path() {
+        let src = r#"import X from "@scope/(?:a+)?";"#;
+        assert!(run_on(src).is_empty());
     }
 }
