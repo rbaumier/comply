@@ -1,6 +1,8 @@
 //! banned-identifiers — rename any identifier starting with `process` /
-//! `handle` / `data` / `do` / `execute` / `run` / `perform` on a word
-//! boundary. These verbs describe mechanics, not intent.
+//! `data` / `do` / `execute` / `run` / `perform` on a word boundary.
+//! These verbs describe mechanics, not intent. `handle` is intentionally
+//! excluded because `handleXxx` is the canonical React event-handler
+//! naming convention (`onClick={handleClick}`).
 
 mod typescript;
 
@@ -12,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "banned-identifiers",
     description: "Banned prefixes describe mechanics, not intent.",
     remediation: "Rename to express what this accomplishes, not how. \
-                  `processOrder` → `fulfillOrder`, `handlePayment` → `chargeCustomer`.",
+                  `processOrder` → `fulfillOrder`, `doPayment` → `chargeCustomer`.",
     severity: Severity::Warning,
     doc_url: None,
     categories: &["naming"],

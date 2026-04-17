@@ -39,7 +39,7 @@ fn detects_nested_ternary() {
 
 #[test]
 fn multiple_violations_are_all_reported() {
-    let source = "function handleData() { throw new Error('x'); const y = a ? b ? 1 : 2 : 3; }\n";
+    let source = "function processOrder() { throw new Error('x'); const y = a ? b ? 1 : 2 : 3; }\n";
     let (_dir, path) = write_ts_file("multi.ts", source);
     Command::cargo_bin("comply")
         .unwrap()

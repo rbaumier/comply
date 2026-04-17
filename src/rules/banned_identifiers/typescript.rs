@@ -5,14 +5,16 @@
 //! letter (camelCase boundary), or `_` (snake_case boundary). Without the
 //! boundary check we'd flag `document`, `database`, `domain` — false
 //! positives that ruined early versions of this rule.
+//!
+//! `handle` is **not** banned: `handleXxx` is the canonical React
+//! event-handler naming convention (`onClick={handleClick}`). Banning it
+//! produced a false positive on every React component.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::walker::walk_tree;
 
-const BANNED_PREFIXES: &[&str] = &[
-    "process", "handle", "data", "do", "execute", "run", "perform",
-];
+const BANNED_PREFIXES: &[&str] = &["process", "data", "do", "execute", "run", "perform"];
 
 #[derive(Debug)]
 pub struct Check;
@@ -92,16 +94,16 @@ mod tests {
 
     #[test]
     fn flags_camel_case_boundary() {
-        assert!(run_on("function handleClick() {}")
+        assert!(run_on("function processOrder() {}")
             .iter()
-            .any(|d| d.message.contains("handleClick")));
+            .any(|d| d.message.contains("processOrder")));
     }
 
     #[test]
     fn flags_snake_case_boundary() {
-        assert!(run_on("const handle_click = 1;")
+        assert!(run_on("const process_order = 1;")
             .iter()
-            .any(|d| d.message.contains("handle_click")));
+            .any(|d| d.message.contains("process_order")));
     }
 
     #[test]
@@ -114,6 +116,19 @@ mod tests {
     #[test]
     fn allows_intent_named() {
         assert!(run_on("function fulfillOrder() {}").is_empty());
+    }
+
+    #[test]
+    fn allows_handle_prefix() {
+        // `handleXxx` is the canonical React event-handler naming convention
+        // (`onClick={handleClick}`). Must not be flagged.
+        for name in ["handleClick", "handleSubmit", "handle_change", "handle"] {
+            let source = format!("const {name} = () => {{}};");
+            assert!(
+                run_on(&source).is_empty(),
+                "'{name}' must NOT be flagged — `handle` is a React idiom"
+            );
+        }
     }
 
     #[test]
