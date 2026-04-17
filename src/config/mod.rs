@@ -143,6 +143,26 @@ impl Config {
             .unwrap_or(fallback)
     }
 
+    /// Read a list of strings from `[rules.<rule_id>] <key> = [...]`.
+    /// Non-string entries and absent keys collapse to an empty vec, so
+    /// the caller can treat "not configured" and "configured empty" the
+    /// same way. Used by rules that match against a user-configured
+    /// pattern list (e.g. `ts-no-restricted-imports`).
+    #[must_use]
+    pub fn string_list(&self, rule_id: &str, key: &str) -> Vec<String> {
+        self.raw
+            .rules
+            .get(rule_id)
+            .and_then(|r| r.extra.get(key))
+            .and_then(toml::Value::as_array)
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     fn from_raw(raw: ComplyToml) -> Result<Self> {
         let mut builder = GlobSetBuilder::new();
         let mut disable_lists: Vec<Vec<String>> = Vec::new();
@@ -283,6 +303,29 @@ mod tests {
     fn threshold_uses_fallback_when_unknown() {
         let cfg = Config::default();
         assert_eq!(cfg.threshold("does-not-exist", "max", 42), 42);
+    }
+
+    #[test]
+    fn string_list_returns_empty_when_unconfigured() {
+        let cfg = Config::default();
+        assert!(cfg.string_list("does-not-exist", "patterns").is_empty());
+    }
+
+    #[test]
+    fn string_list_reads_user_array() {
+        let tmp = TempDir::new().unwrap();
+        let cfg_path = tmp.path().join("comply.toml");
+        fs::write(
+            &cfg_path,
+            r#"
+            [rules.ts-no-restricted-imports]
+            patterns = ["@banned/*", "legacy"]
+            "#,
+        )
+        .unwrap();
+        let cfg = Config::load_from(tmp.path()).unwrap();
+        let list = cfg.string_list("ts-no-restricted-imports", "patterns");
+        assert_eq!(list, vec!["@banned/*", "legacy"]);
     }
 
     #[test]
