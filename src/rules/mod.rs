@@ -564,6 +564,7 @@ pub mod prefer_top_level_await;
 pub mod prefer_type_error;
 pub mod relative_url_style;
 pub mod require_array_join_separator;
+pub mod require_explicit_undefined;
 pub mod require_module_attributes;
 pub mod require_module_specifiers;
 pub mod require_number_to_fixed_digits_argument;
@@ -1399,6 +1400,7 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         prefer_type_error::register(),
         relative_url_style::register(),
         require_array_join_separator::register(),
+        require_explicit_undefined::register(),
         require_module_attributes::register(),
         require_module_specifiers::register(),
         require_number_to_fixed_digits_argument::register(),
