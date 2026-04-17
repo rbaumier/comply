@@ -21,17 +21,15 @@ fn has_extra_lookaround(pattern: &str) -> bool {
                 let content_start = if bytes[i + 2] == b'<' { i + 4 } else { i + 3 };
                 if content_start < len {
                     let trimmed = &pattern[content_start..];
-                    if trimmed.starts_with("(?=")
+                    if (trimmed.starts_with("(?=")
                         || trimmed.starts_with("(?!")
                         || trimmed.starts_with("(?<=")
-                        || trimmed.starts_with("(?<!")
+                        || trimmed.starts_with("(?<!"))
+                        && let Some(inner_close) = find_matching_paren(bytes, content_start)
+                        && inner_close + 1 < len
+                        && bytes[inner_close + 1] == b')'
                     {
-                        if let Some(inner_close) = find_matching_paren(bytes, content_start)
-                            && inner_close + 1 < len
-                            && bytes[inner_close + 1] == b')'
-                        {
-                            return true;
-                        }
+                        return true;
                     }
                 }
             }
