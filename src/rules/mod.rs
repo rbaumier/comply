@@ -28,7 +28,6 @@ pub mod error_without_cause;
 pub mod explicit_return_type_on_exported;
 pub mod explicit_units;
 pub mod jsdoc_missing_example;
-pub mod jsdoc_on_exported;
 pub mod jsx;
 pub mod max_file_lines;
 pub mod max_function_lines;
@@ -666,36 +665,7 @@ pub mod playwright_prefer_to_be;
 pub mod playwright_prefer_to_contain;
 pub mod playwright_prefer_web_first_assertions;
 // eslint-plugin-jsdoc rules (native implementations).
-pub mod jsdoc_check_param_names;
-pub mod jsdoc_check_property_names;
-pub mod jsdoc_check_tag_names;
-pub mod jsdoc_check_template_names;
-pub mod jsdoc_check_types;
-pub mod jsdoc_check_values;
 pub mod jsdoc_complete_sentence;
-pub mod jsdoc_no_undefined_types;
-pub mod jsdoc_require_hyphen_before_param_description;
-pub mod jsdoc_require_next_description;
-pub mod jsdoc_require_param;
-pub mod jsdoc_require_param_description;
-pub mod jsdoc_require_param_name;
-pub mod jsdoc_require_property;
-pub mod jsdoc_require_property_description;
-pub mod jsdoc_require_property_name;
-pub mod jsdoc_require_rejects;
-pub mod jsdoc_require_returns;
-pub mod jsdoc_require_returns_description;
-pub mod jsdoc_require_tags;
-pub mod jsdoc_require_template;
-pub mod jsdoc_require_template_description;
-pub mod jsdoc_require_throws;
-pub mod jsdoc_require_throws_description;
-pub mod jsdoc_require_yields;
-pub mod jsdoc_require_yields_check;
-pub mod jsdoc_require_yields_description;
-pub mod jsdoc_returns_check;
-pub mod jsdoc_sort_tags;
-pub mod jsdoc_valid_types;
 // eslint-plugin-de-morgan (native implementation).
 pub mod de_morgan_simplify;
 // eslint-plugin-react-refresh (native implementation).
@@ -826,7 +796,6 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         no_common_grab_bag::register(),
         no_default_params::register(),
         boolean_naming::register(),
-        jsdoc_on_exported::register(),
         module_header::register(),
         no_boolean_flag_param::register(),
         explicit_units::register(),
@@ -1579,36 +1548,7 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         playwright_prefer_to_be::register(),
         playwright_prefer_to_contain::register(),
         // eslint-plugin-jsdoc rules (native implementations).
-        jsdoc_check_param_names::register(),
-        jsdoc_require_param::register(),
-        jsdoc_require_returns::register(),
-        jsdoc_returns_check::register(),
         jsdoc_complete_sentence::register(),
-        jsdoc_no_undefined_types::register(),
-        jsdoc_sort_tags::register(),
-        jsdoc_check_property_names::register(),
-        jsdoc_check_tag_names::register(),
-        jsdoc_check_template_names::register(),
-        jsdoc_check_types::register(),
-        jsdoc_check_values::register(),
-        jsdoc_valid_types::register(),
-        jsdoc_require_param_description::register(),
-        jsdoc_require_param_name::register(),
-        jsdoc_require_returns_description::register(),
-        jsdoc_require_hyphen_before_param_description::register(),
-        jsdoc_require_property::register(),
-        jsdoc_require_property_description::register(),
-        jsdoc_require_property_name::register(),
-        jsdoc_require_rejects::register(),
-        jsdoc_require_throws::register(),
-        jsdoc_require_yields::register(),
-        jsdoc_require_yields_check::register(),
-        jsdoc_require_tags::register(),
-        jsdoc_require_template::register(),
-        jsdoc_require_next_description::register(),
-        jsdoc_require_template_description::register(),
-        jsdoc_require_throws_description::register(),
-        jsdoc_require_yields_description::register(),
         // eslint-plugin-de-morgan (native implementation).
         de_morgan_simplify::register(),
         // eslint-plugin-react-refresh (native implementation).
