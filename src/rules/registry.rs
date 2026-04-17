@@ -159,9 +159,22 @@ macro_rules! register_ts_family_with_clippy_marker {
 /// ```ignore
 /// crate::ast_check! { |node, source, ctx, diagnostics|
 ///     if node.kind() != "throw_statement" { return; }
-///     diagnostics.push(Diagnostic { /* ... */ });
+///     diagnostics.push(Diagnostic::at_node(
+///         ctx.path,
+///         &node,
+///         "no-throw-literal",
+///         "throw an Error instance, not a literal".into(),
+///         Severity::Warning,
+///     ));
 /// }
 /// ```
+///
+/// Prefer `Diagnostic::at_node` over a `Diagnostic { ... }` literal: it
+/// captures the node's byte range via `node.byte_range()` so the pretty
+/// renderer highlights the exact offending expression instead of falling
+/// back to whole-line highlighting. The literal form is still appropriate
+/// for delegated diagnostics (oxlint/clippy/knip/madge) where only
+/// `(line, column)` is available from external JSON output.
 ///
 /// Without this macro, every rule's `typescript.rs` / `rust.rs` carried
 /// the same ~13-line preamble (imports + `pub struct Check;` + `impl
