@@ -9,11 +9,12 @@ use crate::rules::RuleDef;
 
 pub const META: RuleMeta = RuleMeta {
     id: "react-no-object-in-dep-array",
-    description: "Hook dependency arrays must contain primitives, not objects/arrays.",
-    remediation: "Extract the primitive field you depend on: \
-                  `useEffect(() => { ... }, [user.id])` instead of `[user]`. \
-                  Objects change reference on every render even when their \
-                  content is identical, causing infinite re-runs.",
+    description:
+        "Hook dep arrays must not contain values that allocate every render.",
+    remediation: "Move inline object/array literals, inline functions, and \
+                  `new Map()`-style allocations out of the dep array. Extract \
+                  them into `useMemo`/`useCallback`, or depend on primitive \
+                  fields that are stable across renders.",
     severity: Severity::Error,
     doc_url: None,
     categories: &["typescript", "react"],
