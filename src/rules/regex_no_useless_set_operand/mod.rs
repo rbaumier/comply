@@ -1,11 +1,10 @@
 //! regex-no-useless-set-operand
 
-mod text;
+mod typescript;
 
 use crate::diagnostic::Severity;
-use crate::rules::backend::Backend;
 use crate::rules::meta::RuleMeta;
-use crate::rules::{RuleDef, ALL_TEXT_LANGUAGES};
+use crate::rules::RuleDef;
 
 pub const META: RuleMeta = RuleMeta {
     id: "regex-no-useless-set-operand",
@@ -17,11 +16,5 @@ pub const META: RuleMeta = RuleMeta {
 };
 
 pub fn register() -> RuleDef {
-    RuleDef {
-        meta: META,
-        backends: ALL_TEXT_LANGUAGES
-            .iter()
-            .map(|&lang| (lang, Backend::Text(Box::new(text::Check))))
-            .collect(),
-    }
+    crate::register_ts_family!(META, typescript)
 }
