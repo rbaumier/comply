@@ -36,6 +36,23 @@ const BANNED_WORDS: &[&str] = &[
 /// matched — `dataSource` matches but `database` does not.
 const BANNED_PREFIXES: &[&str] = &["process", "data", "do", "execute", "run", "perform"];
 
+/// Language/runtime globals that happen to start with a banned prefix
+/// but must never be flagged — `process.env`, `Buffer.from`,
+/// `globalThis.x` are the canonical way to reference these primitives.
+/// Exact-name match only; derived names (`processOrder`, `bufferUtil`)
+/// still hit the prefix rule.
+const GLOBAL_IDENTIFIER_ALLOWLIST: &[&str] = &[
+    "process",    // Node global
+    "require",    // CJS global
+    "module",     // CJS global
+    "exports",    // CJS global
+    "Buffer",     // Node global
+    "globalThis", // JS global
+    "console",    // JS global
+    "__dirname",  // Node CJS global
+    "__filename", // Node CJS global
+];
+
 #[derive(Debug)]
 pub struct Check;
 
@@ -97,6 +114,9 @@ fn check_banned_prefix(
         return None;
     }
     let name = node.utf8_text(source).ok()?;
+    if GLOBAL_IDENTIFIER_ALLOWLIST.contains(&name) {
+        return None;
+    }
     let prefix = matched_banned_prefix(name)?;
     let pos = node.start_position();
     Some(Diagnostic {
@@ -256,6 +276,50 @@ mod tests {
                 "'{name}' must NOT be flagged — `handle` is a React idiom"
             );
         }
+    }
+
+    // --- global identifier allowlist ---
+
+    #[test]
+    fn allows_process_global_usage() {
+        // `process` is a Node global; `process.env.NODE_ENV` must not fire.
+        assert!(run_on("const x = process.env.NODE_ENV;").is_empty());
+    }
+
+    #[test]
+    fn allows_buffer_global() {
+        assert!(run_on("const b = Buffer.from('x');").is_empty());
+    }
+
+    #[test]
+    fn allows_global_this_global() {
+        assert!(run_on("const g = globalThis.something;").is_empty());
+    }
+
+    #[test]
+    fn allows_console_require_module_exports() {
+        assert!(run_on("console.log('x');").is_empty());
+        assert!(run_on("const fs = require('fs');").is_empty());
+        assert!(run_on("module.exports = {};").is_empty());
+    }
+
+    #[test]
+    fn allows_dirname_filename_globals() {
+        assert!(run_on("const p = __dirname;").is_empty());
+        assert!(run_on("const f = __filename;").is_empty());
+    }
+
+    #[test]
+    fn still_flags_derived_process_names() {
+        // Derived names still hit the prefix rule — only the exact global
+        // name `process` is exempted. `processor` has no word boundary so
+        // it's also allowed (no banned-prefix match).
+        assert!(run_on("const processOrder = 1;")
+            .iter()
+            .any(|d| d.message.contains("processOrder")));
+        assert!(run_on("const process_order = 1;")
+            .iter()
+            .any(|d| d.message.contains("process_order")));
     }
 
     #[test]
