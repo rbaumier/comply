@@ -112,6 +112,7 @@ pub mod rust_await_holding_lock;
 pub mod rust_block_on_in_async;
 pub mod rust_builder_without_must_use;
 pub mod rust_explicit_iter_loop;
+pub mod regex_ast;
 pub mod rust_helpers;
 pub mod rust_impl_debug_on_public_types;
 pub mod rust_large_enum_variant;
