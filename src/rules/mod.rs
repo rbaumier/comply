@@ -158,7 +158,6 @@ pub mod react_checked_requires_onchange;
 pub mod react_forward_ref_uses_ref;
 pub mod react_iframe_missing_sandbox;
 pub mod react_jsx_key;
-pub mod react_jsx_no_bind;
 pub mod react_jsx_no_comment_textnodes;
 pub mod react_jsx_no_duplicate_props;
 pub mod react_jsx_no_script_url;
@@ -252,7 +251,6 @@ pub mod elseif_without_else;
 pub mod error_message_is_remediation;
 pub mod factory_di_shape;
 pub mod for_loop_increment_sign;
-pub mod function_return_type;
 pub mod hono_cookie_no_httponly;
 pub mod hono_cookie_no_samesite;
 pub mod hono_cookie_no_secure;
@@ -593,9 +591,7 @@ pub mod ts_consistent_indexed_object_style;
 pub mod ts_consistent_type_assertions;
 pub mod ts_consistent_type_definitions;
 pub mod ts_default_param_last;
-pub mod ts_explicit_function_return_type;
 pub mod ts_explicit_member_accessibility;
-pub mod ts_explicit_module_boundary_types;
 pub mod ts_init_declarations;
 pub mod ts_max_params;
 pub mod ts_member_ordering;
@@ -683,7 +679,6 @@ pub mod jsdoc_check_types;
 pub mod jsdoc_check_values;
 pub mod jsdoc_complete_sentence;
 pub mod jsdoc_no_undefined_types;
-pub mod jsdoc_require_file_overview;
 pub mod jsdoc_require_hyphen_before_param_description;
 pub mod jsdoc_require_next_description;
 pub mod jsdoc_require_param;
@@ -1017,7 +1012,6 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         cyclomatic_complexity::register(),
         elseif_without_else::register(),
         for_loop_increment_sign::register(),
-        function_return_type::register(),
         index_of_compare_to_positive::register(),
         inverted_assertion_arguments::register(),
         jsx_no_leaked_render::register(),
@@ -1251,7 +1245,7 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         hono_secure_headers_disabled::register(),
         api_first::register(),
         auth_on_mutation::register(),
-        colocated_tests::register(),
+        // colocated_tests::register(),  // Disabled: flags every file in codebases without test infra.
         data_clumps::register(),
         error_message_is_remediation::register(),
         factory_di_shape::register(),
@@ -1505,7 +1499,6 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         react_no_adjacent_inline_elements::register(),
         react_forward_ref_uses_ref::register(),
         react_no_typos::register(),
-        react_jsx_no_bind::register(),
         // typescript-eslint rules (native implementations).
         ts_no_duplicate_enum_values::register(),
         ts_no_extra_non_null_assertion::register(),
@@ -1563,9 +1556,7 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         ts_consistent_type_assertions::register(),
         ts_consistent_type_definitions::register(),
         ts_default_param_last::register(),
-        ts_explicit_function_return_type::register(),
         ts_explicit_member_accessibility::register(),
-        ts_explicit_module_boundary_types::register(),
         // eslint-plugin-playwright rules (native implementations).
         playwright_no_force_option::register(),
         playwright_no_page_pause::register(),
@@ -1615,7 +1606,6 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         jsdoc_require_param_description::register(),
         jsdoc_require_param_name::register(),
         jsdoc_require_returns_description::register(),
-        jsdoc_require_file_overview::register(),
         jsdoc_require_hyphen_before_param_description::register(),
         jsdoc_require_property::register(),
         jsdoc_require_property_description::register(),
