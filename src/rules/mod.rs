@@ -732,6 +732,8 @@ pub struct RuleDef {
 mod registry;
 pub use registry::{RustBinding, build_rust_only_rule, build_ts_family_rule};
 
+pub mod meta_registry;
+
 /// Language slice for the TS-family. Used by rules that apply to all three
 /// variants identically (either via the TS grammar or oxlint delegation).
 pub const TS_FAMILY: &[Language] = &[Language::TypeScript, Language::Tsx, Language::JavaScript];
