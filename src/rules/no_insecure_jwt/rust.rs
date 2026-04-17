@@ -22,16 +22,13 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         let line = full_text.lines().nth(line_start).unwrap_or("");
         let line_lower = line.to_ascii_lowercase();
         if line_lower.contains("algorithm") || line_lower.contains("jwt") || line_lower.contains("alg") {
-            let pos = node.start_position();
-            diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
-                line: pos.row + 1,
-                column: pos.column + 1,
-                rule_id: "no-insecure-jwt".into(),
-                message: "Insecure JWT algorithm `none` — use RS256 or ES256.".into(),
-                severity: Severity::Error,
-                span: None,
-            });
+            diagnostics.push(Diagnostic::at_node(
+                ctx.path,
+                &node,
+                "no-insecure-jwt",
+                "Insecure JWT algorithm `none` — use RS256 or ES256.".into(),
+                Severity::Error,
+            ));
             return;
         }
     }
@@ -43,16 +40,13 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         let line = full_text.lines().nth(line_start).unwrap_or("");
         let line_lower = line.to_ascii_lowercase();
         if line_lower.contains("jwt") || line_lower.contains("algorithm") || line_lower.contains("alg") {
-            let pos = node.start_position();
-            diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
-                line: pos.row + 1,
-                column: pos.column + 1,
-                rule_id: "no-insecure-jwt".into(),
-                message: "HS256 in JWT context — prefer asymmetric algorithms (RS256, ES256).".into(),
-                severity: Severity::Error,
-                span: None,
-            });
+            diagnostics.push(Diagnostic::at_node(
+                ctx.path,
+                &node,
+                "no-insecure-jwt",
+                "HS256 in JWT context — prefer asymmetric algorithms (RS256, ES256).".into(),
+                Severity::Error,
+            ));
         }
     }
 }

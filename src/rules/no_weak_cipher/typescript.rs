@@ -61,18 +61,15 @@ crate::ast_check! { |node, source, ctx, diagnostics|
     if !is_weak_cipher_spec(&lowered) {
         return;
     }
-    let pos = node.start_position();
-    diagnostics.push(Diagnostic {
-        path: ctx.path.to_path_buf(),
-        line: pos.row + 1,
-        column: pos.column + 1,
-        rule_id: "no-weak-cipher".into(),
-        message: format!(
+    diagnostics.push(Diagnostic::at_node(
+        ctx.path,
+        &node,
+        "no-weak-cipher",
+        format!(
             "Weak cipher `{fragments}` passed to `createCipheriv` \u{2014} use `aes-256-gcm` or ChaCha20-Poly1305."
         ),
-        severity: Severity::Error,
-        span: None,
-    });
+        Severity::Error,
+    ));
 }
 
 #[cfg(test)]
