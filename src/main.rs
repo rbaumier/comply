@@ -38,6 +38,7 @@ mod oxlint;
 mod oxlint_config;
 mod rules;
 
+use std::io::IsTerminal;
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
@@ -534,13 +535,22 @@ fn lint_typescript(
     Ok(diagnostics)
 }
 
-/// Print diagnostics in ESLint-like format and a summary line.
+/// Print diagnostics and a summary line.
+///
+/// On an interactive terminal we render the miette-powered pretty frames so
+/// humans get code context and remediation inline. Piped or redirected
+/// stdout (CI, grep, editors parsing output) keeps the ESLint-like form so
+/// existing pipelines continue to work untouched.
 fn report_diagnostics(diagnostics: &[Diagnostic]) {
     if diagnostics.is_empty() {
         println!("comply: all clear");
         return;
     }
-    let formatted = output::format_eslint(diagnostics);
+    let formatted = if std::io::stdout().is_terminal() {
+        output::render_pretty(diagnostics)
+    } else {
+        output::format_eslint(diagnostics)
+    };
     print!("{formatted}");
     eprintln!(
         "\ncomply: {} violation{} found",

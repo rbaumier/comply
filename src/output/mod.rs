@@ -5,6 +5,16 @@
 //! - **JSON** (`format_json`) for editors, CI dashboards, and anything
 //!   that wants structured data. One object per diagnostic, sorted by
 //!   path then line.
+//!
+//! A third, miette-powered pretty renderer lives in the `pretty` submodule
+//! and is re-exported as `render_pretty`. The shared line/col→byte-span
+//! resolver it depends on lives in `span_resolver` and is used only by
+//! `pretty` — intentionally module-private.
+
+mod pretty;
+mod span_resolver;
+
+pub use pretty::render_pretty;
 
 use anyhow::{Context, Result};
 use serde_json::json;
