@@ -57,7 +57,7 @@ fn banned_identifiers_does_not_flag_document_or_database() {
         .unwrap()
         .arg(&path)
         .assert()
-        .stdout(predicate::str::contains("banned-identifiers").not());
+        .stdout(predicate::str::contains("no-generic-names").not());
 }
 
 #[test]

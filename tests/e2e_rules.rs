@@ -23,7 +23,7 @@ fn detects_banned_identifier() {
         .unwrap()
         .arg(&path)
         .assert()
-        .stdout(predicate::str::contains("banned-identifiers"))
+        .stdout(predicate::str::contains("no-generic-names"))
         .stdout(predicate::str::contains("processOrder"));
 }
 
@@ -48,5 +48,5 @@ fn multiple_violations_are_all_reported() {
         .code(1)
         .stdout(predicate::str::contains("no-throw"))
         .stdout(predicate::str::contains("no-nested-ternary"))
-        .stdout(predicate::str::contains("banned-identifiers"));
+        .stdout(predicate::str::contains("no-generic-names"));
 }

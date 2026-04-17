@@ -16,7 +16,6 @@
 
 pub mod backend;
 pub mod banned_comment_words;
-pub mod banned_identifiers;
 pub mod boolean_naming;
 pub mod call_expression;
 pub mod comment_paraphrases_code;
@@ -806,9 +805,9 @@ pub fn collect_clippy_bindings() -> Vec<(&'static str, &'static RuleMeta, Severi
             }
         }
     }
-    // Dedupe by lint name — multiple rules occasionally share a clippy
-    // lint (e.g. `disallowed_names` is referenced by both
-    // `banned_identifiers` and `no_generic_names`). Keep the first one.
+    // Dedupe by lint name — a clippy lint may be referenced by more
+    // than one comply rule; keep the first binding so the clippy
+    // scanner emits a single diagnostic per lint.
     bindings.sort_by_key(|(lint, _, _)| *lint);
     bindings.dedup_by_key(|(lint, _, _)| *lint);
     bindings
@@ -821,7 +820,6 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         // max_function_lines::register(), // We don't want this rule do we?
         no_throw::register(),
         no_nested_ternary::register(),
-        banned_identifiers::register(),
         // @TODO: il a flag le commentaire suivant :
         // // const foo =, let foo =, var foo =
         no_commented_out_code::register(),
