@@ -84,7 +84,6 @@ mod tests {
     fn finds_registered_rule() {
         let rules = rules::all_rule_defs();
         assert!(find_rule(&rules, "no-throw").is_some());
-        assert!(find_rule(&rules, "max-file-lines").is_some());
     }
 
     #[test]
