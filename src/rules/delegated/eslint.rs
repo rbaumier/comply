@@ -51,14 +51,6 @@ pub fn register_all() -> Vec<RuleDef> {
              Rust: enabled via `clippy::redundant_else` (also see \
              `clippy::needless_return`).",
         ),
-        entry(
-            "no-magic-numbers",
-            "no-magic-numbers",
-            Severity::Error,
-            "Extract literal numbers into named constants.",
-            "Move the literal into a named constant at module scope. If the \
-             literal is a one-shot index (0, 1, -1), it's ignored.",
-        ),
         entry_with_clippy(
             "max-params",
             "max-params",
