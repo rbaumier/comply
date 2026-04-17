@@ -9,8 +9,7 @@ use tempfile::TempDir;
 
 #[test]
 fn exit_code_zero_on_clean_file() {
-    // No exports (satisfies both `import/no-default-export` and
-    // `import-no-named-export`), a const used by `console.log` (satisfies
+    // No exports, a const used by `console.log` (satisfies
     // `no-unused-vars`), and a module-level JSDoc with prose + `@file` tag
     // (satisfies `jsdoc-require-file-overview` and `jsdoc-needs-description`).
     let (_dir, path) = write_ts_file(

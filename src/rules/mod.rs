@@ -413,17 +413,13 @@ pub mod use_type_alias;
 pub mod useless_string_operation;
 
 // eslint-plugin-import rules (native implementations).
-pub mod group_exports;
 pub mod import_consistent_type_specifier_style;
 pub mod import_dynamic_import_chunkname;
-pub mod import_exports_last;
 pub mod import_no_amd;
 pub mod import_no_commonjs;
 pub mod import_no_dynamic_require;
 pub mod import_no_empty_named_blocks;
-pub mod import_no_named_export;
 pub mod import_no_webpack_loader_syntax;
-pub mod import_prefer_default_export;
 pub mod imports_first;
 pub mod max_dependencies;
 pub mod newline_after_import;
@@ -1293,7 +1289,6 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         a11y_scope::register(),
         a11y_tabindex_no_positive::register(),
         // eslint-plugin-import rules (native implementations).
-        group_exports::register(),
         imports_first::register(),
         max_dependencies::register(),
         newline_after_import::register(),
@@ -1304,8 +1299,6 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         no_namespace_import::register(),
         no_self_import::register(),
         no_unassigned_import::register(),
-        import_exports_last::register(),
-        import_no_named_export::register(),
         import_no_commonjs::register(),
         import_no_amd::register(),
         import_no_webpack_loader_syntax::register(),
@@ -1313,7 +1306,6 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         import_no_dynamic_require::register(),
         import_dynamic_import_chunkname::register(),
         import_consistent_type_specifier_style::register(),
-        import_prefer_default_export::register(),
         // eslint-plugin-unicorn rules (native implementations).
         catch_error_name::register(),
         consistent_date_clone::register(),
