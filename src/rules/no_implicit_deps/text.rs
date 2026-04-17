@@ -17,8 +17,10 @@
 //!    - `pkg/sub/path`         -> `pkg`
 //!
 //!    Then match against the union of `dependencies`, `devDependencies`,
-//!    `peerDependencies`, and `optionalDependencies` in the nearest
-//!    ancestor `package.json`. Match -> skip.
+//!    `peerDependencies`, `optionalDependencies`, and the keys of
+//!    `engines` (e.g. `engines.vscode` makes `import x from 'vscode'`
+//!    valid for VSCode extensions) in the nearest ancestor
+//!    `package.json`. Match -> skip.
 //! 5. If no `package.json` is found walking up from the source file, the
 //!    rule stays silent: we can't prove the dep is missing without a
 //!    manifest to compare against, so absence is not an error.
@@ -175,6 +177,11 @@ fn load_package_deps(manifest: &Path) -> Option<HashSet<String>> {
         "devDependencies",
         "peerDependencies",
         "optionalDependencies",
+        // `engines` keys name host runtimes whose APIs are importable as
+        // bare specifiers without appearing in the dep sections — e.g.
+        // VSCode extensions declare `engines.vscode` and then
+        // `import vscode from 'vscode'`. Treat keys as valid package names.
+        "engines",
     ] {
         if let Some(obj) = value.get(section).and_then(|v| v.as_object()) {
             for key in obj.keys() {
@@ -498,5 +505,38 @@ mod tests {
         assert_eq!(root_package_name("@scope/pkg"), "@scope/pkg");
         assert_eq!(root_package_name("react-dom/client"), "react-dom");
         assert_eq!(root_package_name("react"), "react");
+    }
+
+    #[test]
+    fn allows_engines_vscode() {
+        // VSCode extensions: engines.vscode implies `import vscode from 'vscode'`.
+        let (_d, diags) = run_in_project(
+            Some(r#"{ "engines": { "vscode": "^1.85.0" } }"#),
+            None,
+            "import vscode from 'vscode';",
+        );
+        assert!(diags.is_empty(), "expected no diagnostics, got {diags:?}");
+    }
+
+    #[test]
+    fn allows_engines_electron() {
+        // Same pattern with a different host runtime.
+        let (_d, diags) = run_in_project(
+            Some(r#"{ "engines": { "electron": "^28.0.0" } }"#),
+            None,
+            "import { app } from 'electron';",
+        );
+        assert!(diags.is_empty(), "expected no diagnostics, got {diags:?}");
+    }
+
+    #[test]
+    fn still_flags_unlisted_bare_import_with_only_engines() {
+        // engines.vscode does NOT whitelist arbitrary imports — only 'vscode' itself.
+        let (_d, diags) = run_in_project(
+            Some(r#"{ "engines": { "vscode": "^1.85.0" } }"#),
+            None,
+            "import x from 'foo';",
+        );
+        assert_eq!(diags.len(), 1);
     }
 }
