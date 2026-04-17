@@ -27,28 +27,33 @@ use std::fmt::Write as _;
 /// `path:line:col: error [rule-id] message` averages ~120 bytes in practice.
 const BYTES_PER_LINE_HINT: usize = 120;
 
+/// Appends one diagnostic as an eslint-like single line. Shared between
+/// `format_eslint` (the public piped/CI formatter) and the pretty renderer's
+/// unreadable-file fallback path so both wire formats stay byte-identical.
+pub(super) fn write_eslint_line(out: &mut String, d: &Diagnostic) {
+    let severity = match d.severity {
+        Severity::Error => "error",
+        Severity::Warning => "warning",
+    };
+    // Writing to a String via fmt::Write is infallible.
+    writeln!(
+        out,
+        "{}:{}:{}: {} [{}] {}",
+        d.path.display(),
+        d.line,
+        d.column,
+        severity,
+        d.rule_id,
+        d.message,
+    )
+    .expect("fmt::Write into String is infallible");
+}
+
 /// Format diagnostics as ESLint-like single-line output.
 pub fn format_eslint(diagnostics: &[Diagnostic]) -> String {
     let mut out = String::with_capacity(diagnostics.len() * BYTES_PER_LINE_HINT);
     for diag in diagnostics {
-        let severity = match diag.severity {
-            Severity::Error => "error",
-            Severity::Warning => "warning",
-        };
-        // writeln! writes directly into `out` without an intermediate String alloc.
-        // unwrap is infallible here — writing to a String never fails.
-        // comply-ignore: rust-no-unwrap — String::write_fmt is infallible.
-        writeln!(
-            out,
-            "{}:{}:{}: {} [{}] {}",
-            diag.path.display(),
-            diag.line,
-            diag.column,
-            severity,
-            diag.rule_id,
-            diag.message,
-        )
-        .expect("writing to a String never fails");
+        write_eslint_line(&mut out, diag);
     }
     out
 }

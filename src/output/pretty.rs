@@ -16,7 +16,7 @@ use crate::rules::meta::RuleMeta;
 use crate::rules::meta_registry;
 use miette::{GraphicalReportHandler, GraphicalTheme, LabeledSpan, NamedSource, SourceSpan};
 use std::collections::BTreeMap;
-use std::fmt::Write as _;
+use std::sync::Arc;
 
 use super::span_resolver::resolve_line_span;
 
@@ -42,21 +42,22 @@ pub fn render_pretty(diagnostics: &[Diagnostic]) -> String {
             Err(_) => {
                 // File unreadable — fall back to eslint line per diagnostic.
                 for d in &diags {
-                    append_eslint_line(&mut out, d);
+                    super::write_eslint_line(&mut out, d);
                 }
                 continue;
             }
         };
+        let source_arc = Arc::new(source_text);
 
         for d in diags {
             let span_pair = d
                 .span
-                .or_else(|| resolve_line_span(&source_text, d.line, d.column))
+                .or_else(|| resolve_line_span(source_arc.as_str(), d.line, d.column))
                 .unwrap_or((0, 0));
             let md = MietteDiag {
                 diag: d,
                 meta: meta_registry::lookup(&d.rule_id),
-                source: NamedSource::new(path.display().to_string(), source_text.clone()),
+                source: NamedSource::new(path.display().to_string(), Arc::clone(&source_arc)),
                 span: SourceSpan::new(span_pair.0.into(), span_pair.1),
             };
             // Writing into a String never fails; `expect` here is safe.
@@ -70,32 +71,13 @@ pub fn render_pretty(diagnostics: &[Diagnostic]) -> String {
     out
 }
 
-fn append_eslint_line(out: &mut String, d: &Diagnostic) {
-    let sev = match d.severity {
-        Severity::Error => "error",
-        Severity::Warning => "warning",
-    };
-    // Writing to a String is infallible.
-    let _ = writeln!(
-        out,
-        "{}:{}:{}: {} [{}] {}",
-        d.path.display(),
-        d.line,
-        d.column,
-        sev,
-        d.rule_id,
-        d.message,
-    );
-}
-
 // Thin wrapper so we can hand one Diagnostic at a time to miette's
-// GraphicalReportHandler. Built per-diagnostic; NamedSource owns a clone of
-// the file's source text (unavoidable: miette's SourceCode trait needs owned
-// data per diagnostic).
+// GraphicalReportHandler.
+// One MietteDiag per diagnostic; the shared Arc<String> makes the source handle cheap to copy.
 struct MietteDiag<'a> {
     diag: &'a Diagnostic,
     meta: Option<RuleMeta>,
-    source: NamedSource<String>,
+    source: NamedSource<Arc<String>>,
     span: SourceSpan,
 }
 
@@ -117,7 +99,7 @@ impl std::error::Error for MietteDiag<'_> {}
 
 impl miette::Diagnostic for MietteDiag<'_> {
     fn code<'b>(&'b self) -> Option<Box<dyn std::fmt::Display + 'b>> {
-        Some(Box::new(self.diag.rule_id.clone()))
+        Some(Box::new(self.diag.rule_id.as_str()))
     }
 
     fn severity(&self) -> Option<miette::Severity> {
@@ -143,9 +125,10 @@ impl miette::Diagnostic for MietteDiag<'_> {
         Some(&self.source)
     }
 
+    // Label text is omitted — miette draws the message as the error header already; a label would repeat it next to the caret.
     fn labels(&self) -> Option<Box<dyn Iterator<Item = LabeledSpan> + '_>> {
         Some(Box::new(std::iter::once(LabeledSpan::new_with_span(
-            Some(self.diag.message.clone()),
+            None,
             self.span,
         ))))
     }
