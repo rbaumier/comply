@@ -824,8 +824,8 @@ pub fn collect_clippy_bindings() -> Vec<(&'static str, &'static RuleMeta, Severi
 /// All registered rules — both the custom ones and the oxlint-delegated ones.
 pub fn all_rule_defs() -> Vec<RuleDef> {
     let mut rules = vec![
-        max_file_lines::register(),
-        max_function_lines::register(),
+        // max_file_lines::register(), // We don't want this rule do we?
+        // max_function_lines::register(), // We don't want this rule do we?
         no_throw::register(),
         no_nested_ternary::register(),
         banned_identifiers::register(),
@@ -1155,7 +1155,43 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         regex_no_stateful_global::register(),
         regex_no_unused_groups::register(),
         regex_prefer_char_class::register(),
-        regex_prefer_quantifier::register(),
+        // @TODO
+        //         /Users/rbaumier/www/diff-review
+        // ❯ ~/www/comply/target/release/comply
+
+        // thread '<unnamed>' (63760245) panicked at src/rules/regex_prefer_quantifier/text.rs:47:33:
+        // byte index 43 is not a char boundary; it is inside 'é' (bytes 42..44) of `* REVIEW: les boutons sont tout le temps déclarés, on ne peut pas utiliser le composant Button ? *`
+        // note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+        // thread '<unnamed>' (63760245) panicked at src/rules/regex_prefer_quantifier/text.rs:47:33:
+        // byte index 46 is not a char boundary; it is inside '—' (bytes 45..48) of `** Whitelist of languages supported by Shiki — prevents loading arbitrary grammars *`
+
+        // thread '<unnamed>' (63760242) panicked at src/rules/regex_prefer_quantifier/text.rs:47:33:
+        // byte index 46 is not a char boundary; it is inside '—' (bytes 45..48) of `** Create a user with an active organization — ready for org-scoped operations. *`
+
+        // thread '<unnamed>' (63760247) panicked at src/rules/regex_prefer_quantifier/text.rs:47:33:
+        // byte index 24 is not a char boundary; it is inside '—' (bytes 23..26) of `** Service return type — dates are Date objects, Hono serializes to ISO strings *`
+
+        // thread '<unnamed>' (63760242) panicked at src/rules/regex_prefer_quantifier/text.rs:47:33:
+        // byte index 11 is not a char boundary; it is inside '—' (bytes 10..13) of `** DB row — `created_at` is a Date from Drizzle, API schema uses ISO string *`
+        // ❯ ~/www/comply/target/release/comply src
+
+        // thread '<unnamed>' (63760600) panicked at src/rules/regex_prefer_quantifier/text.rs:47:33:
+        // byte index 43 is not a char boundary; it is inside 'é' (bytes 42..44) of `* REVIEW: les boutons sont tout le temps déclarés, on ne peut pas utiliser le composant Button ? *`
+        // note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+        // thread '<unnamed>' (63760600) panicked at src/rules/regex_prefer_quantifier/text.rs:47:33:
+        // byte index 46 is not a char boundary; it is inside '—' (bytes 45..48) of `** Whitelist of languages supported by Shiki — prevents loading arbitrary grammars *`
+
+        // thread '<unnamed>' (63760602) panicked at src/rules/regex_prefer_quantifier/text.rs:47:33:
+        // byte index 11 is not a char boundary; it is inside '—' (bytes 10..13) of `** DB row — `created_at` is a Date from Drizzle, API schema uses ISO string *`
+
+        // thread '<unnamed>' (63760602) panicked at src/rules/regex_prefer_quantifier/text.rs:47:33:
+        // byte index 24 is not a char boundary; it is inside '—' (bytes 23..26) of `** Service return type — dates are Date objects, Hono serializes to ISO strings *`
+
+        // thread '<unnamed>' (63760595) panicked at src/rules/regex_prefer_quantifier/text.rs:47:33:
+        // byte index 46 is not a char boundary; it is inside '—' (bytes 45..48) of `** Create a user with an active organization — ready for org-scoped operations. *`
+        // regex_prefer_quantifier::register(),
         regex_use_unicode_flag::register(),
         regex_no_octal::register(),
         regex_no_escape_backspace::register(),
@@ -1348,7 +1384,7 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         // if (val - 1.0).abs() < f64::EPSILON {
         // ET
         // format!("{:>7.1}ms", d.as_secs_f64() * 1000.0)
-        no_zero_fractions::register(),
+        // no_zero_fractions::register(),
         number_literal_case::register(),
         numeric_separators_style::register(),
         prefer_add_event_listener::register(),

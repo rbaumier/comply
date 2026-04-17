@@ -392,3 +392,8 @@ todo-needs-issue-link a l'air pété
 ---
 
 no-inconsistent-returns a l'air pété
+
+---
+
+https://news.ycombinator.com/item?id=47673171
+https://github.com/etechlead/token-map
