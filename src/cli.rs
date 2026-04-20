@@ -40,6 +40,14 @@ pub struct Cli {
     #[arg(long, num_args = 2)]
     pub range: Option<Vec<String>>,
 
+    /// Restrict reported diagnostics to lines that actually changed in the
+    /// selected scan range. Requires one of `--working-tree`, `--staged`,
+    /// `--last-commit`, `--commit`, or `--range`. Rules still run on whole
+    /// files (context matters), but only findings on added / modified lines
+    /// are reported — CI-friendly "don't complain about pre-existing tech debt".
+    #[arg(long, requires = "scan_mode")]
+    pub diff_only: bool,
+
     /// Output diagnostics as JSON (for editors and CI).
     ///
     /// Field is named `should_emit_json` so it reads as a predicate; the CLI
@@ -178,6 +186,7 @@ mod tests {
             last_commit: false,
             commit: None,
             range: None,
+            diff_only: false,
             should_emit_json: false,
             fix: false,
             with_llm: false,

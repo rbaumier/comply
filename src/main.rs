@@ -16,6 +16,7 @@
 
 mod cargo_modules;
 mod cargo_shear;
+mod changed_lines;
 mod cli;
 mod clippy;
 mod config;
@@ -252,7 +253,15 @@ fn lint_project(cli: &Cli) -> Result<bool> {
 
     let t_post = Instant::now();
     let after_overrides = apply_config_filters(diagnostics, &config);
-    let after_suppressions = ignore_comments::apply_to_all(after_overrides, &discovered);
+    let mut after_suppressions = ignore_comments::apply_to_all(after_overrides, &discovered);
+    if cli.diff_only {
+        let changed = changed_lines::changed_lines(&mode)?;
+        let repo_root = changed_lines::git_repo_root().unwrap_or_default();
+        for diag in &mut after_suppressions {
+            diag.path = changed_lines::normalise_path(&diag.path, &repo_root);
+        }
+        changed_lines::retain_in_diff(&mut after_suppressions, &changed);
+    }
     timings.post = t_post.elapsed();
 
     if cli.should_emit_json {
