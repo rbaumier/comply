@@ -131,6 +131,7 @@ pub mod rust_no_pub_use_glob;
 pub mod rust_no_static_mut;
 pub mod rust_no_unwrap;
 pub mod rust_no_unwrap_in_from_impl;
+pub mod rust_prefer_unwrap_or_explicit;
 pub mod rust_ptr_arg;
 pub mod rust_pub_enum_without_non_exhaustive;
 pub mod rust_rc_mutex;
@@ -1574,6 +1575,7 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         layer_import_boundary::register(),
         // v2.12 — rules derived from code-review feedback.
         rust_no_as_numeric_cast::register(),
+        rust_prefer_unwrap_or_explicit::register(),
     ];
     rules.extend(delegated::register_all());
     rules
