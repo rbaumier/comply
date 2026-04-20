@@ -20,6 +20,126 @@ use std::sync::Arc;
 
 use super::span_resolver::resolve_line_span;
 
+/// Insert a space between miette's leading box-drawing arc (`╭─`) and
+/// the `[path:line:col]` label that follows, so iTerm / wezterm /
+/// kitty Smart Selection doesn't glue the arc to the path on
+/// cmd+click. Miette emits the two characters adjacent, producing
+/// `     ╭─[src/foo.ts:12:3]` — iTerm picks up `╭─[` as part of the
+/// path and the resolution fails.
+///
+/// Tolerant of ANSI color escapes between the arc and the bracket:
+/// miette may emit `\x1b[...m` styling, so the helper walks the
+/// string and only inserts the space when the next non-ANSI char
+/// after `─` is `[`.
+#[must_use]
+fn unstick_path_from_box_drawing(input: &str) -> String {
+    // Fast-path: no arc / tee character → nothing to rewrite.
+    if !input.contains('\u{256D}') && !input.contains('\u{251C}') {
+        return input.to_string();
+    }
+    let mut out = String::with_capacity(input.len() + 8);
+    let chars: Vec<char> = input.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        out.push(c);
+        // Looking for `╭─` or `├─` followed by (optional ANSI SGR)
+        // followed by `[`. `╭` = U+256D, `─` = U+2500, `├` = U+251C.
+        if (c == '\u{256D}' || c == '\u{251C}') && chars.get(i + 1) == Some(&'\u{2500}') {
+            // Copy the `─`.
+            out.push('\u{2500}');
+            i += 2;
+            // Skip any ANSI SGR sequences: `ESC [ ... m`.
+            while let Some(window) = ansi_sgr_len(&chars[i..]) {
+                for k in 0..window {
+                    out.push(chars[i + k]);
+                }
+                i += window;
+            }
+            // If the next visible char is `[`, insert a space.
+            if chars.get(i) == Some(&'[') {
+                out.push(' ');
+            }
+            continue;
+        }
+        i += 1;
+    }
+    out
+}
+
+/// Return the length of an ANSI SGR escape sequence (`ESC [ ... m`)
+/// starting at the head of `chars`, or `None` if `chars` doesn't
+/// start with one. Kept permissive — accepts any chars between `[`
+/// and the terminating letter, which covers every SGR form miette
+/// emits (colors, bold, reset).
+fn ansi_sgr_len(chars: &[char]) -> Option<usize> {
+    if chars.first() != Some(&'\u{001B}') || chars.get(1) != Some(&'[') {
+        return None;
+    }
+    // Walk until the terminating letter (CSI final byte is any
+    // char in 0x40..=0x7E; SGR uses `m`).
+    for (k, c) in chars.iter().enumerate().skip(2) {
+        if c.is_ascii_alphabetic() {
+            return Some(k + 1);
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod unstick_tests {
+    use super::unstick_path_from_box_drawing;
+
+    #[test]
+    fn inserts_space_between_arc_and_bracket() {
+        let input = "   \u{256D}\u{2500}[src/foo.ts:1:1]";
+        let got = unstick_path_from_box_drawing(input);
+        assert_eq!(got, "   \u{256D}\u{2500} [src/foo.ts:1:1]");
+    }
+
+    #[test]
+    fn handles_tee_junction_too() {
+        // The `├─` variant appears in some miette layouts.
+        let input = "\u{251C}\u{2500}[src/foo.ts:1:1]";
+        let got = unstick_path_from_box_drawing(input);
+        assert_eq!(got, "\u{251C}\u{2500} [src/foo.ts:1:1]");
+    }
+
+    #[test]
+    fn tolerates_ansi_sgr_between_arc_and_bracket() {
+        // miette wraps the `[path:line:col]` in a cyan-bold-underline
+        // SGR. The space must go BEFORE the ANSI so the bracket stays
+        // adjacent to its styling.
+        let input = "\u{256D}\u{2500}\x1b[36;1;4m[src/foo.ts:1:1]\x1b[0m";
+        let got = unstick_path_from_box_drawing(input);
+        assert_eq!(
+            got,
+            "\u{256D}\u{2500}\x1b[36;1;4m [src/foo.ts:1:1]\x1b[0m"
+        );
+    }
+
+    #[test]
+    fn leaves_unrelated_input_unchanged() {
+        let input = "no box drawing here";
+        assert_eq!(unstick_path_from_box_drawing(input), input);
+    }
+
+    #[test]
+    fn does_not_touch_arc_without_following_bracket() {
+        // The closing arc `╰────` ends the frame and isn't followed
+        // by a path — we must not alter it.
+        let input = "   \u{2570}\u{2500}\u{2500}\u{2500}\u{2500}";
+        assert_eq!(unstick_path_from_box_drawing(input), input);
+    }
+
+    #[test]
+    fn handles_multiple_frames_in_one_buffer() {
+        let input = "\u{256D}\u{2500}[a]\ncontext\n\u{256D}\u{2500}[b]";
+        let got = unstick_path_from_box_drawing(input);
+        assert_eq!(got, "\u{256D}\u{2500} [a]\ncontext\n\u{256D}\u{2500} [b]");
+    }
+}
+
 /// Render a slice of diagnostics in human-pretty format using miette. Groups
 /// by file path so each file's source is read exactly once. Diagnostics whose
 /// file can't be read fall back to the eslint-like single-line form for that
@@ -61,9 +181,11 @@ pub fn render_pretty(diagnostics: &[Diagnostic]) -> String {
                 span: SourceSpan::new(span_pair.0.into(), span_pair.1),
             };
             // Writing into a String never fails; `expect` here is safe.
+            let mut frame = String::new();
             handler
-                .render_report(&mut out, &md)
+                .render_report(&mut frame, &md)
                 .expect("render_report into String cannot fail");
+            out.push_str(&unstick_path_from_box_drawing(&frame));
             out.push('\n');
         }
     }
