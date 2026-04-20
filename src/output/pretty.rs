@@ -27,7 +27,15 @@ use super::span_resolver::resolve_line_span;
 #[must_use]
 pub fn render_pretty(diagnostics: &[Diagnostic]) -> String {
     let mut out = String::new();
-    let handler = GraphicalReportHandler::new().with_theme(GraphicalTheme::unicode());
+    // `without_primary_span_start()` stops miette from appending its own
+    // `:{line}:{col}` suffix to the header label. We then own the whole
+    // content between the brackets via `NamedSource.name()` — letting us
+    // pad with spaces on both sides (`[ path:line:col ]`) so iTerm /
+    // wezterm / kitty Smart Selection doesn't pick up the adjacent
+    // `╭─` arc or the `]` when cmd+click resolves the path.
+    let handler = GraphicalReportHandler::new()
+        .with_theme(GraphicalTheme::unicode())
+        .without_primary_span_start();
 
     // BTreeMap → stable, alphabetical file ordering for reproducible output.
     // Within a file we preserve the caller's original order.
@@ -54,10 +62,15 @@ pub fn render_pretty(diagnostics: &[Diagnostic]) -> String {
                 .span
                 .or_else(|| resolve_line_span(source_arc.as_str(), d.line, d.column))
                 .unwrap_or((0, 0));
+            // Padding on both sides isolates `path:line:col` from the
+            // surrounding `[`, `]`, and leading `╭─` arc, so Smart
+            // Selection in iTerm / wezterm / kitty extracts only the
+            // path on cmd+click.
+            let name = format!(" {}:{}:{} ", path.display(), d.line, d.column);
             let md = MietteDiag {
                 diag: d,
                 meta: meta_registry::lookup(&d.rule_id),
-                source: NamedSource::new(path.display().to_string(), Arc::clone(&source_arc)),
+                source: NamedSource::new(name, Arc::clone(&source_arc)),
                 span: SourceSpan::new(span_pair.0.into(), span_pair.1),
             };
             // Writing into a String never fails; `expect` here is safe.
