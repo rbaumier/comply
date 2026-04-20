@@ -110,6 +110,7 @@ pub mod rust_await_holding_lock;
 pub mod rust_block_on_in_async;
 pub mod rust_builder_without_must_use;
 pub mod rust_constants_top_of_file;
+pub mod rust_duration_over_integer_with_unit;
 pub mod rust_explicit_enum_match_arms;
 pub mod rust_explicit_iter_loop;
 pub mod regex_ast;
@@ -1580,6 +1581,7 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         rust_prefer_unwrap_or_explicit::register(),
         rust_constants_top_of_file::register(),
         rust_explicit_enum_match_arms::register(),
+        rust_duration_over_integer_with_unit::register(),
     ];
     rules.extend(delegated::register_all());
     rules
