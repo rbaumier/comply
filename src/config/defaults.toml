@@ -1,0 +1,59 @@
+# comply — default configuration.
+#
+# This file is the single source of truth for every built-in threshold.
+# It is embedded in the binary at compile time and merged underneath
+# the project's `comply.toml`. Override any knob by declaring the same
+# `[rules.<id>] <key> = <value>` entry in your own `comply.toml`.
+#
+# `comply config print` writes this exact file back to stdout, so
+# `comply config init > comply.toml` seeds a project with the same
+# defaults, comments included.
+
+# ---------------------------------------------------------------
+# File / function size limits.
+# ---------------------------------------------------------------
+
+[rules.max-file-lines]
+max = 200
+
+[rules.max-function-lines]
+max = 30
+
+# ---------------------------------------------------------------
+# Readability heuristics.
+# ---------------------------------------------------------------
+
+[rules.no-multi-op-oneliner]
+min_ops = 6
+min_line_length = 80
+
+[rules.prefer-switch-over-chained-if]
+min_arms = 4
+
+# ---------------------------------------------------------------
+# Rust-specific thresholds.
+# ---------------------------------------------------------------
+
+[rules.rust-no-large-tuple-return]
+max_elements = 3
+
+# ---------------------------------------------------------------
+# Cross-language thresholds — these propagate into the generated
+# oxlintrc + clippy flags, so the same authoritative number flows
+# into every linter comply orchestrates.
+# ---------------------------------------------------------------
+
+[rules.max-params]
+max = 3
+
+[rules.max-depth]
+max = 3
+
+[rules.id-length]
+min = 2
+# Uncomment to allowlist identifiers that are conventional at <2 chars:
+#   `t` for react-i18next's useTranslation()
+#   `i`, `j` for tight loop indices
+#   `x`, `y` for coordinates
+# exceptions = ["t", "i", "j", "x", "y"]
+# exception_patterns = ["^[A-Z]$"]

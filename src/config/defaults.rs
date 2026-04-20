@@ -1,55 +1,47 @@
-//! Hardcoded default thresholds for every rule that exposes one.
+//! Default configuration — loaded from the embedded `defaults.toml`.
 //!
-//! These are the values used when neither `comply.toml` nor a CLI flag
-//! overrides the rule. Keeping them in one file makes it trivial to:
-//!   1. generate the default `comply.toml` via `comply config init`
-//!   2. unit-test that rules and config stay in sync
-//!   3. document every knob in one place
+//! The file is the single source of truth for every built-in threshold
+//! (max lines, max depth, id-length min, etc.). Keeping it as TOML
+//! means:
+//!
+//! 1. Adding a new knob = one TOML line, zero Rust changes.
+//! 2. `comply config print` writes the file back verbatim, so the
+//!    documentation-as-code stays in sync.
+//! 3. The parser path for defaults is exactly the parser path for
+//!    user config — if `defaults.toml` is invalid, the build test
+//!    catches it rather than an end-user install.
 
-use std::collections::HashMap;
+use super::schema::ComplyToml;
 
-use super::schema::{ComplyToml, RuleConfig};
+const DEFAULTS_TOML: &str = include_str!("defaults.toml");
 
-/// Build the default config — every rule with a threshold gets its
-/// canonical value here. Adding a new threshold-rule means appending
-/// one entry to this function and reading it via `Config::threshold`
-/// from inside the rule's check.
+/// Parse the embedded `defaults.toml`. A panic here means the TOML
+/// shipped with the binary is malformed, which the `parses_cleanly`
+/// test catches at build time.
+#[must_use]
 pub fn build_default_config() -> ComplyToml {
-    let mut rules: HashMap<String, RuleConfig> = HashMap::new();
-
-    insert_threshold(&mut rules, "max-file-lines", "max", 200);
-    insert_threshold(&mut rules, "max-function-lines", "max", 30);
-    insert_threshold(&mut rules, "no-multi-op-oneliner", "min_ops", 6);
-    insert_threshold(&mut rules, "no-multi-op-oneliner", "min_line_length", 80);
-    insert_threshold(&mut rules, "prefer-switch-over-chained-if", "min_arms", 4);
-    insert_threshold(&mut rules, "rust-no-large-tuple-return", "max_elements", 3);
-
-    // Cross-language thresholds that propagate into the oxlint/clippy
-    // command line — kept here so the same authoritative number flows
-    // into both the generated oxlintrc and the `-W` flag list.
-    insert_threshold(&mut rules, "max-params", "max", 3);
-    insert_threshold(&mut rules, "max-depth", "max", 3);
-    insert_threshold(&mut rules, "id-length", "min", 2);
-
-    ComplyToml {
-        rules,
-        overrides: HashMap::new(),
-    }
+    toml::from_str(DEFAULTS_TOML)
+        .expect("embedded defaults.toml must parse — see defaults.rs::parses_cleanly") // comply-ignore: rust-no-unwrap — compile-time-checked constant.
 }
 
-/// Insert a `<key> = <value>` knob into the rule's `extra` map. Creates
-/// the rule's entry if it doesn't exist yet, so multiple thresholds
-/// for the same rule (e.g. `min_ops` + `min_line_length`) compose.
-fn insert_threshold(rules: &mut HashMap<String, RuleConfig>, rule_id: &str, key: &str, value: i64) {
-    let entry = rules.entry(rule_id.to_string()).or_default();
-    entry
-        .extra
-        .insert(key.to_string(), toml::Value::Integer(value));
+/// Raw text of the embedded defaults — used by `comply config print`
+/// to dump the canonical `comply.toml` template complete with
+/// comments.
+#[must_use]
+pub fn default_toml_text() -> &'static str {
+    DEFAULTS_TOML
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_cleanly() {
+        // If this fails, defaults.toml has a syntax error. Fix the
+        // TOML rather than the test.
+        let _ = build_default_config();
+    }
 
     #[test]
     fn defaults_include_max_function_lines() {
@@ -65,7 +57,7 @@ mod tests {
     #[test]
     fn defaults_include_no_multi_op_oneliner_two_thresholds() {
         let cfg = build_default_config();
-        let rule = cfg.rules.get("no-multi-op-oneliner").unwrap();
+        let rule = cfg.rules.get("no-multi-op-oneliner").expect("rule present");
         assert_eq!(
             rule.extra.get("min_ops").and_then(toml::Value::as_integer),
             Some(6)
@@ -76,5 +68,16 @@ mod tests {
                 .and_then(toml::Value::as_integer),
             Some(80)
         );
+    }
+
+    #[test]
+    fn defaults_include_id_length_min() {
+        let cfg = build_default_config();
+        let min = cfg
+            .rules
+            .get("id-length")
+            .and_then(|r| r.extra.get("min"))
+            .and_then(toml::Value::as_integer);
+        assert_eq!(min, Some(2));
     }
 }

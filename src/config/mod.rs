@@ -81,14 +81,14 @@ impl Config {
         Self::from_raw(merged)
     }
 
-    /// Return the resolved config as TOML text — used by
+    /// Return the embedded `defaults.toml` verbatim — used by
     /// `comply config init` to seed a project's `comply.toml`.
+    /// Returning the raw file preserves comments, section ordering,
+    /// and the commented-out examples (e.g. `id-length` exceptions)
+    /// that a round-trip through `toml::to_string_pretty` would erase.
     #[must_use]
     pub fn print_default_toml() -> String {
-        let cfg = defaults::build_default_config();
-        toml::to_string_pretty(&cfg)
-            .map(|body| format!("# comply.toml — generated defaults\n{body}"))
-            .unwrap_or_else(|_| "# failed to render defaults\n".to_string())
+        defaults::default_toml_text().to_string()
     }
 
     /// True if `rule_id` is enabled for `file_path`. Combines:
