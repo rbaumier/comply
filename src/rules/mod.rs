@@ -422,6 +422,7 @@ pub mod import_no_commonjs;
 pub mod import_no_dynamic_require;
 pub mod import_no_empty_named_blocks;
 pub mod import_no_webpack_loader_syntax;
+pub mod id_length;
 pub mod imports_first;
 pub mod max_dependencies;
 pub mod newline_after_import;
@@ -1582,6 +1583,9 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         rust_explicit_enum_match_arms::register(),
         rust_duration_over_integer_with_unit::register(),
         sql_index_needs_rationale_comment::register(),
+        // v2.13 — native id-length (replaces oxlint + clippy delegation)
+        // so the diagnostic names the offending identifier.
+        id_length::register(),
     ];
     rules.extend(delegated::register_all());
     rules

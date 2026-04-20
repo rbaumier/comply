@@ -47,9 +47,7 @@ pub fn register_all() -> Vec<RuleDef> {
             Severity::Error,
             "Prefer guard clauses over else-after-return.",
             "Remove the `else` after a `return` and de-indent the trailing \
-             block. Early returns keep the happy path at the leftmost level. \
-             Rust: enabled via `clippy::redundant_else` (also see \
-             `clippy::needless_return`).",
+             block. Early returns keep the happy path at the leftmost level.",
         ),
         entry_with_clippy(
             "max-params",
@@ -59,8 +57,7 @@ pub fn register_all() -> Vec<RuleDef> {
             "Functions should take at most 3 positional arguments.",
             "If you need more than 3 parameters, pack them into an options \
              object — named fields carry intent where positional arguments \
-             don't. Rust: enable `clippy::too_many_arguments` and set \
-             `too-many-arguments-threshold = 3` in `clippy.toml`.",
+             don't.",
         ),
         entry_with_clippy(
             "max-depth",
@@ -69,9 +66,7 @@ pub fn register_all() -> Vec<RuleDef> {
             Severity::Error,
             "Nesting beyond 2 levels is a smell.",
             "Flatten via early return, extract a helper, or invert the \
-             condition. Deep nesting hides the happy path. Rust: enable \
-             `clippy::excessive_nesting` (restriction lint) and set \
-             `excessive-nesting-threshold = 3` in `clippy.toml`.",
+             condition. Deep nesting hides the happy path.",
         ),
         entry(
             "no-useless-catch",
@@ -82,16 +77,10 @@ pub fn register_all() -> Vec<RuleDef> {
              — the error propagates identically without the ceremony.",
         ),
         // --- v1.1 additions ---
-        entry_with_clippy(
-            "id-length",
-            "id-length",
-            "clippy::min_ident_chars",
-            Severity::Error,
-            "Single-letter identifiers hide intent.",
-            "Rename to a full word — `createdAt` not `d`, `userCount` not `n`. \
-             Exceptions: loop indices `i`, `j` inside tight for-loops. \
-             Rust: enable `clippy::min_ident_chars` in your crate.",
-        ),
+        // `id-length` is handled natively — see `src/rules/id_length/`.
+        // The previous oxlint + clippy delegation hid the offending
+        // identifier behind a generic message; the native version
+        // names it.
         entry(
             "no-await-in-loop",
             "no-await-in-loop",

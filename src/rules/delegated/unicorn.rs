@@ -19,9 +19,7 @@ pub fn register_all() -> Vec<RuleDef> {
             "clippy::needless_for_each",
             "Prefer `for...of` loops over `Array.forEach`.",
             "Replace `.forEach(x => ...)` with `for (const x of arr)`. \
-             forEach can't break/continue and confuses async flows. Rust: \
-             `clippy::needless_for_each` flags `.iter().for_each(|x| ...)` \
-             where a plain `for x in iter` is clearer.",
+             forEach can't break/continue and confuses async flows.",
         ),
         entry_with_clippy(
             "unicorn/prefer-array-flat-map",
@@ -29,8 +27,7 @@ pub fn register_all() -> Vec<RuleDef> {
             "clippy::map_flatten",
             "Use `flatMap` instead of `map().flat()`.",
             "Chain `.flatMap(...)` once instead of `.map(...).flat()` — \
-             one pass instead of two. Rust: `clippy::map_flatten` flags \
-             `.map(..).flatten()` and suggests `.flat_map(..)`.",
+             one pass instead of two.",
         ),
     ]
 }

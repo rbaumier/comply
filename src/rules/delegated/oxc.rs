@@ -24,9 +24,7 @@ pub fn register_all() -> Vec<RuleDef> {
             "oxc/misrefactored-assign-op",
             "clippy::misrefactored_assign_op",
             "Assignment operator is misrefactored — verify the operand \
-             order. `x -= y` is not the same as `x = y - x`. Rust: \
-             enable `clippy::misrefactored_assign_op` (this oxlint rule \
-             is literally a port of the clippy original).",
+             order. `x -= y` is not the same as `x = y - x`.",
         ),
     ]
 }

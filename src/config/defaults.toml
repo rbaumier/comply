@@ -53,7 +53,6 @@ max = 3
 min = 2
 # Uncomment to allowlist identifiers that are conventional at <2 chars:
 #   `t` for react-i18next's useTranslation()
-#   `i`, `j` for tight loop indices
-#   `x`, `y` for coordinates
-exceptions = ["t"]
+#   `T` for typescript generics
+exceptions = ["t", "T"]
 # exception_patterns = ["^[A-Z]$"]
