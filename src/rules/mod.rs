@@ -349,7 +349,6 @@ pub mod prefer_default_last;
 pub mod prefer_destructuring_assignment;
 pub mod prefer_object_literal;
 pub mod prefer_promise_shorthand;
-pub mod prefer_read_only_props;
 pub mod prefer_regexp_exec;
 pub mod prefer_type_guard;
 pub mod public_static_readonly;
@@ -1082,7 +1081,6 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         prefer_default_last::register(),
         prefer_object_literal::register(),
         prefer_promise_shorthand::register(),
-        prefer_read_only_props::register(),
         prefer_type_guard::register(),
         public_static_readonly::register(),
         redundant_type_aliases::register(),

@@ -113,7 +113,6 @@ Grouped by category. Prioritize within each group.
 - [ ] no-hook-setter-in-body — React's useState hook should not be used directly in the render function or body of a component
 - [ ] no-uniq-key — JSX list components keys should match up between renders
 - [ ] no-useless-react-setstate — React state setter function should not be called with its matching state variable
-- [ ] prefer-read-only-props — React props should be read-only
 
 ## typescript (9)
 
