@@ -55,5 +55,5 @@ min = 2
 #   `t` for react-i18next's useTranslation()
 #   `i`, `j` for tight loop indices
 #   `x`, `y` for coordinates
-# exceptions = ["t", "i", "j", "x", "y"]
+exceptions = ["t"]
 # exception_patterns = ["^[A-Z]$"]

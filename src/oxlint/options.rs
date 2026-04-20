@@ -73,10 +73,13 @@ mod tests {
     }
 
     #[test]
-    fn id_length_default_emits_min_only() {
+    fn id_length_default_includes_min_and_t_exception() {
+        // Defaults live in `src/config/defaults.toml`. They ship with
+        // `min = 2` and `exceptions = ["t"]` (the react-i18next
+        // convention). If that file changes, update this test too.
         let opts = for_rule("id-length", default_static_config()).expect("id-length has options");
         assert_eq!(opts["min"], json!(2));
-        assert!(opts.get("exceptions").is_none());
+        assert_eq!(opts["exceptions"], json!(["t"]));
         assert!(opts.get("exceptionPatterns").is_none());
     }
 
