@@ -13,8 +13,9 @@
 //!   - `Config::is_rule_enabled(rule_id, file_path)` — combine global
 //!     `disabled = true` with per-glob `disable = [...]` overrides
 //!   - `Config::severity_for(rule_id)` — global severity override
-//!   - `Config::threshold(rule_id, key, fallback)` — typed threshold
-//!     accessor used by every rule that has a knob
+//!   - `Config::threshold(rule_id, key)` — typed threshold accessor
+//!     used by every rule that has a knob (panics if the key is not
+//!     declared in `src/config/defaults.toml`)
 //!   - `Config::print_default_toml()` — pretty-print the defaults so
 //!     `comply config init` can dump them to disk
 
@@ -128,19 +129,53 @@ impl Config {
         self.raw.rules.iter().map(|(k, v)| (k.as_str(), v))
     }
 
-    /// Read a numeric threshold for `rule_id`. The hardcoded `fallback`
-    /// is the value the rule should use when neither the user nor the
-    /// defaults provide one — keeping it at the call site means a rule
-    /// stays self-contained even if the config layer goes wrong.
+    /// Read a numeric threshold for `rule_id`. Panics if the key is
+    /// missing from the merged config (defaults + user) — by design,
+    /// `src/config/defaults.toml` is the single source of truth and
+    /// any rule that asks for a knob must have declared it there.
+    /// A fallback argument would silently diverge from the TOML the
+    /// day one side gets updated and the other doesn't.
     #[must_use]
-    pub fn threshold(&self, rule_id: &str, key: &str, fallback: usize) -> usize {
-        self.raw
-            .rules
-            .get(rule_id)
-            .and_then(|r| r.extra.get(key))
-            .and_then(toml::Value::as_integer)
-            .and_then(|n| usize::try_from(n).ok())
-            .unwrap_or(fallback)
+    pub fn threshold(&self, rule_id: &str, key: &str) -> usize {
+        let value = self.extra_value(rule_id, key);
+        let Some(n) = value.as_integer().and_then(|n| usize::try_from(n).ok()) else {
+            panic!(
+                "config key `[rules.\"{rule_id}\"] {key}` must be a \
+                 non-negative integer, got {value:?}"
+            );
+        };
+        n
+    }
+
+    /// Read a float-valued threshold for `rule_id`. Used by rules whose
+    /// knob is a fraction / probability (overlap ratios, confidence
+    /// thresholds) rather than a count. Integer values in TOML are
+    /// accepted and coerced (so `min_ratio = 1` behaves as `1.0`).
+    /// Panics with a clear message when the key is absent — same
+    /// contract as `threshold`: defaults.toml is authoritative.
+    #[must_use]
+    pub fn float(&self, rule_id: &str, key: &str) -> f64 {
+        let value = self.extra_value(rule_id, key);
+        if let Some(f) = value.as_float() {
+            return f;
+        }
+        if let Some(n) = value.as_integer() {
+            return n as f64;
+        }
+        panic!("config key `[rules.\"{rule_id}\"] {key}` must be a number, got {value:?}");
+    }
+
+    /// Shared lookup for `threshold` / `float`. Panics with a
+    /// uniform "missing key" message so the two public APIs don't
+    /// duplicate the same boilerplate.
+    fn extra_value(&self, rule_id: &str, key: &str) -> &toml::Value {
+        let Some(value) = self.raw.rules.get(rule_id).and_then(|r| r.extra.get(key)) else {
+            panic!(
+                "config key `[rules.\"{rule_id}\"] {key}` is missing — \
+                 add it to `src/config/defaults.toml`"
+            );
+        };
+        value
     }
 
     /// Like `threshold` but returns `None` when the key isn't configured,
@@ -330,14 +365,15 @@ mod tests {
     #[test]
     fn default_config_returns_known_thresholds() {
         let cfg = Config::default();
-        assert_eq!(cfg.threshold("max-function-lines", "max", 999), 30);
-        assert_eq!(cfg.threshold("max-file-lines", "max", 999), 200);
+        assert_eq!(cfg.threshold("max-function-lines", "max"), 30);
+        assert_eq!(cfg.threshold("max-file-lines", "max"), 200);
     }
 
     #[test]
-    fn threshold_uses_fallback_when_unknown() {
+    #[should_panic(expected = "is missing")]
+    fn threshold_panics_when_key_missing() {
         let cfg = Config::default();
-        assert_eq!(cfg.threshold("does-not-exist", "max", 42), 42);
+        let _ = cfg.threshold("does-not-exist", "max");
     }
 
     #[test]
@@ -376,9 +412,9 @@ mod tests {
         )
         .unwrap();
         let cfg = Config::load_from(tmp.path()).unwrap();
-        assert_eq!(cfg.threshold("max-function-lines", "max", 999), 80);
+        assert_eq!(cfg.threshold("max-function-lines", "max"), 80);
         // Other defaults still intact.
-        assert_eq!(cfg.threshold("max-file-lines", "max", 999), 200);
+        assert_eq!(cfg.threshold("max-file-lines", "max"), 200);
     }
 
     #[test]
@@ -443,7 +479,7 @@ mod tests {
         let cfg = Config::load_from(tmp.path()).unwrap();
         // The default for max-function-lines is 30, regardless of
         // whether we walked into a real workspace.
-        let _ = cfg.threshold("max-function-lines", "max", 30);
+        let _ = cfg.threshold("max-function-lines", "max");
     }
 
     #[test]

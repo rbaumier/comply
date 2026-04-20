@@ -9,8 +9,6 @@ fn is_test_file(path: &std::path::Path) -> bool {
     TEST_MARKERS.iter().any(|m| s.contains(m))
 }
 
-const MAX_EXPECTS: usize = 5;
-
 const TEST_FNS: &[&str] = &["test", "it"];
 
 fn is_test_call(node: tree_sitter::Node, source: &[u8]) -> bool {
@@ -70,15 +68,16 @@ crate::ast_check! { |node, source, ctx, diagnostics|
     }
     let Some(callback) = args.named_child(arg_count - 1) else { return };
 
+    let max_expects = ctx.config.threshold("playwright-max-expects", "max");
     let count = count_expects(callback, source);
-    if count > MAX_EXPECTS {
+    if count > max_expects {
         let pos = node.start_position();
         diagnostics.push(Diagnostic {
             path: ctx.path.to_path_buf(),
             line: pos.row + 1,
             column: pos.column + 1,
             rule_id: "playwright-max-expects".into(),
-            message: format!("Too many assertion calls ({count}) — maximum allowed is {MAX_EXPECTS}."),
+            message: format!("Too many assertion calls ({count}) — maximum allowed is {max_expects}."),
             severity: Severity::Warning,
             span: None,
         });

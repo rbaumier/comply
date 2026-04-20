@@ -5,8 +5,6 @@ use std::collections::HashSet;
 #[derive(Debug)]
 pub struct Check;
 
-const DEFAULT_MAX: usize = 15;
-
 /// Extract the module source from an import line.
 fn extract_import_source(line: &str) -> Option<&str> {
     let trimmed = line.trim();
@@ -27,7 +25,7 @@ fn extract_import_source(line: &str) -> Option<&str> {
 
 impl TextCheck for Check {
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
-        let max = ctx.config.threshold("max-dependencies", "max", DEFAULT_MAX);
+        let max = ctx.config.threshold("max-dependencies", "max");
 
         let mut deps: HashSet<String> = HashSet::new();
         let mut last_import_line: usize = 1;

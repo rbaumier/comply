@@ -18,18 +18,14 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::walker::walk_tree;
 
-const DEFAULT_MIN_ARMS: usize = 4;
-
 #[derive(Debug)]
 pub struct Check;
 
 impl AstCheck for Check {
     fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
-        let min_arms = ctx.config.threshold(
-            "prefer-switch-over-chained-if",
-            "min_arms",
-            DEFAULT_MIN_ARMS,
-        );
+        let min_arms = ctx
+            .config
+            .threshold("prefer-switch-over-chained-if", "min_arms");
         let mut diagnostics = Vec::new();
         walk_tree(tree, |node| {
             if node.kind() != "if_statement" {

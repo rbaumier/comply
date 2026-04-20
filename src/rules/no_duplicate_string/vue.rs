@@ -16,6 +16,10 @@ impl AstCheck for Check {
         if blocks.is_empty() {
             return Vec::new();
         }
+        let min_length = ctx.config.threshold("no-duplicate-string", "min_length");
+        let min_occurrences = ctx
+            .config
+            .threshold("no-duplicate-string", "min_occurrences");
         // Count occurrences across ALL <script> blocks of this SFC so
         // a string used in both the regular `<script>` and in
         // `<script setup>` counts as two.
@@ -42,7 +46,7 @@ impl AstCheck for Check {
                     continue;
                 };
                 let content = super::strip_string_delimiters(raw);
-                if content.chars().count() < super::MIN_STRING_LEN {
+                if content.chars().count() < min_length {
                     continue;
                 }
                 occurrences
@@ -53,10 +57,10 @@ impl AstCheck for Check {
         }
         let mut diagnostics = Vec::new();
         for (content, hits) in &occurrences {
-            if hits.len() < super::THRESHOLD {
+            if hits.len() < min_occurrences {
                 continue;
             }
-            for (block, pos) in &hits[super::THRESHOLD - 1..] {
+            for (block, pos) in &hits[min_occurrences - 1..] {
                 let file_row = pos.row + block.start_row;
                 let file_col = if pos.row == 0 {
                     pos.column + block.start_column

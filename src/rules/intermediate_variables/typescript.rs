@@ -15,7 +15,6 @@ const CALLABLE_BOUNDARIES: &[&str] = &[
     "generator_function",
     "generator_function_declaration",
 ];
-const MIN_LOGICAL_OPS_TO_FLAG: usize = 2;
 
 fn count_logical_ops(node: tree_sitter::Node, source: &[u8]) -> usize {
     let mut count = 0;
@@ -44,7 +43,8 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         return;
     }
     let Some(condition) = node.child_by_field_name("condition") else { return };
-    if count_logical_ops(condition, source) < MIN_LOGICAL_OPS_TO_FLAG {
+    let min_ops = ctx.config.threshold("intermediate-variables", "min_ops");
+    if count_logical_ops(condition, source) < min_ops {
         return;
     }
     let pos = condition.start_position();

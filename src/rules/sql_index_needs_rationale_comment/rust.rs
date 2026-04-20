@@ -19,15 +19,6 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::walker::walk_tree;
 
-/// Minimum number of whitespace-separated tokens (each >1 char) required
-/// for a `-- ...` SQL comment to count as a real rationale, as opposed to
-/// a drive-by note like `-- fix` or `-- TODO`.
-const MIN_RATIONALE_WORDS: usize = 3;
-
-/// How many lines before the `CREATE INDEX` line we scan for a rationale
-/// comment. Same line (trailing comment) also accepted.
-const LOOKBACK_LINES: usize = 3;
-
 fn create_index_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
@@ -40,6 +31,12 @@ pub struct Check;
 
 impl AstCheck for Check {
     fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
+        let min_rationale_words = ctx
+            .config
+            .threshold("sql-index-needs-rationale-comment", "min_rationale_words");
+        let lookback_lines = ctx
+            .config
+            .threshold("sql-index-needs-rationale-comment", "lookback_lines");
         let source_bytes = ctx.source.as_bytes();
         let mut diagnostics = Vec::new();
         walk_tree(tree, |node| {
@@ -63,6 +60,8 @@ impl AstCheck for Check {
                 start.row,
                 start.column + delimiter_len,
                 ctx.path,
+                min_rationale_words,
+                lookback_lines,
             ));
         });
         diagnostics
@@ -98,11 +97,17 @@ fn strip_rust_string_delimiters(raw: &str) -> &str {
 ///   are computed relative to these so the squiggle lands on the actual
 ///   `CREATE INDEX` inside the literal, not on the opening quote.
 /// - `path`: the file being linted, forwarded into each `Diagnostic`.
+/// - `min_rationale_words`: threshold for how many non-trivial tokens
+///   a `-- ...` comment must carry to count as a real rationale.
+/// - `lookback_lines`: how many lines before the `CREATE INDEX` line
+///   are scanned for an explanatory comment.
 pub(super) fn check_string_content(
     content: &str,
     node_start_line: usize,
     node_start_col: usize,
     path: &Path,
+    min_rationale_words: usize,
+    lookback_lines: usize,
 ) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
     let lines: Vec<&str> = content.split('\n').collect();
@@ -113,7 +118,9 @@ pub(super) fn check_string_content(
         let Some(m) = re.find(&upper) else {
             continue;
         };
-        if has_rationale_before(&lines, idx) || has_trailing_rationale(line, m.start()) {
+        if has_rationale_before(&lines, idx, lookback_lines, min_rationale_words)
+            || has_trailing_rationale(line, m.start(), min_rationale_words)
+        {
             continue;
         }
         // Compute position: first line of the literal keeps the node's
@@ -141,35 +148,44 @@ pub(super) fn check_string_content(
     diagnostics
 }
 
-/// True if any of the `LOOKBACK_LINES` lines before `idx` contains a
-/// `-- ...` comment with at least `MIN_RATIONALE_WORDS` non-trivial
+/// True if any of the `lookback_lines` lines before `idx` contains a
+/// `-- ...` comment with at least `min_rationale_words` non-trivial
 /// tokens.
-fn has_rationale_before(lines: &[&str], idx: usize) -> bool {
-    let start = idx.saturating_sub(LOOKBACK_LINES);
+fn has_rationale_before(
+    lines: &[&str],
+    idx: usize,
+    lookback_lines: usize,
+    min_rationale_words: usize,
+) -> bool {
+    let start = idx.saturating_sub(lookback_lines);
     lines[start..idx].iter().any(|line| {
         line.find("--")
-            .is_some_and(|pos| is_real_rationale(&line[pos + 2..]))
+            .is_some_and(|pos| is_real_rationale(&line[pos + 2..], min_rationale_words))
     })
 }
 
 /// True if `line` has a trailing `-- ...` comment (after the
-/// `CREATE INDEX` match) with at least `MIN_RATIONALE_WORDS`
+/// `CREATE INDEX` match) with at least `min_rationale_words`
 /// non-trivial tokens.
-fn has_trailing_rationale(line: &str, create_index_start: usize) -> bool {
-    line[create_index_start..]
-        .find("--")
-        .is_some_and(|pos| is_real_rationale(&line[create_index_start + pos + 2..]))
+fn has_trailing_rationale(
+    line: &str,
+    create_index_start: usize,
+    min_rationale_words: usize,
+) -> bool {
+    line[create_index_start..].find("--").is_some_and(|pos| {
+        is_real_rationale(&line[create_index_start + pos + 2..], min_rationale_words)
+    })
 }
 
 /// A `-- ...` comment counts as a rationale when it contains at least
-/// `MIN_RATIONALE_WORDS` whitespace-separated tokens of length >1. Rejects
+/// `min_rationale_words` whitespace-separated tokens of length >1. Rejects
 /// drive-by notes like `-- ok`, `-- TODO`, or empty `--`.
-fn is_real_rationale(comment_body: &str) -> bool {
+fn is_real_rationale(comment_body: &str, min_rationale_words: usize) -> bool {
     comment_body
         .split_whitespace()
         .filter(|w| w.chars().count() > 1)
         .count()
-        >= MIN_RATIONALE_WORDS
+        >= min_rationale_words
 }
 
 #[cfg(test)]

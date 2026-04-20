@@ -29,7 +29,7 @@ use std::path::Path;
 /// Read-only context handed to in-process check implementations.
 ///
 /// `config` is the resolved per-project configuration. Rules that
-/// read their knobs from here via `config.threshold(rule_id, key, fallback)`,
+/// read their knobs from here via `config.threshold(rule_id, key)`,
 /// so a project's `comply.toml` can override the defaults without
 /// touching any rule code.
 #[derive(Debug)]

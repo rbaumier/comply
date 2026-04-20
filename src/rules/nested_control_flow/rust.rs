@@ -7,8 +7,6 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::walker::walk_tree;
 
-const MAX_DEPTH: usize = 3;
-
 const CONTROL_FLOW_KINDS: &[&str] = &[
     "if_expression",
     "for_expression",
@@ -49,6 +47,7 @@ fn control_flow_depth(node: tree_sitter::Node) -> usize {
 
 impl AstCheck for Check {
     fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
+        let max_depth = ctx.config.threshold("nested-control-flow", "max");
         let mut diagnostics = Vec::new();
         let mut flagged_lines = std::collections::HashSet::new();
 
@@ -64,7 +63,7 @@ impl AstCheck for Check {
                         return;
                     }
             let depth = control_flow_depth(node) + 1;
-            if depth > MAX_DEPTH {
+            if depth > max_depth {
                 let line = node.start_position().row + 1;
                 if flagged_lines.insert(line) {
                     diagnostics.push(Diagnostic {
@@ -73,7 +72,7 @@ impl AstCheck for Check {
                         column: node.start_position().column + 1,
                         rule_id: "nested-control-flow".into(),
                         message: format!(
-                            "Control-flow nesting depth is {depth} (max: {MAX_DEPTH})."
+                            "Control-flow nesting depth is {depth} (max: {max_depth})."
                         ),
                         severity: Severity::Error,
                         span: None,

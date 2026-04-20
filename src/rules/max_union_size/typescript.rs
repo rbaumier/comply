@@ -34,9 +34,10 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         return;
     }
 
-    let count = count_union_members(node);
+    let max = ctx.config.threshold("max-union-size", "max");
+    let count = count_union_members(node) as usize;
 
-    if count > 5 {
+    if count > max {
         let pos = node.start_position();
         diagnostics.push(Diagnostic {
             path: ctx.path.to_path_buf(),
@@ -44,7 +45,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             column: pos.column + 1,
             rule_id: "max-union-size".into(),
             message: format!(
-                "Union type has {count} members (max: 5) — consider extracting a type alias."
+                "Union type has {count} members (max: {max}) — consider extracting a type alias."
             ),
             severity: Severity::Warning,
             span: None,

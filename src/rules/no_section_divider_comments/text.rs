@@ -14,16 +14,16 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
 
 const DIVIDER_CHARS: &[u8] = b"=-*#~";
-const MIN_RUN: usize = 5;
 
 #[derive(Debug)]
 pub struct Check;
 
 impl TextCheck for Check {
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
+        let min_run = ctx.config.threshold("no-section-divider-comments", "min_run");
         let mut diagnostics = Vec::new();
         for (idx, line) in ctx.source.lines().enumerate() {
-            if !is_section_divider(line) {
+            if !is_section_divider(line, min_run) {
                 continue;
             }
             diagnostics.push(Diagnostic {
@@ -47,7 +47,7 @@ impl TextCheck for Check {
 /// divider characters. Markdown-style table separators inside Rust doc
 /// comments (`/// |---|---|`) are also caught — that's fine, they're
 /// equally bad style at the source-file level.
-fn is_section_divider(line: &str) -> bool {
+fn is_section_divider(line: &str, min_run: usize) -> bool {
     let trimmed = line.trim_start();
     let body = if let Some(rest) = trimmed.strip_prefix("//") {
         rest
@@ -81,7 +81,7 @@ fn is_section_divider(line: &str) -> bool {
             last = 0;
         }
     }
-    longest >= MIN_RUN
+    longest >= min_run
 }
 
 #[cfg(test)]

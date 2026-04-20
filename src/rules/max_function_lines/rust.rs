@@ -17,9 +17,7 @@ pub struct Check;
 impl AstCheck for Check {
     fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
         let source_bytes = ctx.source.as_bytes();
-        let max_lines = ctx
-            .config
-            .threshold("max-function-lines", "max", super::DEFAULT_MAX_LINES);
+        let max_lines = ctx.config.threshold("max-function-lines", "max");
         let mut diagnostics = Vec::new();
         walk_tree(tree, |node| {
             if let Some(d) = check_function_node(ctx.source, source_bytes, node, ctx.path, max_lines)
@@ -103,7 +101,7 @@ mod tests {
 
     #[test]
     fn flags_long_function_item() {
-        let body = "let _ = 0;\n".repeat(super::super::DEFAULT_MAX_LINES + 5);
+        let body = "let _ = 0;\n".repeat(30 + 5);
         let diags = run_on(&format!("fn long() {{\n{body}}}"));
         assert_eq!(diags.len(), 1);
     }
@@ -130,7 +128,7 @@ mod tests {
 
     #[test]
     fn flags_long_closure() {
-        let body = "let _ = 0;\n".repeat(super::super::DEFAULT_MAX_LINES + 5);
+        let body = "let _ = 0;\n".repeat(30 + 5);
         let src = format!("fn outer() {{ let c = || {{\n{body}}}; }}");
         let diags = run_on(&src);
         // outer fn + closure both long — expect both flagged.
@@ -139,7 +137,7 @@ mod tests {
 
     #[test]
     fn extracts_function_name_in_message() {
-        let body = "let _ = 0;\n".repeat(super::super::DEFAULT_MAX_LINES + 1);
+        let body = "let _ = 0;\n".repeat(30 + 1);
         let diags = run_on(&format!("fn my_long_func() {{\n{body}}}"));
         assert!(diags[0].message.contains("my_long_func"));
     }

@@ -5,8 +5,6 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-const MAX_PARAMS: usize = 3;
-
 crate::ast_check! { |node, source, ctx, diagnostics|
     let is_func = matches!(
         node.kind(),
@@ -19,6 +17,8 @@ crate::ast_check! { |node, source, ctx, diagnostics|
     if !is_func {
         return;
     }
+
+    let max_params = ctx.config.threshold("ts-max-params", "max");
 
     let Some(params) = node.child_by_field_name("parameters") else {
         return;
@@ -46,7 +46,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         }
     }
 
-    if count > MAX_PARAMS {
+    if count > max_params {
         // Get the function name if available
         let name = node
             .child_by_field_name("name")
@@ -59,7 +59,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             column: pos.column + 1,
             rule_id: "ts-max-params".into(),
             message: format!(
-                "Function `{name}` has {count} parameters (maximum allowed is {MAX_PARAMS})."
+                "Function `{name}` has {count} parameters (maximum allowed is {max_params})."
             ),
             severity: Severity::Warning,
             span: None,

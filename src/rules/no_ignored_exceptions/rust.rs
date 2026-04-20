@@ -91,7 +91,7 @@ mod tests {
             #[test]
             fn missing_config_falls_back_to_defaults() {
                 let cfg = Config::load_from(tmp.path()).unwrap();
-                let _ = cfg.threshold("max-function-lines", "max", 30);
+                let _ = cfg.threshold("max-function-lines", "max");
             }
         "#;
         assert!(run_on(src).is_empty());

@@ -11,13 +11,10 @@ use crate::rules::backend::{CheckCtx, TextCheck};
 #[derive(Debug)]
 pub struct Check;
 
-/// Minimum common whitespace prefix (in spaces) to flag.
-const MIN_INDENT: usize = 4;
-
 /// Find template literals and check their indentation.
 /// This is a simplified text-based approach: we find backtick pairs and
 /// analyze the content lines between them.
-fn find_indented_templates(source: &str) -> Vec<(usize, usize)> {
+fn find_indented_templates(source: &str, min_indent: usize) -> Vec<(usize, usize)> {
     let mut results = Vec::new();
     let lines: Vec<&str> = source.lines().collect();
 
@@ -56,9 +53,9 @@ fn find_indented_templates(source: &str) -> Vec<(usize, usize)> {
 
             if found_close && template_lines.len() >= 2 {
                 // Check if all non-empty lines share a common leading whitespace
-                let min_indent = common_leading_whitespace(&template_lines);
-                if min_indent >= MIN_INDENT {
-                    results.push((start_line + 1, min_indent)); // 1-indexed
+                let actual_indent = common_leading_whitespace(&template_lines);
+                if actual_indent >= min_indent {
+                    results.push((start_line + 1, actual_indent)); // 1-indexed
                 }
             }
             i = if found_close { j + 1 } else { j };
@@ -92,7 +89,8 @@ fn common_leading_whitespace(lines: &[&str]) -> usize {
 
 impl TextCheck for Check {
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
-        find_indented_templates(ctx.source)
+        let min_indent = ctx.config.threshold("template-indent", "min_indent");
+        find_indented_templates(ctx.source, min_indent)
             .into_iter()
             .map(|(line, indent)| Diagnostic {
                 path: ctx.path.to_path_buf(),

@@ -60,13 +60,10 @@ pub fn register() -> RuleDef {
     }
 }
 
-pub(super) const MIN_STRING_LEN: usize = 10;
-pub(super) const THRESHOLD: usize = 3;
-
 /// Walk `tree` for string-literal nodes of the given `kinds`, count
 /// occurrences by canonical content, and emit one diagnostic per
-/// occurrence starting at the `THRESHOLD`th. Shared between the TS
-/// and Rust backends so the counting semantics stay in one place.
+/// occurrence starting at the `min_occurrences`th. Shared between the
+/// TS and Rust backends so the counting semantics stay in one place.
 pub(super) fn collect_diagnostics(
     tree: &tree_sitter::Tree,
     ctx: &crate::rules::backend::CheckCtx,
@@ -75,6 +72,11 @@ pub(super) fn collect_diagnostics(
     use crate::diagnostic::{Diagnostic, Severity};
     use std::collections::HashMap;
 
+    let min_length = ctx.config.threshold("no-duplicate-string", "min_length");
+    let min_occurrences = ctx
+        .config
+        .threshold("no-duplicate-string", "min_occurrences");
+
     let source_bytes = ctx.source.as_bytes();
     let mut occurrences: HashMap<String, Vec<tree_sitter::Node>> = HashMap::new();
     for node in crate::rules::walker::collect_nodes_of_kinds(tree, kinds) {
@@ -82,7 +84,7 @@ pub(super) fn collect_diagnostics(
             continue;
         };
         let content = strip_string_delimiters(raw);
-        if content.chars().count() < MIN_STRING_LEN {
+        if content.chars().count() < min_length {
             continue;
         }
         occurrences.entry(content.to_string()).or_default().push(node);
@@ -90,10 +92,10 @@ pub(super) fn collect_diagnostics(
 
     let mut diagnostics = Vec::new();
     for (content, nodes) in &occurrences {
-        if nodes.len() < THRESHOLD {
+        if nodes.len() < min_occurrences {
             continue;
         }
-        for node in &nodes[THRESHOLD - 1..] {
+        for node in &nodes[min_occurrences - 1..] {
             let pos = node.start_position();
             diagnostics.push(Diagnostic {
                 path: ctx.path.to_path_buf(),

@@ -83,7 +83,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         return;
     }
 
-    let threshold = ctx.config.threshold("cognitive-complexity", "max", 5) as u32;
+    let threshold = ctx.config.threshold("cognitive-complexity", "max") as u32;
     let complexity = compute(body, source, 0);
 
     if complexity > threshold {

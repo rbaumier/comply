@@ -5,8 +5,6 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-const THRESHOLD: usize = 10;
-
 /// Node kinds that represent function declarations/expressions.
 const FUNCTION_KINDS: &[&str] = &[
     "function_declaration",
@@ -43,10 +41,11 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         .and_then(|n| n.utf8_text(source).ok())
         .unwrap_or("<anonymous>");
 
+    let threshold = ctx.config.threshold("cyclomatic-complexity", "max");
     // Count complexity: 1 base path + branching nodes.
     let complexity = 1 + count_complexity(node, source);
 
-    if complexity > THRESHOLD {
+    if complexity > threshold {
         let pos = node.start_position();
         diagnostics.push(Diagnostic {
             path: ctx.path.to_path_buf(),
@@ -54,7 +53,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             column: pos.column + 1,
             rule_id: "cyclomatic-complexity".into(),
             message: format!(
-                "Function `{name}` has a cyclomatic complexity of {complexity} (max: {THRESHOLD}).",
+                "Function `{name}` has a cyclomatic complexity of {complexity} (max: {threshold}).",
             ),
             severity: Severity::Warning,
             span: None,

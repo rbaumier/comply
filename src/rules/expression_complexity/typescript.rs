@@ -6,8 +6,6 @@ use crate::rules::backend::{AstCheck, CheckCtx};
 #[derive(Debug)]
 pub struct Check;
 
-const THRESHOLD: usize = 4;
-
 /// Count logical/conditional operators on a line: `&&`, `||`, `??`, `?` (ternary).
 #[allow(clippy::if_same_then_else)]
 fn count_operators(line: &str) -> usize {
@@ -48,16 +46,17 @@ fn count_operators(line: &str) -> usize {
 
 impl AstCheck for Check {
     fn check(&self, ctx: &CheckCtx, _tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
+        let max_ops = ctx.config.threshold("expression-complexity", "max_ops");
         let mut diagnostics = Vec::new();
         for (idx, line) in ctx.source.lines().enumerate() {
-            if count_operators(line) >= THRESHOLD {
+            if count_operators(line) >= max_ops {
                 diagnostics.push(Diagnostic {
                     path: ctx.path.to_path_buf(),
                     line: idx + 1,
                     column: 1,
                     rule_id: "expression-complexity".into(),
                     message: format!(
-                        "Expression has {THRESHOLD}+ logical/conditional operators — \
+                        "Expression has {max_ops}+ logical/conditional operators — \
                          extract to named variables."
                     ),
                     severity: Severity::Warning,

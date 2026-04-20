@@ -17,6 +17,12 @@ pub struct Check;
 
 impl AstCheck for Check {
     fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
+        let min_rationale_words = ctx
+            .config
+            .threshold("sql-index-needs-rationale-comment", "min_rationale_words");
+        let lookback_lines = ctx
+            .config
+            .threshold("sql-index-needs-rationale-comment", "lookback_lines");
         let source_bytes = ctx.source.as_bytes();
         let mut diagnostics = Vec::new();
         walk_tree(tree, |node| {
@@ -35,6 +41,8 @@ impl AstCheck for Check {
                 start.row,
                 start.column + delimiter_len,
                 ctx.path,
+                min_rationale_words,
+                lookback_lines,
             ));
         });
         diagnostics

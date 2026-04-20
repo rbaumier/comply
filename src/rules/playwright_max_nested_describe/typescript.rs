@@ -9,8 +9,6 @@ fn is_test_file(path: &std::path::Path) -> bool {
     TEST_MARKERS.iter().any(|m| s.contains(m))
 }
 
-const MAX_DEPTH: usize = 5;
-
 fn is_describe_call(node: tree_sitter::Node, source: &[u8]) -> bool {
     if node.kind() != "call_expression" {
         return false;
@@ -33,12 +31,13 @@ fn check_describe_depth(
     node: tree_sitter::Node,
     source: &[u8],
     depth: usize,
+    max_depth: usize,
     ctx: &crate::rules::backend::CheckCtx,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     if is_describe_call(node, source) {
         let new_depth = depth + 1;
-        if new_depth > MAX_DEPTH {
+        if new_depth > max_depth {
             let pos = node.start_position();
             diagnostics.push(Diagnostic {
                 path: ctx.path.to_path_buf(),
@@ -46,7 +45,7 @@ fn check_describe_depth(
                 column: pos.column + 1,
                 rule_id: "playwright-max-nested-describe".into(),
                 message: format!(
-                    "Describe depth {new_depth} exceeds maximum allowed {MAX_DEPTH}."
+                    "Describe depth {new_depth} exceeds maximum allowed {max_depth}."
                 ),
                 severity: Severity::Warning,
                 span: None,
@@ -55,12 +54,12 @@ fn check_describe_depth(
         // Walk children at increased depth
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
-            check_describe_depth(child, source, new_depth, ctx, diagnostics);
+            check_describe_depth(child, source, new_depth, max_depth, ctx, diagnostics);
         }
     } else {
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
-            check_describe_depth(child, source, depth, ctx, diagnostics);
+            check_describe_depth(child, source, depth, max_depth, ctx, diagnostics);
         }
     }
 }
@@ -75,9 +74,10 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         return;
     }
 
+    let max_depth = ctx.config.threshold("playwright-max-nested-describe", "max");
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
-        check_describe_depth(child, source, 0, ctx, diagnostics);
+        check_describe_depth(child, source, 0, max_depth, ctx, diagnostics);
     }
 }
 

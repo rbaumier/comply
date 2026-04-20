@@ -6,9 +6,6 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::walker::walk_tree;
 
-const MAX_COMMENT_TOKENS: usize = 6;
-const OVERLAP_THRESHOLD: f32 = 0.80;
-
 const STOP_WORDS: &[&str] = &[
     "a", "an", "the", "to", "of", "in", "on", "for", "with", "and", "or", "but", "is", "it",
     "this", "that", "these", "those",
@@ -19,6 +16,12 @@ pub struct Check;
 
 impl AstCheck for Check {
     fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
+        let max_comment_tokens = ctx
+            .config
+            .threshold("comment-paraphrases-code", "max_comment_tokens");
+        let overlap_threshold = ctx
+            .config
+            .float("comment-paraphrases-code", "overlap_threshold") as f32;
         let source = ctx.source.as_bytes();
         let mut diagnostics = Vec::new();
         walk_tree(tree, |node| {
@@ -42,7 +45,7 @@ impl AstCheck for Check {
                 return;
             }
             let body = strip_comment_markers(comment_text);
-            if !looks_like_paraphrase(name, &body) {
+            if !looks_like_paraphrase(name, &body, max_comment_tokens, overlap_threshold) {
                 return;
             }
             let pos = prev.start_position();
@@ -71,13 +74,18 @@ fn strip_comment_markers(text: &str) -> String {
         .to_string()
 }
 
-fn looks_like_paraphrase(identifier: &str, comment_body: &str) -> bool {
+fn looks_like_paraphrase(
+    identifier: &str,
+    comment_body: &str,
+    max_comment_tokens: usize,
+    overlap_threshold: f32,
+) -> bool {
     let id_tokens = tokenize_identifier(identifier);
     if id_tokens.is_empty() {
         return false;
     }
     let comment_tokens = tokenize_comment(comment_body);
-    if comment_tokens.is_empty() || comment_tokens.len() > MAX_COMMENT_TOKENS {
+    if comment_tokens.is_empty() || comment_tokens.len() > max_comment_tokens {
         return false;
     }
     let overlap = comment_tokens
@@ -86,7 +94,7 @@ fn looks_like_paraphrase(identifier: &str, comment_body: &str) -> bool {
         .count();
     // comply-ignore: rust-no-lossy-as-cast — bounded count.
     let ratio = overlap as f32 / comment_tokens.len() as f32;
-    ratio >= OVERLAP_THRESHOLD
+    ratio >= overlap_threshold
 }
 
 fn tokenize_identifier(name: &str) -> Vec<String> {

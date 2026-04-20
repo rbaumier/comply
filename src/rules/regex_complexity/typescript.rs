@@ -9,8 +9,6 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::regex_ast::pattern_and_flags;
 
-const THRESHOLD: usize = 20;
-
 fn complexity_score(pattern: &str) -> usize {
     let mut score = 0;
     let bytes = pattern.as_bytes();
@@ -34,8 +32,9 @@ fn complexity_score(pattern: &str) -> usize {
 
 crate::ast_check! { |node, source, ctx, diagnostics|
     let Some((pattern, _flags)) = pattern_and_flags(&node, source) else { return };
+    let threshold = ctx.config.threshold("regex-complexity", "max");
     let score = complexity_score(pattern);
-    if score <= THRESHOLD {
+    if score <= threshold {
         return;
     }
     diagnostics.push(Diagnostic::at_node(
@@ -43,7 +42,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         &node,
         "regex-complexity",
         format!(
-            "Regex complexity score is {score} (threshold: {THRESHOLD}) \u{2014} consider breaking it into smaller patterns."
+            "Regex complexity score is {score} (threshold: {threshold}) \u{2014} consider breaking it into smaller patterns."
         ),
         Severity::Warning,
     ));

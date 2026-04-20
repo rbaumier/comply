@@ -15,7 +15,7 @@ pub struct Check;
 
 impl AstCheck for Check {
     fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
-        let min = ctx.config.threshold("id-length", "min", 2);
+        let min = ctx.config.threshold("id-length", "min");
         let exceptions = ctx.config.string_list("id-length", "exceptions");
         let patterns = compile_patterns(&ctx.config.string_list("id-length", "exception_patterns"));
 
