@@ -186,6 +186,7 @@ pub mod react_self_closing_comp;
 pub mod react_style_prop_object;
 pub mod react_void_dom_elements_no_children;
 pub mod reduce_initial_value;
+pub mod sql_index_needs_rationale_comment;
 pub mod sql_no_between_timestamp;
 pub mod sql_no_float_for_money;
 pub mod sql_no_like_wildcard_prefix;
@@ -1582,6 +1583,7 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         rust_constants_top_of_file::register(),
         rust_explicit_enum_match_arms::register(),
         rust_duration_over_integer_with_unit::register(),
+        sql_index_needs_rationale_comment::register(),
     ];
     rules.extend(delegated::register_all());
     rules
