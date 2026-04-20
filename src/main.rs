@@ -31,7 +31,6 @@ mod engine;
 mod explain;
 mod files;
 mod fix;
-mod id_length_i18n;
 mod ignore_comments;
 mod list;
 mod lsp;
@@ -253,8 +252,7 @@ fn lint_project(cli: &Cli) -> Result<bool> {
     }
 
     let t_post = Instant::now();
-    let mut after_overrides = apply_config_filters(diagnostics, &config);
-    id_length_i18n::apply(&mut after_overrides);
+    let after_overrides = apply_config_filters(diagnostics, &config);
     let mut after_suppressions = ignore_comments::apply_to_all(after_overrides, &discovered);
     if cli.diff_only {
         let changed = changed_lines::changed_lines(&mode)?;
@@ -499,7 +497,7 @@ fn lint_typescript(
         // generates the oxlintrc, and holds the NamedTempFile until the
         // subprocess finishes reading it.
         let t = Instant::now();
-        (oxlint::lint_files(ts_files), t.elapsed())
+        (oxlint::lint_files(ts_files, config), t.elapsed())
     };
     let knip_phase = || -> PhaseOut {
         if !knip_avail {

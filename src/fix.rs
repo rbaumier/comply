@@ -49,7 +49,7 @@ pub fn apply_fixes(discovered: &[SourceFile], config: &Config) -> Result<usize> 
         .collect();
 
     if !ts_files.is_empty() && oxlint_available() {
-        match run_oxlint_fix(&ts_files) {
+        match run_oxlint_fix(&ts_files, config) {
             Ok(()) => runs += 1,
             Err(e) => eprintln!("comply: oxlint --fix failed: {e:#}"),
         }
@@ -84,11 +84,11 @@ fn clippy_available() -> bool {
 /// batch. We pass the same generated oxlintrc the lint mode uses, so
 /// `--fix` only edits rules comply considers active. Without the
 /// config flag, oxlint would run with defaults and miss most fixes.
-fn run_oxlint_fix(files: &[&SourceFile]) -> Result<()> {
+fn run_oxlint_fix(files: &[&SourceFile], config: &Config) -> Result<()> {
     let bindings = crate::rules::collect_oxlint_bindings();
-    let rule_entries: Vec<(&str, crate::diagnostic::Severity)> = bindings
+    let rule_entries: Vec<crate::oxlint_config::RuleEntry> = bindings
         .iter()
-        .map(|(key, _, sev)| (*key, *sev))
+        .map(|(key, _, sev)| (*key, *sev, crate::oxlint::options_for(key, config)))
         .collect();
     let config_file = crate::oxlint_config::generate(&rule_entries)
         .context("failed to generate oxlintrc for --fix run")?;

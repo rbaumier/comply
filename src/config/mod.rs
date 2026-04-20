@@ -143,6 +143,41 @@ impl Config {
             .unwrap_or(fallback)
     }
 
+    /// Like `threshold` but returns `None` when the key isn't configured,
+    /// letting the caller distinguish "use default" from "explicitly set".
+    /// `id-length` needs this: the default `max` is unbounded, so we
+    /// only emit the option when the user sets one.
+    #[must_use]
+    pub fn optional_threshold(&self, rule_id: &str, key: &str) -> Option<i64> {
+        self.raw
+            .rules
+            .get(rule_id)
+            .and_then(|r| r.extra.get(key))
+            .and_then(toml::Value::as_integer)
+    }
+
+    /// Read an optional string value from `[rules.<rule_id>] <key> = "..."`.
+    /// Returns `None` when the key isn't present or isn't a string.
+    #[must_use]
+    pub fn optional_string(&self, rule_id: &str, key: &str) -> Option<String> {
+        self.raw
+            .rules
+            .get(rule_id)
+            .and_then(|r| r.extra.get(key))
+            .and_then(toml::Value::as_str)
+            .map(str::to_string)
+    }
+
+    /// Parse a TOML fragment and merge it on top of the defaults. Used
+    /// by tests that need to seed arbitrary `[rules.<id>]` configuration
+    /// without touching the filesystem.
+    #[cfg(test)]
+    pub fn from_toml_str(toml_text: &str) -> Result<Self> {
+        let user: ComplyToml = toml::from_str(toml_text).context("invalid TOML fragment")?;
+        let merged = merge(defaults::build_default_config(), user);
+        Self::from_raw(merged)
+    }
+
     /// Read a list of strings from `[rules.<rule_id>] <key> = [...]`.
     /// Non-string entries and absent keys collapse to an empty vec, so
     /// the caller can treat "not configured" and "configured empty" the

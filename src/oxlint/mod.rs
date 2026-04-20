@@ -13,8 +13,11 @@
 //!    rule-id + severity through the comply registry so users see
 //!    `[no-explicit-any]` instead of `typescript-eslint(no-explicit-any)`.
 
+mod options;
 mod remap;
 mod schema;
+
+pub use options::for_rule as options_for;
 
 use anyhow::{bail, Context, Result};
 use std::collections::HashMap;
@@ -43,7 +46,7 @@ pub fn is_available() -> bool {
 
 /// Invoke oxlint on the given TS/JS files and return unified diagnostics.
 #[must_use = "diagnostics from oxlint must be reported"]
-pub fn lint_files(files: &[&SourceFile]) -> Result<Vec<Diagnostic>> {
+pub fn lint_files(files: &[&SourceFile], config: &crate::config::Config) -> Result<Vec<Diagnostic>> {
     if files.is_empty() {
         return Ok(vec![]);
     }
@@ -51,8 +54,10 @@ pub fn lint_files(files: &[&SourceFile]) -> Result<Vec<Diagnostic>> {
     if bindings.is_empty() {
         return Ok(vec![]);
     }
-    let rule_entries: Vec<(&str, Severity)> =
-        bindings.iter().map(|(key, _, sev)| (*key, *sev)).collect();
+    let rule_entries: Vec<crate::oxlint_config::RuleEntry> = bindings
+        .iter()
+        .map(|(key, _, sev)| (*key, *sev, options::for_rule(key, config)))
+        .collect();
     let config = crate::oxlint_config::generate(&rule_entries)?;
     let remap = remap::build_table(&bindings);
 

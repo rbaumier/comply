@@ -24,8 +24,14 @@ use std::io::Write;
 
 use crate::diagnostic::Severity;
 
+/// A rule entry bound for the generated oxlintrc: the rule key, its
+/// severity, and optional ESLint-style options (`min`, `exceptions`,
+/// etc.). When `options` is `Some`, oxlint receives the `[severity,
+/// options]` tuple form; otherwise the bare severity string.
+pub type RuleEntry<'a> = (&'a str, Severity, Option<Value>);
+
 /// Build an oxlint config and write it to a fresh temp file.
-pub fn generate(rules: &[(&str, Severity)]) -> Result<tempfile::NamedTempFile> {
+pub fn generate(rules: &[RuleEntry<'_>]) -> Result<tempfile::NamedTempFile> {
     let config = build_config_json(rules);
     let serialized =
         serde_json::to_string_pretty(&config).context("failed to serialize oxlint config")?;
@@ -43,12 +49,16 @@ pub fn generate(rules: &[(&str, Severity)]) -> Result<tempfile::NamedTempFile> {
 }
 
 /// Assemble the oxlint config JSON from a list of rule entries.
-fn build_config_json(rules: &[(&str, Severity)]) -> Value {
+fn build_config_json(rules: &[RuleEntry<'_>]) -> Value {
     let plugins = collect_plugins(rules);
 
     let mut rule_map = serde_json::Map::new();
-    for (key, severity) in rules {
-        rule_map.insert((*key).to_string(), json!(severity_str(*severity)));
+    for (key, severity, options) in rules {
+        let entry = match options {
+            Some(opts) => json!([severity_str(*severity), opts]),
+            None => json!(severity_str(*severity)),
+        };
+        rule_map.insert((*key).to_string(), entry);
     }
 
     json!({
@@ -60,9 +70,9 @@ fn build_config_json(rules: &[(&str, Severity)]) -> Value {
 /// Extract the unique plugin names referenced by the rule keys, sorted for
 /// determinism. A config key like `typescript/no-explicit-any` implies the
 /// `typescript` plugin; bare keys (`eqeqeq`) imply no plugin.
-fn collect_plugins(rules: &[(&str, Severity)]) -> Vec<String> {
+fn collect_plugins(rules: &[RuleEntry<'_>]) -> Vec<String> {
     let mut plugins: BTreeSet<String> = BTreeSet::new();
-    for (key, _) in rules {
+    for (key, _, _) in rules {
         if let Some((plugin, _)) = key.split_once('/') {
             plugins.insert(plugin.to_string());
         }
@@ -83,11 +93,11 @@ mod tests {
 
     #[test]
     fn collects_unique_plugins_from_rule_keys() {
-        let rules = [
-            ("typescript/no-explicit-any", Severity::Error),
-            ("typescript/no-non-null-assertion", Severity::Error),
-            ("import/no-default-export", Severity::Error),
-            ("eqeqeq", Severity::Error),
+        let rules: [RuleEntry; 4] = [
+            ("typescript/no-explicit-any", Severity::Error, None),
+            ("typescript/no-non-null-assertion", Severity::Error, None),
+            ("import/no-default-export", Severity::Error, None),
+            ("eqeqeq", Severity::Error, None),
         ];
         let plugins = collect_plugins(&rules);
         assert_eq!(plugins, vec!["import", "typescript"]);
@@ -101,13 +111,25 @@ mod tests {
 
     #[test]
     fn build_config_emits_rules_and_plugins() {
-        let rules = [
-            ("typescript/no-explicit-any", Severity::Error),
-            ("eqeqeq", Severity::Warning),
+        let rules: [RuleEntry; 2] = [
+            ("typescript/no-explicit-any", Severity::Error, None),
+            ("eqeqeq", Severity::Warning, None),
         ];
         let config = build_config_json(&rules);
         assert_eq!(config["plugins"], json!(["typescript"]));
         assert_eq!(config["rules"]["typescript/no-explicit-any"], json!("error"));
         assert_eq!(config["rules"]["eqeqeq"], json!("warn"));
+    }
+
+    #[test]
+    fn build_config_emits_options_tuple_form_when_present() {
+        // ESLint / oxlint accept either a severity string OR a
+        // `[severity, optionsObject]` tuple. When comply has options
+        // to propagate (`id-length` with exceptions, etc.), we must
+        // emit the tuple form — the bare string would be an error.
+        let options = json!({"min": 2, "exceptions": ["t"]});
+        let rules: [RuleEntry; 1] = [("id-length", Severity::Error, Some(options.clone()))];
+        let config = build_config_json(&rules);
+        assert_eq!(config["rules"]["id-length"], json!(["error", options]));
     }
 }
