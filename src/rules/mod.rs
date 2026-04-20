@@ -109,6 +109,7 @@ pub mod rust_arc_non_send_sync;
 pub mod rust_await_holding_lock;
 pub mod rust_block_on_in_async;
 pub mod rust_builder_without_must_use;
+pub mod rust_constants_top_of_file;
 pub mod rust_explicit_iter_loop;
 pub mod regex_ast;
 pub mod rust_helpers;
@@ -1576,6 +1577,7 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         // v2.12 — rules derived from code-review feedback.
         rust_no_as_numeric_cast::register(),
         rust_prefer_unwrap_or_explicit::register(),
+        rust_constants_top_of_file::register(),
     ];
     rules.extend(delegated::register_all());
     rules
