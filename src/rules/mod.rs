@@ -115,6 +115,7 @@ pub mod rust_helpers;
 pub mod rust_impl_debug_on_public_types;
 pub mod rust_large_enum_variant;
 pub mod rust_mod_tests_without_cfg_test;
+pub mod rust_no_as_numeric_cast;
 pub mod rust_no_bool_return_from_fallible;
 pub mod rust_no_box_default;
 pub mod rust_no_dbg_macro;
@@ -1571,6 +1572,8 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         // comment_prose_quality::register(),
         // architecture: hexagonal layer boundaries.
         layer_import_boundary::register(),
+        // v2.12 — rules derived from code-review feedback.
+        rust_no_as_numeric_cast::register(),
     ];
     rules.extend(delegated::register_all());
     rules
