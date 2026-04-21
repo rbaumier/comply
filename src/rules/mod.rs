@@ -72,8 +72,10 @@ pub mod no_identical_functions;
 pub mod no_ignored_exceptions;
 pub mod no_inline_param_type;
 pub mod no_inverted_boolean_check;
+pub mod no_error_details_in_response;
 pub mod no_json_parse_cast;
 pub mod no_manual_rtl_cleanup;
+pub mod no_mass_assignment;
 pub mod no_match_snapshot;
 pub mod no_misleading_collection_name;
 pub mod no_mock_fetch_directly;
@@ -83,15 +85,20 @@ pub mod no_nested_template_literal;
 pub mod no_nested_ternary;
 pub mod no_new_regex_with_variable;
 pub mod no_nullish_default_on_input;
+pub mod no_open_redirect;
 pub mod no_page_click_deprecated;
+pub mod no_path_traversal;
+pub mod no_prototype_pollution;
 pub mod no_redundant_assignment;
 pub mod no_redundant_boolean;
 pub mod no_section_divider_comments;
 pub mod no_set_x_to_y;
+pub mod no_shell_exec;
 pub mod no_sort_without_comparator;
 pub mod no_test_logic;
 pub mod no_throw;
 pub mod no_type_encoded_names;
+pub mod no_unvalidated_url_redirect;
 pub mod no_verb_in_rest_url;
 pub mod no_wait_for_timeout;
 pub mod object_literal;
@@ -1721,6 +1728,14 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         i18n_no_string_concat_with_translation::register(),
         i18n_prefer_intl_api::register(),
         i18n_no_manual_pluralization::register(),
+        // v3.0 — Skill-driven rules: Batch 12 (security)
+        no_error_details_in_response::register(),
+        no_mass_assignment::register(),
+        no_open_redirect::register(),
+        no_path_traversal::register(),
+        no_prototype_pollution::register(),
+        no_shell_exec::register(),
+        no_unvalidated_url_redirect::register(),
     ];
     rules.extend(delegated::register_all());
     rules
