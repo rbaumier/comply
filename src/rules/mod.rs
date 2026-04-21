@@ -193,6 +193,8 @@ pub mod react_self_closing_comp;
 pub mod react_style_prop_object;
 pub mod react_void_dom_elements_no_children;
 pub mod reduce_initial_value;
+pub mod sql_advisory_lock_prefer_xact;
+pub mod sql_create_index_concurrently;
 pub mod sql_index_needs_rationale_comment;
 pub mod sql_no_between_timestamp;
 pub mod sql_no_float_for_money;
@@ -201,7 +203,9 @@ pub mod sql_no_offset_pagination;
 pub mod sql_no_pg_enum;
 pub mod sql_no_select_star;
 pub mod sql_no_varchar;
+pub mod sql_nullable_requires_comment;
 pub mod sql_prefer_exists_over_in;
+pub mod sql_require_transaction_timeout;
 pub mod tailwind_no_apply_for_variants;
 pub mod tailwind_no_arbitrary_z_index;
 pub mod tailwind_no_conflicting_classes;
@@ -1620,6 +1624,11 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         tailwind_prefer_size_shorthand::register(),
         tailwind_no_apply_for_variants::register(),
         tailwind_prefer_cn_utility::register(),
+        // v3.0 — Skill-driven rules: Batch 4 (SQL/Database)
+        sql_create_index_concurrently::register(),
+        sql_nullable_requires_comment::register(),
+        sql_advisory_lock_prefer_xact::register(),
+        sql_require_transaction_timeout::register(),
     ];
     rules.extend(delegated::register_all());
     rules
