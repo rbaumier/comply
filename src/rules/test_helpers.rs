@@ -97,13 +97,27 @@ pub fn run_tsx_with_project_and_file(
     project: &ProjectCtx,
     file: &FileCtx,
 ) -> Vec<Diagnostic> {
+    run_tsx_with_project_file_and_path(source, check, project, file, "t.tsx")
+}
+
+/// Same as `run_tsx_with_project_and_file` but with a caller-supplied fake
+/// path. Use when the rule also inspects `ctx.path` (filename patterns like
+/// `layout.tsx`).
+#[must_use]
+pub fn run_tsx_with_project_file_and_path(
+    source: &str,
+    check: &dyn AstCheck,
+    project: &ProjectCtx,
+    file: &FileCtx,
+    fake_path: &str,
+) -> Vec<Diagnostic> {
     let mut parser = tree_sitter::Parser::new();
     parser
         .set_language(&tree_sitter_typescript::LANGUAGE_TSX.into())
         .expect("grammar should load");
     let tree = parser.parse(source, None).expect("parser should produce a tree");
     check.check(
-        &CheckCtx::for_test_full(Path::new("t.tsx"), source, project, file),
+        &CheckCtx::for_test_full(Path::new(fake_path), source, project, file),
         &tree,
     )
 }
