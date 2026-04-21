@@ -55,7 +55,7 @@ impl AstCheck for Check {
                 None => return,
             };
             let method = prop.utf8_text(source).unwrap_or("");
-            if !CLEANUP_METHODS.iter().any(|&m| m == method) {
+            if !CLEANUP_METHODS.contains(&method) {
                 return;
             }
             let pos = node.start_position();
