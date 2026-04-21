@@ -1,0 +1,22 @@
+mod text;
+use crate::diagnostic::Severity;
+use crate::files::Language;
+use crate::rules::backend::Backend;
+use crate::rules::meta::RuleMeta;
+use crate::rules::RuleDef;
+
+pub const META: RuleMeta = RuleMeta {
+    id: "vue-pinia-store-to-refs",
+    description: "Destructuring a Pinia store without `storeToRefs()` loses reactivity.",
+    remediation: "Use `const { count } = storeToRefs(useCounterStore())` to preserve reactivity.",
+    severity: Severity::Warning,
+    doc_url: None,
+    categories: &["vue"],
+};
+
+pub fn register() -> RuleDef {
+    RuleDef {
+        meta: META,
+        backends: vec![(Language::Vue, Backend::Text(Box::new(text::Check)))],
+    }
+}

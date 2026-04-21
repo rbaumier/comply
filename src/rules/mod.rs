@@ -238,9 +238,16 @@ pub mod tanstack_start_server_fn_file_convention;
 pub mod tanstack_start_server_fn_requires_auth;
 pub mod tanstack_start_server_fn_requires_validation;
 pub mod timeout_on_io;
+pub mod vue_define_emits_typed;
 pub mod vue_no_duplicate_v_if;
 pub mod vue_no_options_api;
 pub mod vue_no_reactive_destructure;
+pub mod vue_no_v_html_unsafe;
+pub mod vue_pinia_store_to_refs;
+pub mod vue_prefer_v_else;
+pub mod vue_require_lifecycle_cleanup;
+pub mod vue_script_setup_required;
+pub mod vue_sfc_section_order;
 pub mod vue_v_for_needs_stable_key;
 pub mod walker;
 pub mod zod_no_any;
@@ -1694,6 +1701,14 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         api_no_array_root_response::register(),
         api_list_requires_pagination::register(),
         api_import_from_public_index::register(),
+        // v3.0 — Skill-driven rules: Batch 10 (Vue)
+        vue_script_setup_required::register(),
+        vue_sfc_section_order::register(),
+        vue_no_v_html_unsafe::register(),
+        vue_prefer_v_else::register(),
+        vue_require_lifecycle_cleanup::register(),
+        vue_pinia_store_to_refs::register(),
+        vue_define_emits_typed::register(),
     ];
     rules.extend(delegated::register_all());
     rules
