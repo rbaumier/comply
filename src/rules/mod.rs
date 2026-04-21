@@ -280,6 +280,9 @@ pub mod a11y_role_has_required_aria_props;
 pub mod a11y_scope;
 pub mod a11y_tabindex_no_positive;
 pub mod api_first;
+pub mod api_import_from_public_index;
+pub mod api_list_requires_pagination;
+pub mod api_no_array_root_response;
 pub mod arguments_order;
 pub mod array_callback_without_return;
 pub mod assertions_in_tests;
@@ -1673,6 +1676,10 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         tanstack_start_server_fn_requires_auth::register(),
         tanstack_start_server_fn_file_convention::register(),
         tanstack_start_require_validate_search::register(),
+        // v3.0 — Skill-driven rules: Batch 8 (API Design)
+        api_no_array_root_response::register(),
+        api_list_requires_pagination::register(),
+        api_import_from_public_index::register(),
     ];
     rules.extend(delegated::register_all());
     rules
