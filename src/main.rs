@@ -37,6 +37,7 @@ mod lsp;
 mod output;
 mod oxlint;
 mod oxlint_config;
+mod project;
 mod rules;
 
 use std::io::IsTerminal;

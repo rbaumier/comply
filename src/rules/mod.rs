@@ -15,6 +15,7 @@
 //! See TODO.md "Architecture" for the full rationale. // comply-ignore: todo-needs-issue-link — file reference, not marker.
 
 pub mod backend;
+pub mod file_ctx;
 pub mod banned_comment_words;
 pub mod better_auth_no_disable_csrf;
 pub mod better_auth_no_disable_origin_check;
@@ -765,6 +766,21 @@ pub mod i18n_no_hardcoded_string_in_jsx;
 pub mod i18n_no_manual_pluralization;
 pub mod i18n_no_string_concat_with_translation;
 pub mod i18n_prefer_intl_api;
+pub mod better_auth_middleware_requires_headers;
+pub mod better_auth_require_secure_cookies;
+pub mod drizzle_no_push_in_production;
+pub mod i18n_no_unnecessary_trans_component;
+pub mod i18n_prefer_logical_css_properties;
+pub mod no_conditional_async_return;
+pub mod no_unchecked_json_parse;
+pub mod rust_prefer_fast_hasher;
+pub mod tailwind_no_magic_spacing;
+pub mod tanstack_start_loader_stale_time;
+pub mod tanstack_start_no_client_import_in_server_fn;
+pub mod testing_no_real_external_service;
+pub mod ts_prefer_satisfies;
+pub mod vue_no_mutate_prop;
+pub mod zod_transform_requires_pipe;
 use crate::diagnostic::Severity;
 use crate::files::Language;
 use backend::Backend;
@@ -1765,6 +1781,22 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         drizzle_no_sql_raw_with_variable::register(),
         drizzle_returning_on_insert_update::register(),
         drizzle_zod_prefer_generated_schema::register(),
+        // v3.1 — Skill-driven rules: Batch 16 (mixed: security, i18n, vue, rust, tailwind, testing)
+        better_auth_middleware_requires_headers::register(),
+        better_auth_require_secure_cookies::register(),
+        drizzle_no_push_in_production::register(),
+        i18n_no_unnecessary_trans_component::register(),
+        i18n_prefer_logical_css_properties::register(),
+        no_conditional_async_return::register(),
+        no_unchecked_json_parse::register(),
+        rust_prefer_fast_hasher::register(),
+        tailwind_no_magic_spacing::register(),
+        tanstack_start_loader_stale_time::register(),
+        tanstack_start_no_client_import_in_server_fn::register(),
+        testing_no_real_external_service::register(),
+        ts_prefer_satisfies::register(),
+        vue_no_mutate_prop::register(),
+        zod_transform_requires_pipe::register(),
     ];
     rules.extend(delegated::register_all());
     rules

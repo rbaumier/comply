@@ -164,7 +164,7 @@ impl Backend {
             return;
         };
         let cfg = self.config.read().await.clone();
-        let diagnostics = engine::lint_in_memory(&path, language, text, &cfg);
+        let diagnostics = engine::lint_in_memory(&path, language, text, &cfg, None);
         let lsp_diagnostics: Vec<LspDiagnostic> =
             diagnostics.iter().map(comply_to_lsp_diagnostic).collect();
         self.client

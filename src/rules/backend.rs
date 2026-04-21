@@ -24,33 +24,61 @@ use crate::config::Config;
 #[cfg(test)]
 use crate::config::default_static_config;
 use crate::diagnostic::Diagnostic;
+use crate::project::ProjectCtx;
+use crate::rules::file_ctx::FileCtx;
 use std::path::Path;
 
 /// Read-only context handed to in-process check implementations.
 ///
-/// `config` is the resolved per-project configuration. Rules that
-/// read their knobs from here via `config.threshold(rule_id, key)`,
-/// so a project's `comply.toml` can override the defaults without
-/// touching any rule code.
+/// `config` carries the resolved per-project configuration (thresholds,
+/// overrides). `project` exposes parsed manifests and framework detection
+/// loaded once per run. `file` exposes per-file directives, RSC classification
+/// and path-segment flags built per file in `dispatch_backends`.
 #[derive(Debug)]
 pub struct CheckCtx<'a> {
     pub path: &'a Path,
     pub source: &'a str,
     pub config: &'a Config,
+    pub project: &'a ProjectCtx,
+    // Chantier #2+ migrates rules onto `ctx.file`; field lands with the
+    // scaffolding so consumers can compile incrementally.
+    #[allow(dead_code)]
+    pub file: &'a FileCtx,
 }
 
 impl<'a> CheckCtx<'a> {
-    /// Convenience constructor for unit tests. Uses the process-wide
-    /// default config (defaults only, no user `comply.toml`), so test
-    /// files don't need to construct one and pass it through manually.
-    /// Production code should always go through engine.rs which builds
-    /// a real `CheckCtx` with the loaded config.
+    /// Convenience constructor for unit tests. Uses the process-wide default
+    /// config and empty `ProjectCtx` / `FileCtx` so rules that don't rely on
+    /// project context pay nothing. Rules that *do* walk the filesystem via
+    /// `ctx.project.nearest_*(path)` still work — the accessors walk disk
+    /// themselves, they don't require a pre-loaded root.
     #[cfg(test)]
     pub fn for_test(path: &'a Path, source: &'a str) -> Self {
         Self {
             path,
             source,
             config: default_static_config(),
+            project: crate::project::default_static_project_ctx(),
+            file: crate::rules::file_ctx::default_static_file_ctx(),
+        }
+    }
+
+    /// Same as `for_test` but with a caller-owned `ProjectCtx`. Use when a
+    /// test needs to exercise framework-aware code paths (RSC detection,
+    /// framework-scoped rules).
+    #[cfg(test)]
+    #[allow(dead_code)] // Chantier #2+ rules adopt this as they migrate.
+    pub fn for_test_with_project(
+        path: &'a Path,
+        source: &'a str,
+        project: &'a ProjectCtx,
+    ) -> Self {
+        Self {
+            path,
+            source,
+            config: default_static_config(),
+            project,
+            file: crate::rules::file_ctx::default_static_file_ctx(),
         }
     }
 }

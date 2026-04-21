@@ -121,6 +121,8 @@ mod tests {
             path: Path::new("t.ts"),
             source,
             config: &cfg,
+            project: crate::project::default_static_project_ctx(),
+            file: crate::rules::file_ctx::default_static_file_ctx(),
         };
         Check.check(&ctx, &tree)
     }

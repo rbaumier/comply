@@ -28,8 +28,6 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
-use std::collections::HashSet;
-use std::path::Path;
 
 #[derive(Debug)]
 pub struct Check;
@@ -150,108 +148,6 @@ fn root_package_name(spec: &str) -> &str {
     }
 }
 
-/// Walk up from `file` looking for the given manifest filename.
-fn find_manifest(file: &Path, name: &str) -> Option<std::path::PathBuf> {
-    // We can't rely on canonicalize here: unit tests use virtual paths like "t.ts".
-    // The real engine always hands us absolute paths, but tests may not — so
-    // just walk parents and accept None when we fall off the root.
-    let mut current = file.parent();
-    while let Some(dir) = current {
-        let candidate = dir.join(name);
-        if candidate.is_file() {
-            return Some(candidate);
-        }
-        current = dir.parent();
-    }
-    None
-}
-
-/// Load the union of all dep sections from `package.json`. Returns `None`
-/// when the file can't be read or parsed — treated as "no manifest found".
-fn load_package_deps(manifest: &Path) -> Option<HashSet<String>> {
-    let raw = std::fs::read_to_string(manifest).ok()?;
-    let value: serde_json::Value = serde_json::from_str(&raw).ok()?;
-    let mut deps = HashSet::new();
-    for section in [
-        "dependencies",
-        "devDependencies",
-        "peerDependencies",
-        "optionalDependencies",
-        // `engines` keys name host runtimes whose APIs are importable as
-        // bare specifiers without appearing in the dep sections — e.g.
-        // VSCode extensions declare `engines.vscode` and then
-        // `import vscode from 'vscode'`. Treat keys as valid package names.
-        "engines",
-    ] {
-        if let Some(obj) = value.get(section).and_then(|v| v.as_object()) {
-            for key in obj.keys() {
-                deps.insert(key.clone());
-            }
-        }
-    }
-    Some(deps)
-}
-
-/// Parse `compilerOptions.paths` keys from a tsconfig.json. Returns the
-/// list of alias prefixes (with any trailing `/*` stripped). An empty
-/// vector is also used to represent "no paths block" or "parse failure"
-/// — either way we just don't alias-match.
-fn load_tsconfig_alias_prefixes(manifest: &Path) -> Vec<String> {
-    let Ok(raw) = std::fs::read_to_string(manifest) else {
-        return Vec::new();
-    };
-    // tsconfig.json frequently has `//` comments and trailing commas.
-    // serde_json rejects both. Strip line comments first; trailing commas
-    // are rarer and we accept a silent parse failure there rather than
-    // pulling in a full JSONC parser for v1.
-    let stripped = strip_line_comments(&raw);
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(&stripped) else {
-        return Vec::new();
-    };
-    let Some(paths) = value
-        .get("compilerOptions")
-        .and_then(|v| v.get("paths"))
-        .and_then(|v| v.as_object())
-    else {
-        return Vec::new();
-    };
-    paths
-        .keys()
-        .map(|k| k.strip_suffix("/*").unwrap_or(k.as_str()).to_string())
-        .collect()
-}
-
-/// Strip `//`-to-end-of-line comments that tsconfig often contains. Leaves
-/// `//` inside string literals alone.
-fn strip_line_comments(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for line in s.lines() {
-        let mut in_string = false;
-        let mut escape = false;
-        let mut comment_start: Option<usize> = None;
-        let bytes = line.as_bytes();
-        let mut i = 0;
-        while i < bytes.len() {
-            let c = bytes[i] as char;
-            if escape {
-                escape = false;
-            } else if c == '\\' && in_string {
-                escape = true;
-            } else if c == '"' {
-                in_string = !in_string;
-            } else if !in_string && c == '/' && i + 1 < bytes.len() && bytes[i + 1] as char == '/' {
-                comment_start = Some(i);
-                break;
-            }
-            i += 1;
-        }
-        let keep = comment_start.map_or(line, |c| &line[..c]);
-        out.push_str(keep);
-        out.push('\n');
-    }
-    out
-}
-
 /// True if `spec` matches any alias prefix (exact or `prefix/...`).
 fn matches_alias(spec: &str, alias_prefixes: &[String]) -> bool {
     alias_prefixes.iter().any(|p| {
@@ -270,16 +166,17 @@ fn matches_alias(spec: &str, alias_prefixes: &[String]) -> bool {
 
 impl TextCheck for Check {
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
-        // Find the nearest manifests. If there's no package.json anywhere
-        // above this file we can't prove anything; stay silent.
-        let Some(pkg_manifest) = find_manifest(ctx.path, "package.json") else {
+        // If there's no `package.json` anywhere above this file we can't
+        // prove anything; stay silent. `nearest_package_json` walks up from
+        // `ctx.path` and caches the parse on the shared `ProjectCtx` —
+        // monorepo safe (picks the workspace manifest, not the root).
+        let Some(pkg) = ctx.project.nearest_package_json(ctx.path) else {
             return Vec::new();
         };
-        let Some(deps) = load_package_deps(&pkg_manifest) else {
-            return Vec::new();
-        };
-        let alias_prefixes = find_manifest(ctx.path, "tsconfig.json")
-            .map(|p| load_tsconfig_alias_prefixes(&p))
+        let alias_prefixes = ctx
+            .project
+            .nearest_tsconfig(ctx.path)
+            .map(|t| t.alias_prefixes())
             .unwrap_or_default();
 
         let mut diagnostics = Vec::new();
@@ -297,7 +194,7 @@ impl TextCheck for Check {
                 continue;
             }
             let root = root_package_name(spec);
-            if deps.contains(root) {
+            if pkg.has_dep_or_engine(root) {
                 continue;
             }
             diagnostics.push(Diagnostic {

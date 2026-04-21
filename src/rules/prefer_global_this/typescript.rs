@@ -1,19 +1,6 @@
-use std::path::Path;
-
 use crate::diagnostic::{Diagnostic, Severity};
-
-/// Walk up from `file` looking for the nearest `package.json`.
-fn find_package_json(file: &Path) -> Option<std::path::PathBuf> {
-    let mut current = file.parent();
-    while let Some(dir) = current {
-        let candidate = dir.join("package.json");
-        if candidate.is_file() {
-            return Some(candidate);
-        }
-        current = dir.parent();
-    }
-    None
-}
+use crate::project::ProjectCtx;
+use std::path::Path;
 
 /// True if the project's `package.json` declares a browser-like runtime
 /// target — VSCode extension (`engines.vscode`), Electron app
@@ -23,25 +10,13 @@ fn find_package_json(file: &Path) -> Option<std::path::PathBuf> {
 /// set of properties), so we must stay silent. Pure-Node projects — no
 /// manifest, or a manifest without any of these keys — still get the
 /// rule applied.
-fn project_allows_window(file: &Path) -> bool {
-    let Some(manifest) = find_package_json(file) else {
+fn project_allows_window(project: &ProjectCtx, path: &Path) -> bool {
+    let Some(pkg) = project.nearest_package_json(path) else {
         return false;
     };
-    let Ok(raw) = std::fs::read_to_string(&manifest) else {
-        return false;
-    };
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw) else {
-        return false;
-    };
-    if value.get("browserslist").is_some() {
-        return true;
-    }
-    if let Some(engines) = value.get("engines").and_then(|v| v.as_object())
-        && (engines.contains_key("vscode") || engines.contains_key("electron"))
-    {
-        return true;
-    }
-    false
+    pkg.has_browserslist
+        || pkg.engines.contains_key("vscode")
+        || pkg.engines.contains_key("electron")
 }
 
 /// Window-specific APIs that should remain as `window.X`.
@@ -182,7 +157,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
     // Projects declaring a browser/WebView-like runtime (VSCode extension,
     // Electron app, browser build target) may legitimately use `window` as
     // the real DOM Window object. Only fire on pure-Node projects.
-    if project_allows_window(ctx.path) {
+    if project_allows_window(ctx.project, ctx.path) {
         return;
     }
     let src = std::str::from_utf8(source).unwrap_or("");

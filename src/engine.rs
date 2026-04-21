@@ -15,11 +15,14 @@
 use anyhow::{Context, Result};
 use rayon::prelude::*;
 use std::fs;
+use std::sync::Arc;
 use tree_sitter::Parser;
 
 use crate::config::Config;
 use crate::diagnostic::Diagnostic;
 use crate::files::{Language, SourceFile};
+use crate::project::ProjectCtx;
+use crate::rules::file_ctx::FileCtx;
 use crate::rules::{self, backend::Backend, backend::CheckCtx, meta::RuleMeta, RuleDef};
 
 /// Apply every registered rule to the given files.
@@ -32,6 +35,12 @@ use crate::rules::{self, backend::Backend, backend::CheckCtx, meta::RuleMeta, Ru
 #[must_use = "diagnostics from custom rules must be reported"]
 pub fn lint_files(files: &[&SourceFile], config: &Config) -> Result<Vec<Diagnostic>> {
     let rule_defs = rules::all_rule_defs();
+
+    // Project context loads once at the top of the run. `Arc` so every
+    // rayon worker gets a cheap clone of the reference — the inner state
+    // (manifest caches, lazy OnceLocks) is shared and synchronised via
+    // Mutex / OnceLock internally.
+    let project = Arc::new(ProjectCtx::load(files, config));
 
     // Parallel per-file fan-out. `map_init` gives each rayon worker its
     // own `Parser` — tree_sitter::Parser is !Sync, so we can't share one
@@ -46,7 +55,7 @@ pub fn lint_files(files: &[&SourceFile], config: &Config) -> Result<Vec<Diagnost
     let mut diagnostics: Vec<Diagnostic> = files
         .par_iter()
         .map_init(Parser::new, |parser, file| {
-            match lint_one_file(file, &rule_defs, parser, config) {
+            match lint_one_file(file, &rule_defs, parser, config, &project) {
                 Ok(file_diags) => file_diags,
                 Err(e) => {
                     eprintln!("comply: skipping {}: {e:#}", file.path.display());
@@ -83,6 +92,7 @@ pub fn lint_in_memory(
     language: Language,
     source: &str,
     config: &Config,
+    project: Option<&ProjectCtx>,
 ) -> Vec<Diagnostic> {
     let rule_defs = rules::all_rule_defs();
     let applicable = collect_applicable(&rule_defs, language);
@@ -94,7 +104,17 @@ pub fn lint_in_memory(
         language,
     };
     let mut parser = Parser::new();
-    dispatch_backends(&file, source, &applicable, &mut parser, config)
+    // LSP callers that haven't built a ProjectCtx yet get the empty default:
+    // `nearest_*` still walks disk, only eager root fields are absent.
+    let empty;
+    let project = match project {
+        Some(p) => p,
+        None => {
+            empty = ProjectCtx::empty();
+            &empty
+        }
+    };
+    dispatch_backends(&file, source, &applicable, &mut parser, config, project)
 }
 
 /// Flatten `RuleDef[]` into `(meta, backend)` pairs that apply to `language`.
@@ -125,6 +145,7 @@ fn dispatch_backends(
     applicable: &[(&RuleMeta, &Backend)],
     parser: &mut Parser,
     config: &Config,
+    project: &ProjectCtx,
 ) -> Vec<Diagnostic> {
     // Cull disabled rules up front so we can decide whether parsing the
     // AST is even worth the cost.
@@ -145,10 +166,13 @@ fn dispatch_backends(
         None
     };
 
+    let file_ctx = FileCtx::build(&file.path, source, file.language, project);
     let ctx = CheckCtx {
         path: &file.path,
         source,
         config,
+        project,
+        file: &file_ctx,
     };
     let mut diagnostics = Vec::new();
     for (meta, backend) in &active {
@@ -219,6 +243,7 @@ fn lint_one_file(
     rule_defs: &[RuleDef],
     parser: &mut Parser,
     config: &Config,
+    project: &ProjectCtx,
 ) -> Result<Vec<Diagnostic>> {
     let source = fs::read_to_string(&file.path)
         .with_context(|| format!("failed to read {}", file.path.display()))?;
@@ -227,7 +252,7 @@ fn lint_one_file(
     if applicable.is_empty() {
         return Ok(vec![]);
     }
-    Ok(dispatch_backends(file, &source, &applicable, parser, config))
+    Ok(dispatch_backends(file, &source, &applicable, parser, config, project))
 }
 
 /// True if the diagnostic's rule fires on its OWN source directory,
