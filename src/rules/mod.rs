@@ -28,7 +28,11 @@ pub mod db_no_n_plus_one;
 pub mod db_no_string_concat_sql;
 pub mod delegated;
 pub mod drizzle_fk_needs_index;
+pub mod drizzle_no_select_without_limit;
+pub mod drizzle_no_sql_raw_with_variable;
+pub mod drizzle_returning_on_insert_update;
 pub mod drizzle_timestamp_with_timezone;
+pub mod drizzle_zod_prefer_generated_schema;
 pub mod error_without_cause;
 pub mod explicit_return_type_on_exported;
 pub mod explicit_units;
@@ -1756,6 +1760,11 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         testing_no_undefined_mock_var::register(),
         testing_prefer_msw::register(),
         testing_prefer_test_each::register(),
+        // v3.0 — Skill-driven rules: Batch 15 (Drizzle ORM)
+        drizzle_no_select_without_limit::register(),
+        drizzle_no_sql_raw_with_variable::register(),
+        drizzle_returning_on_insert_update::register(),
+        drizzle_zod_prefer_generated_schema::register(),
     ];
     rules.extend(delegated::register_all());
     rules
