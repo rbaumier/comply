@@ -222,7 +222,17 @@ pub mod tailwind_no_important_modifier;
 pub mod tailwind_prefer_cn_utility;
 pub mod tailwind_prefer_size_shorthand;
 pub mod tanstack_query_array_key;
+pub mod tanstack_query_fn_must_throw_on_error;
+pub mod tanstack_query_no_cache_time;
 pub mod tanstack_query_no_deprecated_props;
+pub mod tanstack_query_no_enabled_true;
+pub mod tanstack_query_no_is_loading;
+pub mod tanstack_query_no_keep_previous_data_prop;
+pub mod tanstack_query_no_query_callbacks;
+pub mod tanstack_query_no_use_error_boundary;
+pub mod tanstack_query_prefer_key_factory;
+pub mod tanstack_query_prefer_query_options;
+pub mod tanstack_query_require_stale_time;
 pub mod tanstack_start_require_validate_search;
 pub mod tanstack_start_server_fn_file_convention;
 pub mod tanstack_start_server_fn_requires_auth;
@@ -870,7 +880,17 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         react_no_and_conditional_jsx::register(),
         react_hoist_regex_outside_component::register(),
         tanstack_query_array_key::register(),
+        tanstack_query_fn_must_throw_on_error::register(),
+        tanstack_query_no_cache_time::register(),
         tanstack_query_no_deprecated_props::register(),
+        tanstack_query_no_enabled_true::register(),
+        tanstack_query_no_is_loading::register(),
+        tanstack_query_no_keep_previous_data_prop::register(),
+        tanstack_query_no_query_callbacks::register(),
+        tanstack_query_no_use_error_boundary::register(),
+        tanstack_query_prefer_key_factory::register(),
+        tanstack_query_prefer_query_options::register(),
+        tanstack_query_require_stale_time::register(),
         zod_prefer_top_level_format::register(),
         zod_no_any::register(),
         drizzle_timestamp_with_timezone::register(),
