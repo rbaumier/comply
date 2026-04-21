@@ -119,8 +119,12 @@ pub mod prefer_type_over_interface;
 pub mod react_hoist_regex_outside_component;
 pub mod react_no_and_conditional_jsx;
 pub mod react_no_array_index_key;
+pub mod react_no_browser_api_in_server_component;
+pub mod react_no_class_component_in_server_component;
+pub mod react_no_client_hook_in_server_component;
 pub mod react_no_cookies_in_layout;
 pub mod react_no_derived_state_in_effect;
+pub mod react_no_event_handler_in_server_component;
 pub mod react_no_inline_default_prop;
 pub mod react_no_object_in_dep_array;
 pub mod react_passive_event_listeners;
@@ -1030,6 +1034,11 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         // v2.7+ — Framework rules (React + Vue).
         react_no_cookies_in_layout::register(),
         react_no_object_in_dep_array::register(),
+        // RSC boundary rules — enforce server/client component contracts.
+        react_no_client_hook_in_server_component::register(),
+        react_no_event_handler_in_server_component::register(),
+        react_no_browser_api_in_server_component::register(),
+        react_no_class_component_in_server_component::register(),
         vue_no_options_api::register(),
         vue_no_reactive_destructure::register(),
         vue_v_for_needs_stable_key::register(),

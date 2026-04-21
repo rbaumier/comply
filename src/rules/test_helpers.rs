@@ -30,6 +30,7 @@ use std::path::Path;
 
 use crate::diagnostic::Diagnostic;
 use crate::rules::backend::{AstCheck, CheckCtx};
+use crate::rules::file_ctx::FileCtx;
 
 /// Run a tree-sitter `Check` against `source` parsed with the standard
 /// TypeScript grammar (covers `.ts` and plain JS).
@@ -67,6 +68,24 @@ pub fn run_tsx(source: &str, check: &dyn AstCheck) -> Vec<Diagnostic> {
     )
 }
 
+/// TSX variant that lets the test supply a pre-built `FileCtx`. Use when
+/// the rule consumes `ctx.file.*` (RSC classification, directives,
+/// path segments).
+#[must_use]
+pub fn run_tsx_with_file_ctx(
+    source: &str,
+    check: &dyn AstCheck,
+    file: &FileCtx,
+) -> Vec<Diagnostic> {
+    run_with_grammar_and_file(
+        source,
+        check,
+        tree_sitter_typescript::LANGUAGE_TSX.into(),
+        "t.tsx",
+        file,
+    )
+}
+
 /// Run a tree-sitter `Check` against `source` parsed with the Rust
 /// grammar.
 #[must_use]
@@ -101,4 +120,20 @@ fn run_with_grammar(
     parser.set_language(&grammar).expect("grammar should load");
     let tree = parser.parse(source, None).expect("parser should produce a tree");
     check.check(&CheckCtx::for_test(Path::new(fake_path), source), &tree)
+}
+
+fn run_with_grammar_and_file(
+    source: &str,
+    check: &dyn AstCheck,
+    grammar: tree_sitter::Language,
+    fake_path: &str,
+    file: &FileCtx,
+) -> Vec<Diagnostic> {
+    let mut parser = tree_sitter::Parser::new();
+    parser.set_language(&grammar).expect("grammar should load");
+    let tree = parser.parse(source, None).expect("parser should produce a tree");
+    check.check(
+        &CheckCtx::for_test_with_file(Path::new(fake_path), source, file),
+        &tree,
+    )
 }

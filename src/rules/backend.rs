@@ -40,9 +40,6 @@ pub struct CheckCtx<'a> {
     pub source: &'a str,
     pub config: &'a Config,
     pub project: &'a ProjectCtx,
-    // Chantier #2+ migrates rules onto `ctx.file`; field lands with the
-    // scaffolding so consumers can compile incrementally.
-    #[allow(dead_code)]
     pub file: &'a FileCtx,
 }
 
@@ -79,6 +76,42 @@ impl<'a> CheckCtx<'a> {
             config: default_static_config(),
             project,
             file: crate::rules::file_ctx::default_static_file_ctx(),
+        }
+    }
+
+    /// Same as `for_test` but with a caller-owned `FileCtx`. Use when a rule
+    /// consumes `ctx.file.*` (RSC classification, directives, path segments).
+    #[cfg(test)]
+    pub fn for_test_with_file(
+        path: &'a Path,
+        source: &'a str,
+        file: &'a crate::rules::file_ctx::FileCtx,
+    ) -> Self {
+        Self {
+            path,
+            source,
+            config: default_static_config(),
+            project: crate::project::default_static_project_ctx(),
+            file,
+        }
+    }
+
+    /// Full-control variant for tests that need both a custom `ProjectCtx`
+    /// and a custom `FileCtx`.
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub fn for_test_full(
+        path: &'a Path,
+        source: &'a str,
+        project: &'a ProjectCtx,
+        file: &'a crate::rules::file_ctx::FileCtx,
+    ) -> Self {
+        Self {
+            path,
+            source,
+            config: default_static_config(),
+            project,
+            file,
         }
     }
 }
