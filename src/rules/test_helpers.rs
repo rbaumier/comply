@@ -79,6 +79,18 @@ pub fn run_rust(source: &str, check: &dyn AstCheck) -> Vec<Diagnostic> {
     )
 }
 
+/// Same as `run_rust` but with a custom fake filename. Use this when
+/// the rule filters on the file path (e.g. `src/main.rs` vs lib files).
+#[must_use]
+pub fn run_rust_with_path(source: &str, check: &dyn AstCheck, fake_path: &str) -> Vec<Diagnostic> {
+    run_with_grammar(
+        source,
+        check,
+        tree_sitter_rust::LANGUAGE.into(),
+        fake_path,
+    )
+}
+
 fn run_with_grammar(
     source: &str,
     check: &dyn AstCheck,

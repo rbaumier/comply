@@ -150,8 +150,15 @@ pub mod rust_serde_deny_unknown_fields;
 pub mod rust_string_as_error;
 pub mod rust_sync_io_in_async;
 pub mod rust_thread_sleep_in_async;
+pub mod rust_anyhow_context_on_question_mark;
+pub mod rust_must_use_on_result_fn;
+pub mod rust_prefer_channel_over_arc_mutex_vec;
+pub mod rust_prefer_once_lock;
+pub mod rust_thiserror_for_lib;
 pub mod rust_tokio_spawn_without_handle;
 pub mod rust_unbounded_channel;
+pub mod rust_unsafe_ffi_isolation;
+pub mod rust_vec_with_capacity;
 pub mod rust_undocumented_unsafe;
 pub mod rust_unit_error_result;
 pub mod rust_unsafe_impl_without_comment;
@@ -1629,6 +1636,14 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         sql_nullable_requires_comment::register(),
         sql_advisory_lock_prefer_xact::register(),
         sql_require_transaction_timeout::register(),
+        // v3.0 — Skill-driven rules: Batch 5 (Rust)
+        rust_prefer_once_lock::register(),
+        rust_vec_with_capacity::register(),
+        rust_prefer_channel_over_arc_mutex_vec::register(),
+        rust_anyhow_context_on_question_mark::register(),
+        rust_must_use_on_result_fn::register(),
+        rust_unsafe_ffi_isolation::register(),
+        rust_thiserror_for_lib::register(),
     ];
     rules.extend(delegated::register_all());
     rules
