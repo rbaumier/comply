@@ -223,6 +223,10 @@ pub mod tailwind_prefer_cn_utility;
 pub mod tailwind_prefer_size_shorthand;
 pub mod tanstack_query_array_key;
 pub mod tanstack_query_no_deprecated_props;
+pub mod tanstack_start_require_validate_search;
+pub mod tanstack_start_server_fn_file_convention;
+pub mod tanstack_start_server_fn_requires_auth;
+pub mod tanstack_start_server_fn_requires_validation;
 pub mod timeout_on_io;
 pub mod vue_no_duplicate_v_if;
 pub mod vue_no_options_api;
@@ -1644,6 +1648,11 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         rust_must_use_on_result_fn::register(),
         rust_unsafe_ffi_isolation::register(),
         rust_thiserror_for_lib::register(),
+        // v3.0 — Skill-driven rules: Batch 6 (TanStack Start)
+        tanstack_start_server_fn_requires_validation::register(),
+        tanstack_start_server_fn_requires_auth::register(),
+        tanstack_start_server_fn_file_convention::register(),
+        tanstack_start_require_validate_search::register(),
     ];
     rules.extend(delegated::register_all());
     rules
