@@ -202,9 +202,14 @@ pub mod sql_no_pg_enum;
 pub mod sql_no_select_star;
 pub mod sql_no_varchar;
 pub mod sql_prefer_exists_over_in;
+pub mod tailwind_no_apply_for_variants;
+pub mod tailwind_no_arbitrary_z_index;
 pub mod tailwind_no_conflicting_classes;
 pub mod tailwind_no_duplicate_classes;
 pub mod tailwind_no_dynamic_class;
+pub mod tailwind_no_important_modifier;
+pub mod tailwind_prefer_cn_utility;
+pub mod tailwind_prefer_size_shorthand;
 pub mod tanstack_query_array_key;
 pub mod tanstack_query_no_deprecated_props;
 pub mod timeout_on_io;
@@ -1609,6 +1614,12 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         react_passive_event_listeners::register(),
         react_no_derived_state_in_effect::register(),
         react_use_state_initializer_function::register(),
+        // v3.0 — Skill-driven rules: Batch 3 (Tailwind)
+        tailwind_no_important_modifier::register(),
+        tailwind_no_arbitrary_z_index::register(),
+        tailwind_prefer_size_shorthand::register(),
+        tailwind_no_apply_for_variants::register(),
+        tailwind_prefer_cn_utility::register(),
     ];
     rules.extend(delegated::register_all());
     rules
