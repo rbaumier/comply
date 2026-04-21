@@ -16,6 +16,11 @@
 
 pub mod backend;
 pub mod banned_comment_words;
+pub mod better_auth_no_disable_csrf;
+pub mod better_auth_no_disable_origin_check;
+pub mod better_auth_plugin_import_path;
+pub mod better_auth_require_rate_limit;
+pub mod better_auth_trusted_providers;
 pub mod boolean_naming;
 pub mod call_expression;
 pub mod comment_paraphrases_code;
@@ -1736,6 +1741,12 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         no_prototype_pollution::register(),
         no_shell_exec::register(),
         no_unvalidated_url_redirect::register(),
+        // v3.0 — Skill-driven rules: Batch 13 (better-auth)
+        better_auth_no_disable_csrf::register(),
+        better_auth_no_disable_origin_check::register(),
+        better_auth_plugin_import_path::register(),
+        better_auth_require_rate_limit::register(),
+        better_auth_trusted_providers::register(),
     ];
     rules.extend(delegated::register_all());
     rules
