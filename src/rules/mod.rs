@@ -681,6 +681,10 @@ pub mod layer_import_boundary;
 pub mod package_json_sorted_deps;
 pub mod package_json_unique_deps;
 pub mod playwright_missing_await;
+// v3.0 — Skill-driven rules: Batch 1 (TypeScript/Architecture)
+pub mod no_default_export;
+pub mod prefer_promise_all;
+pub mod ts_prefer_using_declaration;
 use crate::diagnostic::Severity;
 use crate::files::Language;
 use backend::Backend;
@@ -1586,6 +1590,10 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         // v2.13 — native id-length (replaces oxlint + clippy delegation)
         // so the diagnostic names the offending identifier.
         id_length::register(),
+        // v3.0 — Skill-driven rules: Batch 1 (TypeScript/Architecture)
+        no_default_export::register(),
+        prefer_promise_all::register(),
+        ts_prefer_using_declaration::register(),
     ];
     rules.extend(delegated::register_all());
     rules
