@@ -476,6 +476,10 @@ pub mod strings_comparison;
 pub mod structured_api_error;
 pub mod symmetric_pairs;
 pub mod test_check_exception;
+pub mod testing_no_and_in_test_name;
+pub mod testing_no_undefined_mock_var;
+pub mod testing_prefer_msw;
+pub mod testing_prefer_test_each;
 pub mod too_many_break_or_continue;
 pub mod use_type_alias;
 pub mod useless_string_operation;
@@ -1747,6 +1751,11 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         better_auth_plugin_import_path::register(),
         better_auth_require_rate_limit::register(),
         better_auth_trusted_providers::register(),
+        // v3.0 — Skill-driven rules: Batch 14 (testing)
+        testing_no_and_in_test_name::register(),
+        testing_no_undefined_mock_var::register(),
+        testing_prefer_msw::register(),
+        testing_prefer_test_each::register(),
     ];
     rules.extend(delegated::register_all());
     rules
