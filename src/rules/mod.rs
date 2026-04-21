@@ -103,7 +103,14 @@ pub mod react_hoist_regex_outside_component;
 pub mod react_no_and_conditional_jsx;
 pub mod react_no_array_index_key;
 pub mod react_no_cookies_in_layout;
+pub mod react_no_derived_state_in_effect;
+pub mod react_no_inline_default_prop;
 pub mod react_no_object_in_dep_array;
+pub mod react_passive_event_listeners;
+pub mod react_prefer_use_transition;
+pub mod react_server_action_requires_auth;
+pub mod react_server_action_requires_validation;
+pub mod react_use_state_initializer_function;
 pub mod react_use_state_lazy_init;
 pub mod rust_arc_non_send_sync;
 pub mod rust_await_holding_lock;
@@ -1594,6 +1601,14 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         no_default_export::register(),
         prefer_promise_all::register(),
         ts_prefer_using_declaration::register(),
+        // v3.0 — Skill-driven rules: Batch 2 (React)
+        react_server_action_requires_validation::register(),
+        react_server_action_requires_auth::register(),
+        react_prefer_use_transition::register(),
+        react_no_inline_default_prop::register(),
+        react_passive_event_listeners::register(),
+        react_no_derived_state_in_effect::register(),
+        react_use_state_initializer_function::register(),
     ];
     rules.extend(delegated::register_all());
     rules
