@@ -739,6 +739,12 @@ pub mod playwright_missing_await;
 pub mod no_default_export;
 pub mod prefer_promise_all;
 pub mod ts_prefer_using_declaration;
+// v3.0 — Skill-driven rules: Batch 11 (i18n)
+pub mod i18n_no_concat_translation_key;
+pub mod i18n_no_hardcoded_string_in_jsx;
+pub mod i18n_no_manual_pluralization;
+pub mod i18n_no_string_concat_with_translation;
+pub mod i18n_prefer_intl_api;
 use crate::diagnostic::Severity;
 use crate::files::Language;
 use backend::Backend;
@@ -1709,6 +1715,12 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         vue_require_lifecycle_cleanup::register(),
         vue_pinia_store_to_refs::register(),
         vue_define_emits_typed::register(),
+        // v3.0 — Skill-driven rules: Batch 11 (i18n)
+        i18n_no_hardcoded_string_in_jsx::register(),
+        i18n_no_concat_translation_key::register(),
+        i18n_no_string_concat_with_translation::register(),
+        i18n_prefer_intl_api::register(),
+        i18n_no_manual_pluralization::register(),
     ];
     rules.extend(delegated::register_all());
     rules
