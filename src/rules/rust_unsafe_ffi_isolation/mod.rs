@@ -6,11 +6,9 @@
 //! grep-able, keeps bindgen-style raw APIs out of the top of the
 //! file, and funnels every unsafe cast through one audit surface.
 
-mod text;
+mod rust;
 
 use crate::diagnostic::Severity;
-use crate::files::Language;
-use crate::rules::backend::Backend;
 use crate::rules::meta::RuleMeta;
 use crate::rules::RuleDef;
 
@@ -24,8 +22,5 @@ pub const META: RuleMeta = RuleMeta {
 };
 
 pub fn register() -> RuleDef {
-    RuleDef {
-        meta: META,
-        backends: vec![(Language::Rust, Backend::Text(Box::new(text::Check)))],
-    }
+    crate::register_rust_only!(META, rust)
 }
