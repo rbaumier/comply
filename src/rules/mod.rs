@@ -119,14 +119,18 @@ pub mod prefer_type_over_interface;
 pub mod react_hoist_regex_outside_component;
 pub mod react_no_and_conditional_jsx;
 pub mod react_no_array_index_key;
+pub mod react_no_async_client_component;
 pub mod react_no_browser_api_in_server_component;
 pub mod react_no_class_component_in_server_component;
 pub mod react_no_client_hook_in_server_component;
 pub mod react_no_cookies_in_layout;
 pub mod react_no_derived_state_in_effect;
 pub mod react_no_event_handler_in_server_component;
+pub mod react_no_generate_static_params_in_client;
 pub mod react_no_inline_default_prop;
+pub mod react_no_metadata_export_in_client;
 pub mod react_no_object_in_dep_array;
+pub mod react_no_server_only_in_client;
 pub mod react_passive_event_listeners;
 pub mod react_prefer_use_transition;
 pub mod react_server_action_requires_auth;
@@ -1039,6 +1043,10 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         react_no_event_handler_in_server_component::register(),
         react_no_browser_api_in_server_component::register(),
         react_no_class_component_in_server_component::register(),
+        react_no_async_client_component::register(),
+        react_no_server_only_in_client::register(),
+        react_no_metadata_export_in_client::register(),
+        react_no_generate_static_params_in_client::register(),
         vue_no_options_api::register(),
         vue_no_reactive_destructure::register(),
         vue_v_for_needs_stable_key::register(),

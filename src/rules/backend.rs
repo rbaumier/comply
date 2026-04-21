@@ -99,7 +99,6 @@ impl<'a> CheckCtx<'a> {
     /// Full-control variant for tests that need both a custom `ProjectCtx`
     /// and a custom `FileCtx`.
     #[cfg(test)]
-    #[allow(dead_code)]
     pub fn for_test_full(
         path: &'a Path,
         source: &'a str,

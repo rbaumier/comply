@@ -29,6 +29,7 @@
 use std::path::Path;
 
 use crate::diagnostic::Diagnostic;
+use crate::project::ProjectCtx;
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::file_ctx::FileCtx;
 
@@ -83,6 +84,27 @@ pub fn run_tsx_with_file_ctx(
         tree_sitter_typescript::LANGUAGE_TSX.into(),
         "t.tsx",
         file,
+    )
+}
+
+/// TSX variant that lets the test supply both a `ProjectCtx` and a
+/// `FileCtx`. Use when a rule is framework-scoped (Next.js, Nuxt, …) in
+/// addition to consuming `ctx.file.*`.
+#[must_use]
+pub fn run_tsx_with_project_and_file(
+    source: &str,
+    check: &dyn AstCheck,
+    project: &ProjectCtx,
+    file: &FileCtx,
+) -> Vec<Diagnostic> {
+    let mut parser = tree_sitter::Parser::new();
+    parser
+        .set_language(&tree_sitter_typescript::LANGUAGE_TSX.into())
+        .expect("grammar should load");
+    let tree = parser.parse(source, None).expect("parser should produce a tree");
+    check.check(
+        &CheckCtx::for_test_full(Path::new("t.tsx"), source, project, file),
+        &tree,
     )
 }
 
