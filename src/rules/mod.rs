@@ -244,7 +244,14 @@ pub mod vue_no_reactive_destructure;
 pub mod vue_v_for_needs_stable_key;
 pub mod walker;
 pub mod zod_no_any;
+pub mod zod_no_optional_nullable_chain;
+pub mod zod_prefer_discriminated_union;
+pub mod zod_prefer_safe_parse;
 pub mod zod_prefer_top_level_format;
+pub mod zod_refine_requires_path;
+pub mod zod_require_error_messages;
+pub mod zod_string_min_1_required;
+pub mod zod_trim_before_min;
 
 pub mod a11y_alt_text;
 pub mod a11y_anchor_ambiguous_text;
@@ -896,6 +903,13 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         tanstack_query_require_stale_time::register(),
         zod_prefer_top_level_format::register(),
         zod_no_any::register(),
+        zod_prefer_safe_parse::register(),
+        zod_string_min_1_required::register(),
+        zod_trim_before_min::register(),
+        zod_prefer_discriminated_union::register(),
+        zod_refine_requires_path::register(),
+        zod_require_error_messages::register(),
+        zod_no_optional_nullable_chain::register(),
         drizzle_timestamp_with_timezone::register(),
         tailwind_no_dynamic_class::register(),
         // v1.5 — Rust rules from the language-rust skill. All have clippy
