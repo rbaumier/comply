@@ -115,3 +115,10 @@ min_occurrences = 3
 
 [rules.max-dependencies]
 max = 15
+
+# ---------------------------------------------------------------
+# Drizzle ORM thresholds.
+# ---------------------------------------------------------------
+
+[rules.drizzle-chunk-large-batch-insert]
+max = 500

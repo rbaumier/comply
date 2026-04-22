@@ -28,6 +28,7 @@ pub mod comment_paraphrases_code;
 pub mod db_no_n_plus_one;
 pub mod db_no_string_concat_sql;
 pub mod delegated;
+pub mod drizzle_chunk_large_batch_insert;
 pub mod drizzle_fk_needs_index;
 pub mod drizzle_no_select_without_limit;
 pub mod drizzle_no_sql_raw_with_variable;
@@ -129,6 +130,7 @@ pub mod no_section_divider_comments;
 pub mod no_set_x_to_y;
 pub mod no_shell_exec;
 pub mod no_sort_without_comparator;
+pub mod no_ssrf_fetch;
 pub mod no_test_logic;
 pub mod no_throw;
 pub mod no_type_encoded_names;
@@ -142,6 +144,7 @@ pub mod prefer_switch_over_chained_if;
 pub mod prefer_type_over_interface;
 pub mod react_duplicate_use_directive;
 pub mod react_hoist_regex_outside_component;
+pub mod react_hoist_static_jsx;
 pub mod react_layout_requires_children_prop;
 pub mod react_no_and_conditional_jsx;
 pub mod react_no_array_index_key;
@@ -158,8 +161,10 @@ pub mod react_no_inline_default_prop;
 pub mod react_no_metadata_export_in_client;
 pub mod react_no_next_headers_in_client;
 pub mod react_no_object_in_dep_array;
+pub mod react_no_sequential_await_in_component;
 pub mod react_no_server_only_in_client;
 pub mod react_passive_event_listeners;
+pub mod react_prefer_react_cache;
 pub mod react_prefer_use_transition;
 pub mod react_server_action_requires_auth;
 pub mod react_server_action_requires_validation;
@@ -277,6 +282,7 @@ pub mod tailwind_prefer_cn_utility;
 pub mod tailwind_prefer_size_shorthand;
 pub mod tanstack_query_array_key;
 pub mod tanstack_query_fn_must_throw_on_error;
+pub mod tanstack_query_key_includes_params;
 pub mod tanstack_query_no_cache_time;
 pub mod tanstack_query_no_deprecated_props;
 pub mod tanstack_query_no_enabled_true;
@@ -286,6 +292,7 @@ pub mod tanstack_query_no_query_callbacks;
 pub mod tanstack_query_no_use_error_boundary;
 pub mod tanstack_query_prefer_key_factory;
 pub mod tanstack_query_prefer_query_options;
+pub mod tanstack_query_prefer_suspense_query;
 pub mod tanstack_query_require_stale_time;
 pub mod tanstack_start_require_validate_search;
 pub mod tanstack_start_server_fn_file_convention;
@@ -293,15 +300,18 @@ pub mod tanstack_start_server_fn_requires_auth;
 pub mod tanstack_start_server_fn_requires_validation;
 pub mod timeout_on_io;
 pub mod vue_define_emits_typed;
+pub mod vue_markraw_for_third_party;
 pub mod vue_no_duplicate_v_if;
 pub mod vue_no_options_api;
 pub mod vue_no_reactive_destructure;
 pub mod vue_no_v_html_unsafe;
 pub mod vue_pinia_store_to_refs;
+pub mod vue_prefer_computed;
 pub mod vue_prefer_v_else;
 pub mod vue_require_lifecycle_cleanup;
 pub mod vue_script_setup_required;
 pub mod vue_sfc_section_order;
+pub mod vue_url_state_for_filters;
 pub mod vue_v_for_needs_stable_key;
 pub mod walker;
 pub mod zod_no_any;
@@ -347,13 +357,16 @@ pub mod a11y_prefer_tag_over_role;
 pub mod a11y_role_has_required_aria_props;
 pub mod a11y_scope;
 pub mod a11y_tabindex_no_positive;
+pub mod api_deprecation_headers;
 pub mod api_first;
 pub mod api_import_from_public_index;
 pub mod api_list_requires_pagination;
 pub mod api_no_array_root_response;
+pub mod api_no_boolean_field_in_response;
 pub mod arguments_order;
 pub mod array_callback_without_return;
 pub mod assertions_in_tests;
+pub mod audit_log_required_fields;
 pub mod auth_on_mutation;
 pub mod comma_or_logical_or_case;
 pub mod cyclomatic_complexity;
@@ -814,14 +827,19 @@ pub mod i18n_no_unnecessary_trans_component;
 pub mod i18n_prefer_logical_css_properties;
 pub mod no_conditional_async_return;
 pub mod no_unchecked_json_parse;
+pub mod rust_no_mutex_in_single_threaded;
+pub mod rust_prefer_cow;
 pub mod rust_prefer_fast_hasher;
 pub mod tailwind_no_magic_spacing;
+pub mod tailwind_read_theme_before_classes;
 pub mod tanstack_start_loader_stale_time;
 pub mod tanstack_start_no_client_import_in_server_fn;
 pub mod testing_no_real_external_service;
 pub mod ts_prefer_satisfies;
 pub mod vue_no_mutate_prop;
+pub mod zod_brand_ids;
 pub mod zod_transform_requires_pipe;
+pub mod zod_validate_env_at_startup;
 use crate::diagnostic::Severity;
 use crate::files::Language;
 use backend::Backend;
@@ -977,8 +995,12 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         react_use_state_lazy_init::register(),
         react_no_and_conditional_jsx::register(),
         react_hoist_regex_outside_component::register(),
+        react_hoist_static_jsx::register(),
+        react_no_sequential_await_in_component::register(),
+        react_prefer_react_cache::register(),
         tanstack_query_array_key::register(),
         tanstack_query_fn_must_throw_on_error::register(),
+        tanstack_query_key_includes_params::register(),
         tanstack_query_no_cache_time::register(),
         tanstack_query_no_deprecated_props::register(),
         tanstack_query_no_enabled_true::register(),
@@ -988,6 +1010,7 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         tanstack_query_no_use_error_boundary::register(),
         tanstack_query_prefer_key_factory::register(),
         tanstack_query_prefer_query_options::register(),
+        tanstack_query_prefer_suspense_query::register(),
         tanstack_query_require_stale_time::register(),
         zod_prefer_top_level_format::register(),
         zod_no_any::register(),
@@ -1806,6 +1829,8 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         api_no_array_root_response::register(),
         api_list_requires_pagination::register(),
         api_import_from_public_index::register(),
+        api_no_boolean_field_in_response::register(),
+        api_deprecation_headers::register(),
         // v3.0 — Skill-driven rules: Batch 10 (Vue)
         vue_script_setup_required::register(),
         vue_sfc_section_order::register(),
@@ -1814,6 +1839,9 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         vue_require_lifecycle_cleanup::register(),
         vue_pinia_store_to_refs::register(),
         vue_define_emits_typed::register(),
+        vue_prefer_computed::register(),
+        vue_markraw_for_third_party::register(),
+        vue_url_state_for_filters::register(),
         // v3.0 — Skill-driven rules: Batch 11 (i18n)
         i18n_no_hardcoded_string_in_jsx::register(),
         i18n_no_concat_translation_key::register(),
@@ -1821,12 +1849,14 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         i18n_prefer_intl_api::register(),
         i18n_no_manual_pluralization::register(),
         // v3.0 — Skill-driven rules: Batch 12 (security)
+        audit_log_required_fields::register(),
         no_error_details_in_response::register(),
         no_mass_assignment::register(),
         no_open_redirect::register(),
         no_path_traversal::register(),
         no_prototype_pollution::register(),
         no_shell_exec::register(),
+        no_ssrf_fetch::register(),
         no_unvalidated_url_redirect::register(),
         // v3.0 — Skill-driven rules: Batch 13 (better-auth)
         better_auth_no_disable_csrf::register(),
@@ -1840,6 +1870,7 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         testing_prefer_msw::register(),
         testing_prefer_test_each::register(),
         // v3.0 — Skill-driven rules: Batch 15 (Drizzle ORM)
+        drizzle_chunk_large_batch_insert::register(),
         drizzle_no_select_without_limit::register(),
         drizzle_no_sql_raw_with_variable::register(),
         drizzle_returning_on_insert_update::register(),
@@ -1853,13 +1884,18 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         no_conditional_async_return::register(),
         no_unchecked_json_parse::register(),
         rust_prefer_fast_hasher::register(),
+        rust_prefer_cow::register(),
+        rust_no_mutex_in_single_threaded::register(),
         tailwind_no_magic_spacing::register(),
+        tailwind_read_theme_before_classes::register(),
         tanstack_start_loader_stale_time::register(),
         tanstack_start_no_client_import_in_server_fn::register(),
         testing_no_real_external_service::register(),
         ts_prefer_satisfies::register(),
         vue_no_mutate_prop::register(),
+        zod_brand_ids::register(),
         zod_transform_requires_pipe::register(),
+        zod_validate_env_at_startup::register(),
     ];
     rules.extend(delegated::register_all());
     rules

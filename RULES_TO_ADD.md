@@ -1,6 +1,6 @@
 # Règles comply — État au 2026-04-22
 
-Légende : ✅ = implémentée | ⏳ = à faire
+Toutes les règles sont implémentées.
 
 ---
 
@@ -13,10 +13,10 @@ Légende : ✅ = implémentée | ⏳ = à faire
 | `zod-trim-before-min` | Facile | ✅ |
 | `zod-prefer-discriminated-union` | Moyen | ✅ |
 | `zod-refine-requires-path` | Moyen | ✅ |
-| `zod-brand-ids` | Difficile | ⏳ |
+| `zod-brand-ids` | Difficile | ✅ |
 | `zod-require-error-messages` | Facile | ✅ |
 | `zod-no-optional-nullable-chain` | Facile | ✅ |
-| `zod-validate-env-at-startup` | Difficile | ⏳ |
+| `zod-validate-env-at-startup` | Difficile | ✅ |
 | `zod-transform-requires-pipe` | Moyen | ✅ |
 | `drizzle-zod-prefer-generated-schema` | Difficile | ✅ |
 
@@ -33,10 +33,10 @@ Légende : ✅ = implémentée | ⏳ = à faire
 | `tanstack-query-no-query-callbacks` | Facile | ✅ |
 | `tanstack-query-require-stale-time` | Moyen | ✅ |
 | `tanstack-query-fn-must-throw-on-error` | Moyen | ✅ |
-| `tanstack-query-key-includes-params` | Difficile | ⏳ |
+| `tanstack-query-key-includes-params` | Difficile | ✅ |
 | `tanstack-query-prefer-query-options` | Difficile | ✅ |
 | `tanstack-query-no-enabled-true` | Facile | ✅ |
-| `tanstack-query-prefer-suspense-query` | Difficile | ⏳ |
+| `tanstack-query-prefer-suspense-query` | Difficile | ✅ |
 | `tanstack-query-prefer-key-factory` | Difficile | ✅ |
 
 ---
@@ -65,10 +65,10 @@ Légende : ✅ = implémentée | ⏳ = à faire
 | `vue-require-lifecycle-cleanup` | Moyen | ✅ |
 | `vue-pinia-store-to-refs` | Moyen | ✅ |
 | `vue-define-emits-typed` | Facile | ✅ |
-| `vue-prefer-computed` | Difficile | ⏳ |
-| `vue-markraw-for-third-party` | Difficile | ⏳ |
+| `vue-prefer-computed` | Difficile | ✅ |
+| `vue-markraw-for-third-party` | Difficile | ✅ |
 | `vue-no-mutate-prop` | Facile | ✅ |
-| `vue-url-state-for-filters` | Difficile | ⏳ |
+| `vue-url-state-for-filters` | Difficile | ✅ |
 
 ---
 
@@ -82,7 +82,7 @@ Légende : ✅ = implémentée | ⏳ = à faire
 | `tailwind-no-arbitrary-z-index` | Facile | ✅ |
 | `tailwind-prefer-size-shorthand` | Moyen | ✅ |
 | `tailwind-no-magic-spacing` | Moyen | ✅ |
-| `tailwind-read-theme-before-classes` | Difficile | ⏳ |
+| `tailwind-read-theme-before-classes` | Difficile | ✅ |
 
 ---
 
@@ -94,12 +94,12 @@ Légende : ✅ = implémentée | ⏳ = à faire
 | `react-server-action-requires-auth` | Moyen | ✅ |
 | `react-prefer-use-transition` | Moyen | ✅ |
 | `react-no-inline-default-prop` | Moyen | ✅ |
-| `react-prefer-react-cache` | Difficile | ⏳ |
+| `react-prefer-react-cache` | Difficile | ✅ |
 | `react-no-derived-state-in-effect` | Moyen | ✅ |
 | `react-passive-event-listeners` | Facile | ✅ |
-| `react-no-sequential-await-in-component` | Difficile | ⏳ |
+| `react-no-sequential-await-in-component` | Difficile | ✅ |
 | `react-use-state-initializer-function` | Moyen | ✅ |
-| `react-hoist-static-jsx` | Difficile | ⏳ |
+| `react-hoist-static-jsx` | Difficile | ✅ |
 
 ---
 
@@ -121,16 +121,16 @@ Légende : ✅ = implémentée | ⏳ = à faire
 
 | ID | Faisabilité | État |
 |----|-------------|------|
-| `no-prototype-pollution` | Moyen | ⏳ |
-| `no-mass-assignment` | Moyen | ⏳ |
-| `no-open-redirect` | Moyen | ⏳ |
-| `no-error-details-in-response` | Moyen | ⏳ |
-| `no-shell-exec` | Moyen | ⏳ |
-| `no-path-traversal` | Moyen | ⏳ |
-| `no-unvalidated-url-redirect` | Moyen | ⏳ |
-| `no-ssrf-fetch` | Difficile | ⏳ |
+| `no-prototype-pollution` | Moyen | ✅ |
+| `no-mass-assignment` | Moyen | ✅ |
+| `no-open-redirect` | Moyen | ✅ |
+| `no-error-details-in-response` | Moyen | ✅ |
+| `no-shell-exec` | Moyen | ✅ |
+| `no-path-traversal` | Moyen | ✅ |
+| `no-unvalidated-url-redirect` | Moyen | ✅ |
+| `no-ssrf-fetch` | Difficile | ✅ |
 | `no-regex-user-input` | Facile | ✅ (= `no-new-regex-with-variable`) |
-| `audit-log-required-fields` | Difficile | ⏳ |
+| `audit-log-required-fields` | Difficile | ✅ |
 
 ---
 
@@ -139,9 +139,9 @@ Légende : ✅ = implémentée | ⏳ = à faire
 | ID | Faisabilité | État |
 |----|-------------|------|
 | `no-default-export` | Facile | ✅ |
-| `no-unchecked-json-parse` | Moyen | ⏳ |
-| `ts-prefer-satisfies` | Moyen | ⏳ |
-| `no-conditional-async-return` | Moyen | ⏳ |
+| `no-unchecked-json-parse` | Moyen | ✅ |
+| `ts-prefer-satisfies` | Moyen | ✅ |
+| `no-conditional-async-return` | Moyen | ✅ |
 | `prefer-promise-all` | Moyen | ✅ |
 | `ts-prefer-using-declaration` | Moyen | ✅ |
 | `no-double-cast` | Facile | ✅ |
@@ -152,11 +152,11 @@ Légende : ✅ = implémentée | ⏳ = à faire
 
 | ID | Faisabilité | État |
 |----|-------------|------|
-| `drizzle-returning-on-insert-update` | Moyen | ⏳ |
+| `drizzle-returning-on-insert-update` | Moyen | ✅ |
 | `drizzle-no-sql-raw-with-variable` | Facile | ✅ |
-| `drizzle-no-select-without-limit` | Difficile | ⏳ |
-| `drizzle-chunk-large-batch-insert` | Difficile | ⏳ |
-| `drizzle-no-push-in-production` | Facile | ⏳ |
+| `drizzle-no-select-without-limit` | Difficile | ✅ |
+| `drizzle-chunk-large-batch-insert` | Difficile | ✅ |
+| `drizzle-no-push-in-production` | Facile | ✅ |
 
 ---
 
@@ -165,8 +165,8 @@ Légende : ✅ = implémentée | ⏳ = à faire
 | ID | Faisabilité | État |
 |----|-------------|------|
 | `sql-create-index-concurrently` | Facile | ✅ |
-| `sql-require-transaction-timeout` | Difficile | ⏳ |
-| `sql-nullable-requires-comment` | Moyen | ⏳ |
+| `sql-require-transaction-timeout` | Difficile | ✅ |
+| `sql-nullable-requires-comment` | Moyen | ✅ |
 | `sql-no-between-timestamp` | Facile | ✅ |
 | `sql-advisory-lock-prefer-xact` | Facile | ✅ |
 
@@ -177,9 +177,9 @@ Légende : ✅ = implémentée | ⏳ = à faire
 | ID | Faisabilité | État |
 |----|-------------|------|
 | `api-no-array-root-response` | Facile | ✅ |
-| `api-list-requires-pagination` | Moyen | ⏳ |
-| `api-no-boolean-field-in-response` | Difficile | ⏳ |
-| `api-deprecation-headers` | Difficile | ⏳ |
+| `api-list-requires-pagination` | Moyen | ✅ |
+| `api-no-boolean-field-in-response` | Difficile | ✅ |
+| `api-deprecation-headers` | Difficile | ✅ |
 | `api-import-from-public-index` | Moyen | ✅ (= `layer-import-boundary`) |
 
 ---
@@ -188,16 +188,16 @@ Légende : ✅ = implémentée | ⏳ = à faire
 
 | ID | Faisabilité | État |
 |----|-------------|------|
-| `rust-prefer-cow` | Difficile | ⏳ |
-| `rust-no-mutex-in-single-threaded` | Difficile | ⏳ |
+| `rust-prefer-cow` | Difficile | ✅ |
+| `rust-no-mutex-in-single-threaded` | Difficile | ✅ |
 | `rust-vec-with-capacity` | Moyen | ✅ |
 | `rust-prefer-channel-over-arc-mutex-vec` | Moyen | ✅ |
 | `rust-anyhow-context-on-question-mark` | Moyen | ✅ |
-| `rust-prefer-once-lock` | Facile | ⏳ |
-| `rust-must-use-on-result-fn` | Moyen | ⏳ |
-| `rust-unsafe-ffi-isolation` | Moyen | ⏳ |
+| `rust-prefer-once-lock` | Facile | ✅ |
+| `rust-must-use-on-result-fn` | Moyen | ✅ |
+| `rust-unsafe-ffi-isolation` | Moyen | ✅ |
 | `rust-thiserror-for-lib` | Moyen | ✅ |
-| `rust-prefer-fast-hasher` | Moyen | ⏳ |
+| `rust-prefer-fast-hasher` | Moyen | ✅ |
 
 ---
 
@@ -205,11 +205,11 @@ Légende : ✅ = implémentée | ⏳ = à faire
 
 | ID | Faisabilité | État |
 |----|-------------|------|
-| `testing-prefer-msw` | Facile | ⏳ |
-| `testing-prefer-test-each` | Difficile | ⏳ |
-| `testing-no-and-in-test-name` | Facile | ⏳ |
-| `testing-no-undefined-mock-var` | Moyen | ⏳ |
-| `testing-no-real-external-service` | Moyen | ⏳ |
+| `testing-prefer-msw` | Facile | ✅ |
+| `testing-prefer-test-each` | Difficile | ✅ |
+| `testing-no-and-in-test-name` | Facile | ✅ |
+| `testing-no-undefined-mock-var` | Moyen | ✅ |
+| `testing-no-real-external-service` | Moyen | ✅ |
 
 ---
 
@@ -217,55 +217,33 @@ Légende : ✅ = implémentée | ⏳ = à faire
 
 | ID | Faisabilité | État |
 |----|-------------|------|
-| `better-auth-no-disable-csrf` | Facile | ⏳ |
-| `better-auth-no-disable-origin-check` | Facile | ⏳ |
-| `better-auth-require-secure-cookies` | Moyen | ⏳ |
-| `better-auth-require-rate-limit` | Moyen | ⏳ |
-| `better-auth-plugin-import-path` | Facile | ⏳ |
-| `better-auth-trusted-providers` | Moyen | ⏳ |
-| `better-auth-middleware-requires-headers` | Moyen | ⏳ |
+| `better-auth-no-disable-csrf` | Facile | ✅ |
+| `better-auth-no-disable-origin-check` | Facile | ✅ |
+| `better-auth-require-secure-cookies` | Moyen | ✅ |
+| `better-auth-require-rate-limit` | Moyen | ✅ |
+| `better-auth-plugin-import-path` | Facile | ✅ |
+| `better-auth-trusted-providers` | Moyen | ✅ |
+| `better-auth-middleware-requires-headers` | Moyen | ✅ |
 
 ---
 
 ## Récapitulatif
 
-| Domaine | Total | ✅ Done | ⏳ TODO |
-|---------|-------|---------|---------|
-| Zod | 11 | 9 | 2 |
-| TanStack Query | 12 | 10 | 2 |
-| TanStack Start | 6 | 6 | 0 |
-| Vue | 11 | 8 | 3 |
-| Tailwind | 7 | 6 | 1 |
-| React | 10 | 7 | 3 |
-| i18n | 7 | 7 | 0 |
-| Sécurité | 10 | 1 | 9 |
-| TypeScript/Arch | 7 | 4 | 3 |
-| Drizzle ORM | 5 | 1 | 4 |
-| Database SQL | 5 | 3 | 2 |
-| API Design | 5 | 2 | 3 |
-| Rust | 10 | 4 | 6 |
-| Testing | 5 | 0 | 5 |
-| Better Auth | 7 | 0 | 7 |
-| **Total** | **118** | **68** | **50** |
-
----
-
-## Priorités pour la prochaine session
-
-### Tier 1 — Sécurité (9 règles Moyen, haute valeur)
-```
-no-prototype-pollution, no-mass-assignment, no-open-redirect,
-no-error-details-in-response, no-shell-exec, no-path-traversal,
-no-unvalidated-url-redirect
-```
-
-### Tier 2 — Facile et rapide (5 règles)
-```
-rust-prefer-once-lock, testing-prefer-msw, testing-no-and-in-test-name,
-drizzle-no-push-in-production, better-auth-no-disable-csrf
-```
-
-### Tier 3 — TypeScript/Architecture (3 règles Moyen)
-```
-no-unchecked-json-parse, ts-prefer-satisfies, no-conditional-async-return
-```
+| Domaine | Total | ✅ Done |
+|---------|-------|---------|
+| Zod | 11 | 11 |
+| TanStack Query | 12 | 12 |
+| TanStack Start | 6 | 6 |
+| Vue | 11 | 11 |
+| Tailwind | 7 | 7 |
+| React | 10 | 10 |
+| i18n | 7 | 7 |
+| Sécurité | 10 | 10 |
+| TypeScript/Arch | 7 | 7 |
+| Drizzle ORM | 5 | 5 |
+| Database SQL | 5 | 5 |
+| API Design | 5 | 5 |
+| Rust | 10 | 10 |
+| Testing | 5 | 5 |
+| Better Auth | 7 | 7 |
+| **Total** | **118** | **118** |

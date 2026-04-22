@@ -1,26 +1,20 @@
-mod text;
+//! testing-no-undefined-mock-var — flag `jest.fn()` / `vi.fn()` mocks that are never configured.
+
+mod typescript;
+
 use crate::diagnostic::Severity;
 use crate::rules::meta::RuleMeta;
 use crate::rules::RuleDef;
-use crate::rules::backend::Backend;
-use crate::files::Language;
 
 pub const META: RuleMeta = RuleMeta {
     id: "testing-no-undefined-mock-var",
-    description: "`vi.mock()` factories are hoisted — module-level `let` vars they reference will be `undefined`.",
-    remediation: "Declare the variable inside `vi.hoisted()` so it is initialized before the factory runs.",
-    severity: Severity::Error,
-    doc_url: Some("https://vitest.dev/api/vi#vi-hoisted"),
+    description: "`jest.fn()` / `vi.fn()` stored in a variable but never configured with `mockReturnValue` / `mockResolvedValue` / `mockImplementation` always returns `undefined`.",
+    remediation: "Configure the mock with `.mockReturnValue(...)`, `.mockResolvedValue(...)` or `.mockImplementation(...)`, or pass an implementation to `jest.fn(impl)`.",
+    severity: Severity::Warning,
+    doc_url: None,
     categories: &["testing"],
 };
 
 pub fn register() -> RuleDef {
-    RuleDef {
-        meta: META,
-        backends: vec![
-            (Language::TypeScript, Backend::Text(Box::new(text::Check))),
-            (Language::Tsx, Backend::Text(Box::new(text::Check))),
-            (Language::JavaScript, Backend::Text(Box::new(text::Check))),
-        ],
-    }
+    crate::register_ts_family!(META, typescript)
 }

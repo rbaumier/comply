@@ -1,9 +1,10 @@
-mod text;
+//! testing-no-and-in-test-name — flag " and " in `test` / `it` names.
+
+mod typescript;
+
 use crate::diagnostic::Severity;
 use crate::rules::meta::RuleMeta;
 use crate::rules::RuleDef;
-use crate::rules::backend::Backend;
-use crate::files::Language;
 
 pub const META: RuleMeta = RuleMeta {
     id: "testing-no-and-in-test-name",
@@ -15,12 +16,5 @@ pub const META: RuleMeta = RuleMeta {
 };
 
 pub fn register() -> RuleDef {
-    RuleDef {
-        meta: META,
-        backends: vec![
-            (Language::TypeScript, Backend::Text(Box::new(text::Check))),
-            (Language::Tsx, Backend::Text(Box::new(text::Check))),
-            (Language::JavaScript, Backend::Text(Box::new(text::Check))),
-        ],
-    }
+    crate::register_ts_family!(META, typescript)
 }

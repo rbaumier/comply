@@ -1,26 +1,20 @@
-mod text;
+//! testing-prefer-test-each — flag `for`/`forEach` loops that wrap `test` / `it`.
+
+mod typescript;
+
 use crate::diagnostic::Severity;
 use crate::rules::meta::RuleMeta;
 use crate::rules::RuleDef;
-use crate::rules::backend::Backend;
-use crate::files::Language;
 
 pub const META: RuleMeta = RuleMeta {
     id: "testing-prefer-test-each",
-    description: "3+ tests with a common name prefix can be collapsed into a single `test.each` table.",
-    remediation: "Use `test.each([...])` to express parameterized cases without repeating test boilerplate.",
+    description: "Looping over `test` / `it` hides failures — use `test.each` so each row is its own named case.",
+    remediation: "Replace `for (const row of cases) { test(..., () => {...}) }` with `test.each(cases)(..., (row) => {...})`.",
     severity: Severity::Warning,
-    doc_url: None,
+    doc_url: Some("https://jestjs.io/docs/api#testeachtablename-fn-timeout"),
     categories: &["testing"],
 };
 
 pub fn register() -> RuleDef {
-    RuleDef {
-        meta: META,
-        backends: vec![
-            (Language::TypeScript, Backend::Text(Box::new(text::Check))),
-            (Language::Tsx, Backend::Text(Box::new(text::Check))),
-            (Language::JavaScript, Backend::Text(Box::new(text::Check))),
-        ],
-    }
+    crate::register_ts_family!(META, typescript)
 }
