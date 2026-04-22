@@ -29,6 +29,10 @@ use serde_json::Value;
 use crate::config::Config;
 use crate::files::SourceFile;
 
+pub mod import_index;
+
+pub use import_index::ImportIndex;
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum ModuleType {
     #[default]
@@ -226,6 +230,12 @@ pub struct ProjectCtx {
     // cache None on failure, never retry" contract in a single primitive.
     tailwind_theme: OnceLock<Option<TailwindTheme>>,
     drizzle_config: OnceLock<Option<DrizzleConfig>>,
+
+    // Cross-file import/export index. Eagerly built by `load` when files are
+    // known; empty (still queryable, returns no matches) for callers that
+    // construct a `ProjectCtx` via `empty()` — e.g. the LSP server, where
+    // single-file edits don't have a multi-file view yet.
+    import_index: OnceLock<ImportIndex>,
 }
 
 impl ProjectCtx {
@@ -236,7 +246,9 @@ impl ProjectCtx {
         Self::default()
     }
 
-    /// Load once per run from the set of files being linted.
+    /// Load once per run from the set of files being linted. Eagerly parses
+    /// every TS/JS/TSX input to build `import_index` — cross-file rules are
+    /// noisy/wrong without it, so we don't make that lookup lazy.
     pub fn load(files: &[&SourceFile], _config: &Config) -> Self {
         let root = detect_project_root(files);
         let pkg = root
@@ -272,6 +284,34 @@ impl ProjectCtx {
                 .unwrap()
                 .insert(r.clone(), Arc::clone(t));
         }
+
+        // Eager cross-file index. Building here (instead of lazily on first
+        // access) means the cost is paid once in the main thread before rule
+        // dispatch fans out across rayon workers — rules see an already-built
+        // `ImportIndex` and never contend on `OnceLock::get_or_init`.
+        let index = ImportIndex::build(files);
+        let _ = ctx.import_index.set(index);
+        ctx
+    }
+
+    /// Cross-file import/export index. Always returns a handle: when the
+    /// index wasn't pre-built (e.g. `ProjectCtx::empty()` from the LSP),
+    /// falls back to a shared empty index so callers never need to branch
+    /// on availability — every accessor on an empty index returns an empty
+    /// slice.
+    pub fn import_index(&self) -> &ImportIndex {
+        self.import_index.get_or_init(ImportIndex::default)
+    }
+
+    /// Test-only constructor that seeds `import_index` from an arbitrary set
+    /// of `SourceFile`s. Lets cross-file rule tests exercise the index
+    /// without spinning up a full `load`.
+    #[cfg(test)]
+    #[must_use]
+    pub fn for_test_with_files(files: &[&SourceFile]) -> Self {
+        let ctx = ProjectCtx::default();
+        let index = ImportIndex::build(files);
+        let _ = ctx.import_index.set(index);
         ctx
     }
 

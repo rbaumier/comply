@@ -57,6 +57,26 @@ pub fn run_ts_with_path(source: &str, check: &dyn AstCheck, fake_path: &str) -> 
     )
 }
 
+/// Same as `run_ts` but with a caller-supplied `ProjectCtx` + fake path. Use
+/// when a cross-file rule needs a populated `ImportIndex` to query.
+#[must_use]
+pub fn run_ts_with_project_and_path(
+    source: &str,
+    check: &dyn AstCheck,
+    project: &ProjectCtx,
+    fake_path: &Path,
+) -> Vec<Diagnostic> {
+    let mut parser = tree_sitter::Parser::new();
+    parser
+        .set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into())
+        .expect("grammar should load");
+    let tree = parser.parse(source, None).expect("parser should produce a tree");
+    check.check(
+        &CheckCtx::for_test_with_project(fake_path, source, project),
+        &tree,
+    )
+}
+
 /// Same as `run_ts` but with the TSX/JSX grammar variant. Use this when
 /// the rule under test inspects JSX-specific node kinds.
 #[must_use]

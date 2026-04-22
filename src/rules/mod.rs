@@ -77,6 +77,7 @@ pub mod vue_template_helpers;
 // below for the rationale.
 pub mod cognitive_complexity;
 pub mod generator_without_yield;
+pub mod god_module;
 pub mod jsdoc_needs_description;
 pub mod module_header;
 pub mod no_abbreviated_names;
@@ -372,6 +373,7 @@ pub mod auth_on_mutation;
 pub mod comma_or_logical_or_case;
 pub mod cyclomatic_complexity;
 pub mod data_clumps;
+pub mod dead_export;
 pub mod elseif_without_else;
 pub mod error_message_is_remediation;
 pub mod factory_di_shape;
@@ -1198,6 +1200,8 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         assertions_in_tests::register(),
         comma_or_logical_or_case::register(),
         cyclomatic_complexity::register(),
+        dead_export::register(),
+        god_module::register(),
         elseif_without_else::register(),
         for_loop_increment_sign::register(),
         inconsistent_function_call::register(),
