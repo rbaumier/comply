@@ -1,5 +1,7 @@
 # Skill-driven rules — Implementation Plan
 
+> **Status: COMPLETE — 2026-04-22.** All 82 rules implemented, registered, tests green (4364 total). Checkboxes flipped mechanically.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use subagent-development (recommended) or plans skill to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Implement ~82 new native comply rules derived from the skill library, covering 15 technology domains that currently have zero or inadequate static analysis.
@@ -67,7 +69,7 @@ cargo clippy --all --all-targets -- -D warnings
 - Create: `src/rules/no_default_export/typescript.rs`
 - Modify: `src/rules/mod.rs`
 
-- [ ] **Step 1: Add mod.rs**
+- [x] **Step 1: Add mod.rs**
 
 ```rust
 mod typescript;
@@ -89,7 +91,7 @@ pub fn register() -> RuleDef {
 }
 ```
 
-- [ ] **Step 2: Write failing tests in typescript.rs**
+- [x] **Step 2: Write failing tests in typescript.rs**
 
 ```rust
 use crate::diagnostic::{Diagnostic, Severity};
@@ -138,12 +140,12 @@ mod tests {
 }
 ```
 
-- [ ] **Step 3: Run tests — expect compile error or failures**
+- [x] **Step 3: Run tests — expect compile error or failures**
 ```bash
 cargo nextest run no_default_export 2>&1 | head -30
 ```
 
-- [ ] **Step 4: Implement detection in typescript.rs**
+- [x] **Step 4: Implement detection in typescript.rs**
 
 ```rust
 use crate::diagnostic::{Diagnostic, Severity};
@@ -169,22 +171,22 @@ crate::ast_check! { |node, source, ctx, diagnostics|
 }
 ```
 
-- [ ] **Step 5: Register the rule** — add to `src/rules/mod.rs`:
+- [x] **Step 5: Register the rule** — add to `src/rules/mod.rs`:
   - `pub mod no_default_export;` in the pub mod block
   - `no_default_export::register()` in `all_rule_defs()`
 
-- [ ] **Step 6: Run tests**
+- [x] **Step 6: Run tests**
 ```bash
 cargo nextest run no_default_export
 # Expected: all tests pass
 ```
 
-- [ ] **Step 7: Full suite + clippy**
+- [x] **Step 7: Full suite + clippy**
 ```bash
 cargo nextest run && cargo clippy --all --all-targets -- -D warnings
 ```
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 ```bash
 git add src/rules/no_default_export/ src/rules/mod.rs
 git commit -m "feat(no-default-export): flag export default declarations"
@@ -203,7 +205,7 @@ git commit -m "feat(no-default-export): flag export default declarations"
 
 Conservative simplification: flag any two consecutive `const X = await callExpr()` statements where the second `callExpr` is a plain call (not `callExpr(X)` — i.e., does not contain the text of the first binding name).
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
 
 ```rust
 #[cfg(test)]
@@ -266,7 +268,7 @@ async function f() {
 }
 ```
 
-- [ ] **Step 2: Implement detection**
+- [x] **Step 2: Implement detection**
 
 Detection algorithm (in `ast_check!`):
 1. On `statement_block` nodes, collect child statements that match `lexical_declaration` with a single `await_expression` initializer.
@@ -344,7 +346,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
 }
 ```
 
-- [ ] **Step 3: Register, run tests, clippy, commit**
+- [x] **Step 3: Register, run tests, clippy, commit**
 ```bash
 cargo nextest run prefer_promise_all
 cargo nextest run && cargo clippy --all --all-targets -- -D warnings
@@ -363,7 +365,7 @@ git commit -m "feat(prefer-promise-all): flag sequential independent awaits"
 
 **Detection logic:** Flag `try_statement` where the `finally_clause` contains only a single `expression_statement` calling `.close()`, `.dispose()`, `.destroy()`, `.disconnect()`, or `.release()` on a variable — a pattern replaceable by `await using` / `using`.
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
 
 ```rust
 #[cfg(test)]
@@ -400,7 +402,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Implement detection**
+- [x] **Step 2: Implement detection**
 
 ```rust
 use crate::diagnostic::{Diagnostic, Severity};
@@ -449,7 +451,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
 }
 ```
 
-- [ ] **Step 3: Register, run tests, clippy, commit**
+- [x] **Step 3: Register, run tests, clippy, commit**
 ```bash
 cargo nextest run ts_prefer_using_declaration
 cargo nextest run && cargo clippy --all --all-targets -- -D warnings
@@ -472,7 +474,7 @@ git commit -m "feat(ts-prefer-using-declaration): flag try/finally cleanup repla
 - Create: `src/rules/react_server_action_requires_validation/text.rs`
 - Modify: `src/rules/mod.rs`
 
-- [ ] **Step 1: Create mod.rs**
+- [x] **Step 1: Create mod.rs**
 
 ```rust
 mod text;
@@ -502,7 +504,7 @@ pub fn register() -> RuleDef {
 }
 ```
 
-- [ ] **Step 2: Create text.rs**
+- [x] **Step 2: Create text.rs**
 
 ```rust
 use crate::diagnostic::{Diagnostic, Severity};
@@ -579,9 +581,9 @@ mod tests {
 }
 ```
 
-- [ ] **Step 3: Register** — `src/rules/mod.rs`: `pub mod react_server_action_requires_validation;` + `react_server_action_requires_validation::register()`
+- [x] **Step 3: Register** — `src/rules/mod.rs`: `pub mod react_server_action_requires_validation;` + `react_server_action_requires_validation::register()`
 
-- [ ] **Step 4: Test & commit**
+- [x] **Step 4: Test & commit**
 ```bash
 cargo nextest run react_server_action_requires_validation
 git add src/rules/react_server_action_requires_validation/ src/rules/mod.rs
@@ -597,7 +599,7 @@ git commit -m "feat(react-server-action-requires-validation): flag unvalidated s
 - Create: `src/rules/react_server_action_requires_auth/text.rs`
 - Modify: `src/rules/mod.rs`
 
-- [ ] **Step 1: Create mod.rs**
+- [x] **Step 1: Create mod.rs**
 
 ```rust
 mod text;
@@ -627,7 +629,7 @@ pub fn register() -> RuleDef {
 }
 ```
 
-- [ ] **Step 2: Create text.rs**
+- [x] **Step 2: Create text.rs**
 
 ```rust
 use crate::diagnostic::{Diagnostic, Severity};
@@ -703,7 +705,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 3: Register + test + commit**
+- [x] **Step 3: Register + test + commit**
 ```bash
 cargo nextest run react_server_action_requires_auth
 git add src/rules/react_server_action_requires_auth/ src/rules/mod.rs
@@ -719,7 +721,7 @@ git commit -m "feat(react-server-action-requires-auth): flag unauthenticated ser
 - Create: `src/rules/react_prefer_use_transition/text.rs`
 - Modify: `src/rules/mod.rs`
 
-- [ ] **Step 1: Create mod.rs**
+- [x] **Step 1: Create mod.rs**
 
 ```rust
 mod text;
@@ -749,7 +751,7 @@ pub fn register() -> RuleDef {
 }
 ```
 
-- [ ] **Step 2: Create text.rs**
+- [x] **Step 2: Create text.rs**
 
 ```rust
 use crate::diagnostic::{Diagnostic, Severity};
@@ -824,7 +826,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 3: Register + test + commit**
+- [x] **Step 3: Register + test + commit**
 ```bash
 cargo nextest run react_prefer_use_transition
 git add src/rules/react_prefer_use_transition/ src/rules/mod.rs
@@ -840,7 +842,7 @@ git commit -m "feat(react-prefer-use-transition): flag manual loading boolean st
 - Create: `src/rules/react_no_inline_default_prop/typescript.rs`
 - Modify: `src/rules/mod.rs`
 
-- [ ] **Step 1: Create mod.rs**
+- [x] **Step 1: Create mod.rs**
 
 ```rust
 mod typescript;
@@ -862,7 +864,7 @@ pub fn register() -> RuleDef {
 }
 ```
 
-- [ ] **Step 2: Create typescript.rs**
+- [x] **Step 2: Create typescript.rs**
 
 ```rust
 use crate::diagnostic::{Diagnostic, Severity};
@@ -933,7 +935,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 3: Register + test + commit**
+- [x] **Step 3: Register + test + commit**
 ```bash
 cargo nextest run react_no_inline_default_prop
 git add src/rules/react_no_inline_default_prop/ src/rules/mod.rs
@@ -949,7 +951,7 @@ git commit -m "feat(react-no-inline-default-prop): flag non-primitive defaults i
 - Create: `src/rules/react_passive_event_listeners/typescript.rs`
 - Modify: `src/rules/mod.rs`
 
-- [ ] **Step 1: Create mod.rs**
+- [x] **Step 1: Create mod.rs**
 
 ```rust
 mod typescript;
@@ -971,7 +973,7 @@ pub fn register() -> RuleDef {
 }
 ```
 
-- [ ] **Step 2: Create typescript.rs**
+- [x] **Step 2: Create typescript.rs**
 
 ```rust
 use crate::diagnostic::{Diagnostic, Severity};
@@ -1052,7 +1054,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 3: Register + test + commit**
+- [x] **Step 3: Register + test + commit**
 ```bash
 cargo nextest run react_passive_event_listeners
 git add src/rules/react_passive_event_listeners/ src/rules/mod.rs
@@ -1068,7 +1070,7 @@ git commit -m "feat(react-passive-event-listeners): flag scroll/touch listeners 
 - Create: `src/rules/react_no_derived_state_in_effect/typescript.rs`
 - Modify: `src/rules/mod.rs`
 
-- [ ] **Step 1: Create mod.rs**
+- [x] **Step 1: Create mod.rs**
 
 ```rust
 mod typescript;
@@ -1090,7 +1092,7 @@ pub fn register() -> RuleDef {
 }
 ```
 
-- [ ] **Step 2: Create typescript.rs**
+- [x] **Step 2: Create typescript.rs**
 
 ```rust
 use crate::diagnostic::{Diagnostic, Severity};
@@ -1183,7 +1185,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 3: Register + test + commit**
+- [x] **Step 3: Register + test + commit**
 ```bash
 cargo nextest run react_no_derived_state_in_effect
 git add src/rules/react_no_derived_state_in_effect/ src/rules/mod.rs
@@ -1199,7 +1201,7 @@ git commit -m "feat(react-no-derived-state-in-effect): flag setter-only useEffec
 - Create: `src/rules/react_use_state_initializer_function/typescript.rs`
 - Modify: `src/rules/mod.rs`
 
-- [ ] **Step 1: Create mod.rs**
+- [x] **Step 1: Create mod.rs**
 
 ```rust
 mod typescript;
@@ -1221,7 +1223,7 @@ pub fn register() -> RuleDef {
 }
 ```
 
-- [ ] **Step 2: Create typescript.rs**
+- [x] **Step 2: Create typescript.rs**
 
 ```rust
 use crate::diagnostic::{Diagnostic, Severity};
@@ -1303,7 +1305,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 3: Register + test + commit**
+- [x] **Step 3: Register + test + commit**
 ```bash
 cargo nextest run react_use_state_initializer_function
 cargo nextest run && cargo clippy --all --all-targets -- -D warnings
@@ -1326,7 +1328,7 @@ git commit -m "feat(react-use-state-initializer-function): flag expensive useSta
 - Create: `src/rules/tailwind_no_important_modifier/text.rs`
 - Modify: `src/rules/mod.rs`
 
-- [ ] **Step 1: Create mod.rs**
+- [x] **Step 1: Create mod.rs**
 
 ```rust
 mod text;
@@ -1357,7 +1359,7 @@ pub fn register() -> RuleDef {
 }
 ```
 
-- [ ] **Step 2: Create text.rs**
+- [x] **Step 2: Create text.rs**
 
 ```rust
 use crate::diagnostic::{Diagnostic, Severity};
@@ -1430,7 +1432,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 3: Register + test + commit**
+- [x] **Step 3: Register + test + commit**
 ```bash
 cargo nextest run tailwind_no_important_modifier
 git add src/rules/tailwind_no_important_modifier/ src/rules/mod.rs
@@ -1446,7 +1448,7 @@ git commit -m "feat(tailwind-no-important-modifier): flag ! important modifier i
 - Create: `src/rules/tailwind_no_arbitrary_z_index/text.rs`
 - Modify: `src/rules/mod.rs`
 
-- [ ] **Step 1: Create mod.rs**
+- [x] **Step 1: Create mod.rs**
 
 ```rust
 mod text;
@@ -1477,7 +1479,7 @@ pub fn register() -> RuleDef {
 }
 ```
 
-- [ ] **Step 2: Create text.rs**
+- [x] **Step 2: Create text.rs**
 
 ```rust
 use crate::diagnostic::{Diagnostic, Severity};
@@ -1541,7 +1543,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 3: Register + test + commit**
+- [x] **Step 3: Register + test + commit**
 ```bash
 cargo nextest run tailwind_no_arbitrary_z_index
 git add src/rules/tailwind_no_arbitrary_z_index/ src/rules/mod.rs
@@ -1557,7 +1559,7 @@ git commit -m "feat(tailwind-no-arbitrary-z-index): flag z-[n] arbitrary z-index
 - Create: `src/rules/tailwind_prefer_size_shorthand/text.rs`
 - Modify: `src/rules/mod.rs`
 
-- [ ] **Step 1: Create mod.rs**
+- [x] **Step 1: Create mod.rs**
 
 ```rust
 mod text;
@@ -1588,7 +1590,7 @@ pub fn register() -> RuleDef {
 }
 ```
 
-- [ ] **Step 2: Create text.rs**
+- [x] **Step 2: Create text.rs**
 
 ```rust
 use crate::diagnostic::{Diagnostic, Severity};
@@ -1673,7 +1675,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 3: Register + test + commit**
+- [x] **Step 3: Register + test + commit**
 ```bash
 cargo nextest run tailwind_prefer_size_shorthand
 git add src/rules/tailwind_prefer_size_shorthand/ src/rules/mod.rs
@@ -1689,7 +1691,7 @@ git commit -m "feat(tailwind-prefer-size-shorthand): suggest size-X for matching
 - Create: `src/rules/tailwind_no_apply_for_variants/text.rs`
 - Modify: `src/rules/mod.rs`
 
-- [ ] **Step 1: Create mod.rs**
+- [x] **Step 1: Create mod.rs**
 
 ```rust
 mod text;
@@ -1723,7 +1725,7 @@ pub fn register() -> RuleDef {
 }
 ```
 
-- [ ] **Step 2: Create text.rs**
+- [x] **Step 2: Create text.rs**
 
 ```rust
 use crate::diagnostic::{Diagnostic, Severity};
@@ -1800,7 +1802,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 3: Register + test + commit**
+- [x] **Step 3: Register + test + commit**
 ```bash
 cargo nextest run tailwind_no_apply_for_variants
 git add src/rules/tailwind_no_apply_for_variants/ src/rules/mod.rs
@@ -1816,7 +1818,7 @@ git commit -m "feat(tailwind-no-apply-for-variants): flag @apply outside @layer 
 - Create: `src/rules/tailwind_prefer_cn_utility/typescript.rs`
 - Modify: `src/rules/mod.rs`
 
-- [ ] **Step 1: Create mod.rs**
+- [x] **Step 1: Create mod.rs**
 
 ```rust
 mod typescript;
@@ -1838,7 +1840,7 @@ pub fn register() -> RuleDef {
 }
 ```
 
-- [ ] **Step 2: Create typescript.rs**
+- [x] **Step 2: Create typescript.rs**
 
 ```rust
 use crate::diagnostic::{Diagnostic, Severity};
@@ -1903,7 +1905,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 3: Register + test + commit**
+- [x] **Step 3: Register + test + commit**
 ```bash
 cargo nextest run tailwind_prefer_cn_utility
 cargo nextest run && cargo clippy --all --all-targets -- -D warnings
@@ -1928,7 +1930,7 @@ All SQL rules register on all 5 languages and scan text (SQL appears in template
 - Create: `src/rules/sql_create_index_concurrently/text.rs`
 - Modify: `src/rules/mod.rs`
 
-- [ ] **Step 1: Create mod.rs**
+- [x] **Step 1: Create mod.rs**
 
 ```rust
 mod text;
@@ -1961,7 +1963,7 @@ pub fn register() -> RuleDef {
 }
 ```
 
-- [ ] **Step 2: Create text.rs**
+- [x] **Step 2: Create text.rs**
 
 ```rust
 use crate::diagnostic::{Diagnostic, Severity};
@@ -2026,7 +2028,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 3: Register + test + commit**
+- [x] **Step 3: Register + test + commit**
 ```bash
 cargo nextest run sql_create_index_concurrently
 git add src/rules/sql_create_index_concurrently/ src/rules/mod.rs
@@ -2042,7 +2044,7 @@ git commit -m "feat(sql-create-index-concurrently): flag CREATE INDEX without CO
 - Create: `src/rules/sql_nullable_requires_comment/text.rs`
 - Modify: `src/rules/mod.rs`
 
-- [ ] **Step 1: Create mod.rs**
+- [x] **Step 1: Create mod.rs**
 
 ```rust
 mod text;
@@ -2075,7 +2077,7 @@ pub fn register() -> RuleDef {
 }
 ```
 
-- [ ] **Step 2: Create text.rs**
+- [x] **Step 2: Create text.rs**
 
 ```rust
 use crate::diagnostic::{Diagnostic, Severity};
@@ -2152,7 +2154,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 3: Register + test + commit**
+- [x] **Step 3: Register + test + commit**
 ```bash
 cargo nextest run sql_nullable_requires_comment
 git add src/rules/sql_nullable_requires_comment/ src/rules/mod.rs
@@ -2168,7 +2170,7 @@ git commit -m "feat(sql-nullable-requires-comment): flag nullable columns withou
 - Create: `src/rules/sql_advisory_lock_prefer_xact/text.rs`
 - Modify: `src/rules/mod.rs`
 
-- [ ] **Step 1: Create mod.rs**
+- [x] **Step 1: Create mod.rs**
 
 ```rust
 mod text;
@@ -2201,7 +2203,7 @@ pub fn register() -> RuleDef {
 }
 ```
 
-- [ ] **Step 2: Create text.rs**
+- [x] **Step 2: Create text.rs**
 
 ```rust
 use crate::diagnostic::{Diagnostic, Severity};
@@ -2259,7 +2261,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 3: Register + test + commit**
+- [x] **Step 3: Register + test + commit**
 ```bash
 cargo nextest run sql_advisory_lock_prefer_xact
 git add src/rules/sql_advisory_lock_prefer_xact/ src/rules/mod.rs
@@ -2275,7 +2277,7 @@ git commit -m "feat(sql-advisory-lock-prefer-xact): flag session-scoped advisory
 - Create: `src/rules/sql_require_transaction_timeout/text.rs`
 - Modify: `src/rules/mod.rs`
 
-- [ ] **Step 1: Create mod.rs**
+- [x] **Step 1: Create mod.rs**
 
 ```rust
 mod text;
@@ -2305,7 +2307,7 @@ pub fn register() -> RuleDef {
 }
 ```
 
-- [ ] **Step 2: Create text.rs**
+- [x] **Step 2: Create text.rs**
 
 ```rust
 use crate::diagnostic::{Diagnostic, Severity};
@@ -2368,7 +2370,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 3: Register + test + commit**
+- [x] **Step 3: Register + test + commit**
 ```bash
 cargo nextest run sql_require_transaction_timeout
 cargo nextest run && cargo clippy --all --all-targets -- -D warnings
@@ -2391,7 +2393,7 @@ git commit -m "feat(sql-require-transaction-timeout): flag pool config missing s
 - Create: `src/rules/rust_prefer_once_lock/text.rs`
 - Modify: `src/rules/mod.rs`
 
-- [ ] **Step 1: Create mod.rs**
+- [x] **Step 1: Create mod.rs**
 
 ```rust
 mod text;
@@ -2418,7 +2420,7 @@ pub fn register() -> RuleDef {
 }
 ```
 
-- [ ] **Step 2: Create text.rs**
+- [x] **Step 2: Create text.rs**
 
 ```rust
 use crate::diagnostic::{Diagnostic, Severity};
@@ -2482,7 +2484,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 3: Register + test + commit**
+- [x] **Step 3: Register + test + commit**
 ```bash
 cargo nextest run rust_prefer_once_lock
 git add src/rules/rust_prefer_once_lock/ src/rules/mod.rs
@@ -2498,7 +2500,7 @@ git commit -m "feat(rust-prefer-once-lock): flag lazy_static! and once_cell in f
 - Create: `src/rules/rust_vec_with_capacity/text.rs`
 - Modify: `src/rules/mod.rs`
 
-- [ ] **Step 1: Create mod.rs**
+- [x] **Step 1: Create mod.rs**
 
 ```rust
 mod text;
@@ -2525,7 +2527,7 @@ pub fn register() -> RuleDef {
 }
 ```
 
-- [ ] **Step 2: Create text.rs**
+- [x] **Step 2: Create text.rs**
 
 ```rust
 use crate::diagnostic::{Diagnostic, Severity};
@@ -2595,7 +2597,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 3: Register + test + commit**
+- [x] **Step 3: Register + test + commit**
 ```bash
 cargo nextest run rust_vec_with_capacity
 git add src/rules/rust_vec_with_capacity/ src/rules/mod.rs
@@ -2611,7 +2613,7 @@ git commit -m "feat(rust-vec-with-capacity): flag Vec::new() before for-push loo
 - Create: `src/rules/rust_prefer_channel_over_arc_mutex_vec/text.rs`
 - Modify: `src/rules/mod.rs`
 
-- [ ] **Step 1: Create mod.rs**
+- [x] **Step 1: Create mod.rs**
 
 ```rust
 mod text;
@@ -2638,7 +2640,7 @@ pub fn register() -> RuleDef {
 }
 ```
 
-- [ ] **Step 2: Create text.rs**
+- [x] **Step 2: Create text.rs**
 
 ```rust
 use crate::diagnostic::{Diagnostic, Severity};
@@ -2699,7 +2701,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 3: Register + test + commit**
+- [x] **Step 3: Register + test + commit**
 ```bash
 cargo nextest run rust_prefer_channel_over_arc_mutex_vec
 git add src/rules/rust_prefer_channel_over_arc_mutex_vec/ src/rules/mod.rs
@@ -2715,7 +2717,7 @@ git commit -m "feat(rust-prefer-channel-over-arc-mutex-vec): flag Arc<Mutex<Vec>
 - Create: `src/rules/rust_anyhow_context_on_question_mark/rust.rs`
 - Modify: `src/rules/mod.rs`
 
-- [ ] **Step 1: Create mod.rs**
+- [x] **Step 1: Create mod.rs**
 
 ```rust
 mod rust;
@@ -2737,7 +2739,7 @@ pub fn register() -> RuleDef {
 }
 ```
 
-- [ ] **Step 2: Create rust.rs**
+- [x] **Step 2: Create rust.rs**
 
 ```rust
 use crate::diagnostic::{Diagnostic, Severity};
@@ -2809,7 +2811,7 @@ grep -r "run_rust_with_path" src/rules/test_helpers.rs
 ```
 If missing, add alongside `run_ts_with_path` following the same pattern (same as `run_rust` but accepts a `fake_path` param). Alternatively, skip path-dependent test and mark the test as `#[ignore]`.
 
-- [ ] **Step 3: Register + test + commit**
+- [x] **Step 3: Register + test + commit**
 ```bash
 cargo nextest run rust_anyhow_context_on_question_mark
 git add src/rules/rust_anyhow_context_on_question_mark/ src/rules/mod.rs
@@ -2825,7 +2827,7 @@ git commit -m "feat(rust-anyhow-context-on-question-mark): flag bare ? in applic
 - Create: `src/rules/rust_must_use_on_result_fn/rust.rs`
 - Modify: `src/rules/mod.rs`
 
-- [ ] **Step 1: Create mod.rs**
+- [x] **Step 1: Create mod.rs**
 
 ```rust
 mod rust;
@@ -2847,7 +2849,7 @@ pub fn register() -> RuleDef {
 }
 ```
 
-- [ ] **Step 2: Create rust.rs**
+- [x] **Step 2: Create rust.rs**
 
 ```rust
 use crate::diagnostic::{Diagnostic, Severity};
@@ -2916,7 +2918,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 3: Register + test + commit**
+- [x] **Step 3: Register + test + commit**
 ```bash
 cargo nextest run rust_must_use_on_result_fn
 git add src/rules/rust_must_use_on_result_fn/ src/rules/mod.rs
@@ -2932,7 +2934,7 @@ git commit -m "feat(rust-must-use-on-result-fn): flag pub fn returning Result wi
 - Create: `src/rules/rust_unsafe_ffi_isolation/text.rs`
 - Modify: `src/rules/mod.rs`
 
-- [ ] **Step 1: Create mod.rs**
+- [x] **Step 1: Create mod.rs**
 
 ```rust
 mod text;
@@ -2959,7 +2961,7 @@ pub fn register() -> RuleDef {
 }
 ```
 
-- [ ] **Step 2: Create text.rs**
+- [x] **Step 2: Create text.rs**
 
 ```rust
 use crate::diagnostic::{Diagnostic, Severity};
@@ -3031,7 +3033,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 3: Register + test + commit**
+- [x] **Step 3: Register + test + commit**
 ```bash
 cargo nextest run rust_unsafe_ffi_isolation
 git add src/rules/rust_unsafe_ffi_isolation/ src/rules/mod.rs
@@ -3047,7 +3049,7 @@ git commit -m "feat(rust-unsafe-ffi-isolation): flag extern C blocks outside sys
 - Create: `src/rules/rust_thiserror_for_lib/text.rs`
 - Modify: `src/rules/mod.rs`
 
-- [ ] **Step 1: Create mod.rs**
+- [x] **Step 1: Create mod.rs**
 
 ```rust
 mod text;
@@ -3074,7 +3076,7 @@ pub fn register() -> RuleDef {
 }
 ```
 
-- [ ] **Step 2: Create text.rs**
+- [x] **Step 2: Create text.rs**
 
 ```rust
 use crate::diagnostic::{Diagnostic, Severity};
@@ -3140,7 +3142,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 3: Register + test + commit**
+- [x] **Step 3: Register + test + commit**
 ```bash
 cargo nextest run rust_thiserror_for_lib
 cargo nextest run && cargo clippy --all --all-targets -- -D warnings
@@ -3163,7 +3165,7 @@ git commit -m "feat(rust-thiserror-for-lib): flag pub enum Error without thiserr
 - Create: `src/rules/tanstack_start_server_fn_requires_validation/text.rs`
 - Modify: `src/rules/mod.rs`
 
-- [ ] **Step 1: Create mod.rs**
+- [x] **Step 1: Create mod.rs**
 
 ```rust
 mod text;
@@ -3193,7 +3195,7 @@ pub fn register() -> RuleDef {
 }
 ```
 
-- [ ] **Step 2: Create text.rs**
+- [x] **Step 2: Create text.rs**
 
 ```rust
 use crate::diagnostic::{Diagnostic, Severity};
@@ -3253,7 +3255,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 3: Register + test + commit**
+- [x] **Step 3: Register + test + commit**
 ```bash
 cargo nextest run tanstack_start_server_fn_requires_validation
 git add src/rules/tanstack_start_server_fn_requires_validation/ src/rules/mod.rs
@@ -3269,7 +3271,7 @@ git commit -m "feat(tanstack-start-server-fn-requires-validation): flag createSe
 - Create: `src/rules/tanstack_start_server_fn_requires_auth/text.rs`
 - Modify: `src/rules/mod.rs`
 
-- [ ] **Step 1: Create mod.rs**
+- [x] **Step 1: Create mod.rs**
 
 ```rust
 mod text;
@@ -3299,7 +3301,7 @@ pub fn register() -> RuleDef {
 }
 ```
 
-- [ ] **Step 2: Create text.rs**
+- [x] **Step 2: Create text.rs**
 
 ```rust
 use crate::diagnostic::{Diagnostic, Severity};
@@ -3364,7 +3366,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 3: Register + test + commit**
+- [x] **Step 3: Register + test + commit**
 ```bash
 cargo nextest run tanstack_start_server_fn_requires_auth
 git add src/rules/tanstack_start_server_fn_requires_auth/ src/rules/mod.rs
@@ -3380,7 +3382,7 @@ git commit -m "feat(tanstack-start-server-fn-requires-auth): flag unauthenticate
 - Create: `src/rules/tanstack_start_server_fn_file_convention/text.rs`
 - Modify: `src/rules/mod.rs`
 
-- [ ] **Step 1: Create mod.rs**
+- [x] **Step 1: Create mod.rs**
 
 ```rust
 mod text;
@@ -3410,7 +3412,7 @@ pub fn register() -> RuleDef {
 }
 ```
 
-- [ ] **Step 2: Create text.rs**
+- [x] **Step 2: Create text.rs**
 
 ```rust
 use crate::diagnostic::{Diagnostic, Severity};
@@ -3476,7 +3478,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 3: Register + test + commit**
+- [x] **Step 3: Register + test + commit**
 ```bash
 cargo nextest run tanstack_start_server_fn_file_convention
 git add src/rules/tanstack_start_server_fn_file_convention/ src/rules/mod.rs
@@ -3492,7 +3494,7 @@ git commit -m "feat(tanstack-start-server-fn-file-convention): enforce .function
 - Create: `src/rules/tanstack_start_require_validate_search/text.rs`
 - Modify: `src/rules/mod.rs`
 
-- [ ] **Step 1: Create mod.rs**
+- [x] **Step 1: Create mod.rs**
 
 ```rust
 mod text;
@@ -3522,7 +3524,7 @@ pub fn register() -> RuleDef {
 }
 ```
 
-- [ ] **Step 2: Create text.rs**
+- [x] **Step 2: Create text.rs**
 
 ```rust
 use crate::diagnostic::{Diagnostic, Severity};
@@ -3581,7 +3583,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 3: Register + test + commit**
+- [x] **Step 3: Register + test + commit**
 ```bash
 cargo nextest run tanstack_start_require_validate_search
 cargo nextest run && cargo clippy --all --all-targets -- -D warnings
@@ -3612,7 +3614,7 @@ RuleDef {
 
 **Files:** `src/rules/tanstack_query_no_is_loading/{mod.rs,text.rs}`
 
-- [ ] **Step 1: Create mod.rs**
+- [x] **Step 1: Create mod.rs**
 
 ```rust
 mod text;
@@ -3642,7 +3644,7 @@ pub fn register() -> RuleDef {
 }
 ```
 
-- [ ] **Step 2: Create text.rs**
+- [x] **Step 2: Create text.rs**
 
 ```rust
 use crate::diagnostic::{Diagnostic, Severity};
@@ -3701,7 +3703,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 3: Register + commit**
+- [x] **Step 3: Register + commit**
 ```bash
 cargo nextest run tanstack_query_no_is_loading
 git add src/rules/tanstack_query_no_is_loading/ src/rules/mod.rs
@@ -3714,9 +3716,9 @@ git commit -m "feat(tanstack-query-no-is-loading): flag removed isLoading API (v
 
 **Files:** `src/rules/tanstack_query_no_cache_time/{mod.rs,text.rs}`
 
-- [ ] **mod.rs** — same pattern, id `"tanstack-query-no-cache-time"`, description: `` "`cacheTime` was renamed to `gcTime` in TanStack Query v5." ``, remediation: `"Replace `cacheTime` with `gcTime`."`, doc_url `Some("https://tanstack.com/query/v5/docs/react/guides/migrating-to-v5")`.
+- [x] **mod.rs** — same pattern, id `"tanstack-query-no-cache-time"`, description: `` "`cacheTime` was renamed to `gcTime` in TanStack Query v5." ``, remediation: `"Replace `cacheTime` with `gcTime`."`, doc_url `Some("https://tanstack.com/query/v5/docs/react/guides/migrating-to-v5")`.
 
-- [ ] **text.rs**
+- [x] **text.rs**
 
 ```rust
 use crate::diagnostic::{Diagnostic, Severity};
@@ -3763,7 +3765,7 @@ mod tests {
 }
 ```
 
-- [ ] **Register + commit:** `git commit -m "feat(tanstack-query-no-cache-time): flag renamed cacheTime API (v5)"`
+- [x] **Register + commit:** `git commit -m "feat(tanstack-query-no-cache-time): flag renamed cacheTime API (v5)"`
 
 ---
 
@@ -3771,9 +3773,9 @@ mod tests {
 
 **Files:** `src/rules/tanstack_query_no_use_error_boundary/{mod.rs,text.rs}`
 
-- [ ] **mod.rs** — id `"tanstack-query-no-use-error-boundary"`, description: `` "`useErrorBoundary` was removed in TanStack Query v5." ``, remediation: `"Use the `throwOnError` option instead."`, doc_url `Some("https://tanstack.com/query/v5/docs/react/guides/migrating-to-v5")`.
+- [x] **mod.rs** — id `"tanstack-query-no-use-error-boundary"`, description: `` "`useErrorBoundary` was removed in TanStack Query v5." ``, remediation: `"Use the `throwOnError` option instead."`, doc_url `Some("https://tanstack.com/query/v5/docs/react/guides/migrating-to-v5")`.
 
-- [ ] **text.rs** — scan for `useErrorBoundary` in files containing `useQuery`; flag each occurrence.
+- [x] **text.rs** — scan for `useErrorBoundary` in files containing `useQuery`; flag each occurrence.
 
 ```rust
 use crate::diagnostic::{Diagnostic, Severity};
@@ -3815,7 +3817,7 @@ mod tests {
 }
 ```
 
-- [ ] **Register + commit:** `git commit -m "feat(tanstack-query-no-use-error-boundary): flag removed useErrorBoundary (v5)"`
+- [x] **Register + commit:** `git commit -m "feat(tanstack-query-no-use-error-boundary): flag removed useErrorBoundary (v5)"`
 
 ---
 
@@ -3823,9 +3825,9 @@ mod tests {
 
 **Files:** `src/rules/tanstack_query_no_keep_previous_data_prop/{mod.rs,text.rs}`
 
-- [ ] **mod.rs** — id `"tanstack-query-no-keep-previous-data-prop"`, description: `` "`keepPreviousData: true` was replaced by `placeholderData: keepPreviousData` in v5." ``, remediation: `"Import `keepPreviousData` from `@tanstack/react-query` and use `placeholderData: keepPreviousData`."`, doc_url `Some("https://tanstack.com/query/v5/docs/react/guides/migrating-to-v5")`.
+- [x] **mod.rs** — id `"tanstack-query-no-keep-previous-data-prop"`, description: `` "`keepPreviousData: true` was replaced by `placeholderData: keepPreviousData` in v5." ``, remediation: `"Import `keepPreviousData` from `@tanstack/react-query` and use `placeholderData: keepPreviousData`."`, doc_url `Some("https://tanstack.com/query/v5/docs/react/guides/migrating-to-v5")`.
 
-- [ ] **text.rs**
+- [x] **text.rs**
 
 ```rust
 use crate::diagnostic::{Diagnostic, Severity};
@@ -3866,7 +3868,7 @@ mod tests {
 }
 ```
 
-- [ ] **Register + commit:** `git commit -m "feat(tanstack-query-no-keep-previous-data-prop): flag keepPreviousData: true (v5)"`
+- [x] **Register + commit:** `git commit -m "feat(tanstack-query-no-keep-previous-data-prop): flag keepPreviousData: true (v5)"`
 
 ---
 
@@ -3874,9 +3876,9 @@ mod tests {
 
 **Files:** `src/rules/tanstack_query_no_query_callbacks/{mod.rs,text.rs}`
 
-- [ ] **mod.rs** — id `"tanstack-query-no-query-callbacks"`, description: `` "`onSuccess`/`onError`/`onSettled` callbacks on `useQuery` were removed in v5." ``, remediation: `"Move side-effects to `useEffect` watching the query result."`, doc_url `Some("https://tanstack.com/query/v5/docs/react/guides/migrating-to-v5")`.
+- [x] **mod.rs** — id `"tanstack-query-no-query-callbacks"`, description: `` "`onSuccess`/`onError`/`onSettled` callbacks on `useQuery` were removed in v5." ``, remediation: `"Move side-effects to `useEffect` watching the query result."`, doc_url `Some("https://tanstack.com/query/v5/docs/react/guides/migrating-to-v5")`.
 
-- [ ] **text.rs** — scan lines for `onSuccess:`, `onError:`, `onSettled:` in files with `useQuery` but NOT `useMutation`.
+- [x] **text.rs** — scan lines for `onSuccess:`, `onError:`, `onSettled:` in files with `useQuery` but NOT `useMutation`.
 
 ```rust
 use crate::diagnostic::{Diagnostic, Severity};
@@ -3928,7 +3930,7 @@ mod tests {
 }
 ```
 
-- [ ] **Register + commit:** `git commit -m "feat(tanstack-query-no-query-callbacks): flag removed onSuccess/onError on useQuery (v5)"`
+- [x] **Register + commit:** `git commit -m "feat(tanstack-query-no-query-callbacks): flag removed onSuccess/onError on useQuery (v5)"`
 
 ---
 
@@ -3936,9 +3938,9 @@ mod tests {
 
 **Files:** `src/rules/tanstack_query_require_stale_time/{mod.rs,text.rs}`
 
-- [ ] **mod.rs** — id `"tanstack-query-require-stale-time"`, description: `` "`QueryClient` without a default `staleTime` refetches on every mount." ``, remediation: `"Add `defaultOptions: { queries: { staleTime: 60_000 } }` to `QueryClient`."`, severity: `Warning`.
+- [x] **mod.rs** — id `"tanstack-query-require-stale-time"`, description: `` "`QueryClient` without a default `staleTime` refetches on every mount." ``, remediation: `"Add `defaultOptions: { queries: { staleTime: 60_000 } }` to `QueryClient`."`, severity: `Warning`.
 
-- [ ] **text.rs**
+- [x] **text.rs**
 
 ```rust
 use crate::diagnostic::{Diagnostic, Severity};
@@ -3983,7 +3985,7 @@ mod tests {
 }
 ```
 
-- [ ] **Register + commit:** `git commit -m "feat(tanstack-query-require-stale-time): flag QueryClient without default staleTime"`
+- [x] **Register + commit:** `git commit -m "feat(tanstack-query-require-stale-time): flag QueryClient without default staleTime"`
 
 ---
 
@@ -3991,9 +3993,9 @@ mod tests {
 
 **Files:** `src/rules/tanstack_query_fn_must_throw_on_error/{mod.rs,text.rs}`
 
-- [ ] **mod.rs** — id `"tanstack-query-fn-must-throw-on-error"`, description: `` "`queryFn` must throw on HTTP errors so TanStack Query can retry and surface them." ``, remediation: `"Check `res.ok` and throw: `if (!res.ok) throw new Error(...)`."`.
+- [x] **mod.rs** — id `"tanstack-query-fn-must-throw-on-error"`, description: `` "`queryFn` must throw on HTTP errors so TanStack Query can retry and surface them." ``, remediation: `"Check `res.ok` and throw: `if (!res.ok) throw new Error(...)`."`.
 
-- [ ] **text.rs** — find `queryFn:` blocks with `fetch(` but no `res.ok` or `response.ok` check.
+- [x] **text.rs** — find `queryFn:` blocks with `fetch(` but no `res.ok` or `response.ok` check.
 
 ```rust
 use crate::diagnostic::{Diagnostic, Severity};
@@ -4043,7 +4045,7 @@ mod tests {
 }
 ```
 
-- [ ] **Register + commit:** `git commit -m "feat(tanstack-query-fn-must-throw-on-error): flag queryFn with fetch but no res.ok check"`
+- [x] **Register + commit:** `git commit -m "feat(tanstack-query-fn-must-throw-on-error): flag queryFn with fetch but no res.ok check"`
 
 ---
 
@@ -4051,9 +4053,9 @@ mod tests {
 
 **Files:** `src/rules/tanstack_query_no_enabled_true/{mod.rs,text.rs}`
 
-- [ ] **mod.rs** — id `"tanstack-query-no-enabled-true"`, description: `` "`enabled: true` is the default in TanStack Query and should be omitted." ``, remediation: `"Remove `enabled: true` — queries are enabled by default."`.
+- [x] **mod.rs** — id `"tanstack-query-no-enabled-true"`, description: `` "`enabled: true` is the default in TanStack Query and should be omitted." ``, remediation: `"Remove `enabled: true` — queries are enabled by default."`.
 
-- [ ] **text.rs** — scan for `enabled: true` or `enabled:true` in useQuery context.
+- [x] **text.rs** — scan for `enabled: true` or `enabled:true` in useQuery context.
 
 ```rust
 use crate::diagnostic::{Diagnostic, Severity};
@@ -4098,7 +4100,7 @@ mod tests {
 }
 ```
 
-- [ ] **Register + commit:** `git commit -m "feat(tanstack-query-no-enabled-true): flag redundant enabled: true in query options"`
+- [x] **Register + commit:** `git commit -m "feat(tanstack-query-no-enabled-true): flag redundant enabled: true in query options"`
 
 ---
 
@@ -4106,9 +4108,9 @@ mod tests {
 
 **Files:** `src/rules/tanstack_query_prefer_query_options/{mod.rs,text.rs}`
 
-- [ ] **mod.rs** — id `"tanstack-query-prefer-query-options"`, description: `"Inline `queryKey`/`queryFn` objects should be extracted to `queryOptions()` factories for reuse."`, remediation: `"Use `queryOptions({ queryKey: [...], queryFn: ... })` and import the factory where needed."`.
+- [x] **mod.rs** — id `"tanstack-query-prefer-query-options"`, description: `"Inline `queryKey`/`queryFn` objects should be extracted to `queryOptions()` factories for reuse."`, remediation: `"Use `queryOptions({ queryKey: [...], queryFn: ... })` and import the factory where needed."`.
 
-- [ ] **text.rs** — flag `useQuery({ queryKey:` (inline options) when `queryOptions(` is absent from the file.
+- [x] **text.rs** — flag `useQuery({ queryKey:` (inline options) when `queryOptions(` is absent from the file.
 
 ```rust
 use crate::diagnostic::{Diagnostic, Severity};
@@ -4152,7 +4154,7 @@ mod tests {
 }
 ```
 
-- [ ] **Register + commit:** `git commit -m "feat(tanstack-query-prefer-query-options): flag inline useQuery options without queryOptions factory"`
+- [x] **Register + commit:** `git commit -m "feat(tanstack-query-prefer-query-options): flag inline useQuery options without queryOptions factory"`
 
 ---
 
@@ -4160,9 +4162,9 @@ mod tests {
 
 **Files:** `src/rules/tanstack_query_prefer_key_factory/{mod.rs,text.rs}`
 
-- [ ] **mod.rs** — id `"tanstack-query-prefer-key-factory"`, description: `"Inline dynamic `queryKey` arrays should use a key factory for consistency."`, remediation: `"Define a key factory: `const todoKeys = { detail: (id: string) => ['todos', id] as const }` and use `todoKeys.detail(id)`."`.
+- [x] **mod.rs** — id `"tanstack-query-prefer-key-factory"`, description: `"Inline dynamic `queryKey` arrays should use a key factory for consistency."`, remediation: `"Define a key factory: `const todoKeys = { detail: (id: string) => ['todos', id] as const }` and use `todoKeys.detail(id)`."`.
 
-- [ ] **text.rs** — flag `queryKey: [` arrays that contain both a string literal and a variable (mixed static/dynamic key).
+- [x] **text.rs** — flag `queryKey: [` arrays that contain both a string literal and a variable (mixed static/dynamic key).
 
 ```rust
 use crate::diagnostic::{Diagnostic, Severity};
@@ -4223,7 +4225,7 @@ mod tests {
 }
 ```
 
-- [ ] **Register all 10 rules + full suite**
+- [x] **Register all 10 rules + full suite**
 ```bash
 cargo nextest run tanstack_query
 cargo nextest run && cargo clippy --all --all-targets -- -D warnings
@@ -4248,7 +4250,7 @@ git commit -m "feat(tanstack-query-prefer-key-factory): flag inline dynamic quer
 - Create: `src/rules/api_no_array_root_response/text.rs`
 - Modify: `src/rules/mod.rs`
 
-- [ ] **Step 1: Create mod.rs**
+- [x] **Step 1: Create mod.rs**
 
 ```rust
 mod text;
@@ -4278,7 +4280,7 @@ pub fn register() -> RuleDef {
 }
 ```
 
-- [ ] **Step 2: Create text.rs**
+- [x] **Step 2: Create text.rs**
 
 ```rust
 use crate::diagnostic::{Diagnostic, Severity};
@@ -4328,7 +4330,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 3: Register + test + commit**
+- [x] **Step 3: Register + test + commit**
 ```bash
 cargo nextest run api_no_array_root_response
 git add src/rules/api_no_array_root_response/ src/rules/mod.rs
@@ -4344,9 +4346,9 @@ git commit -m "feat(api-no-array-root-response): flag root-level array JSON resp
 - Create: `src/rules/api_list_requires_pagination/text.rs`
 - Modify: `src/rules/mod.rs`
 
-- [ ] **Step 1: Create mod.rs** — id `"api-list-requires-pagination"`, description: `"List endpoints must support pagination to prevent unbounded result sets."`, remediation: `"Add `limit`/`cursor` or `page`/`pageSize` parameters to the handler."`, categories: `&["api"]`.
+- [x] **Step 1: Create mod.rs** — id `"api-list-requires-pagination"`, description: `"List endpoints must support pagination to prevent unbounded result sets."`, remediation: `"Add `limit`/`cursor` or `page`/`pageSize` parameters to the handler."`, categories: `&["api"]`.
 
-- [ ] **Step 2: Create text.rs**
+- [x] **Step 2: Create text.rs**
 
 ```rust
 use crate::diagnostic::{Diagnostic, Severity};
@@ -4394,7 +4396,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 3: Register + test + commit**
+- [x] **Step 3: Register + test + commit**
 ```bash
 cargo nextest run api_list_requires_pagination
 git add src/rules/api_list_requires_pagination/ src/rules/mod.rs
@@ -4412,9 +4414,9 @@ git commit -m "feat(api-list-requires-pagination): flag GET handlers without pag
 - Create: `src/rules/api_import_from_public_index/typescript.rs`
 - Modify: `src/rules/mod.rs`
 
-- [ ] **Step 1: Create mod.rs** — id `"api-import-from-public-index"`, description: `"Cross-feature imports must go through the public index, not internal files."`, remediation: `"Import from `../users` (index) instead of `../users/db/queries`."`, categories: `&["api", "architecture"]`.
+- [x] **Step 1: Create mod.rs** — id `"api-import-from-public-index"`, description: `"Cross-feature imports must go through the public index, not internal files."`, remediation: `"Import from `../users` (index) instead of `../users/db/queries`."`, categories: `&["api", "architecture"]`.
 
-- [ ] **Step 2: Create typescript.rs**
+- [x] **Step 2: Create typescript.rs**
 
 ```rust
 use crate::diagnostic::{Diagnostic, Severity};
@@ -4469,7 +4471,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 3: Register + test + commit**
+- [x] **Step 3: Register + test + commit**
 ```bash
 cargo nextest run api_import_from_public_index
 cargo nextest run && cargo clippy --all --all-targets -- -D warnings
@@ -4492,9 +4494,9 @@ git commit -m "feat(api-import-from-public-index): flag deep cross-feature impor
 - Create: `src/rules/zod_prefer_safe_parse/text.rs`
 - Modify: `src/rules/mod.rs`
 
-- [ ] **mod.rs** — id `"zod-prefer-safe-parse"`, description: `"`.parse()` in a route handler throws `ZodError` unhandled — use `.safeParse()` instead."`, remediation: `"Use `.safeParse()` and handle `!result.success` to return a structured 400 response."`, categories: `&["zod", "api"]`.
+- [x] **mod.rs** — id `"zod-prefer-safe-parse"`, description: `"`.parse()` in a route handler throws `ZodError` unhandled — use `.safeParse()` instead."`, remediation: `"Use `.safeParse()` and handle `!result.success` to return a structured 400 response."`, categories: `&["zod", "api"]`.
 
-- [ ] **text.rs**
+- [x] **text.rs**
 
 ```rust
 use crate::diagnostic::{Diagnostic, Severity};
@@ -4552,7 +4554,7 @@ mod tests {
 }
 ```
 
-- [ ] **Register + test + commit**
+- [x] **Register + test + commit**
 ```bash
 cargo nextest run zod_prefer_safe_parse
 git add src/rules/zod_prefer_safe_parse/ src/rules/mod.rs
@@ -4565,9 +4567,9 @@ git commit -m "feat(zod-prefer-safe-parse): flag .parse() in route handlers"
 
 **Files:** `src/rules/zod_string_min_1_required/{mod.rs,text.rs}`
 
-- [ ] **mod.rs** — id `"zod-string-min-1-required"`, description: `` "Bare `z.string()` without length constraints accepts empty strings." ``, remediation: `"Add `.min(1)` or `.trim().min(1)` to reject empty strings."`, categories: `&["zod"]`.
+- [x] **mod.rs** — id `"zod-string-min-1-required"`, description: `` "Bare `z.string()` without length constraints accepts empty strings." ``, remediation: `"Add `.min(1)` or `.trim().min(1)` to reject empty strings."`, categories: `&["zod"]`.
 
-- [ ] **text.rs** — find `z.string()` not followed by length/format chain on the same line.
+- [x] **text.rs** — find `z.string()` not followed by length/format chain on the same line.
 
 ```rust
 use crate::diagnostic::{Diagnostic, Severity};
@@ -4623,7 +4625,7 @@ mod tests {
 }
 ```
 
-- [ ] **Register + commit:** `git commit -m "feat(zod-string-min-1-required): flag bare z.string() without length constraint"`
+- [x] **Register + commit:** `git commit -m "feat(zod-string-min-1-required): flag bare z.string() without length constraint"`
 
 ---
 
@@ -4631,9 +4633,9 @@ mod tests {
 
 **Files:** `src/rules/zod_trim_before_min/{mod.rs,text.rs}`
 
-- [ ] **mod.rs** — id `"zod-trim-before-min"`, description: `` "`z.string().min(1)` without `.trim()` allows strings of only whitespace." ``, remediation: `"Add `.trim()` before `.min(1)`: `z.string().trim().min(1)`."`, categories: `&["zod"]`.
+- [x] **mod.rs** — id `"zod-trim-before-min"`, description: `` "`z.string().min(1)` without `.trim()` allows strings of only whitespace." ``, remediation: `"Add `.trim()` before `.min(1)`: `z.string().trim().min(1)`."`, categories: `&["zod"]`.
 
-- [ ] **text.rs**
+- [x] **text.rs**
 
 ```rust
 use crate::diagnostic::{Diagnostic, Severity};
@@ -4677,7 +4679,7 @@ mod tests {
 }
 ```
 
-- [ ] **Register + commit:** `git commit -m "feat(zod-trim-before-min): flag z.string().min() without prior .trim()"`
+- [x] **Register + commit:** `git commit -m "feat(zod-trim-before-min): flag z.string().min() without prior .trim()"`
 
 ---
 
@@ -4685,9 +4687,9 @@ mod tests {
 
 **Files:** `src/rules/zod_prefer_discriminated_union/{mod.rs,text.rs}`
 
-- [ ] **mod.rs** — id `"zod-prefer-discriminated-union"`, description: `` "`z.union([z.object({...}), ...])` with shared discriminant fields should use `z.discriminatedUnion()`." ``, remediation: `"Use `z.discriminatedUnion('type', [...])` for faster parsing and better error messages."`, categories: `&["zod"]`.
+- [x] **mod.rs** — id `"zod-prefer-discriminated-union"`, description: `` "`z.union([z.object({...}), ...])` with shared discriminant fields should use `z.discriminatedUnion()`." ``, remediation: `"Use `z.discriminatedUnion('type', [...])` for faster parsing and better error messages."`, categories: `&["zod"]`.
 
-- [ ] **text.rs** — find `z.union([z.object({` where inner objects contain `type: z.literal(` or `kind: z.literal(`.
+- [x] **text.rs** — find `z.union([z.object({` where inner objects contain `type: z.literal(` or `kind: z.literal(`.
 
 ```rust
 use crate::diagnostic::{Diagnostic, Severity};
@@ -4750,7 +4752,7 @@ mod tests {
 }
 ```
 
-- [ ] **Register + commit:** `git commit -m "feat(zod-prefer-discriminated-union): flag z.union with literal discriminant fields"`
+- [x] **Register + commit:** `git commit -m "feat(zod-prefer-discriminated-union): flag z.union with literal discriminant fields"`
 
 ---
 
@@ -4758,9 +4760,9 @@ mod tests {
 
 **Files:** `src/rules/zod_refine_requires_path/{mod.rs,text.rs}`
 
-- [ ] **mod.rs** — id `"zod-refine-requires-path"`, description: `` "`z.object().refine()` without `path:` attaches the error to the whole object, not a specific field." ``, remediation: `"Add `path: ['fieldName']` to the refine options so form errors appear on the correct field."`, categories: `&["zod"]`.
+- [x] **mod.rs** — id `"zod-refine-requires-path"`, description: `` "`z.object().refine()` without `path:` attaches the error to the whole object, not a specific field." ``, remediation: `"Add `path: ['fieldName']` to the refine options so form errors appear on the correct field."`, categories: `&["zod"]`.
 
-- [ ] **text.rs** — find `.refine(` on lines that also have `z.object(` context (or preceded by one), where the refine call lacks `path:`.
+- [x] **text.rs** — find `.refine(` on lines that also have `z.object(` context (or preceded by one), where the refine call lacks `path:`.
 
 ```rust
 use crate::diagnostic::{Diagnostic, Severity};
@@ -4811,7 +4813,7 @@ mod tests {
 }
 ```
 
-- [ ] **Register + commit:** `git commit -m "feat(zod-refine-requires-path): flag .refine() without path option on object schemas"`
+- [x] **Register + commit:** `git commit -m "feat(zod-refine-requires-path): flag .refine() without path option on object schemas"`
 
 ---
 
@@ -4819,9 +4821,9 @@ mod tests {
 
 **Files:** `src/rules/zod_require_error_messages/{mod.rs,text.rs}`
 
-- [ ] **mod.rs** — id `"zod-require-error-messages"`, description: `` "`.refine()` without an error message produces unhelpful validation errors." ``, remediation: `"Add `{ message: 'descriptive error' }` as the second argument to `.refine()`."`, categories: `&["zod"]`.
+- [x] **mod.rs** — id `"zod-require-error-messages"`, description: `` "`.refine()` without an error message produces unhelpful validation errors." ``, remediation: `"Add `{ message: 'descriptive error' }` as the second argument to `.refine()`."`, categories: `&["zod"]`.
 
-- [ ] **text.rs** — find `.refine(` with a single-argument call (closing `)` on same line after the function, no second arg).
+- [x] **text.rs** — find `.refine(` with a single-argument call (closing `)` on same line after the function, no second arg).
 
 ```rust
 use crate::diagnostic::{Diagnostic, Severity};
@@ -4880,7 +4882,7 @@ mod tests {
 }
 ```
 
-- [ ] **Register + commit:** `git commit -m "feat(zod-require-error-messages): flag .refine() without error message"`
+- [x] **Register + commit:** `git commit -m "feat(zod-require-error-messages): flag .refine() without error message"`
 
 ---
 
@@ -4888,9 +4890,9 @@ mod tests {
 
 **Files:** `src/rules/zod_no_optional_nullable_chain/{mod.rs,text.rs}`
 
-- [ ] **mod.rs** — id `"zod-no-optional-nullable-chain"`, description: `` "`.optional().nullable()` should be written as `.nullish()` for clarity." ``, remediation: `"Replace `.optional().nullable()` or `.nullable().optional()` with `.nullish()`."`, categories: `&["zod"]`.
+- [x] **mod.rs** — id `"zod-no-optional-nullable-chain"`, description: `` "`.optional().nullable()` should be written as `.nullish()` for clarity." ``, remediation: `"Replace `.optional().nullable()` or `.nullable().optional()` with `.nullish()`."`, categories: `&["zod"]`.
 
-- [ ] **text.rs**
+- [x] **text.rs**
 
 ```rust
 use crate::diagnostic::{Diagnostic, Severity};
@@ -4937,7 +4939,7 @@ mod tests {
 }
 ```
 
-- [ ] **Register all Zod rules + full suite**
+- [x] **Register all Zod rules + full suite**
 ```bash
 cargo nextest run zod_
 cargo nextest run && cargo clippy --all --all-targets -- -D warnings
@@ -4959,7 +4961,7 @@ All Vue rules use TextCheck + `Language::Vue` only. See `vue_no_reactive_destruc
 
 **Files:** `src/rules/vue_script_setup_required/{mod.rs,text.rs}`
 
-- [ ] **mod.rs**
+- [x] **mod.rs**
 
 ```rust
 mod text;
@@ -4986,7 +4988,7 @@ pub fn register() -> RuleDef {
 }
 ```
 
-- [ ] **text.rs**
+- [x] **text.rs**
 
 ```rust
 use crate::diagnostic::{Diagnostic, Severity};
@@ -5032,7 +5034,7 @@ mod tests {
 }
 ```
 
-- [ ] **Register + commit:** `git commit -m "feat(vue-script-setup-required): flag <script> with setup() fn instead of <script setup>"`
+- [x] **Register + commit:** `git commit -m "feat(vue-script-setup-required): flag <script> with setup() fn instead of <script setup>"`
 
 ---
 
@@ -5040,9 +5042,9 @@ mod tests {
 
 **Files:** `src/rules/vue_sfc_section_order/{mod.rs,text.rs}`
 
-- [ ] **mod.rs** — id `"vue-sfc-section-order"`, description: `"SFC sections must be ordered: `<script setup>` → `<template>` → `<style>`."`, remediation: `"Reorder sections: script first, template second, style last."`, categories: `&["vue"]`.
+- [x] **mod.rs** — id `"vue-sfc-section-order"`, description: `"SFC sections must be ordered: `<script setup>` → `<template>` → `<style>`."`, remediation: `"Reorder sections: script first, template second, style last."`, categories: `&["vue"]`.
 
-- [ ] **text.rs**
+- [x] **text.rs**
 
 ```rust
 use crate::diagnostic::{Diagnostic, Severity};
@@ -5089,7 +5091,7 @@ mod tests {
 }
 ```
 
-- [ ] **Register + commit:** `git commit -m "feat(vue-sfc-section-order): flag template before script in SFC"`
+- [x] **Register + commit:** `git commit -m "feat(vue-sfc-section-order): flag template before script in SFC"`
 
 ---
 
@@ -5097,9 +5099,9 @@ mod tests {
 
 **Files:** `src/rules/vue_no_v_html_unsafe/{mod.rs,text.rs}`
 
-- [ ] **mod.rs** — id `"vue-no-v-html-unsafe"`, description: `` "`v-html` without sanitization is an XSS vector." ``, remediation: `"Wrap the value in `DOMPurify.sanitize(...)` before binding with `v-html`."`, severity: `Severity::Error`, categories: `&["vue", "security"]`.
+- [x] **mod.rs** — id `"vue-no-v-html-unsafe"`, description: `` "`v-html` without sanitization is an XSS vector." ``, remediation: `"Wrap the value in `DOMPurify.sanitize(...)` before binding with `v-html`."`, severity: `Severity::Error`, categories: `&["vue", "security"]`.
 
-- [ ] **text.rs**
+- [x] **text.rs**
 
 ```rust
 use crate::diagnostic::{Diagnostic, Severity};
@@ -5144,7 +5146,7 @@ mod tests {
 }
 ```
 
-- [ ] **Register + commit:** `git commit -m "feat(vue-no-v-html-unsafe): flag v-html without DOMPurify sanitization"`
+- [x] **Register + commit:** `git commit -m "feat(vue-no-v-html-unsafe): flag v-html without DOMPurify sanitization"`
 
 ---
 
@@ -5152,9 +5154,9 @@ mod tests {
 
 **Files:** `src/rules/vue_prefer_v_else/{mod.rs,text.rs}`
 
-- [ ] **mod.rs** — id `"vue-prefer-v-else"`, description: `` "Consecutive `v-if=\"X\"` and `v-if=\"!X\"` should use `v-else`." ``, remediation: `"Replace the second `v-if=\"!X\"` with `v-else`."`, categories: `&["vue"]`.
+- [x] **mod.rs** — id `"vue-prefer-v-else"`, description: `` "Consecutive `v-if=\"X\"` and `v-if=\"!X\"` should use `v-else`." ``, remediation: `"Replace the second `v-if=\"!X\"` with `v-else`."`, categories: `&["vue"]`.
 
-- [ ] **text.rs**
+- [x] **text.rs**
 
 ```rust
 use crate::diagnostic::{Diagnostic, Severity};
@@ -5209,7 +5211,7 @@ mod tests {
 }
 ```
 
-- [ ] **Register + commit:** `git commit -m "feat(vue-prefer-v-else): flag consecutive v-if/!v-if that should use v-else"`
+- [x] **Register + commit:** `git commit -m "feat(vue-prefer-v-else): flag consecutive v-if/!v-if that should use v-else"`
 
 ---
 
@@ -5217,9 +5219,9 @@ mod tests {
 
 **Files:** `src/rules/vue_require_lifecycle_cleanup/{mod.rs,text.rs}`
 
-- [ ] **mod.rs** — id `"vue-require-lifecycle-cleanup"`, description: `` "`onMounted` with `addEventListener` must have a matching `onUnmounted` with `removeEventListener`." ``, remediation: `"Add `onUnmounted(() => element.removeEventListener(...))` to clean up."`, categories: `&["vue"]`.
+- [x] **mod.rs** — id `"vue-require-lifecycle-cleanup"`, description: `` "`onMounted` with `addEventListener` must have a matching `onUnmounted` with `removeEventListener`." ``, remediation: `"Add `onUnmounted(() => element.removeEventListener(...))` to clean up."`, categories: `&["vue"]`.
 
-- [ ] **text.rs**
+- [x] **text.rs**
 
 ```rust
 use crate::diagnostic::{Diagnostic, Severity};
@@ -5267,7 +5269,7 @@ mod tests {
 }
 ```
 
-- [ ] **Register + commit:** `git commit -m "feat(vue-require-lifecycle-cleanup): flag addEventListener without removeEventListener cleanup"`
+- [x] **Register + commit:** `git commit -m "feat(vue-require-lifecycle-cleanup): flag addEventListener without removeEventListener cleanup"`
 
 ---
 
@@ -5275,9 +5277,9 @@ mod tests {
 
 **Files:** `src/rules/vue_pinia_store_to_refs/{mod.rs,text.rs}`
 
-- [ ] **mod.rs** — id `"vue-pinia-store-to-refs"`, description: `` "Destructuring a Pinia store without `storeToRefs()` loses reactivity." ``, remediation: `"Use `const { count } = storeToRefs(useCounterStore())` to preserve reactivity."`, categories: `&["vue"]`.
+- [x] **mod.rs** — id `"vue-pinia-store-to-refs"`, description: `` "Destructuring a Pinia store without `storeToRefs()` loses reactivity." ``, remediation: `"Use `const { count } = storeToRefs(useCounterStore())` to preserve reactivity."`, categories: `&["vue"]`.
 
-- [ ] **text.rs**
+- [x] **text.rs**
 
 ```rust
 use crate::diagnostic::{Diagnostic, Severity};
@@ -5325,7 +5327,7 @@ mod tests {
 }
 ```
 
-- [ ] **Register + commit:** `git commit -m "feat(vue-pinia-store-to-refs): flag Pinia store destructuring without storeToRefs"`
+- [x] **Register + commit:** `git commit -m "feat(vue-pinia-store-to-refs): flag Pinia store destructuring without storeToRefs"`
 
 ---
 
@@ -5333,9 +5335,9 @@ mod tests {
 
 **Files:** `src/rules/vue_define_emits_typed/{mod.rs,text.rs}`
 
-- [ ] **mod.rs** — id `"vue-define-emits-typed"`, description: `` "`defineEmits([...])` array form loses type safety — use the generic `defineEmits<{...}>()` form." ``, remediation: `"Use `defineEmits<{ change: [value: string] }>()` for full type-checking on emits."`, categories: `&["vue"]`.
+- [x] **mod.rs** — id `"vue-define-emits-typed"`, description: `` "`defineEmits([...])` array form loses type safety — use the generic `defineEmits<{...}>()` form." ``, remediation: `"Use `defineEmits<{ change: [value: string] }>()` for full type-checking on emits."`, categories: `&["vue"]`.
 
-- [ ] **text.rs**
+- [x] **text.rs**
 
 ```rust
 use crate::diagnostic::{Diagnostic, Severity};
@@ -5379,7 +5381,7 @@ mod tests {
 }
 ```
 
-- [ ] **Register all Vue rules + full suite**
+- [x] **Register all Vue rules + full suite**
 ```bash
 cargo nextest run vue_
 cargo nextest run && cargo clippy --all --all-targets -- -D warnings
@@ -5402,7 +5404,7 @@ git commit -m "feat(vue-define-emits-typed): flag untyped defineEmits([]) array 
 - Create: `src/rules/i18n_no_hardcoded_string_in_jsx/typescript.rs`
 - Modify: `src/rules/mod.rs`
 
-- [ ] **mod.rs**
+- [x] **mod.rs**
 
 ```rust
 mod typescript;
@@ -5424,7 +5426,7 @@ pub fn register() -> RuleDef {
 }
 ```
 
-- [ ] **typescript.rs**
+- [x] **typescript.rs**
 
 ```rust
 use crate::diagnostic::{Diagnostic, Severity};
@@ -5465,7 +5467,7 @@ mod tests {
 }
 ```
 
-- [ ] **Register + test + commit**
+- [x] **Register + test + commit**
 ```bash
 cargo nextest run i18n_no_hardcoded_string_in_jsx
 git add src/rules/i18n_no_hardcoded_string_in_jsx/ src/rules/mod.rs
@@ -5478,9 +5480,9 @@ git commit -m "feat(i18n-no-hardcoded-string-in-jsx): flag literal text content 
 
 **Files:** `src/rules/i18n_no_concat_translation_key/{mod.rs,typescript.rs}`
 
-- [ ] **mod.rs** — id `"i18n-no-concat-translation-key"`, description: `` "Dynamic `t()` keys built with concatenation or template literals can't be statically extracted." ``, remediation: `"Use full static key strings: `t('section.home')` instead of `t('section.' + name)`."`, categories: `&["i18n"]`.
+- [x] **mod.rs** — id `"i18n-no-concat-translation-key"`, description: `` "Dynamic `t()` keys built with concatenation or template literals can't be statically extracted." ``, remediation: `"Use full static key strings: `t('section.home')` instead of `t('section.' + name)`."`, categories: `&["i18n"]`.
 
-- [ ] **typescript.rs**
+- [x] **typescript.rs**
 
 ```rust
 use crate::diagnostic::{Diagnostic, Severity};
@@ -5528,7 +5530,7 @@ mod tests {
 }
 ```
 
-- [ ] **Register + commit:** `git commit -m "feat(i18n-no-concat-translation-key): flag dynamic t() key concatenation"`
+- [x] **Register + commit:** `git commit -m "feat(i18n-no-concat-translation-key): flag dynamic t() key concatenation"`
 
 ---
 
@@ -5536,9 +5538,9 @@ mod tests {
 
 **Files:** `src/rules/i18n_no_string_concat_with_translation/{mod.rs,text.rs}`
 
-- [ ] **mod.rs** — id `"i18n-no-string-concat-with-translation"`, description: `` "Concatenating `t()` results breaks word order in RTL and agglutinative languages." ``, remediation: `"Use interpolation: `t('greeting', { name })` instead of `t('hello') + ' ' + name`."`, categories: `&["i18n"]`.
+- [x] **mod.rs** — id `"i18n-no-string-concat-with-translation"`, description: `` "Concatenating `t()` results breaks word order in RTL and agglutinative languages." ``, remediation: `"Use interpolation: `t('greeting', { name })` instead of `t('hello') + ' ' + name`."`, categories: `&["i18n"]`.
 
-- [ ] **text.rs**
+- [x] **text.rs**
 
 ```rust
 use crate::diagnostic::{Diagnostic, Severity};
@@ -5584,7 +5586,7 @@ mod tests {
 }
 ```
 
-- [ ] **Register + commit:** `git commit -m "feat(i18n-no-string-concat-with-translation): flag t() concatenation"`
+- [x] **Register + commit:** `git commit -m "feat(i18n-no-string-concat-with-translation): flag t() concatenation"`
 
 ---
 
@@ -5592,9 +5594,9 @@ mod tests {
 
 **Files:** `src/rules/i18n_prefer_intl_api/{mod.rs,typescript.rs}`
 
-- [ ] **mod.rs** — id `"i18n-prefer-intl-api"`, description: `` "`.toLocaleDateString()` without an explicit locale uses the environment default, which varies by machine." ``, remediation: `"Pass `i18n.language` as the first argument or use `Intl.DateTimeFormat(locale).format(date)`."`, categories: `&["i18n"]`.
+- [x] **mod.rs** — id `"i18n-prefer-intl-api"`, description: `` "`.toLocaleDateString()` without an explicit locale uses the environment default, which varies by machine." ``, remediation: `"Pass `i18n.language` as the first argument or use `Intl.DateTimeFormat(locale).format(date)`."`, categories: `&["i18n"]`.
 
-- [ ] **typescript.rs**
+- [x] **typescript.rs**
 
 ```rust
 use crate::diagnostic::{Diagnostic, Severity};
@@ -5645,7 +5647,7 @@ mod tests {
 }
 ```
 
-- [ ] **Register + commit:** `git commit -m "feat(i18n-prefer-intl-api): flag .toLocaleDateString() without explicit locale"`
+- [x] **Register + commit:** `git commit -m "feat(i18n-prefer-intl-api): flag .toLocaleDateString() without explicit locale"`
 
 ---
 
@@ -5653,9 +5655,9 @@ mod tests {
 
 **Files:** `src/rules/i18n_no_manual_pluralization/{mod.rs,typescript.rs}`
 
-- [ ] **mod.rs** — id `"i18n-no-manual-pluralization"`, description: `` "Manual `count === 1 ? singular : plural` ignores CLDR plural rules for non-English languages." ``, remediation: `"Use `t('key', { count })` — i18next applies CLDR plural rules automatically."`, categories: `&["i18n"]`.
+- [x] **mod.rs** — id `"i18n-no-manual-pluralization"`, description: `` "Manual `count === 1 ? singular : plural` ignores CLDR plural rules for non-English languages." ``, remediation: `"Use `t('key', { count })` — i18next applies CLDR plural rules automatically."`, categories: `&["i18n"]`.
 
-- [ ] **typescript.rs**
+- [x] **typescript.rs**
 
 ```rust
 use crate::diagnostic::{Diagnostic, Severity};
@@ -5710,7 +5712,7 @@ mod tests {
 }
 ```
 
-- [ ] **Register all i18n rules + full suite**
+- [x] **Register all i18n rules + full suite**
 ```bash
 cargo nextest run i18n_
 cargo nextest run && cargo clippy --all --all-targets -- -D warnings
@@ -5753,7 +5755,7 @@ pub fn register() -> RuleDef {
 
 ### Task 12.1 — `no-mass-assignment`
 
-- [ ] Create `src/rules/no_mass_assignment/mod.rs`:
+- [x] Create `src/rules/no_mass_assignment/mod.rs`:
 ```rust
 mod text;
 use crate::diagnostic::Severity;
@@ -5783,7 +5785,7 @@ pub fn register() -> RuleDef {
 }
 ```
 
-- [ ] Create `src/rules/no_mass_assignment/text.rs`:
+- [x] Create `src/rules/no_mass_assignment/text.rs`:
 ```rust
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
@@ -5833,7 +5835,7 @@ mod tests {
 }
 ```
 
-- [ ] Register in `src/rules/mod.rs` + run:
+- [x] Register in `src/rules/mod.rs` + run:
 ```bash
 cargo nextest run no_mass_assignment
 ```
@@ -5842,7 +5844,7 @@ cargo nextest run no_mass_assignment
 
 ### Task 12.2 — `no-open-redirect`
 
-- [ ] Create `src/rules/no_open_redirect/mod.rs`:
+- [x] Create `src/rules/no_open_redirect/mod.rs`:
 ```rust
 mod text;
 use crate::diagnostic::Severity;
@@ -5872,7 +5874,7 @@ pub fn register() -> RuleDef {
 }
 ```
 
-- [ ] Create `src/rules/no_open_redirect/text.rs`:
+- [x] Create `src/rules/no_open_redirect/text.rs`:
 ```rust
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
@@ -5927,7 +5929,7 @@ mod tests {
 }
 ```
 
-- [ ] Register + run:
+- [x] Register + run:
 ```bash
 cargo nextest run no_open_redirect
 ```
@@ -5936,7 +5938,7 @@ cargo nextest run no_open_redirect
 
 ### Task 12.3 — `no-error-details-in-response`
 
-- [ ] Create `src/rules/no_error_details_in_response/mod.rs`:
+- [x] Create `src/rules/no_error_details_in_response/mod.rs`:
 ```rust
 mod text;
 use crate::diagnostic::Severity;
@@ -5966,7 +5968,7 @@ pub fn register() -> RuleDef {
 }
 ```
 
-- [ ] Create `src/rules/no_error_details_in_response/text.rs`:
+- [x] Create `src/rules/no_error_details_in_response/text.rs`:
 ```rust
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
@@ -6029,7 +6031,7 @@ mod tests {
 }
 ```
 
-- [ ] Register + run:
+- [x] Register + run:
 ```bash
 cargo nextest run no_error_details_in_response
 ```
@@ -6038,7 +6040,7 @@ cargo nextest run no_error_details_in_response
 
 ### Task 12.4 — `no-shell-exec`
 
-- [ ] Create `src/rules/no_shell_exec/mod.rs`:
+- [x] Create `src/rules/no_shell_exec/mod.rs`:
 ```rust
 mod text;
 use crate::diagnostic::Severity;
@@ -6068,7 +6070,7 @@ pub fn register() -> RuleDef {
 }
 ```
 
-- [ ] Create `src/rules/no_shell_exec/text.rs`:
+- [x] Create `src/rules/no_shell_exec/text.rs`:
 ```rust
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
@@ -6128,7 +6130,7 @@ mod tests {
 }
 ```
 
-- [ ] Register + run:
+- [x] Register + run:
 ```bash
 cargo nextest run no_shell_exec
 ```
@@ -6137,7 +6139,7 @@ cargo nextest run no_shell_exec
 
 ### Task 12.5 — `no-path-traversal`
 
-- [ ] Create `src/rules/no_path_traversal/mod.rs`:
+- [x] Create `src/rules/no_path_traversal/mod.rs`:
 ```rust
 mod text;
 use crate::diagnostic::Severity;
@@ -6167,7 +6169,7 @@ pub fn register() -> RuleDef {
 }
 ```
 
-- [ ] Create `src/rules/no_path_traversal/text.rs`:
+- [x] Create `src/rules/no_path_traversal/text.rs`:
 ```rust
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
@@ -6233,7 +6235,7 @@ mod tests {
 }
 ```
 
-- [ ] Register + run:
+- [x] Register + run:
 ```bash
 cargo nextest run no_path_traversal
 ```
@@ -6242,7 +6244,7 @@ cargo nextest run no_path_traversal
 
 ### Task 12.6 — `no-unvalidated-url-redirect`
 
-- [ ] Create `src/rules/no_unvalidated_url_redirect/mod.rs`:
+- [x] Create `src/rules/no_unvalidated_url_redirect/mod.rs`:
 ```rust
 mod text;
 use crate::diagnostic::Severity;
@@ -6272,7 +6274,7 @@ pub fn register() -> RuleDef {
 }
 ```
 
-- [ ] Create `src/rules/no_unvalidated_url_redirect/text.rs`:
+- [x] Create `src/rules/no_unvalidated_url_redirect/text.rs`:
 ```rust
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
@@ -6336,7 +6338,7 @@ mod tests {
 }
 ```
 
-- [ ] Register + run:
+- [x] Register + run:
 ```bash
 cargo nextest run no_unvalidated_url_redirect
 ```
@@ -6345,7 +6347,7 @@ cargo nextest run no_unvalidated_url_redirect
 
 ### Task 12.7 — `no-prototype-pollution`
 
-- [ ] Create `src/rules/no_prototype_pollution/mod.rs`:
+- [x] Create `src/rules/no_prototype_pollution/mod.rs`:
 ```rust
 mod text;
 use crate::diagnostic::Severity;
@@ -6375,7 +6377,7 @@ pub fn register() -> RuleDef {
 }
 ```
 
-- [ ] Create `src/rules/no_prototype_pollution/text.rs`:
+- [x] Create `src/rules/no_prototype_pollution/text.rs`:
 ```rust
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
@@ -6428,7 +6430,7 @@ mod tests {
 }
 ```
 
-- [ ] Register all 7 security rules in `src/rules/mod.rs` + run full suite:
+- [x] Register all 7 security rules in `src/rules/mod.rs` + run full suite:
 ```bash
 cargo nextest run && cargo clippy --all --all-targets -- -D warnings
 git add src/rules/no_mass_assignment/ src/rules/no_open_redirect/ src/rules/no_error_details_in_response/ \
@@ -6449,7 +6451,7 @@ git commit -m "feat(security): add 7 security rules (mass-assignment, open-redir
 
 ### Task 13.1 — `better-auth-no-disable-csrf`
 
-- [ ] Create `src/rules/better_auth_no_disable_csrf/mod.rs`:
+- [x] Create `src/rules/better_auth_no_disable_csrf/mod.rs`:
 ```rust
 mod text;
 use crate::diagnostic::Severity;
@@ -6479,7 +6481,7 @@ pub fn register() -> RuleDef {
 }
 ```
 
-- [ ] Create `src/rules/better_auth_no_disable_csrf/text.rs`:
+- [x] Create `src/rules/better_auth_no_disable_csrf/text.rs`:
 ```rust
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
@@ -6521,7 +6523,7 @@ mod tests {
 }
 ```
 
-- [ ] Register + run:
+- [x] Register + run:
 ```bash
 cargo nextest run better_auth_no_disable_csrf
 ```
@@ -6530,7 +6532,7 @@ cargo nextest run better_auth_no_disable_csrf
 
 ### Task 13.2 — `better-auth-no-disable-origin-check`
 
-- [ ] Create `src/rules/better_auth_no_disable_origin_check/mod.rs`:
+- [x] Create `src/rules/better_auth_no_disable_origin_check/mod.rs`:
 ```rust
 mod text;
 use crate::diagnostic::Severity;
@@ -6560,7 +6562,7 @@ pub fn register() -> RuleDef {
 }
 ```
 
-- [ ] Create `src/rules/better_auth_no_disable_origin_check/text.rs`:
+- [x] Create `src/rules/better_auth_no_disable_origin_check/text.rs`:
 ```rust
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
@@ -6604,7 +6606,7 @@ mod tests {
 }
 ```
 
-- [ ] Register + run:
+- [x] Register + run:
 ```bash
 cargo nextest run better_auth_no_disable_origin_check
 ```
@@ -6613,7 +6615,7 @@ cargo nextest run better_auth_no_disable_origin_check
 
 ### Task 13.3 — `better-auth-require-rate-limit`
 
-- [ ] Create `src/rules/better_auth_require_rate_limit/mod.rs`:
+- [x] Create `src/rules/better_auth_require_rate_limit/mod.rs`:
 ```rust
 mod text;
 use crate::diagnostic::Severity;
@@ -6643,7 +6645,7 @@ pub fn register() -> RuleDef {
 }
 ```
 
-- [ ] Create `src/rules/better_auth_require_rate_limit/text.rs`:
+- [x] Create `src/rules/better_auth_require_rate_limit/text.rs`:
 ```rust
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
@@ -6695,7 +6697,7 @@ mod tests {
 }
 ```
 
-- [ ] Register + run:
+- [x] Register + run:
 ```bash
 cargo nextest run better_auth_require_rate_limit
 ```
@@ -6704,7 +6706,7 @@ cargo nextest run better_auth_require_rate_limit
 
 ### Task 13.4 — `better-auth-plugin-import-path`
 
-- [ ] Create `src/rules/better_auth_plugin_import_path/mod.rs`:
+- [x] Create `src/rules/better_auth_plugin_import_path/mod.rs`:
 ```rust
 mod text;
 use crate::diagnostic::Severity;
@@ -6734,7 +6736,7 @@ pub fn register() -> RuleDef {
 }
 ```
 
-- [ ] Create `src/rules/better_auth_plugin_import_path/text.rs`:
+- [x] Create `src/rules/better_auth_plugin_import_path/text.rs`:
 ```rust
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
@@ -6791,7 +6793,7 @@ mod tests {
 }
 ```
 
-- [ ] Register + run:
+- [x] Register + run:
 ```bash
 cargo nextest run better_auth_plugin_import_path
 ```
@@ -6800,7 +6802,7 @@ cargo nextest run better_auth_plugin_import_path
 
 ### Task 13.5 — `better-auth-trusted-providers`
 
-- [ ] Create `src/rules/better_auth_trusted_providers/mod.rs`:
+- [x] Create `src/rules/better_auth_trusted_providers/mod.rs`:
 ```rust
 mod text;
 use crate::diagnostic::Severity;
@@ -6830,7 +6832,7 @@ pub fn register() -> RuleDef {
 }
 ```
 
-- [ ] Create `src/rules/better_auth_trusted_providers/text.rs`:
+- [x] Create `src/rules/better_auth_trusted_providers/text.rs`:
 ```rust
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
@@ -6882,7 +6884,7 @@ mod tests {
 }
 ```
 
-- [ ] Register all 5 Better Auth rules in `src/rules/mod.rs` + run full suite:
+- [x] Register all 5 Better Auth rules in `src/rules/mod.rs` + run full suite:
 ```bash
 cargo nextest run && cargo clippy --all --all-targets -- -D warnings
 git add src/rules/better_auth_no_disable_csrf/ src/rules/better_auth_no_disable_origin_check/ \
@@ -6903,7 +6905,7 @@ git commit -m "feat(better-auth): add 5 Better Auth security rules"
 
 ### Task 14.1 — `testing-prefer-msw`
 
-- [ ] Create `src/rules/testing_prefer_msw/mod.rs`:
+- [x] Create `src/rules/testing_prefer_msw/mod.rs`:
 ```rust
 mod text;
 use crate::diagnostic::Severity;
@@ -6933,7 +6935,7 @@ pub fn register() -> RuleDef {
 }
 ```
 
-- [ ] Create `src/rules/testing_prefer_msw/text.rs`:
+- [x] Create `src/rules/testing_prefer_msw/text.rs`:
 ```rust
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
@@ -6997,7 +6999,7 @@ mod tests {
 }
 ```
 
-- [ ] Register + run:
+- [x] Register + run:
 ```bash
 cargo nextest run testing_prefer_msw
 ```
@@ -7006,7 +7008,7 @@ cargo nextest run testing_prefer_msw
 
 ### Task 14.2 — `testing-no-and-in-test-name`
 
-- [ ] Create `src/rules/testing_no_and_in_test_name/mod.rs`:
+- [x] Create `src/rules/testing_no_and_in_test_name/mod.rs`:
 ```rust
 mod text;
 use crate::diagnostic::Severity;
@@ -7036,7 +7038,7 @@ pub fn register() -> RuleDef {
 }
 ```
 
-- [ ] Create `src/rules/testing_no_and_in_test_name/text.rs`:
+- [x] Create `src/rules/testing_no_and_in_test_name/text.rs`:
 ```rust
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
@@ -7116,7 +7118,7 @@ mod tests {
 }
 ```
 
-- [ ] Register + run:
+- [x] Register + run:
 ```bash
 cargo nextest run testing_no_and_in_test_name
 ```
@@ -7125,7 +7127,7 @@ cargo nextest run testing_no_and_in_test_name
 
 ### Task 14.3 — `testing-prefer-test-each`
 
-- [ ] Create `src/rules/testing_prefer_test_each/mod.rs`:
+- [x] Create `src/rules/testing_prefer_test_each/mod.rs`:
 ```rust
 mod text;
 use crate::diagnostic::Severity;
@@ -7155,7 +7157,7 @@ pub fn register() -> RuleDef {
 }
 ```
 
-- [ ] Create `src/rules/testing_prefer_test_each/text.rs`:
+- [x] Create `src/rules/testing_prefer_test_each/text.rs`:
 ```rust
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
@@ -7264,7 +7266,7 @@ mod tests {
 }
 ```
 
-- [ ] Register + run:
+- [x] Register + run:
 ```bash
 cargo nextest run testing_prefer_test_each
 ```
@@ -7275,7 +7277,7 @@ cargo nextest run testing_prefer_test_each
 
 **Heuristic:** collect module-level `let` var names (zero-indented lines starting with `let `), find `vi.mock(` factory blocks, flag if any collected name appears in the factory body. Variables inside `vi.hoisted(` are exempt.
 
-- [ ] Create `src/rules/testing_no_undefined_mock_var/mod.rs`:
+- [x] Create `src/rules/testing_no_undefined_mock_var/mod.rs`:
 ```rust
 mod text;
 use crate::diagnostic::Severity;
@@ -7305,7 +7307,7 @@ pub fn register() -> RuleDef {
 }
 ```
 
-- [ ] Create `src/rules/testing_no_undefined_mock_var/text.rs`:
+- [x] Create `src/rules/testing_no_undefined_mock_var/text.rs`:
 ```rust
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
@@ -7432,7 +7434,7 @@ vi.mock('module', () => ({ default: vi.fn() }))
 }
 ```
 
-- [ ] Register all 4 testing rules in `src/rules/mod.rs` + run full suite:
+- [x] Register all 4 testing rules in `src/rules/mod.rs` + run full suite:
 ```bash
 cargo nextest run && cargo clippy --all --all-targets -- -D warnings
 git add src/rules/testing_prefer_msw/ src/rules/testing_no_and_in_test_name/ \
@@ -7453,7 +7455,7 @@ git commit -m "feat(testing): add 4 testing rules (prefer-msw, no-and-in-name, p
 
 ### Task 15.1 — `drizzle-returning-on-insert-update`
 
-- [ ] Create `src/rules/drizzle_returning_on_insert_update/mod.rs`:
+- [x] Create `src/rules/drizzle_returning_on_insert_update/mod.rs`:
 ```rust
 mod text;
 use crate::diagnostic::Severity;
@@ -7483,7 +7485,7 @@ pub fn register() -> RuleDef {
 }
 ```
 
-- [ ] Create `src/rules/drizzle_returning_on_insert_update/text.rs`:
+- [x] Create `src/rules/drizzle_returning_on_insert_update/text.rs`:
 ```rust
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
@@ -7560,7 +7562,7 @@ mod tests {
 }
 ```
 
-- [ ] Register + run:
+- [x] Register + run:
 ```bash
 cargo nextest run drizzle_returning_on_insert_update
 ```
@@ -7569,7 +7571,7 @@ cargo nextest run drizzle_returning_on_insert_update
 
 ### Task 15.2 — `drizzle-no-sql-raw-with-variable`
 
-- [ ] Create `src/rules/drizzle_no_sql_raw_with_variable/mod.rs`:
+- [x] Create `src/rules/drizzle_no_sql_raw_with_variable/mod.rs`:
 ```rust
 mod text;
 use crate::diagnostic::Severity;
@@ -7599,7 +7601,7 @@ pub fn register() -> RuleDef {
 }
 ```
 
-- [ ] Create `src/rules/drizzle_no_sql_raw_with_variable/text.rs`:
+- [x] Create `src/rules/drizzle_no_sql_raw_with_variable/text.rs`:
 ```rust
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
@@ -7661,7 +7663,7 @@ mod tests {
 }
 ```
 
-- [ ] Register + run:
+- [x] Register + run:
 ```bash
 cargo nextest run drizzle_no_sql_raw_with_variable
 ```
@@ -7670,7 +7672,7 @@ cargo nextest run drizzle_no_sql_raw_with_variable
 
 ### Task 15.3 — `drizzle-no-select-without-limit`
 
-- [ ] Create `src/rules/drizzle_no_select_without_limit/mod.rs`:
+- [x] Create `src/rules/drizzle_no_select_without_limit/mod.rs`:
 ```rust
 mod text;
 use crate::diagnostic::Severity;
@@ -7700,7 +7702,7 @@ pub fn register() -> RuleDef {
 }
 ```
 
-- [ ] Create `src/rules/drizzle_no_select_without_limit/text.rs`:
+- [x] Create `src/rules/drizzle_no_select_without_limit/text.rs`:
 ```rust
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
@@ -7776,7 +7778,7 @@ mod tests {
 }
 ```
 
-- [ ] Register + run:
+- [x] Register + run:
 ```bash
 cargo nextest run drizzle_no_select_without_limit
 ```
@@ -7787,7 +7789,7 @@ cargo nextest run drizzle_no_select_without_limit
 
 **Heuristic:** file imports both `drizzle-orm` and `zod`, defines a table with `pgTable(`/`mysqlTable(`/`sqliteTable(`, and also contains a manual `z.object({` — flag the `z.object` as likely duplicating the table schema.
 
-- [ ] Create `src/rules/drizzle_zod_prefer_generated_schema/mod.rs`:
+- [x] Create `src/rules/drizzle_zod_prefer_generated_schema/mod.rs`:
 ```rust
 mod text;
 use crate::diagnostic::Severity;
@@ -7817,7 +7819,7 @@ pub fn register() -> RuleDef {
 }
 ```
 
-- [ ] Create `src/rules/drizzle_zod_prefer_generated_schema/text.rs`:
+- [x] Create `src/rules/drizzle_zod_prefer_generated_schema/text.rs`:
 ```rust
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
@@ -7895,7 +7897,7 @@ export const schema = z.object({ name: z.string() })
 }
 ```
 
-- [ ] Register all 4 Drizzle rules in `src/rules/mod.rs` + run full suite:
+- [x] Register all 4 Drizzle rules in `src/rules/mod.rs` + run full suite:
 ```bash
 cargo nextest run && cargo clippy --all --all-targets -- -D warnings
 git add src/rules/drizzle_returning_on_insert_update/ src/rules/drizzle_no_sql_raw_with_variable/ \
@@ -7908,8 +7910,8 @@ git commit -m "feat(drizzle): add 4 Drizzle ORM rules (returning, no-sql-raw, no
 
 ## Final verification after all batches
 
-- [ ] `cargo nextest run` — all tests pass
-- [ ] `cargo clippy --all --all-targets -- -D warnings` — zero warnings
-- [ ] `./target/release/comply src/` — comply finds no violations in its own source
-- [ ] Update `RULES_TO_ADD.md` — mark all implemented rules as done
-- [ ] One consolidated PR per batch or grouped PR for trivial batches (7 v5 rename rules → single PR)
+- [x] `cargo nextest run` — all tests pass
+- [x] `cargo clippy --all --all-targets -- -D warnings` — zero warnings
+- [x] `./target/release/comply src/` — comply finds no violations in its own source
+- [x] Update `RULES_TO_ADD.md` — mark all implemented rules as done
+- [x] One consolidated PR per batch or grouped PR for trivial batches (7 v5 rename rules → single PR)

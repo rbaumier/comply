@@ -1,14 +1,18 @@
 # Skill-driven rules — implementation report
 
-**Date**: 2026-04-21
+**Date**: 2026-04-21 — **Completed**: 2026-04-22
 **Branch**: `feat/skill-driven-rules`
-**Plan**: [`docs/plans/2026-04-21-skill-driven-rules.md`](../plans/2026-04-21-skill-driven-rules.md)
+**Plan**: [`docs/plans/2026-04-21-skill-driven-rules.md`](../plans/2026-04-21-skill-driven-rules.md) (status: COMPLETE)
 **PRD**: [`docs/prds/2026-04-21-skill-driven-rules.md`](../prds/2026-04-21-skill-driven-rules.md)
 
 ## Résumé
 
-80 nouvelles règles natives comply livrées en 15 batches séquentiels, un commit par batch.
-Suite de tests : 2940 → 4210 (+1270 tests).
+**107 nouvelles règles natives** livrées sur la branche :
+- **80 règles** du plan initial, en 15 batches séquentiels (un commit par batch).
+- **15 règles additionnelles** hors plan (committées `4d236ff4`) — better-auth × 2, drizzle × 1, i18n × 2, misc TS × 2, rust × 1, tailwind × 1, tanstack-start × 2, testing × 1, vue × 1, zod × 1.
+- **12 règles RSC boundary** (React Server Components) livrées en 3 commits atomiques (`344dc32e`, `afdc164c`, `3716ce20`) — server-component violations, client-component violations, cross-boundary leaks.
+
+Suite de tests : 2940 → 4364 (+1424 tests). Clippy : 0 warning sur les règles enregistrées (50 erreurs pré-existantes sur règles non enregistrées, hors scope).
 
 | # | Batch | Règles | Commit |
 |---|-------|--------|--------|
@@ -27,6 +31,17 @@ Suite de tests : 2940 → 4210 (+1270 tests).
 | 13 | Better Auth | 5 | `678baa86` |
 | 14 | Testing | 4 | `92d415ff` |
 | 15 | Drizzle ORM | 4 | `07e1d132` |
+
+### Additions post-plan (2026-04-22)
+
+| Lot | Règles | Commit |
+|-----|--------|--------|
+| Extras hors-plan (15 règles) | better-auth × 2, drizzle × 1, i18n × 2, misc TS × 2, rust × 1, tailwind × 1, tanstack-start × 2, testing × 1, vue × 1, zod × 1 | `4d236ff4` |
+| RSC boundary (serveur, 4 règles) | react-no-client-hook-in-server-component, react-no-event-handler-in-server-component, react-no-browser-api-in-server-component, react-no-class-component-in-server-component | `344dc32e` |
+| RSC boundary (client, 4 règles) | react-no-async-client-component, react-no-server-only-in-client, react-no-metadata-export-in-client, react-no-generate-static-params-in-client | `afdc164c` |
+| RSC boundary (cross, 4 règles) | react-no-next-headers-in-client, react-duplicate-use-directive, react-no-client-only-in-server-component, react-layout-requires-children-prop | `3716ce20` |
+
+Les 12 règles RSC s'appuient sur l'infrastructure `ProjectCtx` + `FileCtx` livrée en `f6781a02` (classification `RscContext`, `path_segments.in_app_router`, `directives.use_client` / `use_server`). Aucune ne re-parse les directives depuis la source.
 
 ---
 
