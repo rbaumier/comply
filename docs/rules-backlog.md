@@ -70,6 +70,40 @@ Règles à ajouter ou améliorer. Dernière mise à jour: 2026-04-22
 
 ---
 
+## Vertical Codebase (TkDodo) — Architecture par domaine
+
+Règles pour forcer l'architecture verticale vs horizontale. Partiellement couvert par `layer-import-boundary` et `api-import-from-public-index`.
+
+### Nouvelles règles
+
+| Règle | Description | Faisabilité |
+|-------|-------------|-------------|
+| `no-horizontal-folders` | Bannir imports depuis `src/utils/*`, `src/hooks/*`, `src/types/*`, `src/components/*` | facile |
+| `no-global-types-file` | Interdire `types.ts` à la racine ou partagés massivement | facile |
+| `feature-boundary-strict` | Feature A ne peut importer Feature B que via `index.ts` | moyen (étend api-import-from-public-index) |
+| `colocate-hook-with-component` | Hook spécifique à un composant doit vivre dans le même fichier/dossier | difficile |
+| `no-barrel-re-export-all` | Interdire `export * from` dans les index.ts (masque les dépendances) | facile |
+
+### Améliorations règles existantes
+
+| Règle | Amélioration |
+|-------|--------------|
+| `api-import-from-public-index` | Configurable par feature (définir les "verticals" autorisées) |
+| `layer-import-boundary` | Support des alias tsconfig (`@/domain`, `@/infra`) |
+
+### Config suggérée (defaults.toml)
+
+```toml
+[rules.no-horizontal-folders]
+banned_patterns = ["src/utils/*", "src/hooks/*", "src/types/*", "src/components/*"]
+allowed_horizontal = ["src/design-system/*", "src/ui/*"]
+
+[rules.feature-boundary-strict]
+feature_roots = ["src/features/*", "src/modules/*"]
+```
+
+---
+
 ## Notes
 
 - Voir `docs/hickey-rules-todo.md` pour détails Rich Hickey
