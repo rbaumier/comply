@@ -70,6 +70,42 @@ Règles à ajouter ou améliorer. Dernière mise à jour: 2026-04-22
 
 ---
 
+## e18e/eslint-plugin — Modernization & Performance
+
+Plugin ESLint pour moderniser le code JS/TS. 20 règles analysées, 13 manquantes.
+
+### Haute priorité
+
+| Règle | Description | Catégorie |
+|-------|-------------|-----------|
+| `prefer-nullish-coalescing` | `x != null ? x : y` → `x ?? y` | typescript |
+| `ban-dependencies` | Bannir lodash, moment, underscore → alternatives légères | imports |
+| `prefer-static-regex` | Hisser regex hors fonctions (étendre react_hoist_regex) | performance |
+
+### Moyenne priorité
+
+| Règle | Description |
+|-------|-------------|
+| `prefer-array-to-reversed` | `[...arr].reverse()` → `arr.toReversed()` (ES2023) |
+| `prefer-array-to-sorted` | `arr.slice().sort()` → `arr.toSorted()` (ES2023) |
+| `prefer-array-to-spliced` | Idem pour splice (ES2023) |
+| `prefer-array-fill` | `Array.from({length: n}, () => v)` → `Array(n).fill(v)` |
+| `prefer-object-has-own` | `obj.hasOwnProperty(k)` → `Object.hasOwn(obj, k)` (ES2022) |
+| `prefer-exponentiation-operator` | `Math.pow(x, y)` → `x ** y` |
+| `prefer-url-canparse` | try-catch `new URL()` → `URL.canParse()` |
+| `prefer-timer-args` | `setTimeout(() => fn(a), 100)` → `setTimeout(fn, 100, a)` |
+| `prefer-array-from-map` | `[...iter].map(fn)` → `Array.from(iter, fn)` |
+| `no-indexof-equality` | `str.indexOf('x') === 0` → `str.startsWith('x')` |
+
+### À étendre (partielles)
+
+| Règle comply | Extension |
+|--------------|-----------|
+| `prefer-array-some` | Ajouter `arr.find(pred) !== undefined` |
+| `prefer-spread` | Ajouter `Object.assign({}, a, b)` et `fn.apply()` |
+
+---
+
 ## Vertical Codebase (TkDodo) — Architecture par domaine
 
 Règles pour forcer l'architecture verticale vs horizontale. Partiellement couvert par `layer-import-boundary` et `api-import-from-public-index`.
