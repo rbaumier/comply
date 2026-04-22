@@ -22,6 +22,7 @@ pub mod better_auth_no_disable_origin_check;
 pub mod better_auth_plugin_import_path;
 pub mod better_auth_require_rate_limit;
 pub mod better_auth_trusted_providers;
+pub mod bool_param_default;
 pub mod boolean_naming;
 pub mod call_expression;
 pub mod comment_paraphrases_code;
@@ -383,6 +384,7 @@ pub mod hono_csp_unsafe;
 pub mod hono_csrf_missing;
 pub mod hono_missing_secure_headers;
 pub mod hono_secure_headers_disabled;
+pub mod inconsistent_function_call;
 pub mod index_of_compare_to_positive;
 pub mod intermediate_variables;
 pub mod inverted_assertion_arguments;
@@ -559,6 +561,7 @@ pub mod no_named_export;
 pub mod no_namespace_import;
 pub mod no_self_import;
 pub mod no_unassigned_import;
+pub mod file_name_differ_from_class;
 pub mod prefer_default_export;
 
 // eslint-plugin-unicorn rules (native implementations).
@@ -957,6 +960,7 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         no_commented_out_code::register(),
         no_common_grab_bag::register(),
         no_default_params::register(),
+        bool_param_default::register(),
         boolean_naming::register(),
         module_header::register(),
         no_boolean_flag_param::register(),
@@ -1196,6 +1200,7 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         cyclomatic_complexity::register(),
         elseif_without_else::register(),
         for_loop_increment_sign::register(),
+        inconsistent_function_call::register(),
         index_of_compare_to_positive::register(),
         inverted_assertion_arguments::register(),
         jsx_no_leaked_render::register(),
@@ -1492,6 +1497,7 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         exports_last::register(),
         no_named_export::register(),
         prefer_default_export::register(),
+        file_name_differ_from_class::register(),
         // eslint-plugin-unicorn rules (native implementations).
         catch_error_name::register(),
         consistent_date_clone::register(),
