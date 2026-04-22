@@ -76,6 +76,7 @@ pub mod vue_template_helpers;
 // rust_must_use_on_result intentionally not declared — see mod.rs
 // below for the rationale.
 pub mod cognitive_complexity;
+pub mod halstead_complexity;
 pub mod generator_without_yield;
 pub mod god_module;
 pub mod jsdoc_needs_description;
@@ -1163,6 +1164,7 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         no_test_logic::register(),
         // SonarJS-equivalent rules (native implementations).
         cognitive_complexity::register(),
+        halstead_complexity::register(),
         no_identical_functions::register(),
         no_gratuitous_expression::register(),
         no_all_duplicated_branches::register(),

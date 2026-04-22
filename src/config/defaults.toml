@@ -73,6 +73,11 @@ max = 10
 [rules.cognitive-complexity]
 max = 5
 
+[rules.halstead-complexity]
+max_volume = 1500
+max_difficulty = 30
+max_effort = 1000000
+
 [rules.expression-complexity]
 max_ops = 4
 
