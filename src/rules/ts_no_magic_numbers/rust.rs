@@ -56,7 +56,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         path: ctx.path.to_path_buf(),
         line: pos.row + 1,
         column: pos.column + 1,
-        rule_id: "no-magic-numbers".into(),
+        rule_id: "ts-no-magic-numbers".into(),
         message: format!(
             "Magic number `{text}` — extract it into a named `const`."
         ),

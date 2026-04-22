@@ -39,7 +39,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 path: ctx.path.to_path_buf(),
                 line: pos.row + 1,
                 column: pos.column + 1,
-                rule_id: "no-loop-func".into(),
+                rule_id: "ts-no-loop-func".into(),
                 message: "Closure declared inside a loop body — hoist it out so it is not rebuilt per iteration.".into(),
                 severity: Severity::Warning,
                 span: None,

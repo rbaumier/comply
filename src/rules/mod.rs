@@ -826,13 +826,6 @@ pub mod testing_no_real_external_service;
 pub mod ts_prefer_satisfies;
 pub mod vue_no_mutate_prop;
 pub mod zod_transform_requires_pipe;
-pub mod no_extraneous_class;
-pub mod no_import_type_side_effects;
-pub mod no_invalid_this;
-pub mod no_invalid_void_type;
-pub mod no_loop_func;
-pub mod no_magic_numbers;
-pub mod no_redeclare;
 use crate::diagnostic::Severity;
 use crate::files::Language;
 use backend::Backend;
@@ -1895,13 +1888,6 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         ts_prefer_satisfies::register(),
         vue_no_mutate_prop::register(),
         zod_transform_requires_pipe::register(),
-        no_extraneous_class::register(),
-        no_import_type_side_effects::register(),
-        no_invalid_this::register(),
-        no_invalid_void_type::register(),
-        no_loop_func::register(),
-        no_magic_numbers::register(),
-        no_redeclare::register(),
     ];
     rules.extend(delegated::register_all());
     rules
