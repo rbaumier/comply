@@ -19,6 +19,8 @@ Always use `cargo nextest run` over `cargo test` — parallel execution, better 
 src/
   main.rs           # CLI entry point
   engine.rs         # File → parse → dispatch rules → collect diagnostics
+  project/
+    import_index.rs # Cross-file import/export index (TS/JS/Rust)
   rules/
     mod.rs          # Rule registry: all_rule_defs() + pub mod declarations
     backend.rs      # Backend enum (TreeSitter/Text/Oxlint/Clippy/Tsc)
@@ -36,6 +38,13 @@ src/
       rust.rs       # AstCheck backend (tree-sitter Rust) — optional
       text.rs       # TextCheck backend (line scanning) — for text-only rules or Vue
 ```
+
+## Cross-file Analysis
+
+comply supporte l'analyse cross-file via `ImportIndex`:
+- Indexe exports/imports pour TS/JS/TSX et Rust
+- APIs: `get_exports()`, `get_imports()`, `get_usages()`, `get_call_sites()`
+- Utilisé par: `no-identical-functions`, `inconsistent-function-call`, `god-module`, `dead-export`
 
 ## Adding a rule
 

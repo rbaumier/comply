@@ -1,7 +1,9 @@
 # Comply — Règles à faire (compilation)
 
-Consolidation des 4 fichiers racine (hors `DIFF_REVIEW_FULL.md` qui est du raw output) :
-- `RULES_TO_ADD.md` — nouvelles règles candidates
+**Dernière mise à jour: 2026-04-22**
+
+Consolidation des fichiers racine (hors `DIFF_REVIEW_FULL.md` qui est du raw output) :
+- `RULES_TO_ADD.md` — nouvelles règles candidates (118 règles, toutes ✅ implémentées)
 - `RULES_TO_FIX.md` — règles existantes à corriger
 - `TODO.md` — perf debt / tiers / bugs en vrac
 - `TODO_AFTER_REVIEWS.md` — classification d'une review POC (bugs + suggestions)
@@ -9,123 +11,110 @@ Consolidation des 4 fichiers racine (hors `DIFF_REVIEW_FULL.md` qui est du raw o
 
 Format : chaque entrée = une ligne actionnable. À toi de trier / prioriser.
 
----
-
-## 1. Nouvelles règles — Faciles (AST simple)
-
-| ID | Catégorie | Détecte | Source |
-|----|-----------|---------|--------|
-| `no-double-cast` | typescript | `as unknown as T` | RULES_TO_ADD |
-| `vue-no-mutate-prop` | vue | Assignation à `props.X` | RULES_TO_ADD |
-| `drizzle-no-push-in-production` | drizzle (text) | `drizzle-kit push` dans un script CI | RULES_TO_ADD |
-| `i18n-no-unnecessary-trans-component` | i18n | `<Trans>` sans enfants JSX | RULES_TO_ADD |
-| `i18n-prefer-logical-css-properties` | i18n (text CSS) | `margin-left`/`padding-right` | RULES_TO_ADD |
-| `sql-create-index-concurrently` | database (text) | `CREATE INDEX` sans `CONCURRENTLY` | RULES_TO_ADD |
-| `sql-advisory-lock-prefer-xact` | database (text) | `pg_advisory_lock(` sans `xact_` | RULES_TO_ADD |
+Légende :
+- ✅ implémenté (présent dans `src/rules/`)
+- ⏳ à faire
 
 ---
 
-## 2. Nouvelles règles — Sécurité (Moyen, cluster cohérent)
+## 1. Nouvelles règles — Faciles (AST simple) — COMPLET ✅
 
-Aucune n'est implémentée. Bon candidat pour une session dédiée.
+Section entièrement implémentée. Voir `src/rules/` pour les détails.
 
-| ID | Détecte |
-|----|---------|
-| `no-mass-assignment` | `db.update(X).set(req.body)` / `db.insert(X).values(req.body)` |
-| `no-open-redirect` | `res.redirect(req.query.returnTo)` sans validation |
-| `no-error-details-in-response` | `res.json({ error: err.message })` ou `err.stack` |
-| `no-prototype-pollution` | `_.merge(`/spread récursif sur input utilisateur |
-| `no-unvalidated-url-redirect` | `window.location = userInput` sans validation protocole |
-
----
-
-## 3. Nouvelles règles — TypeScript / Architecture (Moyen)
-
-| ID | Détecte |
-|----|---------|
-| `ts-prefer-satisfies` | `value as Type` remplaçable par `satisfies` |
-| `prefer-promise-all` | Awaits séquentiels indépendants |
-| `no-unchecked-json-parse` | `JSON.parse(` sans Zod/type guard ensuite |
-| `no-conditional-async-return` | Fonction retournant parfois `T` parfois `Promise<T>` |
-| `ts-prefer-using-declaration` | `try/finally { close() }` remplaçable par `using` (TS 5.2+) |
-| `vertical-slice-no-role-folders` | `src/services/` + `src/repositories/` + `src/handlers/` en parallèle |
-| `single-call-site-inline` | Fonction exportée référencée dans 1 seul fichier (Difficile) |
+- ✅ `no-double-cast` — `no_double_cast/`
+- ✅ `vue-no-mutate-prop` — `vue_no_mutate_prop/`
+- ✅ `drizzle-no-push-in-production` — `drizzle_no_push_in_production/`
+- ✅ `i18n-no-unnecessary-trans-component` — `i18n_no_unnecessary_trans_component/`
+- ✅ `i18n-prefer-logical-css-properties` — `i18n_prefer_logical_css_properties/`
+- ✅ `sql-create-index-concurrently` — `sql_create_index_concurrently/`
+- ✅ `sql-advisory-lock-prefer-xact` — `sql_advisory_lock_prefer_xact/`
 
 ---
 
-## 4. Nouvelles règles — Rust restantes
+## 2. Nouvelles règles — Sécurité — COMPLET ✅
 
-| ID | Difficulté | Détecte |
-|----|------------|---------|
-| `rust-prefer-fast-hasher` | Moyen | `HashMap::<u64,` / `HashMap::<usize,` sans `ahash`/`fxhash` |
-| `rust-prefer-cow` | Difficile | `&str` puis parfois `.to_owned()` — data-flow |
-| `rust-no-mutex-in-single-threaded` | Difficile | `Mutex::new(` sans `spawn`/async — data-flow |
+- ✅ `no-mass-assignment` — `no_mass_assignment/`
+- ✅ `no-open-redirect` — `no_open_redirect/`
+- ✅ `no-error-details-in-response` — `no_error_details_in_response/`
+- ✅ `no-prototype-pollution` — `no_prototype_pollution/`
+- ✅ `no-unvalidated-url-redirect` — `no_unvalidated_url_redirect/`
 
 ---
 
-## 5. Nouvelles règles — Frameworks (Moyen / Difficile)
+## 3. Nouvelles règles — TypeScript / Architecture
+
+- ✅ `ts-prefer-satisfies` — `ts_prefer_satisfies/`
+- ✅ `prefer-promise-all` — `prefer_promise_all/`
+- ✅ `no-unchecked-json-parse` — `no_unchecked_json_parse/`
+- ✅ `no-conditional-async-return` — `no_conditional_async_return/`
+- ✅ `ts-prefer-using-declaration` — `ts_prefer_using_declaration/`
+- ⏳ `vertical-slice-no-role-folders` — `src/services/` + `src/repositories/` + `src/handlers/` en parallèle
+- ⏳ `single-call-site-inline` — Fonction exportée référencée dans 1 seul fichier (Difficile) — proche de `dead-export` + ImportIndex cross-file
+
+---
+
+## 4. Nouvelles règles — Rust — COMPLET ✅
+
+- ✅ `rust-prefer-fast-hasher` — `rust_prefer_fast_hasher/`
+- ✅ `rust-prefer-cow` — `rust_prefer_cow/`
+- ✅ `rust-no-mutex-in-single-threaded` — `rust_no_mutex_in_single_threaded/`
+
+---
+
+## 5. Nouvelles règles — Frameworks — COMPLET ✅
 
 ### Zod
-| ID | Difficulté | Détecte |
-|----|------------|---------|
-| `zod-transform-requires-pipe` | Moyen | `.transform(fn)` terminal sans `.pipe(z.*)` |
-| `zod-brand-ids` | Difficile | `z.string().uuid()` sans `.brand()` pour les IDs |
-| `zod-validate-env-at-startup` | Difficile | Accès `process.env.X` sans validation Zod préalable |
+- ✅ `zod-transform-requires-pipe` — `zod_transform_requires_pipe/`
+- ✅ `zod-brand-ids` — `zod_brand_ids/`
+- ✅ `zod-validate-env-at-startup` — `zod_validate_env_at_startup/`
 
 ### TanStack Query / Start
-| ID | Difficulté | Détecte |
-|----|------------|---------|
-| `tanstack-query-prefer-suspense-query` | Difficile | `useQuery(` dans contexte SSR/RSC |
-| `tanstack-start-loader-stale-time` | Moyen | `ensureQueryData(` avec `staleTime` < 5000 |
-| `tanstack-start-no-client-import-in-server-fn` | Facile | Import `useState`/`useEffect` dans fichier `.functions.ts` |
+- ✅ `tanstack-query-prefer-suspense-query` — `tanstack_query_prefer_suspense_query/`
+- ✅ `tanstack-start-loader-stale-time` — `tanstack_start_loader_stale_time/`
+- ✅ `tanstack-start-no-client-import-in-server-fn` — `tanstack_start_no_client_import_in_server_fn/`
 
 ### Tailwind
-| ID | Difficulté | Détecte |
-|----|------------|---------|
-| `tailwind-no-magic-spacing` | Moyen | `p-[`, `m-[`, `gap-[` avec px non-multiple de 4 |
-| `tailwind-read-theme-before-classes` | Difficile | `bg-blue-500` alors que token `--color-brand-*` existe |
+- ✅ `tailwind-no-magic-spacing` — `tailwind_no_magic_spacing/`
+- ✅ `tailwind-read-theme-before-classes` — `tailwind_read_theme_before_classes/`
 
 ### React
-| ID | Difficulté | Détecte |
-|----|------------|---------|
-| `react-prefer-react-cache` | Difficile | Fonction async appelée depuis plusieurs RSC sans `cache()` |
-| `react-no-sequential-await-in-component` | Difficile | `const a = await f(); const b = await g()` sans dépendance |
-| `react-hoist-static-jsx` | Difficile | JSX sans props dynamiques créé à l'intérieur d'un composant |
+- ✅ `react-prefer-react-cache` — `react_prefer_react_cache/`
+- ✅ `react-no-sequential-await-in-component` — `react_no_sequential_await_in_component/`
+- ✅ `react-hoist-static-jsx` — `react_hoist_static_jsx/`
 
 ### Vue
-| ID | Difficulté | Détecte |
-|----|------------|---------|
-| `vue-prefer-computed` | Difficile | Expression complexe répétée dans `<template>` sans `computed()` |
-| `vue-markraw-for-third-party` | Difficile | Instance de classe tierce assignée à `ref()`/`reactive()` |
-| `vue-url-state-for-filters` | Difficile | `useState`-like pour `page`/`sort`/`filter`/`search` |
+- ✅ `vue-prefer-computed` — `vue_prefer_computed/`
+- ✅ `vue-markraw-for-third-party` — `vue_markraw_for_third_party/`
+- ✅ `vue-url-state-for-filters` — `vue_url_state_for_filters/`
 
 ### Better Auth
-| ID | Difficulté | Détecte |
-|----|------------|---------|
-| `better-auth-require-secure-cookies` | Moyen | Absence de `useSecureCookies: true` dans advanced |
-| `better-auth-middleware-requires-headers` | Moyen | `getSession(` dans `middleware.ts` sans `headers: nextHeaders()` |
+- ✅ `better-auth-require-secure-cookies` — `better_auth_require_secure_cookies/`
+- ✅ `better-auth-middleware-requires-headers` — `better_auth_middleware_requires_headers/`
 
 ### Testing
-| ID | Difficulté | Détecte |
-|----|------------|---------|
-| `testing-no-real-external-service` | Moyen | `fetch('https://stripe.com'` dans les tests |
+- ✅ `testing-no-real-external-service` — `testing_no_real_external_service/`
 
 ### Drizzle
-| ID | Difficulté | Détecte |
-|----|------------|---------|
-| `drizzle-chunk-large-batch-insert` | Difficile | `db.insert(t).values(array)` sans chunking (limite PG params) |
+- ✅ `drizzle-chunk-large-batch-insert` — `drizzle_chunk_large_batch_insert/`
 
 ### API Design
-| ID | Difficulté | Détecte |
-|----|------------|---------|
-| `api-no-boolean-field-in-response` | Difficile | `isX: boolean` dans un DTO de réponse |
-| `api-deprecation-headers` | Difficile | Endpoint `@deprecated` sans header `Deprecation`/`Sunset` |
+- ✅ `api-no-boolean-field-in-response` — `api_no_boolean_field_in_response/`
+- ✅ `api-deprecation-headers` — `api_deprecation_headers/`
 
 ### Database SQL
-| ID | Difficulté | Détecte |
-|----|------------|---------|
-| `sql-require-transaction-timeout` | Difficile | Absence de `idle_in_transaction_session_timeout` dans config |
-| `sql-nullable-requires-comment` | Moyen | Colonne `.nullable()` Drizzle sans commentaire justificatif |
+- ✅ `sql-require-transaction-timeout` — `sql_require_transaction_timeout/`
+- ✅ `sql-nullable-requires-comment` — `sql_nullable_requires_comment/`
+
+---
+
+## 5b. Règles cross-file ImportIndex — COMPLET ✅
+
+- ✅ `file-name-differ-from-class` — `file_name_differ_from_class/`
+- ✅ `inconsistent-function-call` — `inconsistent_function_call/` (cross-file via ImportIndex)
+- ✅ `bool-param-default` — `bool_param_default/`
+- ✅ `god-module` — `god_module/`
+- ✅ `dead-export` — `dead_export/`
+- ✅ `no-identical-functions` — `no_identical_functions/` (cross-file via ImportIndex)
 
 ---
 
@@ -217,7 +206,7 @@ Classification d'une review POC sur la codebase de `poc/query-table`.
 
 2. **`impl Display` + `impl FromStr` manuels** sur un enum → **doit utiliser `strum`**. Règle suggérée : `rust-prefer-strum` — enum avec `#[derive(...)]` + `impl Display` + `impl FromStr` manuels mirroring des variants 1-pour-1.
 
-3. **2 fonctions presque identiques dans 2 fichiers différents** : doit être flaggé (ne l'est pas aujourd'hui). → couvert par `no-clones` natif mentionné en Tier 0 ci-dessous.
+3. **2 fonctions presque identiques dans 2 fichiers différents** : ✅ couvert par `no-identical-functions` (cross-file via ImportIndex).
 
 ---
 
