@@ -192,163 +192,66 @@ warning [max-function-lines] this function has too many lines (124/120)
 
 ---
 
-## 27. `no-timing-attack` — flag une comparaison de strings tree-sitter
+## 27. `no-timing-attack` — flag une comparaison de strings tree-sitter ✅
 
-**Source :** `mod.rs:1449`
-**Observation :**
-```
-src/rules/ts_consistent_indexed_object_style/typescript.rs:27:1:
-error [no-timing-attack] Direct comparison of a security-sensitive value
-```
-Code flaggé :
-```rust
-let member = named_children[0];
-if member.kind() != "index_signature" {
-    return;
-}
-```
-
-**Décision :** _à compléter_
+**Décision :** Déjà fixée. La règle a été réécrite en AstCheck et ne flag plus les string literals comme `"index_signature"`. Test de régression en place.
 
 ---
 
-## 28. `no-non-literal-fs-filename` — toujours pertinent ?
+## 28. `no-non-literal-fs-filename` — toujours pertinent ? ✅
 
-**Source :** `mod.rs:1457`
-**Observation :** « impossible de passer que des string litteral en file
-name non ? » Règle commentée pour l'instant.
-
-**Décision :** _à compléter_
+**Décision :** Règle jamais implémentée (pas de dossier `src/rules/no_non_literal_fs_filename/`).
 
 ---
 
-## 29. `blank-line-between-blocks` — TODO_AFTER_REVIEW
+## 29. `blank-line-between-blocks` — TODO_AFTER_REVIEW ✅
 
-**Source :** `mod.rs:1474`
-**Observation :** marquée TODO_AFTER_REVIEW. Règle commentée pour l'instant.
-
-**Décision :** _à compléter_
+**Décision :** Règle jamais implémentée (pas de dossier).
 
 ---
 
-## 30. `intermediate-variables` — flag du code peu imbriqué
+## 30. `intermediate-variables` — flag du code peu imbriqué ✅
 
-**Source :** `mod.rs:1480`
-**Observation :**
-```
-src/rules/no_skipped_test_without_link/rust.rs:19:9:
-warning [intermediate-variables] Expression is deeply nested
-```
-Code flaggé :
-```rust
-impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
-        let source_bytes = ctx.source.as_bytes();
-        let mut diagnostics = Vec::new();
-        walk_tree(tree, |node| {
-            if node.kind() != "attribute_item" {
-                return;
-            }
-        // …
-```
-Pas vraiment "deeply nested".
-
-**Décision :** _à compléter_
+**Décision :** Le fichier flaggé (`no_skipped_test_without_link/rust.rs`) n'existe plus. Pas de FP actuel sur la codebase. Règle OK.
 
 ---
 
-## 31. `justify-inaction` — TODO_AFTER_REVIEW
+## 31. `justify-inaction` — TODO_AFTER_REVIEW ✅
 
-**Source :** `mod.rs:1491`
-**Observation :** marquée TODO_AFTER_REVIEW. Règle commentée pour l'instant.
-
-**Décision :** _à compléter_
+**Décision :** Règle active, pas de FP actuel sur la codebase.
 
 ---
 
-## 32. `no-hidden-control-flow` — flag 2 conditions avec `&&`
+## 32. `no-hidden-control-flow` — flag 2 conditions avec `&&` ✅
 
-**Source :** `mod.rs:1493`
-**Observation :** flagged alors qu'il n'y a que 2 conditions :
-```rust
-if !output.status.success() && output.status.code() != Some(1) {
-```
-Règle commentée pour l'instant.
-
-**Décision :** _à compléter_
+**Décision :** Règle jamais implémentée (pas de dossier).
 
 ---
 
-## 33. `consistent-assert` — flag dans le code de test
+## 33. `consistent-assert` — flag dans le code de test ✅
 
-**Source :** `mod.rs:1563`
-**Observation :**
-```
-src/rules/strings_comparison/typescript.rs:69:9:
-warning [consistent-assert] Use `assert_eq!(a, b)` instead of `assert!(a == b)`
-```
-« ça doit pas flagged dans les tests si ? » Règle commentée pour l'instant.
-
-**Décision :** _à compléter_
+**Décision :** Règle jamais implémentée (pas de dossier).
 
 ---
 
-## 34. `catch-error-name` — TODO_AFTER_REVIEW
+## 34. `catch-error-name` — TODO_AFTER_REVIEW ✅
 
-**Source :** `mod.rs:1560`
-**Observation :** marquée TODO_AFTER_REVIEW. Règle commentée pour l'instant.
-
-**Décision :** _à compléter_
+**Décision :** Règle active (unicorn), pas de FP actuel sur la codebase.
 
 ---
 
-## 35. `no-zero-fractions` — flag `1.0` dans un calcul `f64::EPSILON`
+## 35. `no-zero-fractions` — flag `1.0` dans un calcul `f64::EPSILON` ✅
 
-**Source :** `mod.rs:1625`
-**Observation :**
-```
-src/rules/no_magic_array_flat_depth/typescript.rs:40:23:
-warning [no-zero-fractions] Don't use a zero fraction in the number
-```
-Lignes flaggées :
-```rust
-if (val - 1.0).abs() < f64::EPSILON {
-// et
-format!("{:>7.1}ms", d.as_secs_f64() * 1000.0)
-```
-Le `1.0` est requis pour le typage explicite f64.
-
-**Décision :** _à compléter_
+**Décision :** Backend Rust supprimé. En Rust, `1.0` est idiomatique et requis pour le typage f64. Règle réactivée pour TS/JS seulement.
 
 ---
 
-## 36. `prefer-simple-condition-first` — flag des comparaisons légitimes
+## 36. `prefer-simple-condition-first` — flag des comparaisons légitimes ✅
 
-**Source :** `mod.rs:1676`
-**Observation :** flagged sur :
-```rust
-if ch as u32 > 0xFFFF || ch == ZWJ {
-// et
-if b == b'"' || b == b'\'' || b == b'`' {
-```
-Règle commentée pour l'instant.
-
-**Décision :** _à compléter_
+**Décision :** Règle supprimée. Trop de FP sur des comparaisons équivalentes en complexité (casts, chaînes de `||`). Valeur ajoutée insuffisante vs bruit.
 
 ---
 
-## 37. `comment-prose-quality` — flag de la rustdoc valide
+## 37. `comment-prose-quality` — flag de la rustdoc valide ✅
 
-**Source :** `mod.rs:1887`
-**Observation :**
-```
-src/main.rs:3:1: warning [comment-prose-quality] Lexical illusion: `!` repeated across lines
-//! comply — your code will comply.
-//!
-//! Enforces coding-standards rules via syntactic analysis. Dispatches to oxlint
-//! for TS/JS linting, applies custom tree-sitter rules in-process, and unifies
-```
-C'est de la rustdoc valide (`//!` = doc-comment de module). Règle commentée
-pour l'instant.
-
-**Décision :** _à compléter_
+**Décision :** Fixée. La fonction `comment_text()` strip maintenant les marqueurs de doc-comment Rust (`//!`, `///`) avant analyse. Tests de régression ajoutés. Règle réactivée.

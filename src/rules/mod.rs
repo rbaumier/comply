@@ -65,8 +65,6 @@ pub mod jsdoc_require_yields_description;
 pub mod jsdoc_text_helpers;
 pub mod jsdoc_valid_types;
 pub mod jsx;
-pub mod max_file_lines;
-pub mod max_function_lines;
 pub mod meta;
 pub mod migration_needs_lock_timeout;
 pub mod migration_needs_rollback;
@@ -357,7 +355,6 @@ pub mod arguments_order;
 pub mod array_callback_without_return;
 pub mod assertions_in_tests;
 pub mod auth_on_mutation;
-pub mod colocated_tests;
 pub mod comma_or_logical_or_case;
 pub mod cyclomatic_complexity;
 pub mod data_clumps;
@@ -673,7 +670,6 @@ pub mod prefer_regexp_test;
 pub mod prefer_response_static_json;
 pub mod prefer_set_has;
 pub mod prefer_set_size;
-pub mod prefer_simple_condition_first;
 pub mod prefer_single_call;
 pub mod prefer_spread;
 pub mod prefer_string_raw;
@@ -936,8 +932,6 @@ pub fn collect_clippy_bindings() -> Vec<(&'static str, &'static RuleMeta, Severi
 /// All registered rules — both the custom ones and the oxlint-delegated ones.
 pub fn all_rule_defs() -> Vec<RuleDef> {
     let mut rules = vec![
-        // max_file_lines::register(), // We don't want this rule do we?
-        // max_function_lines::register(), // We don't want this rule do we?
         no_throw::register(),
         no_nested_ternary::register(),
         // @TODO: il a flag le commentaire suivant :
@@ -1351,9 +1345,7 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         // thread '<unnamed>' (63760602) panicked at src/rules/regex_prefer_quantifier/text.rs:47:33:
         // byte index 24 is not a char boundary; it is inside '—' (bytes 23..26) of `** Service return type — dates are Date objects, Hono serializes to ISO strings *`
 
-        // thread '<unnamed>' (63760595) panicked at src/rules/regex_prefer_quantifier/text.rs:47:33:
-        // byte index 46 is not a char boundary; it is inside '—' (bytes 45..48) of `** Create a user with an active organization — ready for org-scoped operations. *`
-        // regex_prefer_quantifier::register(),
+        regex_prefer_quantifier::register(),
         regex_use_unicode_flag::register(),
         regex_no_octal::register(),
         regex_no_escape_backspace::register(),
@@ -1411,7 +1403,6 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         hono_secure_headers_disabled::register(),
         api_first::register(),
         auth_on_mutation::register(),
-        // colocated_tests::register(),  // Disabled: flags every file in codebases without test infra.
         data_clumps::register(),
         error_message_is_remediation::register(),
         factory_di_shape::register(),
@@ -1539,12 +1530,7 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         no_useless_promise_resolve_reject::register(),
         no_useless_spread::register(),
         no_useless_switch_case::register(),
-        // @TODO flagged:
-        // src/rules/no_magic_array_flat_depth/typescript.rs:40:23: warning [no-zero-fractions] Don't use a zero fraction in the number.
-        // if (val - 1.0).abs() < f64::EPSILON {
-        // ET
-        // format!("{:>7.1}ms", d.as_secs_f64() * 1000.0)
-        // no_zero_fractions::register(),
+        no_zero_fractions::register(),
         number_literal_case::register(),
         numeric_separators_style::register(),
         prefer_add_event_listener::register(),
@@ -1590,11 +1576,6 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         prefer_response_static_json::register(),
         prefer_set_has::register(),
         prefer_set_size::register(),
-        // @TODO flagged:
-        // if ch as u32 > 0xFFFF || ch == ZWJ {
-        // ET
-        // if b == b'"' || b == b'\'' || b == b'`' {
-        // prefer_simple_condition_first::register(),
         prefer_single_call::register(),
         prefer_spread::register(),
         prefer_string_raw::register(),
@@ -1772,16 +1753,7 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         // package-json rules.
         package_json_sorted_deps::register(),
         package_json_unique_deps::register(),
-        // comment prose quality.
-        // @TODO:
-        //         src/main.rs:3:1: warning [comment-prose-quality] Lexical illusion: `!` repeated across lines.
-        // //! comply — your code will comply.
-        // //!
-        // //! Enforces coding-standards rules via syntactic analysis. Dispatches to oxlint
-        // //! for TS/JS linting, applies custom tree-sitter rules in-process, and unifies
-
-        // -> c'est de la rustdoc valide, ne devrait pas flag
-        // comment_prose_quality::register(),
+        comment_prose_quality::register(),
         // architecture: hexagonal layer boundaries.
         layer_import_boundary::register(),
         // v2.12 — rules derived from code-review feedback.

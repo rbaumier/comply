@@ -1,6 +1,7 @@
-//! no-zero-fractions
+//! no-zero-fractions — flag `1.0`, `2.00` where the fractional part is
+//! all zeros. TS/JS only: in Rust, `1.0` is idiomatic and required for
+//! explicit f64 typing (`1.0` vs `1` = f64 vs i32).
 
-mod rust;
 mod typescript;
 
 use crate::diagnostic::Severity;
@@ -17,5 +18,5 @@ pub const META: RuleMeta = RuleMeta {
 };
 
 pub fn register() -> RuleDef {
-    crate::register_ts_family_with_rust!(META, typescript, rust)
+    crate::register_ts_family!(META, typescript)
 }

@@ -33,10 +33,13 @@ const PASSIVE_PATTERNS: &[&str] = &[
 
 /// Extract comment text from a line. Returns `Some(text)` for `//` and
 /// `/*` single-line comments, and lines that continue a block comment
-/// (starting with `*`).
+/// (starting with `*`). Strips Rust doc-comment markers (`//!`, `///`).
 fn comment_text(line: &str) -> Option<&str> {
     let trimmed = line.trim();
     if let Some(rest) = trimmed.strip_prefix("//") {
+        // Strip Rust doc-comment markers: `//!` or `///`.
+        let rest = rest.strip_prefix('!').unwrap_or(rest);
+        let rest = rest.strip_prefix('/').unwrap_or(rest);
         return Some(rest);
     }
     if let Some(rest) = trimmed.strip_prefix("/*") {
@@ -175,5 +178,19 @@ mod tests {
     #[test]
     fn allows_clean_comment() {
         assert!(run("// Compute the SHA-256 hash of the input buffer.").is_empty());
+    }
+
+    #[test]
+    fn allows_rust_doc_comments() {
+        // `//!` markers should not trigger lexical illusion on `!`.
+        let src = "//! Module doc.\n//!\n//! More details here.";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_rust_item_doc_comments() {
+        // `///` markers should not trigger lexical illusion on `/`.
+        let src = "/// Function doc.\n///\n/// More details.";
+        assert!(run(src).is_empty());
     }
 }

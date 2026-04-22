@@ -62,7 +62,7 @@ fn extract_template_names(body: &str) -> Vec<String> {
     // Keep only the portion before any separator that starts a
     // description (`-`, `:`).
     let head = after_type
-        .split(|c: char| c == '-' || c == ':')
+        .split(['-', ':'])
         .next()
         .unwrap_or("");
     head.split(',')
