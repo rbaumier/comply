@@ -37,7 +37,33 @@ pub mod drizzle_zod_prefer_generated_schema;
 pub mod error_without_cause;
 pub mod explicit_return_type_on_exported;
 pub mod explicit_units;
+pub mod jsdoc_check_property_names;
+pub mod jsdoc_check_tag_names;
+pub mod jsdoc_check_template_names;
+pub mod jsdoc_check_types;
+pub mod jsdoc_check_values;
+pub mod jsdoc_helpers;
 pub mod jsdoc_missing_example;
+pub mod jsdoc_require_file_overview;
+pub mod jsdoc_require_hyphen_before_param_description;
+pub mod jsdoc_require_param_description;
+pub mod jsdoc_require_param_name;
+pub mod jsdoc_require_property;
+pub mod jsdoc_require_property_description;
+pub mod jsdoc_require_property_name;
+pub mod jsdoc_require_next_description;
+pub mod jsdoc_require_rejects;
+pub mod jsdoc_require_returns_description;
+pub mod jsdoc_require_tags;
+pub mod jsdoc_require_template;
+pub mod jsdoc_require_template_description;
+pub mod jsdoc_require_throws;
+pub mod jsdoc_require_throws_description;
+pub mod jsdoc_require_yields;
+pub mod jsdoc_require_yields_check;
+pub mod jsdoc_require_yields_description;
+pub mod jsdoc_text_helpers;
+pub mod jsdoc_valid_types;
 pub mod jsx;
 pub mod max_file_lines;
 pub mod max_function_lines;
@@ -205,6 +231,7 @@ pub mod react_checked_requires_onchange;
 pub mod react_forward_ref_uses_ref;
 pub mod react_iframe_missing_sandbox;
 pub mod react_jsx_key;
+pub mod react_jsx_no_bind;
 pub mod react_jsx_no_comment_textnodes;
 pub mod react_jsx_no_duplicate_props;
 pub mod react_jsx_no_script_url;
@@ -502,6 +529,7 @@ pub mod use_type_alias;
 pub mod useless_string_operation;
 
 // eslint-plugin-import rules (native implementations).
+pub mod exports_last;
 pub mod import_consistent_type_specifier_style;
 pub mod import_dynamic_import_chunkname;
 pub mod import_no_amd;
@@ -517,9 +545,11 @@ pub mod no_absolute_path;
 pub mod no_duplicate_imports;
 pub mod no_import_module_exports;
 pub mod no_mutable_exports;
+pub mod no_named_export;
 pub mod no_namespace_import;
 pub mod no_self_import;
 pub mod no_unassigned_import;
+pub mod prefer_default_export;
 
 // eslint-plugin-unicorn rules (native implementations).
 pub mod catch_error_name;
@@ -678,6 +708,9 @@ pub mod ts_consistent_indexed_object_style;
 pub mod ts_consistent_type_assertions;
 pub mod ts_consistent_type_definitions;
 pub mod ts_default_param_last;
+pub mod ts_explicit_function_return_type;
+pub mod ts_explicit_member_accessibility;
+pub mod ts_explicit_module_boundary_types;
 pub mod ts_init_declarations;
 pub mod ts_max_params;
 pub mod ts_member_ordering;
@@ -793,6 +826,13 @@ pub mod testing_no_real_external_service;
 pub mod ts_prefer_satisfies;
 pub mod vue_no_mutate_prop;
 pub mod zod_transform_requires_pipe;
+pub mod no_extraneous_class;
+pub mod no_import_type_side_effects;
+pub mod no_invalid_this;
+pub mod no_invalid_void_type;
+pub mod no_loop_func;
+pub mod no_magic_numbers;
+pub mod no_redeclare;
 use crate::diagnostic::Severity;
 use crate::files::Language;
 use backend::Backend;
@@ -1036,6 +1076,31 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         banned_comment_words::register(),
         no_section_divider_comments::register(),
         jsdoc_missing_example::register(),
+        // eslint-plugin-jsdoc imports — 12 rules.
+        jsdoc_check_property_names::register(),
+        jsdoc_check_tag_names::register(),
+        jsdoc_check_template_names::register(),
+        jsdoc_check_types::register(),
+        jsdoc_check_values::register(),
+        jsdoc_valid_types::register(),
+        jsdoc_require_param_description::register(),
+        jsdoc_require_param_name::register(),
+        jsdoc_require_returns_description::register(),
+        jsdoc_require_file_overview::register(),
+        jsdoc_require_hyphen_before_param_description::register(),
+        jsdoc_require_property::register(),
+        jsdoc_require_property_description::register(),
+        jsdoc_require_property_name::register(),
+        jsdoc_require_rejects::register(),
+        jsdoc_require_throws::register(),
+        jsdoc_require_yields::register(),
+        jsdoc_require_yields_check::register(),
+        jsdoc_require_tags::register(),
+        jsdoc_require_template::register(),
+        jsdoc_require_next_description::register(),
+        jsdoc_require_template_description::register(),
+        jsdoc_require_throws_description::register(),
+        jsdoc_require_yields_description::register(),
         comment_paraphrases_code::register(),
         // v2.9 — Naming: intent + collection-type alignment.
         no_misleading_collection_name::register(),
@@ -1417,6 +1482,9 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         import_no_dynamic_require::register(),
         import_dynamic_import_chunkname::register(),
         import_consistent_type_specifier_style::register(),
+        exports_last::register(),
+        no_named_export::register(),
+        prefer_default_export::register(),
         // eslint-plugin-unicorn rules (native implementations).
         catch_error_name::register(),
         consistent_date_clone::register(),
@@ -1603,6 +1671,7 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         react_no_adjacent_inline_elements::register(),
         react_forward_ref_uses_ref::register(),
         react_no_typos::register(),
+        react_jsx_no_bind::register(),
         // typescript-eslint rules (native implementations).
         ts_no_duplicate_enum_values::register(),
         ts_no_extra_non_null_assertion::register(),
@@ -1660,6 +1729,10 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         ts_consistent_type_assertions::register(),
         ts_consistent_type_definitions::register(),
         ts_default_param_last::register(),
+        ts_explicit_function_return_type::register(),
+        ts_explicit_member_accessibility::register(),
+        ts_explicit_module_boundary_types::register(),
+        ts_init_declarations::register(),
         // eslint-plugin-playwright rules (native implementations).
         playwright_no_force_option::register(),
         playwright_no_page_pause::register(),
@@ -1822,6 +1895,13 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         ts_prefer_satisfies::register(),
         vue_no_mutate_prop::register(),
         zod_transform_requires_pipe::register(),
+        no_extraneous_class::register(),
+        no_import_type_side_effects::register(),
+        no_invalid_this::register(),
+        no_invalid_void_type::register(),
+        no_loop_func::register(),
+        no_magic_numbers::register(),
+        no_redeclare::register(),
     ];
     rules.extend(delegated::register_all());
     rules
