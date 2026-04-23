@@ -22,7 +22,6 @@ mod clippy;
 mod config;
 mod jscpd;
 mod knip;
-mod llm;
 mod madge;
 mod runner_helpers;
 mod catalog;
@@ -145,7 +144,6 @@ struct Timings {
     jscpd_rs: Duration,
     engine_rs: Duration,
     engine_vue: Duration,
-    llm: Duration,
     post: Duration,
     total: Duration,
 }
@@ -175,9 +173,6 @@ fn print_timings(t: &Timings) {
     eprintln!("  engine (rs)   {}", fmt_ms(t.engine_rs));
     eprintln!("  -- vue --");
     eprintln!("  engine (vue)  {}", fmt_ms(t.engine_vue));
-    if t.llm > Duration::ZERO {
-        eprintln!("  llm           {}", fmt_ms(t.llm));
-    }
     eprintln!("  post-filter   {}", fmt_ms(t.post));
     eprintln!("  -----");
     eprintln!("  TOTAL         {}", fmt_ms(t.total));
@@ -231,26 +226,7 @@ fn lint_project(cli: &Cli) -> Result<bool> {
         eprintln!("comply: ran {runs} fixer(s); re-linting");
     }
 
-    let mut diagnostics = collect_all_diagnostics(&discovered, &config, &mut timings)?;
-
-    // Phase 3: LLM rules (opt-in via --with-llm).
-    if cli.with_llm {
-        if !llm::claude_cli::is_available() {
-            anyhow::bail!(
-                "--with-llm requires the `claude` CLI. Install it: \
-                 https://docs.anthropic.com/en/docs/claude-code"
-            );
-        }
-        let all_files: Vec<&SourceFile> = discovered.iter().collect();
-        let llm_config = llm::LlmConfig {
-            model: cli.model.clone(),
-            concurrency: cli.llm_concurrency,
-            project_root: config_anchor,
-        };
-        let t_llm = Instant::now();
-        diagnostics.extend(llm::lint_files(&all_files, &llm_config)?);
-        timings.llm = t_llm.elapsed();
-    }
+    let diagnostics = collect_all_diagnostics(&discovered, &config, &mut timings)?;
 
     let t_post = Instant::now();
     let after_overrides = apply_config_filters(diagnostics, &config);

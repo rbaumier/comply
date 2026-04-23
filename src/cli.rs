@@ -59,23 +59,6 @@ pub struct Cli {
     #[arg(long)]
     pub fix: bool,
 
-    /// Enable LLM-powered semantic rules. Spawns `claude` CLI as a
-    /// subprocess for rules that can't be checked mechanically (comment
-    /// quality, intent naming, PII detection, etc.). Uses your local
-    /// Claude subscription — no API key or extra cost. Panics if the
-    /// `claude` CLI is not installed.
-    #[arg(long)]
-    pub with_llm: bool,
-
-    /// LLM model override (default: sonnet). Only used with `--with-llm`.
-    #[arg(long, default_value = "sonnet")]
-    pub model: String,
-
-    /// Maximum parallel `claude` subprocesses (default: 30).
-    /// Only used with `--with-llm`.
-    #[arg(long, default_value = "30")]
-    pub llm_concurrency: usize,
-
     /// Print per-phase timing breakdown to stderr (discovery, oxlint,
     /// clippy, cargo-shear, cargo-modules, engine, ...). Dev-only flag
     /// used to profile where comply spends its wall-clock.
@@ -189,9 +172,6 @@ mod tests {
             diff_only: false,
             should_emit_json: false,
             fix: false,
-            with_llm: false,
-            model: "sonnet".to_string(),
-            llm_concurrency: 30,
             timings: false,
             path: None,
         }
