@@ -23,7 +23,6 @@ pub mod better_auth_no_disable_origin_check;
 pub mod better_auth_plugin_import_path;
 pub mod better_auth_require_rate_limit;
 pub mod better_auth_trusted_providers;
-pub mod bool_param_default;
 pub mod boolean_naming;
 pub mod call_expression;
 pub mod comment_paraphrases_code;
@@ -38,7 +37,6 @@ pub mod drizzle_returning_on_insert_update;
 pub mod drizzle_timestamp_with_timezone;
 pub mod drizzle_zod_prefer_generated_schema;
 pub mod error_without_cause;
-pub mod explicit_return_type_on_exported;
 pub mod explicit_units;
 pub mod jsdoc_check_property_names;
 pub mod jsdoc_check_tag_names;
@@ -47,7 +45,6 @@ pub mod jsdoc_check_types;
 pub mod jsdoc_check_values;
 pub mod jsdoc_helpers;
 pub mod jsdoc_missing_example;
-pub mod jsdoc_require_file_overview;
 pub mod jsdoc_require_hyphen_before_param_description;
 pub mod jsdoc_require_param_description;
 pub mod jsdoc_require_param_name;
@@ -60,8 +57,6 @@ pub mod jsdoc_require_returns_description;
 pub mod jsdoc_require_tags;
 pub mod jsdoc_require_template;
 pub mod jsdoc_require_template_description;
-pub mod jsdoc_require_throws;
-pub mod jsdoc_require_throws_description;
 pub mod jsdoc_require_yields;
 pub mod jsdoc_require_yields_check;
 pub mod jsdoc_require_yields_description;
@@ -81,7 +76,6 @@ pub mod halstead_complexity;
 pub mod generator_without_yield;
 pub mod god_module;
 pub mod jsdoc_needs_description;
-pub mod module_header;
 pub mod mysql_no_multiple_statements;
 pub mod no_abbreviated_names;
 pub mod no_alias_methods;
@@ -94,7 +88,6 @@ pub mod no_collapsible_if;
 pub mod no_commented_out_code;
 pub mod no_common_grab_bag;
 pub mod no_dangerously_set_inner_html;
-pub mod no_default_params;
 pub mod no_done_callback;
 pub mod no_double_cast;
 pub mod no_duplicate_string;
@@ -286,7 +279,6 @@ pub mod react_no_unstable_nested_components;
 pub mod react_self_closing_comp;
 pub mod react_style_prop_object;
 pub mod react_void_dom_elements_no_children;
-pub mod reduce_initial_value;
 pub mod sql_advisory_lock_prefer_xact;
 pub mod sql_create_index_concurrently;
 pub mod sql_index_needs_rationale_comment;
@@ -619,12 +611,10 @@ pub mod no_import_node_test;
 pub mod no_mocks_import;
 pub mod no_mutable_exports;
 pub mod no_useless_path_segments;
-pub mod no_named_export;
 pub mod no_namespace_import;
 pub mod no_self_import;
 pub mod no_unassigned_import;
 pub mod file_name_differ_from_class;
-pub mod prefer_default_export;
 
 // eslint-plugin-unicorn rules (native implementations).
 pub mod catch_error_name;
@@ -692,7 +682,6 @@ pub mod no_useless_spread;
 pub mod no_useless_switch_case;
 pub mod no_zero_fractions;
 pub mod node_callback_return;
-pub mod node_exports_style;
 pub mod node_global_require;
 pub mod node_handle_callback_err;
 pub mod node_hashbang;
@@ -788,7 +777,6 @@ pub mod ts_class_methods_use_this;
 pub mod ts_consistent_generic_constructors;
 pub mod ts_consistent_indexed_object_style;
 pub mod ts_consistent_type_assertions;
-pub mod ts_consistent_type_definitions;
 pub mod ts_default_param_last;
 pub mod ts_explicit_function_return_type;
 pub mod ts_explicit_member_accessibility;
@@ -836,11 +824,9 @@ pub mod ts_no_useless_constructor;
 pub mod ts_no_useless_empty_export;
 pub mod ts_no_wrapper_object_types;
 pub mod ts_parameter_properties;
-pub mod ts_prefer_enum_initializers;
 pub mod ts_prefer_for_of;
 pub mod ts_prefer_function_type;
 pub mod ts_prefer_literal_enum_member;
-pub mod ts_prefer_namespace_keyword;
 pub mod ts_triple_slash_reference;
 pub mod ts_unified_signatures;
 // eslint-plugin-playwright rules (native implementations).
@@ -1050,10 +1036,7 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         // // const foo =, let foo =, var foo =
         no_commented_out_code::register(),
         no_common_grab_bag::register(),
-        no_default_params::register(),
-        bool_param_default::register(),
         boolean_naming::register(),
-        module_header::register(),
         mysql_no_multiple_statements::register(),
         no_boolean_flag_param::register(),
         explicit_units::register(),
@@ -1077,7 +1060,6 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         no_enum::register(),
         no_double_cast::register(),
         no_json_parse_cast::register(),
-        explicit_return_type_on_exported::register(),
         no_inline_function_event_listener::register(),
         no_inline_param_type::register(),
         no_interpolation_in_snapshots::register(),
@@ -1208,20 +1190,17 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         jsdoc_require_param_description::register(),
         jsdoc_require_param_name::register(),
         jsdoc_require_returns_description::register(),
-        jsdoc_require_file_overview::register(),
         jsdoc_require_hyphen_before_param_description::register(),
         jsdoc_require_property::register(),
         jsdoc_require_property_description::register(),
         jsdoc_require_property_name::register(),
         jsdoc_require_rejects::register(),
-        jsdoc_require_throws::register(),
         jsdoc_require_yields::register(),
         jsdoc_require_yields_check::register(),
         jsdoc_require_tags::register(),
         jsdoc_require_template::register(),
         jsdoc_require_next_description::register(),
         jsdoc_require_template_description::register(),
-        jsdoc_require_throws_description::register(),
         jsdoc_require_yields_description::register(),
         comment_paraphrases_code::register(),
         // v2.9 — Naming: intent + collection-type alignment.
@@ -1304,7 +1283,6 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         jsdoc_needs_description::register(),
         // Text-based code-quality rules.
         no_try_promise::register(),
-        reduce_initial_value::register(),
         no_unused_collection::register(),
         prefer_while::register(),
         prefer_less_than::register(),
@@ -1641,8 +1619,6 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         import_dynamic_import_chunkname::register(),
         import_consistent_type_specifier_style::register(),
         exports_last::register(),
-        no_named_export::register(),
-        prefer_default_export::register(),
         file_name_differ_from_class::register(),
         // eslint-plugin-unicorn rules (native implementations).
         catch_error_name::register(),
@@ -1794,7 +1770,6 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         node_callback_return::register(),
         node_global_require::register(),
         node_no_mixed_requires::register(),
-        node_exports_style::register(),
         node_hashbang::register(),
         node_no_exports_assign::register(),
         node_no_top_level_await::register(),
@@ -1859,7 +1834,6 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         ts_no_unused_private_class_members::register(),
         ts_no_unused_vars::register(),
         ts_no_use_before_define::register(),
-        ts_prefer_namespace_keyword::register(),
         ts_triple_slash_reference::register(),
         ts_unified_signatures::register(),
         ts_method_signature_style::register(),
@@ -1881,7 +1855,6 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         ts_no_unnecessary_parameter_property_assignment::register(),
         ts_no_useless_constructor::register(),
         ts_parameter_properties::register(),
-        ts_prefer_enum_initializers::register(),
         ts_prefer_for_of::register(),
         ts_prefer_function_type::register(),
         ts_adjacent_overload_signatures::register(),
@@ -1891,7 +1864,6 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         ts_consistent_generic_constructors::register(),
         ts_consistent_indexed_object_style::register(),
         ts_consistent_type_assertions::register(),
-        ts_consistent_type_definitions::register(),
         ts_default_param_last::register(),
         ts_explicit_function_return_type::register(),
         ts_explicit_member_accessibility::register(),

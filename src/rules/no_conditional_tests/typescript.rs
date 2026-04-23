@@ -11,7 +11,7 @@ fn callee_is_test_fn(name: &str) -> bool {
     // Accept bare `test`, `it`, `describe` and member-access variants like
     // `test.each`, `describe.only` — the base identifier is what matters.
     let base = name.split('.').next().unwrap_or(name);
-    TEST_FNS.iter().any(|n| *n == base)
+    TEST_FNS.contains(&base)
 }
 
 fn has_conditional_ancestor(node: tree_sitter::Node) -> bool {

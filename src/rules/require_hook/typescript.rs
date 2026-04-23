@@ -58,7 +58,7 @@ fn root_callee_name<'a>(call: tree_sitter::Node<'a>, source: &'a [u8]) -> Option
 /// Literals, identifiers, template strings without expressions,
 /// plain object/array literals, arrow/function expressions, and the
 /// `as` cast of any of the above are considered safe.
-fn is_pure_initializer(node: tree_sitter::Node, source: &[u8]) -> bool {
+fn is_pure_initializer(node: tree_sitter::Node) -> bool {
     match node.kind() {
         "string"
         | "number"
@@ -82,37 +82,36 @@ fn is_pure_initializer(node: tree_sitter::Node, source: &[u8]) -> bool {
         }
         "array" => {
             let mut cur = node.walk();
-            node.named_children(&mut cur)
-                .all(|c| is_pure_initializer(c, source))
+            node.named_children(&mut cur).all(|c| is_pure_initializer(c))
         }
         "object" => {
             let mut cur = node.walk();
             node.named_children(&mut cur).all(|c| match c.kind() {
                 "pair" => c
                     .child_by_field_name("value")
-                    .is_some_and(|v| is_pure_initializer(v, source)),
+                    .is_some_and(|v| is_pure_initializer(v)),
                 "shorthand_property_identifier" | "spread_element" => false,
                 _ => false,
             })
         }
         "unary_expression" | "parenthesized_expression" | "as_expression"
-        | "type_assertion" | "satisfies_expression" | "non_null_expression" => node
-            .named_child(0)
-            .is_some_and(|c| is_pure_initializer(c, source)),
+        | "type_assertion" | "satisfies_expression" | "non_null_expression" => {
+            node.named_child(0).is_some_and(|c| is_pure_initializer(c))
+        }
         _ => false,
     }
 }
 
 /// Every declarator in a `const`/`let`/`var` statement must have a
 /// pure initializer (or none at all).
-fn declaration_is_pure(decl: tree_sitter::Node, source: &[u8]) -> bool {
+fn declaration_is_pure(decl: tree_sitter::Node) -> bool {
     let mut cur = decl.walk();
     for child in decl.named_children(&mut cur) {
         if child.kind() != "variable_declarator" {
             continue;
         }
         if let Some(value) = child.child_by_field_name("value")
-            && !is_pure_initializer(value, source)
+            && !is_pure_initializer(value)
         {
             return false;
         }
@@ -140,9 +139,7 @@ fn top_level_is_allowed(stmt: tree_sitter::Node, source: &[u8]) -> bool {
         | "empty_statement"
         | "comment" => true,
 
-        "lexical_declaration" | "variable_declaration" => {
-            declaration_is_pure(stmt, source)
-        }
+        "lexical_declaration" | "variable_declaration" => declaration_is_pure(stmt),
 
         // `describe(...)`, `test(...)`, `beforeEach(...)`, etc.
         "expression_statement" => {

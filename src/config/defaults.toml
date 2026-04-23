@@ -139,3 +139,16 @@ max = 500
 [rules.god-module]
 threshold_percent = 30
 min_importers = 10
+
+# ---------------------------------------------------------------
+# Disabled by default — opt-in only.
+# ---------------------------------------------------------------
+
+[rules.node-no-callback-literal]
+disabled = true
+
+[rules.ts-explicit-function-return-type]
+disabled = true
+
+[rules.no-throw]
+disabled = true

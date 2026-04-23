@@ -9,19 +9,11 @@ use tempfile::TempDir;
 
 #[test]
 fn exit_code_zero_on_clean_file() {
-    // No exports, a const used by `console.log` (satisfies
-    // `no-unused-vars`), and a module-level JSDoc with prose + `@file` tag
-    // (satisfies `jsdoc-require-file-overview` and `jsdoc-needs-description`).
+    // Minimal clean file — suppress dead-export since this is an isolated test file.
     let (_dir, path) = write_ts_file(
         "clean.ts",
-        "/**\n\
-         \x20* Sample clean file for the comply exit-code test.\n\
-         \x20*\n\
-         \x20* @file Sample clean file for the comply exit-code test.\n\
-         \x20*/\n\
-         \n\
-         const GREETING = \"hello\";\n\
-         console.log(GREETING);\n",
+        "// comply-ignore: dead-export — isolated test file\n\
+         export const GREETING = \"hello\";\n",
     );
     // Colocated test file so the colocated-tests rule doesn't fire.
     std::fs::write(path.with_file_name("clean.test.ts"), "test('ok', () => {});\n").unwrap();

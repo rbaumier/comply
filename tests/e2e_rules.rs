@@ -7,13 +7,13 @@ use common::write_ts_file;
 use predicates::prelude::*;
 
 #[test]
-fn detects_throw_statement() {
-    let (_dir, path) = write_ts_file("throw.ts", "function f() { throw new Error('x'); }\n");
+fn detects_nested_ternary_violation() {
+    let (_dir, path) = write_ts_file("ternary.ts", "export const x = a ? b ? 1 : 2 : 3;\n");
     Command::cargo_bin("comply")
         .unwrap()
         .arg(&path)
         .assert()
-        .stdout(predicate::str::contains("no-throw"));
+        .stdout(predicate::str::contains("no-nested-ternary"));
 }
 
 #[test]
@@ -39,14 +39,13 @@ fn detects_nested_ternary() {
 
 #[test]
 fn multiple_violations_are_all_reported() {
-    let source = "function processOrder() { throw new Error('x'); const y = a ? b ? 1 : 2 : 3; }\n";
+    let source = "function processOrder() { const y = a ? b ? 1 : 2 : 3; }\n";
     let (_dir, path) = write_ts_file("multi.ts", source);
     Command::cargo_bin("comply")
         .unwrap()
         .arg(&path)
         .assert()
         .code(1)
-        .stdout(predicate::str::contains("no-throw"))
         .stdout(predicate::str::contains("no-nested-ternary"))
         .stdout(predicate::str::contains("no-generic-names"));
 }

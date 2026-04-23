@@ -11,13 +11,13 @@ fn marker_inside_string_literal_is_not_honored() {
     // Round 3: hardened marker matching to require leading whitespace only.
     // String literals containing "// comply-ignore: ..." must NOT register
     // a phantom suppression that swallows the next line.
-    let source = "const fake = \"// comply-ignore: no-throw — bypass\";\nfunction f() { throw 1; }\n";
+    let source = "const fake = \"// comply-ignore: no-nested-ternary — bypass\";\nexport const x = a ? b ? 1 : 2 : 3;\n";
     let (_dir, path) = write_ts_file("phantom.ts", source);
     Command::cargo_bin("comply")
         .unwrap()
         .arg(&path)
         .assert()
-        .stdout(predicate::str::contains("no-throw"));
+        .stdout(predicate::str::contains("no-nested-ternary"));
 }
 
 #[test]
@@ -38,13 +38,13 @@ fn jsx_files_use_tsx_grammar() {
     // Round 2: split Language::Tsx so .jsx/.tsx use LANGUAGE_TSX. Without
     // this, JSX expressions parse as ERROR nodes — either missing real
     // violations or emitting phantoms.
-    let source = "const App = () => <div onClick={() => { throw new Error('boom'); }}>x</div>;\n";
-    let (_dir, path) = write_ts_file("App.jsx", source);
+    let source = "export const App = () => <div onClick={() => { const x = a ? b ? 1 : 2 : 3; }}>x</div>;\n";
+    let (_dir, path) = write_ts_file("app.jsx", source);
     Command::cargo_bin("comply")
         .unwrap()
         .arg(&path)
         .assert()
-        .stdout(predicate::str::contains("no-throw"));
+        .stdout(predicate::str::contains("no-nested-ternary"));
 }
 
 #[test]
@@ -63,24 +63,24 @@ fn banned_identifiers_does_not_flag_document_or_database() {
 #[test]
 fn trailing_comply_ignore_suppresses_current_line() {
     // Round 5: same-line trailing markers suppress the current line.
-    let source = "function f() { throw 1; } // comply-ignore: no-throw — boundary\n";
+    let source = "export const x = a ? b ? 1 : 2 : 3; // comply-ignore: no-nested-ternary — boundary\n";
     let (_dir, path) = write_ts_file("trailing.ts", source);
     Command::cargo_bin("comply")
         .unwrap()
         .arg(&path)
         .assert()
-        .stdout(predicate::str::contains("no-throw").not());
+        .stdout(predicate::str::contains("no-nested-ternary").not());
 }
 
 #[test]
 fn bom_prefixed_file_honors_line_one_ignore() {
     // Round 4: strip leading UTF-8 BOM before scanning ignore markers,
     // otherwise line-1 ignores silently never apply.
-    let source = "\u{FEFF}// comply-ignore: no-throw — startup boundary\nfunction f() { throw 1; }\n";
+    let source = "\u{FEFF}// comply-ignore: no-nested-ternary — startup boundary\nexport const x = a ? b ? 1 : 2 : 3;\n";
     let (_dir, path) = write_ts_file("bom.ts", source);
     Command::cargo_bin("comply")
         .unwrap()
         .arg(&path)
         .assert()
-        .stdout(predicate::str::contains("no-throw").not());
+        .stdout(predicate::str::contains("no-nested-ternary").not());
 }
