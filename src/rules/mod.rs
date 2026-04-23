@@ -136,6 +136,7 @@ pub mod no_nullish_default_on_input;
 pub mod no_open_redirect;
 pub mod no_page_click_deprecated;
 pub mod no_path_traversal;
+pub mod no_property_mutation;
 pub mod no_prototype_pollution;
 pub mod no_redundant_assignment;
 pub mod no_one_iteration_loop;
@@ -973,6 +974,7 @@ pub mod prefer_promise_all;
 pub mod ts_prefer_using_declaration;
 // v3.0 — Skill-driven rules: Batch 11 (i18n)
 pub mod i18n_json_identical_keys;
+pub mod i18n_json_identical_placeholders;
 pub mod i18n_json_valid_message_syntax;
 pub mod i18n_no_concat_translation_key;
 pub mod i18n_no_hardcoded_string_in_jsx;
@@ -2178,6 +2180,7 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         vue_url_state_for_filters::register(),
         // v3.0 — Skill-driven rules: Batch 11 (i18n)
         i18n_json_identical_keys::register(),
+        i18n_json_identical_placeholders::register(),
         i18n_json_valid_message_syntax::register(),
         i18n_no_hardcoded_string_in_jsx::register(),
         i18n_no_concat_translation_key::register(),
@@ -2190,6 +2193,7 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         no_mass_assignment::register(),
         no_open_redirect::register(),
         no_path_traversal::register(),
+        no_property_mutation::register(),
         no_prototype_pollution::register(),
         no_shell_exec::register(),
         no_ssrf_fetch::register(),

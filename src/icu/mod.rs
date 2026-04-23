@@ -9,4 +9,4 @@
 
 mod parser;
 
-pub use parser::{parse, IcuError, IcuErrorKind};
+pub use parser::{extract_placeholders, parse, IcuError, IcuErrorKind};

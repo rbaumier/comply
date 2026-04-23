@@ -380,6 +380,69 @@ fn is_arg_name_char(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_'
 }
 
+/// Extract all placeholder names from an ICU message.
+/// Returns a sorted Vec of unique placeholder names.
+pub fn extract_placeholders(input: &str) -> Vec<String> {
+    let mut placeholders = std::collections::HashSet::new();
+    let bytes = input.as_bytes();
+    let mut i = 0;
+
+    while i < bytes.len() {
+        if bytes[i] == b'{' {
+            i += 1;
+            // Skip whitespace
+            while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+                i += 1;
+            }
+            // Read argument name
+            let start = i;
+            while i < bytes.len() && is_arg_name_char(bytes[i]) {
+                i += 1;
+            }
+            if i > start {
+                if let Ok(name) = std::str::from_utf8(&bytes[start..i]) {
+                    placeholders.insert(name.to_string());
+                }
+            }
+            // Skip to closing brace (handle nesting)
+            let mut depth = 1;
+            while i < bytes.len() && depth > 0 {
+                match bytes[i] {
+                    b'{' => depth += 1,
+                    b'}' => depth -= 1,
+                    b'\'' => {
+                        i += 1;
+                        while i < bytes.len() && bytes[i] != b'\'' {
+                            i += 1;
+                        }
+                    }
+                    _ => {}
+                }
+                i += 1;
+            }
+        } else if bytes[i] == b'\'' {
+            // Skip quoted content
+            i += 1;
+            if i < bytes.len() && bytes[i] == b'\'' {
+                i += 1;
+            } else {
+                while i < bytes.len() && bytes[i] != b'\'' {
+                    i += 1;
+                }
+                if i < bytes.len() {
+                    i += 1;
+                }
+            }
+        } else {
+            i += 1;
+        }
+    }
+
+    let mut result: Vec<String> = placeholders.into_iter().collect();
+    result.sort();
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -476,5 +539,45 @@ mod tests {
     fn real_world_example() {
         let msg = "You have {count, plural, =0 {no messages} one {# message} other {# messages}} from {sender}.";
         assert!(parse(msg).is_ok());
+    }
+
+    // extract_placeholders tests
+
+    #[test]
+    fn extracts_simple_placeholders() {
+        assert_eq!(extract_placeholders("{name}"), vec!["name"]);
+        assert_eq!(extract_placeholders("Hello {name}!"), vec!["name"]);
+    }
+
+    #[test]
+    fn extracts_multiple_placeholders() {
+        let mut result = extract_placeholders("{a} and {b} and {c}");
+        result.sort();
+        assert_eq!(result, vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn extracts_from_plural() {
+        let result = extract_placeholders("{count, plural, one {# item} other {# items}}");
+        assert_eq!(result, vec!["count"]);
+    }
+
+    #[test]
+    fn extracts_from_nested() {
+        let msg = "Hello {name}, you have {count, plural, one {# msg} other {# msgs}}";
+        let mut result = extract_placeholders(msg);
+        result.sort();
+        assert_eq!(result, vec!["count", "name"]);
+    }
+
+    #[test]
+    fn no_duplicates() {
+        let result = extract_placeholders("{name} and {name} again");
+        assert_eq!(result, vec!["name"]);
+    }
+
+    #[test]
+    fn empty_for_plain_text() {
+        assert!(extract_placeholders("Hello world").is_empty());
     }
 }
