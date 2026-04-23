@@ -29,11 +29,11 @@ fn is_outermost_call(node: tree_sitter::Node) -> bool {
         match parent.kind() {
             "call_expression" => {
                 // Check if we're in the arguments of the parent call
-                if let Some(args) = parent.child_by_field_name("arguments") {
-                    if node.start_byte() >= args.start_byte() && node.end_byte() <= args.end_byte()
-                    {
-                        return false;
-                    }
+                if let Some(args) = parent.child_by_field_name("arguments")
+                    && node.start_byte() >= args.start_byte()
+                    && node.end_byte() <= args.end_byte()
+                {
+                    return false;
                 }
             }
             "arguments" => {

@@ -84,35 +84,33 @@ fn collect_functions<'a>(
 ) {
     match node.kind() {
         "function_declaration" | "generator_function_declaration" => {
-            if let Some(name) = get_function_name(node, source) {
-                if let Some(params) = node.child_by_field_name("parameters") {
-                    let (count, has_rest) = count_params(params);
-                    functions.insert(
-                        name.to_string(),
-                        FunctionInfo {
-                            param_count: count,
-                            has_rest,
-                        },
-                    );
-                }
+            if let Some(name) = get_function_name(node, source)
+                && let Some(params) = node.child_by_field_name("parameters")
+            {
+                let (count, has_rest) = count_params(params);
+                functions.insert(
+                    name.to_string(),
+                    FunctionInfo {
+                        param_count: count,
+                        has_rest,
+                    },
+                );
             }
         }
         "variable_declarator" => {
-            if let Some(name) = get_function_name(node, source) {
-                if let Some(value) = node.child_by_field_name("value") {
-                    if value.kind() == "arrow_function" || value.kind() == "function" {
-                        if let Some(params) = value.child_by_field_name("parameters") {
-                            let (count, has_rest) = count_params(params);
-                            functions.insert(
-                                name.to_string(),
-                                FunctionInfo {
-                                    param_count: count,
-                                    has_rest,
-                                },
-                            );
-                        }
-                    }
-                }
+            if let Some(name) = get_function_name(node, source)
+                && let Some(value) = node.child_by_field_name("value")
+                && (value.kind() == "arrow_function" || value.kind() == "function")
+                && let Some(params) = value.child_by_field_name("parameters")
+            {
+                let (count, has_rest) = count_params(params);
+                functions.insert(
+                    name.to_string(),
+                    FunctionInfo {
+                        param_count: count,
+                        has_rest,
+                    },
+                );
             }
         }
         _ => {}
@@ -145,34 +143,29 @@ fn check_calls<'a>(
     diagnostics: &mut Vec<Diagnostic>,
     path: &std::path::Path,
 ) {
-    if node.kind() == "call_expression" {
-        if let Some(func) = node.child_by_field_name("function") {
-            if func.kind() == "identifier" {
-                if let Ok(name) = func.utf8_text(source) {
-                    if let Some(info) = functions.get(name) {
-                        if !info.has_rest {
-                            if let Some(args) = node.child_by_field_name("arguments") {
-                                let arg_count = count_args(args);
-                                if arg_count > info.param_count {
-                                    let pos = node.start_position();
-                                    diagnostics.push(Diagnostic {
-                                        path: path.to_path_buf(),
-                                        line: pos.row + 1,
-                                        column: pos.column + 1,
-                                        rule_id: "no-extra-arguments".into(),
-                                        message: format!(
-                                            "Function `{name}` expects {} argument(s) but got {arg_count}.",
-                                            info.param_count
-                                        ),
-                                        severity: Severity::Warning,
-                                        span: None,
-                                    });
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+    if node.kind() == "call_expression"
+        && let Some(func) = node.child_by_field_name("function")
+        && func.kind() == "identifier"
+        && let Ok(name) = func.utf8_text(source)
+        && let Some(info) = functions.get(name)
+        && !info.has_rest
+        && let Some(args) = node.child_by_field_name("arguments")
+    {
+        let arg_count = count_args(args);
+        if arg_count > info.param_count {
+            let pos = node.start_position();
+            diagnostics.push(Diagnostic {
+                path: path.to_path_buf(),
+                line: pos.row + 1,
+                column: pos.column + 1,
+                rule_id: "no-extra-arguments".into(),
+                message: format!(
+                    "Function `{name}` expects {} argument(s) but got {arg_count}.",
+                    info.param_count
+                ),
+                severity: Severity::Warning,
+                span: None,
+            });
         }
     }
 

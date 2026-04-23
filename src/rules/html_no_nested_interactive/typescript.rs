@@ -96,10 +96,10 @@ fn is_interactive_element(node: tree_sitter::Node, source: &[u8]) -> bool {
 fn find_nested_interactive<'a>(node: tree_sitter::Node<'a>, source: &'a [u8]) -> Option<tree_sitter::Node<'a>> {
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
-        if child.kind() == "jsx_element" || child.kind() == "jsx_self_closing_element" {
-            if is_interactive_element(child, source) {
-                return Some(child);
-            }
+        if (child.kind() == "jsx_element" || child.kind() == "jsx_self_closing_element")
+            && is_interactive_element(child, source)
+        {
+            return Some(child);
         }
         if let Some(found) = find_nested_interactive(child, source) {
             return Some(found);

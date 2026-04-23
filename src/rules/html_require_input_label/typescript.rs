@@ -36,17 +36,15 @@ fn get_attribute_value<'a>(
 ) -> Option<String> {
     let mut cursor = opening.walk();
     for child in opening.children(&mut cursor) {
-        if child.kind() == "jsx_attribute" {
-            if jsx::jsx_attribute_name(child, source) == Some(attr_name) {
-                if let Some(val) = jsx::jsx_attribute_value(child) {
-                    if let Ok(text) = val.utf8_text(source) {
-                        return Some(
-                            text.trim_matches(|c| c == '"' || c == '\'' || c == '{' || c == '}')
-                                .to_string(),
-                        );
-                    }
-                }
-            }
+        if child.kind() == "jsx_attribute"
+            && jsx::jsx_attribute_name(child, source) == Some(attr_name)
+            && let Some(val) = jsx::jsx_attribute_value(child)
+            && let Ok(text) = val.utf8_text(source)
+        {
+            return Some(
+                text.trim_matches(|c| c == '"' || c == '\'' || c == '{' || c == '}')
+                    .to_string(),
+            );
         }
     }
     None
@@ -75,12 +73,11 @@ fn is_exempt_input(opening: tree_sitter::Node, source: &[u8]) -> bool {
 fn is_inside_label(node: tree_sitter::Node, source: &[u8]) -> bool {
     let mut current = node.parent();
     while let Some(parent) = current {
-        if parent.kind() == "jsx_element" {
-            if let Some(name) = get_jsx_element_name(parent, source) {
-                if name.to_lowercase() == "label" {
-                    return true;
-                }
-            }
+        if parent.kind() == "jsx_element"
+            && let Some(name) = get_jsx_element_name(parent, source)
+            && name.to_lowercase() == "label"
+        {
+            return true;
         }
         current = parent.parent();
     }
@@ -99,18 +96,16 @@ impl LabelCollector {
     }
 
     fn collect(&mut self, node: tree_sitter::Node, source: &[u8]) {
-        if node.kind() == "jsx_element" || node.kind() == "jsx_self_closing_element" {
-            if let Some(name) = get_jsx_element_name(node, source) {
-                if name.to_lowercase() == "label" {
-                    if let Some(opening) = get_opening_element(node) {
-                        if let Some(for_val) = get_attribute_value(opening, "htmlFor", source) {
-                            self.label_fors.insert(for_val);
-                        }
-                        if let Some(for_val) = get_attribute_value(opening, "for", source) {
-                            self.label_fors.insert(for_val);
-                        }
-                    }
-                }
+        if (node.kind() == "jsx_element" || node.kind() == "jsx_self_closing_element")
+            && let Some(name) = get_jsx_element_name(node, source)
+            && name.to_lowercase() == "label"
+            && let Some(opening) = get_opening_element(node)
+        {
+            if let Some(for_val) = get_attribute_value(opening, "htmlFor", source) {
+                self.label_fors.insert(for_val);
+            }
+            if let Some(for_val) = get_attribute_value(opening, "for", source) {
+                self.label_fors.insert(for_val);
             }
         }
 
@@ -131,12 +126,12 @@ impl<'a> InputCollector<'a> {
     }
 
     fn collect(&mut self, node: tree_sitter::Node<'a>, source: &'a [u8]) {
-        if node.kind() == "jsx_element" || node.kind() == "jsx_self_closing_element" {
-            if let Some(name) = get_jsx_element_name(node, source) {
-                let lower = name.to_lowercase();
-                if lower == "input" || lower == "select" || lower == "textarea" {
-                    self.inputs.push(node);
-                }
+        if (node.kind() == "jsx_element" || node.kind() == "jsx_self_closing_element")
+            && let Some(name) = get_jsx_element_name(node, source)
+        {
+            let lower = name.to_lowercase();
+            if lower == "input" || lower == "select" || lower == "textarea" {
+                self.inputs.push(node);
             }
         }
 
@@ -179,10 +174,10 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         }
 
         // Check if has id matching a label's htmlFor
-        if let Some(id) = get_attribute_value(opening, "id", source) {
-            if label_collector.label_fors.contains(&id) {
-                continue;
-            }
+        if let Some(id) = get_attribute_value(opening, "id", source)
+            && label_collector.label_fors.contains(&id)
+        {
+            continue;
         }
 
         let pos = input.start_position();

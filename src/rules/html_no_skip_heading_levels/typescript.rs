@@ -37,12 +37,11 @@ impl<'a> HeadingCollector<'a> {
     }
 
     fn collect(&mut self, node: tree_sitter::Node<'a>, source: &'a [u8]) {
-        if node.kind() == "jsx_element" || node.kind() == "jsx_self_closing_element" {
-            if let Some(name) = get_jsx_element_name(node, source) {
-                if let Some(level) = get_heading_level(name) {
-                    self.headings.push((level, node));
-                }
-            }
+        if (node.kind() == "jsx_element" || node.kind() == "jsx_self_closing_element")
+            && let Some(name) = get_jsx_element_name(node, source)
+            && let Some(level) = get_heading_level(name)
+        {
+            self.headings.push((level, node));
         }
 
         let mut cursor = node.walk();
