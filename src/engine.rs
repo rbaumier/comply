@@ -188,9 +188,10 @@ fn dispatch_backends(
             // Oxlint / Clippy / Tsc backends don't produce diagnostics here —
             // they contribute their rule-id to the external tool's config
             // and their diagnostics are remapped in the oxlint/clippy/tsc modules.
-            Backend::Oxlint { .. } | Backend::Clippy { .. } | Backend::Tsc { .. } => {
-                Vec::new()
-            }
+            Backend::Oxlint { .. }
+            | Backend::Clippy { .. }
+            | Backend::Tsc { .. }
+            | Backend::Tsgolint { .. } => Vec::new(),
         };
         // Apply severity override if the user set one for this rule.
         if let Some(override_sev) = config.severity_for(meta.id) {

@@ -44,13 +44,16 @@ pub fn is_available() -> bool {
     })
 }
 
+
 /// Invoke oxlint on the given TS/JS files and return unified diagnostics.
+/// Always enables type-aware rules via `--type-aware` (requires oxlint-tsgolint).
 #[must_use = "diagnostics from oxlint must be reported"]
 pub fn lint_files(files: &[&SourceFile], config: &crate::config::Config) -> Result<Vec<Diagnostic>> {
     if files.is_empty() {
         return Ok(vec![]);
     }
-    let bindings = crate::rules::collect_oxlint_bindings();
+    let mut bindings = crate::rules::collect_oxlint_bindings();
+    bindings.extend(crate::rules::collect_tsgolint_bindings());
     if bindings.is_empty() {
         return Ok(vec![]);
     }
@@ -58,12 +61,12 @@ pub fn lint_files(files: &[&SourceFile], config: &crate::config::Config) -> Resu
         .iter()
         .map(|(key, _, sev)| (*key, *sev, options::for_rule(key, config)))
         .collect();
-    let config = crate::oxlint_config::generate(&rule_entries)?;
+    let oxlint_config = crate::oxlint_config::generate(&rule_entries)?;
     let remap = remap::build_table(&bindings);
 
     let mut all = Vec::with_capacity(files.len());
     for batch in files.chunks(FILES_PER_BATCH) {
-        let output = invoke_oxlint(batch, Some(config.path()))?;
+        let output = invoke_oxlint(batch, Some(oxlint_config.path()))?;
         all.extend(parse_json_bytes(&output.stdout, &output.stderr, &remap)?);
     }
     Ok(all)
@@ -75,7 +78,7 @@ fn invoke_oxlint(
     config_path: Option<&Path>,
 ) -> Result<std::process::Output> {
     let mut cmd = Command::new("oxlint");
-    cmd.args(["--format", "json"]);
+    cmd.args(["--format", "json", "--type-aware"]);
     if let Some(cfg) = config_path {
         cmd.arg("-c").arg(cfg);
     }

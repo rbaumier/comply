@@ -147,6 +147,9 @@ pub enum Backend {
     Clippy { lint: &'static str },
     /// (v1.2) Shell out to `tsc --noEmit` and filter by diagnostic code.
     Tsc { codes: &'static [u32] },
+    /// Delegate to a tsgolint rule (type-aware linting via typescript-go).
+    /// Only runs when --with-types is passed.
+    Tsgolint { rule: &'static str },
 }
 
 impl std::fmt::Debug for Backend {
@@ -157,6 +160,7 @@ impl std::fmt::Debug for Backend {
             Self::Oxlint { rule } => write!(f, "Backend::Oxlint {{ rule: {rule:?} }}"),
             Self::Clippy { lint } => write!(f, "Backend::Clippy {{ lint: {lint:?} }}"),
             Self::Tsc { codes } => write!(f, "Backend::Tsc {{ codes: {codes:?} }}"),
+            Self::Tsgolint { rule } => write!(f, "Backend::Tsgolint {{ rule: {rule:?} }}"),
         }
     }
 }

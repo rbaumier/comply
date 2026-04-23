@@ -434,6 +434,9 @@ fn partition_by_language(discovered: &[SourceFile]) -> FilesByLanguage<'_> {
 /// on rayon's worker pool via nested `rayon::join` calls, just like the
 /// Rust pipeline in `lint_rust`.
 ///
+/// Type-aware rules are always enabled via oxlint --type-aware (requires
+/// oxlint-tsgolint package).
+///
 /// jscpd is DISABLED (see `lint_rust` and TODO.md).
 fn lint_typescript(
     ts_files: &[&SourceFile],
@@ -447,7 +450,7 @@ fn lint_typescript(
     if !oxlint_avail {
         eprintln!(
             "comply: oxlint not found — skipping oxlint rules. \
-             Install with: npm install -g oxlint"
+             Install with: npm install -g oxlint oxlint-tsgolint"
         );
     }
     if !knip_avail {
@@ -469,10 +472,6 @@ fn lint_typescript(
         if !oxlint_avail {
             return (Ok(Vec::new()), Duration::ZERO);
         }
-        // oxlint::lint_files owns its own temp-config lifecycle — it
-        // collects Backend::Oxlint bindings from the rule registry,
-        // generates the oxlintrc, and holds the NamedTempFile until the
-        // subprocess finishes reading it.
         let t = Instant::now();
         (oxlint::lint_files(ts_files, config), t.elapsed())
     };

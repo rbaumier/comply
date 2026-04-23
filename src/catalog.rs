@@ -47,6 +47,7 @@ fn backend_label(rule: &rules::RuleDef) -> String {
             Backend::Oxlint { .. } => "Oxlint",
             Backend::Clippy { .. } => "Clippy",
             Backend::Tsc { .. } => "Tsc",
+            Backend::Tsgolint { .. } => "Tsgolint",
         })
         .collect::<std::collections::BTreeSet<_>>()
         .into_iter()

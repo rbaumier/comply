@@ -18,6 +18,7 @@ pub mod backend;
 pub mod file_ctx;
 pub mod arrow_this_in_function;
 pub mod banned_comment_words;
+pub mod block_scope_case;
 pub mod better_auth_no_disable_csrf;
 pub mod better_auth_no_disable_origin_check;
 pub mod better_auth_plugin_import_path;
@@ -36,7 +37,11 @@ pub mod drizzle_no_sql_raw_with_variable;
 pub mod drizzle_returning_on_insert_update;
 pub mod drizzle_timestamp_with_timezone;
 pub mod drizzle_zod_prefer_generated_schema;
+pub mod enforce_delete_with_where;
+pub mod enforce_update_with_where;
+pub mod pg_require_limit;
 pub mod error_without_cause;
+pub mod exception_use_error_cause;
 pub mod explicit_units;
 pub mod jsdoc_check_property_names;
 pub mod jsdoc_check_tag_names;
@@ -128,6 +133,7 @@ pub mod no_page_click_deprecated;
 pub mod no_path_traversal;
 pub mod no_prototype_pollution;
 pub mod no_redundant_assignment;
+pub mod no_one_iteration_loop;
 pub mod no_redundant_boolean;
 pub mod no_section_divider_comments;
 pub mod no_set_x_to_y;
@@ -135,6 +141,7 @@ pub mod no_shell_exec;
 pub mod no_side_effects_in_initialization;
 pub mod no_sort_without_comparator;
 pub mod no_ssrf_fetch;
+pub mod no_submit_handler_without_prevent_default;
 pub mod no_test_logic;
 pub mod no_test_prefixes;
 pub mod no_test_return_statement;
@@ -148,9 +155,11 @@ pub mod no_wait_for_timeout;
 pub mod object_literal;
 pub mod operation_returning_nan;
 pub mod prefer_called_exactly_once_with;
+pub mod prefer_early_return;
 pub mod prefer_called_with;
 pub mod prefer_expect_resolves;
 pub mod prefer_immediate_return;
+pub mod prefer_single_boolean_return;
 pub mod prefer_less_than;
 pub mod prefer_mock_promise_shorthand;
 pub mod prefer_spy_on;
@@ -160,6 +169,7 @@ pub mod prefer_type_over_interface;
 pub mod react_duplicate_use_directive;
 pub mod react_hoist_regex_outside_component;
 pub mod react_hoist_static_jsx;
+pub mod react_hook_form_destructuring_formstate;
 pub mod react_layout_requires_children_prop;
 pub mod react_no_and_conditional_jsx;
 pub mod react_no_array_index_key;
@@ -265,6 +275,7 @@ pub mod react_jsx_pascal_case;
 pub mod react_jsx_props_no_spread_multi;
 pub mod react_no_access_state_in_setstate;
 pub mod react_no_adjacent_inline_elements;
+pub mod react_no_chain_state_updates;
 pub mod react_no_children_prop;
 pub mod react_no_constructed_context_values;
 pub mod react_no_danger_with_children;
@@ -420,14 +431,20 @@ pub mod hono_csp_unsafe;
 pub mod hono_csrf_missing;
 pub mod hono_missing_secure_headers;
 pub mod hono_secure_headers_disabled;
+pub mod html_no_abstract_roles;
+pub mod html_no_aria_hidden_body;
 pub mod html_no_duplicate_attrs;
 pub mod html_no_duplicate_id;
 pub mod html_no_non_scalable_viewport;
 pub mod html_no_obsolete_tags;
+pub mod html_no_positive_tabindex;
 pub mod html_no_script_style_type;
 pub mod html_prefer_https;
+pub mod html_require_button_type;
 pub mod html_require_closing_tags;
 pub mod html_require_doctype;
+pub mod html_require_explicit_size;
+pub mod html_require_img_alt;
 pub mod html_require_meta_charset;
 pub mod html_require_title;
 pub mod inconsistent_function_call;
@@ -437,7 +454,9 @@ pub mod inverted_assertion_arguments;
 pub mod jsdoc_informative_docs;
 pub mod jsdoc_reject_any_type;
 pub mod jsdoc_reject_function_type;
+pub mod jsx_ensure_booleans;
 pub mod jsx_no_leaked_render;
+pub mod jsx_no_new_function_as_prop;
 pub mod justify_inaction;
 pub mod max_union_size;
 pub mod nested_control_flow;
@@ -446,6 +465,10 @@ pub mod no_array_constructor;
 pub mod no_array_delete;
 pub mod no_associative_arrays;
 pub mod no_async_constructor;
+pub mod no_async_without_await;
+pub mod no_async_array_callback;
+pub mod no_floating_promise;
+pub mod no_redundant_await;
 pub mod no_bidi_characters;
 pub mod no_bitwise_in_boolean;
 pub mod no_built_in_override;
@@ -643,6 +666,16 @@ pub mod no_await_expression_member;
 pub mod no_await_in_promise_methods;
 pub mod no_console_spaces;
 pub mod no_document_cookie;
+pub mod no_document_domain;
+pub mod no_document_write;
+pub mod no_inner_html;
+pub mod no_unsafe_alloc;
+pub mod no_unsafe_shell_exec;
+pub mod detect_dangerous_redirects;
+pub mod detect_option_rejectunauthorized;
+pub mod react_no_javascript_urls;
+pub mod no_catch_log_rethrow;
+pub mod no_catch_without_use;
 pub mod no_empty_catch;
 pub mod no_empty_file;
 pub mod no_for_loop;
@@ -767,6 +800,9 @@ pub mod switch_case_braces;
 pub mod switch_case_break_position;
 pub mod template_indent;
 pub mod text_encoding_identifier_case;
+pub mod throw_error_values;
+pub mod try_catch_json_parse;
+pub mod try_catch_new_url;
 pub mod throw_new_error;
 // typescript-eslint rules (native implementations).
 pub mod ts_adjacent_overload_signatures;
@@ -777,6 +813,8 @@ pub mod ts_class_methods_use_this;
 pub mod ts_consistent_generic_constructors;
 pub mod ts_consistent_indexed_object_style;
 pub mod ts_consistent_type_assertions;
+pub mod ts_consistent_type_exports;
+pub mod ts_consistent_type_imports;
 pub mod ts_default_param_last;
 pub mod ts_explicit_function_return_type;
 pub mod ts_explicit_member_accessibility;
@@ -806,6 +844,7 @@ pub mod ts_no_magic_numbers;
 pub mod ts_no_misused_new;
 pub mod ts_no_mixed_types;
 pub mod ts_no_namespace;
+pub mod ts_no_non_null_assertion;
 pub mod ts_no_non_null_asserted_nullish_coalescing;
 pub mod ts_no_non_null_asserted_optional_chain;
 pub mod ts_no_redeclare;
@@ -823,10 +862,12 @@ pub mod ts_no_use_before_define;
 pub mod ts_no_useless_constructor;
 pub mod ts_no_useless_empty_export;
 pub mod ts_no_wrapper_object_types;
+pub mod ts_only_throw_error;
 pub mod ts_parameter_properties;
 pub mod ts_prefer_for_of;
 pub mod ts_prefer_function_type;
 pub mod ts_prefer_literal_enum_member;
+pub mod ts_prefer_promise_reject_errors;
 pub mod ts_triple_slash_reference;
 pub mod ts_unified_signatures;
 // eslint-plugin-playwright rules (native implementations).
@@ -875,6 +916,9 @@ pub mod layer_import_boundary;
 pub mod package_json_sorted_deps;
 pub mod package_json_unique_deps;
 pub mod playwright_missing_await;
+pub mod playwright_no_eval;
+pub mod vitest_hoisted_apis_on_top;
+pub mod vitest_no_disabled_tests;
 // v3.0 — Skill-driven rules: Batch 1 (TypeScript/Architecture)
 pub mod avoid_barrel_files;
 pub mod avoid_re_export_all;
@@ -1027,10 +1071,37 @@ pub fn collect_clippy_bindings() -> Vec<(&'static str, &'static RuleMeta, Severi
     bindings
 }
 
+/// Accessor for tsgolint-delegated backends (type-aware rules).
+/// Only used when --with-types is passed.
+pub fn collect_tsgolint_bindings() -> Vec<(&'static str, &'static RuleMeta, Severity)> {
+    let mut bindings = Vec::new();
+    for rule in delegated::register_tsgolint() {
+        let meta_static: &'static RuleMeta = Box::leak(Box::new(rule.meta));
+        for (_lang, backend) in &rule.backends {
+            if let Backend::Tsgolint { rule: tsgolint_key } = backend {
+                bindings.push((*tsgolint_key, meta_static, meta_static.severity));
+            }
+        }
+    }
+    bindings.sort_by_key(|(key, _, _)| *key);
+    bindings.dedup_by_key(|(key, _, _)| *key);
+    bindings
+}
+
 /// All registered rules — both the custom ones and the oxlint-delegated ones.
 pub fn all_rule_defs() -> Vec<RuleDef> {
     let mut rules = vec![
         no_throw::register(),
+        no_async_without_await::register(),
+        no_async_array_callback::register(),
+        no_floating_promise::register(),
+        no_redundant_await::register(),
+        throw_error_values::register(),
+        no_catch_without_use::register(),
+        try_catch_json_parse::register(),
+        try_catch_new_url::register(),
+        no_catch_log_rethrow::register(),
+        exception_use_error_cause::register(),
         no_nested_ternary::register(),
         // @TODO: il a flag le commentaire suivant :
         // // const foo =, let foo =, var foo =
@@ -1267,6 +1338,10 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         operation_returning_nan::register(),
         no_collapsible_if::register(),
         no_redundant_boolean::register(),
+        block_scope_case::register(),
+        prefer_single_boolean_return::register(),
+        no_one_iteration_loop::register(),
+        prefer_early_return::register(),
         no_valueof_field::register(),
         no_nested_template_literal::register(),
         prefer_called_exactly_once_with::register(),
@@ -1531,14 +1606,20 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         hono_csrf_missing::register(),
         hono_missing_secure_headers::register(),
         hono_secure_headers_disabled::register(),
+        html_no_abstract_roles::register(),
+        html_no_aria_hidden_body::register(),
         html_no_duplicate_attrs::register(),
         html_no_duplicate_id::register(),
         html_no_non_scalable_viewport::register(),
         html_no_obsolete_tags::register(),
+        html_no_positive_tabindex::register(),
         html_no_script_style_type::register(),
         html_prefer_https::register(),
+        html_require_button_type::register(),
         html_require_closing_tags::register(),
         html_require_doctype::register(),
+        html_require_explicit_size::register(),
+        html_require_img_alt::register(),
         html_require_meta_charset::register(),
         html_require_title::register(),
         api_first::register(),
@@ -1647,6 +1728,14 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         no_await_in_promise_methods::register(),
         no_console_spaces::register(),
         no_document_cookie::register(),
+        no_document_domain::register(),
+        no_document_write::register(),
+        no_inner_html::register(),
+        no_unsafe_alloc::register(),
+        no_unsafe_shell_exec::register(),
+        detect_dangerous_redirects::register(),
+        detect_option_rejectunauthorized::register(),
+        react_no_javascript_urls::register(),
         no_empty_catch::register(),
         no_empty_file::register(),
         no_for_loop::register(),
@@ -1807,6 +1896,11 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         react_jsx_no_jsx_as_prop::register(),
         react_jsx_no_new_array_as_prop::register(),
         react_jsx_no_new_object_as_prop::register(),
+        jsx_no_new_function_as_prop::register(),
+        jsx_ensure_booleans::register(),
+        react_hook_form_destructuring_formstate::register(),
+        react_no_chain_state_updates::register(),
+        no_submit_handler_without_prevent_default::register(),
         // typescript-eslint rules (native implementations).
         ts_no_const_enum::register(),
         ts_no_duplicate_enum_values::register(),
@@ -1864,6 +1958,11 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         ts_consistent_generic_constructors::register(),
         ts_consistent_indexed_object_style::register(),
         ts_consistent_type_assertions::register(),
+        ts_consistent_type_exports::register(),
+        ts_consistent_type_imports::register(),
+        ts_no_non_null_assertion::register(),
+        ts_only_throw_error::register(),
+        ts_prefer_promise_reject_errors::register(),
         ts_default_param_last::register(),
         ts_explicit_function_return_type::register(),
         ts_explicit_member_accessibility::register(),
@@ -1874,6 +1973,9 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         playwright_no_page_pause::register(),
         playwright_no_networkidle::register(),
         playwright_no_element_handle::register(),
+        playwright_no_eval::register(),
+        vitest_hoisted_apis_on_top::register(),
+        vitest_no_disabled_tests::register(),
         playwright_prefer_web_first_assertions::register(),
         playwright_no_unsafe_references::register(),
         playwright_no_raw_locators::register(),
@@ -2022,6 +2124,9 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         drizzle_no_sql_raw_with_variable::register(),
         drizzle_returning_on_insert_update::register(),
         drizzle_zod_prefer_generated_schema::register(),
+        enforce_delete_with_where::register(),
+        enforce_update_with_where::register(),
+        pg_require_limit::register(),
         // v3.1 — Skill-driven rules: Batch 16 (mixed: security, i18n, vue, rust, tailwind, testing)
         better_auth_middleware_requires_headers::register(),
         better_auth_require_secure_cookies::register(),
@@ -2058,6 +2163,7 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         zod_validate_env_at_startup::register(),
     ];
     rules.extend(delegated::register_all());
+    rules.extend(delegated::register_tsgolint());
     rules
 }
 
