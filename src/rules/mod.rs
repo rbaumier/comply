@@ -148,6 +148,7 @@ pub mod no_test_logic;
 pub mod no_test_prefixes;
 pub mod no_test_return_statement;
 pub mod no_throw;
+pub mod no_type_assertion;
 pub mod no_type_encoded_names;
 pub mod no_unsanitized_property;
 pub mod no_unvalidated_url_redirect;
@@ -440,16 +441,19 @@ pub mod html_no_abstract_roles;
 pub mod html_no_aria_hidden_body;
 pub mod html_no_duplicate_attrs;
 pub mod html_no_duplicate_id;
+pub mod html_no_nested_interactive;
 pub mod html_no_non_scalable_viewport;
 pub mod html_no_obsolete_tags;
 pub mod html_no_positive_tabindex;
 pub mod html_no_script_style_type;
+pub mod html_no_skip_heading_levels;
 pub mod html_prefer_https;
 pub mod html_require_button_type;
 pub mod html_require_closing_tags;
 pub mod html_require_doctype;
 pub mod html_require_explicit_size;
 pub mod html_require_img_alt;
+pub mod html_require_input_label;
 pub mod html_require_meta_charset;
 pub mod html_require_title;
 pub mod inconsistent_function_call;
@@ -463,6 +467,7 @@ pub mod jsx_ensure_booleans;
 pub mod jsx_no_leaked_render;
 pub mod jsx_no_new_function_as_prop;
 pub mod justify_inaction;
+pub mod max_call_chain_depth;
 pub mod max_union_size;
 pub mod nested_control_flow;
 pub mod no_arguments_usage;
@@ -622,6 +627,7 @@ pub mod import_consistent_type_specifier_style;
 pub mod import_dynamic_import_chunkname;
 pub mod import_no_amd;
 pub mod import_no_commonjs;
+pub mod import_no_cycle;
 pub mod import_no_dynamic_require;
 pub mod import_no_empty_named_blocks;
 pub mod import_no_webpack_loader_syntax;
@@ -683,6 +689,7 @@ pub mod no_catch_log_rethrow;
 pub mod no_catch_without_use;
 pub mod no_empty_catch;
 pub mod no_empty_file;
+pub mod no_extra_arguments;
 pub mod no_for_loop;
 pub mod no_hex_escape;
 pub mod no_immediate_mutation;
@@ -803,6 +810,7 @@ pub mod require_hook;
 pub mod require_module_attributes;
 pub mod require_module_specifiers;
 pub mod require_number_to_fixed_digits_argument;
+pub mod require_path_exists;
 pub mod require_post_message_target_origin;
 pub mod require_to_throw_message;
 pub mod require_too_many_arguments;
@@ -1142,6 +1150,7 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         // src/rules/comment_paraphrases_code/text.rs:31:17: warning [no-type-encoded-names] 'fn_name' encodes a type prefix 'fn' — Hungarian notation is obsolete. Remove the prefix; the type system already tells you the type.
         // let fn_name = extract_fn_name(trimmed);
         // -> ne pas faire les fonctions ? le faire que si le type est vraiment le meme que le nom ?
+        no_type_assertion::register(),
         no_type_encoded_names::register(),
         timeout_on_io::register(),
         no_nullish_default_on_input::register(),
@@ -1405,6 +1414,7 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         index_of_compare_to_positive::register(),
         inverted_assertion_arguments::register(),
         jsx_no_leaked_render::register(),
+        max_call_chain_depth::register(),
         max_union_size::register(),
         nested_control_flow::register(),
         no_arguments_usage::register(),
@@ -1636,16 +1646,19 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         html_no_aria_hidden_body::register(),
         html_no_duplicate_attrs::register(),
         html_no_duplicate_id::register(),
+        html_no_nested_interactive::register(),
         html_no_non_scalable_viewport::register(),
         html_no_obsolete_tags::register(),
         html_no_positive_tabindex::register(),
         html_no_script_style_type::register(),
+        html_no_skip_heading_levels::register(),
         html_prefer_https::register(),
         html_require_button_type::register(),
         html_require_closing_tags::register(),
         html_require_doctype::register(),
         html_require_explicit_size::register(),
         html_require_img_alt::register(),
+        html_require_input_label::register(),
         html_require_meta_charset::register(),
         html_require_title::register(),
         api_first::register(),
@@ -1718,6 +1731,7 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         no_self_import::register(),
         no_unassigned_import::register(),
         import_no_commonjs::register(),
+        import_no_cycle::register(),
         import_no_amd::register(),
         import_no_webpack_loader_syntax::register(),
         import_no_empty_named_blocks::register(),
@@ -1764,6 +1778,7 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         react_no_javascript_urls::register(),
         no_empty_catch::register(),
         no_empty_file::register(),
+        no_extra_arguments::register(),
         no_for_loop::register(),
         no_hex_escape::register(),
         no_immediate_mutation::register(),
@@ -1870,6 +1885,7 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         require_module_attributes::register(),
         require_module_specifiers::register(),
         require_number_to_fixed_digits_argument::register(),
+        require_path_exists::register(),
         require_post_message_target_origin::register(),
         require_to_throw_message::register(),
         require_too_many_arguments::register(),
