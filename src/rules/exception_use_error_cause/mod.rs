@@ -1,0 +1,23 @@
+//! exception-use-error-cause — flag re-throws of `new Error(...)` without
+//! `{ cause }` inside a `catch` block.
+
+mod typescript;
+
+use crate::diagnostic::Severity;
+use crate::rules::meta::RuleMeta;
+use crate::rules::RuleDef;
+
+pub const META: RuleMeta = RuleMeta {
+    id: "exception-use-error-cause",
+    description: "Rethrowing a new Error from catch without `{ cause }` drops the original stack.",
+    remediation: "When wrapping a caught error in a new one, pass `{ cause: e }` \
+                  as the second argument: `throw new Error('context', { cause: e })`. \
+                  Otherwise the original stack trace and error chain are lost.",
+    severity: Severity::Warning,
+    doc_url: None,
+    categories: &["error-handling"],
+};
+
+pub fn register() -> RuleDef {
+    crate::register_ts_family!(META, typescript)
+}

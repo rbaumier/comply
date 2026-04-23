@@ -1,0 +1,121 @@
+//! no-catch-without-use backend — flag `catch (e)` whose binding `e` is
+//! never referenced inside the catch body.
+//!
+//! Detection: every `catch_clause` that has a `parameter` field gets its
+//! body scanned. If no `identifier` node matching the parameter name is
+//! found in the body, emit a diagnostic. Destructuring (`catch ({ code })`)
+//! is skipped — the destructured names are already "used" by being bound.
+
+use crate::diagnostic::{Diagnostic, Severity};
+use crate::rules::backend::{AstCheck, CheckCtx};
+use crate::rules::walker::walk_tree;
+
+fn body_references(body: tree_sitter::Node, name: &str, source: &[u8]) -> bool {
+    let mut cursor = body.walk();
+    let mut stack: Vec<tree_sitter::Node> = body.children(&mut cursor).collect();
+    while let Some(n) = stack.pop() {
+        if n.kind() == "identifier" && n.utf8_text(source).unwrap_or("") == name {
+            return true;
+        }
+        let mut c = n.walk();
+        for child in n.children(&mut c) {
+            stack.push(child);
+        }
+    }
+    false
+}
+
+#[derive(Debug)]
+pub struct Check;
+
+impl AstCheck for Check {
+    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
+        let source = ctx.source.as_bytes();
+        let mut diagnostics = Vec::new();
+        walk_tree(tree, |node| {
+            if node.kind() != "catch_clause" {
+                return;
+            }
+            let Some(param) = node.child_by_field_name("parameter") else {
+                return; // bare `catch { ... }` — nothing to flag.
+            };
+            // Only handle simple identifier bindings. Destructuring patterns
+            // (`catch ({ code })`) are out of scope — the bound names are
+            // "used" by construction, and matching them would be noisy.
+            if param.kind() != "identifier" {
+                return;
+            }
+            let Ok(name) = param.utf8_text(source) else {
+                return;
+            };
+            let Some(body) = node.child_by_field_name("body") else {
+                return;
+            };
+            if body_references(body, name, source) {
+                return;
+            }
+            let pos = param.start_position();
+            diagnostics.push(Diagnostic {
+                path: ctx.path.to_path_buf(),
+                line: pos.row + 1,
+                column: pos.column + 1,
+                rule_id: "no-catch-without-use".into(),
+                message: format!(
+                    "`catch ({name})` is never used — drop the binding (`catch {{ ... }}`) \
+                     or reference `{name}` in the handler."
+                ),
+                severity: Severity::Warning,
+                span: None,
+            });
+        });
+        diagnostics
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_ts(source, &Check)
+    }
+
+    #[test]
+    fn flags_unused_binding() {
+        let d = run_on("try { x(); } catch (e) { return null; }");
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].rule_id, "no-catch-without-use");
+    }
+
+    #[test]
+    fn flags_unused_binding_with_log() {
+        let d = run_on("try { x(); } catch (e) { console.log('oops'); }");
+        assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn allows_used_binding() {
+        assert!(run_on("try { x(); } catch (e) { console.log(e); }").is_empty());
+    }
+
+    #[test]
+    fn allows_rethrow() {
+        assert!(run_on("try { x(); } catch (e) { throw e; }").is_empty());
+    }
+
+    #[test]
+    fn allows_bare_catch() {
+        assert!(run_on("try { x(); } catch { return null; }").is_empty());
+    }
+
+    #[test]
+    fn allows_destructured_binding() {
+        // Destructuring is skipped — conservative.
+        assert!(run_on("try { x(); } catch ({ code }) { return null; }").is_empty());
+    }
+
+    #[test]
+    fn allows_used_in_nested_expr() {
+        assert!(run_on("try { x(); } catch (e) { return new Error(e.message); }").is_empty());
+    }
+}

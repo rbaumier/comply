@@ -1,0 +1,176 @@
+//! no-floating-promise backend — flag statement-level calls that look
+//! like they return a Promise without being awaited or handled.
+//!
+//! Heuristic (no type info, so we're conservative):
+//!   - The statement is `expression_statement` whose expression is a
+//!     `call_expression` (or `await_expression` — we accept that, skip).
+//!   - The call ends with `.then(...)`/`.catch(...)`/`.finally(...)` →
+//!     already handled, skip.
+//!   - The callee is `Promise.resolve/reject/all/allSettled/race/any` →
+//!     flag (top-level promise literal).
+//!   - The callee is a member whose method name is in a short "looks
+//!     async" list: `send`, `save`, `load`, `fetch`, `query`, `emit`,
+//!     `publish`, `write`, `insert`, `update`, `delete`, `close`,
+//!     `connect`, `dispatch` — flag.
+//!   - Otherwise skip.
+//!
+//! This intentionally misses cases (the spec mentions "skip if too
+//! complex") rather than producing noisy false positives. Type-aware
+//! rules catch the rest.
+
+use crate::diagnostic::{Diagnostic, Severity};
+
+const ASYNC_LOOKING_METHODS: &[&str] = &[
+    "send", "save", "load", "fetch", "query", "emit", "publish", "write", "insert", "update",
+    "delete", "close", "connect", "dispatch", "sync", "flush", "commit", "rollback", "run",
+    "exec", "execute", "process", "handle",
+];
+
+/// Does the call end with `.then(...)` / `.catch(...)` / `.finally(...)`?
+fn has_promise_handler(call: tree_sitter::Node, source: &[u8]) -> bool {
+    let Some(callee) = call.child_by_field_name("function") else {
+        return false;
+    };
+    if callee.kind() != "member_expression" {
+        return false;
+    }
+    let Some(prop) = callee.child_by_field_name("property") else {
+        return false;
+    };
+    matches!(
+        prop.utf8_text(source).unwrap_or(""),
+        "then" | "catch" | "finally"
+    )
+}
+
+/// Is the callee `Promise.<combinator>`?
+fn is_promise_combinator(call: tree_sitter::Node, source: &[u8]) -> Option<&'static str> {
+    let callee = call.child_by_field_name("function")?;
+    if callee.kind() != "member_expression" {
+        return None;
+    }
+    let obj = callee.child_by_field_name("object")?;
+    let prop = callee.child_by_field_name("property")?;
+    if obj.utf8_text(source).unwrap_or("") != "Promise" {
+        return None;
+    }
+    match prop.utf8_text(source).unwrap_or("") {
+        "resolve" => Some("resolve"),
+        "reject" => Some("reject"),
+        "all" => Some("all"),
+        "allSettled" => Some("allSettled"),
+        "race" => Some("race"),
+        "any" => Some("any"),
+        _ => None,
+    }
+}
+
+/// Is the callee a member whose method name is in the async-looking list?
+fn is_async_looking_member_call(call: tree_sitter::Node, source: &[u8]) -> bool {
+    let Some(callee) = call.child_by_field_name("function") else {
+        return false;
+    };
+    if callee.kind() != "member_expression" {
+        return false;
+    }
+    let Some(prop) = callee.child_by_field_name("property") else {
+        return false;
+    };
+    let method = prop.utf8_text(source).unwrap_or("");
+    ASYNC_LOOKING_METHODS.contains(&method)
+}
+
+crate::ast_check! { |node, source, ctx, diagnostics|
+    if node.kind() != "expression_statement" {
+        return;
+    }
+    let Some(expr) = node.named_child(0) else { return };
+    if expr.kind() != "call_expression" {
+        return;
+    }
+    // Already handled by a promise handler — skip.
+    if has_promise_handler(expr, source) {
+        return;
+    }
+    let is_flag = is_promise_combinator(expr, source).is_some()
+        || is_async_looking_member_call(expr, source);
+    if !is_flag {
+        return;
+    }
+    let pos = expr.start_position();
+    diagnostics.push(Diagnostic {
+        path: ctx.path.to_path_buf(),
+        line: pos.row + 1,
+        column: pos.column + 1,
+        rule_id: "no-floating-promise".into(),
+        message: "Promise-returning call is used as a statement — rejections will \
+                  become UnhandledPromiseRejection. Add `await`, chain `.catch`, \
+                  or prefix with `void` if you really want to ignore it."
+            .into(),
+        severity: Severity::Warning,
+        span: None,
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_ts(source, &Check)
+    }
+
+    #[test]
+    fn flags_bare_promise_all() {
+        let d = run_on("Promise.all([p1, p2]);");
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].rule_id, "no-floating-promise");
+    }
+
+    #[test]
+    fn flags_async_looking_method() {
+        let d = run_on("db.save(user);");
+        assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn flags_fetch() {
+        let d = run_on("api.fetch(url);");
+        assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn allows_awaited_call() {
+        // `await api.fetch(url);` parses as await_expression inside
+        // expression_statement — not a bare call_expression.
+        assert!(run_on("async function f() { await api.fetch(url); }").is_empty());
+    }
+
+    #[test]
+    fn allows_then_chain() {
+        assert!(run_on("api.fetch(url).then(handleResult);").is_empty());
+    }
+
+    #[test]
+    fn allows_catch_chain() {
+        assert!(run_on("api.fetch(url).catch(err);").is_empty());
+    }
+
+    #[test]
+    fn allows_assignment() {
+        // Assignment is not a bare expression_statement → call_expression.
+        assert!(run_on("const p = api.fetch(url);").is_empty());
+    }
+
+    #[test]
+    fn allows_non_async_looking_call() {
+        // Not in our heuristic list — we conservatively skip.
+        assert!(run_on("helper(x);").is_empty());
+    }
+
+    #[test]
+    fn allows_void_expression() {
+        // `void p;` parses as expression_statement → unary_expression, not a bare call.
+        assert!(run_on("void api.fetch(url);").is_empty());
+    }
+}

@@ -16,6 +16,9 @@
 [rules.max-file-lines]
 max = 200
 
+[rules.no-large-snapshots]
+max_lines = 50
+
 [rules.max-function-lines]
 max = 30
 

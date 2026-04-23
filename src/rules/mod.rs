@@ -117,6 +117,7 @@ pub mod no_interpolation_in_snapshots;
 pub mod no_inverted_boolean_check;
 pub mod no_error_details_in_response;
 pub mod no_json_parse_cast;
+pub mod no_large_snapshots;
 pub mod no_manual_rtl_cleanup;
 pub mod no_mass_assignment;
 pub mod no_match_snapshot;
@@ -142,6 +143,7 @@ pub mod no_side_effects_in_initialization;
 pub mod no_sort_without_comparator;
 pub mod no_ssrf_fetch;
 pub mod no_submit_handler_without_prevent_default;
+pub mod no_sync_scripts;
 pub mod no_test_logic;
 pub mod no_test_prefixes;
 pub mod no_test_return_statement;
@@ -686,8 +688,12 @@ pub mod no_invalid_fetch_options;
 pub mod no_invalid_remove_event_listener;
 pub mod no_keyword_prefix;
 pub mod no_lonely_if;
+pub mod no_delete;
+pub mod no_let;
 pub mod no_magic_array_flat_depth;
 pub mod no_mutating_assign;
+pub mod no_mutating_methods;
+pub mod no_mutation;
 pub mod no_named_default;
 pub mod no_negated_condition;
 pub mod no_negation_in_equality_check;
@@ -754,6 +760,7 @@ pub mod prefer_import_meta_properties;
 pub mod prefer_includes;
 pub mod prefer_json_parse_buffer;
 pub mod prefer_keyboard_event_key;
+pub mod prefer_lazy_load;
 pub mod prefer_logical_operator_over_ternary;
 pub mod prefer_math_min_max;
 pub mod prefer_math_trunc;
@@ -915,6 +922,9 @@ pub mod comment_prose_quality;
 pub mod layer_import_boundary;
 pub mod package_json_sorted_deps;
 pub mod package_json_unique_deps;
+pub mod no_index_file;
+pub mod top_level_function;
+pub mod proper_arrows_name;
 pub mod playwright_missing_await;
 pub mod playwright_no_eval;
 pub mod vitest_hoisted_apis_on_top;
@@ -953,7 +963,11 @@ pub mod testing_no_real_external_service;
 pub mod ts_prefer_satisfies;
 pub mod valid_describe_callback;
 pub mod vue_no_mutate_prop;
+pub mod xstate_entry_exit_action;
+pub mod xstate_event_names;
+pub mod xstate_invoke_usage;
 pub mod xstate_no_async_guard;
+pub mod xstate_no_imperative_action;
 pub mod xstate_no_infinite_loop;
 pub mod xstate_no_inline_implementation;
 pub mod xstate_no_invalid_conditional_action;
@@ -961,6 +975,7 @@ pub mod xstate_no_invalid_state_props;
 pub mod xstate_no_invalid_transition_props;
 pub mod xstate_no_misplaced_on_transition;
 pub mod xstate_no_ondone_outside_compound_state;
+pub mod xstate_state_names;
 pub mod zod_brand_ids;
 pub mod zod_transform_requires_pipe;
 pub mod zod_validate_env_at_startup;
@@ -1131,6 +1146,7 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         no_enum::register(),
         no_double_cast::register(),
         no_json_parse_cast::register(),
+        no_large_snapshots::register(),
         no_inline_function_event_listener::register(),
         no_inline_param_type::register(),
         no_interpolation_in_snapshots::register(),
@@ -1746,8 +1762,12 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         no_invalid_remove_event_listener::register(),
         no_keyword_prefix::register(),
         no_lonely_if::register(),
+        no_delete::register(),
+        no_let::register(),
         no_magic_array_flat_depth::register(),
         no_mutating_assign::register(),
+        no_mutating_methods::register(),
+        no_mutation::register(),
         no_named_default::register(),
         no_negated_condition::register(),
         no_negation_in_equality_check::register(),
@@ -1800,6 +1820,7 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         prefer_includes::register(),
         prefer_json_parse_buffer::register(),
         prefer_keyboard_event_key::register(),
+        prefer_lazy_load::register(),
         prefer_logical_operator_over_ternary::register(),
         prefer_math_min_max::register(),
         prefer_math_trunc::register(),
@@ -1901,6 +1922,7 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         react_hook_form_destructuring_formstate::register(),
         react_no_chain_state_updates::register(),
         no_submit_handler_without_prevent_default::register(),
+        no_sync_scripts::register(),
         // typescript-eslint rules (native implementations).
         ts_no_const_enum::register(),
         ts_no_duplicate_enum_values::register(),
@@ -2019,6 +2041,9 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         // package-json rules.
         package_json_sorted_deps::register(),
         package_json_unique_deps::register(),
+        no_index_file::register(),
+        top_level_function::register(),
+        proper_arrows_name::register(),
         comment_prose_quality::register(),
         // architecture: hexagonal layer boundaries.
         layer_import_boundary::register(),
@@ -2150,7 +2175,11 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         ts_prefer_satisfies::register(),
         valid_describe_callback::register(),
         vue_no_mutate_prop::register(),
+        xstate_entry_exit_action::register(),
+        xstate_event_names::register(),
+        xstate_invoke_usage::register(),
         xstate_no_async_guard::register(),
+        xstate_no_imperative_action::register(),
         xstate_no_infinite_loop::register(),
         xstate_no_inline_implementation::register(),
         xstate_no_invalid_conditional_action::register(),
@@ -2158,6 +2187,7 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         xstate_no_misplaced_on_transition::register(),
         xstate_no_invalid_state_props::register(),
         xstate_no_ondone_outside_compound_state::register(),
+        xstate_state_names::register(),
         zod_brand_ids::register(),
         zod_transform_requires_pipe::register(),
         zod_validate_env_at_startup::register(),
