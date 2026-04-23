@@ -232,6 +232,12 @@ fn parse_with_grammar(
         // lint the TS/JS inside a `<script>` section must extract that
         // text and re-parse it themselves (see `rules::vue_sfc`).
         Language::Vue => tree_sitter_vue_updated::language(),
+        // TOML / JSON have no bundled tree-sitter grammar — rules use
+        // TextCheck and parse on demand via the `toml` / `serde_json`
+        // crates. Returning None here ensures the engine skips AST
+        // dispatch for those files even if a stray TreeSitter backend
+        // slipped into a rule's definition.
+        Language::Toml | Language::Json => return None,
     };
     parser.set_language(&lang).ok()?;
     parser.parse(source, None)

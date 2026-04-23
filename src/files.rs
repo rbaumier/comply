@@ -19,6 +19,8 @@ const TSX_EXTENSIONS: &[&str] = &["tsx", "jsx"];
 const JS_EXTENSIONS: &[&str] = &["js", "mjs"];
 const RUST_EXTENSIONS: &[&str] = &["rs"];
 const VUE_EXTENSIONS: &[&str] = &["vue"];
+const TOML_EXTENSIONS: &[&str] = &["toml"];
+const JSON_EXTENSIONS: &[&str] = &["json"];
 
 /// A discovered file tagged with its detected language.
 #[derive(Debug)]
@@ -46,6 +48,13 @@ pub enum Language {
     /// tree-sitter grammar bundled). Rules check the raw SFC source
     /// for template/script patterns.
     Vue,
+    /// TOML configuration file `.toml` — text-based rules only, parsed
+    /// on demand by individual rules via the `toml` crate.
+    Toml,
+    /// JSON data file `.json` — text-based rules only, parsed on demand
+    /// by individual rules via the `serde_json` crate. Used for i18n
+    /// translation files, config files, etc.
+    Json,
 }
 
 impl Language {
@@ -74,6 +83,10 @@ impl Language {
             Some(Language::Rust)
         } else if VUE_EXTENSIONS.contains(&ext) {
             Some(Language::Vue)
+        } else if TOML_EXTENSIONS.contains(&ext) {
+            Some(Language::Toml)
+        } else if JSON_EXTENSIONS.contains(&ext) {
+            Some(Language::Json)
         } else {
             None
         }
@@ -172,6 +185,10 @@ fn classify(path: &Path) -> Option<SourceFile> {
         Language::Rust
     } else if VUE_EXTENSIONS.contains(&ext) {
         Language::Vue
+    } else if TOML_EXTENSIONS.contains(&ext) {
+        Language::Toml
+    } else if JSON_EXTENSIONS.contains(&ext) {
+        Language::Json
     } else {
         return None;
     };
@@ -205,10 +222,16 @@ mod tests {
 
     #[test]
     fn classify_skips_unsupported_or_extensionless() {
-        for ext in ["txt", "md", "json", "py"] {
+        for ext in ["txt", "md", "py"] {
             assert!(classify(&PathBuf::from(format!("foo.{ext}"))).is_none());
         }
         assert!(classify(&PathBuf::from("Makefile")).is_none());
+    }
+
+    #[test]
+    fn classify_json_files() {
+        assert_eq!(lang_for("json"), Language::Json);
+        assert_eq!(lang_for("toml"), Language::Toml);
     }
 
     #[test]

@@ -948,7 +948,6 @@ pub mod i18n_no_hardcoded_string_in_jsx;
 pub mod i18n_no_manual_pluralization;
 pub mod i18n_no_string_concat_with_translation;
 pub mod i18n_prefer_intl_api;
-pub mod i18n_json_valid_message_syntax;
 pub mod better_auth_middleware_requires_headers;
 pub mod better_auth_require_secure_cookies;
 pub mod express_session_require_name;
