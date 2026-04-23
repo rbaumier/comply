@@ -40,6 +40,7 @@ pub mod drizzle_zod_prefer_generated_schema;
 pub mod enforce_delete_with_where;
 pub mod enforce_update_with_where;
 pub mod pg_require_limit;
+pub mod post_message_origin;
 pub mod error_without_cause;
 pub mod exception_use_error_cause;
 pub mod explicit_units;
@@ -105,6 +106,7 @@ pub mod no_for_in_iterable;
 pub mod no_function_declaration_in_block;
 pub mod no_function_overloads;
 pub mod no_generic_names;
+pub mod no_global_types_file;
 pub mod no_gratuitous_expression;
 pub mod no_hardcoded_ip;
 pub mod no_hardcoded_secret;
@@ -172,8 +174,10 @@ pub mod prefer_mock_promise_shorthand;
 pub mod prefer_object_has_own;
 pub mod prefer_spy_on;
 pub mod prefer_switch_over_chained_if;
+pub mod prefer_timer_args;
 pub mod prefer_todo;
 pub mod prefer_type_over_interface;
+pub mod prefer_url_canparse;
 pub mod react_duplicate_use_directive;
 pub mod react_hoist_regex_outside_component;
 pub mod react_hoist_static_jsx;
@@ -431,6 +435,7 @@ pub mod filename_naming_convention;
 pub mod folder_naming_convention;
 pub mod for_loop_increment_sign;
 pub mod function_inside_loop;
+pub mod function_return_type;
 pub mod fsd_no_cross_slice_dependency;
 pub mod fsd_no_global_store_imports;
 pub mod fsd_no_relative_imports;
@@ -719,6 +724,7 @@ pub mod no_process_exit;
 pub mod no_single_promise_in_promise_methods;
 pub mod no_static_only_class;
 pub mod no_thenable;
+pub mod no_this_mutation;
 pub mod no_this_assignment;
 pub mod no_typeof_undefined;
 pub mod no_unnecessary_array_flat_depth;
@@ -2231,6 +2237,7 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         xstate_no_ondone_outside_compound_state::register(),
         xstate_state_names::register(),
         function_inside_loop::register(),
+        function_return_type::register(),
         no_while_loop::register(),
         prefer_object_has_own::register(),
         prefer_exponentiation_operator::register(),
@@ -2239,6 +2246,11 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         prefer_array_to_sorted::register(),
         os_command::register(),
         xpath_injection::register(),
+        prefer_url_canparse::register(),
+        prefer_timer_args::register(),
+        no_global_types_file::register(),
+        post_message_origin::register(),
+        no_this_mutation::register(),
         zod_brand_ids::register(),
         zod_transform_requires_pipe::register(),
         zod_validate_env_at_startup::register(),
