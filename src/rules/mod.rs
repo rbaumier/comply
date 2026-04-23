@@ -114,6 +114,7 @@ pub mod no_ignored_exceptions;
 pub mod no_inline_function_event_listener;
 pub mod no_inline_param_type;
 pub mod no_interpolation_in_snapshots;
+pub mod no_indexof_equality;
 pub mod no_inverted_boolean_check;
 pub mod no_error_details_in_response;
 pub mod no_json_parse_cast;
@@ -155,16 +156,20 @@ pub mod no_unvalidated_url_redirect;
 pub mod no_valueof_field;
 pub mod no_verb_in_rest_url;
 pub mod no_wait_for_timeout;
+pub mod no_while_loop;
 pub mod object_literal;
 pub mod operation_returning_nan;
+pub mod os_command;
 pub mod prefer_called_exactly_once_with;
 pub mod prefer_early_return;
 pub mod prefer_called_with;
 pub mod prefer_expect_resolves;
+pub mod prefer_exponentiation_operator;
 pub mod prefer_immediate_return;
 pub mod prefer_single_boolean_return;
 pub mod prefer_less_than;
 pub mod prefer_mock_promise_shorthand;
+pub mod prefer_object_has_own;
 pub mod prefer_spy_on;
 pub mod prefer_switch_over_chained_if;
 pub mod prefer_todo;
@@ -425,6 +430,7 @@ pub mod factory_di_shape;
 pub mod filename_naming_convention;
 pub mod folder_naming_convention;
 pub mod for_loop_increment_sign;
+pub mod function_inside_loop;
 pub mod fsd_no_cross_slice_dependency;
 pub mod fsd_no_global_store_imports;
 pub mod fsd_no_relative_imports;
@@ -751,6 +757,8 @@ pub mod prefer_array_find;
 pub mod prefer_array_flat;
 pub mod prefer_array_index_of;
 pub mod prefer_array_some;
+pub mod prefer_array_to_reversed;
+pub mod prefer_array_to_sorted;
 pub mod prefer_at;
 pub mod prefer_bigint_literals;
 pub mod prefer_blob_reading_methods;
@@ -991,6 +999,7 @@ pub mod xstate_no_invalid_transition_props;
 pub mod xstate_no_misplaced_on_transition;
 pub mod xstate_no_ondone_outside_compound_state;
 pub mod xstate_state_names;
+pub mod xpath_injection;
 pub mod zod_brand_ids;
 pub mod zod_transform_requires_pipe;
 pub mod zod_validate_env_at_startup;
@@ -2221,6 +2230,15 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         xstate_no_invalid_state_props::register(),
         xstate_no_ondone_outside_compound_state::register(),
         xstate_state_names::register(),
+        function_inside_loop::register(),
+        no_while_loop::register(),
+        prefer_object_has_own::register(),
+        prefer_exponentiation_operator::register(),
+        no_indexof_equality::register(),
+        prefer_array_to_reversed::register(),
+        prefer_array_to_sorted::register(),
+        os_command::register(),
+        xpath_injection::register(),
         zod_brand_ids::register(),
         zod_transform_requires_pipe::register(),
         zod_validate_env_at_startup::register(),
