@@ -1,0 +1,24 @@
+//! zod-prefer-enum-over-literal-union — prefer `z.enum([...])` when a
+//! `z.union([...])` is built entirely from `z.literal('...')` string
+//! literals. `z.enum` is shorter, produces better error messages, and
+//! gives a narrow string-literal union on the TypeScript side without
+//! the manual `z.literal` wrapping.
+
+mod typescript;
+
+use crate::diagnostic::Severity;
+use crate::rules::meta::RuleMeta;
+use crate::rules::RuleDef;
+
+pub const META: RuleMeta = RuleMeta {
+    id: "zod-prefer-enum-over-literal-union",
+    description: "`z.union([z.literal('a'), z.literal('b')])` with only string literals should use `z.enum([...])`.",
+    remediation: "Use z.enum(['a', 'b']) instead of z.union with literals",
+    severity: Severity::Warning,
+    doc_url: None,
+    categories: &["zod"],
+};
+
+pub fn register() -> RuleDef {
+    crate::register_ts_family!(META, typescript)
+}

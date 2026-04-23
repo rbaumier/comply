@@ -16,6 +16,7 @@
 
 pub mod backend;
 pub mod file_ctx;
+pub mod arrow_this_in_function;
 pub mod banned_comment_words;
 pub mod better_auth_no_disable_csrf;
 pub mod better_auth_no_disable_origin_check;
@@ -81,7 +82,9 @@ pub mod generator_without_yield;
 pub mod god_module;
 pub mod jsdoc_needs_description;
 pub mod module_header;
+pub mod mysql_no_multiple_statements;
 pub mod no_abbreviated_names;
+pub mod no_alias_methods;
 pub mod no_all_duplicated_branches;
 pub mod no_and_in_function_name;
 pub mod no_auth_token_in_localstorage;
@@ -92,6 +95,7 @@ pub mod no_commented_out_code;
 pub mod no_common_grab_bag;
 pub mod no_dangerously_set_inner_html;
 pub mod no_default_params;
+pub mod no_done_callback;
 pub mod no_double_cast;
 pub mod no_duplicate_string;
 pub mod no_enum;
@@ -107,8 +111,11 @@ pub mod no_gratuitous_expression;
 pub mod no_hardcoded_ip;
 pub mod no_hardcoded_secret;
 pub mod no_identical_functions;
+pub mod no_identical_title;
 pub mod no_ignored_exceptions;
+pub mod no_inline_function_event_listener;
 pub mod no_inline_param_type;
+pub mod no_interpolation_in_snapshots;
 pub mod no_inverted_boolean_check;
 pub mod no_error_details_in_response;
 pub mod no_json_parse_cast;
@@ -132,18 +139,30 @@ pub mod no_redundant_boolean;
 pub mod no_section_divider_comments;
 pub mod no_set_x_to_y;
 pub mod no_shell_exec;
+pub mod no_side_effects_in_initialization;
 pub mod no_sort_without_comparator;
 pub mod no_ssrf_fetch;
 pub mod no_test_logic;
+pub mod no_test_prefixes;
+pub mod no_test_return_statement;
 pub mod no_throw;
 pub mod no_type_encoded_names;
+pub mod no_unsanitized_property;
 pub mod no_unvalidated_url_redirect;
+pub mod no_valueof_field;
 pub mod no_verb_in_rest_url;
 pub mod no_wait_for_timeout;
 pub mod object_literal;
 pub mod operation_returning_nan;
+pub mod prefer_called_exactly_once_with;
+pub mod prefer_called_with;
+pub mod prefer_expect_resolves;
 pub mod prefer_immediate_return;
+pub mod prefer_less_than;
+pub mod prefer_mock_promise_shorthand;
+pub mod prefer_spy_on;
 pub mod prefer_switch_over_chained_if;
+pub mod prefer_todo;
 pub mod prefer_type_over_interface;
 pub mod react_duplicate_use_directive;
 pub mod react_hoist_regex_outside_component;
@@ -158,8 +177,11 @@ pub mod react_no_client_hook_in_server_component;
 pub mod react_no_client_only_in_server_component;
 pub mod react_no_cookies_in_layout;
 pub mod react_no_derived_state_in_effect;
+pub mod react_no_empty_effect;
 pub mod react_no_event_handler_in_server_component;
+pub mod react_no_find_dom_node;
 pub mod react_no_generate_static_params_in_client;
+pub mod react_no_initialize_state_in_effect;
 pub mod react_no_inline_default_prop;
 pub mod react_no_metadata_export_in_client;
 pub mod react_no_next_headers_in_client;
@@ -240,6 +262,9 @@ pub mod react_jsx_key;
 pub mod react_jsx_no_bind;
 pub mod react_jsx_no_comment_textnodes;
 pub mod react_jsx_no_duplicate_props;
+pub mod react_jsx_no_jsx_as_prop;
+pub mod react_jsx_no_new_array_as_prop;
+pub mod react_jsx_no_new_object_as_prop;
 pub mod react_jsx_no_script_url;
 pub mod react_jsx_no_target_blank;
 pub mod react_jsx_no_useless_fragment;
@@ -275,12 +300,14 @@ pub mod sql_no_varchar;
 pub mod sql_nullable_requires_comment;
 pub mod sql_prefer_exists_over_in;
 pub mod sql_require_transaction_timeout;
+pub mod tailwind_enforces_negative_arbitrary_values;
 pub mod tailwind_no_apply_for_variants;
 pub mod tailwind_no_arbitrary_z_index;
 pub mod tailwind_no_conflicting_classes;
 pub mod tailwind_no_duplicate_classes;
 pub mod tailwind_no_dynamic_class;
 pub mod tailwind_no_important_modifier;
+pub mod tailwind_no_unnecessary_whitespace;
 pub mod tailwind_prefer_cn_utility;
 pub mod tailwind_prefer_size_shorthand;
 pub mod tanstack_query_array_key;
@@ -317,9 +344,17 @@ pub mod vue_sfc_section_order;
 pub mod vue_url_state_for_filters;
 pub mod vue_v_for_needs_stable_key;
 pub mod walker;
+pub mod xstate_spawn_usage;
+pub mod zod_consistent_import_source;
 pub mod zod_no_any;
+pub mod zod_no_empty_custom_schema;
+pub mod zod_no_number_schema_with_int;
 pub mod zod_no_optional_nullable_chain;
+pub mod zod_no_string_schema_with_uuid;
+pub mod zod_no_throw_in_refine;
+pub mod zod_no_transform_in_record_key;
 pub mod zod_prefer_discriminated_union;
+pub mod zod_prefer_enum_over_literal_union;
 pub mod zod_prefer_safe_parse;
 pub mod zod_prefer_top_level_format;
 pub mod zod_refine_requires_path;
@@ -378,7 +413,13 @@ pub mod dead_export;
 pub mod elseif_without_else;
 pub mod error_message_is_remediation;
 pub mod factory_di_shape;
+pub mod filename_naming_convention;
+pub mod folder_naming_convention;
 pub mod for_loop_increment_sign;
+pub mod fsd_no_cross_slice_dependency;
+pub mod fsd_no_global_store_imports;
+pub mod fsd_no_relative_imports;
+pub mod fsd_no_ui_in_business_logic;
 pub mod hono_cookie_no_httponly;
 pub mod hono_cookie_no_samesite;
 pub mod hono_cookie_no_secure;
@@ -387,6 +428,16 @@ pub mod hono_csp_unsafe;
 pub mod hono_csrf_missing;
 pub mod hono_missing_secure_headers;
 pub mod hono_secure_headers_disabled;
+pub mod html_no_duplicate_attrs;
+pub mod html_no_duplicate_id;
+pub mod html_no_non_scalable_viewport;
+pub mod html_no_obsolete_tags;
+pub mod html_no_script_style_type;
+pub mod html_prefer_https;
+pub mod html_require_closing_tags;
+pub mod html_require_doctype;
+pub mod html_require_meta_charset;
+pub mod html_require_title;
 pub mod inconsistent_function_call;
 pub mod index_of_compare_to_positive;
 pub mod intermediate_variables;
@@ -418,6 +469,7 @@ pub mod no_duplicate_in_composite;
 pub mod no_duplicated_branches;
 pub mod no_dynamic_template;
 pub mod no_ecb_mode;
+pub mod no_electron_node_integration;
 pub mod no_element_overwrite;
 pub mod no_empty_test_file;
 pub mod no_globals_shadowing;
@@ -446,6 +498,7 @@ pub mod no_primitive_wrappers;
 pub mod no_promise_reject;
 pub mod no_pseudo_random;
 pub mod no_raw_db_entity_in_handler;
+pub mod no_redundant_clsx;
 pub mod no_redundant_jump;
 pub mod no_redundant_optional;
 pub mod no_return_type_any;
@@ -552,14 +605,20 @@ pub mod import_no_commonjs;
 pub mod import_no_dynamic_require;
 pub mod import_no_empty_named_blocks;
 pub mod import_no_webpack_loader_syntax;
+pub mod require_not_empty;
 pub mod id_length;
 pub mod imports_first;
 pub mod max_dependencies;
 pub mod newline_after_import;
 pub mod no_absolute_path;
 pub mod no_duplicate_imports;
+pub mod no_import_dist;
 pub mod no_import_module_exports;
+pub mod no_import_node_modules_by_path;
+pub mod no_import_node_test;
+pub mod no_mocks_import;
 pub mod no_mutable_exports;
+pub mod no_useless_path_segments;
 pub mod no_named_export;
 pub mod no_namespace_import;
 pub mod no_self_import;
@@ -589,10 +648,12 @@ pub mod no_array_method_this_argument;
 pub mod no_array_reduce;
 pub mod no_array_reverse;
 pub mod no_array_sort_mutation;
+pub mod no_assign_mutated_array;
 pub mod no_await_expression_member;
 pub mod no_await_in_promise_methods;
 pub mod no_console_spaces;
 pub mod no_document_cookie;
+pub mod no_empty_catch;
 pub mod no_empty_file;
 pub mod no_for_loop;
 pub mod no_hex_escape;
@@ -603,6 +664,7 @@ pub mod no_invalid_remove_event_listener;
 pub mod no_keyword_prefix;
 pub mod no_lonely_if;
 pub mod no_magic_array_flat_depth;
+pub mod no_mutating_assign;
 pub mod no_named_default;
 pub mod no_negated_condition;
 pub mod no_negation_in_equality_check;
@@ -673,6 +735,7 @@ pub mod prefer_keyboard_event_key;
 pub mod prefer_logical_operator_over_ternary;
 pub mod prefer_math_min_max;
 pub mod prefer_math_trunc;
+pub mod prefer_mock_return_shorthand;
 pub mod prefer_modern_dom_apis;
 pub mod prefer_modern_math_apis;
 pub mod prefer_module;
@@ -698,15 +761,19 @@ pub mod prefer_string_starts_ends_with;
 pub mod prefer_string_trim_start_end;
 pub mod prefer_structured_clone;
 pub mod prefer_ternary;
+pub mod prefer_to_have_length;
 pub mod prefer_top_level_await;
 pub mod prefer_type_error;
 pub mod relative_url_style;
 pub mod require_array_join_separator;
 pub mod require_explicit_undefined;
+pub mod require_hook;
 pub mod require_module_attributes;
 pub mod require_module_specifiers;
 pub mod require_number_to_fixed_digits_argument;
 pub mod require_post_message_target_origin;
+pub mod require_to_throw_message;
+pub mod require_too_many_arguments;
 pub mod switch_case_braces;
 pub mod switch_case_break_position;
 pub mod template_indent;
@@ -732,13 +799,16 @@ pub mod ts_member_ordering;
 pub mod ts_method_signature_style;
 pub mod ts_no_array_constructor;
 pub mod ts_no_confusing_non_null_assertion;
+pub mod ts_no_const_enum;
 pub mod ts_no_dupe_class_members;
 pub mod ts_no_duplicate_enum_values;
 pub mod ts_no_dynamic_delete;
 pub mod ts_no_empty_function;
 pub mod ts_no_empty_object_type;
+pub mod ts_no_export_equal;
 pub mod ts_no_extra_non_null_assertion;
 pub mod ts_no_extraneous_class;
+pub mod ts_no_implicit_any_catch;
 pub mod ts_no_import_type_side_effects;
 pub mod ts_no_inferrable_types;
 pub mod ts_no_invalid_this;
@@ -746,6 +816,7 @@ pub mod ts_no_invalid_void_type;
 pub mod ts_no_loop_func;
 pub mod ts_no_magic_numbers;
 pub mod ts_no_misused_new;
+pub mod ts_no_mixed_types;
 pub mod ts_no_namespace;
 pub mod ts_no_non_null_asserted_nullish_coalescing;
 pub mod ts_no_non_null_asserted_optional_chain;
@@ -795,6 +866,7 @@ pub mod playwright_no_useless_await;
 pub mod playwright_no_useless_not;
 pub mod playwright_no_wait_for_navigation;
 pub mod playwright_no_wait_for_selector;
+pub mod playwright_no_wait_for_timeout;
 pub mod playwright_prefer_comparison_matcher;
 pub mod playwright_prefer_equality_matcher;
 pub mod playwright_prefer_hooks_in_order;
@@ -803,6 +875,7 @@ pub mod playwright_prefer_native_locators;
 pub mod playwright_prefer_strict_equal;
 pub mod playwright_prefer_to_be;
 pub mod playwright_prefer_to_contain;
+pub mod playwright_prefer_to_have_count;
 pub mod playwright_prefer_web_first_assertions;
 // eslint-plugin-jsdoc rules (native implementations).
 pub mod jsdoc_complete_sentence;
@@ -817,6 +890,8 @@ pub mod package_json_sorted_deps;
 pub mod package_json_unique_deps;
 pub mod playwright_missing_await;
 // v3.0 — Skill-driven rules: Batch 1 (TypeScript/Architecture)
+pub mod avoid_barrel_files;
+pub mod avoid_re_export_all;
 pub mod no_default_export;
 pub mod prefer_promise_all;
 pub mod ts_prefer_using_declaration;
@@ -828,11 +903,14 @@ pub mod i18n_no_string_concat_with_translation;
 pub mod i18n_prefer_intl_api;
 pub mod better_auth_middleware_requires_headers;
 pub mod better_auth_require_secure_cookies;
+pub mod express_session_require_name;
 pub mod drizzle_no_push_in_production;
 pub mod i18n_no_unnecessary_trans_component;
 pub mod i18n_prefer_logical_css_properties;
 pub mod no_conditional_async_return;
+pub mod no_conditional_tests;
 pub mod no_unchecked_json_parse;
+pub mod no_unsanitized_method;
 pub mod rust_no_mutex_in_single_threaded;
 pub mod rust_prefer_cow;
 pub mod rust_prefer_fast_hasher;
@@ -840,9 +918,19 @@ pub mod tailwind_no_magic_spacing;
 pub mod tailwind_read_theme_before_classes;
 pub mod tanstack_start_loader_stale_time;
 pub mod tanstack_start_no_client_import_in_server_fn;
+pub mod serialize_javascript_no_unsafe;
 pub mod testing_no_real_external_service;
 pub mod ts_prefer_satisfies;
+pub mod valid_describe_callback;
 pub mod vue_no_mutate_prop;
+pub mod xstate_no_async_guard;
+pub mod xstate_no_infinite_loop;
+pub mod xstate_no_inline_implementation;
+pub mod xstate_no_invalid_conditional_action;
+pub mod xstate_no_invalid_state_props;
+pub mod xstate_no_invalid_transition_props;
+pub mod xstate_no_misplaced_on_transition;
+pub mod xstate_no_ondone_outside_compound_state;
 pub mod zod_brand_ids;
 pub mod zod_transform_requires_pipe;
 pub mod zod_validate_env_at_startup;
@@ -966,6 +1054,7 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         bool_param_default::register(),
         boolean_naming::register(),
         module_header::register(),
+        mysql_no_multiple_statements::register(),
         no_boolean_flag_param::register(),
         explicit_units::register(),
         no_abbreviated_names::register(),
@@ -978,6 +1067,8 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         timeout_on_io::register(),
         no_nullish_default_on_input::register(),
         prefer_switch_over_chained_if::register(),
+        prefer_todo::register(),
+        prefer_mock_promise_shorthand::register(),
         // @TODO: flagged:
         // src/rules/no_empty_test_file/text.rs:62:1: warning [no-multi-op-oneliner] Line has 11 chained operations — extract intermediate named bindings so each step's purpose is visible.
         // assert_eq!(run("utils.spec.ts", "// TODO: add tests").len(), 1); // comply-ignore: todo-needs-issue-link — test content, not a real marker.
@@ -987,7 +1078,9 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         no_double_cast::register(),
         no_json_parse_cast::register(),
         explicit_return_type_on_exported::register(),
+        no_inline_function_event_listener::register(),
         no_inline_param_type::register(),
+        no_interpolation_in_snapshots::register(),
         prefer_type_over_interface::register(),
         no_function_overloads::register(),
         no_verb_in_rest_url::register(),
@@ -995,8 +1088,10 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         no_new_regex_with_variable::register(),
         no_auth_token_in_localstorage::register(),
         no_dangerously_set_inner_html::register(),
+        no_unsanitized_property::register(),
         no_hardcoded_secret::register(),
         no_focused_test::register(),
+        no_done_callback::register(),
         no_match_snapshot::register(),
         react_no_array_index_key::register(),
         react_use_state_lazy_init::register(),
@@ -1019,15 +1114,23 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         tanstack_query_prefer_query_options::register(),
         tanstack_query_prefer_suspense_query::register(),
         tanstack_query_require_stale_time::register(),
+        xstate_spawn_usage::register(),
         zod_prefer_top_level_format::register(),
+        zod_consistent_import_source::register(),
         zod_no_any::register(),
+        zod_no_empty_custom_schema::register(),
+        zod_no_number_schema_with_int::register(),
         zod_prefer_safe_parse::register(),
         zod_string_min_1_required::register(),
         zod_trim_before_min::register(),
         zod_prefer_discriminated_union::register(),
+        zod_prefer_enum_over_literal_union::register(),
         zod_refine_requires_path::register(),
         zod_require_error_messages::register(),
         zod_no_optional_nullable_chain::register(),
+        zod_no_transform_in_record_key::register(),
+        zod_no_throw_in_refine::register(),
+        zod_no_string_schema_with_uuid::register(),
         drizzle_timestamp_with_timezone::register(),
         tailwind_no_dynamic_class::register(),
         // v1.5 — Rust rules from the language-rust skill. All have clippy
@@ -1089,6 +1192,8 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         error_without_cause::register(),
         no_set_x_to_y::register(),
         no_and_in_function_name::register(),
+        arrow_this_in_function::register(),
+        no_side_effects_in_initialization::register(),
         // v2.8 — Comments: mechanical comment-quality rules.
         banned_comment_words::register(),
         no_section_divider_comments::register(),
@@ -1137,6 +1242,7 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         react_duplicate_use_directive::register(),
         react_no_client_only_in_server_component::register(),
         react_layout_requires_children_prop::register(),
+        react_no_find_dom_node::register(),
         vue_no_options_api::register(),
         vue_no_reactive_destructure::register(),
         vue_v_for_needs_stable_key::register(),
@@ -1162,10 +1268,15 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         no_manual_rtl_cleanup::register(),
         no_mock_fetch_directly::register(),
         no_test_logic::register(),
+        no_test_prefixes::register(),
+        no_test_return_statement::register(),
+        no_alias_methods::register(),
+        prefer_spy_on::register(),
         // SonarJS-equivalent rules (native implementations).
         cognitive_complexity::register(),
         halstead_complexity::register(),
         no_identical_functions::register(),
+        no_identical_title::register(),
         no_gratuitous_expression::register(),
         no_all_duplicated_branches::register(),
         no_redundant_assignment::register(),
@@ -1177,7 +1288,11 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         operation_returning_nan::register(),
         no_collapsible_if::register(),
         no_redundant_boolean::register(),
+        no_valueof_field::register(),
         no_nested_template_literal::register(),
+        prefer_called_exactly_once_with::register(),
+        prefer_called_with::register(),
+        prefer_expect_resolves::register(),
         prefer_immediate_return::register(),
         no_hardcoded_ip::register(),
         // @TODO: ça flagged:
@@ -1192,6 +1307,7 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         reduce_initial_value::register(),
         no_unused_collection::register(),
         prefer_while::register(),
+        prefer_less_than::register(),
         expression_complexity::register(),
         no_duplicate_string::register(),
         no_ignored_exceptions::register(),
@@ -1287,6 +1403,7 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         no_post_message_star::register(),
         no_primitive_wrappers::register(),
         no_pseudo_random::register(),
+        no_redundant_clsx::register(),
         no_redundant_jump::register(),
         no_redundant_optional::register(),
         no_return_type_any::register(),
@@ -1320,6 +1437,7 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         no_deprecated_api::register(),
         no_deprecated_cipher::register(),
         no_ecb_mode::register(),
+        no_electron_node_integration::register(),
         no_empty_test_file::register(),
         no_globals_shadowing::register(),
         no_implicit_deps::register(),
@@ -1435,11 +1553,27 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         hono_csrf_missing::register(),
         hono_missing_secure_headers::register(),
         hono_secure_headers_disabled::register(),
+        html_no_duplicate_attrs::register(),
+        html_no_duplicate_id::register(),
+        html_no_non_scalable_viewport::register(),
+        html_no_obsolete_tags::register(),
+        html_no_script_style_type::register(),
+        html_prefer_https::register(),
+        html_require_closing_tags::register(),
+        html_require_doctype::register(),
+        html_require_meta_charset::register(),
+        html_require_title::register(),
         api_first::register(),
         auth_on_mutation::register(),
         data_clumps::register(),
         error_message_is_remediation::register(),
         factory_di_shape::register(),
+        filename_naming_convention::register(),
+        folder_naming_convention::register(),
+        fsd_no_cross_slice_dependency::register(),
+        fsd_no_global_store_imports::register(),
+        fsd_no_relative_imports::register(),
+        fsd_no_ui_in_business_logic::register(),
         intermediate_variables::register(),
         justify_inaction::register(),
         no_inferred_any::register(),
@@ -1488,8 +1622,13 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         newline_after_import::register(),
         no_absolute_path::register(),
         no_duplicate_imports::register(),
+        no_import_dist::register(),
         no_import_module_exports::register(),
+        no_import_node_modules_by_path::register(),
+        no_import_node_test::register(),
+        no_mocks_import::register(),
         no_mutable_exports::register(),
+        no_useless_path_segments::register(),
         no_namespace_import::register(),
         no_self_import::register(),
         no_unassigned_import::register(),
@@ -1498,6 +1637,7 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         import_no_webpack_loader_syntax::register(),
         import_no_empty_named_blocks::register(),
         import_no_dynamic_require::register(),
+        require_not_empty::register(),
         import_dynamic_import_chunkname::register(),
         import_consistent_type_specifier_style::register(),
         exports_last::register(),
@@ -1526,10 +1666,12 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         no_array_reduce::register(),
         no_array_reverse::register(),
         no_array_sort_mutation::register(),
+        no_assign_mutated_array::register(),
         no_await_expression_member::register(),
         no_await_in_promise_methods::register(),
         no_console_spaces::register(),
         no_document_cookie::register(),
+        no_empty_catch::register(),
         no_empty_file::register(),
         no_for_loop::register(),
         no_hex_escape::register(),
@@ -1540,6 +1682,7 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         no_keyword_prefix::register(),
         no_lonely_if::register(),
         no_magic_array_flat_depth::register(),
+        no_mutating_assign::register(),
         no_named_default::register(),
         no_negated_condition::register(),
         no_negation_in_equality_check::register(),
@@ -1595,6 +1738,7 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         prefer_logical_operator_over_ternary::register(),
         prefer_math_min_max::register(),
         prefer_math_trunc::register(),
+        prefer_mock_return_shorthand::register(),
         prefer_modern_dom_apis::register(),
         prefer_modern_math_apis::register(),
         prefer_module::register(),
@@ -1620,15 +1764,19 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         prefer_string_trim_start_end::register(),
         prefer_structured_clone::register(),
         prefer_ternary::register(),
+        prefer_to_have_length::register(),
         prefer_top_level_await::register(),
         prefer_type_error::register(),
         relative_url_style::register(),
         require_array_join_separator::register(),
         require_explicit_undefined::register(),
+        require_hook::register(),
         require_module_attributes::register(),
         require_module_specifiers::register(),
         require_number_to_fixed_digits_argument::register(),
         require_post_message_target_origin::register(),
+        require_to_throw_message::register(),
+        require_too_many_arguments::register(),
         switch_case_braces::register(),
         switch_case_break_position::register(),
         template_indent::register(),
@@ -1681,14 +1829,20 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         react_forward_ref_uses_ref::register(),
         react_no_typos::register(),
         react_jsx_no_bind::register(),
+        react_jsx_no_jsx_as_prop::register(),
+        react_jsx_no_new_array_as_prop::register(),
+        react_jsx_no_new_object_as_prop::register(),
         // typescript-eslint rules (native implementations).
+        ts_no_const_enum::register(),
         ts_no_duplicate_enum_values::register(),
         ts_no_extra_non_null_assertion::register(),
         ts_no_non_null_asserted_optional_chain::register(),
         ts_no_wrapper_object_types::register(),
         ts_no_unsafe_declaration_merging::register(),
         ts_no_misused_new::register(),
+        ts_no_mixed_types::register(),
         ts_no_empty_object_type::register(),
+        ts_no_export_equal::register(),
         ts_no_non_null_asserted_nullish_coalescing::register(),
         ts_no_confusing_non_null_assertion::register(),
         ts_no_unnecessary_type_constraint::register(),
@@ -1720,6 +1874,7 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         ts_no_dynamic_delete::register(),
         ts_no_empty_function::register(),
         ts_no_extraneous_class::register(),
+        ts_no_implicit_any_catch::register(),
         ts_no_import_type_side_effects::register(),
         ts_no_invalid_void_type::register(),
         ts_no_this_alias::register(),
@@ -1767,6 +1922,7 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         playwright_no_useless_not::register(),
         playwright_no_wait_for_selector::register(),
         playwright_no_wait_for_navigation::register(),
+        playwright_no_wait_for_timeout::register(),
         playwright_prefer_comparison_matcher::register(),
         playwright_prefer_equality_matcher::register(),
         playwright_prefer_hooks_in_order::register(),
@@ -1774,6 +1930,7 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         playwright_prefer_strict_equal::register(),
         playwright_prefer_to_be::register(),
         playwright_prefer_to_contain::register(),
+        playwright_prefer_to_have_count::register(),
         // eslint-plugin-jsdoc rules (native implementations).
         jsdoc_complete_sentence::register(),
         // eslint-plugin-de-morgan (native implementation).
@@ -1802,6 +1959,8 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         // so the diagnostic names the offending identifier.
         id_length::register(),
         // v3.0 — Skill-driven rules: Batch 1 (TypeScript/Architecture)
+        avoid_barrel_files::register(),
+        avoid_re_export_all::register(),
         no_default_export::register(),
         prefer_promise_all::register(),
         ts_prefer_using_declaration::register(),
@@ -1809,16 +1968,20 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         react_server_action_requires_validation::register(),
         react_server_action_requires_auth::register(),
         react_prefer_use_transition::register(),
+        react_no_initialize_state_in_effect::register(),
         react_no_inline_default_prop::register(),
         react_passive_event_listeners::register(),
         react_no_derived_state_in_effect::register(),
+        react_no_empty_effect::register(),
         react_use_state_initializer_function::register(),
         // v3.0 — Skill-driven rules: Batch 3 (Tailwind)
         tailwind_no_important_modifier::register(),
         tailwind_no_arbitrary_z_index::register(),
+        tailwind_enforces_negative_arbitrary_values::register(),
         tailwind_prefer_size_shorthand::register(),
         tailwind_no_apply_for_variants::register(),
         tailwind_prefer_cn_utility::register(),
+        tailwind_no_unnecessary_whitespace::register(),
         // v3.0 — Skill-driven rules: Batch 4 (SQL/Database)
         sql_create_index_concurrently::register(),
         sql_nullable_requires_comment::register(),
@@ -1890,11 +2053,14 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         // v3.1 — Skill-driven rules: Batch 16 (mixed: security, i18n, vue, rust, tailwind, testing)
         better_auth_middleware_requires_headers::register(),
         better_auth_require_secure_cookies::register(),
+        express_session_require_name::register(),
         drizzle_no_push_in_production::register(),
         i18n_no_unnecessary_trans_component::register(),
         i18n_prefer_logical_css_properties::register(),
         no_conditional_async_return::register(),
+        no_conditional_tests::register(),
         no_unchecked_json_parse::register(),
+        no_unsanitized_method::register(),
         rust_prefer_fast_hasher::register(),
         rust_prefer_cow::register(),
         rust_no_mutex_in_single_threaded::register(),
@@ -1902,9 +2068,19 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         tailwind_read_theme_before_classes::register(),
         tanstack_start_loader_stale_time::register(),
         tanstack_start_no_client_import_in_server_fn::register(),
+        serialize_javascript_no_unsafe::register(),
         testing_no_real_external_service::register(),
         ts_prefer_satisfies::register(),
+        valid_describe_callback::register(),
         vue_no_mutate_prop::register(),
+        xstate_no_async_guard::register(),
+        xstate_no_infinite_loop::register(),
+        xstate_no_inline_implementation::register(),
+        xstate_no_invalid_conditional_action::register(),
+        xstate_no_invalid_transition_props::register(),
+        xstate_no_misplaced_on_transition::register(),
+        xstate_no_invalid_state_props::register(),
+        xstate_no_ondone_outside_compound_state::register(),
         zod_brand_ids::register(),
         zod_transform_requires_pipe::register(),
         zod_validate_env_at_startup::register(),

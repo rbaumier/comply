@@ -153,7 +153,6 @@ Rules requiring capabilities comply does not have yet (scope analysis, per-modul
 
 ---
 
-- https://philodev.one/posts/2026-04-code-complexity/
 - hono : https://www.evlog.dev/
 - improve perf 
 - cargo run -- src
@@ -169,3 +168,6 @@ note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
 mode human: dans les diagnostiques afficher avec une flèche qui pointe et affiche le code (il doit y avoir une lib pour ça)
 
 ---
+
+https://news.ycombinator.com/item?id=47673171
+https://github.com/etechlead/token-map
