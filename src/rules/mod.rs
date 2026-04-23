@@ -814,6 +814,7 @@ pub mod require_path_exists;
 pub mod require_post_message_target_origin;
 pub mod require_to_throw_message;
 pub mod require_too_many_arguments;
+pub mod require_type_arguments;
 pub mod switch_case_braces;
 pub mod switch_case_break_position;
 pub mod template_indent;
@@ -1889,6 +1890,7 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         require_post_message_target_origin::register(),
         require_to_throw_message::register(),
         require_too_many_arguments::register(),
+        require_type_arguments::register(),
         switch_case_braces::register(),
         switch_case_break_position::register(),
         template_indent::register(),
