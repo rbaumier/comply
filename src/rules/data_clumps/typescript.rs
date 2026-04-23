@@ -2,9 +2,13 @@
 //!
 //! Walks the AST to find function-like nodes, extracts their parameter
 //! names, and flags when the same 3-parameter subset appears in 2+ functions.
+//!
+//! Cross-file: also considers exported functions from imported modules via
+//! ImportIndex, detecting clumps across file boundaries.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 
 /// Node kinds that can have `parameters` / `formal_parameters`.
 const FUNCTION_KINDS: &[&str] = &[
@@ -16,40 +20,82 @@ const FUNCTION_KINDS: &[&str] = &[
     "generator_function",
 ];
 
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+enum FnLocation {
+    Local(usize),
+    External(PathBuf, String, usize),
+}
+
 crate::ast_check! { |node, source, ctx, diagnostics|
-    // We process the entire tree at the program level to collect all
-    // function signatures in one pass.
     if node.kind() != "program" {
         return;
     }
 
-    let mut fn_params: Vec<(usize, Vec<String>)> = Vec::new();
+    let mut fn_params: Vec<(FnLocation, Vec<String>)> = Vec::new();
     collect_functions(node, source, &mut fn_params);
 
-    // For each 3-param subset, count how many functions contain it.
-    let mut subset_occurrences: HashMap<Vec<String>, Vec<usize>> = HashMap::new();
-    for (line, params) in &fn_params {
-        for combo in combinations(params, 3) {
-            subset_occurrences.entry(combo).or_default().push(*line);
+    // Add exported functions from imported modules (cross-file)
+    let index = ctx.project.import_index();
+    for imp in index.get_imports(ctx.path) {
+        let Some(src_path) = &imp.source_path else { continue; };
+        for export in index.get_exports(src_path) {
+            if export.params.len() >= 3 {
+                let mut sorted_params = export.params.clone();
+                sorted_params.sort();
+                sorted_params.dedup();
+                if sorted_params.len() >= 3 {
+                    fn_params.push((
+                        FnLocation::External(src_path.clone(), export.name.clone(), export.line),
+                        sorted_params,
+                    ));
+                }
+            }
         }
     }
 
-    let mut flagged_lines: HashSet<usize> = HashSet::new();
+    // For each 3-param subset, count which functions contain it.
+    let mut subset_occurrences: HashMap<Vec<String>, Vec<FnLocation>> = HashMap::new();
+    for (loc, params) in &fn_params {
+        for combo in combinations(params, 3) {
+            subset_occurrences.entry(combo).or_default().push(loc.clone());
+        }
+    }
+
+    let mut flagged: HashSet<FnLocation> = HashSet::new();
     let mut results: Vec<(usize, String)> = Vec::new();
 
-    for (subset, lines) in &subset_occurrences {
-        if lines.len() >= 2 {
-            for &line in lines {
-                if flagged_lines.insert(line) {
-                    results.push((
-                        line,
+    for (subset, locations) in &subset_occurrences {
+        if locations.len() < 2 { continue; }
+
+        // Collect external function info for the message
+        let external_locs: Vec<_> = locations.iter()
+            .filter_map(|l| match l {
+                FnLocation::External(path, name, _) => Some((path, name)),
+                _ => None,
+            })
+            .collect();
+
+        // Only flag local functions (we can't fix external ones)
+        for loc in locations {
+            if let FnLocation::Local(line) = loc {
+                if flagged.insert(loc.clone()) {
+                    let msg = if external_locs.is_empty() {
                         format!(
-                            "Parameters [{}] appear together in {} functions \
-                             — extract into a value object.",
+                            "Parameters [{}] appear together in {} functions — extract into a type.",
                             subset.join(", "),
-                            lines.len(),
-                        ),
-                    ));
+                            locations.len(),
+                        )
+                    } else {
+                        let ext_names: Vec<_> = external_locs.iter()
+                            .map(|(_, name)| name.as_str())
+                            .collect();
+                        format!(
+                            "Parameters [{}] also used by imported function(s): {} — extract into a shared type.",
+                            subset.join(", "),
+                            ext_names.join(", "),
+                        )
+                    };
+                    results.push((*line, msg));
                 }
             }
         }
@@ -73,7 +119,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
 fn collect_functions(
     node: tree_sitter::Node,
     source: &[u8],
-    out: &mut Vec<(usize, Vec<String>)>,
+    out: &mut Vec<(FnLocation, Vec<String>)>,
 ) {
     if FUNCTION_KINDS.contains(&node.kind()) {
         let params_node = node
@@ -92,7 +138,7 @@ fn collect_functions(
             names.sort();
             names.dedup();
             if names.len() >= 3 {
-                out.push((node.start_position().row + 1, names));
+                out.push((FnLocation::Local(node.start_position().row + 1), names));
             }
         }
     }
@@ -113,12 +159,10 @@ fn extract_param_name(node: tree_sitter::Node, source: &[u8]) -> Option<String> 
     match node.kind() {
         "identifier" => node.utf8_text(source).ok().map(String::from),
         "required_parameter" | "optional_parameter" => {
-            // The `pattern` field holds the identifier.
             let pat = node.child_by_field_name("pattern")?;
             pat.utf8_text(source).ok().map(String::from)
         }
         "rest_pattern" => {
-            // `...name`
             let child = node.named_child(0)?;
             child.utf8_text(source).ok().map(String::from)
         }
@@ -188,4 +232,6 @@ function bar(a: string, b: string, d: number) {}
 "#;
         assert!(run_on(src).is_empty());
     }
+
+    // Cross-file tests would require multi-file setup via ProjectCtx
 }

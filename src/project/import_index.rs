@@ -85,6 +85,8 @@ pub struct ExportedSymbol {
     /// Only populated for `ReExport` / `StarReExport` — the (possibly
     /// resolved) source path or raw specifier.
     pub reexport_source: Option<String>,
+    /// Parameter names for function exports (empty for non-functions).
+    pub params: Vec<String>,
 }
 
 /// Kind of an imported symbol.
@@ -156,6 +158,8 @@ pub struct CallSite {
     /// Byte length of the call expression.
     pub byte_len: usize,
     pub kind: CallKind,
+    /// Argument names at call site (None if not a simple identifier).
+    pub args: Vec<Option<String>>,
 }
 
 /// Snapshot of exports, imports, and cross-file symbol usages for the input
@@ -201,6 +205,9 @@ impl ImportIndex {
         // built from `mod foo;` declarations. Build it once here.
         let rust_graph = RustModuleGraph::build(&per_file, &known_paths);
 
+        // Load tsconfig.json path aliases for TS resolution
+        let tsconfig_paths = TsconfigPaths::discover(&known_paths);
+
         // First pass: stash exports, and partially-populate imports with their
         // raw specifiers resolved against disk (TS) or the module graph (Rust).
         for (path, mut extract) in per_file {
@@ -214,7 +221,7 @@ impl ImportIndex {
                         imp.source_path = Some(resolved);
                     }
                 } else if let Some(resolved) =
-                    resolve_relative(&path, &imp.specifier, &known_paths)
+                    resolve_specifier(&path, &imp.specifier, &known_paths, &tsconfig_paths)
                 {
                     imp.source_path = Some(resolved);
                 }
@@ -283,6 +290,7 @@ impl ImportIndex {
                         byte_offset: call.byte_offset,
                         byte_len: call.byte_len,
                         kind: call.kind,
+                        args: call.args.clone(),
                     });
             }
         }
@@ -419,6 +427,7 @@ struct LocalCall {
     byte_offset: usize,
     byte_len: usize,
     kind: CallKind,
+    args: Vec<Option<String>>,
 }
 
 fn extract_for(parser: &mut Parser, file: &SourceFile) -> Option<(PathBuf, FileExtract)> {
@@ -487,6 +496,20 @@ fn extract_call(node: Node, source: &[u8], kind: CallKind, out: &mut Vec<LocalCa
     };
     let pos = node.start_position();
     let range = node.byte_range();
+
+    // Extract argument names (None for non-identifier arguments)
+    let mut args = Vec::new();
+    if let Some(args_node) = node.child_by_field_name("arguments") {
+        let mut cursor = args_node.walk();
+        for child in args_node.named_children(&mut cursor) {
+            if child.kind() == "identifier" {
+                args.push(child.utf8_text(source).ok().map(String::from));
+            } else {
+                args.push(None);
+            }
+        }
+    }
+
     out.push(LocalCall {
         local_name: name.to_string(),
         line: pos.row + 1,
@@ -494,6 +517,7 @@ fn extract_call(node: Node, source: &[u8], kind: CallKind, out: &mut Vec<LocalCa
         byte_offset: range.start,
         byte_len: range.len(),
         kind,
+        args,
     });
 }
 
@@ -620,6 +644,7 @@ fn extract_export(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
                 kind: ExportKind::ReExport,
                 line,
                 reexport_source: Some(src.clone()),
+            params: Vec::new(),
             });
             return;
         }
@@ -628,6 +653,7 @@ fn extract_export(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
             kind: ExportKind::StarReExport,
             line,
             reexport_source: Some(src.clone()),
+            params: Vec::new(),
         });
         return;
     }
@@ -664,6 +690,7 @@ fn extract_export(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
                 kind,
                 line,
                 reexport_source: source_str.clone(),
+            params: Vec::new(),
             });
         }
         return;
@@ -679,6 +706,7 @@ fn extract_export(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
             kind: ExportKind::Default,
             line,
             reexport_source: None,
+            params: Vec::new(),
         });
         return;
     }
@@ -687,10 +715,22 @@ fn extract_export(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
     // `export type Foo = …` / `export interface Foo` / `export enum Foo`
     for child in node.named_children(&mut node.walk()) {
         match child.kind() {
-            "function_declaration"
-            | "generator_function_declaration"
-            | "class_declaration"
-            | "abstract_class_declaration" => {
+            "function_declaration" | "generator_function_declaration" => {
+                if let Some(id) = child
+                    .named_children(&mut child.walk())
+                    .find(|c| c.kind() == "identifier")
+                {
+                    let params = extract_params(child, source);
+                    out.push(ExportedSymbol {
+                        name: text_of(id, source),
+                        kind: ExportKind::Named,
+                        line,
+                        reexport_source: None,
+                        params,
+                    });
+                }
+            }
+            "class_declaration" | "abstract_class_declaration" => {
                 if let Some(id) = child
                     .named_children(&mut child.walk())
                     .find(|c| c.kind() == "identifier" || c.kind() == "type_identifier")
@@ -700,6 +740,7 @@ fn extract_export(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
                         kind: ExportKind::Named,
                         line,
                         reexport_source: None,
+                        params: Vec::new(),
                     });
                 }
             }
@@ -719,6 +760,7 @@ fn extract_export(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
                             kind: ExportKind::Named,
                             line,
                             reexport_source: None,
+            params: Vec::new(),
                         });
                     }
                 }
@@ -733,6 +775,7 @@ fn extract_export(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
                         kind: ExportKind::Named,
                         line,
                         reexport_source: None,
+            params: Vec::new(),
                     });
                 }
             }
@@ -753,6 +796,31 @@ fn find_specifier_string(node: Node, source: &[u8]) -> Option<String> {
 
 fn text_of(node: Node, source: &[u8]) -> String {
     node.utf8_text(source).unwrap_or("").to_string()
+}
+
+/// Extract parameter names from a function declaration node.
+fn extract_params(node: Node, source: &[u8]) -> Vec<String> {
+    let Some(params) = node.child_by_field_name("parameters") else {
+        return Vec::new();
+    };
+    let mut result = Vec::new();
+    let mut cursor = params.walk();
+    for child in params.named_children(&mut cursor) {
+        match child.kind() {
+            "identifier" => {
+                result.push(text_of(child, source));
+            }
+            "required_parameter" | "optional_parameter" => {
+                if let Some(id) = child.child_by_field_name("pattern") {
+                    if id.kind() == "identifier" {
+                        result.push(text_of(id, source));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    result
 }
 
 /// Try to resolve a relative specifier (`./foo`, `../bar/baz`) into an
@@ -799,6 +867,159 @@ fn resolve_relative(
         }
     }
     None
+}
+
+/// Try to resolve a specifier using both tsconfig aliases and relative paths.
+fn resolve_specifier(
+    importer: &Path,
+    specifier: &str,
+    known: &std::collections::HashSet<PathBuf>,
+    tsconfig: &TsconfigPaths,
+) -> Option<PathBuf> {
+    // First try relative resolution
+    if specifier.starts_with('.') {
+        return resolve_relative(importer, specifier, known);
+    }
+    // Then try tsconfig path aliases
+    tsconfig.resolve(specifier, known)
+}
+
+/// Parsed tsconfig.json path mappings for alias resolution.
+#[derive(Debug, Default)]
+struct TsconfigPaths {
+    /// Base directory for non-relative imports (from baseUrl).
+    base_url: Option<PathBuf>,
+    /// Path mappings: (pattern, replacement paths). Pattern uses `*` as wildcard.
+    mappings: Vec<(String, Vec<PathBuf>)>,
+}
+
+impl TsconfigPaths {
+    /// Find and parse tsconfig.json files from the project root.
+    fn discover(known_paths: &std::collections::HashSet<PathBuf>) -> Self {
+        // Find the project root by looking for tsconfig.json
+        let Some(first_path) = known_paths.iter().next() else {
+            return Self::default();
+        };
+
+        let mut dir = first_path.parent();
+        while let Some(d) = dir {
+            let tsconfig_path = d.join("tsconfig.json");
+            if tsconfig_path.exists() {
+                if let Some(paths) = Self::parse(&tsconfig_path) {
+                    return paths;
+                }
+            }
+            dir = d.parent();
+        }
+        Self::default()
+    }
+
+    fn parse(path: &Path) -> Option<Self> {
+        let content = std::fs::read_to_string(path).ok()?;
+        let json: serde_json::Value = serde_json::from_str(&content).ok()?;
+        let compiler_opts = json.get("compilerOptions")?;
+
+        let tsconfig_dir = path.parent()?;
+
+        // Parse baseUrl
+        let base_url = compiler_opts
+            .get("baseUrl")
+            .and_then(|v| v.as_str())
+            .map(|b| tsconfig_dir.join(b));
+
+        // Parse paths
+        let mut mappings = Vec::new();
+        if let Some(paths_obj) = compiler_opts.get("paths").and_then(|v| v.as_object()) {
+            let base = base_url.as_deref().unwrap_or(tsconfig_dir);
+            for (pattern, targets) in paths_obj {
+                if let Some(arr) = targets.as_array() {
+                    let resolved: Vec<PathBuf> = arr
+                        .iter()
+                        .filter_map(|v| v.as_str())
+                        .map(|t| base.join(t))
+                        .collect();
+                    if !resolved.is_empty() {
+                        mappings.push((pattern.clone(), resolved));
+                    }
+                }
+            }
+        }
+
+        Some(Self { base_url, mappings })
+    }
+
+    fn resolve(&self, specifier: &str, known: &std::collections::HashSet<PathBuf>) -> Option<PathBuf> {
+        const EXTS: &[&str] = &["ts", "tsx", "js", "jsx", "mts", "mjs"];
+
+        // Try path mappings first
+        for (pattern, targets) in &self.mappings {
+            if let Some(matched) = match_pattern(pattern, specifier) {
+                for target in targets {
+                    let target_str = target.to_string_lossy();
+                    let resolved_path = if target_str.contains('*') {
+                        PathBuf::from(target_str.replace('*', matched))
+                    } else {
+                        target.join(matched)
+                    };
+
+                    // Try with extensions
+                    for ext in EXTS {
+                        let candidate = resolved_path.with_extension(ext);
+                        if let Ok(c) = std::fs::canonicalize(&candidate) {
+                            if known.contains(&c) {
+                                return Some(c);
+                            }
+                        }
+                    }
+                    // Try index files
+                    for ext in EXTS {
+                        let candidate = resolved_path.join(format!("index.{ext}"));
+                        if let Ok(c) = std::fs::canonicalize(&candidate) {
+                            if known.contains(&c) {
+                                return Some(c);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Try baseUrl resolution
+        if let Some(base) = &self.base_url {
+            let raw = base.join(specifier);
+            for ext in EXTS {
+                let candidate = raw.with_extension(ext);
+                if let Ok(c) = std::fs::canonicalize(&candidate) {
+                    if known.contains(&c) {
+                        return Some(c);
+                    }
+                }
+            }
+            for ext in EXTS {
+                let candidate = raw.join(format!("index.{ext}"));
+                if let Ok(c) = std::fs::canonicalize(&candidate) {
+                    if known.contains(&c) {
+                        return Some(c);
+                    }
+                }
+            }
+        }
+
+        None
+    }
+}
+
+/// Match a tsconfig path pattern against a specifier.
+/// Returns the wildcard match if successful.
+/// Pattern `@/*` matches `@/utils` → returns `utils`.
+fn match_pattern<'a>(pattern: &str, specifier: &'a str) -> Option<&'a str> {
+    if let Some(prefix) = pattern.strip_suffix('*') {
+        specifier.strip_prefix(prefix)
+    } else if pattern == specifier {
+        Some("")
+    } else {
+        None
+    }
 }
 
 // -------------------------- Rust extraction --------------------------
@@ -849,6 +1070,7 @@ fn extract_rust_item(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
         kind,
         line: node.start_position().row + 1,
         reexport_source: None,
+            params: Vec::new(),
     });
 }
 
@@ -917,6 +1139,7 @@ fn extract_rust_use(
                 kind: ExportKind::ReExport,
                 line,
                 reexport_source: Some(specifier),
+            params: Vec::new(),
             });
         }
     }
@@ -1705,5 +1928,40 @@ mod tests {
         assert_eq!(imports.len(), 1);
         assert_eq!(imports[0].kind, ImportKind::Namespace);
         assert_eq!(imports[0].imported_name, "*");
+    }
+
+    #[test]
+    fn tsconfig_paths_resolves_alias() {
+        let dir = TempDir::new().unwrap();
+        // Create tsconfig.json with path alias
+        let tsconfig = r#"{
+            "compilerOptions": {
+                "baseUrl": ".",
+                "paths": {
+                    "@/*": ["src/*"]
+                }
+            }
+        }"#;
+        fs::write(dir.path().join("tsconfig.json"), tsconfig).unwrap();
+        fs::create_dir_all(dir.path().join("src")).unwrap();
+        fs::write(dir.path().join("src/utils.ts"), "export function helper() {}").unwrap();
+        fs::write(dir.path().join("app.ts"), "import { helper } from '@/utils';").unwrap();
+
+        let utils_path = dir.path().join("src/utils.ts");
+        let app_path = dir.path().join("app.ts");
+
+        let sources = vec![
+            SourceFile { path: utils_path.clone(), language: Language::TypeScript },
+            SourceFile { path: app_path.clone(), language: Language::TypeScript },
+        ];
+        let refs: Vec<&SourceFile> = sources.iter().collect();
+        let index = ImportIndex::build(&refs);
+
+        let utils_canon = fs::canonicalize(&utils_path).unwrap();
+        let app_canon = fs::canonicalize(&app_path).unwrap();
+
+        let imports = index.get_imports(&app_canon);
+        assert_eq!(imports.len(), 1, "imports: {imports:?}");
+        assert_eq!(imports[0].source_path.as_ref(), Some(&utils_canon));
     }
 }

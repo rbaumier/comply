@@ -65,6 +65,7 @@ REVIEW: pas besoin si on a déjà le no-eval
 REVIEW: on a pas déjà une règle qui interdit le commonJS ?
 
 ### ✅ `detect-option-rejectunauthorized`
+
 **Source:** eslint-plugin-security-node  
 **Pourquoi:** `{ rejectUnauthorized: false }` désactive la vérification TLS. Comply a `no-weak-ssl` mais cette règle couvre les APIs Node `https`/`tls` spécifiquement.
 

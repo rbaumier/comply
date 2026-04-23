@@ -3,6 +3,7 @@
 ## Infrastructure manquante
 
 ### 1. ICU Message Format Parser
+
 **Pour :** `i18n-json-valid-message-syntax`
 
 ```toml
