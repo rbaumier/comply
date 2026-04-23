@@ -201,6 +201,8 @@ pub mod react_no_inline_default_prop;
 pub mod react_no_metadata_export_in_client;
 pub mod react_no_next_headers_in_client;
 pub mod react_no_object_in_dep_array;
+pub mod react_no_pass_data_to_parent;
+pub mod react_no_reset_all_state_on_prop_change;
 pub mod react_no_sequential_await_in_component;
 pub mod react_no_server_only_in_client;
 pub mod react_passive_event_listeners;
@@ -1329,6 +1331,8 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         // v2.7+ — Framework rules (React + Vue).
         react_no_cookies_in_layout::register(),
         react_no_object_in_dep_array::register(),
+        react_no_pass_data_to_parent::register(),
+        react_no_reset_all_state_on_prop_change::register(),
         // RSC boundary rules — enforce server/client component contracts.
         react_no_client_hook_in_server_component::register(),
         react_no_event_handler_in_server_component::register(),
