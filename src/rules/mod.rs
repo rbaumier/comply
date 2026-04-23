@@ -975,6 +975,9 @@ pub mod ts_prefer_using_declaration;
 // v3.0 — Skill-driven rules: Batch 11 (i18n)
 pub mod i18n_json_identical_keys;
 pub mod i18n_json_identical_placeholders;
+pub mod i18n_json_no_empty_values;
+pub mod i18n_json_no_nesting;
+pub mod i18n_json_no_untranslated;
 pub mod i18n_json_valid_message_syntax;
 pub mod i18n_no_concat_translation_key;
 pub mod i18n_no_hardcoded_string_in_jsx;
@@ -2181,6 +2184,9 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         // v3.0 — Skill-driven rules: Batch 11 (i18n)
         i18n_json_identical_keys::register(),
         i18n_json_identical_placeholders::register(),
+        i18n_json_no_empty_values::register(),
+        i18n_json_no_nesting::register(),
+        i18n_json_no_untranslated::register(),
         i18n_json_valid_message_syntax::register(),
         i18n_no_hardcoded_string_in_jsx::register(),
         i18n_no_concat_translation_key::register(),
