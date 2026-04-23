@@ -30,8 +30,10 @@ use crate::config::Config;
 use crate::files::SourceFile;
 
 pub mod import_index;
+pub mod locale_index;
 
 pub use import_index::ImportIndex;
+pub use locale_index::LocaleIndex;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum ModuleType {
@@ -236,6 +238,9 @@ pub struct ProjectCtx {
     // construct a `ProjectCtx` via `empty()` — e.g. the LSP server, where
     // single-file edits don't have a multi-file view yet.
     import_index: OnceLock<ImportIndex>,
+
+    // Cross-file i18n locale index. Built lazily when first accessed.
+    locale_index: OnceLock<LocaleIndex>,
 }
 
 impl ProjectCtx {
@@ -301,6 +306,12 @@ impl ProjectCtx {
     /// slice.
     pub fn import_index(&self) -> &ImportIndex {
         self.import_index.get_or_init(ImportIndex::default)
+    }
+
+    /// Access the locale index (i18n translation keys). Lazily initialized,
+    /// returns empty index if not built.
+    pub fn locale_index(&self) -> &LocaleIndex {
+        self.locale_index.get_or_init(LocaleIndex::default)
     }
 
     /// Test-only constructor that seeds `import_index` from an arbitrary set

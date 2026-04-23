@@ -30,6 +30,7 @@ mod engine;
 mod explain;
 mod files;
 mod fix;
+mod icu;
 mod ignore_comments;
 mod list;
 mod lsp;

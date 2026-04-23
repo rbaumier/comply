@@ -17,6 +17,7 @@
 pub mod backend;
 pub mod file_ctx;
 pub mod arrow_this_in_function;
+pub mod ban_dependencies;
 pub mod banned_comment_words;
 pub mod block_scope_case;
 pub mod better_auth_no_disable_csrf;
@@ -762,11 +763,14 @@ pub mod number_literal_case;
 pub mod numeric_separators_style;
 pub mod prefer_add_event_listener;
 pub mod prefer_array_find;
+pub mod prefer_array_fill;
 pub mod prefer_array_flat;
+pub mod prefer_array_from_map;
 pub mod prefer_array_index_of;
 pub mod prefer_array_some;
 pub mod prefer_array_to_reversed;
 pub mod prefer_array_to_sorted;
+pub mod prefer_array_to_spliced;
 pub mod prefer_at;
 pub mod prefer_bigint_literals;
 pub mod prefer_blob_reading_methods;
@@ -809,6 +813,7 @@ pub mod prefer_set_has;
 pub mod prefer_set_size;
 pub mod prefer_single_call;
 pub mod prefer_spread;
+pub mod prefer_static_regex;
 pub mod prefer_string_raw;
 pub mod prefer_string_replace_all;
 pub mod prefer_string_slice;
@@ -967,6 +972,8 @@ pub mod no_default_export;
 pub mod prefer_promise_all;
 pub mod ts_prefer_using_declaration;
 // v3.0 — Skill-driven rules: Batch 11 (i18n)
+pub mod i18n_json_identical_keys;
+pub mod i18n_json_valid_message_syntax;
 pub mod i18n_no_concat_translation_key;
 pub mod i18n_no_hardcoded_string_in_jsx;
 pub mod i18n_no_manual_pluralization;
@@ -1887,6 +1894,7 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         prefer_set_size::register(),
         prefer_single_call::register(),
         prefer_spread::register(),
+        prefer_static_regex::register(),
         prefer_string_raw::register(),
         prefer_string_replace_all::register(),
         prefer_string_slice::register(),
@@ -2169,6 +2177,8 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         vue_markraw_for_third_party::register(),
         vue_url_state_for_filters::register(),
         // v3.0 — Skill-driven rules: Batch 11 (i18n)
+        i18n_json_identical_keys::register(),
+        i18n_json_valid_message_syntax::register(),
         i18n_no_hardcoded_string_in_jsx::register(),
         i18n_no_concat_translation_key::register(),
         i18n_no_string_concat_with_translation::register(),
@@ -2248,6 +2258,10 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         no_indexof_equality::register(),
         prefer_array_to_reversed::register(),
         prefer_array_to_sorted::register(),
+        prefer_array_to_spliced::register(),
+        prefer_array_fill::register(),
+        prefer_array_from_map::register(),
+        ban_dependencies::register(),
         os_command::register(),
         xpath_injection::register(),
         prefer_url_canparse::register(),
