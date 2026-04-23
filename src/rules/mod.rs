@@ -315,6 +315,9 @@ pub mod tailwind_no_important_modifier;
 pub mod tailwind_no_unnecessary_whitespace;
 pub mod tailwind_prefer_cn_utility;
 pub mod tailwind_prefer_size_shorthand;
+pub mod tailwind_classnames_order;
+pub mod tailwind_no_deprecated_classes;
+pub mod tailwind_prefer_shorthand;
 pub mod tanstack_query_array_key;
 pub mod tanstack_query_fn_must_throw_on_error;
 pub mod tanstack_query_key_includes_params;
@@ -932,6 +935,10 @@ pub mod vitest_no_disabled_tests;
 // v3.0 — Skill-driven rules: Batch 1 (TypeScript/Architecture)
 pub mod avoid_barrel_files;
 pub mod avoid_re_export_all;
+pub mod avoid_importing_barrel_files;
+pub mod import_dedupe;
+pub mod no_full_import;
+pub mod no_test_imports_in_prod;
 pub mod no_default_export;
 pub mod prefer_promise_all;
 pub mod ts_prefer_using_declaration;
@@ -941,6 +948,7 @@ pub mod i18n_no_hardcoded_string_in_jsx;
 pub mod i18n_no_manual_pluralization;
 pub mod i18n_no_string_concat_with_translation;
 pub mod i18n_prefer_intl_api;
+pub mod i18n_json_valid_message_syntax;
 pub mod better_auth_middleware_requires_headers;
 pub mod better_auth_require_secure_cookies;
 pub mod express_session_require_name;
@@ -979,6 +987,9 @@ pub mod xstate_state_names;
 pub mod zod_brand_ids;
 pub mod zod_transform_requires_pipe;
 pub mod zod_validate_env_at_startup;
+pub mod zod_no_optional_and_default_together;
+pub mod zod_no_unknown_schema;
+pub mod zod_require_schema_suffix;
 use crate::diagnostic::Severity;
 use crate::files::Language;
 use backend::Backend;
@@ -2060,6 +2071,10 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         // v3.0 — Skill-driven rules: Batch 1 (TypeScript/Architecture)
         avoid_barrel_files::register(),
         avoid_re_export_all::register(),
+        avoid_importing_barrel_files::register(),
+        import_dedupe::register(),
+        no_full_import::register(),
+        no_test_imports_in_prod::register(),
         no_default_export::register(),
         prefer_promise_all::register(),
         ts_prefer_using_declaration::register(),
@@ -2078,6 +2093,9 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         tailwind_no_arbitrary_z_index::register(),
         tailwind_enforces_negative_arbitrary_values::register(),
         tailwind_prefer_size_shorthand::register(),
+        tailwind_classnames_order::register(),
+        tailwind_no_deprecated_classes::register(),
+        tailwind_prefer_shorthand::register(),
         tailwind_no_apply_for_variants::register(),
         tailwind_prefer_cn_utility::register(),
         tailwind_no_unnecessary_whitespace::register(),
@@ -2191,6 +2209,9 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         zod_brand_ids::register(),
         zod_transform_requires_pipe::register(),
         zod_validate_env_at_startup::register(),
+        zod_no_optional_and_default_together::register(),
+        zod_no_unknown_schema::register(),
+        zod_require_schema_suffix::register(),
     ];
     rules.extend(delegated::register_all());
     rules.extend(delegated::register_tsgolint());

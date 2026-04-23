@@ -1,7 +1,7 @@
-//! tsgolint type-aware rules delegated to tsgolint subprocess.
+//! Type-aware rules delegated to oxlint --type-aware.
 //!
-//! These rules require the TypeScript type checker and only run with --with-types.
-//! tsgolint uses typescript-go for ~10x faster type checking than tsc.
+//! These rules require the TypeScript type checker via tsgolint/typescript-go.
+//! They run automatically when oxlint-tsgolint is installed.
 
 use crate::diagnostic::Severity;
 use crate::rules::backend::Backend;
@@ -10,7 +10,9 @@ use crate::rules::{Language, RuleDef, TS_FAMILY};
 
 pub fn register_all() -> Vec<RuleDef> {
     vec![
-        // Async / Promises
+        // ══════════════════════════════════════════════════════════════════
+        // ASYNC / PROMISES
+        // ══════════════════════════════════════════════════════════════════
         entry(
             "no-floating-promises",
             "no-floating-promises",
@@ -41,7 +43,21 @@ pub fn register_all() -> Vec<RuleDef> {
             "Function returns a Promise but is not marked `async`.",
             "Add the `async` keyword to the function declaration.",
         ),
-        // Type Safety - any leaks
+        entry(
+            "prefer-promise-reject-errors",
+            "prefer-promise-reject-errors",
+            "`Promise.reject()` should receive an Error, not a primitive.",
+            "Pass an Error instance: `Promise.reject(new Error(msg))`.",
+        ),
+        // ══════════════════════════════════════════════════════════════════
+        // TYPE SAFETY — ANY LEAKS
+        // ══════════════════════════════════════════════════════════════════
+        entry(
+            "no-explicit-any",
+            "no-explicit-any",
+            "Explicit `any` defeats TypeScript's type safety.",
+            "Use `unknown`, a specific type, or a generic.",
+        ),
         entry(
             "no-unsafe-argument",
             "no-unsafe-argument",
@@ -72,7 +88,39 @@ pub fn register_all() -> Vec<RuleDef> {
             "Returning `any` from a typed function defeats type safety.",
             "Add a type assertion or fix the source of `any`.",
         ),
-        // Boolean / Conditions
+        entry(
+            "no-unsafe-declaration-merging",
+            "no-unsafe-declaration-merging",
+            "Interface/class merging can bypass type checking.",
+            "Avoid declaration merging or use separate types.",
+        ),
+        entry(
+            "no-unsafe-enum-comparison",
+            "no-unsafe-enum-comparison",
+            "Comparing enum with non-enum value is error-prone.",
+            "Compare with enum members only.",
+        ),
+        entry(
+            "no-unsafe-function-type",
+            "no-unsafe-function-type",
+            "The `Function` type accepts any function — use explicit signatures.",
+            "Replace with a specific function type: `(arg: T) => R`.",
+        ),
+        entry(
+            "no-unsafe-unary-minus",
+            "no-unsafe-unary-minus",
+            "Unary minus on non-number type is error-prone.",
+            "Ensure the operand is a number.",
+        ),
+        entry(
+            "use-unknown-in-catch-callback-variable",
+            "use-unknown-in-catch-callback-variable",
+            "Catch callback parameter should be `unknown`, not `any`.",
+            "Type the catch parameter as `unknown` and narrow it.",
+        ),
+        // ══════════════════════════════════════════════════════════════════
+        // BOOLEAN / CONDITIONS
+        // ══════════════════════════════════════════════════════════════════
         entry(
             "strict-boolean-expressions",
             "strict-boolean-expressions",
@@ -85,7 +133,15 @@ pub fn register_all() -> Vec<RuleDef> {
             "Condition is always truthy or always falsy based on types.",
             "Remove the condition or fix the type.",
         ),
-        // Nullish
+        entry(
+            "no-unnecessary-boolean-literal-compare",
+            "no-unnecessary-boolean-literal-compare",
+            "`x === true` is verbose — use `x` directly.",
+            "Remove the comparison: `if (x)` instead of `if (x === true)`.",
+        ),
+        // ══════════════════════════════════════════════════════════════════
+        // NULLISH
+        // ══════════════════════════════════════════════════════════════════
         entry(
             "prefer-nullish-coalescing",
             "prefer-nullish-coalescing",
@@ -98,7 +154,15 @@ pub fn register_all() -> Vec<RuleDef> {
             "Use `?.` instead of `&& x.y` for cleaner null checks.",
             "Replace `x && x.y` with `x?.y`.",
         ),
-        // Arrays
+        entry(
+            "no-non-null-asserted-nullish-coalescing",
+            "no-non-null-asserted-nullish-coalescing",
+            "`x! ?? y` is contradictory — `!` asserts non-null.",
+            "Remove the `!` or the `??`.",
+        ),
+        // ══════════════════════════════════════════════════════════════════
+        // ARRAYS
+        // ══════════════════════════════════════════════════════════════════
         entry(
             "no-for-in-array",
             "no-for-in-array",
@@ -123,21 +187,33 @@ pub fn register_all() -> Vec<RuleDef> {
             "`.sort()` without a comparator converts elements to strings.",
             "Provide an explicit comparator: `.sort((a, b) => a - b)`.",
         ),
-        // Errors
+        // ══════════════════════════════════════════════════════════════════
+        // ERRORS
+        // ══════════════════════════════════════════════════════════════════
         entry(
             "only-throw-error",
             "only-throw-error",
             "Throwing a non-Error value loses stack trace information.",
             "Throw an Error instance: `throw new Error(message)`.",
         ),
-        // Methods
+        // ══════════════════════════════════════════════════════════════════
+        // METHODS / THIS
+        // ══════════════════════════════════════════════════════════════════
         entry(
             "unbound-method",
             "unbound-method",
             "Method passed as callback loses its `this` binding.",
             "Bind the method: `.bind(this)` or use an arrow function.",
         ),
-        // Operators
+        entry(
+            "no-this-alias",
+            "no-this-alias",
+            "`const self = this` is legacy — use arrow functions.",
+            "Replace callback with arrow function to preserve `this`.",
+        ),
+        // ══════════════════════════════════════════════════════════════════
+        // OPERATORS
+        // ══════════════════════════════════════════════════════════════════
         entry(
             "restrict-plus-operands",
             "restrict-plus-operands",
@@ -150,7 +226,15 @@ pub fn register_all() -> Vec<RuleDef> {
             "Interpolating `any` or complex objects in templates is error-prone.",
             "Convert to string explicitly or add proper types.",
         ),
-        // Unions / Enums
+        entry(
+            "dot-notation",
+            "dot-notation",
+            "`obj[\"prop\"]` should be `obj.prop` when possible.",
+            "Use dot notation for known property names.",
+        ),
+        // ══════════════════════════════════════════════════════════════════
+        // UNIONS / ENUMS
+        // ══════════════════════════════════════════════════════════════════
         entry(
             "switch-exhaustiveness-check",
             "switch-exhaustiveness-check",
@@ -163,14 +247,144 @@ pub fn register_all() -> Vec<RuleDef> {
             "Enum mixes string and number members, which is confusing.",
             "Use either all string or all number members.",
         ),
-        // Type assertions
+        entry(
+            "no-duplicate-enum-values",
+            "no-duplicate-enum-values",
+            "Enum has duplicate values — likely a copy-paste error.",
+            "Use unique values for each enum member.",
+        ),
+        // ══════════════════════════════════════════════════════════════════
+        // TYPES — REDUNDANT / UNNECESSARY
+        // ══════════════════════════════════════════════════════════════════
         entry(
             "no-unnecessary-type-assertion",
             "no-unnecessary-type-assertion",
             "Type assertion `as T` is unnecessary — value is already that type.",
             "Remove the type assertion.",
         ),
-        // Misc
+        entry(
+            "no-unnecessary-type-constraint",
+            "no-unnecessary-type-constraint",
+            "`<T extends unknown>` is redundant — `unknown` is the default.",
+            "Remove the constraint: `<T>`.",
+        ),
+        entry(
+            "no-unnecessary-type-parameters",
+            "no-unnecessary-type-parameters",
+            "Type parameter is never used or could be `unknown`.",
+            "Remove the unused type parameter.",
+        ),
+        entry(
+            "no-unnecessary-template-expression",
+            "no-unnecessary-template-expression",
+            "`` `${x}` `` is verbose when `x` is already a string.",
+            "Use `x` directly without template literal.",
+        ),
+        entry(
+            "no-unnecessary-type-conversion",
+            "no-unnecessary-type-conversion",
+            "`String(x)` is unnecessary when `x` is already a string.",
+            "Remove the conversion.",
+        ),
+        entry(
+            "no-unnecessary-parameter-property-assignment",
+            "no-unnecessary-parameter-property-assignment",
+            "`this.x = x` is redundant when `x` is a parameter property.",
+            "Remove the assignment — parameter property handles it.",
+        ),
+        entry(
+            "no-redundant-type-constituents",
+            "no-redundant-type-constituents",
+            "`string | \"foo\"` is redundant — the literal is subsumed.",
+            "Remove the redundant type constituent.",
+        ),
+        entry(
+            "no-duplicate-type-constituents",
+            "no-duplicate-type-constituents",
+            "`A | A` has duplicate — likely a copy-paste error.",
+            "Remove the duplicate type constituent.",
+        ),
+        entry(
+            "no-inferrable-types",
+            "no-inferrable-types",
+            "`const x: number = 5` — the type is inferred from the value.",
+            "Remove the type annotation.",
+        ),
+        // ══════════════════════════════════════════════════════════════════
+        // TYPES — BAD PATTERNS
+        // ══════════════════════════════════════════════════════════════════
+        entry(
+            "no-wrapper-object-types",
+            "no-wrapper-object-types",
+            "`String` should be `string` — use primitive types.",
+            "Use lowercase primitive: `string`, `number`, `boolean`.",
+        ),
+        entry(
+            "no-invalid-void-type",
+            "no-invalid-void-type",
+            "`void` is only valid as a return type, not a variable type.",
+            "Use `undefined` for variables, `void` only for returns.",
+        ),
+        entry(
+            "no-misused-new",
+            "no-misused-new",
+            "Interface with `new()` or class with `constructor` type is wrong.",
+            "Use proper constructor signature.",
+        ),
+        entry(
+            "no-empty-interface",
+            "no-empty-interface",
+            "Empty interface has no members — use `type` or remove it.",
+            "Add members, use `type = {}`, or remove the interface.",
+        ),
+        entry(
+            "no-empty-object-type",
+            "no-empty-object-type",
+            "`{}` matches any non-nullish value — probably not intended.",
+            "Use `object`, `Record<string, unknown>`, or a specific type.",
+        ),
+        entry(
+            "no-extraneous-class",
+            "no-extraneous-class",
+            "Class with only static members should be a plain object/module.",
+            "Export functions directly instead of static class methods.",
+        ),
+        // ══════════════════════════════════════════════════════════════════
+        // TYPES — VOID / RETURN
+        // ══════════════════════════════════════════════════════════════════
+        entry(
+            "no-confusing-void-expression",
+            "no-confusing-void-expression",
+            "Void expression used where a value is expected.",
+            "Don't use void expression as a value.",
+        ),
+        entry(
+            "no-meaningless-void-operator",
+            "no-meaningless-void-operator",
+            "`void x` has no effect — the value is already discarded.",
+            "Remove the `void` operator.",
+        ),
+        entry(
+            "strict-void-return",
+            "strict-void-return",
+            "Function declared void but caller expects a value.",
+            "Fix the return type or don't use the return value.",
+        ),
+        entry(
+            "consistent-return",
+            "consistent-return",
+            "Function should either always return a value or never.",
+            "Add return statements to all branches or none.",
+        ),
+        entry(
+            "return-await",
+            "return-await",
+            "`return await` is unnecessary outside of try/catch.",
+            "Remove `await` from the return statement.",
+        ),
+        // ══════════════════════════════════════════════════════════════════
+        // TYPES — EXPORTS / IMPORTS
+        // ══════════════════════════════════════════════════════════════════
         entry(
             "consistent-type-exports",
             "consistent-type-exports",
@@ -178,10 +392,187 @@ pub fn register_all() -> Vec<RuleDef> {
             "Add the `type` keyword: `export type { Foo }`.",
         ),
         entry(
-            "return-await",
-            "return-await",
-            "`return await` is unnecessary outside of try/catch.",
-            "Remove `await` from the return statement.",
+            "consistent-type-imports",
+            "consistent-type-imports",
+            "Type-only imports should use `import type`.",
+            "Add the `type` keyword: `import type { Foo }`.",
+        ),
+        entry(
+            "no-import-type-side-effects",
+            "no-import-type-side-effects",
+            "`import type` should not have side effects.",
+            "Split type imports from value imports.",
+        ),
+        entry(
+            "no-useless-empty-export",
+            "no-useless-empty-export",
+            "`export {}` has no effect in a module.",
+            "Remove the empty export.",
+        ),
+        entry(
+            "no-require-imports",
+            "no-require-imports",
+            "`require()` is CommonJS — use ES `import`.",
+            "Replace with `import x from 'module'`.",
+        ),
+        entry(
+            "no-var-requires",
+            "no-var-requires",
+            "`const x = require()` is CommonJS — use ES `import`.",
+            "Replace with `import x from 'module'`.",
+        ),
+        entry(
+            "triple-slash-reference",
+            "triple-slash-reference",
+            "`/// <reference>` is legacy — use `import`.",
+            "Replace with ES import statement.",
+        ),
+        // ══════════════════════════════════════════════════════════════════
+        // STYLE — EXPLICIT TYPES
+        // ══════════════════════════════════════════════════════════════════
+        entry(
+            "explicit-function-return-type",
+            "explicit-function-return-type",
+            "Function should have an explicit return type.",
+            "Add a return type annotation: `function f(): T { }`.",
+        ),
+        entry(
+            "explicit-module-boundary-types",
+            "explicit-module-boundary-types",
+            "Exported function should have explicit parameter and return types.",
+            "Add type annotations to all parameters and return type.",
+        ),
+        // ══════════════════════════════════════════════════════════════════
+        // STYLE — CONSISTENCY
+        // ══════════════════════════════════════════════════════════════════
+        entry(
+            "array-type",
+            "array-type",
+            "Use `T[]` syntax for array types consistently.",
+            "Replace `Array<T>` with `T[]`.",
+        ),
+        entry(
+            "consistent-generic-constructors",
+            "consistent-generic-constructors",
+            "Specify type arguments on constructor: `new Map<K, V>()`.",
+            "Move type arguments to constructor call.",
+        ),
+        entry(
+            "consistent-indexed-object-style",
+            "consistent-indexed-object-style",
+            "Use `Record<K, V>` instead of `{ [key: K]: V }`.",
+            "Replace index signature with `Record<K, V>`.",
+        ),
+        entry(
+            "prefer-as-const",
+            "prefer-as-const",
+            "`\"foo\" as const` is cleaner than `\"foo\" as \"foo\"`.",
+            "Use `as const` for literal assertions.",
+        ),
+        entry(
+            "prefer-for-of",
+            "prefer-for-of",
+            "`for (const x of arr)` is cleaner than index-based loop.",
+            "Use `for...of` when you don't need the index.",
+        ),
+        entry(
+            "prefer-function-type",
+            "prefer-function-type",
+            "`() => T` is cleaner than `{ (): T }`.",
+            "Use arrow function type syntax.",
+        ),
+        entry(
+            "class-literal-property-style",
+            "class-literal-property-style",
+            "Use `readonly x = 5` instead of getter for constants.",
+            "Replace getter with readonly property.",
+        ),
+        entry(
+            "parameter-properties",
+            "parameter-properties",
+            "Use `constructor(public x: T)` for concise initialization.",
+            "Use parameter property syntax.",
+        ),
+        entry(
+            "unified-signatures",
+            "unified-signatures",
+            "Overloads can be unified into a single signature.",
+            "Use union type in single signature instead of overloads.",
+        ),
+        entry(
+            "related-getter-setter-pairs",
+            "related-getter-setter-pairs",
+            "Getter and setter have incompatible types.",
+            "Ensure getter return type matches setter parameter type.",
+        ),
+        // ══════════════════════════════════════════════════════════════════
+        // STYLE — PREFER
+        // ══════════════════════════════════════════════════════════════════
+        entry(
+            "prefer-regexp-exec",
+            "prefer-regexp-exec",
+            "`.exec()` is faster than `.match()` for single matches.",
+            "Use `regex.exec(str)` instead of `str.match(regex)`.",
+        ),
+        entry(
+            "prefer-string-starts-ends-with",
+            "prefer-string-starts-ends-with",
+            "`.indexOf() === 0` is less readable than `.startsWith()`.",
+            "Use `.startsWith()` or `.endsWith()`.",
+        ),
+        entry(
+            "prefer-return-this-type",
+            "prefer-return-this-type",
+            "Method returning `this` should use `this` return type.",
+            "Change return type to `this` for method chaining.",
+        ),
+        // ══════════════════════════════════════════════════════════════════
+        // RESTRICTIONS — BAN
+        // ══════════════════════════════════════════════════════════════════
+        entry(
+            "ban-ts-comment",
+            "ban-ts-comment",
+            "`@ts-ignore` and `@ts-nocheck` suppress type errors dangerously.",
+            "Fix the type error instead of suppressing it.",
+        ),
+        entry(
+            "ban-types",
+            "ban-types",
+            "`Object`, `{}`, `Function` are too loose — use specific types.",
+            "Use `object`, `Record<>`, or explicit function signatures.",
+        ),
+        entry(
+            "no-namespace",
+            "no-namespace",
+            "TypeScript namespaces are legacy — use ES modules.",
+            "Convert namespace to ES module exports.",
+        ),
+        // ══════════════════════════════════════════════════════════════════
+        // OTHER
+        // ══════════════════════════════════════════════════════════════════
+        entry(
+            "no-deprecated",
+            "no-deprecated",
+            "Using deprecated API that may be removed in future.",
+            "Replace with the recommended alternative.",
+        ),
+        entry(
+            "no-base-to-string",
+            "no-base-to-string",
+            "`.toString()` on object without override returns `[object Object]`.",
+            "Implement custom `.toString()` or use JSON.stringify.",
+        ),
+        entry(
+            "no-implied-eval",
+            "no-implied-eval",
+            "`setTimeout(\"code\")` executes string as code like eval.",
+            "Pass a function instead of a string.",
+        ),
+        entry(
+            "no-misused-spread",
+            "no-misused-spread",
+            "Spread `...x` on incompatible type loses data.",
+            "Ensure spread is used on the correct type.",
         ),
     ]
 }
