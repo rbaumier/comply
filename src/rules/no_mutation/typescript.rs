@@ -1,19 +1,26 @@
-//! no-mutation backend — flag property assignments on `const` bindings.
+//! no-mutation backend — flag mutations on `const` bindings.
 //!
-//! Pattern: `obj.prop = value` or `obj[key] = value` (or any compound
-//! assignment like `+=`) where `obj` is a binding declared with `const`
-//! somewhere up the scope chain.
+//! Detects:
+//! - Property assignments: `obj.prop = value`, `obj[key] = value`
+//! - Compound assignments: `obj.prop += 1`
+//! - Mutating method calls: `arr.push(x)`, `map.set(k, v)`, `set.add(x)`
+//! - Update expressions: `obj.count++`, `--obj.count`
+//! - Delete operator: `delete obj.prop`
+//! - Object mutators: `Object.assign(obj, ...)`, `Object.defineProperty(obj, ...)`
 //!
-//! Scope resolution here is deliberately lightweight: we walk up from
-//! the assignment looking for any ancestor that textually contains
-//! `const <name>` as a variable declarator. We stop at the first match
-//! — no shadowing logic. This keeps the rule cheap and catches the
-//! overwhelming majority of real-world cases (top-level or block-local
-//! `const`); a pathological shadowed-`let`-inside-`const` case would
-//! still be reported, which is fine since the outer `const` is also
-//! being indirectly mutated.
+//! Scope resolution is lightweight: we walk up looking for `const <name>`.
 
 use crate::diagnostic::{Diagnostic, Severity};
+
+const MUTATING_ARRAY_METHODS: &[&str] = &[
+    "push", "pop", "shift", "unshift", "splice", "sort", "reverse", "fill", "copyWithin",
+];
+
+const MUTATING_MAP_METHODS: &[&str] = &["set", "delete", "clear"];
+
+const MUTATING_SET_METHODS: &[&str] = &["add", "delete", "clear"];
+
+const OBJECT_MUTATOR_FUNCTIONS: &[&str] = &["assign", "defineProperty", "defineProperties", "setPrototypeOf"];
 
 /// Walk down the LHS of an assignment to find the root identifier of
 /// a member/subscript chain. Returns `None` if the LHS is a plain
@@ -106,24 +113,95 @@ fn pattern_binds(node: tree_sitter::Node, source: &[u8], name: &str) -> bool {
     }
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "assignment_expression" && node.kind() != "augmented_assignment_expression" {
-        return;
-    }
-    let Some(left) = node.child_by_field_name("left") else { return };
-    let Some(root) = root_identifier_of_member_chain(left, source) else { return };
-    if !declared_as_const(node, source, root) {
-        return;
-    }
+fn report(
+    diagnostics: &mut Vec<Diagnostic>,
+    path: &std::path::Path,
+    node: &tree_sitter::Node,
+    root: &str,
+    kind: &str,
+) {
     diagnostics.push(Diagnostic::at_node(
-        ctx.path,
-        &node,
+        path,
+        node,
         "no-mutation",
         format!(
-            "Mutating a property of `{root}` (declared with `const`) — build a new value and rebind instead of mutating."
+            "{kind} `{root}` (declared with `const`) — build a new value instead of mutating."
         ),
         Severity::Warning,
     ));
+}
+
+crate::ast_check! { |node, source, ctx, diagnostics|
+    match node.kind() {
+        // obj.prop = x, obj.prop += x
+        "assignment_expression" | "augmented_assignment_expression" => {
+            let Some(left) = node.child_by_field_name("left") else { return };
+            let Some(root) = root_identifier_of_member_chain(left, source) else { return };
+            if declared_as_const(node, source, root) {
+                report(diagnostics, ctx.path, &node, root, "Mutating property of");
+            }
+        }
+        // obj.count++, --obj.count
+        "update_expression" => {
+            let Some(arg) = node.child_by_field_name("argument") else { return };
+            let Some(root) = root_identifier_of_member_chain(arg, source) else { return };
+            if declared_as_const(node, source, root) {
+                report(diagnostics, ctx.path, &node, root, "Mutating property of");
+            }
+        }
+        // delete obj.prop
+        "unary_expression" => {
+            let Some(op) = node.child_by_field_name("operator") else { return };
+            if op.utf8_text(source).unwrap_or("") != "delete" { return }
+            let Some(arg) = node.child_by_field_name("argument") else { return };
+            let Some(root) = root_identifier_of_member_chain(arg, source) else { return };
+            if declared_as_const(node, source, root) {
+                report(diagnostics, ctx.path, &node, root, "Deleting property of");
+            }
+        }
+        // arr.push(x), map.set(k, v), Object.assign(obj, ...)
+        "call_expression" => {
+            let Some(callee) = node.child_by_field_name("function") else { return };
+            if callee.kind() != "member_expression" { return }
+            let Some(prop) = callee.child_by_field_name("property") else { return };
+            let method = prop.utf8_text(source).unwrap_or("");
+
+            // Object.assign(target, ...) — first argument is mutated
+            if OBJECT_MUTATOR_FUNCTIONS.contains(&method)
+                && let Some(obj) = callee.child_by_field_name("object")
+                && obj.utf8_text(source).unwrap_or("") == "Object"
+                && let Some(args) = node.child_by_field_name("arguments")
+            {
+                let mut cursor = args.walk();
+                if let Some(first_arg) = args.named_children(&mut cursor).next()
+                    && let Some(root) = root_identifier_of_member_chain(first_arg, source)
+                        .or_else(|| (first_arg.kind() == "identifier").then(|| first_arg.utf8_text(source).ok()).flatten())
+                    && declared_as_const(node, source, root)
+                {
+                    report(diagnostics, ctx.path, &node, root, "Mutating");
+                }
+                return;
+            }
+
+            // arr.push(), map.set(), set.add()
+            let is_mutating = MUTATING_ARRAY_METHODS.contains(&method)
+                || MUTATING_MAP_METHODS.contains(&method)
+                || MUTATING_SET_METHODS.contains(&method);
+            if !is_mutating { return }
+
+            let Some(obj) = callee.child_by_field_name("object") else { return };
+            let root = if obj.kind() == "identifier" {
+                obj.utf8_text(source).ok()
+            } else {
+                root_identifier_of_member_chain(obj, source)
+            };
+            let Some(root) = root else { return };
+            if declared_as_const(node, source, root) {
+                report(diagnostics, ctx.path, &node, root, &format!("Calling `{method}()` on"));
+            }
+        }
+        _ => {}
+    }
 }
 
 #[cfg(test)]
@@ -133,6 +211,8 @@ mod tests {
     fn run_on(source: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_ts(source, &Check)
     }
+
+    // === Property assignments ===
 
     #[test]
     fn flags_property_mutation_on_const() {
@@ -160,26 +240,130 @@ mod tests {
         assert_eq!(run_on("export const obj = {}; obj.x = 1;").len(), 1);
     }
 
+    // === Mutating method calls ===
+
+    #[test]
+    fn flags_array_push_on_const() {
+        assert_eq!(run_on("const arr = []; arr.push(1);").len(), 1);
+    }
+
+    #[test]
+    fn flags_array_pop_on_const() {
+        assert_eq!(run_on("const arr = [1]; arr.pop();").len(), 1);
+    }
+
+    #[test]
+    fn flags_array_splice_on_const() {
+        assert_eq!(run_on("const arr = [1, 2, 3]; arr.splice(0, 1);").len(), 1);
+    }
+
+    #[test]
+    fn flags_array_sort_on_const() {
+        assert_eq!(run_on("const arr = [3, 1, 2]; arr.sort();").len(), 1);
+    }
+
+    #[test]
+    fn flags_array_reverse_on_const() {
+        assert_eq!(run_on("const arr = [1, 2]; arr.reverse();").len(), 1);
+    }
+
+    #[test]
+    fn flags_map_set_on_const() {
+        assert_eq!(run_on("const map = new Map(); map.set('a', 1);").len(), 1);
+    }
+
+    #[test]
+    fn flags_map_delete_on_const() {
+        assert_eq!(run_on("const map = new Map(); map.delete('a');").len(), 1);
+    }
+
+    #[test]
+    fn flags_set_add_on_const() {
+        assert_eq!(run_on("const set = new Set(); set.add(1);").len(), 1);
+    }
+
+    #[test]
+    fn flags_set_clear_on_const() {
+        assert_eq!(run_on("const set = new Set([1]); set.clear();").len(), 1);
+    }
+
+    #[test]
+    fn flags_nested_array_push() {
+        assert_eq!(run_on("const obj = { items: [] }; obj.items.push(1);").len(), 1);
+    }
+
+    // === Update expressions ===
+
+    #[test]
+    fn flags_increment_on_const_property() {
+        assert_eq!(run_on("const obj = { n: 0 }; obj.n++;").len(), 1);
+    }
+
+    #[test]
+    fn flags_decrement_on_const_property() {
+        assert_eq!(run_on("const obj = { n: 0 }; --obj.n;").len(), 1);
+    }
+
+    // === Delete operator ===
+
+    #[test]
+    fn flags_delete_on_const_property() {
+        assert_eq!(run_on("const obj = { a: 1 }; delete obj.a;").len(), 1);
+    }
+
+    // === Object.assign and friends ===
+
+    #[test]
+    fn flags_object_assign_on_const() {
+        assert_eq!(run_on("const obj = {}; Object.assign(obj, { a: 1 });").len(), 1);
+    }
+
+    #[test]
+    fn flags_object_define_property_on_const() {
+        assert_eq!(run_on("const obj = {}; Object.defineProperty(obj, 'a', { value: 1 });").len(), 1);
+    }
+
+    // === Allowed patterns ===
+
     #[test]
     fn allows_mutation_on_let_binding() {
-        // `let` isn't this rule's target — no-let covers reassignment concerns.
         assert!(run_on("let obj = {}; obj.prop = 1;").is_empty());
     }
 
     #[test]
+    fn allows_array_push_on_let() {
+        assert!(run_on("let arr = []; arr.push(1);").is_empty());
+    }
+
+    #[test]
     fn allows_plain_reassignment() {
-        // Reassigning a `let` identifier (no member access) is out of scope.
         assert!(run_on("let x = 1; x = 2;").is_empty());
     }
 
     #[test]
     fn allows_mutation_on_unknown_binding() {
-        // When we can't see the declaration (e.g. function parameter), we don't flag.
         assert!(run_on("function f(obj: { x: number }) { obj.x = 1; }").is_empty());
+    }
+
+    #[test]
+    fn allows_push_on_parameter() {
+        assert!(run_on("function f(arr: number[]) { arr.push(1); }").is_empty());
     }
 
     #[test]
     fn allows_new_object_via_spread() {
         assert!(run_on("const obj = { a: 1 }; const next = { ...obj, b: 2 };").is_empty());
+    }
+
+    #[test]
+    fn allows_non_mutating_methods() {
+        assert!(run_on("const arr = [1, 2, 3]; const x = arr.map(n => n * 2);").is_empty());
+        assert!(run_on("const arr = [1, 2, 3]; const x = arr.filter(n => n > 1);").is_empty());
+        assert!(run_on("const arr = [1, 2, 3]; const x = arr.slice(0, 1);").is_empty());
+    }
+
+    #[test]
+    fn allows_object_assign_to_new_object() {
+        assert!(run_on("const obj = {}; const next = Object.assign({}, obj, { a: 1 });").is_empty());
     }
 }
