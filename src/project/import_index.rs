@@ -48,6 +48,9 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use oxc_resolver::{
+    ResolveOptions, Resolver, TsconfigDiscovery, TsconfigOptions, TsconfigReferences,
+};
 use rayon::prelude::*;
 use tree_sitter::{Node, Parser};
 
@@ -205,8 +208,8 @@ impl ImportIndex {
         // built from `mod foo;` declarations. Build it once here.
         let rust_graph = RustModuleGraph::build(&per_file, &known_paths);
 
-        // Load tsconfig.json path aliases for TS resolution
-        let tsconfig_paths = TsconfigPaths::discover(&known_paths);
+        // Load module resolver (tsconfig paths + node_modules) for TS resolution
+        let path_resolver = OxcPathResolver::discover(&known_paths);
 
         // First pass: stash exports, and partially-populate imports with their
         // raw specifiers resolved against disk (TS) or the module graph (Rust).
@@ -221,7 +224,7 @@ impl ImportIndex {
                         imp.source_path = Some(resolved);
                     }
                 } else if let Some(resolved) =
-                    resolve_specifier(&path, &imp.specifier, &known_paths, &tsconfig_paths)
+                    resolve_specifier(&path, &imp.specifier, &known_paths, &path_resolver)
                 {
                     imp.source_path = Some(resolved);
                 }
@@ -869,156 +872,91 @@ fn resolve_relative(
     None
 }
 
-/// Try to resolve a specifier using both tsconfig aliases and relative paths.
+/// Try to resolve a specifier into an absolute path that appears in the input
+/// set. Relative specifiers (`./foo`) take a fast in-memory path through
+/// [`resolve_relative`]; bare and aliased specifiers are delegated to
+/// [`OxcPathResolver`], which handles tsconfig `paths`, `baseUrl`, package
+/// `exports`, and `node_modules` walking.
 fn resolve_specifier(
     importer: &Path,
     specifier: &str,
     known: &std::collections::HashSet<PathBuf>,
-    tsconfig: &TsconfigPaths,
+    resolver: &OxcPathResolver,
 ) -> Option<PathBuf> {
-    // First try relative resolution
     if specifier.starts_with('.') {
         return resolve_relative(importer, specifier, known);
     }
-    // Then try tsconfig path aliases
-    tsconfig.resolve(specifier, known)
+    resolver.resolve(importer, specifier, known)
 }
 
-/// Parsed tsconfig.json path mappings for alias resolution.
+/// Wrapper around [`oxc_resolver::Resolver`] configured for TS/JS module
+/// resolution. Discovers a `tsconfig.json` near the indexed files and uses
+/// it for `paths` / `baseUrl`. Without a tsconfig the resolver still works
+/// and handles bare specifiers via `node_modules`.
 #[derive(Debug, Default)]
-struct TsconfigPaths {
-    /// Base directory for non-relative imports (from baseUrl).
-    base_url: Option<PathBuf>,
-    /// Path mappings: (pattern, replacement paths). Pattern uses `*` as wildcard.
-    mappings: Vec<(String, Vec<PathBuf>)>,
+struct OxcPathResolver {
+    resolver: Option<Resolver>,
 }
 
-impl TsconfigPaths {
-    /// Find and parse tsconfig.json files from the project root.
+impl OxcPathResolver {
     fn discover(known_paths: &std::collections::HashSet<PathBuf>) -> Self {
-        // Find the project root by looking for tsconfig.json
         let Some(first_path) = known_paths.iter().next() else {
             return Self::default();
         };
 
+        let mut tsconfig_path: Option<PathBuf> = None;
         let mut dir = first_path.parent();
         while let Some(d) = dir {
-            let tsconfig_path = d.join("tsconfig.json");
-            if tsconfig_path.exists() {
-                if let Some(paths) = Self::parse(&tsconfig_path) {
-                    return paths;
-                }
+            let candidate = d.join("tsconfig.json");
+            if candidate.exists() {
+                tsconfig_path = Some(candidate);
+                break;
             }
             dir = d.parent();
         }
-        Self::default()
+
+        let options = ResolveOptions {
+            extensions: vec![
+                ".ts".into(),
+                ".tsx".into(),
+                ".js".into(),
+                ".jsx".into(),
+                ".mts".into(),
+                ".mjs".into(),
+                ".cts".into(),
+                ".cjs".into(),
+            ],
+            condition_names: vec![
+                "import".into(),
+                "require".into(),
+                "node".into(),
+                "default".into(),
+            ],
+            tsconfig: tsconfig_path.map(|p| {
+                TsconfigDiscovery::Manual(TsconfigOptions {
+                    config_file: p,
+                    references: TsconfigReferences::Auto,
+                })
+            }),
+            ..Default::default()
+        };
+
+        Self {
+            resolver: Some(Resolver::new(options)),
+        }
     }
 
-    fn parse(path: &Path) -> Option<Self> {
-        let content = std::fs::read_to_string(path).ok()?;
-        let json: serde_json::Value = serde_json::from_str(&content).ok()?;
-        let compiler_opts = json.get("compilerOptions")?;
-
-        let tsconfig_dir = path.parent()?;
-
-        // Parse baseUrl
-        let base_url = compiler_opts
-            .get("baseUrl")
-            .and_then(|v| v.as_str())
-            .map(|b| tsconfig_dir.join(b));
-
-        // Parse paths
-        let mut mappings = Vec::new();
-        if let Some(paths_obj) = compiler_opts.get("paths").and_then(|v| v.as_object()) {
-            let base = base_url.as_deref().unwrap_or(tsconfig_dir);
-            for (pattern, targets) in paths_obj {
-                if let Some(arr) = targets.as_array() {
-                    let resolved: Vec<PathBuf> = arr
-                        .iter()
-                        .filter_map(|v| v.as_str())
-                        .map(|t| base.join(t))
-                        .collect();
-                    if !resolved.is_empty() {
-                        mappings.push((pattern.clone(), resolved));
-                    }
-                }
-            }
-        }
-
-        Some(Self { base_url, mappings })
-    }
-
-    fn resolve(&self, specifier: &str, known: &std::collections::HashSet<PathBuf>) -> Option<PathBuf> {
-        const EXTS: &[&str] = &["ts", "tsx", "js", "jsx", "mts", "mjs"];
-
-        // Try path mappings first
-        for (pattern, targets) in &self.mappings {
-            if let Some(matched) = match_pattern(pattern, specifier) {
-                for target in targets {
-                    let target_str = target.to_string_lossy();
-                    let resolved_path = if target_str.contains('*') {
-                        PathBuf::from(target_str.replace('*', matched))
-                    } else {
-                        target.join(matched)
-                    };
-
-                    // Try with extensions
-                    for ext in EXTS {
-                        let candidate = resolved_path.with_extension(ext);
-                        if let Ok(c) = std::fs::canonicalize(&candidate) {
-                            if known.contains(&c) {
-                                return Some(c);
-                            }
-                        }
-                    }
-                    // Try index files
-                    for ext in EXTS {
-                        let candidate = resolved_path.join(format!("index.{ext}"));
-                        if let Ok(c) = std::fs::canonicalize(&candidate) {
-                            if known.contains(&c) {
-                                return Some(c);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Try baseUrl resolution
-        if let Some(base) = &self.base_url {
-            let raw = base.join(specifier);
-            for ext in EXTS {
-                let candidate = raw.with_extension(ext);
-                if let Ok(c) = std::fs::canonicalize(&candidate) {
-                    if known.contains(&c) {
-                        return Some(c);
-                    }
-                }
-            }
-            for ext in EXTS {
-                let candidate = raw.join(format!("index.{ext}"));
-                if let Ok(c) = std::fs::canonicalize(&candidate) {
-                    if known.contains(&c) {
-                        return Some(c);
-                    }
-                }
-            }
-        }
-
-        None
-    }
-}
-
-/// Match a tsconfig path pattern against a specifier.
-/// Returns the wildcard match if successful.
-/// Pattern `@/*` matches `@/utils` → returns `utils`.
-fn match_pattern<'a>(pattern: &str, specifier: &'a str) -> Option<&'a str> {
-    if let Some(prefix) = pattern.strip_suffix('*') {
-        specifier.strip_prefix(prefix)
-    } else if pattern == specifier {
-        Some("")
-    } else {
-        None
+    fn resolve(
+        &self,
+        importer: &Path,
+        specifier: &str,
+        known: &std::collections::HashSet<PathBuf>,
+    ) -> Option<PathBuf> {
+        let resolver = self.resolver.as_ref()?;
+        let importer_dir = importer.parent()?;
+        let resolved = resolver.resolve(importer_dir, specifier).ok()?;
+        let canonical = std::fs::canonicalize(resolved.path()).ok()?;
+        known.contains(&canonical).then_some(canonical)
     }
 }
 
