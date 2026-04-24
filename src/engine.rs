@@ -161,7 +161,7 @@ fn dispatch_backends(
         .iter()
         .any(|(_, b)| matches!(b, Backend::TreeSitter(_)));
     let tree = if needs_ast {
-        parse_with_grammar(parser, file.language, source.as_bytes())
+        crate::parsing::parse_with_grammar(parser, file.language, source.as_bytes())
     } else {
         None
     };
@@ -202,14 +202,6 @@ fn dispatch_backends(
         diagnostics.extend(produced);
     }
     diagnostics
-}
-
-fn parse_with_grammar(
-    parser: &mut Parser,
-    language: Language,
-    source: &[u8],
-) -> Option<tree_sitter::Tree> {
-    crate::parsing::parse_with_grammar(parser, language, source)
 }
 
 /// Apply every applicable rule to one file. Parses the AST once if any of

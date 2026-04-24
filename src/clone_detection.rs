@@ -50,6 +50,11 @@ pub fn lint_files(files: &[&SourceFile]) -> Vec<Diagnostic> {
         .map_init(Parser::new, |parser, file| tokenize_file(parser, file))
         .collect();
 
+    let mut raw = find_raw_clones(&file_data);
+    merge_and_emit(&mut raw, &file_data, files)
+}
+
+fn find_raw_clones(file_data: &[Option<FileTokens>]) -> Vec<RawClone> {
     let mut index: HashMap<u64, Vec<Occurrence>> = HashMap::new();
     let mut raw: Vec<RawClone> = Vec::new();
 
@@ -90,7 +95,7 @@ pub fn lint_files(files: &[&SourceFile]) -> Vec<Diagnostic> {
         }
     }
 
-    merge_and_emit(&mut raw, &file_data, files)
+    raw
 }
 
 fn verify_tokens(a: &FileTokens, a_start: usize, b: &FileTokens, b_start: usize) -> bool {
@@ -155,7 +160,10 @@ fn merge_and_emit(
 }
 
 fn clone_line_span(file_data: &[Option<FileTokens>], fi: usize, first_tok: usize, last_window_tok: usize) -> usize {
-    let Some(ref ft) = file_data[fi] else { return 10 };
+    let Some(ref ft) = file_data[fi] else {
+        debug_assert!(false, "clone_line_span called with None file_data[{fi}]");
+        return MIN_TOKENS;
+    };
     let first_line = ft.tokens[first_tok].line;
     let last_tok_idx = last_window_tok + MIN_TOKENS - 1;
     let last_line = if last_tok_idx < ft.tokens.len() {
@@ -412,12 +420,10 @@ mod tests {
 
     #[test]
     fn hash_collision_with_first_mismatch() {
-        // Tests the full index logic: bucket has a first occurrence that
-        // fails token-by-token verification, then a second that matches.
-        let source_a = b"aaaa".to_vec();
-        let source_b = b"bbbb".to_vec();
-        let source_c = b"aaaa".to_vec();
-
+        // File 0 and 2 share bytes ("aaaa"), file 1 differs ("bbbb") but
+        // tokens have identical kind_id/hash → same window_hash.
+        // find_raw_clones must reject file 1 via verify_tokens and match
+        // file 2 against file 0.
         let make_tokens = |n: usize| -> Vec<Token> {
             (0..n)
                 .map(|i| Token {
@@ -431,41 +437,17 @@ mod tests {
         };
 
         let file_data: Vec<Option<FileTokens>> = vec![
-            Some(FileTokens { source: source_a, tokens: make_tokens(MIN_TOKENS) }),
-            Some(FileTokens { source: source_b, tokens: make_tokens(MIN_TOKENS) }),
-            Some(FileTokens { source: source_c, tokens: make_tokens(MIN_TOKENS) }),
+            Some(FileTokens { source: b"aaaa".to_vec(), tokens: make_tokens(MIN_TOKENS) }),
+            Some(FileTokens { source: b"bbbb".to_vec(), tokens: make_tokens(MIN_TOKENS) }),
+            Some(FileTokens { source: b"aaaa".to_vec(), tokens: make_tokens(MIN_TOKENS) }),
         ];
 
-        // Simulate indexing: insert file 0, then file 1, then file 2
-        let mut index: HashMap<u64, Vec<Occurrence>> = HashMap::new();
-        let wh = window_hash(&file_data[0].as_ref().unwrap().tokens[0..MIN_TOKENS]);
-
-        // File 0: first insert
-        index.entry(wh).or_default().push(Occurrence { file_idx: 0, start_token: 0, start_line: 1 });
-
-        // File 1: different bytes, same hash → verify_tokens rejects file 0
-        let ft1 = file_data[1].as_ref().unwrap();
-        let ft0 = file_data[0].as_ref().unwrap();
-        assert!(!verify_tokens(ft1, 0, ft0, 0));
-
-        // File 1 gets inserted since no match
-        index.entry(wh).or_default().push(Occurrence { file_idx: 1, start_token: 0, start_line: 1 });
-
-        // File 2: same bytes as file 0 → verify_tokens accepts file 0
-        let ft2 = file_data[2].as_ref().unwrap();
-        let bucket = index.get(&wh).unwrap();
-        let mut found_match = false;
-        for occ in bucket {
-            if occ.file_idx != 2 {
-                if let Some(ref canon_ft) = file_data[occ.file_idx] {
-                    if verify_tokens(ft2, 0, canon_ft, occ.start_token) {
-                        found_match = true;
-                        break;
-                    }
-                }
-            }
-        }
-        assert!(found_match);
+        let raw = find_raw_clones(&file_data);
+        // File 2 matches file 0, file 1 matches neither.
+        assert_eq!(raw.len(), 1);
+        let (rfi, _, _, cfi, _, _) = raw[0];
+        assert_eq!(rfi, 2);
+        assert_eq!(cfi, 0);
     }
 
     #[test]
@@ -498,7 +480,19 @@ mod tests {
         ];
         let file_refs: Vec<&SourceFile> = files.iter().collect();
 
-        let file_data: Vec<Option<FileTokens>> = vec![None, None];
+        let make_ft = |n: usize| -> FileTokens {
+            FileTokens {
+                source: b"x".to_vec(),
+                tokens: (0..n).map(|i| Token {
+                    kind_id: 1, start_byte: 0, end_byte: 1,
+                    line: i + 1, hash: i as u64,
+                }).collect(),
+            }
+        };
+        let file_data: Vec<Option<FileTokens>> = vec![
+            Some(make_ft(MIN_TOKENS + 50)),
+            Some(make_ft(MIN_TOKENS + 80)),
+        ];
         let mut raw: Vec<RawClone> = vec![
             //  (rfi, rstart, rline, cfi, cstart, cline)
             (0, 0, 1, 1, 0, 1),
