@@ -1,51 +1,159 @@
-# Plugin Rules — Status
+# Plugin Rules — Blocked on Infrastructure
 
-Every rule from every plugin, categorized. Source of truth for coverage.
-
----
-
-## Grand Summary
-
-| Plugin | Total | Done | TODO | Later | Skip |
-|--------|-------|------|------|-------|------|
-| typescript-eslint | 134 | 72 | 0 | 55 | 7 |
-| eslint-plugin-react | 104 | 42 | 0 | 13 | 49 |
-| eslint-plugin-import | 46 | 25 | 0 | 14 | 7 |
-| eslint-plugin-n | 43 | 18 | 0 | 14 | 11 |
-| eslint-plugin-playwright | 58 | 35 | 0 | 6 | 17 |
-| eslint-plugin-regexp | 82 | 55 | 0 | 7 | 20 |
-| eslint-plugin-jsdoc | 66 | 34 | 0 | 5 | 27 |
-| eslint-plugin-unicorn | 147 | 139 | 0 | 7 | 1 |
-| **TOTAL** | **680** | **420** | **0** | **121** | **139** |
-
-**All actionable rules implemented. 121 rules blocked on infrastructure (type checker, module resolution, scope analysis).**
+Audit: 2026-04-24. **83 rules** remaining (JSDoc rules dropped).
 
 ---
 
-## LATER — Rules needing infrastructure (121 total)
+## Summary
 
-### Needs type checker (typescript-eslint: 55 rules)
-await-thenable, consistent-return, consistent-type-exports, dot-notation, naming-convention, no-array-delete, no-base-to-string, no-confusing-void-expression, no-deprecated, no-duplicate-type-constituents, no-floating-promises, no-for-in-array, no-implied-eval, no-meaningless-void-operator, no-misused-promises, no-misused-spread, no-mixed-enums, no-redundant-type-constituents, no-unnecessary-boolean-literal-compare, no-unnecessary-condition, no-unnecessary-qualifier, no-unnecessary-template-expression, no-unnecessary-type-arguments, no-unnecessary-type-assertion, no-unnecessary-type-conversion, no-unnecessary-type-parameters, no-unsafe-argument, no-unsafe-assignment, no-unsafe-call, no-unsafe-enum-comparison, no-unsafe-member-access, no-unsafe-return, no-unsafe-unary-minus, no-useless-default-assignment, non-nullable-type-assertion-style, only-throw-error, prefer-destructuring, prefer-find, prefer-includes, prefer-nullish-coalescing, prefer-optional-chain, prefer-promise-reject-errors, prefer-readonly, prefer-readonly-parameter-types, prefer-reduce-type-parameter, prefer-regexp-exec, prefer-return-this-type, prefer-string-starts-ends-with, promise-function-async, related-getter-setter-pairs, require-array-sort-compare, require-await, restrict-plus-operands, restrict-template-expressions, return-await, strict-boolean-expressions, strict-void-return, switch-exhaustiveness-check, unbound-method, use-unknown-in-catch-callback-variable
-
-### Needs module resolution (import: 14 + n: 14 = 28 rules)
-import: no-unresolved, named, default, namespace, export, no-named-as-default, no-named-as-default-member, no-cycle, no-unused-modules, no-deprecated, no-extraneous-dependencies, order, no-useless-path-segments, enforce-node-protocol-usage
-n: no-missing-import, no-missing-require, no-extraneous-import, no-extraneous-require, no-unpublished-bin, no-unpublished-import, no-unpublished-require, file-extension-in-import, no-unsupported-features/es-builtins, no-unsupported-features/es-syntax, no-unsupported-features/node-builtins, prefer-global/buffer, prefer-global/console, prefer-global/process
-
-### Needs scope analysis (react: 13 + playwright: 6 = 19 rules)
-react: display-name, jsx-no-undef, no-unknown-property, jsx-handler-names, hook-use-state, function-component-definition, no-deprecated, no-render-return-value, destructuring-assignment, jsx-filename-extension, jsx-fragments, jsx-max-depth, no-find-dom-node, boolean-prop-naming
-playwright: no-duplicate-slow, no-slowed-test, no-unused-locators, valid-expect, valid-expect-in-promise, valid-describe-callback
-
-### Needs full regex parser (regexp: 7 rules)
-no-invalid-regexp, strict, optimal-quantifier-concatenation, simplify-set-operations
-
-### Needs JSDoc type context (jsdoc: 5 rules)
-require-param-type, require-returns-type, require-property-type, require-next-type, require-throws-type
-
-### Needs unicorn infra (7 rules)
-better-regex, consistent-function-scoping, isolated-functions, import-style, no-unnecessary-polyfills, no-unused-properties, string-content
+| Infrastructure | Blocked | Already done | Notes |
+|----------------|---------|--------------|-------|
+| Type checker (typescript-eslint) | 51 | 9 | Needs tsc-level type resolution |
+| Module resolution (import + n) | 13 | 15 | Needs extended ImportIndex |
+| Scope analysis (react + playwright) | 9 | 11 | Partially unblockable with oxc_semantic |
+| Full regex parser (regexp) | 4 | 3 | Needs regex AST parser |
+| Unicorn infra | 6 | 1 | Mixed: regex, scope, module resolution |
+| **Total** | **83** | **39** | |
 
 ---
 
-## SKIP — Rules not applicable (139 total)
+## Type checker — 51 rules
 
-These rules are skipped for various reasons: formatting-only, deprecated, superseded by other rules, or not applicable to comply's use case. See git history for the full rationale.
+All require type-aware analysis (type inference, type narrowing, or type resolution).
+
+| Rule | Why |
+|------|-----|
+| `await-thenable` | Verify `await` operand is a thenable |
+| `consistent-return` | Infer return type for consistency check |
+| `dot-notation` | Check property exists on type |
+| `naming-convention` | Apply conventions based on type kind |
+| `no-base-to-string` | Detect inherited `.toString()` from Object |
+| `no-confusing-void-expression` | `void` used as expression value |
+| `no-deprecated` | Detect `@deprecated` via type metadata |
+| `no-duplicate-type-constituents` | Simplify redundant unions/intersections |
+| `no-floating-promises` | Promise not awaited (partial heuristic exists) |
+| `no-for-in-array` | `for...in` on array type |
+| `no-implied-eval` | `setTimeout(string)` via type check |
+| `no-meaningless-void-operator` | `void expr` where expr is already void |
+| `no-misused-promises` | Promise in boolean/void position |
+| `no-misused-spread` | Spread on non-iterable |
+| `no-mixed-enums` | Mixed string/number in enum |
+| `no-redundant-type-constituents` | `string \| "a"` → `string` |
+| `no-unnecessary-boolean-literal-compare` | `x === true` when x is boolean |
+| `no-unnecessary-condition` | Condition always true/false per types |
+| `no-unnecessary-qualifier` | Redundant namespace qualifier |
+| `no-unnecessary-template-expression` | Template with constant type |
+| `no-unnecessary-type-arguments` | Type arg same as default |
+| `no-unnecessary-type-assertion` | `as T` when already type T |
+| `no-unnecessary-type-conversion` | `.toString()` on string |
+| `no-unnecessary-type-parameters` | Generic param used once |
+| `no-unsafe-argument` | `any` arg passed to typed function |
+| `no-unsafe-assignment` | Assign `any` to typed variable |
+| `no-unsafe-call` | Call a value of type `any` |
+| `no-unsafe-enum-comparison` | Compare enum with non-enum value |
+| `no-unsafe-member-access` | Access member on `any` |
+| `no-unsafe-return` | Return `any` from typed function |
+| `no-unsafe-unary-minus` | `-x` on non-number type |
+| `no-useless-default-assignment` | Default param redundant with type |
+| `non-nullable-type-assertion-style` | Prefer `!` over `as NonNullable<T>` |
+| `only-throw-error` | Throw non-Error (partial heuristic exists) |
+| `prefer-find` | `.filter()[0]` → `.find()` (needs array type) |
+| `prefer-nullish-coalescing` | `\|\|` → `??` (needs nullable check) |
+| `prefer-optional-chain` | `a && a.b` → `a?.b` (needs types) |
+| `prefer-readonly` | Private property never reassigned |
+| `prefer-readonly-parameter-types` | Unmutated params → readonly type |
+| `prefer-reduce-type-parameter` | Explicit type param for `.reduce<T>()` |
+| `prefer-return-this-type` | Return `this` instead of class name |
+| `promise-function-async` | Function returning Promise → `async` |
+| `related-getter-setter-pairs` | Getter/setter type mismatch |
+| `require-array-sort-compare` | `.sort()` without comparator on non-string[] |
+| `require-await` | `async` function without `await` |
+| `restrict-plus-operands` | `+` on incompatible types |
+| `restrict-template-expressions` | `${}` with non-stringifiable type |
+| `return-await` | Check if `return await` is necessary |
+| `strict-boolean-expressions` | Force explicit boolean in conditions |
+| `switch-exhaustiveness-check` | Switch on enum without exhaustive default |
+| `unbound-method` | Class method passed without bind |
+
+---
+
+## Module resolution — 13 rules
+
+Need deeper module resolution than current ImportIndex (re-export tracking, publish analysis, require support).
+
+| Rule | Plugin | Why |
+|------|--------|-----|
+| `no-named-as-default-member` | import | Check named export member on default import |
+| `no-unused-modules` | import | Cross-project dead module detection |
+| `no-deprecated` | import | Detect deprecated exports via JSDoc/metadata |
+| `no-extraneous-dependencies` | import | Full dep validation (not just devDeps) |
+| `order` | import | Enforce import ordering with group logic |
+| `no-missing-import` | n | Validate import target exists (bare specifiers) |
+| `no-missing-require` | n | Same for `require()` calls |
+| `no-extraneous-require` | n | Extraneous deps via `require()` |
+| `no-unpublished-bin` | n | Bin script points to unpublished file |
+| `no-unpublished-import` | n | Import from unpublished package file |
+| `no-unpublished-require` | n | Same for `require()` |
+| `prefer-global/buffer` | n | Prefer `Buffer` global over `require('buffer')` |
+| `prefer-global/console` | n | Prefer `console` global over `require('console')` |
+
+**Already implemented (15):** import/named, default, namespace, export, no-unresolved, no-named-as-default, no-cycle, no-useless-path-segments, no-duplicates, enforce-node-protocol-usage, n/file-extension-in-import, n/no-extraneous-import, n/no-unsupported-features/node-builtins, prefer-global/process (prefer-global-this), import-no-cycle.
+
+---
+
+## Scope analysis — 9 rules
+
+Need scope analysis beyond what oxc_semantic currently provides (component identity, prop flow, JSX semantics).
+
+| Rule | Plugin | Why |
+|------|--------|-----|
+| `display-name` | react | Detect anonymous component exports |
+| `jsx-handler-names` | react | Enforce `on*`/`handle*` naming for JSX handlers |
+| `function-component-definition` | react | Enforce arrow vs function declaration |
+| `no-render-return-value` | react | `ReactDOM.render()` return value used |
+| `jsx-filename-extension` | react | Only allow JSX in `.jsx`/`.tsx` files |
+| `jsx-fragments` | react | Enforce `<>` vs `React.Fragment` |
+| `jsx-max-depth` | react | Limit JSX nesting depth |
+| `boolean-prop-naming` | react | Enforce `is*`/`has*` for boolean props |
+| `no-slowed-test` | playwright | Detect tests marked `.slow()` |
+
+**Already implemented (11):** hook-use-state, jsx-no-undef, no-unknown-property, no-find-dom-node, react-no-deprecated, destructuring-assignment, no-duplicate-slow, no-unused-locators, valid-expect, valid-expect-in-promise, valid-describe-callback.
+
+---
+
+## Full regex parser — 4 rules
+
+Need a regex AST parser to analyze regex structure (quantifiers, character classes, set operations).
+
+| Rule | Plugin |
+|------|--------|
+| `no-invalid-regexp` | regexp |
+| `strict` | regexp |
+| `optimal-quantifier-concatenation` | regexp |
+| `simplify-set-operations` | regexp |
+
+**Already implemented (3):** no-empty-alternative, no-super-linear-backtracking, no-misleading-unicode-character (via heuristics).
+
+---
+
+## Unicorn infra — 6 rules
+
+Mixed infrastructure needs (regex parser, scope analysis, module resolution).
+
+| Rule | Needs |
+|------|-------|
+| `better-regex` | Regex AST parser |
+| `isolated-functions` | Scope + reference analysis |
+| `import-style` | Module resolution |
+| `no-unnecessary-polyfills` | Module resolution + target env |
+| `no-unused-properties` | Cross-file usage analysis |
+| `string-content` | Regex-based string content matching |
+
+**Already implemented (1):** consistent-function-scoping.
+
+---
+
+## Dropped
+
+- **JSDoc type context (5 rules):** require-param-type, require-returns-type, require-property-type, require-next-type, require-throws-type — dropped, not actionable.
+- **SKIP (139 rules):** Formatting-only, deprecated, superseded, or not applicable. See git history.
