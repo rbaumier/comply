@@ -48,12 +48,11 @@ crate::ast_check! { |node, source, ctx, diagnostics|
 }
 
 fn collect_return_types<'a>(node: tree_sitter::Node<'a>, source: &'a [u8], types: &mut HashSet<&'a str>) {
-    if node.kind() == "return_statement" {
-        if let Some(value) = node.named_child(0) {
+    if node.kind() == "return_statement"
+        && let Some(value) = node.named_child(0) {
             let type_hint = infer_type(value, source);
             types.insert(type_hint);
         }
-    }
 
     // Don't descend into nested functions
     if node.kind() == "function_declaration"

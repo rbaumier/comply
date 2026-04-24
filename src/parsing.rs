@@ -18,7 +18,9 @@ pub(crate) fn parse_with_grammar(
         Language::Tsx => tree_sitter_typescript::LANGUAGE_TSX.into(),
         Language::Rust => tree_sitter_rust::LANGUAGE.into(),
         Language::Vue => tree_sitter_vue_updated::language(),
-        Language::Toml | Language::Json => return None,
+        Language::Css => tree_sitter_css::LANGUAGE.into(),
+        Language::Yaml => tree_sitter_yaml::LANGUAGE.into(),
+        Language::Toml | Language::Json | Language::Dockerfile => return None,
     };
     parser.set_language(&lang).ok()?;
     parser.parse(source, None)

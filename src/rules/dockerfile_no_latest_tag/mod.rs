@@ -1,0 +1,26 @@
+//! dockerfile-no-latest-tag — FROM image must pin a version tag; `:latest` or
+//! no tag at all allows silent base-image drift.
+
+mod text;
+
+use crate::diagnostic::Severity;
+use crate::files::Language;
+use crate::rules::RuleDef;
+use crate::rules::backend::Backend;
+use crate::rules::meta::RuleMeta;
+
+pub const META: RuleMeta = RuleMeta {
+    id: "dockerfile-no-latest-tag",
+    description: "FROM image must pin a version tag; `:latest` and untagged images drift silently.",
+    remediation: "Replace `:latest` (or missing tag) with a pinned version such as `node:22.12-alpine3.20`.",
+    severity: Severity::Warning,
+    doc_url: None,
+    categories: &["docker"],
+};
+
+pub fn register() -> RuleDef {
+    RuleDef {
+        meta: META,
+        backends: vec![(Language::Dockerfile, Backend::Text(Box::new(text::Check)))],
+    }
+}

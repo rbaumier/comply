@@ -235,7 +235,9 @@ fn grammar_family(lang: Language) -> Option<u8> {
         Language::TypeScript | Language::JavaScript => Some(0),
         Language::Tsx => Some(1),
         Language::Rust => Some(2),
-        Language::Vue | Language::Toml | Language::Json => None,
+        Language::Css => Some(3),
+        Language::Yaml => Some(4),
+        Language::Vue | Language::Toml | Language::Json | Language::Dockerfile => None,
     }
 }
 

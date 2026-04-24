@@ -1,0 +1,23 @@
+//! rn-no-react-navigation-stack — ban `@react-navigation/stack` in favour of Expo Router.
+//!
+//! Expo Router supersedes the legacy stack navigator. Mixing the two leads to
+//! duplicated navigation state and type-unsafe route references.
+
+mod typescript;
+
+use crate::diagnostic::Severity;
+use crate::rules::RuleDef;
+use crate::rules::meta::RuleMeta;
+
+pub const META: RuleMeta = RuleMeta {
+    id: "rn-no-react-navigation-stack",
+    description: "`@react-navigation/stack` and `createStackNavigator` are forbidden; use Expo Router.",
+    remediation: "Delete the stack navigator and migrate routes to Expo Router file-based routing.",
+    severity: Severity::Warning,
+    doc_url: None,
+    categories: &["react-native"],
+};
+
+pub fn register() -> RuleDef {
+    crate::register_ts_family!(META, typescript)
+}

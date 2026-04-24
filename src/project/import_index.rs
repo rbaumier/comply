@@ -814,11 +814,10 @@ fn extract_params(node: Node, source: &[u8]) -> Vec<String> {
                 result.push(text_of(child, source));
             }
             "required_parameter" | "optional_parameter" => {
-                if let Some(id) = child.child_by_field_name("pattern") {
-                    if id.kind() == "identifier" {
+                if let Some(id) = child.child_by_field_name("pattern")
+                    && id.kind() == "identifier" {
                         result.push(text_of(id, source));
                     }
-                }
             }
             _ => {}
         }
@@ -1888,10 +1887,8 @@ mod tests {
         let utils_path = dir.path().join("src/utils.ts");
         let app_path = dir.path().join("app.ts");
 
-        let sources = vec![
-            SourceFile { path: utils_path.clone(), language: Language::TypeScript },
-            SourceFile { path: app_path.clone(), language: Language::TypeScript },
-        ];
+        let sources = [SourceFile { path: utils_path.clone(), language: Language::TypeScript },
+            SourceFile { path: app_path.clone(), language: Language::TypeScript }];
         let refs: Vec<&SourceFile> = sources.iter().collect();
         let index = ImportIndex::build(&refs);
 

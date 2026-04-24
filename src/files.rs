@@ -21,6 +21,9 @@ const RUST_EXTENSIONS: &[&str] = &["rs"];
 const VUE_EXTENSIONS: &[&str] = &["vue"];
 const TOML_EXTENSIONS: &[&str] = &["toml"];
 const JSON_EXTENSIONS: &[&str] = &["json"];
+const CSS_EXTENSIONS: &[&str] = &["css"];
+const YAML_EXTENSIONS: &[&str] = &["yml", "yaml"];
+const DOCKERFILE_EXTENSIONS: &[&str] = &["dockerfile"];
 
 /// A discovered file tagged with its detected language.
 #[derive(Debug)]
@@ -55,6 +58,14 @@ pub enum Language {
     /// by individual rules via the `serde_json` crate. Used for i18n
     /// translation files, config files, etc.
     Json,
+    /// CSS stylesheet `.css` — text-based rules only.
+    Css,
+    /// YAML file `.yml` / `.yaml` — text-based rules only. Used for
+    /// Kubernetes manifests, docker-compose, GitHub Actions workflows.
+    Yaml,
+    /// Dockerfile — text-based rules only. Matched by extension
+    /// `.dockerfile` or by filename starting with `Dockerfile`.
+    Dockerfile,
 }
 
 impl Language {
@@ -87,6 +98,16 @@ impl Language {
             Some(Language::Toml)
         } else if JSON_EXTENSIONS.contains(&ext) {
             Some(Language::Json)
+        } else if CSS_EXTENSIONS.contains(&ext) {
+            Some(Language::Css)
+        } else if YAML_EXTENSIONS.contains(&ext) {
+            Some(Language::Yaml)
+        } else if DOCKERFILE_EXTENSIONS.contains(&ext)
+            || path.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
+                n == "Dockerfile" || n.starts_with("Dockerfile.")
+            })
+        {
+            Some(Language::Dockerfile)
         } else {
             None
         }
@@ -174,21 +195,34 @@ fn parse_git_output(stdout: &[u8]) -> Result<Vec<SourceFile>> {
 /// Classify a file path into a Language based on its extension.
 /// Returns None for unsupported extensions (silently skipped).
 fn classify(path: &Path) -> Option<SourceFile> {
-    let ext = path.extension()?.to_str()?;
-    let language = if TS_EXTENSIONS.contains(&ext) {
-        Language::TypeScript
-    } else if TSX_EXTENSIONS.contains(&ext) {
-        Language::Tsx
-    } else if JS_EXTENSIONS.contains(&ext) {
-        Language::JavaScript
-    } else if RUST_EXTENSIONS.contains(&ext) {
-        Language::Rust
-    } else if VUE_EXTENSIONS.contains(&ext) {
-        Language::Vue
-    } else if TOML_EXTENSIONS.contains(&ext) {
-        Language::Toml
-    } else if JSON_EXTENSIONS.contains(&ext) {
-        Language::Json
+    let language = if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+        if TS_EXTENSIONS.contains(&ext) {
+            Language::TypeScript
+        } else if TSX_EXTENSIONS.contains(&ext) {
+            Language::Tsx
+        } else if JS_EXTENSIONS.contains(&ext) {
+            Language::JavaScript
+        } else if RUST_EXTENSIONS.contains(&ext) {
+            Language::Rust
+        } else if VUE_EXTENSIONS.contains(&ext) {
+            Language::Vue
+        } else if TOML_EXTENSIONS.contains(&ext) {
+            Language::Toml
+        } else if JSON_EXTENSIONS.contains(&ext) {
+            Language::Json
+        } else if CSS_EXTENSIONS.contains(&ext) {
+            Language::Css
+        } else if YAML_EXTENSIONS.contains(&ext) {
+            Language::Yaml
+        } else if DOCKERFILE_EXTENSIONS.contains(&ext) {
+            Language::Dockerfile
+        } else {
+            return None;
+        }
+    } else if path.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
+        n == "Dockerfile" || n.starts_with("Dockerfile.")
+    }) {
+        Language::Dockerfile
     } else {
         return None;
     };

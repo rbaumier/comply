@@ -15,11 +15,10 @@ crate::ast_check! { |node, source, ctx, diagnostics|
     while let Some(parent) = current {
         match parent.kind() {
             "method_definition" => {
-                if let Some(name) = parent.child_by_field_name("name") {
-                    if name.utf8_text(source).unwrap_or("") == "constructor" {
+                if let Some(name) = parent.child_by_field_name("name")
+                    && name.utf8_text(source).unwrap_or("") == "constructor" {
                         return; // Inside constructor, allowed
                     }
-                }
                 break; // Inside a method but not constructor
             }
             "function_declaration" | "function_expression" | "arrow_function" => {

@@ -58,8 +58,8 @@ fn args_contain_expect(args: Node<'_>, source: &[u8]) -> bool {
     let mut cursor = args.walk();
     let mut stack: Vec<Node<'_>> = args.named_children(&mut cursor).collect();
     while let Some(n) = stack.pop() {
-        if n.kind() == "call_expression" {
-            if let Some(callee) = n.child_by_field_name("function") {
+        if n.kind() == "call_expression"
+            && let Some(callee) = n.child_by_field_name("function") {
                 let name_bytes = match callee.kind() {
                     "identifier" => Some(&source[callee.byte_range()]),
                     "member_expression" => callee
@@ -78,7 +78,6 @@ fn args_contain_expect(args: Node<'_>, source: &[u8]) -> bool {
                     return true;
                 }
             }
-        }
         let mut c = n.walk();
         for child in n.named_children(&mut c) {
             stack.push(child);

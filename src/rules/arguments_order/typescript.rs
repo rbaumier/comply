@@ -39,16 +39,14 @@ fn collect_function_signatures(
 ) {
     let mut stack = vec![root];
     while let Some(node) = stack.pop() {
-        if node.kind() == "function_declaration" {
-            if let Some(name_node) = node.child_by_field_name("name") {
-                if let Ok(name) = name_node.utf8_text(source) {
+        if node.kind() == "function_declaration"
+            && let Some(name_node) = node.child_by_field_name("name")
+                && let Ok(name) = name_node.utf8_text(source) {
                     let params = extract_param_names(node, source);
                     if !params.is_empty() {
                         out.insert(name.to_string(), params);
                     }
                 }
-            }
-        }
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
             stack.push(child);
@@ -70,13 +68,11 @@ fn extract_param_names(func: tree_sitter::Node<'_>, source: &[u8]) -> Vec<String
                 }
             }
             "required_parameter" | "optional_parameter" => {
-                if let Some(pattern) = child.child_by_field_name("pattern") {
-                    if pattern.kind() == "identifier" {
-                        if let Ok(name) = pattern.utf8_text(source) {
+                if let Some(pattern) = child.child_by_field_name("pattern")
+                    && pattern.kind() == "identifier"
+                        && let Ok(name) = pattern.utf8_text(source) {
                             result.push(name.to_string());
                         }
-                    }
-                }
             }
             _ => {}
         }
@@ -93,17 +89,13 @@ fn check_calls(
 ) {
     let mut stack = vec![root];
     while let Some(node) = stack.pop() {
-        if node.kind() == "call_expression" {
-            if let Some(callee) = node.child_by_field_name("function") {
-                if callee.kind() == "identifier" {
-                    if let Ok(name) = callee.utf8_text(source) {
-                        if let Some(params) = signatures.get(name) {
+        if node.kind() == "call_expression"
+            && let Some(callee) = node.child_by_field_name("function")
+                && callee.kind() == "identifier"
+                    && let Ok(name) = callee.utf8_text(source)
+                        && let Some(params) = signatures.get(name) {
                             check_call_args(node, source, path, name, params, diagnostics);
                         }
-                    }
-                }
-            }
-        }
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
             stack.push(child);

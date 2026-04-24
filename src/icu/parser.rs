@@ -399,11 +399,10 @@ pub fn extract_placeholders(input: &str) -> Vec<String> {
             while i < bytes.len() && is_arg_name_char(bytes[i]) {
                 i += 1;
             }
-            if i > start {
-                if let Ok(name) = std::str::from_utf8(&bytes[start..i]) {
+            if i > start
+                && let Ok(name) = std::str::from_utf8(&bytes[start..i]) {
                     placeholders.insert(name.to_string());
                 }
-            }
             // Skip to closing brace (handle nesting)
             let mut depth = 1;
             while i < bytes.len() && depth > 0 {

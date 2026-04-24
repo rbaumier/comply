@@ -23,6 +23,8 @@ tokio = { version = "1", features = ["io-std", "rt-multi-thread", "macros", "syn
 regex = "1.12.3"
 rayon = "1"
 tree-sitter-vue-updated = "0.1.0"
+tree-sitter-yaml = "0.7"
+tree-sitter-css = "0.23"
 miette = { version = "7", features = ["fancy"] }
 oxc_resolver = "11"
 oxc_allocator = "0.127"

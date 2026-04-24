@@ -1,0 +1,162 @@
+//! Collect optional property names in an interface / object type. If
+//! three or more share a common alphabetic prefix (≥ 4 chars, e.g.
+//! `cancel…`, `shipped…`), flag the declaration: this is the
+//! "conditional optional fields" smell.
+
+use crate::diagnostic::{Diagnostic, Severity};
+use std::collections::HashMap;
+
+fn is_optional_property(member: tree_sitter::Node) -> bool {
+    // tree-sitter-typescript marks optional properties either with
+    // `optional: "?"` child or by the prop kind directly. Walk children
+    // looking for a literal "?" token.
+    let mut cursor = member.walk();
+    for child in member.children(&mut cursor) {
+        if child.kind() == "?" {
+            return true;
+        }
+    }
+    false
+}
+
+/// Return a lowercase alphabetic prefix of `name` up to its first
+/// non-alpha boundary (camelCase uppercase transition, underscore, ...).
+fn leading_prefix(name: &str) -> String {
+    let bytes = name.as_bytes();
+    let mut end = 0;
+    for (i, b) in bytes.iter().enumerate() {
+        if i == 0 {
+            if !b.is_ascii_alphabetic() {
+                break;
+            }
+            end = 1;
+            continue;
+        }
+        // stop on uppercase (camelCase boundary) or non-alpha
+        if b.is_ascii_uppercase() || !b.is_ascii_alphabetic() {
+            break;
+        }
+        end = i + 1;
+    }
+    name[..end].to_ascii_lowercase()
+}
+
+fn collect_optional_prefixes(body: tree_sitter::Node, source: &[u8]) -> HashMap<String, usize> {
+    let mut counts: HashMap<String, usize> = HashMap::new();
+    let mut cursor = body.walk();
+    for member in body.children(&mut cursor) {
+        if member.kind() != "property_signature" {
+            continue;
+        }
+        if !is_optional_property(member) {
+            continue;
+        }
+        let Some(name_node) = member.child_by_field_name("name") else {
+            continue;
+        };
+        let Ok(name) = std::str::from_utf8(&source[name_node.byte_range()]) else {
+            continue;
+        };
+        let prefix = leading_prefix(name);
+        if prefix.len() < 4 {
+            continue;
+        }
+        *counts.entry(prefix).or_insert(0) += 1;
+    }
+    counts
+}
+
+fn check_decl(
+    node: tree_sitter::Node,
+    type_name: &str,
+    body: tree_sitter::Node,
+    source: &[u8],
+    ctx_path: &std::path::Path,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let counts = collect_optional_prefixes(body, source);
+    let mut hits: Vec<(&String, &usize)> = counts.iter().filter(|(_, c)| **c >= 3).collect();
+    if hits.is_empty() {
+        return;
+    }
+    hits.sort_by(|a, b| b.1.cmp(a.1));
+    let (prefix, count) = hits[0];
+    diagnostics.push(Diagnostic::at_node(
+        ctx_path,
+        &node,
+        super::META.id,
+        format!(
+            "`{type_name}` has {count} optional fields sharing prefix `{prefix}…` — encode this state with a discriminated union instead."
+        ),
+        Severity::Warning,
+    ));
+}
+
+crate::ast_check! { |node, source, ctx, diagnostics|
+    match node.kind() {
+        "interface_declaration" => {
+            let Some(name_node) = node.child_by_field_name("name") else { return };
+            let Ok(name) = std::str::from_utf8(&source[name_node.byte_range()]) else { return };
+            let Some(body) = node.child_by_field_name("body") else { return };
+            check_decl(node, name, body, source, ctx.path, diagnostics);
+        }
+        "type_alias_declaration" => {
+            let Some(name_node) = node.child_by_field_name("name") else { return };
+            let Ok(name) = std::str::from_utf8(&source[name_node.byte_range()]) else { return };
+            let Some(value) = node.child_by_field_name("value") else { return };
+            if value.kind() != "object_type" { return }
+            check_decl(node, name, value, source, ctx.path, diagnostics);
+        }
+        _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_ts(s, &Check)
+    }
+
+    #[test]
+    fn flags_three_optional_fields_sharing_prefix() {
+        let d = run(
+            "interface Order { id: string; cancelReason?: string; cancelNote?: string; cancelCode?: string }",
+        );
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("cancel"));
+    }
+
+    #[test]
+    fn flags_prefix_in_type_alias() {
+        let d = run(
+            "type Shipment = { id: string; shippedAt?: string; shippedBy?: string; shippedVia?: string };",
+        );
+        assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn allows_two_optional_fields() {
+        assert!(run(
+            "interface Order { id: string; cancelReason?: string; cancelledAt?: string }"
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn allows_optional_fields_without_shared_prefix() {
+        assert!(run(
+            "interface User { id: string; name?: string; email?: string; phone?: string }"
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn allows_required_fields_sharing_prefix() {
+        assert!(run(
+            "interface Order { cancelReason: string; cancelledAt: string; cancelledBy: string }"
+        )
+        .is_empty());
+    }
+}

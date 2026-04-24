@@ -142,6 +142,41 @@ pub fn run_tsx_with_project_file_and_path(
     )
 }
 
+/// Run a tree-sitter `Check` against `source` parsed with the YAML
+/// grammar. Used by Kubernetes manifest rules.
+#[must_use]
+pub fn run_yaml(source: &str, check: &dyn AstCheck) -> Vec<Diagnostic> {
+    run_with_grammar(
+        source,
+        check,
+        tree_sitter_yaml::LANGUAGE.into(),
+        "manifest.yaml",
+    )
+}
+
+/// Same as `run_yaml` but with a custom fake filename.
+#[must_use]
+pub fn run_yaml_with_path(source: &str, check: &dyn AstCheck, fake_path: &str) -> Vec<Diagnostic> {
+    run_with_grammar(
+        source,
+        check,
+        tree_sitter_yaml::LANGUAGE.into(),
+        fake_path,
+    )
+}
+
+/// Run a tree-sitter `Check` against `source` parsed with the CSS
+/// grammar. Use for rules that target `Language::Css`.
+#[must_use]
+pub fn run_css(source: &str, check: &dyn AstCheck) -> Vec<Diagnostic> {
+    run_with_grammar(
+        source,
+        check,
+        tree_sitter_css::LANGUAGE.into(),
+        "t.css",
+    )
+}
+
 /// Run a tree-sitter `Check` against `source` parsed with the Rust
 /// grammar.
 #[must_use]

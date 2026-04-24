@@ -57,14 +57,13 @@ fn validate_json_strings(
     match value {
         Value::String(s) => {
             // Only validate strings that look like ICU messages (contain {)
-            if s.contains('{') {
-                if let Err(e) = icu::parse(s) {
+            if s.contains('{')
+                && let Err(e) = icu::parse(s) {
                     let key_path = path.join(".");
                     // Find line number by searching for the string in source
                     let line = find_line_for_key(source, path.last().map(|s| s.as_str()).unwrap_or(""));
                     diagnostics.push((key_path, e.to_string(), line));
                 }
-            }
         }
         Value::Object(map) => {
             for (key, val) in map {

@@ -19,8 +19,8 @@ crate::ast_check! { |node, source, ctx, diagnostics|
     // Arrow with expression body: () => fn(args)
     if body.kind() == "call_expression" {
         // Check it's a simple function call (not method call or complex expression)
-        if let Some(callee) = body.child_by_field_name("function") {
-            if callee.kind() == "identifier" {
+        if let Some(callee) = body.child_by_field_name("function")
+            && callee.kind() == "identifier" {
                 let pos = node.start_position();
                 diagnostics.push(Diagnostic {
                     path: ctx.path.to_path_buf(),
@@ -32,7 +32,6 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                     span: None,
                 });
             }
-        }
     }
 }
 

@@ -77,8 +77,8 @@ crate::ast_check! { |node, source, ctx, diagnostics|
 
         // Only flag local functions (we can't fix external ones)
         for loc in locations {
-            if let FnLocation::Local(line) = loc {
-                if flagged.insert(loc.clone()) {
+            if let FnLocation::Local(line) = loc
+                && flagged.insert(loc.clone()) {
                     let msg = if external_locs.is_empty() {
                         format!(
                             "Parameters [{}] appear together in {} functions — extract into a type.",
@@ -97,7 +97,6 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                     };
                     results.push((*line, msg));
                 }
-            }
         }
     }
 

@@ -77,6 +77,309 @@ pub mod migration_needs_rollback;
 pub mod sql_helpers;
 pub mod vue_sfc;
 pub mod vue_template_helpers;
+pub mod yaml_k8s_helpers;
+pub mod api_branded_id_types;
+pub mod api_no_internal_ids_in_response;
+pub mod api_no_nullable_variant_fields;
+pub mod api_put_vs_patch;
+pub mod api_separate_input_output_types;
+pub mod api_validate_at_boundaries;
+pub mod better_auth_client_framework_import;
+pub mod better_auth_drizzle_useplural;
+pub mod better_auth_email_verification_handler;
+pub mod better_auth_expo_no_cookie_auth;
+pub mod better_auth_no_duplicate_baseurl;
+pub mod better_auth_no_duplicate_secret;
+pub mod better_auth_required_user_fields;
+pub mod better_auth_reset_password_handler;
+pub mod better_auth_secret_min_length;
+pub mod better_auth_session_infer_type;
+pub mod better_result_await_inside_gen;
+pub mod better_result_caller_must_handle;
+pub mod better_result_catch_returns_tagged;
+pub mod better_result_constructor_spreads_args;
+pub mod better_result_no_catch_panic;
+pub mod better_result_no_manual_propagation;
+pub mod better_result_no_mixed_throw;
+pub mod better_result_no_nullable_return;
+pub mod better_result_no_param_properties;
+pub mod better_result_no_promise_catch;
+pub mod better_result_no_rewrap_error;
+pub mod better_result_no_throw;
+pub mod better_result_no_try_catch;
+pub mod better_result_prefer_map_single;
+pub mod better_result_prefer_matcherror_exhaustive;
+pub mod better_result_require_gen_for_chains;
+pub mod better_result_tag_matches_classname;
+pub mod better_result_tagged_error_cause_unknown;
+pub mod better_result_tagged_error_message;
+pub mod better_result_try_requires_catch;
+pub mod ci_cache_key_includes_lockfile;
+pub mod ci_checkout_action_pinned;
+pub mod ci_docker_gha_cache;
+pub mod ci_no_hardcoded_db_password;
+pub mod ci_no_plaintext_secrets;
+pub mod ci_playwright_report_upload;
+pub mod ci_postgres_healthcheck;
+pub mod ci_setup_node_cache_enabled;
+pub mod ci_use_npm_ci;
+pub mod comment_max_words;
+pub mod compose_bind_localhost_ports;
+pub mod compose_cap_drop_all;
+pub mod compose_depends_on_condition;
+pub mod compose_no_inline_secrets;
+pub mod compose_no_latest_tag;
+pub mod compose_no_privileged;
+pub mod compose_require_resource_limits;
+pub mod dockerfile_copy_after_install;
+pub mod dockerfile_exec_form_cmd;
+pub mod dockerfile_no_latest_tag;
+pub mod dockerfile_no_secrets_in_arg;
+pub mod dockerfile_no_secrets_in_copy;
+pub mod dockerfile_no_secrets_in_env;
+pub mod dockerfile_pin_exact_version;
+pub mod dockerfile_require_dockerignore;
+pub mod dockerfile_require_healthcheck;
+pub mod dockerfile_require_multi_stage;
+pub mod dockerfile_require_non_root_user;
+pub mod dockerfile_use_cache_mount;
+pub mod dockerfile_use_frozen_lockfile;
+pub mod dockerfile_use_npm_ci;
+pub mod dockerignore_must_exclude_sensitive;
+pub mod drizzle_camel_snake_column_names;
+pub mod drizzle_config_satisfies;
+pub mod drizzle_consistent_table_naming;
+pub mod drizzle_created_at_default_now;
+pub mod drizzle_json_requires_type;
+pub mod drizzle_junction_composite_pk;
+pub mod drizzle_multi_statement_tx;
+pub mod drizzle_no_new_pool_per_request;
+pub mod drizzle_pool_requires_timeouts;
+pub mod drizzle_prefer_findmany_relations;
+pub mod drizzle_prefer_inarray;
+pub mod drizzle_prefer_infer_select;
+pub mod drizzle_prepared_placeholder;
+pub mod drizzle_serverless_pool_max_one;
+pub mod drizzle_soft_delete_filter;
+pub mod drizzle_updated_at_on_update;
+pub mod drizzle_zod_omit_generated;
+pub mod function_doc_banned_verbs;
+pub mod i18n_key_exists;
+pub mod i18n_key_requires_domain_prefix;
+pub mod i18n_max_key_depth;
+pub mod i18n_no_english_key;
+pub mod i18n_no_manual_list_join;
+pub mod i18n_use_singleton_outside_react;
+pub mod k8s_disallow_privilege_escalation;
+pub mod k8s_min_replicas_two;
+pub mod k8s_no_default_service_account;
+pub mod k8s_no_latest_image_tag;
+pub mod k8s_no_plaintext_secret_in_git;
+pub mod k8s_no_secrets_in_configmap;
+pub mod k8s_rbac_no_wildcard_resources;
+pub mod k8s_rbac_no_wildcard_verbs;
+pub mod k8s_require_drop_all_caps;
+pub mod k8s_require_explicit_namespace;
+pub mod k8s_require_ingress_tls;
+pub mod k8s_require_liveness_probe;
+pub mod k8s_require_network_policy;
+pub mod k8s_require_pod_disruption_budget;
+pub mod k8s_require_read_only_root;
+pub mod k8s_require_readiness_probe;
+pub mod k8s_require_resource_limits;
+pub mod k8s_require_resource_requests;
+pub mod k8s_require_run_as_non_root;
+pub mod k8s_require_standard_labels;
+pub mod k8s_rolling_update_zero_unavailable;
+pub mod law_of_demeter_max_dots;
+pub mod no_history_in_comments;
+pub mod no_shallow_passthrough_method;
+pub mod perf_font_face_display_swap;
+pub mod perf_font_preload_crossorigin;
+pub mod perf_img_fetchpriority_high;
+pub mod perf_img_modern_format;
+pub mod perf_no_google_fonts_link;
+pub mod perf_no_render_blocking_css;
+pub mod perf_prefers_reduced_motion;
+pub mod perf_route_level_code_split;
+pub mod react_no_barrel_import_known_libs;
+pub mod react_no_blocking_log_after_mutation;
+pub mod react_no_boolean_variant_props;
+pub mod react_no_chained_filter_map_reduce;
+pub mod react_no_dedup_filter_indexof;
+pub mod react_no_destructure_zustand_store;
+pub mod react_no_find_in_map_loop;
+pub mod react_no_interleaved_layout_rw;
+pub mod react_no_setstate_without_updater;
+pub mod react_no_sort_for_extrema;
+pub mod react_no_unwrapped_localstorage;
+pub mod react_no_use_client_without_client_api;
+pub mod react_no_usestate_high_frequency;
+pub mod react_require_content_visibility;
+pub mod react_require_versioned_storage_key;
+pub mod rn_auth_token_securestore;
+pub mod rn_biometrics_hardware_check;
+pub mod rn_expo_router_layout_required;
+pub mod rn_flashlist_estimated_item_size;
+pub mod rn_flashlist_over_flatlist;
+pub mod rn_image_source_object;
+pub mod rn_memo_list_items;
+pub mod rn_no_inline_renderitem;
+pub mod rn_no_inline_styles;
+pub mod rn_no_react_navigation_stack;
+pub mod rn_no_string_route_names;
+pub mod rn_push_permissions_before_token;
+pub mod rn_push_token_requires_projectid;
+pub mod rn_raw_string_in_text;
+pub mod rn_reanimated_over_animated;
+pub mod rn_router_replace_after_login;
+pub mod rust_asref_path_for_fs_fns;
+pub mod rust_no_arc_mutex_tree;
+pub mod rust_no_println_in_async;
+pub mod rust_workspace_deps_centralized;
+pub mod rust_workspace_lints_shared;
+pub mod security_bcrypt_min_rounds;
+pub mod security_no_deserialize_untrusted;
+pub mod security_no_query_without_ownership;
+pub mod security_no_sri_missing;
+pub mod security_require_helmet;
+pub mod security_require_hsts;
+pub mod security_require_oauth_state;
+pub mod security_require_pkce_oauth;
+pub mod security_require_rate_limit_auth;
+pub mod shadcn_avatar_requires_fallback;
+pub mod shadcn_button_icon_data_attr;
+pub mod shadcn_dialog_requires_title;
+pub mod shadcn_no_custom_badge;
+pub mod shadcn_no_custom_skeleton;
+pub mod shadcn_no_hr_use_separator;
+pub mod shadcn_no_manual_dark_overrides;
+pub mod shadcn_no_manual_zindex_overlays;
+pub mod shadcn_no_raw_tailwind_colors;
+pub mod shadcn_no_space_x_y;
+pub mod shadcn_no_toggle_group_manual;
+pub mod shadcn_sheet_requires_title;
+pub mod shadcn_tabs_trigger_in_list;
+pub mod sql_add_constraint_not_valid;
+pub mod sql_boolean_column_prefix;
+pub mod sql_constraint_naming_convention;
+pub mod sql_fk_naming_convention;
+pub mod sql_no_disable_autovacuum;
+pub mod sql_no_drop_column_without_expand;
+pub mod sql_no_function_on_indexed_column;
+pub mod sql_no_is_deleted_boolean;
+pub mod sql_no_now_in_transaction;
+pub mod sql_no_rename_column;
+pub mod sql_no_reserved_keyword_identifiers;
+pub mod sql_no_select_then_insert_race;
+pub mod sql_no_truncate_in_app;
+pub mod sql_no_union_when_union_all;
+pub mod sql_no_uuidv4_primary_key;
+pub mod sql_require_search_path;
+pub mod sql_singular_table_names;
+pub mod tailwind_min_touch_target;
+pub mod tailwind_no_legacy_directives;
+pub mod tailwind_no_manual_dark_variants;
+pub mod tailwind_no_off_scale_spacing;
+pub mod tailwind_no_raw_color_utilities;
+pub mod tailwind_no_tailwindcss_animate;
+pub mod tailwind_no_transition_all_layout;
+pub mod tailwind_require_focus_ring;
+pub mod tailwind_require_motion_reduce;
+pub mod tailwind_require_responsive_grid;
+pub mod tailwind_require_responsive_text;
+pub mod tanstack_query_dependent_needs_enabled;
+pub mod tanstack_query_infinite_initial_page_param;
+pub mod tanstack_query_invalidate_after_mutation;
+pub mod tanstack_query_max_pages_requires_both;
+pub mod tanstack_query_no_enabled_on_suspense;
+pub mod tanstack_query_no_global_onerror_v5;
+pub mod tanstack_query_no_mutation_for_client_state;
+pub mod tanstack_query_no_v4_import_path;
+pub mod tanstack_query_object_syntax;
+pub mod tanstack_query_pass_signal_to_fetch;
+pub mod tanstack_query_serializable_key;
+pub mod tanstack_query_test_retry_false;
+pub mod tanstack_start_api_route_json_helper;
+pub mod tanstack_start_no_date_now_in_render;
+pub mod tanstack_start_no_fetch_to_own_api;
+pub mod tanstack_start_no_window_in_render;
+pub mod tanstack_start_route_protection_beforeload;
+pub mod tanstack_start_server_fn_post_for_mutations;
+pub mod tanstack_start_server_fn_use_notfound;
+pub mod tanstack_start_session_cookie_httponly;
+pub mod tanstack_start_session_cookie_samesite;
+pub mod tanstack_start_session_cookie_secure;
+pub mod tanstack_start_session_secret_min_length;
+pub mod testing_no_concurrent_without_context_expect;
+pub mod testing_no_conditional_assertion;
+pub mod testing_no_mocking_internal_modules;
+pub mod testing_no_mocktimers_without_restore;
+pub mod testing_no_shared_state;
+pub mod testing_no_stubglobal_without_restore;
+pub mod testing_no_try_catch_swallow;
+pub mod testing_require_testid_kebab_case;
+pub mod ts_assertion_fn_must_be_declaration;
+pub mod ts_bounded_recursive_generic;
+pub mod ts_branded_type_no_direct_cast;
+pub mod ts_declare_global_requires_export;
+pub mod ts_no_as_narrowing;
+pub mod ts_no_generic_return_only;
+pub mod ts_no_large_string_union;
+pub mod ts_no_mixed_decorator_systems;
+pub mod ts_no_mixed_sync_async_returns;
+pub mod ts_no_narrowing_across_closures;
+pub mod ts_no_unused_generic_parameter;
+pub mod ts_overload_signature_order;
+pub mod ts_prefer_interface_extends;
+pub mod ts_require_variance_annotation;
+pub mod ui_animate_presence_requires_exit;
+pub mod ui_animate_transform_opacity_only;
+pub mod ui_antialiased_on_root;
+pub mod ui_concentric_border_radius;
+pub mod ui_exit_duration_shorter_enter;
+pub mod ui_hover_gated_media_query;
+pub mod ui_min_hit_area_44;
+pub mod ui_no_display_none_exit;
+pub mod ui_no_keyframes_for_interruptible;
+pub mod ui_no_pure_black;
+pub mod ui_no_scroll_trigger_markers_prod;
+pub mod ui_no_transition_all;
+pub mod ui_prefers_reduced_motion;
+pub mod ui_stagger_children_cap;
+pub mod ui_symmetric_initial_exit;
+pub mod ui_tabular_nums_on_data;
+pub mod ui_text_balance_headings;
+pub mod vue_computed_no_side_effects;
+pub mod vue_custom_directive_v_prefix;
+pub mod vue_define_model_over_modelvalue;
+pub mod vue_inject_key_typed;
+pub mod vue_no_filter_sort_in_template;
+pub mod vue_no_ssr_globals_in_setup;
+pub mod vue_no_usestore_top_level;
+pub mod vue_no_v_if_with_v_for;
+pub mod vue_no_value_on_reactive;
+pub mod vue_no_watch_reactive_property;
+pub mod vue_ref_value_in_script;
+pub mod vue_scoped_styles_preferred;
+pub mod vue_setup_store_return_all;
+pub mod vue_shallowref_for_primitives;
+pub mod vue_typed_define_props_emits;
+pub mod vue_use_template_ref;
+pub mod vue_v_memo_requires_v_for;
+pub mod vue_watch_immediate_over_onmounted;
+pub mod vue_withdefaults_factory;
+pub mod zod_no_coerce_on_financial;
+pub mod zod_no_manual_types;
+pub mod zod_no_schema_in_hot_path;
+pub mod zod_prefer_extend_over_merge;
+pub mod zod_prefer_loose_object;
+pub mod zod_prefer_overwrite_v4;
+pub mod zod_prefer_strict_object;
+pub mod zod_prefer_stringbool;
+pub mod zod_record_two_args;
+pub mod zod_require_input_for_transforms;
+pub mod zod_require_multipleof_currency;
 // rust_must_use_on_result intentionally not declared — see mod.rs
 // below for the rationale.
 pub mod cognitive_complexity;
@@ -2343,6 +2646,309 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         zod_no_optional_and_default_together::register(),
         zod_no_unknown_schema::register(),
         zod_require_schema_suffix::register(),
+        // v4.0 — 302 candidate rules (skills-rules-candidates.md)
+        api_branded_id_types::register(),
+        api_no_internal_ids_in_response::register(),
+        api_no_nullable_variant_fields::register(),
+        api_put_vs_patch::register(),
+        api_separate_input_output_types::register(),
+        api_validate_at_boundaries::register(),
+        better_auth_client_framework_import::register(),
+        better_auth_drizzle_useplural::register(),
+        better_auth_email_verification_handler::register(),
+        better_auth_expo_no_cookie_auth::register(),
+        better_auth_no_duplicate_baseurl::register(),
+        better_auth_no_duplicate_secret::register(),
+        better_auth_required_user_fields::register(),
+        better_auth_reset_password_handler::register(),
+        better_auth_secret_min_length::register(),
+        better_auth_session_infer_type::register(),
+        better_result_await_inside_gen::register(),
+        better_result_caller_must_handle::register(),
+        better_result_catch_returns_tagged::register(),
+        better_result_constructor_spreads_args::register(),
+        better_result_no_catch_panic::register(),
+        better_result_no_manual_propagation::register(),
+        better_result_no_mixed_throw::register(),
+        better_result_no_nullable_return::register(),
+        better_result_no_param_properties::register(),
+        better_result_no_promise_catch::register(),
+        better_result_no_rewrap_error::register(),
+        better_result_no_throw::register(),
+        better_result_no_try_catch::register(),
+        better_result_prefer_map_single::register(),
+        better_result_prefer_matcherror_exhaustive::register(),
+        better_result_require_gen_for_chains::register(),
+        better_result_tag_matches_classname::register(),
+        better_result_tagged_error_cause_unknown::register(),
+        better_result_tagged_error_message::register(),
+        better_result_try_requires_catch::register(),
+        ci_cache_key_includes_lockfile::register(),
+        ci_checkout_action_pinned::register(),
+        ci_docker_gha_cache::register(),
+        ci_no_hardcoded_db_password::register(),
+        ci_no_plaintext_secrets::register(),
+        ci_playwright_report_upload::register(),
+        ci_postgres_healthcheck::register(),
+        ci_setup_node_cache_enabled::register(),
+        ci_use_npm_ci::register(),
+        comment_max_words::register(),
+        compose_bind_localhost_ports::register(),
+        compose_cap_drop_all::register(),
+        compose_depends_on_condition::register(),
+        compose_no_inline_secrets::register(),
+        compose_no_latest_tag::register(),
+        compose_no_privileged::register(),
+        compose_require_resource_limits::register(),
+        dockerfile_copy_after_install::register(),
+        dockerfile_exec_form_cmd::register(),
+        dockerfile_no_latest_tag::register(),
+        dockerfile_no_secrets_in_arg::register(),
+        dockerfile_no_secrets_in_copy::register(),
+        dockerfile_no_secrets_in_env::register(),
+        dockerfile_pin_exact_version::register(),
+        dockerfile_require_dockerignore::register(),
+        dockerfile_require_healthcheck::register(),
+        dockerfile_require_multi_stage::register(),
+        dockerfile_require_non_root_user::register(),
+        dockerfile_use_cache_mount::register(),
+        dockerfile_use_frozen_lockfile::register(),
+        dockerfile_use_npm_ci::register(),
+        dockerignore_must_exclude_sensitive::register(),
+        drizzle_camel_snake_column_names::register(),
+        drizzle_config_satisfies::register(),
+        drizzle_consistent_table_naming::register(),
+        drizzle_created_at_default_now::register(),
+        drizzle_json_requires_type::register(),
+        drizzle_junction_composite_pk::register(),
+        drizzle_multi_statement_tx::register(),
+        drizzle_no_new_pool_per_request::register(),
+        drizzle_pool_requires_timeouts::register(),
+        drizzle_prefer_findmany_relations::register(),
+        drizzle_prefer_inarray::register(),
+        drizzle_prefer_infer_select::register(),
+        drizzle_prepared_placeholder::register(),
+        drizzle_serverless_pool_max_one::register(),
+        drizzle_soft_delete_filter::register(),
+        drizzle_updated_at_on_update::register(),
+        drizzle_zod_omit_generated::register(),
+        function_doc_banned_verbs::register(),
+        i18n_key_exists::register(),
+        i18n_key_requires_domain_prefix::register(),
+        i18n_max_key_depth::register(),
+        i18n_no_english_key::register(),
+        i18n_no_manual_list_join::register(),
+        i18n_use_singleton_outside_react::register(),
+        k8s_disallow_privilege_escalation::register(),
+        k8s_min_replicas_two::register(),
+        k8s_no_default_service_account::register(),
+        k8s_no_latest_image_tag::register(),
+        k8s_no_plaintext_secret_in_git::register(),
+        k8s_no_secrets_in_configmap::register(),
+        k8s_rbac_no_wildcard_resources::register(),
+        k8s_rbac_no_wildcard_verbs::register(),
+        k8s_require_drop_all_caps::register(),
+        k8s_require_explicit_namespace::register(),
+        k8s_require_ingress_tls::register(),
+        k8s_require_liveness_probe::register(),
+        k8s_require_network_policy::register(),
+        k8s_require_pod_disruption_budget::register(),
+        k8s_require_read_only_root::register(),
+        k8s_require_readiness_probe::register(),
+        k8s_require_resource_limits::register(),
+        k8s_require_resource_requests::register(),
+        k8s_require_run_as_non_root::register(),
+        k8s_require_standard_labels::register(),
+        k8s_rolling_update_zero_unavailable::register(),
+        law_of_demeter_max_dots::register(),
+        no_history_in_comments::register(),
+        no_shallow_passthrough_method::register(),
+        perf_font_face_display_swap::register(),
+        perf_font_preload_crossorigin::register(),
+        perf_img_fetchpriority_high::register(),
+        perf_img_modern_format::register(),
+        perf_no_google_fonts_link::register(),
+        perf_no_render_blocking_css::register(),
+        perf_prefers_reduced_motion::register(),
+        perf_route_level_code_split::register(),
+        react_no_barrel_import_known_libs::register(),
+        react_no_blocking_log_after_mutation::register(),
+        react_no_boolean_variant_props::register(),
+        react_no_chained_filter_map_reduce::register(),
+        react_no_dedup_filter_indexof::register(),
+        react_no_destructure_zustand_store::register(),
+        react_no_find_in_map_loop::register(),
+        react_no_interleaved_layout_rw::register(),
+        react_no_setstate_without_updater::register(),
+        react_no_sort_for_extrema::register(),
+        react_no_unwrapped_localstorage::register(),
+        react_no_use_client_without_client_api::register(),
+        react_no_usestate_high_frequency::register(),
+        react_require_content_visibility::register(),
+        react_require_versioned_storage_key::register(),
+        rn_auth_token_securestore::register(),
+        rn_biometrics_hardware_check::register(),
+        rn_expo_router_layout_required::register(),
+        rn_flashlist_estimated_item_size::register(),
+        rn_flashlist_over_flatlist::register(),
+        rn_image_source_object::register(),
+        rn_memo_list_items::register(),
+        rn_no_inline_renderitem::register(),
+        rn_no_inline_styles::register(),
+        rn_no_react_navigation_stack::register(),
+        rn_no_string_route_names::register(),
+        rn_push_permissions_before_token::register(),
+        rn_push_token_requires_projectid::register(),
+        rn_raw_string_in_text::register(),
+        rn_reanimated_over_animated::register(),
+        rn_router_replace_after_login::register(),
+        rust_asref_path_for_fs_fns::register(),
+        rust_no_arc_mutex_tree::register(),
+        rust_no_println_in_async::register(),
+        rust_workspace_deps_centralized::register(),
+        rust_workspace_lints_shared::register(),
+        security_bcrypt_min_rounds::register(),
+        security_no_deserialize_untrusted::register(),
+        security_no_query_without_ownership::register(),
+        security_no_sri_missing::register(),
+        security_require_helmet::register(),
+        security_require_hsts::register(),
+        security_require_oauth_state::register(),
+        security_require_pkce_oauth::register(),
+        security_require_rate_limit_auth::register(),
+        shadcn_avatar_requires_fallback::register(),
+        shadcn_button_icon_data_attr::register(),
+        shadcn_dialog_requires_title::register(),
+        shadcn_no_custom_badge::register(),
+        shadcn_no_custom_skeleton::register(),
+        shadcn_no_hr_use_separator::register(),
+        shadcn_no_manual_dark_overrides::register(),
+        shadcn_no_manual_zindex_overlays::register(),
+        shadcn_no_raw_tailwind_colors::register(),
+        shadcn_no_space_x_y::register(),
+        shadcn_no_toggle_group_manual::register(),
+        shadcn_sheet_requires_title::register(),
+        shadcn_tabs_trigger_in_list::register(),
+        sql_add_constraint_not_valid::register(),
+        sql_boolean_column_prefix::register(),
+        sql_constraint_naming_convention::register(),
+        sql_fk_naming_convention::register(),
+        sql_no_disable_autovacuum::register(),
+        sql_no_drop_column_without_expand::register(),
+        sql_no_function_on_indexed_column::register(),
+        sql_no_is_deleted_boolean::register(),
+        sql_no_now_in_transaction::register(),
+        sql_no_rename_column::register(),
+        sql_no_reserved_keyword_identifiers::register(),
+        sql_no_select_then_insert_race::register(),
+        sql_no_truncate_in_app::register(),
+        sql_no_union_when_union_all::register(),
+        sql_no_uuidv4_primary_key::register(),
+        sql_require_search_path::register(),
+        sql_singular_table_names::register(),
+        tailwind_min_touch_target::register(),
+        tailwind_no_legacy_directives::register(),
+        tailwind_no_manual_dark_variants::register(),
+        tailwind_no_off_scale_spacing::register(),
+        tailwind_no_raw_color_utilities::register(),
+        tailwind_no_tailwindcss_animate::register(),
+        tailwind_no_transition_all_layout::register(),
+        tailwind_require_focus_ring::register(),
+        tailwind_require_motion_reduce::register(),
+        tailwind_require_responsive_grid::register(),
+        tailwind_require_responsive_text::register(),
+        tanstack_query_dependent_needs_enabled::register(),
+        tanstack_query_infinite_initial_page_param::register(),
+        tanstack_query_invalidate_after_mutation::register(),
+        tanstack_query_max_pages_requires_both::register(),
+        tanstack_query_no_enabled_on_suspense::register(),
+        tanstack_query_no_global_onerror_v5::register(),
+        tanstack_query_no_mutation_for_client_state::register(),
+        tanstack_query_no_v4_import_path::register(),
+        tanstack_query_object_syntax::register(),
+        tanstack_query_pass_signal_to_fetch::register(),
+        tanstack_query_serializable_key::register(),
+        tanstack_query_test_retry_false::register(),
+        tanstack_start_api_route_json_helper::register(),
+        tanstack_start_no_date_now_in_render::register(),
+        tanstack_start_no_fetch_to_own_api::register(),
+        tanstack_start_no_window_in_render::register(),
+        tanstack_start_route_protection_beforeload::register(),
+        tanstack_start_server_fn_post_for_mutations::register(),
+        tanstack_start_server_fn_use_notfound::register(),
+        tanstack_start_session_cookie_httponly::register(),
+        tanstack_start_session_cookie_samesite::register(),
+        tanstack_start_session_cookie_secure::register(),
+        tanstack_start_session_secret_min_length::register(),
+        testing_no_concurrent_without_context_expect::register(),
+        testing_no_conditional_assertion::register(),
+        testing_no_mocking_internal_modules::register(),
+        testing_no_mocktimers_without_restore::register(),
+        testing_no_shared_state::register(),
+        testing_no_stubglobal_without_restore::register(),
+        testing_no_try_catch_swallow::register(),
+        testing_require_testid_kebab_case::register(),
+        ts_assertion_fn_must_be_declaration::register(),
+        ts_bounded_recursive_generic::register(),
+        ts_branded_type_no_direct_cast::register(),
+        ts_declare_global_requires_export::register(),
+        ts_no_as_narrowing::register(),
+        ts_no_generic_return_only::register(),
+        ts_no_large_string_union::register(),
+        ts_no_mixed_decorator_systems::register(),
+        ts_no_mixed_sync_async_returns::register(),
+        ts_no_narrowing_across_closures::register(),
+        ts_no_unused_generic_parameter::register(),
+        ts_overload_signature_order::register(),
+        ts_prefer_interface_extends::register(),
+        ts_require_variance_annotation::register(),
+        ui_animate_presence_requires_exit::register(),
+        ui_animate_transform_opacity_only::register(),
+        ui_antialiased_on_root::register(),
+        ui_concentric_border_radius::register(),
+        ui_exit_duration_shorter_enter::register(),
+        ui_hover_gated_media_query::register(),
+        ui_min_hit_area_44::register(),
+        ui_no_display_none_exit::register(),
+        ui_no_keyframes_for_interruptible::register(),
+        ui_no_pure_black::register(),
+        ui_no_scroll_trigger_markers_prod::register(),
+        ui_no_transition_all::register(),
+        ui_prefers_reduced_motion::register(),
+        ui_stagger_children_cap::register(),
+        ui_symmetric_initial_exit::register(),
+        ui_tabular_nums_on_data::register(),
+        ui_text_balance_headings::register(),
+        vue_computed_no_side_effects::register(),
+        vue_custom_directive_v_prefix::register(),
+        vue_define_model_over_modelvalue::register(),
+        vue_inject_key_typed::register(),
+        vue_no_filter_sort_in_template::register(),
+        vue_no_ssr_globals_in_setup::register(),
+        vue_no_usestore_top_level::register(),
+        vue_no_v_if_with_v_for::register(),
+        vue_no_value_on_reactive::register(),
+        vue_no_watch_reactive_property::register(),
+        vue_ref_value_in_script::register(),
+        vue_scoped_styles_preferred::register(),
+        vue_setup_store_return_all::register(),
+        vue_shallowref_for_primitives::register(),
+        vue_typed_define_props_emits::register(),
+        vue_use_template_ref::register(),
+        vue_v_memo_requires_v_for::register(),
+        vue_watch_immediate_over_onmounted::register(),
+        vue_withdefaults_factory::register(),
+        zod_no_coerce_on_financial::register(),
+        zod_no_manual_types::register(),
+        zod_no_schema_in_hot_path::register(),
+        zod_prefer_extend_over_merge::register(),
+        zod_prefer_loose_object::register(),
+        zod_prefer_overwrite_v4::register(),
+        zod_prefer_strict_object::register(),
+        zod_prefer_stringbool::register(),
+        zod_record_two_args::register(),
+        zod_require_input_for_transforms::register(),
+        zod_require_multipleof_currency::register(),
     ];
     rules.extend(delegated::register_all());
     rules.extend(delegated::register_tsgolint());
