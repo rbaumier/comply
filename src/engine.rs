@@ -204,43 +204,12 @@ fn dispatch_backends(
     diagnostics
 }
 
-/// Configure the parser for the language and parse the source.
-///
-/// Returns None when no tree-sitter grammar is bundled for the language —
-/// the caller skips check_tree for those files. Without this explicit None,
-/// reusing a parser left in a previous language's state would produce
-/// garbage diagnostics from the wrong grammar.
 fn parse_with_grammar(
     parser: &mut Parser,
     language: Language,
     source: &[u8],
 ) -> Option<tree_sitter::Tree> {
-    let lang: tree_sitter::Language = match language {
-        // Plain TS/JS — TypeScript grammar handles both (TS is a superset).
-        Language::TypeScript | Language::JavaScript => {
-            tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()
-        }
-        // TSX/JSX needs the JSX-aware grammar — using LANGUAGE_TYPESCRIPT
-        // produces ERROR nodes peppered through every JSX expression.
-        Language::Tsx => tree_sitter_typescript::LANGUAGE_TSX.into(),
-        // Rust grammar — enables in-process Rust rules for checks clippy
-        // doesn't cover (boolean-naming, explicit-units, …).
-        Language::Rust => tree_sitter_rust::LANGUAGE.into(),
-        // Vue SFC grammar — parses `.vue` files as a component with
-        // `<template>` / `<script>` / `<style>` blocks. Script contents
-        // are exposed as a single `raw_text` node; rules that want to
-        // lint the TS/JS inside a `<script>` section must extract that
-        // text and re-parse it themselves (see `rules::vue_sfc`).
-        Language::Vue => tree_sitter_vue_updated::language(),
-        // TOML / JSON have no bundled tree-sitter grammar — rules use
-        // TextCheck and parse on demand via the `toml` / `serde_json`
-        // crates. Returning None here ensures the engine skips AST
-        // dispatch for those files even if a stray TreeSitter backend
-        // slipped into a rule's definition.
-        Language::Toml | Language::Json => return None,
-    };
-    parser.set_language(&lang).ok()?;
-    parser.parse(source, None)
+    crate::parsing::parse_with_grammar(parser, language, source)
 }
 
 /// Apply every applicable rule to one file. Parses the AST once if any of

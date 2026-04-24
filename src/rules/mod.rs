@@ -26,6 +26,7 @@ pub mod better_auth_plugin_import_path;
 pub mod better_auth_require_rate_limit;
 pub mod better_auth_trusted_providers;
 pub mod boolean_naming;
+pub mod boundary_condition;
 pub mod call_expression;
 pub mod comment_paraphrases_code;
 pub mod db_no_n_plus_one;
@@ -481,6 +482,7 @@ pub mod jsdoc_reject_function_type;
 pub mod jsx_ensure_booleans;
 pub mod jsx_no_leaked_render;
 pub mod jsx_no_new_function_as_prop;
+pub mod jsx_no_undef;
 pub mod justify_inaction;
 pub mod max_call_chain_depth;
 pub mod max_union_size;
@@ -494,6 +496,9 @@ pub mod no_async_without_await;
 pub mod no_async_array_callback;
 pub mod no_floating_promise;
 pub mod no_redundant_await;
+pub mod no_redundant_state;
+pub mod no_unused_locators;
+pub mod unused_component_prop;
 pub mod no_bidi_characters;
 pub mod no_bitwise_in_boolean;
 pub mod no_built_in_override;
@@ -671,6 +676,7 @@ pub mod consistent_date_clone;
 pub mod consistent_destructuring;
 pub mod consistent_empty_array_spread;
 pub mod consistent_existence_index_check;
+pub mod consistent_function_scoping;
 pub mod consistent_template_literal_escape;
 pub mod custom_error_definition;
 pub mod empty_brace_spaces;
@@ -731,6 +737,7 @@ pub mod no_thenable;
 pub mod no_this_mutation;
 pub mod no_this_assignment;
 pub mod no_typeof_undefined;
+pub mod no_unknown_property;
 pub mod no_unnecessary_array_flat_depth;
 pub mod no_unnecessary_array_splice_count;
 pub mod no_unnecessary_await;
@@ -1158,6 +1165,9 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         no_async_array_callback::register(),
         no_floating_promise::register(),
         no_redundant_await::register(),
+        no_redundant_state::register(),
+        no_unused_locators::register(),
+        unused_component_prop::register(),
         throw_error_values::register(),
         no_catch_without_use::register(),
         try_catch_json_parse::register(),
@@ -1170,6 +1180,7 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         no_commented_out_code::register(),
         no_common_grab_bag::register(),
         boolean_naming::register(),
+        boundary_condition::register(),
         mysql_no_multiple_statements::register(),
         no_boolean_flag_param::register(),
         explicit_units::register(),
@@ -1205,6 +1216,7 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         no_new_regex_with_variable::register(),
         no_auth_token_in_localstorage::register(),
         no_dangerously_set_inner_html::register(),
+        no_unknown_property::register(),
         no_unsanitized_property::register(),
         no_hardcoded_secret::register(),
         no_focused_test::register(),
@@ -1778,6 +1790,7 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         consistent_destructuring::register(),
         consistent_empty_array_spread::register(),
         consistent_existence_index_check::register(),
+        consistent_function_scoping::register(),
         consistent_template_literal_escape::register(),
         custom_error_definition::register(),
         empty_brace_spaces::register(),
@@ -1976,6 +1989,7 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         react_jsx_no_new_array_as_prop::register(),
         react_jsx_no_new_object_as_prop::register(),
         jsx_no_new_function_as_prop::register(),
+        jsx_no_undef::register(),
         jsx_ensure_booleans::register(),
         react_hook_form_destructuring_formstate::register(),
         react_no_chain_state_updates::register(),
@@ -2290,7 +2304,3 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
     rules.extend(delegated::register_tsgolint());
     rules
 }
-
-// LLM rules are evaluated via a unified prompt in src/llm/unified_prompt.rs
-// (one claude subprocess per file, not per rule). The individual rule
-// modules under src/rules/llm_* are no longer registered here.

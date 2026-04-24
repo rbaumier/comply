@@ -32,9 +32,7 @@ const BIN = join(ROOT, "target", "release", "comply");
 const OUT = join(ROOT, "tools", "bench-baseline.json");
 
 // Small synthetic TS fixture — isolates "startup + TS engine cold path"
-// without depending on any real source file. LLM subsystem files
-// (tools/llm-worker.ts, src/llm/**) are explicitly out of scope for
-// perf work and must not appear in bench targets.
+// without depending on any real source file.
 const TINY_TS_SRC = `
 export function greet(name: string): string {
   const parts = ["hello", name];
@@ -135,7 +133,6 @@ const PHASES = [
   "jscpd (rs)",
   "engine (rs)",
   "engine (vue)",
-  "llm",
   "post-filter",
   "TOTAL",
 ] as const;

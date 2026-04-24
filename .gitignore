@@ -1,5 +1,6 @@
 /target
 .worktrees/
+.DS_Store
 
 
 # Added by cargo

@@ -19,10 +19,8 @@ mod cargo_shear;
 mod changed_lines;
 mod cli;
 mod clippy;
+mod clone_detection;
 mod config;
-mod jscpd;
-mod knip;
-mod madge;
 mod runner_helpers;
 mod catalog;
 mod diagnostic;
@@ -36,6 +34,7 @@ mod list;
 mod lsp;
 mod output;
 mod oxc_helpers;
+mod parsing;
 mod oxlint;
 mod oxlint_config;
 mod project;
@@ -136,16 +135,13 @@ struct Timings {
     config: Duration,
     fix: Duration,
     oxlint: Duration,
-    jscpd_ts: Duration,
-    knip: Duration,
-    madge: Duration,
     engine_ts: Duration,
     clippy: Duration,
     cargo_shear: Duration,
     cargo_modules: Duration,
-    jscpd_rs: Duration,
     engine_rs: Duration,
     engine_vue: Duration,
+    clones: Duration,
     post: Duration,
     total: Duration,
 }
@@ -163,18 +159,16 @@ fn print_timings(t: &Timings) {
     }
     eprintln!("  -- typescript --");
     eprintln!("  oxlint        {}", fmt_ms(t.oxlint));
-    eprintln!("  jscpd (ts)    {}", fmt_ms(t.jscpd_ts));
-    eprintln!("  knip          {}", fmt_ms(t.knip));
-    eprintln!("  madge         {}", fmt_ms(t.madge));
     eprintln!("  engine (ts)   {}", fmt_ms(t.engine_ts));
     eprintln!("  -- rust --");
     eprintln!("  clippy        {}", fmt_ms(t.clippy));
     eprintln!("  cargo-shear   {}", fmt_ms(t.cargo_shear));
     eprintln!("  cargo-modules {}", fmt_ms(t.cargo_modules));
-    eprintln!("  jscpd (rs)    {}", fmt_ms(t.jscpd_rs));
     eprintln!("  engine (rs)   {}", fmt_ms(t.engine_rs));
     eprintln!("  -- vue --");
     eprintln!("  engine (vue)  {}", fmt_ms(t.engine_vue));
+    eprintln!("  -- cross-file --");
+    eprintln!("  clones        {}", fmt_ms(t.clones));
     eprintln!("  post-filter   {}", fmt_ms(t.post));
     eprintln!("  -----");
     eprintln!("  TOTAL         {}", fmt_ms(t.total));
@@ -270,12 +264,21 @@ fn collect_all_diagnostics(
     if !by_lang.rs.is_empty() {
         diagnostics.extend(lint_rust(&by_lang.rs, config, timings)?);
     }
-    // Vue SFCs: text-based rules only (no tree-sitter grammar, no oxlint).
     if !by_lang.vue.is_empty() {
         let t = Instant::now();
         let vue_diags = engine::lint_files(&by_lang.vue, config)?;
         timings.engine_vue = t.elapsed();
         diagnostics.extend(vue_diags);
+    }
+    if !by_lang.json.is_empty() {
+        diagnostics.extend(engine::lint_files(&by_lang.json, config)?);
+    }
+
+    if discovered.len() >= 2 {
+        let t = Instant::now();
+        let all_refs: Vec<&SourceFile> = discovered.iter().collect();
+        diagnostics.extend(clone_detection::lint_files(&all_refs));
+        timings.clones = t.elapsed();
     }
 
     Ok(diagnostics)
@@ -335,10 +338,6 @@ fn lint_rust(
              Install with: cargo install cargo-modules"
         );
     }
-
-    // jscpd (Node.js clone-detection subprocess) is DISABLED — it
-    // dominated wall-clock at 92% on a 216-file benchmark. A native Rust
-    // replacement is tracked in TODO.md.
 
     // All four phases below are independent: they read the same input
     // slice but never mutate shared state and each spawns its own
@@ -416,55 +415,29 @@ struct FilesByLanguage<'a> {
     ts: Vec<&'a SourceFile>,
     rs: Vec<&'a SourceFile>,
     vue: Vec<&'a SourceFile>,
+    json: Vec<&'a SourceFile>,
 }
 
-/// Split discovered files into TS-family, Rust, and Vue slices.
-/// Without this split we'd hand .rs/.vue files to oxlint, which would error.
 fn partition_by_language(discovered: &[SourceFile]) -> FilesByLanguage<'_> {
     FilesByLanguage {
         ts: discovered.iter().filter(|f| f.language.is_typescript_family()).collect(),
         rs: discovered.iter().filter(|f| f.language == Language::Rust).collect(),
         vue: discovered.iter().filter(|f| f.language == Language::Vue).collect(),
+        json: discovered.iter().filter(|f| f.language == Language::Json).collect(),
     }
 }
 
-/// Lint TypeScript/JavaScript files via oxlint subprocess + custom rules.
-///
-/// oxlint / knip / madge / engine are independent — none of them mutates
-/// shared state and they each spawn their own Node/oxlint subprocess or
-/// run an in-process AST walk (engine). The four phases run in parallel
-/// on rayon's worker pool via nested `rayon::join` calls, just like the
-/// Rust pipeline in `lint_rust`.
-///
-/// Type-aware rules are always enabled via oxlint --type-aware (requires
-/// oxlint-tsgolint package).
-///
-/// jscpd is DISABLED (see `lint_rust` and TODO.md).
 fn lint_typescript(
     ts_files: &[&SourceFile],
     config: &Config,
     timings: &mut Timings,
 ) -> Result<Vec<Diagnostic>> {
     let oxlint_avail = oxlint::is_available();
-    let knip_avail = knip::is_available();
-    let madge_avail = madge::is_available();
 
     if !oxlint_avail {
         eprintln!(
             "comply: oxlint not found — skipping oxlint rules. \
              Install with: npm install -g oxlint oxlint-tsgolint"
-        );
-    }
-    if !knip_avail {
-        eprintln!(
-            "comply: knip not found — skipping dead-code rules. \
-             Install with: npm install -g knip"
-        );
-    }
-    if !madge_avail {
-        eprintln!(
-            "comply: madge not found — skipping circular-import rule. \
-             Install with: npm install -g madge"
         );
     }
 
@@ -477,43 +450,18 @@ fn lint_typescript(
         let t = Instant::now();
         (oxlint::lint_files(ts_files, config), t.elapsed())
     };
-    let knip_phase = || -> PhaseOut {
-        if !knip_avail {
-            return (Ok(Vec::new()), Duration::ZERO);
-        }
-        let t = Instant::now();
-        (knip::lint_files(ts_files), t.elapsed())
-    };
-    let madge_phase = || -> PhaseOut {
-        if !madge_avail {
-            return (Ok(Vec::new()), Duration::ZERO);
-        }
-        let t = Instant::now();
-        (madge::lint_files(ts_files), t.elapsed())
-    };
     let engine_phase = || -> PhaseOut {
         let t = Instant::now();
         (engine::lint_files(ts_files, config), t.elapsed())
     };
 
-    let ((oxlint_out, knip_out), (madge_out, engine_out)) = rayon::join(
-        || rayon::join(oxlint_phase, knip_phase),
-        || rayon::join(madge_phase, engine_phase),
-    );
+    let (oxlint_out, engine_out) = rayon::join(oxlint_phase, engine_phase);
 
     let mut diagnostics = Vec::new();
 
     let (oxlint_res, oxlint_dur) = oxlint_out;
     timings.oxlint = oxlint_dur;
     diagnostics.extend(oxlint_res?);
-
-    let (knip_res, knip_dur) = knip_out;
-    timings.knip = knip_dur;
-    diagnostics.extend(knip_res?);
-
-    let (madge_res, madge_dur) = madge_out;
-    timings.madge = madge_dur;
-    diagnostics.extend(madge_res?);
 
     let (engine_res, engine_dur) = engine_out;
     timings.engine_ts = engine_dur;
