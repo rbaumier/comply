@@ -1,93 +1,55 @@
-//! ts-no-redeclare backend — detect duplicate variable declarations in the
-//! same block scope (e.g. two `let x` or `var x` in the same function/block).
+//! ts-no-redeclare backend — detect duplicate variable declarations in
+//! the same scope, via oxc_semantic.
 //!
-//! Walks `variable_declarator` nodes, groups by their enclosing scope
-//! (nearest function/block/program ancestor), and flags duplicates.
-//! Allows TS declaration merging (interface + namespace, etc.) by only
-//! checking `var`/`let`/`const` declarations.
+//! Walks every symbol and reports each entry returned by
+//! `symbol_redeclarations` (oxc tracks duplicate `var`, `function` and
+//! TS declaration-merging compatible redeclarations on the original
+//! symbol).
+//!
+//! The previous implementation rebuilt scope identity from
+//! tree-sitter parent kinds, which only supported `function` /
+//! `function_declaration` / `arrow_function` / `method_definition` /
+//! `statement_block` and treated for-headers, catch clauses, switch
+//! blocks, and class bodies as the surrounding scope — leading to both
+//! false positives (declarations in for-init reused in the loop body)
+//! and false negatives (`for (let x of …)` followed by another `let x`
+//! in the same block was missed when the for-statement was nested).
+//! Using oxc's symbol model removes that whole class of bugs.
 
-use std::collections::HashMap;
+use oxc_span::GetSpan;
+
 use crate::diagnostic::{Diagnostic, Severity};
+use crate::oxc_helpers::{source_type_for_path, with_semantic};
+use crate::rules::backend::CheckCtx;
 
-/// Find the enclosing scope node id for a given node.
-fn scope_id(node: tree_sitter::Node) -> usize {
-    let mut cur = node.parent();
-    while let Some(p) = cur {
-        match p.kind() {
-            "program" | "function_declaration" | "function" | "arrow_function"
-            | "method_definition" | "statement_block" => return p.id(),
-            _ => {}
-        }
-        cur = p.parent();
-    }
-    // fallback: root
-    0
-}
+#[derive(Debug)]
+pub struct Check;
 
-/// Check if a node is inside a `var`/`let`/`const` declaration (not a type/interface).
-fn is_variable_declaration(node: tree_sitter::Node) -> bool {
-    let mut cur = node.parent();
-    while let Some(p) = cur {
-        match p.kind() {
-            "variable_declaration" | "lexical_declaration" => return true,
-            "program" | "statement_block" | "function_declaration" | "function"
-            | "arrow_function" | "export_statement" => return false,
-            _ => {}
-        }
-        cur = p.parent();
-    }
-    false
-}
+impl crate::rules::backend::AstCheck for Check {
+    fn check(&self, ctx: &CheckCtx, _tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
+        let source_type = source_type_for_path(ctx.path);
+        with_semantic(ctx.source, source_type, |semantic| {
+            let scoping = semantic.scoping();
+            let nodes = semantic.nodes();
+            let mut diagnostics = Vec::new();
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "program" {
-        return;
-    }
-
-    // Collect all variable_declarator names grouped by scope.
-    // scope_id -> { name -> [positions] }
-    let mut scopes: HashMap<usize, HashMap<String, Vec<tree_sitter::Point>>> = HashMap::new();
-
-    fn collect_declarations(
-        n: tree_sitter::Node,
-        source: &[u8],
-        scopes: &mut HashMap<usize, HashMap<String, Vec<tree_sitter::Point>>>,
-    ) {
-        if n.kind() == "variable_declarator" {
-            if !is_variable_declaration(n) {
-                return;
-            }
-            if let Some(name_node) = n.child_by_field_name("name")
-                && name_node.kind() == "identifier"
-                    && let Ok(name) = name_node.utf8_text(source) {
-                        let sid = scope_id(n);
-                        scopes
-                            .entry(sid)
-                            .or_default()
-                            .entry(name.to_string())
-                            .or_default()
-                            .push(name_node.start_position());
-                    }
-            return; // don't recurse into children
-        }
-
-        let mut cursor = n.walk();
-        for child in n.named_children(&mut cursor) {
-            collect_declarations(child, source, scopes);
-        }
-    }
-
-    collect_declarations(node, source, &mut scopes);
-
-    for scope_map in scopes.values() {
-        for (name, positions) in scope_map {
-            if positions.len() > 1 {
-                // Flag all after the first
-                for pos in &positions[1..] {
+            for symbol_id in scoping.symbol_ids() {
+                // `symbol_declarations` returns every declaration node bound to
+                // a symbol; the first is the original, anything after it is a
+                // redeclaration we should flag.
+                let mut iter = scoping.symbol_declarations(symbol_id);
+                if iter.next().is_none() {
+                    continue;
+                }
+                let name = scoping.symbol_name(symbol_id);
+                for decl_id in iter {
+                    let span = nodes.kind(decl_id).span();
+                    let (line, column) =
+                        byte_offset_to_line_col(ctx.source, span.start as usize);
                     diagnostics.push(Diagnostic {
                         path: ctx.path.to_path_buf(),
-                        line: pos.row + 1,
-                        column: pos.column + 1,
+                        line,
+                        column,
                         rule_id: "ts-no-redeclare".into(),
                         message: format!("`{name}` is already defined."),
                         severity: Severity::Warning,
@@ -95,8 +57,27 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                     });
                 }
             }
+
+            diagnostics
+        })
+    }
+}
+
+fn byte_offset_to_line_col(source: &str, byte_offset: usize) -> (usize, usize) {
+    let mut line = 1;
+    let mut col = 1;
+    for (i, c) in source.char_indices() {
+        if i >= byte_offset {
+            break;
+        }
+        if c == '\n' {
+            line += 1;
+            col = 1;
+        } else {
+            col += 1;
         }
     }
+    (line, col)
 }
 
 #[cfg(test)]
@@ -121,8 +102,11 @@ mod tests {
     }
 
     #[test]
-    fn flags_duplicate_let_in_same_block() {
-        let d = run_on("{ let y = 1; let y = 2; }");
+    fn flags_duplicate_function_declaration() {
+        // Two `function foo` at the same scope is a redeclaration that
+        // the previous walker missed (it only inspected
+        // variable_declarator nodes).
+        let d = run_on("function foo() {} function foo() {}");
         assert_eq!(d.len(), 1);
     }
 }
