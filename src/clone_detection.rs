@@ -79,6 +79,7 @@ pub fn lint_files(files: &[&SourceFile]) -> Vec<Diagnostic> {
                 }
             }
 
+            // Matched windows skip insertion — future duplicates match the canonical.
             if !matched {
                 bucket.push(Occurrence {
                     file_idx: fi,
@@ -167,19 +168,11 @@ fn clone_line_span(file_data: &[Option<FileTokens>], fi: usize, first_tok: usize
 
 // --- Tokenization ---
 
-fn supports_clone_detection(lang: Language) -> bool {
-    matches!(lang, Language::TypeScript | Language::JavaScript | Language::Tsx | Language::Rust)
-}
-
 fn tokenize_file(parser: &mut Parser, file: &SourceFile) -> Option<FileTokens> {
-    if !supports_clone_detection(file.language) {
-        return None;
-    }
+    let grammar_tag = grammar_family(file.language)?;
     let source_str = std::fs::read_to_string(&file.path).ok()?;
     let source = source_str.into_bytes();
     let tree = parsing::parse_with_grammar(parser, file.language, &source)?;
-
-    let grammar_tag = grammar_family(file.language);
     let mut tokens = Vec::new();
     let mut cursor = tree.walk();
 
@@ -229,13 +222,12 @@ fn is_comment_kind(kind: &str) -> bool {
     matches!(kind, "comment" | "line_comment" | "block_comment")
 }
 
-fn grammar_family(lang: Language) -> u8 {
+fn grammar_family(lang: Language) -> Option<u8> {
     match lang {
-        Language::TypeScript | Language::JavaScript => 0,
-        Language::Tsx => 1,
-        Language::Rust => 2,
-        Language::Vue => 3,
-        Language::Toml | Language::Json => 4,
+        Language::TypeScript | Language::JavaScript => Some(0),
+        Language::Tsx => Some(1),
+        Language::Rust => Some(2),
+        Language::Vue | Language::Toml | Language::Json => None,
     }
 }
 
@@ -479,17 +471,23 @@ mod tests {
     #[test]
     fn error_subtree_tokens_ignored() {
         let dir = tempfile::tempdir().unwrap();
-        let broken = "function foo( { const x = 1; const y = 2; }}}}}";
+        // 100+ statements inside a broken syntax context — most tokens
+        // land under an ERROR subtree and must be skipped.
+        let stmts: String = (1..=25)
+            .map(|i| format!("const v_{i} = compute({i}, \"p_{i}\");"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let broken = format!("function foo( {{\n{stmts}\n}}}}}}");
         let pa = dir.path().join("a.ts");
-        let pb = dir.path().join("b.ts");
-        std::fs::write(&pa, broken).unwrap();
-        std::fs::write(&pb, broken).unwrap();
+        std::fs::write(&pa, &broken).unwrap();
         let fa = SourceFile { path: pa, language: Language::TypeScript };
-        let fb = SourceFile { path: pb, language: Language::TypeScript };
-        let diags = lint_files(&[&fa, &fb]);
-        for d in &diags {
-            assert_eq!(d.rule_id, "no-clones");
-        }
+        let mut parser = Parser::new();
+        let ft = tokenize_file(&mut parser, &fa).unwrap();
+        assert!(
+            ft.tokens.len() < MIN_TOKENS,
+            "ERROR subtree tokens should be skipped, got {} tokens",
+            ft.tokens.len(),
+        );
     }
 
     #[test]
@@ -522,6 +520,21 @@ mod tests {
         let fa = SourceFile { path: pa, language: Language::Vue };
         let fb = SourceFile { path: pb, language: Language::Vue };
         assert!(lint_files(&[&fa, &fb]).is_empty());
+    }
+
+    #[test]
+    fn clone_line_span_exact() {
+        let dir = tempfile::tempdir().unwrap();
+        let block = large_ts_block(20);
+        let (fa, fb) = write_pair(&dir, "ts", &block);
+        let diags = lint_files(&[&fa, &fb]);
+        assert_eq!(diags.len(), 1);
+        // 20 statements, one per line → exactly 20 lines
+        assert!(
+            diags[0].message.contains("20 lines"),
+            "expected '20 lines', got: {}",
+            diags[0].message,
+        );
     }
 
     #[test]
