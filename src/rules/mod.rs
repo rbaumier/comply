@@ -102,6 +102,7 @@ pub mod no_duplicate_string;
 pub mod no_enum;
 pub mod no_equals_in_for_termination;
 pub mod no_eval;
+pub mod no_extraneous_import;
 pub mod no_fire_event;
 pub mod no_focused_test;
 pub mod no_for_in_iterable;
@@ -157,6 +158,7 @@ pub mod no_throw;
 pub mod no_type_assertion;
 pub mod no_type_encoded_names;
 pub mod no_unsanitized_property;
+pub mod no_unsupported_node_builtins;
 pub mod no_unvalidated_url_redirect;
 pub mod no_valueof_field;
 pub mod no_verb_in_rest_url;
@@ -437,6 +439,7 @@ pub mod dead_export;
 pub mod elseif_without_else;
 pub mod error_message_is_remediation;
 pub mod factory_di_shape;
+pub mod file_extension_in_import;
 pub mod filename_naming_convention;
 pub mod folder_naming_convention;
 pub mod for_loop_increment_sign;
@@ -1590,6 +1593,9 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         no_empty_test_file::register(),
         no_globals_shadowing::register(),
         no_implicit_deps::register(),
+        no_extraneous_import::register(),
+        no_unsupported_node_builtins::register(),
+        file_extension_in_import::register(),
         no_loop_counter_reassign::register(),
         no_misplaced_loop_counter::register(),
         no_nested_incdec::register(),
