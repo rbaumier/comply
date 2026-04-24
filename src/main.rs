@@ -35,6 +35,7 @@ mod ignore_comments;
 mod list;
 mod lsp;
 mod output;
+mod oxc_helpers;
 mod oxlint;
 mod oxlint_config;
 mod project;

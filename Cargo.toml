@@ -28,6 +28,12 @@ rayon = "1"
 tree-sitter-vue-updated = "0.1.0"
 miette = { version = "7", features = ["fancy"] }
 oxc_resolver = "11"
+oxc_allocator = "0.127"
+oxc_parser = "0.127"
+oxc_ast = "0.127"
+oxc_semantic = "0.127"
+oxc_span = "0.127"
+oxc_str = "0.127"
 
 [dev-dependencies]
 assert_cmd = "2"
