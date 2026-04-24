@@ -20,7 +20,7 @@ Dernière mise à jour: 2026-04-24
 | Testing | 3/3 | 0 |
 | Node.js / ESM | 3/3 | 0 |
 | Tier 5/6 (LLM review) | — | supprimé |
-| Bloquées infra | 0/83 | 83 |
+| Bloquées infra | 0/30 | 30 |
 
 **Total actionnable restant: 1 règle** (`data-clumps` cross-file, bloquée infra)
 
@@ -85,17 +85,18 @@ Dernière mise à jour: 2026-04-24
 
 Subsystem LLM supprimé (2026-04-24). Les 26 règles LLM ne sont plus actionnables.
 
-### Bloquées sur infrastructure (83 règles)
+### Bloquées sur infrastructure (30 règles)
 
+45 règles typescript-eslint type-aware sont déjà déléguées à oxlint via tsgolint.
 Détail dans `docs/plugin-rules-todo.md` (audit 2026-04-24).
 
 | Infra requise | Count | Notes |
 |---------------|-------|-------|
-| Type checker (typescript-eslint) | 51 | 9 des 60 listées sont déjà couvertes |
-| Module resolution (import + n) | 13 | 15 des 28 listées sont déjà couvertes |
-| Scope analysis (react + playwright) | 9 | 11 des 20 listées sont déjà couvertes |
-| Full regex parser | 4 | |
-| Unicorn infra | 6 | `consistent-function-scoping` déjà fait |
+| Type checker (typescript-eslint) | 8 | 45 déléguées tsgolint, 9 natives |
+| Module resolution (import + n) | 13 | 15 natives + 1 déléguée oxlint |
+| Scope analysis (react + playwright) | 9 | 11 natives |
+| Full regex parser | 4 | 3 natives (heuristique) |
+| Unicorn infra | 6 | 1 native + 1 déléguée oxlint |
 
 ---
 

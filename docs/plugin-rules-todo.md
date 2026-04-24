@@ -1,79 +1,58 @@
 # Plugin Rules — Blocked on Infrastructure
 
-Audit: 2026-04-24. **83 rules** remaining (JSDoc rules dropped).
+Audit: 2026-04-24. **30 rules** truly blocked.
 
 ---
 
 ## Summary
 
-| Infrastructure | Blocked | Already done | Notes |
-|----------------|---------|--------------|-------|
-| Type checker (typescript-eslint) | 51 | 9 | Needs tsc-level type resolution |
-| Module resolution (import + n) | 13 | 15 | Needs extended ImportIndex |
-| Scope analysis (react + playwright) | 9 | 11 | Partially unblockable with oxc_semantic |
-| Full regex parser (regexp) | 4 | 3 | Needs regex AST parser |
-| Unicorn infra | 6 | 1 | Mixed: regex, scope, module resolution |
-| **Total** | **83** | **39** | |
+| Infrastructure | Blocked | Delegated (tsgolint/oxlint) | Native (comply) | Notes |
+|----------------|---------|----------------------------|-----------------|-------|
+| Type checker (typescript-eslint) | 8 | 45 via tsgolint | 9 native | 8 rules not yet in oxlint |
+| Module resolution (import + n) | 13 | 1 (no-mutable-exports) | 15 native | |
+| Scope analysis (react + playwright) | 9 | — | 11 native | Partially unblockable via oxc_semantic |
+| Full regex parser (regexp) | 4 | — | 3 native (heuristic) | Needs regex AST parser |
+| Unicorn infra | 6 | 1 (filename-case) | 1 native | Mixed needs |
+| **Total blocked** | **30** | | | |
+
+The 45 typescript-eslint rules delegated to `oxlint --type-aware` (tsgolint/typescript-go)
+are **already functional** when `oxlint` + `oxlint-tsgolint` are installed. They are NOT blocked.
 
 ---
 
-## Type checker — 51 rules
+## Type checker — 8 truly blocked
 
-All require type-aware analysis (type inference, type narrowing, or type resolution).
+These rules need type-aware analysis but are NOT yet supported by oxlint's typescript rule set.
 
 | Rule | Why |
 |------|-----|
-| `await-thenable` | Verify `await` operand is a thenable |
-| `consistent-return` | Infer return type for consistency check |
-| `dot-notation` | Check property exists on type |
-| `naming-convention` | Apply conventions based on type kind |
-| `no-base-to-string` | Detect inherited `.toString()` from Object |
-| `no-confusing-void-expression` | `void` used as expression value |
-| `no-deprecated` | Detect `@deprecated` via type metadata |
-| `no-duplicate-type-constituents` | Simplify redundant unions/intersections |
-| `no-floating-promises` | Promise not awaited (partial heuristic exists) |
-| `no-for-in-array` | `for...in` on array type |
-| `no-implied-eval` | `setTimeout(string)` via type check |
-| `no-meaningless-void-operator` | `void expr` where expr is already void |
-| `no-misused-promises` | Promise in boolean/void position |
-| `no-misused-spread` | Spread on non-iterable |
-| `no-mixed-enums` | Mixed string/number in enum |
-| `no-redundant-type-constituents` | `string \| "a"` → `string` |
-| `no-unnecessary-boolean-literal-compare` | `x === true` when x is boolean |
-| `no-unnecessary-condition` | Condition always true/false per types |
+| `naming-convention` | Apply naming rules based on AST node type (interface, enum, etc.) |
 | `no-unnecessary-qualifier` | Redundant namespace qualifier |
-| `no-unnecessary-template-expression` | Template with constant type |
-| `no-unnecessary-type-arguments` | Type arg same as default |
-| `no-unnecessary-type-assertion` | `as T` when already type T |
-| `no-unnecessary-type-conversion` | `.toString()` on string |
-| `no-unnecessary-type-parameters` | Generic param used once |
-| `no-unsafe-argument` | `any` arg passed to typed function |
-| `no-unsafe-assignment` | Assign `any` to typed variable |
-| `no-unsafe-call` | Call a value of type `any` |
-| `no-unsafe-enum-comparison` | Compare enum with non-enum value |
-| `no-unsafe-member-access` | Access member on `any` |
-| `no-unsafe-return` | Return `any` from typed function |
-| `no-unsafe-unary-minus` | `-x` on non-number type |
+| `no-unnecessary-type-arguments` | Type arg identical to default |
 | `no-useless-default-assignment` | Default param redundant with type |
 | `non-nullable-type-assertion-style` | Prefer `!` over `as NonNullable<T>` |
-| `only-throw-error` | Throw non-Error (partial heuristic exists) |
-| `prefer-find` | `.filter()[0]` → `.find()` (needs array type) |
-| `prefer-nullish-coalescing` | `\|\|` → `??` (needs nullable check) |
-| `prefer-optional-chain` | `a && a.b` → `a?.b` (needs types) |
-| `prefer-readonly` | Private property never reassigned |
+| `prefer-readonly` | Private property never reassigned → `readonly` |
 | `prefer-readonly-parameter-types` | Unmutated params → readonly type |
 | `prefer-reduce-type-parameter` | Explicit type param for `.reduce<T>()` |
-| `prefer-return-this-type` | Return `this` instead of class name |
-| `promise-function-async` | Function returning Promise → `async` |
-| `related-getter-setter-pairs` | Getter/setter type mismatch |
-| `require-array-sort-compare` | `.sort()` without comparator on non-string[] |
-| `require-await` | `async` function without `await` |
-| `restrict-plus-operands` | `+` on incompatible types |
-| `restrict-template-expressions` | `${}` with non-stringifiable type |
-| `return-await` | Check if `return await` is necessary |
-| `strict-boolean-expressions` | Force explicit boolean in conditions |
-| `switch-exhaustiveness-check` | Switch on enum without exhaustive default |
-| `unbound-method` | Class method passed without bind |
+
+### Already delegated to tsgolint (45 rules — NOT blocked)
+
+await-thenable, consistent-return, dot-notation, no-base-to-string,
+no-confusing-void-expression, no-deprecated, no-duplicate-type-constituents,
+no-floating-promises, no-for-in-array, no-implied-eval, no-meaningless-void-operator,
+no-misused-promises, no-misused-spread, no-mixed-enums, no-redundant-type-constituents,
+no-unnecessary-boolean-literal-compare, no-unnecessary-condition,
+no-unnecessary-template-expression, no-unnecessary-type-assertion,
+no-unnecessary-type-conversion, no-unnecessary-type-parameters, no-unsafe-argument,
+no-unsafe-assignment, no-unsafe-call, no-unsafe-enum-comparison, no-unsafe-member-access,
+no-unsafe-return, no-unsafe-unary-minus, only-throw-error, prefer-find,
+prefer-nullish-coalescing, prefer-optional-chain, prefer-return-this-type,
+promise-function-async, related-getter-setter-pairs, require-array-sort-compare,
+require-await, restrict-plus-operands, restrict-template-expressions, return-await,
+strict-boolean-expressions, strict-void-return, switch-exhaustiveness-check,
+unbound-method, use-unknown-in-catch-callback-variable.
+
+See `src/rules/delegated/tsgolint.rs` for full definitions.
 
 ---
 
@@ -97,7 +76,11 @@ Need deeper module resolution than current ImportIndex (re-export tracking, publ
 | `prefer-global/buffer` | n | Prefer `Buffer` global over `require('buffer')` |
 | `prefer-global/console` | n | Prefer `console` global over `require('console')` |
 
-**Already implemented (15):** import/named, default, namespace, export, no-unresolved, no-named-as-default, no-cycle, no-useless-path-segments, no-duplicates, enforce-node-protocol-usage, n/file-extension-in-import, n/no-extraneous-import, n/no-unsupported-features/node-builtins, prefer-global/process (prefer-global-this), import-no-cycle.
+**Already implemented (15 native + 1 delegated):** import/named, default, namespace, export,
+no-unresolved, no-named-as-default, no-cycle, no-useless-path-segments, no-duplicates,
+enforce-node-protocol-usage, n/file-extension-in-import, n/no-extraneous-import,
+n/no-unsupported-features/node-builtins, prefer-global/process (prefer-global-this),
+import/no-mutable-exports (delegated oxlint).
 
 ---
 
@@ -117,7 +100,9 @@ Need scope analysis beyond what oxc_semantic currently provides (component ident
 | `boolean-prop-naming` | react | Enforce `is*`/`has*` for boolean props |
 | `no-slowed-test` | playwright | Detect tests marked `.slow()` |
 
-**Already implemented (11):** hook-use-state, jsx-no-undef, no-unknown-property, no-find-dom-node, react-no-deprecated, destructuring-assignment, no-duplicate-slow, no-unused-locators, valid-expect, valid-expect-in-promise, valid-describe-callback.
+**Already implemented (11 native):** hook-use-state, jsx-no-undef, no-unknown-property,
+no-find-dom-node, react-no-deprecated, destructuring-assignment, no-duplicate-slow,
+no-unused-locators, valid-expect, valid-expect-in-promise, valid-describe-callback.
 
 ---
 
@@ -132,7 +117,8 @@ Need a regex AST parser to analyze regex structure (quantifiers, character class
 | `optimal-quantifier-concatenation` | regexp |
 | `simplify-set-operations` | regexp |
 
-**Already implemented (3):** no-empty-alternative, no-super-linear-backtracking, no-misleading-unicode-character (via heuristics).
+**Already implemented (3 native heuristic):** no-empty-alternative, no-super-linear-backtracking,
+no-misleading-unicode-character.
 
 ---
 
@@ -149,11 +135,13 @@ Mixed infrastructure needs (regex parser, scope analysis, module resolution).
 | `no-unused-properties` | Cross-file usage analysis |
 | `string-content` | Regex-based string content matching |
 
-**Already implemented (1):** consistent-function-scoping.
+**Already implemented (1 native + 1 delegated):** consistent-function-scoping (native),
+filename-case (delegated oxlint).
 
 ---
 
 ## Dropped
 
-- **JSDoc type context (5 rules):** require-param-type, require-returns-type, require-property-type, require-next-type, require-throws-type — dropped, not actionable.
+- **JSDoc type context (5 rules):** require-param-type, require-returns-type, require-property-type,
+  require-next-type, require-throws-type — dropped, not actionable.
 - **SKIP (139 rules):** Formatting-only, deprecated, superseded, or not applicable. See git history.
