@@ -199,6 +199,7 @@ pub mod react_no_cookies_in_layout;
 pub mod react_no_derived_state_in_effect;
 pub mod react_no_empty_effect;
 pub mod react_no_event_handler_in_server_component;
+pub mod display_name;
 pub mod react_no_deprecated;
 pub mod react_no_find_dom_node;
 pub mod react_no_generate_static_params_in_client;
@@ -208,6 +209,7 @@ pub mod react_no_metadata_export_in_client;
 pub mod react_no_next_headers_in_client;
 pub mod react_no_object_in_dep_array;
 pub mod react_no_pass_data_to_parent;
+pub mod react_no_render_return_value;
 pub mod react_no_reset_all_state_on_prop_change;
 pub mod react_no_sequential_await_in_component;
 pub mod react_no_server_only_in_client;
@@ -443,6 +445,7 @@ pub mod file_extension_in_import;
 pub mod filename_naming_convention;
 pub mod folder_naming_convention;
 pub mod for_loop_increment_sign;
+pub mod function_component_definition;
 pub mod function_inside_loop;
 pub mod function_return_type;
 pub mod fsd_no_cross_slice_dependency;
@@ -484,6 +487,9 @@ pub mod jsdoc_informative_docs;
 pub mod jsdoc_reject_any_type;
 pub mod jsdoc_reject_function_type;
 pub mod jsx_ensure_booleans;
+pub mod jsx_filename_extension;
+pub mod jsx_fragments;
+pub mod jsx_handler_names;
 pub mod jsx_no_leaked_render;
 pub mod jsx_no_new_function_as_prop;
 pub mod jsx_no_undef;
@@ -507,6 +513,7 @@ pub mod unused_component_prop;
 pub mod valid_expect;
 pub mod valid_expect_in_promise;
 pub mod playwright_no_duplicate_slow;
+pub mod playwright_no_slowed_test;
 pub mod no_bidi_characters;
 pub mod no_bitwise_in_boolean;
 pub mod no_built_in_override;
@@ -1187,6 +1194,9 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         valid_expect::register(),
         valid_expect_in_promise::register(),
         playwright_no_duplicate_slow::register(),
+        playwright_no_slowed_test::register(),
+        function_component_definition::register(),
+        jsx_filename_extension::register(),
         react_no_deprecated::register(),
         throw_error_values::register(),
         no_catch_without_use::register(),
@@ -1992,6 +2002,10 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         react_void_dom_elements_no_children::register(),
         react_jsx_no_duplicate_props::register(),
         react_jsx_no_comment_textnodes::register(),
+        display_name::register(),
+        jsx_handler_names::register(),
+        jsx_fragments::register(),
+        react_no_render_return_value::register(),
         react_style_prop_object::register(),
         react_jsx_no_target_blank::register(),
         react_jsx_no_script_url::register(),

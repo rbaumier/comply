@@ -1,0 +1,17 @@
+mod typescript;
+use crate::diagnostic::Severity;
+use crate::rules::meta::RuleMeta;
+use crate::rules::RuleDef;
+
+pub const META: RuleMeta = RuleMeta {
+    id: "playwright-no-slowed-test",
+    description: "Unconditional `test.slow()` hides an optimization opportunity.",
+    remediation: "Remove `test.slow()` and speed up the test, or make it conditional with `test.slow(condition, reason)`.",
+    severity: Severity::Warning,
+    doc_url: Some("https://playwright.dev/docs/api/class-test#test-slow"),
+    categories: &["testing"],
+};
+
+pub fn register() -> RuleDef {
+    crate::register_ts_family!(META, typescript)
+}
