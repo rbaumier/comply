@@ -11,16 +11,19 @@ crate::ast_check! { |node, source, ctx, diagnostics|
     let Some(left) = node.child_by_field_name("left") else { return };
     let Some(right) = node.child_by_field_name("right") else { return };
 
-    let has_typeof = left.kind() == "unary_expression"
-        && left.child_by_field_name("operator")
-            .is_some_and(|op| op.utf8_text(source).unwrap_or("") == "typeof")
-        || right.kind() == "unary_expression"
-        && right.child_by_field_name("operator")
-            .is_some_and(|op| op.utf8_text(source).unwrap_or("") == "typeof");
-
-    if !has_typeof {
-        return;
+    fn typeof_operand<'a>(n: tree_sitter::Node<'a>, source: &[u8]) -> Option<tree_sitter::Node<'a>> {
+        if n.kind() != "unary_expression" {
+            return None;
+        }
+        let op = n.child_by_field_name("operator")?;
+        if op.utf8_text(source).unwrap_or("") != "typeof" {
+            return None;
+        }
+        n.child_by_field_name("argument")
     }
+
+    let typeof_arg = typeof_operand(left, source).or_else(|| typeof_operand(right, source));
+    let Some(arg) = typeof_arg else { return };
 
     let is_undefined_string = |n: tree_sitter::Node| -> bool {
         if n.kind() != "string" {
@@ -34,14 +37,27 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         return;
     }
 
+    // Only flag when the operand is guaranteed to be a declared binding.
+    // `typeof x === 'undefined'` where `x` is a bare identifier is the only
+    // safe way to test a possibly-undeclared variable — `x === undefined`
+    // throws ReferenceError.
+    let safe_to_rewrite = matches!(
+        arg.kind(),
+        "member_expression" | "subscript_expression"
+    );
+    if !safe_to_rewrite {
+        return;
+    }
+
     let pos = node.start_position();
     diagnostics.push(Diagnostic {
         path: ctx.path.to_path_buf(),
         line: pos.row + 1,
         column: pos.column + 1,
         rule_id: "no-typeof-undefined".into(),
-        message: "Compare with `undefined` directly instead of using `typeof`. \
-                  Replace `typeof x === 'undefined'` with `x === undefined`.".into(),
+        message: "Prefer `=== undefined` over `typeof … === 'undefined'` when \
+                  the operand is a property access (which cannot throw \
+                  ReferenceError).".into(),
         severity: Severity::Warning,
         span: None,
     });
@@ -52,20 +68,38 @@ mod tests {
     use super::*;
 
     #[test]
-    fn flags_typeof_triple_equals_single_quotes() {
+    fn flags_typeof_member_expression() {
         let d = crate::rules::test_helpers::run_ts(
-            "if (typeof x === 'undefined') {}", &Check,
+            "if (typeof obj.foo === 'undefined') {}", &Check,
         );
         assert_eq!(d.len(), 1);
         assert_eq!(d[0].rule_id, "no-typeof-undefined");
     }
 
     #[test]
-    fn flags_typeof_double_quotes() {
+    fn flags_typeof_member_expression_double_quotes() {
         let d = crate::rules::test_helpers::run_ts(
-            r#"if (typeof x === "undefined") {}"#, &Check,
+            r#"if (typeof obj.foo === "undefined") {}"#, &Check,
         );
         assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn flags_typeof_subscript_expression() {
+        let d = crate::rules::test_helpers::run_ts(
+            "if (typeof arr[0] === 'undefined') {}", &Check,
+        );
+        assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn allows_typeof_bare_identifier() {
+        // `x` may not be declared — `x === undefined` would throw.
+        // `typeof x === 'undefined'` is the only safe check.
+        let d = crate::rules::test_helpers::run_ts(
+            "if (typeof x === 'undefined') {}", &Check,
+        );
+        assert!(d.is_empty());
     }
 
     #[test]
