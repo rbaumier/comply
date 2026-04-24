@@ -197,6 +197,7 @@ pub mod react_no_cookies_in_layout;
 pub mod react_no_derived_state_in_effect;
 pub mod react_no_empty_effect;
 pub mod react_no_event_handler_in_server_component;
+pub mod react_no_deprecated;
 pub mod react_no_find_dom_node;
 pub mod react_no_generate_static_params_in_client;
 pub mod react_no_initialize_state_in_effect;
@@ -483,6 +484,7 @@ pub mod jsx_ensure_booleans;
 pub mod jsx_no_leaked_render;
 pub mod jsx_no_new_function_as_prop;
 pub mod jsx_no_undef;
+pub mod hook_use_state;
 pub mod justify_inaction;
 pub mod max_call_chain_depth;
 pub mod max_union_size;
@@ -499,6 +501,9 @@ pub mod no_redundant_await;
 pub mod no_redundant_state;
 pub mod no_unused_locators;
 pub mod unused_component_prop;
+pub mod valid_expect;
+pub mod valid_expect_in_promise;
+pub mod playwright_no_duplicate_slow;
 pub mod no_bidi_characters;
 pub mod no_bitwise_in_boolean;
 pub mod no_built_in_override;
@@ -647,9 +652,16 @@ pub mod import_consistent_type_specifier_style;
 pub mod import_dynamic_import_chunkname;
 pub mod import_no_amd;
 pub mod import_no_commonjs;
+pub mod import_default;
+pub mod import_export;
+pub mod import_named;
+pub mod import_namespace;
 pub mod import_no_cycle;
+pub mod import_no_duplicates;
 pub mod import_no_dynamic_require;
 pub mod import_no_empty_named_blocks;
+pub mod import_no_named_as_default;
+pub mod import_no_unresolved;
 pub mod import_no_webpack_loader_syntax;
 pub mod require_not_empty;
 pub mod id_length;
@@ -1168,6 +1180,11 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         no_redundant_state::register(),
         no_unused_locators::register(),
         unused_component_prop::register(),
+        hook_use_state::register(),
+        valid_expect::register(),
+        valid_expect_in_promise::register(),
+        playwright_no_duplicate_slow::register(),
+        react_no_deprecated::register(),
         throw_error_values::register(),
         no_catch_without_use::register(),
         try_catch_json_parse::register(),
@@ -1774,7 +1791,14 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         no_self_import::register(),
         no_unassigned_import::register(),
         import_no_commonjs::register(),
+        import_default::register(),
+        import_export::register(),
+        import_named::register(),
+        import_namespace::register(),
         import_no_cycle::register(),
+        import_no_duplicates::register(),
+        import_no_named_as_default::register(),
+        import_no_unresolved::register(),
         import_no_amd::register(),
         import_no_webpack_loader_syntax::register(),
         import_no_empty_named_blocks::register(),

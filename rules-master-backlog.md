@@ -4,7 +4,7 @@ Dernière mise à jour: 2026-04-24
 
 ## Résumé
 
-**988 règles implémentées.** Le backlog est quasi-vide.
+**992 règles implémentées.** Le backlog est quasi-vide.
 
 | Catégorie | Implémenté | Restant |
 |-----------|------------|---------|
@@ -46,6 +46,21 @@ Dernière mise à jour: 2026-04-24
 |-------|-------------|--------|
 | `no-redundant-state` | `useState` dont le setter n'est jamais utilisé | ✓ |
 | `unused-component-prop` | Prop déclarée mais jamais lue dans le composant | ✓ |
+| `hook-use-state` | Enforce `[value, setValue]` naming pour useState | ✓ |
+
+### Import rules (2026-04-24)
+
+| Règle | Description | Status |
+|-------|-------------|--------|
+| `import-namespace` | Vérifie que `ns.member` existe dans les exports source (cross-file) | ✓ |
+| `import-no-duplicates` | Détecte les imports dupliqués du même module | ✓ |
+| `import-no-cycle` | Détecte les imports circulaires (cross-file) | ✓ (précédent) |
+
+### Testing (2026-04-24)
+
+| Règle | Description | Status |
+|-------|-------------|--------|
+| `valid-expect` | `expect()` doit avoir au moins un argument | ✓ |
 
 ### Tier 5/6 — LLM Review (supprimé)
 
