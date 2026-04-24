@@ -20,7 +20,7 @@ Dernière mise à jour: 2026-04-24
 | Testing | 3/3 | 0 |
 | Node.js / ESM | 3/3 | 0 |
 | Tier 5/6 (LLM review) | — | supprimé |
-| Bloquées infra | 0/110 | 110 |
+| Bloquées infra | 0/88 | 88 |
 
 **Total actionnable restant: 1 règle** (`data-clumps` cross-file, bloquée infra)
 
@@ -85,19 +85,18 @@ Dernière mise à jour: 2026-04-24
 
 Subsystem LLM supprimé (2026-04-24). Les 26 règles LLM ne sont plus actionnables.
 
-### Bloquées sur infrastructure (113 règles)
+### Bloquées sur infrastructure (88 règles)
 
-Détail dans `docs/plugin-rules-todo.md`. Non actionnables sans infra préalable.
+Détail dans `docs/plugin-rules-todo.md` (headers décalés — audit fait le 2026-04-24).
 
-| Infra requise | Count |
-|---------------|-------|
-| Type checker (tsc) | 55 |
-| Module resolution | 20 |
-| Scope analysis | 11 |
-| Full regex parser | 7 |
-| JSDoc type context | 5 |
-| Unicorn infra | 7 |
-| Package.json reader | 8 |
+| Infra requise | Count | Notes |
+|---------------|-------|-------|
+| Type checker (typescript-eslint) | 51 | 9 des 60 listées sont déjà couvertes |
+| Module resolution (import + n) | 13 | 15 des 28 listées sont déjà couvertes |
+| Scope analysis (react + playwright) | 9 | 11 des 20 listées sont déjà couvertes |
+| Full regex parser | 4 | Header dit 7, seulement 4 listées |
+| JSDoc type context | 5 | |
+| Unicorn infra | 6 | `consistent-function-scoping` déjà fait |
 
 ---
 
