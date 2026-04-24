@@ -36,6 +36,9 @@ struct Occurrence {
     start_line: usize,
 }
 
+// (reporter_fi, reporter_tok_start, reporter_line, canonical_fi, canonical_tok_start, canonical_line)
+type RawClone = (usize, usize, usize, usize, usize, usize);
+
 #[must_use]
 pub fn lint_files(files: &[&SourceFile]) -> Vec<Diagnostic> {
     if files.len() < 2 {
@@ -48,8 +51,7 @@ pub fn lint_files(files: &[&SourceFile]) -> Vec<Diagnostic> {
         .collect();
 
     let mut index: HashMap<u64, Vec<Occurrence>> = HashMap::new();
-    let mut raw: Vec<(usize, usize, usize, usize, usize)> = Vec::new();
-    // (reporter_fi, reporter_tok_start, reporter_line, canonical_fi, canonical_line)
+    let mut raw: Vec<RawClone> = Vec::new();
 
     for (fi, ft) in file_data.iter().enumerate() {
         let Some(ft) = ft else { continue };
@@ -65,18 +67,15 @@ pub fn lint_files(files: &[&SourceFile]) -> Vec<Diagnostic> {
                 continue;
             }
 
-            // Check → emit → insert
             let mut matched = false;
             for occ in bucket.iter() {
-                if occ.file_idx == fi {
-                    continue;
-                }
-                if let Some(ref canon_ft) = file_data[occ.file_idx] {
-                    if verify_tokens(ft, start, canon_ft, occ.start_token) {
-                        raw.push((fi, start, ft.tokens[start].line, occ.file_idx, occ.start_line));
-                        matched = true;
-                        break;
-                    }
+                if occ.file_idx != fi
+                    && let Some(ref canon_ft) = file_data[occ.file_idx]
+                    && verify_tokens(ft, start, canon_ft, occ.start_token)
+                {
+                    raw.push((fi, start, ft.tokens[start].line, occ.file_idx, occ.start_token, occ.start_line));
+                    matched = true;
+                    break;
                 }
             }
 
@@ -90,7 +89,7 @@ pub fn lint_files(files: &[&SourceFile]) -> Vec<Diagnostic> {
         }
     }
 
-    merge_and_emit(&mut raw, files)
+    merge_and_emit(&mut raw, &file_data, files)
 }
 
 fn verify_tokens(a: &FileTokens, a_start: usize, b: &FileTokens, b_start: usize) -> bool {
@@ -108,7 +107,8 @@ fn verify_tokens(a: &FileTokens, a_start: usize, b: &FileTokens, b_start: usize)
 }
 
 fn merge_and_emit(
-    raw: &mut Vec<(usize, usize, usize, usize, usize)>,
+    raw: &mut Vec<RawClone>,
+    file_data: &[Option<FileTokens>],
     files: &[&SourceFile],
 ) -> Vec<Diagnostic> {
     if raw.is_empty() {
@@ -120,30 +120,29 @@ fn merge_and_emit(
     let mut out = Vec::new();
     let mut i = 0;
     while i < raw.len() {
-        let (rfi, rstart, rline, cfi, cline) = raw[i];
+        let (rfi, rstart, rline, cfi, cstart, cline) = raw[i];
         let mut last_rstart = rstart;
+        let mut last_cstart = cstart;
         let mut j = i + 1;
         while j < raw.len() {
-            let (nrfi, nrstart, _, ncfi, ncline) = raw[j];
-            if nrfi == rfi && ncfi == cfi && nrstart == last_rstart + 1 && ncline >= cline {
+            let (nrfi, nrstart, _, ncfi, ncstart, _) = raw[j];
+            if nrfi == rfi && ncfi == cfi && nrstart == last_rstart + 1 && ncstart == last_cstart + 1 {
                 last_rstart = nrstart;
+                last_cstart = ncstart;
                 j += 1;
                 continue;
             }
             break;
         }
 
-        let last_entry = raw[j - 1];
-        let end_line = last_entry.2;
-        // Approximate clone span: from first reporter line to last reporter line + estimated lines per window
-        let lines_in_window = estimate_window_lines(files, rfi, rline, end_line);
+        let lines_in_clone = clone_line_span(file_data, rfi, rstart, last_rstart);
         out.push(Diagnostic {
             path: files[rfi].path.clone(),
             line: rline,
             column: 1,
             rule_id: RULE_ID.into(),
             message: format!(
-                "Duplicated block ({lines_in_window} lines) — also in `{}` at line {cline}.",
+                "Duplicated block ({lines_in_clone} lines) — also in `{}` at line {cline}.",
                 files[cfi].path.display(),
             ),
             severity: Severity::Warning,
@@ -154,16 +153,28 @@ fn merge_and_emit(
     out
 }
 
-fn estimate_window_lines(_files: &[&SourceFile], _fi: usize, first_line: usize, last_window_start_line: usize) -> usize {
-    // Conservative: span from first line to last window start + average lines per window
-    let span = last_window_start_line.saturating_sub(first_line);
-    // MIN_TOKENS tokens ≈ 10 lines on average
-    span + 10
+fn clone_line_span(file_data: &[Option<FileTokens>], fi: usize, first_tok: usize, last_window_tok: usize) -> usize {
+    let Some(ref ft) = file_data[fi] else { return 10 };
+    let first_line = ft.tokens[first_tok].line;
+    let last_tok_idx = last_window_tok + MIN_TOKENS - 1;
+    let last_line = if last_tok_idx < ft.tokens.len() {
+        ft.tokens[last_tok_idx].line
+    } else {
+        ft.tokens.last().map_or(first_line, |t| t.line)
+    };
+    last_line.saturating_sub(first_line) + 1
 }
 
 // --- Tokenization ---
 
+fn supports_clone_detection(lang: Language) -> bool {
+    matches!(lang, Language::TypeScript | Language::JavaScript | Language::Tsx | Language::Rust)
+}
+
 fn tokenize_file(parser: &mut Parser, file: &SourceFile) -> Option<FileTokens> {
+    if !supports_clone_detection(file.language) {
+        return None;
+    }
     let source_str = std::fs::read_to_string(&file.path).ok()?;
     let source = source_str.into_bytes();
     let tree = parsing::parse_with_grammar(parser, file.language, &source)?;
@@ -182,16 +193,13 @@ fn tokenize_file(parser: &mut Parser, file: &SourceFile) -> Option<FileTokens> {
             continue;
         }
 
-        if node.child_count() == 0 {
-            let kind = node.kind();
-            if !is_comment_kind(kind) {
-                let kind_id = node.kind_id();
-                let start_byte = node.start_byte();
-                let end_byte = node.end_byte();
-                let line = node.start_position().row + 1;
-                let hash = token_hash(grammar_tag, kind_id, &source[start_byte..end_byte]);
-                tokens.push(Token { kind_id, start_byte, end_byte, line, hash });
-            }
+        if node.child_count() == 0 && !is_comment_kind(node.kind()) {
+            let kind_id = node.kind_id();
+            let start_byte = node.start_byte();
+            let end_byte = node.end_byte();
+            let line = node.start_position().row + 1;
+            let hash = token_hash(grammar_tag, kind_id, &source[start_byte..end_byte]);
+            tokens.push(Token { kind_id, start_byte, end_byte, line, hash });
         }
 
         if cursor.goto_first_child() {
@@ -221,7 +229,6 @@ fn is_comment_kind(kind: &str) -> bool {
     matches!(kind, "comment" | "line_comment" | "block_comment")
 }
 
-/// TS/JS share same grammar → same family. TSX separate. Rust separate.
 fn grammar_family(lang: Language) -> u8 {
     match lang {
         Language::TypeScript | Language::JavaScript => 0,
@@ -238,7 +245,7 @@ fn token_hash(grammar_tag: u8, kind_id: u16, text: &[u8]) -> u64 {
     let mut h: u64 = 0;
     h = hash_step(h, u64::from(grammar_tag));
     h = hash_step(h, u64::from(kind_id));
-    h = hash_step(h, 0xFF); // separator
+    h = hash_step(h, 0xFF);
     for &b in text {
         h = hash_step(h, u64::from(b));
     }
@@ -321,7 +328,7 @@ mod tests {
     #[test]
     fn no_false_positive_on_short_overlap() {
         let dir = tempfile::tempdir().unwrap();
-        let block = large_ts_block(5); // ~50 tokens, below MIN_TOKENS
+        let block = large_ts_block(5);
         let (fa, fb) = write_pair(&dir, "ts", &block);
         assert!(lint_files(&[&fa, &fb]).is_empty());
     }
@@ -413,12 +420,12 @@ mod tests {
 
     #[test]
     fn hash_collision_with_first_mismatch() {
-        // Unit test at the type level: craft tokens with forced hash collision
+        // Tests the full index logic: bucket has a first occurrence that
+        // fails token-by-token verification, then a second that matches.
         let source_a = b"aaaa".to_vec();
         let source_b = b"bbbb".to_vec();
         let source_c = b"aaaa".to_vec();
 
-        let forced_hash = 42u64;
         let make_tokens = |n: usize| -> Vec<Token> {
             (0..n)
                 .map(|i| Token {
@@ -426,25 +433,52 @@ mod tests {
                     start_byte: 0,
                     end_byte: 4,
                     line: i + 1,
-                    hash: forced_hash + i as u64,
+                    hash: 42 + i as u64,
                 })
                 .collect()
         };
 
-        let ft_a = FileTokens { source: source_a, tokens: make_tokens(MIN_TOKENS) };
-        let ft_b = FileTokens { source: source_b, tokens: make_tokens(MIN_TOKENS) };
-        let ft_c = FileTokens { source: source_c, tokens: make_tokens(MIN_TOKENS) };
+        let file_data: Vec<Option<FileTokens>> = vec![
+            Some(FileTokens { source: source_a, tokens: make_tokens(MIN_TOKENS) }),
+            Some(FileTokens { source: source_b, tokens: make_tokens(MIN_TOKENS) }),
+            Some(FileTokens { source: source_c, tokens: make_tokens(MIN_TOKENS) }),
+        ];
 
-        // A vs B: same hashes but different source bytes → verify_tokens rejects
-        assert!(!verify_tokens(&ft_a, 0, &ft_b, 0));
-        // A vs C: same hashes and same source bytes → verify_tokens accepts
-        assert!(verify_tokens(&ft_a, 0, &ft_c, 0));
+        // Simulate indexing: insert file 0, then file 1, then file 2
+        let mut index: HashMap<u64, Vec<Occurrence>> = HashMap::new();
+        let wh = window_hash(&file_data[0].as_ref().unwrap().tokens[0..MIN_TOKENS]);
+
+        // File 0: first insert
+        index.entry(wh).or_default().push(Occurrence { file_idx: 0, start_token: 0, start_line: 1 });
+
+        // File 1: different bytes, same hash → verify_tokens rejects file 0
+        let ft1 = file_data[1].as_ref().unwrap();
+        let ft0 = file_data[0].as_ref().unwrap();
+        assert!(!verify_tokens(ft1, 0, ft0, 0));
+
+        // File 1 gets inserted since no match
+        index.entry(wh).or_default().push(Occurrence { file_idx: 1, start_token: 0, start_line: 1 });
+
+        // File 2: same bytes as file 0 → verify_tokens accepts file 0
+        let ft2 = file_data[2].as_ref().unwrap();
+        let bucket = index.get(&wh).unwrap();
+        let mut found_match = false;
+        for occ in bucket {
+            if occ.file_idx != 2 {
+                if let Some(ref canon_ft) = file_data[occ.file_idx] {
+                    if verify_tokens(ft2, 0, canon_ft, occ.start_token) {
+                        found_match = true;
+                        break;
+                    }
+                }
+            }
+        }
+        assert!(found_match);
     }
 
     #[test]
     fn error_subtree_tokens_ignored() {
         let dir = tempfile::tempdir().unwrap();
-        // Intentionally broken syntax: unclosed function
         let broken = "function foo( { const x = 1; const y = 2; }}}}}";
         let pa = dir.path().join("a.ts");
         let pb = dir.path().join("b.ts");
@@ -452,10 +486,7 @@ mod tests {
         std::fs::write(&pb, broken).unwrap();
         let fa = SourceFile { path: pa, language: Language::TypeScript };
         let fb = SourceFile { path: pb, language: Language::TypeScript };
-        // Should not produce clone diagnostics from ERROR subtree tokens
         let diags = lint_files(&[&fa, &fb]);
-        // We accept 0 diagnostics (ERROR subtree skipped) or a diagnostic
-        // only from tokens outside the error region
         for d in &diags {
             assert_eq!(d.rule_id, "no-clones");
         }
@@ -463,22 +494,34 @@ mod tests {
 
     #[test]
     fn merge_refuses_non_adjacent_canonical() {
-        // Verify that raw entries with same reporter but non-adjacent canonical
-        // produce separate diagnostics
         let files: Vec<SourceFile> = vec![
             make_file("/a.ts", Language::TypeScript),
             make_file("/b.ts", Language::TypeScript),
         ];
         let file_refs: Vec<&SourceFile> = files.iter().collect();
 
-        let mut raw = vec![
-            // Two separate clone regions in reporter file 0, canonical file 1
-            (0usize, 0usize, 1usize, 1usize, 1usize),
-            (0, 1, 2, 1, 2),   // adjacent, should merge
-            (0, 10, 20, 1, 50), // gap in both sides, should NOT merge
+        let file_data: Vec<Option<FileTokens>> = vec![None, None];
+        let mut raw: Vec<RawClone> = vec![
+            //  (rfi, rstart, rline, cfi, cstart, cline)
+            (0, 0, 1, 1, 0, 1),
+            (0, 1, 2, 1, 1, 2),   // both sides advance → merge
+            (0, 10, 20, 1, 50, 80), // gap on both sides → separate
         ];
-        let diags = merge_and_emit(&mut raw, &file_refs);
+        let diags = merge_and_emit(&mut raw, &file_data, &file_refs);
         assert_eq!(diags.len(), 2);
+    }
+
+    #[test]
+    fn vue_files_excluded() {
+        let dir = tempfile::tempdir().unwrap();
+        let content = "<template><div>hello</div></template><script>const x = 1;</script>";
+        let pa = dir.path().join("a.vue");
+        let pb = dir.path().join("b.vue");
+        std::fs::write(&pa, content).unwrap();
+        std::fs::write(&pb, content).unwrap();
+        let fa = SourceFile { path: pa, language: Language::Vue };
+        let fb = SourceFile { path: pb, language: Language::Vue };
+        assert!(lint_files(&[&fa, &fb]).is_empty());
     }
 
     #[test]
@@ -490,8 +533,6 @@ mod tests {
         let f = SourceFile { path: pa, language: Language::TypeScript };
         let mut parser = Parser::new();
         let ft = tokenize_file(&mut parser, &f).unwrap();
-        // Should have tokens for `const`, `x`, `=`, `1`, `;`, `const`, `y`, `=`, `2`, `;`
-        // But NOT for the comments
         assert!(ft.tokens.len() >= 10);
         for t in &ft.tokens {
             let text = std::str::from_utf8(&ft.source[t.start_byte..t.end_byte]).unwrap();
