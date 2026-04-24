@@ -4,7 +4,7 @@ Dernière mise à jour: 2026-04-24
 
 ## Résumé
 
-**992 règles implémentées.** Le backlog est quasi-vide.
+**1000 règles implémentées.** Le backlog est quasi-vide.
 
 | Catégorie | Implémenté | Restant |
 |-----------|------------|---------|
@@ -15,9 +15,11 @@ Dernière mise à jour: 2026-04-24
 | Code Quality | 12/12 | 0 |
 | Rust-specific | 3/3 | 0 |
 | Tier 3 (type info / tsc) | 7/8 | 1 |
-| React (oxc_semantic) | 2/2 | 0 |
+| React (oxc_semantic) | 4/4 | 0 |
+| Import validation (ImportIndex) | 7/7 | 0 |
+| Testing | 3/3 | 0 |
 | Tier 5/6 (LLM review) | — | supprimé |
-| Bloquées infra | 0/121 | 121 |
+| Bloquées infra | 0/113 | 113 |
 
 **Total actionnable restant: 1 règle** (`data-clumps` cross-file, bloquée infra)
 
@@ -47,13 +49,19 @@ Dernière mise à jour: 2026-04-24
 | `no-redundant-state` | `useState` dont le setter n'est jamais utilisé | ✓ |
 | `unused-component-prop` | Prop déclarée mais jamais lue dans le composant | ✓ |
 | `hook-use-state` | Enforce `[value, setValue]` naming pour useState | ✓ |
+| `react-no-deprecated` | Détecte APIs React/ReactDOM dépréciées + lifecycles legacy | ✓ |
 
-### Import rules (2026-04-24)
+### Import validation — ImportIndex (2026-04-24)
 
 | Règle | Description | Status |
 |-------|-------------|--------|
-| `import-namespace` | Vérifie que `ns.member` existe dans les exports source (cross-file) | ✓ |
+| `import-named` | Vérifie que les named imports existent dans les exports cible | ✓ |
+| `import-default` | Vérifie que le module cible a un default export | ✓ |
+| `import-namespace` | Vérifie que `ns.member` existe dans les exports source | ✓ |
+| `import-export` | Détecte les exports dupliqués dans un module | ✓ |
 | `import-no-duplicates` | Détecte les imports dupliqués du même module | ✓ |
+| `import-no-named-as-default` | Avertit quand un default import correspond à un named export | ✓ |
+| `import-no-unresolved` | Détecte les imports relatifs qui ne résolvent vers aucun fichier | ✓ |
 | `import-no-cycle` | Détecte les imports circulaires (cross-file) | ✓ (précédent) |
 
 ### Testing (2026-04-24)
@@ -61,23 +69,26 @@ Dernière mise à jour: 2026-04-24
 | Règle | Description | Status |
 |-------|-------------|--------|
 | `valid-expect` | `expect()` doit avoir au moins un argument | ✓ |
+| `valid-expect-in-promise` | Assertions dans `.then()`/`.catch()` doivent être returned/awaited | ✓ |
+| `playwright-no-duplicate-slow` | `test.slow()` appelé 2x dans le même scope | ✓ |
 
 ### Tier 5/6 — LLM Review (supprimé)
 
 Subsystem LLM supprimé (2026-04-24). Les 26 règles LLM ne sont plus actionnables.
 
-### Bloquées sur infrastructure (121 règles)
+### Bloquées sur infrastructure (113 règles)
 
 Détail dans `docs/plugin-rules-todo.md`. Non actionnables sans infra préalable.
 
 | Infra requise | Count |
 |---------------|-------|
 | Type checker (tsc) | 55 |
-| Module resolution | 28 |
-| Scope analysis | 19 |
+| Module resolution | 20 |
+| Scope analysis | 11 |
 | Full regex parser | 7 |
 | JSDoc type context | 5 |
 | Unicorn infra | 7 |
+| Package.json reader | 8 |
 
 ---
 
