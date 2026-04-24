@@ -1,123 +1,90 @@
-//! ts-no-unused-vars backend — simplified unused variable detection.
+//! ts-no-unused-vars backend — accurate unused-symbol detection via
+//! oxc_semantic.
 //!
-//! Catches the obvious case: a `const`/`let` variable declarator whose
-//! name never appears again anywhere else in the file source text.
-//! Also checks function parameters.
+//! Walks every symbol the semantic builder produced and flags those with
+//! no resolved references. Skips:
+//! - names starting with `_` (intentional non-use convention)
+//! - symbols whose declaration sits inside an `export` (named, default, or
+//!   `export *`) — they're part of the public surface
 //!
-//! Intentional limitations (simplicity over completeness):
-//! - Uses text-based reference scanning (not scope-aware)
-//! - Skips variables prefixed with `_`
-//! - Skips exported declarations
-//! - Skips destructuring patterns
-//! - Only processes file-level and function-level declarations
+//! Picks up cases the previous text-based heuristic missed: destructuring
+//! patterns (`const { x, y } = obj` where `y` is unused), function
+//! parameters that share a name with another identifier in the file (the
+//! text scan would over-count and mark them used), unused imports, unused
+//! type aliases, and shadowed inner bindings that never get referenced.
+
+use oxc_ast::AstKind;
 
 use crate::diagnostic::{Diagnostic, Severity};
+use crate::oxc_helpers::{source_type_for_path, with_semantic};
+use crate::rules::backend::CheckCtx;
 
-/// Check if a node is inside an export statement.
-fn is_exported(node: tree_sitter::Node) -> bool {
-    let mut cur = node.parent();
-    while let Some(p) = cur {
-        if p.kind() == "export_statement" {
-            return true;
-        }
-        if p.kind() == "program" {
+#[derive(Debug)]
+pub struct Check;
+
+impl crate::rules::backend::AstCheck for Check {
+    fn check(&self, ctx: &CheckCtx, _tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
+        let source_type = source_type_for_path(ctx.path);
+        with_semantic(ctx.source, source_type, |semantic| {
+            let scoping = semantic.scoping();
+            let nodes = semantic.nodes();
+            let mut diagnostics = Vec::new();
+
+            for symbol_id in scoping.symbol_ids() {
+                let name = scoping.symbol_name(symbol_id);
+                if name.starts_with('_') || name.is_empty() {
+                    continue;
+                }
+                if scoping.get_resolved_references(symbol_id).next().is_some() {
+                    continue;
+                }
+
+                let decl_node = scoping.symbol_declaration(symbol_id);
+                let exported = nodes.ancestor_kinds(decl_node).any(|k| {
+                    matches!(
+                        k,
+                        AstKind::ExportNamedDeclaration(_)
+                            | AstKind::ExportDefaultDeclaration(_)
+                            | AstKind::ExportAllDeclaration(_)
+                    )
+                });
+                if exported {
+                    continue;
+                }
+
+                let span = scoping.symbol_span(symbol_id);
+                let (line, column) = byte_offset_to_line_col(ctx.source, span.start as usize);
+                diagnostics.push(Diagnostic {
+                    path: ctx.path.to_path_buf(),
+                    line,
+                    column,
+                    rule_id: "ts-no-unused-vars".into(),
+                    message: format!("`{name}` is declared but never used."),
+                    severity: Severity::Warning,
+                    span: None,
+                });
+            }
+
+            diagnostics
+        })
+    }
+}
+
+fn byte_offset_to_line_col(source: &str, byte_offset: usize) -> (usize, usize) {
+    let mut line = 1;
+    let mut col = 1;
+    for (i, c) in source.char_indices() {
+        if i >= byte_offset {
             break;
         }
-        cur = p.parent();
-    }
-    false
-}
-
-/// Count occurrences of `name` as a whole word in source text.
-fn count_references(source: &str, name: &str) -> usize {
-    let mut count = 0usize;
-    let name_bytes = name.as_bytes();
-    let src_bytes = source.as_bytes();
-    let len = name_bytes.len();
-
-    let mut i = 0;
-    while i + len <= src_bytes.len() {
-        if &src_bytes[i..i + len] == name_bytes {
-            // Check word boundaries
-            let before_ok = i == 0 || !is_ident_char(src_bytes[i - 1]);
-            let after_ok = i + len >= src_bytes.len() || !is_ident_char(src_bytes[i + len]);
-            if before_ok && after_ok {
-                count += 1;
-            }
-            i += len;
+        if c == '\n' {
+            line += 1;
+            col = 1;
         } else {
-            i += 1;
+            col += 1;
         }
     }
-    count
-}
-
-fn is_ident_char(b: u8) -> bool {
-    b.is_ascii_alphanumeric() || b == b'_' || b == b'$'
-}
-
-crate::ast_check! { |node, source, ctx, diagnostics|
-    // Only process variable_declarator nodes within lexical_declaration (let/const)
-    if node.kind() != "variable_declarator" {
-        return;
-    }
-
-    // Must be inside a lexical_declaration (let/const) — skip var for simplicity
-    let parent = match node.parent() {
-        Some(p) if p.kind() == "lexical_declaration" => p,
-        _ => return,
-    };
-
-    // Skip exported declarations
-    if is_exported(parent) {
-        return;
-    }
-
-    // Get the variable name
-    let Some(name_node) = node.child_by_field_name("name") else {
-        return;
-    };
-
-    // Only handle simple identifiers (skip destructuring)
-    if name_node.kind() != "identifier" {
-        return;
-    }
-
-    let Ok(name) = name_node.utf8_text(source) else {
-        return;
-    };
-
-    // Skip underscore-prefixed names (intentional non-use convention)
-    if name.starts_with('_') {
-        return;
-    }
-
-    // Skip very short names that might cause false positives
-    if name.is_empty() {
-        return;
-    }
-
-    // Count whole-word occurrences of name in the full source
-    let source_str = match std::str::from_utf8(source) {
-        Ok(s) => s,
-        Err(_) => return,
-    };
-
-    let ref_count = count_references(source_str, name);
-
-    // If the name appears exactly once, it's only the declaration
-    if ref_count <= 1 {
-        let pos = name_node.start_position();
-        diagnostics.push(Diagnostic {
-            path: ctx.path.to_path_buf(),
-            line: pos.row + 1,
-            column: pos.column + 1,
-            rule_id: "ts-no-unused-vars".into(),
-            message: format!("`{name}` is declared but never used."),
-            severity: Severity::Warning,
-            span: None,
-        });
-    }
+    (line, col)
 }
 
 #[cfg(test)]
@@ -154,5 +121,27 @@ mod tests {
     fn flags_multiple_unused() {
         let d = run_on("const aaa = 1; const bbb = 2;");
         assert_eq!(d.len(), 2);
+    }
+
+    #[test]
+    fn flags_unused_destructured_binding() {
+        let d = run_on("const obj = { a: 1, b: 2 }; const { a, b } = obj; console.log(a);");
+        assert_eq!(d.len(), 1, "destructured `b` is unused");
+        assert!(d[0].message.contains("`b`"));
+    }
+
+    #[test]
+    fn allows_shared_name_with_outer_use() {
+        let d = run_on(
+            "const x = 1; function f(x: number) { return x; } f(2); console.log(x);",
+        );
+        assert!(d.is_empty(), "param `x` is used in body, outer `x` is logged");
+    }
+
+    #[test]
+    fn flags_unused_import() {
+        let d = run_on("import { foo } from './x'; console.log('hello');");
+        assert_eq!(d.len(), 1, "imported `foo` is never used");
+        assert!(d[0].message.contains("`foo`"));
     }
 }
