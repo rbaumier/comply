@@ -4,7 +4,7 @@ Dernière mise à jour: 2026-04-24
 
 ## Résumé
 
-**1000 règles implémentées.** Le backlog est quasi-vide.
+**1003 règles implémentées.** Le backlog est quasi-vide.
 
 | Catégorie | Implémenté | Restant |
 |-----------|------------|---------|
@@ -18,8 +18,9 @@ Dernière mise à jour: 2026-04-24
 | React (oxc_semantic) | 4/4 | 0 |
 | Import validation (ImportIndex) | 7/7 | 0 |
 | Testing | 3/3 | 0 |
+| Node.js / ESM | 3/3 | 0 |
 | Tier 5/6 (LLM review) | — | supprimé |
-| Bloquées infra | 0/113 | 113 |
+| Bloquées infra | 0/110 | 110 |
 
 **Total actionnable restant: 1 règle** (`data-clumps` cross-file, bloquée infra)
 
@@ -71,6 +72,14 @@ Dernière mise à jour: 2026-04-24
 | `valid-expect` | `expect()` doit avoir au moins un argument | ✓ |
 | `valid-expect-in-promise` | Assertions dans `.then()`/`.catch()` doivent être returned/awaited | ✓ |
 | `playwright-no-duplicate-slow` | `test.slow()` appelé 2x dans le même scope | ✓ |
+
+### Node.js / ESM (2026-04-24)
+
+| Règle | Description | Status |
+|-------|-------------|--------|
+| `file-extension-in-import` | Imports relatifs doivent inclure une extension de fichier (ESM compat) | ✓ |
+| `no-extraneous-import` | devDependencies ne doivent pas être importées en code production | ✓ |
+| `no-unsupported-node-builtins` | APIs Node.js non disponibles dans la version `engines.node` déclarée | ✓ |
 
 ### Tier 5/6 — LLM Review (supprimé)
 
