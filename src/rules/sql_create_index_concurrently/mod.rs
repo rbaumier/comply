@@ -1,6 +1,8 @@
 //! sql-create-index-concurrently
 
+mod rust;
 mod text;
+mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
@@ -21,12 +23,22 @@ pub fn register() -> RuleDef {
     RuleDef {
         meta: META,
         backends: vec![
-            (Language::TypeScript, Backend::Text(Box::new(text::Check))),
-            (Language::JavaScript, Backend::Text(Box::new(text::Check))),
-            (Language::Tsx, Backend::Text(Box::new(text::Check))),
-            (Language::Rust, Backend::Text(Box::new(text::Check))),
+            (Language::TypeScript, Backend::TreeSitter(Box::new(typescript::Check))),
+            (Language::JavaScript, Backend::TreeSitter(Box::new(typescript::Check))),
+            (Language::Tsx, Backend::TreeSitter(Box::new(typescript::Check))),
+            (Language::Rust, Backend::TreeSitter(Box::new(rust::Check))),
             (Language::Vue, Backend::Text(Box::new(text::Check))),
             (Language::Sql, Backend::Text(Box::new(text::Check))),
         ],
     }
+}
+
+/// True if `text` contains a `CREATE INDEX` (or `CREATE UNIQUE INDEX`)
+/// without the `CONCURRENTLY` keyword.
+pub(super) fn is_blocking_create_index(text: &str) -> bool {
+    let upper = text.to_ascii_uppercase();
+    if upper.contains("CONCURRENTLY") {
+        return false;
+    }
+    upper.contains("CREATE INDEX") || upper.contains("CREATE UNIQUE INDEX")
 }

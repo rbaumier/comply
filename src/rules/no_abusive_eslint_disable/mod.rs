@@ -1,6 +1,8 @@
 //! no-abusive-eslint-disable
 
+mod rust;
 mod text;
+mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
@@ -17,19 +19,56 @@ pub const META: RuleMeta = RuleMeta {
     categories: &["unicorn"],
 };
 
+/// The eslint disable directives that require a rule list.
+const DIRECTIVES: &[&str] = &[
+    "eslint-disable-next-line",
+    "eslint-disable-line",
+    "eslint-disable",
+];
+
+/// Returns true if the comment text contains an eslint-disable directive
+/// without specifying which rule(s) to disable.
+pub(crate) fn is_abusive_disable(text: &str) -> bool {
+    for directive in DIRECTIVES {
+        if let Some(pos) = text.find(directive) {
+            let end = pos + directive.len();
+            // If the char right after the directive is a hyphen, this is a
+            // longer directive (e.g. `eslint-disable` inside
+            // `eslint-disable-next-line`). Skip — the longer directive will
+            // match on its own iteration.
+            if text.as_bytes().get(end) == Some(&b'-') {
+                continue;
+            }
+            let after_trimmed = text[end..].trim();
+            if after_trimmed.is_empty()
+                || after_trimmed == "*/"
+                || after_trimmed == "-->"
+            {
+                return true;
+            }
+            if after_trimmed.starts_with("--") {
+                return true;
+            }
+            if let Some(first) = after_trimmed.chars().next()
+                && !first.is_ascii_alphabetic()
+                && first != '@'
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 pub fn register() -> RuleDef {
-    let backends: Vec<_> = [
-        Language::TypeScript,
-        Language::Tsx,
-        Language::JavaScript,
-        Language::Rust,
-        Language::Vue,
-    ]
-    .into_iter()
-    .map(|lang| (lang, Backend::Text(Box::new(text::Check))))
-    .collect();
     RuleDef {
         meta: META,
-        backends,
+        backends: vec![
+            (Language::TypeScript, Backend::TreeSitter(Box::new(typescript::Check))),
+            (Language::Tsx, Backend::TreeSitter(Box::new(typescript::Check))),
+            (Language::JavaScript, Backend::TreeSitter(Box::new(typescript::Check))),
+            (Language::Rust, Backend::TreeSitter(Box::new(rust::Check))),
+            (Language::Vue, Backend::Text(Box::new(text::Check))),
+        ],
     }
 }

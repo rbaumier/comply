@@ -1,6 +1,8 @@
 //! sql-no-pg-enum
 
+mod rust;
 mod text;
+mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
@@ -21,12 +23,18 @@ pub fn register() -> RuleDef {
     RuleDef {
         meta: META,
         backends: vec![
-            (Language::TypeScript, Backend::Text(Box::new(text::Check))),
-            (Language::JavaScript, Backend::Text(Box::new(text::Check))),
-            (Language::Tsx, Backend::Text(Box::new(text::Check))),
-            (Language::Rust, Backend::Text(Box::new(text::Check))),
+            (Language::TypeScript, Backend::TreeSitter(Box::new(typescript::Check))),
+            (Language::JavaScript, Backend::TreeSitter(Box::new(typescript::Check))),
+            (Language::Tsx, Backend::TreeSitter(Box::new(typescript::Check))),
+            (Language::Rust, Backend::TreeSitter(Box::new(rust::Check))),
             (Language::Vue, Backend::Text(Box::new(text::Check))),
             (Language::Sql, Backend::Text(Box::new(text::Check))),
         ],
     }
+}
+
+/// True if `text` contains an `AS ENUM` clause (case-insensitive),
+/// which is the marker for `CREATE TYPE ... AS ENUM (...)`.
+pub(super) fn declares_pg_enum(text: &str) -> bool {
+    text.to_ascii_uppercase().contains("AS ENUM")
 }

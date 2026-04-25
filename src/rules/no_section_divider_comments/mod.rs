@@ -6,7 +6,9 @@
 //! responsibility. The coding-standards skill: "A file doing two things is
 //! two files."
 
+mod rust;
 mod text;
+mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
@@ -25,16 +27,44 @@ pub const META: RuleMeta = RuleMeta {
     categories: &["comments"],
 };
 
+const DIVIDER_CHARS: &[u8] = b"=-*#~";
+
+/// True if the comment text contains a run of divider characters of at
+/// least `min_run` length. Walks the entire raw comment text — leading
+/// markers (`//`, `/*`) contain no divider characters so they don't
+/// inflate the run count.
+pub(crate) fn is_section_divider_text(text: &str, min_run: usize) -> bool {
+    let mut longest: usize = 0;
+    let mut current: usize = 0;
+    let mut last: u8 = 0;
+    for &b in text.as_bytes() {
+        if DIVIDER_CHARS.contains(&b) {
+            if b == last {
+                current += 1;
+            } else {
+                current = 1;
+                last = b;
+            }
+            if current > longest {
+                longest = current;
+            }
+        } else {
+            current = 0;
+            last = 0;
+        }
+    }
+    longest >= min_run
+}
+
 pub fn register() -> RuleDef {
-    let backends: Vec<_> = [
-        Language::TypeScript,
-        Language::Tsx,
-        Language::JavaScript,
-        Language::Rust,
-        Language::Vue,
-    ]
-    .into_iter()
-    .map(|lang| (lang, Backend::Text(Box::new(text::Check))))
-    .collect();
-    RuleDef { meta: META, backends }
+    RuleDef {
+        meta: META,
+        backends: vec![
+            (Language::TypeScript, Backend::TreeSitter(Box::new(typescript::Check))),
+            (Language::Tsx, Backend::TreeSitter(Box::new(typescript::Check))),
+            (Language::JavaScript, Backend::TreeSitter(Box::new(typescript::Check))),
+            (Language::Rust, Backend::TreeSitter(Box::new(rust::Check))),
+            (Language::Vue, Backend::Text(Box::new(text::Check))),
+        ],
+    }
 }

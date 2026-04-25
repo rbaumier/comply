@@ -1,10 +1,12 @@
 //! comment-prose-quality
 
+mod rust;
 mod text;
+mod typescript;
 
-use crate::diagnostic::Severity;
+use crate::diagnostic::{Diagnostic, Severity};
 use crate::files::Language;
-use crate::rules::backend::Backend;
+use crate::rules::backend::{Backend, CheckCtx};
 use crate::rules::meta::RuleMeta;
 use crate::rules::RuleDef;
 
@@ -19,19 +21,165 @@ pub const META: RuleMeta = RuleMeta {
     categories: &["comments"],
 };
 
+const WEASEL_WORDS: &[&str] = &[
+    "various",
+    "many",
+    "somewhat",
+    "practically",
+    "relatively",
+    "extremely",
+    "basically",
+    "actually",
+    "really",
+    "literally",
+    "quite",
+    "fairly",
+];
+
+const PASSIVE_PATTERNS: &[&str] = &[
+    "is used",
+    "was called",
+    "are handled",
+    "were created",
+    "been processed",
+];
+
+/// Strip the leading comment marker(s) from a single source line. Mirrors
+/// the original `text.rs` behaviour — including stripping Rust doc-comment
+/// markers (`//!`, `///`) so they don't trigger lexical-illusion on `!`/`/`.
+fn strip_marker(line: &str) -> &str {
+    let trimmed = line.trim();
+    if let Some(rest) = trimmed.strip_prefix("//") {
+        let rest = rest.strip_prefix('!').unwrap_or(rest);
+        let rest = rest.strip_prefix('/').unwrap_or(rest);
+        return rest;
+    }
+    if let Some(rest) = trimmed.strip_prefix("/*") {
+        let rest = rest.strip_suffix("*/").unwrap_or(rest);
+        return rest;
+    }
+    if let Some(rest) = trimmed.strip_prefix('*') {
+        return rest;
+    }
+    trimmed
+}
+
+/// Word-boundary, case-insensitive substring match.
+fn contains_word(haystack: &str, needle: &str) -> bool {
+    let lower = haystack.to_lowercase();
+    let mut start = 0;
+    while let Some(idx) = lower[start..].find(needle) {
+        let abs = start + idx;
+        let before_ok = abs == 0 || !lower.as_bytes()[abs - 1].is_ascii_alphanumeric();
+        let after_pos = abs + needle.len();
+        let after_ok = after_pos >= lower.len()
+            || !lower.as_bytes()[after_pos].is_ascii_alphanumeric();
+        if before_ok && after_ok {
+            return true;
+        }
+        start = abs + 1;
+    }
+    false
+}
+
+/// Lint a set of comment AST nodes. Walks each comment line by line so that
+/// the lexical-illusion check (last word of line N == first word of line N+1)
+/// behaves exactly like the original text-based scan. Across nodes the
+/// "previous word" only carries over when nodes are on adjacent source
+/// lines — otherwise unrelated comments would falsely trigger.
+pub(crate) fn lint_comment_nodes(
+    ctx: &CheckCtx,
+    source: &[u8],
+    nodes: &[tree_sitter::Node<'_>],
+) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+    let mut prev_last_word: Option<String> = None;
+    let mut prev_line: Option<usize> = None;
+
+    for node in nodes {
+        let Ok(raw) = node.utf8_text(source) else {
+            continue;
+        };
+        let start_row = node.start_position().row;
+        for (offset, line) in raw.lines().enumerate() {
+            let line_no = start_row + offset + 1;
+            let text = strip_marker(line);
+            let lower = text.to_lowercase();
+
+            // Weasel words.
+            for &weasel in WEASEL_WORDS {
+                if contains_word(&lower, weasel) {
+                    diagnostics.push(Diagnostic {
+                        path: ctx.path.to_path_buf(),
+                        line: line_no,
+                        column: 1,
+                        rule_id: META.id.into(),
+                        message: format!(
+                            "Weasel word `{weasel}` in comment — be specific."
+                        ),
+                        severity: Severity::Warning,
+                        span: None,
+                    });
+                    break;
+                }
+            }
+
+            // Passive voice.
+            for &passive in PASSIVE_PATTERNS {
+                if lower.contains(passive) {
+                    diagnostics.push(Diagnostic {
+                        path: ctx.path.to_path_buf(),
+                        line: line_no,
+                        column: 1,
+                        rule_id: META.id.into(),
+                        message: format!(
+                            "Passive voice `{passive}` in comment — use active voice."
+                        ),
+                        severity: Severity::Warning,
+                        span: None,
+                    });
+                    break;
+                }
+            }
+
+            // Lexical illusion: last word of previous comment line == first
+            // word of this line. Only triggers when the previous line is
+            // immediately adjacent (line_no - 1).
+            let words: Vec<&str> = text.split_whitespace().collect();
+            if let Some(ref prev) = prev_last_word
+                && let Some(prev_l) = prev_line
+                && prev_l + 1 == line_no
+                && let Some(&first) = words.first()
+                && first.to_lowercase() == *prev
+            {
+                diagnostics.push(Diagnostic {
+                    path: ctx.path.to_path_buf(),
+                    line: line_no,
+                    column: 1,
+                    rule_id: META.id.into(),
+                    message: format!(
+                        "Lexical illusion: `{first}` repeated across lines."
+                    ),
+                    severity: Severity::Warning,
+                    span: None,
+                });
+            }
+            prev_last_word = words.last().map(|w| w.to_lowercase());
+            prev_line = Some(line_no);
+        }
+    }
+    diagnostics
+}
+
 pub fn register() -> RuleDef {
-    let backends: Vec<_> = [
-        Language::TypeScript,
-        Language::Tsx,
-        Language::JavaScript,
-        Language::Rust,
-        Language::Vue,
-    ]
-    .into_iter()
-    .map(|lang| (lang, Backend::Text(Box::new(text::Check))))
-    .collect();
     RuleDef {
         meta: META,
-        backends,
+        backends: vec![
+            (Language::TypeScript, Backend::TreeSitter(Box::new(typescript::Check))),
+            (Language::Tsx, Backend::TreeSitter(Box::new(typescript::Check))),
+            (Language::JavaScript, Backend::TreeSitter(Box::new(typescript::Check))),
+            (Language::Rust, Backend::TreeSitter(Box::new(rust::Check))),
+            (Language::Vue, Backend::Text(Box::new(text::Check))),
+        ],
     }
 }

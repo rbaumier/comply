@@ -6,7 +6,9 @@
 //! it needs `simply`, it's not simple." Strip the filler and either delete
 //! the comment or rewrite it to explain the actual subtlety.
 
+mod rust;
 mod text;
+mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
@@ -25,16 +27,51 @@ pub const META: RuleMeta = RuleMeta {
     categories: &["comments"],
 };
 
+const BANNED: &[&str] = &[
+    "obviously",
+    "simply",
+    "just",
+    "basically",
+    "clearly",
+    "trivially",
+];
+
+/// Return the first banned word found in `text` at a word boundary,
+/// case-insensitive. Used by both the TS and Rust AST backends; the Vue
+/// `text.rs` backend has its own line-scanning logic.
+pub(crate) fn find_banned_word(text: &str) -> Option<&'static str> {
+    let lower = text.to_ascii_lowercase();
+    let bytes = lower.as_bytes();
+    for &word in BANNED {
+        let needle = word.as_bytes();
+        if needle.len() > bytes.len() {
+            continue;
+        }
+        let mut i = 0;
+        while i + needle.len() <= bytes.len() {
+            if &bytes[i..i + needle.len()] == needle {
+                let prev_ok = i == 0 || !bytes[i - 1].is_ascii_alphabetic();
+                let next_ok = i + needle.len() == bytes.len()
+                    || !bytes[i + needle.len()].is_ascii_alphabetic();
+                if prev_ok && next_ok {
+                    return Some(word);
+                }
+            }
+            i += 1;
+        }
+    }
+    None
+}
+
 pub fn register() -> RuleDef {
-    let backends: Vec<_> = [
-        Language::TypeScript,
-        Language::Tsx,
-        Language::JavaScript,
-        Language::Rust,
-        Language::Vue,
-    ]
-    .into_iter()
-    .map(|lang| (lang, Backend::Text(Box::new(text::Check))))
-    .collect();
-    RuleDef { meta: META, backends }
+    RuleDef {
+        meta: META,
+        backends: vec![
+            (Language::TypeScript, Backend::TreeSitter(Box::new(typescript::Check))),
+            (Language::Tsx, Backend::TreeSitter(Box::new(typescript::Check))),
+            (Language::JavaScript, Backend::TreeSitter(Box::new(typescript::Check))),
+            (Language::Rust, Backend::TreeSitter(Box::new(rust::Check))),
+            (Language::Vue, Backend::Text(Box::new(text::Check))),
+        ],
+    }
 }

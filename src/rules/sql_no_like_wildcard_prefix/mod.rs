@@ -1,6 +1,8 @@
 //! sql-no-like-wildcard-prefix
 
+mod rust;
 mod text;
+mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
@@ -21,12 +23,22 @@ pub fn register() -> RuleDef {
     RuleDef {
         meta: META,
         backends: vec![
-            (Language::TypeScript, Backend::Text(Box::new(text::Check))),
-            (Language::JavaScript, Backend::Text(Box::new(text::Check))),
-            (Language::Tsx, Backend::Text(Box::new(text::Check))),
-            (Language::Rust, Backend::Text(Box::new(text::Check))),
+            (Language::TypeScript, Backend::TreeSitter(Box::new(typescript::Check))),
+            (Language::JavaScript, Backend::TreeSitter(Box::new(typescript::Check))),
+            (Language::Tsx, Backend::TreeSitter(Box::new(typescript::Check))),
+            (Language::Rust, Backend::TreeSitter(Box::new(rust::Check))),
             (Language::Vue, Backend::Text(Box::new(text::Check))),
             (Language::Sql, Backend::Text(Box::new(text::Check))),
         ],
     }
+}
+
+/// True if `text` contains a `LIKE '%...` (leading-wildcard) pattern.
+/// Matches both single and double quote variants, case-insensitive on
+/// the keyword.
+pub(super) fn has_leading_wildcard_like(text: &str) -> bool {
+    text.contains("LIKE '%")
+        || text.contains("like '%")
+        || text.contains("LIKE \"%")
+        || text.contains("like \"%")
 }

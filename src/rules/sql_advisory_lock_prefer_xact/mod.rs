@@ -1,6 +1,8 @@
 //! sql-advisory-lock-prefer-xact
 
+mod rust;
 mod text;
+mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
@@ -21,12 +23,24 @@ pub fn register() -> RuleDef {
     RuleDef {
         meta: META,
         backends: vec![
-            (Language::TypeScript, Backend::Text(Box::new(text::Check))),
-            (Language::JavaScript, Backend::Text(Box::new(text::Check))),
-            (Language::Tsx, Backend::Text(Box::new(text::Check))),
-            (Language::Rust, Backend::Text(Box::new(text::Check))),
+            (Language::TypeScript, Backend::TreeSitter(Box::new(typescript::Check))),
+            (Language::JavaScript, Backend::TreeSitter(Box::new(typescript::Check))),
+            (Language::Tsx, Backend::TreeSitter(Box::new(typescript::Check))),
+            (Language::Rust, Backend::TreeSitter(Box::new(rust::Check))),
             (Language::Vue, Backend::Text(Box::new(text::Check))),
             (Language::Sql, Backend::Text(Box::new(text::Check))),
         ],
     }
+}
+
+/// True if `text` calls `pg_advisory_lock(` (the session-scoped variant)
+/// without using the transaction-scoped or try variants.
+pub(super) fn uses_session_advisory_lock(text: &str) -> bool {
+    if !text.contains("pg_advisory_lock(") {
+        return false;
+    }
+    if text.contains("pg_advisory_xact_lock(") || text.contains("pg_try_advisory") {
+        return false;
+    }
+    true
 }

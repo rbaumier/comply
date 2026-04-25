@@ -1,6 +1,8 @@
 //! sql-no-select-star
 
+mod rust;
 mod text;
+mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
@@ -21,12 +23,19 @@ pub fn register() -> RuleDef {
     RuleDef {
         meta: META,
         backends: vec![
-            (Language::TypeScript, Backend::Text(Box::new(text::Check))),
-            (Language::JavaScript, Backend::Text(Box::new(text::Check))),
-            (Language::Tsx, Backend::Text(Box::new(text::Check))),
-            (Language::Rust, Backend::Text(Box::new(text::Check))),
+            (Language::TypeScript, Backend::TreeSitter(Box::new(typescript::Check))),
+            (Language::JavaScript, Backend::TreeSitter(Box::new(typescript::Check))),
+            (Language::Tsx, Backend::TreeSitter(Box::new(typescript::Check))),
+            (Language::Rust, Backend::TreeSitter(Box::new(rust::Check))),
             (Language::Vue, Backend::Text(Box::new(text::Check))),
             (Language::Sql, Backend::Text(Box::new(text::Check))),
         ],
     }
+}
+
+/// True if `text` contains a `SELECT *` (case-insensitive), allowing
+/// for one or two spaces between the keyword and the asterisk.
+pub(super) fn contains_select_star(text: &str) -> bool {
+    let upper = text.to_ascii_uppercase();
+    upper.contains("SELECT *") || upper.contains("SELECT  *")
 }
