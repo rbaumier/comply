@@ -1,15 +1,17 @@
 //! Detect `.put(...)` route registrations whose handler signature
-//! (arrow / function) mentions `Partial<...>` in a type annotation.
+//! mentions `Partial<...>` *as a type annotation*.
 //!
 //! Shape scanned:
 //! ```ts
 //! app.put("/users/:id", (req: Request<..., ..., Partial<User>>, res) => { ... })
-//! router.put("/x", handler: (body: Partial<X>) => ...)
+//! router.put("/x", (body: Partial<X>) => ...)
 //! ```
 //!
-//! The detection is intentionally syntactic: we match a call expression
-//! whose callee is `<something>.put` and look for `Partial<...>` tokens
-//! anywhere in the call's argument subtree.
+//! The match is intentionally narrow: only `Partial<...>` appearing
+//! inside a `type_annotation` (parameter / return-type slot) or inside
+//! a `type_arguments` list (route-handler generic) on the put call's
+//! arguments triggers the diagnostic. Bare textual mentions in strings
+//! or values are ignored.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
@@ -27,16 +29,45 @@ fn is_put_member(callee: tree_sitter::Node, source: &[u8]) -> bool {
     name == "put"
 }
 
-/// Walk `root` looking for a `generic_type` whose name is `Partial`.
-fn contains_partial(root: tree_sitter::Node, source: &[u8]) -> bool {
+/// Walk `root`'s subtree but only descend into nodes that represent
+/// type-level positions (parameter type annotations, return-type
+/// annotations, type-argument lists). When a `generic_type` with name
+/// `Partial` is reached inside such a position, return true.
+fn contains_partial_in_type_position(root: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut stack: Vec<tree_sitter::Node> = vec![root];
+    while let Some(n) = stack.pop() {
+        match n.kind() {
+            // Type-level scopes — once inside, descend freely looking
+            // for `Partial<...>`.
+            "type_annotation" | "type_arguments" | "opting_type_annotation" => {
+                if subtree_has_partial(n, source) {
+                    return true;
+                }
+                continue;
+            }
+            _ => {}
+        }
+        // Otherwise keep looking for a type position deeper in the tree
+        // (we don't dive into already-known leaf scopes here, to avoid
+        // matching `Partial` inside string contents or value calls).
+        let mut cursor = n.walk();
+        for child in n.children(&mut cursor) {
+            stack.push(child);
+        }
+    }
+    false
+}
+
+fn subtree_has_partial(root: tree_sitter::Node, source: &[u8]) -> bool {
     let mut stack = vec![root];
     while let Some(n) = stack.pop() {
         if n.kind() == "generic_type"
             && let Some(name_node) = n.child_by_field_name("name")
-                && let Ok(name) = std::str::from_utf8(&source[name_node.byte_range()])
-                    && name == "Partial" {
-                        return true;
-                    }
+            && let Ok(name) = std::str::from_utf8(&source[name_node.byte_range()])
+            && name == "Partial"
+        {
+            return true;
+        }
         let mut cursor = n.walk();
         for child in n.children(&mut cursor) {
             stack.push(child);
@@ -50,7 +81,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
     let Some(callee) = node.child_by_field_name("function") else { return };
     if !is_put_member(callee, source) { return }
     let Some(args) = node.child_by_field_name("arguments") else { return };
-    if !contains_partial(args, source) { return }
+    if !contains_partial_in_type_position(args, source) { return }
     diagnostics.push(Diagnostic::at_node(
         ctx.path,
         &node,
@@ -96,5 +127,13 @@ mod tests {
     fn allows_non_route_put_method() {
         // `.put(...)` on a map-like is ignored unless Partial appears — no false positive here.
         assert!(run("const m = new Map(); m.put('k', 'v');").is_empty());
+    }
+
+    #[test]
+    fn allows_partial_in_value_position_only() {
+        // REVIEW regression: `Partial` referenced as a value (string or
+        // local variable) must not trigger the rule — we only flag a
+        // type-level `Partial<...>` in the handler signature.
+        assert!(run("app.put('/x', (req, res) => { console.log('Partial<User>'); });").is_empty());
     }
 }

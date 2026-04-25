@@ -1,7 +1,9 @@
 //! Collect optional property names in an interface / object type. If
-//! three or more share a common alphabetic prefix (≥ 4 chars, e.g.
+//! two or more share a common alphabetic prefix (≥ 4 chars, e.g.
 //! `cancel…`, `shipped…`), flag the declaration: this is the
-//! "conditional optional fields" smell.
+//! "conditional optional fields" smell. Two related optional fields
+//! (e.g. `cancelReason?` + `cancelledAt?`) are already enough to
+//! warrant a discriminated union.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use std::collections::HashMap;
@@ -19,26 +21,23 @@ fn is_optional_property(member: tree_sitter::Node) -> bool {
     false
 }
 
-/// Return a lowercase alphabetic prefix of `name` up to its first
-/// non-alpha boundary (camelCase uppercase transition, underscore, ...).
+/// Return a 4-character lowercase prefix bucket for `name`, so close
+/// variants such as `cancelReason` and `cancelledAt` collide on the
+/// same bucket (`canc`). Returns the empty string when the name has
+/// fewer than 4 leading ASCII alphabetic characters.
 fn leading_prefix(name: &str) -> String {
     let bytes = name.as_bytes();
-    let mut end = 0;
-    for (i, b) in bytes.iter().enumerate() {
-        if i == 0 {
-            if !b.is_ascii_alphabetic() {
-                break;
-            }
-            end = 1;
-            continue;
+    let mut buf = String::with_capacity(4);
+    for &b in bytes.iter().take(4) {
+        if !b.is_ascii_alphabetic() {
+            return String::new();
         }
-        // stop on uppercase (camelCase boundary) or non-alpha
-        if b.is_ascii_uppercase() || !b.is_ascii_alphabetic() {
-            break;
-        }
-        end = i + 1;
+        buf.push(b.to_ascii_lowercase() as char);
     }
-    name[..end].to_ascii_lowercase()
+    if buf.len() < 4 {
+        return String::new();
+    }
+    buf
 }
 
 fn collect_optional_prefixes(body: tree_sitter::Node, source: &[u8]) -> HashMap<String, usize> {
@@ -75,7 +74,7 @@ fn check_decl(
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let counts = collect_optional_prefixes(body, source);
-    let mut hits: Vec<(&String, &usize)> = counts.iter().filter(|(_, c)| **c >= 3).collect();
+    let mut hits: Vec<(&String, &usize)> = counts.iter().filter(|(_, c)| **c >= 2).collect();
     if hits.is_empty() {
         return;
     }
@@ -125,7 +124,19 @@ mod tests {
             "interface Order { id: string; cancelReason?: string; cancelNote?: string; cancelCode?: string }",
         );
         assert_eq!(d.len(), 1);
-        assert!(d[0].message.contains("cancel"));
+        assert!(d[0].message.contains("canc"));
+    }
+
+    #[test]
+    fn flags_two_optional_fields_sharing_prefix() {
+        // REVIEW regression: two related optional fields are enough —
+        // `status: "cancelled"` + `cancelReason?` + `cancelledAt?` is the
+        // canonical conditional-fields smell.
+        let d = run(
+            "interface Order { id: string; cancelReason?: string; cancelledAt?: string }",
+        );
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("canc"));
     }
 
     #[test]
@@ -134,14 +145,6 @@ mod tests {
             "type Shipment = { id: string; shippedAt?: string; shippedBy?: string; shippedVia?: string };",
         );
         assert_eq!(d.len(), 1);
-    }
-
-    #[test]
-    fn allows_two_optional_fields() {
-        assert!(run(
-            "interface Order { id: string; cancelReason?: string; cancelledAt?: string }"
-        )
-        .is_empty());
     }
 
     #[test]
@@ -158,5 +161,10 @@ mod tests {
             "interface Order { cancelReason: string; cancelledAt: string; cancelledBy: string }"
         )
         .is_empty());
+    }
+
+    #[test]
+    fn allows_single_optional_field() {
+        assert!(run("interface Order { id: string; cancelReason?: string }").is_empty());
     }
 }

@@ -1,13 +1,21 @@
 //! For every `call_expression` whose callee is `<x>.parse` or
 //! `<x>.safeParse`, walk up the AST to find the enclosing function. If
-//! that function's name doesn't look like a handler / middleware,
-//! emit a diagnostic.
+//! that function does not look like an HTTP boundary, emit a
+//! diagnostic.
 //!
-//! "Looks like a handler/middleware" heuristic:
-//!   - name contains `handler`, `middleware`, `route`, `controller`
-//!   - name starts with HTTP verb (`get`, `post`, `put`, `patch`, `delete`)
-//!   - function has 2+ params where first param type mentions `Request`
-//!     or one of the params is named `req`, `request`, `ctx`, `context`
+//! "Looks like an HTTP boundary" heuristic:
+//!   - name contains `handler`, `middleware`, `controller`, `endpoint`,
+//!     `resolver`
+//!   - the function is the callback argument of a route registration
+//!     call (`app.get(...)`, `router.post(...)`, …)
+//!   - the function is `export async function GET/POST/PUT/PATCH/DELETE`
+//!     (Next.js / Remix-style route exports — exact-uppercase verb name)
+//!   - function has a parameter typed `Request` / `NextApiRequest` /
+//!     similar, OR a parameter literally named `req`, `request`, `ctx`,
+//!     `context`
+//!
+//! Names like `getUser` or `postProcess` are NOT treated as handlers
+//! anymore — the verb prefix alone is too noisy.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
@@ -27,27 +35,25 @@ fn is_parse_call(callee: tree_sitter::Node, source: &[u8]) -> Option<&'static st
 const HANDLER_KEYWORDS: &[&str] = &[
     "handler",
     "middleware",
-    "route",
     "controller",
     "endpoint",
     "resolver",
 ];
 
-const VERB_PREFIXES: &[&str] = &["get", "post", "put", "patch", "delete", "head", "options"];
+const HTTP_VERB_EXPORTS: &[&str] = &[
+    "GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS",
+];
 
 fn name_looks_like_handler(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
     if HANDLER_KEYWORDS.iter().any(|k| lower.contains(k)) {
         return true;
     }
-    // Verb prefix followed by an uppercase letter: getUser, postOrder, ...
-    for v in VERB_PREFIXES {
-        if lower.starts_with(v) && name.len() > v.len() {
-            let next = name.as_bytes()[v.len()];
-            if next.is_ascii_uppercase() {
-                return true;
-            }
-        }
+    // Next.js / Remix-style: an exact-uppercase HTTP verb name signals a
+    // route-handler export. Lowercase / mixed forms (`getUser`,
+    // `postProcess`) are NOT handlers.
+    if HTTP_VERB_EXPORTS.contains(&name) {
+        return true;
     }
     false
 }
@@ -112,12 +118,39 @@ fn is_in_handler_context(fn_node: tree_sitter::Node, name: Option<&str>, source:
         && name_looks_like_handler(n) {
             return true;
         }
-    // Inspect parameters.
     if let Some(params) = fn_node.child_by_field_name("parameters")
         && params_look_like_handler(params, source) {
             return true;
         }
+    if is_inline_route_callback(fn_node, source) {
+        return true;
+    }
     false
+}
+
+const ROUTE_VERBS: &[&str] = &[
+    "get", "post", "put", "patch", "delete", "head", "options", "all", "use",
+];
+
+/// True when `fn_node` (an arrow / function expression) is an argument
+/// to a call like `<obj>.<verb>(...)`, where `<verb>` is a router HTTP
+/// method name (`app.get`, `router.post`, …).
+fn is_inline_route_callback(fn_node: tree_sitter::Node<'_>, source: &[u8]) -> bool {
+    let Some(parent) = fn_node.parent() else { return false };
+    if parent.kind() != "arguments" {
+        return false;
+    }
+    let Some(call) = parent.parent() else { return false };
+    if call.kind() != "call_expression" {
+        return false;
+    }
+    let Some(callee) = call.child_by_field_name("function") else { return false };
+    if callee.kind() != "member_expression" {
+        return false;
+    }
+    let Some(prop) = callee.child_by_field_name("property") else { return false };
+    let Ok(method) = std::str::from_utf8(&source[prop.byte_range()]) else { return false };
+    ROUTE_VERBS.contains(&method)
 }
 
 crate::ast_check! { |node, source, ctx, diagnostics|
@@ -189,7 +222,34 @@ mod tests {
     }
 
     #[test]
-    fn allows_parse_in_verb_prefixed_function() {
+    fn allows_parse_in_verb_prefixed_function_with_request_param() {
+        // Still allowed because of the `req: Request` parameter, not
+        // because of the `getUser` name.
         assert!(run("function getUser(req: Request) { return Schema.parse(req.body); }").is_empty());
+    }
+
+    #[test]
+    fn flags_parse_in_verb_prefixed_function_without_request_param() {
+        // REVIEW regression: a function named `getUser`/`postProcess`
+        // that takes no Request parameter is NOT a handler; the verb
+        // prefix alone must not exempt it from the rule.
+        let d = run("function getUser(input: unknown) { return Schema.parse(input); }");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("getUser"));
+    }
+
+    #[test]
+    fn allows_parse_in_inline_route_callback() {
+        // Inline arrow handler passed to `.get(...)` is treated as a
+        // boundary even when its name (or lack thereof) gives no signal.
+        assert!(run("app.get('/u', (req, res) => { Schema.parse(req.body); });").is_empty());
+    }
+
+    #[test]
+    fn allows_parse_in_nextjs_uppercase_route_export() {
+        assert!(run(
+            "export async function GET(req: Request) { return Schema.parse(await req.json()); }"
+        )
+        .is_empty());
     }
 }

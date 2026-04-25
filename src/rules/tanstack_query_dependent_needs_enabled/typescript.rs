@@ -5,6 +5,13 @@
 //! depends on a possibly-undefined value. In that case the options
 //! object must also carry an `enabled` key — otherwise the query fires
 //! with `undefined` and either errors or caches a bogus key.
+//!
+//! Limitation: we cannot detect dependencies that are visible only to a
+//! type-checker — e.g. `queryFn: () => fetchUser(user.id)` where
+//! `user: User | undefined` in the surrounding scope. Tree-sitter has
+//! no type information, so we deliberately stop at syntactic markers
+//! (`?.` and `!`) and do not guess further. The `documents_type_info_limitation`
+//! test below records this as a known false negative.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
@@ -131,6 +138,18 @@ mod tests {
     #[test]
     fn allows_non_dependent_query() {
         let src = "useQuery({ queryKey: ['u'], queryFn: () => fetch('/u') });";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn documents_type_info_limitation() {
+        // REVIEW: this rule is intentionally syntactic. A dependency
+        // visible only to a TypeScript type-checker (e.g. `user: User |
+        // undefined` referenced as `user.id` without `?.` / `!`) is a
+        // known false negative. Expanding the heuristic would require
+        // type info, which tree-sitter does not provide. We assert the
+        // current behaviour so any future change is intentional.
+        let src = "useQuery({ queryKey: ['u'], queryFn: () => fetchUser(user.id) });";
         assert!(run(src).is_empty());
     }
 }

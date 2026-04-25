@@ -1,9 +1,14 @@
 //! tanstack-query-no-mutation-for-client-state backend.
 //!
 //! Heuristic: a `useMutation({ mutationFn: (...) => body })` whose body
-//! contains no network call (no `fetch`, no `axios.*`, no `api.*`
-//! method call, no `await` at all) is almost always misuse — the
+//! contains no concrete HTTP call is almost always misuse — the
 //! developer is reaching for `useMutation` to paper over `useState`.
+//!
+//! "Concrete HTTP call" = `fetch(...)`, `axios(...)` / `axios.<verb>(...)`,
+//! `api(...)` / `api.<...>(...)`, or any `.get/.post/.put/.patch/.delete(...)`
+//! method call. A bare `await someLocalFn()` is NOT considered network
+//! activity — it could be doing anything (timer, IndexedDB, channel
+//! send) and would fall into the same misuse pattern.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
@@ -54,18 +59,36 @@ fn find_pair_value<'a>(
     None
 }
 
+const HTTP_VERB_METHODS: &[&str] = &["get", "post", "put", "patch", "delete"];
+
 fn body_has_network_call(body: tree_sitter::Node<'_>, source: &[u8]) -> bool {
     let mut found = false;
     walk_subtree(body, &mut |n| {
         if found { return; }
-        if n.kind() == "await_expression" { found = true; return; }
         if n.kind() != "call_expression" { return; }
         let Some(func) = n.child_by_field_name("function") else { return; };
-        let Ok(text) = func.utf8_text(source) else { return; };
-        if text == "fetch" { found = true; return; }
-        // `axios(...)`, `axios.post(...)`, `api.post(...)`, `api.foo.bar(...)`.
-        if text.starts_with("axios") || text.starts_with("api.") || text == "api" {
-            found = true;
+        // Bare callee: `fetch(...)`, `axios(...)`, `api(...)`.
+        if func.kind() == "identifier" {
+            let Ok(name) = func.utf8_text(source) else { return; };
+            if matches!(name, "fetch" | "axios" | "api") {
+                found = true;
+            }
+            return;
+        }
+        // Member callee: `axios.post(...)`, `api.foo.bar(...)`,
+        // `<x>.get/.post/.put/.patch/.delete(...)`.
+        if func.kind() == "member_expression" {
+            let Some(prop) = func.child_by_field_name("property") else { return; };
+            let Ok(method) = prop.utf8_text(source) else { return; };
+            if HTTP_VERB_METHODS.contains(&method) {
+                found = true;
+                return;
+            }
+            // Match the `axios` / `api` chain even when the verb name is unusual.
+            let Ok(full) = func.utf8_text(source) else { return; };
+            if full.starts_with("axios.") || full.starts_with("api.") {
+                found = true;
+            }
         }
     });
     found
@@ -124,8 +147,17 @@ mod tests {
     }
 
     #[test]
-    fn allows_mutation_with_await() {
+    fn flags_mutation_with_bare_await_no_http_call() {
+        // REVIEW regression: `await doWork(t)` could be local
+        // (Promise.resolve, IndexedDB, channel send). It is NOT a
+        // network call by itself and must not exempt the mutation.
         let src = "useMutation({ mutationFn: async (t) => { await doWork(t); } });";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_mutation_with_http_verb_method() {
+        let src = "useMutation({ mutationFn: (t) => http.put('/t', t) });";
         assert!(run(src).is_empty());
     }
 }

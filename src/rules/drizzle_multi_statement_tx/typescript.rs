@@ -65,54 +65,125 @@ fn chain_contains_mutation(node: tree_sitter::Node<'_>, src: &[u8]) -> bool {
     }
 }
 
+/// Recursively collect mutation calls in `block`, descending one level
+/// into `if_statement`/`else` blocks (and similar simple control-flow
+/// containers). Loops and nested function bodies are NOT descended into
+/// — those represent a different scope.
+fn collect_block_mutations<'a>(
+    block: tree_sitter::Node<'a>,
+    source: &[u8],
+    out: &mut Vec<tree_sitter::Node<'a>>,
+) {
+    let mut cursor = block.walk();
+    for stmt in block.children(&mut cursor) {
+        match stmt.kind() {
+            "expression_statement" => {
+                if let Some(expr) = strip_to_call(stmt.child(0))
+                    && chain_contains_mutation(expr, source)
+                {
+                    out.push(expr);
+                }
+            }
+            // if (cond) { … } else { … } / else if (…) { … }
+            "if_statement" => {
+                let mut c = stmt.walk();
+                for ch in stmt.children(&mut c) {
+                    if ch.kind() == "statement_block" {
+                        collect_block_mutations(ch, source, out);
+                    } else if ch.kind() == "else_clause" {
+                        let mut ec = ch.walk();
+                        for inner in ch.children(&mut ec) {
+                            if inner.kind() == "statement_block" {
+                                collect_block_mutations(inner, source, out);
+                            } else if inner.kind() == "if_statement" {
+                                // else if — recurse via a synthetic block walk.
+                                let mut ic = inner.walk();
+                                for grand in inner.children(&mut ic) {
+                                    if grand.kind() == "statement_block" {
+                                        collect_block_mutations(grand, source, out);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            // try { … } catch { … } / try { … } finally { … }
+            "try_statement" => {
+                let mut c = stmt.walk();
+                for ch in stmt.children(&mut c) {
+                    if ch.kind() == "statement_block" {
+                        collect_block_mutations(ch, source, out);
+                    } else if matches!(ch.kind(), "catch_clause" | "finally_clause") {
+                        let mut ec = ch.walk();
+                        for inner in ch.children(&mut ec) {
+                            if inner.kind() == "statement_block" {
+                                collect_block_mutations(inner, source, out);
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Strip `await_expression` layers from an expression node to reach
+/// the underlying call expression.
+fn strip_to_call(mut expr_opt: Option<tree_sitter::Node<'_>>) -> Option<tree_sitter::Node<'_>> {
+    while let Some(e) = expr_opt {
+        if e.kind() == "await_expression" {
+            let mut c = e.walk();
+            let mut found: Option<tree_sitter::Node<'_>> = None;
+            for ch in e.children(&mut c) {
+                if ch.kind() == "call_expression" {
+                    found = Some(ch);
+                    break;
+                }
+            }
+            expr_opt = found;
+            continue;
+        }
+        break;
+    }
+    let expr = expr_opt?;
+    if expr.kind() != "call_expression" {
+        return None;
+    }
+    Some(expr)
+}
+
 crate::ast_check! { |node, source, ctx, diagnostics|
     if node.kind() != "statement_block" {
         return;
     }
-    // Count mutation calls at the top level of this block (direct
-    // expression_statements).
-    let mut cursor = node.walk();
-    let mut mutation_nodes: Vec<tree_sitter::Node<'_>> = Vec::new();
-    for stmt in node.children(&mut cursor) {
-        if stmt.kind() != "expression_statement" {
-            continue;
-        }
-        // The expression could be an await_expression wrapping the call.
-        // Strip await_expression layers until we hit the underlying call.
-        let mut expr_opt = stmt.child(0);
-        while let Some(e) = expr_opt {
-            if e.kind() == "await_expression" {
-                // await_expression wraps a single expression; find the first
-                // call_expression child.
-                let mut found: Option<tree_sitter::Node<'_>> = None;
-                let mut c = e.walk();
-                for ch in e.children(&mut c) {
-                    if ch.kind() == "call_expression" {
-                        found = Some(ch);
-                        break;
-                    }
-                }
-                expr_opt = found;
-                continue;
-            }
-            break;
-        }
-        let Some(expr) = expr_opt else { continue };
-        if expr.kind() != "call_expression" {
-            continue;
-        }
-        if !chain_contains_mutation(expr, source) {
-            continue;
-        }
-        mutation_nodes.push(expr);
+    // Skip nested blocks: only the outermost function/transaction body
+    // should drive a single diagnostic. We rely on the parent kind: if
+    // the block's parent is itself an inner control-flow node we let
+    // the outer block do the counting.
+    if let Some(parent) = node.parent()
+        && matches!(
+            parent.kind(),
+            "if_statement"
+                | "else_clause"
+                | "try_statement"
+                | "catch_clause"
+                | "finally_clause"
+        )
+    {
+        return;
     }
+
+    let mut mutation_nodes: Vec<tree_sitter::Node<'_>> = Vec::new();
+    collect_block_mutations(node, source, &mut mutation_nodes);
+
     if mutation_nodes.len() < 2 {
         return;
     }
     if is_in_transaction_callback(node, source) {
         return;
     }
-    // Flag the first mutation node.
     let first = mutation_nodes[0];
     diagnostics.push(Diagnostic::at_node(
         ctx.path,
@@ -147,5 +218,22 @@ mod tests {
     fn allows_single_mutation() {
         let src = "async function f() { await db.insert(users).values({ id: 1 }); }";
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_mutations_split_across_if_else() {
+        // REVIEW regression: mutations buried inside if/else branches
+        // were missed by the previous direct-children-only count.
+        let src = "async function f(c) {\n  \
+                   if (c) {\n    await db.insert(users).values({ id: 1 });\n  } else {\n    await db.update(posts).set({ x: 1 });\n  }\n}";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_top_level_then_nested_mutation() {
+        let src = "async function f(c) {\n  \
+                   await db.insert(users).values({ id: 1 });\n  \
+                   if (c) { await db.update(posts).set({ x: 1 }); }\n}";
+        assert_eq!(run(src).len(), 1);
     }
 }
