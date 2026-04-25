@@ -1,12 +1,13 @@
-//! Flag `mr-2` / `ml-2` on any JSX child inside a `<Button>` element.
+//! Flag icons inside a `<Button>` that don't carry the `data-icon`
+//! attribute shadcn uses to size + space them via parent CSS.
 //!
-//! The heuristic fires when:
-//!   1. We encounter a `jsx_element` whose opening tag is `Button`.
-//!   2. One of its JSX element children has a `className` utility of
-//!      `mr-2` or `ml-2`.
-//!
-//! The rule is intentionally narrow — the shadcn docs codify `mr-2`
-//! and `ml-2` as the legacy anti-pattern that `data-icon` replaces.
+//! Two violations are reported:
+//!   1. Legacy spacing classes — a child whose `className` includes
+//!      `mr-2` / `ml-2`. `data-icon="inline-start"|"inline-end"`
+//!      replaces this.
+//!   2. Missing `data-icon` — a JSX child that *looks* like an icon
+//!      (component name ends with `Icon`, or matches a known icon-library
+//!      export like `ChevronRight`) but has no `data-icon` attribute.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
@@ -56,6 +57,36 @@ fn child_has_offending_margin<'a>(child: tree_sitter::Node<'a>, source: &'a [u8]
     None
 }
 
+/// Heuristic: does `tag` look like an icon component? Matches `*Icon`
+/// (e.g. `<TrashIcon />`, `<UserIcon />`) and a small allow-list of
+/// well-known lucide-react / heroicons exports that don't end with `Icon`
+/// (`<ChevronRight />`, `<Plus />`, …).
+fn looks_like_icon(tag: &str) -> bool {
+    if tag.ends_with("Icon") && tag.chars().next().is_some_and(|c| c.is_ascii_uppercase()) {
+        return true;
+    }
+    const KNOWN_ICONS: &[&str] = &[
+        "ChevronLeft", "ChevronRight", "ChevronUp", "ChevronDown",
+        "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown",
+        "Plus", "Minus", "Check", "X", "Search", "Trash", "Edit", "Pencil",
+        "Loader", "Spinner",
+    ];
+    KNOWN_ICONS.contains(&tag)
+}
+
+/// Does `child` carry a `data-icon` attribute (any value)?
+fn has_data_icon_attr(child: tree_sitter::Node, source: &[u8]) -> bool {
+    let Some(attrs) = attributes_node(child, source) else { return false };
+    let mut cursor = attrs.walk();
+    for attr in attrs.children(&mut cursor) {
+        if attr.kind() != "jsx_attribute" { continue; }
+        if crate::rules::jsx::jsx_attribute_name(attr, source) == Some("data-icon") {
+            return true;
+        }
+    }
+    false
+}
+
 crate::ast_check! { |node, source, ctx, diagnostics|
     if node.kind() != "jsx_element" {
         return;
@@ -79,6 +110,21 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 &offending,
                 super::META.id,
                 "Icon inside `<Button>` uses `mr-2`/`ml-2` — replace with `data-icon=\"inline-start\"` or `data-icon=\"inline-end\"`.".into(),
+                Severity::Warning,
+            ));
+            continue;
+        }
+
+        // Icon-shaped child with no data-icon attribute → flag it so the
+        // parent button can size + space it via the shadcn `[data-icon]`
+        // selector.
+        let Some(child_tag) = opening_tag_name(child, source) else { continue };
+        if looks_like_icon(child_tag) && !has_data_icon_attr(child, source) {
+            diagnostics.push(Diagnostic::at_node(
+                ctx.path,
+                &child,
+                super::META.id,
+                "Icon child of `<Button>` is missing a `data-icon` attribute — add `data-icon=\"inline-start\"` or `data-icon=\"inline-end\"`.".into(),
                 Severity::Warning,
             ));
         }
@@ -112,14 +158,34 @@ mod tests {
     }
 
     #[test]
-    fn allows_icon_without_margin() {
+    fn flags_icon_without_data_icon_attr() {
+        // `<Icon />` is icon-shaped but missing `data-icon` — still wrong
+        // because the parent button can't size/space it via CSS.
         let src = r#"const x = <Button><Icon />Save</Button>;"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_lucide_named_icon_without_data_icon() {
+        let src = r#"const x = <Button><ChevronRight />Next</Button>;"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_data_icon_on_lucide_named_icon() {
+        let src = r#"const x = <Button><ChevronRight data-icon="inline-end" />Next</Button>;"#;
         assert!(run(src).is_empty());
     }
 
     #[test]
     fn ignores_non_button() {
         let src = r#"const x = <div><Icon className="mr-2" />hi</div>;"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_non_icon_child() {
+        let src = r#"const x = <Button><span>Save</span></Button>;"#;
         assert!(run(src).is_empty());
     }
 }

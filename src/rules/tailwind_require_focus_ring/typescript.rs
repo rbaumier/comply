@@ -6,7 +6,17 @@ use crate::rules::jsx::{
 const INTERACTIVE_TAGS: &[&str] = &["button", "a", "input", "select", "textarea"];
 
 fn has_focus_ring(classes: &str) -> bool {
+    // `focus:outline-none` / `focus:outline-0` REMOVE the focus indicator
+    // rather than provide one. They must not count as a valid ring even
+    // though they share the `focus:outline-` prefix.
+    const OUTLINE_REMOVERS: &[&str] = &[
+        "focus:outline-none",
+        "focus:outline-0",
+        "focus-visible:outline-none",
+        "focus-visible:outline-0",
+    ];
     classes.split_whitespace().any(|tok| {
+        if OUTLINE_REMOVERS.contains(&tok) { return false; }
         tok.starts_with("focus:ring")
             || tok.starts_with("focus-visible:ring")
             || tok.starts_with("focus:outline-")
@@ -88,5 +98,31 @@ mod tests {
     #[test]
     fn ignores_non_interactive_div() {
         assert!(run(r#"export const A = () => <div className="px-4" />;"#).is_empty());
+    }
+
+    #[test]
+    fn flags_focus_outline_none_alone() {
+        // outline-none REMOVES the focus indicator — must not count as a ring.
+        assert_eq!(
+            run(r#"export const A = () => <button className="focus:outline-none" />;"#).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn flags_focus_outline_0_alone() {
+        assert_eq!(
+            run(r#"export const A = () => <button className="focus-visible:outline-0" />;"#).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn allows_outline_none_paired_with_ring() {
+        // The recommended pattern: outline-none + a real ring.
+        assert!(
+            run(r#"export const A = () => <button className="focus:outline-none focus:ring-2" />;"#)
+                .is_empty()
+        );
     }
 }

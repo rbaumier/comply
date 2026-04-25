@@ -1,9 +1,12 @@
 //! ui-tabular-nums-on-data — JSX elements displaying numeric data
 //! (counters, prices, metrics) should use `tabular-nums`.
 
+mod css;
 mod typescript;
 
 use crate::diagnostic::Severity;
+use crate::files::Language;
+use crate::rules::backend::Backend;
 use crate::rules::RuleDef;
 use crate::rules::meta::RuleMeta;
 
@@ -17,5 +20,8 @@ pub const META: RuleMeta = RuleMeta {
 };
 
 pub fn register() -> RuleDef {
-    crate::register_ts_family!(META, typescript)
+    let mut def = crate::register_ts_family!(META, typescript);
+    def.backends
+        .push((Language::Css, Backend::TreeSitter(Box::new(css::Check))));
+    def
 }

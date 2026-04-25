@@ -29,7 +29,19 @@ fn collect_program_let_var(root: tree_sitter::Node, source: &[u8], out: &mut Vec
     }
 }
 
-/// Does `fn_node`'s body contain an assignment to any of `names`?
+/// Mutating array/collection methods. A `name.push(...)` call mutates the
+/// shared binding even though tree-sitter sees no `assignment_expression`.
+const MUTATING_METHODS: &[&str] = &[
+    "push", "pop", "shift", "unshift", "splice", "sort", "reverse", "fill", "copyWithin",
+    "set", "delete", "clear", "add",
+];
+
+/// Does `fn_node`'s body contain an assignment OR a mutation to any of `names`?
+///
+/// Detects three flavours of mutation:
+///   1. `name = ...` (re-assignment)
+///   2. `name.prop = ...` / `name[key] = ...` (property write)
+///   3. `name.push(...)` / `name.set(...)` / etc. (mutating method call)
 fn body_assigns_any(fn_node: tree_sitter::Node, source: &[u8], names: &HashSet<String>) -> HashSet<String> {
     let mut found = HashSet::new();
     let Some(body) = fn_node.child_by_field_name("body") else { return found; };
@@ -37,10 +49,38 @@ fn body_assigns_any(fn_node: tree_sitter::Node, source: &[u8], names: &HashSet<S
     while let Some(n) = stack.pop() {
         if n.kind() == "assignment_expression"
             && let Some(lhs) = n.child_by_field_name("left")
-                && lhs.kind() == "identifier" {
-                    let t = lhs.utf8_text(source).unwrap_or("").to_string();
-                    if names.contains(&t) { found.insert(t); }
-                }
+        {
+            // Case 1: bare identifier on the LHS → reassignment.
+            if lhs.kind() == "identifier" {
+                let t = lhs.utf8_text(source).unwrap_or("").to_string();
+                if names.contains(&t) { found.insert(t); }
+            }
+            // Cases 2: `obj.prop = ...` / `obj[k] = ...` — the LHS is a
+            // member/subscript expression rooted at the shared identifier.
+            if matches!(lhs.kind(), "member_expression" | "subscript_expression")
+                && let Some(obj) = lhs.child_by_field_name("object")
+                && obj.kind() == "identifier"
+            {
+                let t = obj.utf8_text(source).unwrap_or("").to_string();
+                if names.contains(&t) { found.insert(t); }
+            }
+        }
+
+        // Case 3: mutating method call — `name.push(...)`, `name.set(...)`, etc.
+        if n.kind() == "call_expression"
+            && let Some(func) = n.child_by_field_name("function")
+            && func.kind() == "member_expression"
+            && let Some(obj) = func.child_by_field_name("object")
+            && obj.kind() == "identifier"
+            && let Some(prop) = func.child_by_field_name("property")
+        {
+            let obj_name = obj.utf8_text(source).unwrap_or("").to_string();
+            let prop_name = prop.utf8_text(source).unwrap_or("");
+            if names.contains(&obj_name) && MUTATING_METHODS.contains(&prop_name) {
+                found.insert(obj_name);
+            }
+        }
+
         let mut c = n.walk();
         for child in n.named_children(&mut c) { stack.push(child); }
     }
@@ -177,5 +217,41 @@ mod tests {
         let src = "var state = null;\n\
                    it('a', () => { state = { ok: true }; });";
         assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_array_push_mutation() {
+        let src = "let items = [];\n\
+                   test('a', () => { items.push(1); });";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_map_set_mutation() {
+        let src = "let cache = new Map();\n\
+                   test('a', () => { cache.set('k', 1); });";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_property_assignment() {
+        let src = "let state = { x: 0 };\n\
+                   test('a', () => { state.x = 1; });";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_subscript_assignment() {
+        let src = "let bag = {};\n\
+                   test('a', () => { bag['k'] = 1; });";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_array_push_reset_in_before_each() {
+        let src = "let items = [];\n\
+                   beforeEach(() => { items = []; });\n\
+                   test('a', () => { items.push(1); });";
+        assert!(run(src).is_empty());
     }
 }

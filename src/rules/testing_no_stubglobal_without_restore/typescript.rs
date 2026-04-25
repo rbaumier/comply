@@ -17,36 +17,81 @@ fn is_vi_method(func: tree_sitter::Node, source: &[u8], props: &[&str]) -> bool 
     props.contains(&prop.utf8_text(source).unwrap_or(""))
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    let has_stub_global = ctx.source.contains("stubGlobal");
-    let has_stub_env = ctx.source.contains("stubEnv");
-    if !(has_stub_global || has_stub_env) { return; }
-
-    let unstubbed_globals = ctx.source.contains("unstubAllGlobals");
-    let unstubbed_envs = ctx.source.contains("unstubAllEnvs");
-
-    if node.kind() != "call_expression" { return; }
-    let Some(func) = node.child_by_field_name("function") else { return; };
-
-    if is_vi_method(func, source, &["stubGlobal"]) && !unstubbed_globals {
-        diagnostics.push(Diagnostic::at_node(
-            ctx.path,
-            &node,
-            super::META.id,
-            "vi.stubGlobal() without vi.unstubAllGlobals() in afterEach/afterAll leaks stubs into sibling tests.".into(),
-            Severity::Warning,
-        ));
-        return;
+/// Walk ancestors looking for an `afterEach(...)` / `afterAll(...)` call —
+/// the only legitimate hosts for an `unstubAll*` restore.
+fn is_inside_after_hook(node: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut current = node.parent();
+    while let Some(n) = current {
+        if n.kind() == "call_expression"
+            && let Some(func) = n.child_by_field_name("function")
+            && let Ok(name) = func.utf8_text(source)
+            && matches!(name, "afterEach" | "afterAll")
+        {
+            return true;
+        }
+        current = n.parent();
     }
+    false
+}
 
-    if is_vi_method(func, source, &["stubEnv"]) && !unstubbed_envs {
-        diagnostics.push(Diagnostic::at_node(
-            ctx.path,
-            &node,
-            super::META.id,
-            "vi.stubEnv() without vi.unstubAllEnvs() in afterEach/afterAll leaks env stubs into sibling tests.".into(),
-            Severity::Warning,
-        ));
+/// Find an `unstubAll<Suffix>` call (e.g. `Globals` / `Envs`) that lives
+/// inside an `afterEach` / `afterAll` callback.
+fn has_scoped_unstub(tree: &tree_sitter::Tree, source: &[u8], method: &str) -> bool {
+    let mut found = false;
+    crate::rules::walker::walk_tree(tree, |n| {
+        if found { return; }
+        if n.kind() != "call_expression" { return; }
+        let Some(func) = n.child_by_field_name("function") else { return; };
+        if !is_vi_method(func, source, &[method]) { return; }
+        if is_inside_after_hook(n, source) { found = true; }
+    });
+    found
+}
+
+#[derive(Debug)]
+pub struct Check;
+
+impl crate::rules::backend::AstCheck for Check {
+    fn check(
+        &self,
+        ctx: &crate::rules::backend::CheckCtx,
+        tree: &tree_sitter::Tree,
+    ) -> Vec<Diagnostic> {
+        let source = ctx.source.as_bytes();
+        let has_stub_global = ctx.source.contains("stubGlobal");
+        let has_stub_env = ctx.source.contains("stubEnv");
+        if !(has_stub_global || has_stub_env) { return Vec::new(); }
+
+        let unstubbed_globals = has_scoped_unstub(tree, source, "unstubAllGlobals");
+        let unstubbed_envs = has_scoped_unstub(tree, source, "unstubAllEnvs");
+
+        let mut diagnostics = Vec::new();
+        crate::rules::walker::walk_tree(tree, |node| {
+            if node.kind() != "call_expression" { return; }
+            let Some(func) = node.child_by_field_name("function") else { return; };
+
+            if is_vi_method(func, source, &["stubGlobal"]) && !unstubbed_globals {
+                diagnostics.push(Diagnostic::at_node(
+                    ctx.path,
+                    &node,
+                    super::META.id,
+                    "vi.stubGlobal() without vi.unstubAllGlobals() in afterEach/afterAll leaks stubs into sibling tests.".into(),
+                    Severity::Warning,
+                ));
+                return;
+            }
+
+            if is_vi_method(func, source, &["stubEnv"]) && !unstubbed_envs {
+                diagnostics.push(Diagnostic::at_node(
+                    ctx.path,
+                    &node,
+                    super::META.id,
+                    "vi.stubEnv() without vi.unstubAllEnvs() in afterEach/afterAll leaks env stubs into sibling tests.".into(),
+                    Severity::Warning,
+                ));
+            }
+        });
+        diagnostics
     }
 }
 
@@ -92,6 +137,21 @@ mod tests {
     fn flags_stub_global_even_if_envs_restored() {
         let src = "beforeEach(() => { vi.stubGlobal('fetch', vi.fn()); });\n\
                    afterEach(() => { vi.unstubAllEnvs(); });";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_unstub_at_top_level() {
+        // unstubAllGlobals exists, but isn't inside afterEach/afterAll → still leaks.
+        let src = "vi.unstubAllGlobals();\n\
+                   beforeEach(() => { vi.stubGlobal('fetch', vi.fn()); });";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_unstub_in_test_body() {
+        let src = "beforeEach(() => { vi.stubEnv('NODE_ENV', 'test'); });\n\
+                   test('a', () => { vi.unstubAllEnvs(); });";
         assert_eq!(run(src).len(), 1);
     }
 }

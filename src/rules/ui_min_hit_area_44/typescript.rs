@@ -1,5 +1,13 @@
 //! Flag `<button|a|input>` elements whose Tailwind className forces a
-//! sub-44-pixel footprint (e.g. `h-4 w-4`, `size-3`).
+//! sub-44-pixel footprint.
+//!
+//! Two heuristics fire:
+//!   1. Explicit small dimensions — `h-4 w-4`, `size-3`, etc.
+//!   2. Tiny padding paired with small text — `px-1 py-0.5 text-xs`. This
+//!      almost always renders below 44 px tall/wide. We only flag when
+//!      the className lacks an explicit `h-*` / `w-*` / `size-*` /
+//!      `min-h-*` / `min-w-*` that could push the element back over the
+//!      threshold.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
@@ -39,7 +47,27 @@ crate::ast_check! { |node, source, ctx, diagnostics|
     let has_tiny_w = tokens.iter().any(|t| t.starts_with("w-") && TINY_SIZE_TOKENS.contains(t));
     let has_tiny_size = tokens.iter().any(|t| t.starts_with("size-") && TINY_SIZE_TOKENS.contains(t));
 
-    let tiny = (has_tiny_h && has_tiny_w) || has_tiny_size;
+    // Padding-based smallness: `px-1 py-0.5 text-xs` style buttons that
+    // never reach 44 px without explicit size utilities. We only flag
+    // when no explicit sizing class exists that could rescue the height.
+    const TINY_PADDING: &[&str] = &[
+        "p-0", "p-0.5", "p-1",
+        "px-0", "px-0.5", "px-1", "px-2",
+        "py-0", "py-0.5", "py-1",
+    ];
+    const TINY_TEXT: &[&str] = &["text-xs", "text-sm"];
+    let has_tiny_padding = tokens.iter().any(|t| TINY_PADDING.contains(t));
+    let has_tiny_text = tokens.iter().any(|t| TINY_TEXT.contains(t));
+    let has_explicit_size = tokens.iter().any(|t| {
+        t.starts_with("h-")
+            || t.starts_with("w-")
+            || t.starts_with("size-")
+            || t.starts_with("min-h-")
+            || t.starts_with("min-w-")
+    });
+    let tiny_via_padding = has_tiny_padding && has_tiny_text && !has_explicit_size;
+
+    let tiny = (has_tiny_h && has_tiny_w) || has_tiny_size || tiny_via_padding;
     if !tiny { return; }
 
     let pos = node.start_position();
@@ -85,6 +113,32 @@ mod tests {
     #[test]
     fn ignores_non_interactive() {
         let src = r#"const x = <div className="h-4 w-4" />;"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_padding_based_small_button() {
+        // `px-2 py-1 text-xs` without explicit sizing → almost certainly below 44px.
+        let src = r#"const x = <button className="px-2 py-1 text-xs">x</button>;"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_padding_based_small_anchor() {
+        let src = r##"const x = <a className="px-1 py-0.5 text-sm" href="#">x</a>;"##;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_padding_with_min_height() {
+        // Tiny padding but explicit min-h rescues the hit area.
+        let src = r#"const x = <button className="px-2 py-1 text-xs min-h-12">x</button>;"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_padding_with_explicit_height() {
+        let src = r#"const x = <button className="px-2 py-1 text-xs h-12">x</button>;"#;
         assert!(run(src).is_empty());
     }
 }

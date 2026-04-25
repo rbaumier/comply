@@ -22,7 +22,10 @@ fn enclosing_fn_body<'a>(node: tree_sitter::Node<'a>) -> Option<tree_sitter::Nod
     None
 }
 
-fn subtree_calls(root: tree_sitter::Node<'_>, source: &[u8], needle: &str) -> bool {
+/// Find the earliest `call_expression` whose callee text ends with
+/// `needle` inside `root`. Returns its start byte offset.
+fn first_call_offset(root: tree_sitter::Node<'_>, source: &[u8], needle: &str) -> Option<usize> {
+    let mut best: Option<usize> = None;
     let mut stack = vec![root];
     while let Some(n) = stack.pop() {
         if n.kind() == "call_expression"
@@ -30,14 +33,15 @@ fn subtree_calls(root: tree_sitter::Node<'_>, source: &[u8], needle: &str) -> bo
             && let Ok(text) = func.utf8_text(source)
             && text.ends_with(needle)
         {
-            return true;
+            let start = n.start_byte();
+            best = Some(best.map_or(start, |b| b.min(start)));
         }
         let mut cursor = n.walk();
         for child in n.children(&mut cursor) {
             stack.push(child);
         }
     }
-    false
+    best
 }
 
 fn callee_name<'a>(call: tree_sitter::Node<'a>, source: &'a [u8]) -> Option<&'a str> {
@@ -51,7 +55,12 @@ crate::ast_check! { |node, source, ctx, diagnostics|
     let Some(name) = callee_name(node, source) else { return };
     if !name.ends_with("getExpoPushTokenAsync") { return; }
     let Some(body) = enclosing_fn_body(node) else { return };
-    if subtree_calls(body, source, "requestPermissionsAsync") { return; }
+
+    let token_offset = node.start_byte();
+    let permissions_before = first_call_offset(body, source, "requestPermissionsAsync")
+        .is_some_and(|perm_offset| perm_offset < token_offset);
+    if permissions_before { return; }
+
     diagnostics.push(Diagnostic::at_node(
         ctx.path,
         &node,
@@ -78,5 +87,13 @@ mod tests {
     fn allows_with_permissions() {
         let src = "async function reg() { await Notifications.requestPermissionsAsync(); const t = await Notifications.getExpoPushTokenAsync(); }";
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_when_permissions_come_after_token() {
+        // permissions exist but are requested AFTER the token call —
+        // still wrong, the prompt shows up after the token API throws.
+        let src = "async function reg() { const t = await Notifications.getExpoPushTokenAsync(); await Notifications.requestPermissionsAsync(); }";
+        assert_eq!(run(src).len(), 1);
     }
 }
