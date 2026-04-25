@@ -1,7 +1,7 @@
 //! dockerfile-copy-after-install — copy lockfile + install before the rest of
 //! the source, so layer caching survives unrelated edits.
 
-mod text;
+mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
@@ -21,6 +21,6 @@ pub const META: RuleMeta = RuleMeta {
 pub fn register() -> RuleDef {
     RuleDef {
         meta: META,
-        backends: vec![(Language::Dockerfile, Backend::Text(Box::new(text::Check)))],
+        backends: vec![(Language::Dockerfile, Backend::TreeSitter(Box::new(typescript::Check)))],
     }
 }

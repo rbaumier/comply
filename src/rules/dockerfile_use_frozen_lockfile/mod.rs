@@ -1,7 +1,7 @@
 //! dockerfile-use-frozen-lockfile — pnpm/yarn installs in images must use
 //! `--frozen-lockfile` to refuse lockfile drift.
 
-mod text;
+mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
@@ -21,6 +21,6 @@ pub const META: RuleMeta = RuleMeta {
 pub fn register() -> RuleDef {
     RuleDef {
         meta: META,
-        backends: vec![(Language::Dockerfile, Backend::Text(Box::new(text::Check)))],
+        backends: vec![(Language::Dockerfile, Backend::TreeSitter(Box::new(typescript::Check)))],
     }
 }

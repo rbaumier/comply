@@ -1,7 +1,7 @@
 //! dockerfile-require-healthcheck — production images must ship a
 //! HEALTHCHECK so orchestrators can detect stuck containers.
 
-mod text;
+mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
@@ -21,6 +21,6 @@ pub const META: RuleMeta = RuleMeta {
 pub fn register() -> RuleDef {
     RuleDef {
         meta: META,
-        backends: vec![(Language::Dockerfile, Backend::Text(Box::new(text::Check)))],
+        backends: vec![(Language::Dockerfile, Backend::TreeSitter(Box::new(typescript::Check)))],
     }
 }

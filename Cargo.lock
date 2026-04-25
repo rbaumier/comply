@@ -303,6 +303,7 @@ dependencies = [
  "tower-lsp",
  "tree-sitter",
  "tree-sitter-css",
+ "tree-sitter-dockerfile-updated",
  "tree-sitter-rust",
  "tree-sitter-typescript",
  "tree-sitter-vue-updated",
@@ -1985,6 +1986,16 @@ checksum = "5ad6489794d41350d12a7fbe520e5199f688618f43aace5443980d1ddcf1b29e"
 dependencies = [
  "cc",
  "tree-sitter-language",
+]
+
+[[package]]
+name = "tree-sitter-dockerfile-updated"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5e61eb704364be179ab9be89e2891c8e77c0041eca5891a5c04164a21f6df7a0"
+dependencies = [
+ "cc",
+ "tree-sitter",
 ]
 
 [[package]]

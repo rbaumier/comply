@@ -201,6 +201,18 @@ pub fn run_rust_with_path(source: &str, check: &dyn AstCheck, fake_path: &str) -
     )
 }
 
+/// Run a tree-sitter `Check` against `source` parsed with the Dockerfile
+/// grammar.
+#[must_use]
+pub fn run_dockerfile(source: &str, check: &dyn AstCheck) -> Vec<Diagnostic> {
+    run_with_grammar(
+        source,
+        check,
+        tree_sitter_dockerfile_updated::language(),
+        "Dockerfile",
+    )
+}
+
 fn run_with_grammar(
     source: &str,
     check: &dyn AstCheck,
@@ -212,6 +224,7 @@ fn run_with_grammar(
     let tree = parser.parse(source, None).expect("parser should produce a tree");
     check.check(&CheckCtx::for_test(Path::new(fake_path), source), &tree)
 }
+
 
 fn run_with_grammar_and_file(
     source: &str,
