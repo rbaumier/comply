@@ -1,6 +1,7 @@
 //! sql-no-drop-column-without-expand
 
-mod text;
+mod rust;
+mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
@@ -21,11 +22,26 @@ pub fn register() -> RuleDef {
     RuleDef {
         meta: META,
         backends: vec![
-            (Language::TypeScript, Backend::Text(Box::new(text::Check))),
-            (Language::JavaScript, Backend::Text(Box::new(text::Check))),
-            (Language::Tsx, Backend::Text(Box::new(text::Check))),
-            (Language::Rust, Backend::Text(Box::new(text::Check))),
-            (Language::Vue, Backend::Text(Box::new(text::Check))),
+            (Language::TypeScript, Backend::TreeSitter(Box::new(typescript::Check))),
+            (Language::JavaScript, Backend::TreeSitter(Box::new(typescript::Check))),
+            (Language::Tsx, Backend::TreeSitter(Box::new(typescript::Check))),
+            (Language::Rust, Backend::TreeSitter(Box::new(rust::Check))),
         ],
     }
+}
+
+/// True if the file (anywhere) marks a column as deprecated. Searched in the
+/// host source (not the SQL string) because the marker is conventionally
+/// written as a code comment near the migration call site.
+pub(super) fn file_marks_deprecation(source: &str) -> bool {
+    let lower = source.to_ascii_lowercase();
+    lower.contains("deprecated in")
+        || lower.contains("expand-contract")
+        || lower.contains("unused since")
+}
+
+/// True if the SQL string drops a column.
+pub(super) fn sql_drops_column(sql: &str) -> bool {
+    let upper = sql.to_ascii_uppercase();
+    upper.contains("DROP COLUMN") && upper.contains("ALTER TABLE")
 }

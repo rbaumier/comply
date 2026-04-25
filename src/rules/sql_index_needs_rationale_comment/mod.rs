@@ -10,12 +10,16 @@
 //! Cross-language: raw SQL is embedded in TS/TSX/JS template literals
 //! (drizzle, sqlx-style wrappers, knex) and in Rust string / raw-string
 //! literals (sqlx, diesel, tokio-postgres). Both backends walk string
-//! nodes in the AST and scan their contents.
+//! nodes in the AST and scan their contents. Pure `.sql` migration
+//! files run the same scan against the whole file content.
 
 mod rust;
+mod sql_text;
 mod typescript;
 
 use crate::diagnostic::Severity;
+use crate::files::Language;
+use crate::rules::backend::Backend;
 use crate::rules::meta::RuleMeta;
 use crate::rules::RuleDef;
 
@@ -32,5 +36,14 @@ pub const META: RuleMeta = RuleMeta {
 };
 
 pub fn register() -> RuleDef {
-    crate::register_ts_family_with_rust!(META, typescript, rust)
+    RuleDef {
+        meta: META,
+        backends: vec![
+            (Language::TypeScript, Backend::TreeSitter(Box::new(typescript::Check))),
+            (Language::JavaScript, Backend::TreeSitter(Box::new(typescript::Check))),
+            (Language::Tsx, Backend::TreeSitter(Box::new(typescript::Check))),
+            (Language::Rust, Backend::TreeSitter(Box::new(rust::Check))),
+            (Language::Sql, Backend::Text(Box::new(sql_text::Check))),
+        ],
+    }
 }

@@ -1,6 +1,7 @@
 //! sql-no-now-in-transaction
 
-mod text;
+mod rust;
+mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
@@ -21,11 +22,50 @@ pub fn register() -> RuleDef {
     RuleDef {
         meta: META,
         backends: vec![
-            (Language::TypeScript, Backend::Text(Box::new(text::Check))),
-            (Language::JavaScript, Backend::Text(Box::new(text::Check))),
-            (Language::Tsx, Backend::Text(Box::new(text::Check))),
-            (Language::Rust, Backend::Text(Box::new(text::Check))),
-            (Language::Vue, Backend::Text(Box::new(text::Check))),
+            (Language::TypeScript, Backend::TreeSitter(Box::new(typescript::Check))),
+            (Language::JavaScript, Backend::TreeSitter(Box::new(typescript::Check))),
+            (Language::Tsx, Backend::TreeSitter(Box::new(typescript::Check))),
+            (Language::Rust, Backend::TreeSitter(Box::new(rust::Check))),
         ],
     }
+}
+
+/// Walk the SQL string line-by-line tracking transaction state and return true
+/// if `NOW()` or `CURRENT_TIMESTAMP` appears inside a BEGIN..COMMIT block.
+///
+/// The input may include the AST node's surrounding quote characters (`` ` ``,
+/// `"`, `r#"`, etc.) — we strip leading non-SQL punctuation per line before
+/// matching keywords so the start/end detection works on the same text the
+/// original TextCheck saw.
+pub(super) fn sql_uses_now_in_tx(sql: &str) -> bool {
+    let upper = sql.to_ascii_uppercase();
+    let mut in_tx = false;
+    for line in upper.lines() {
+        // Strip both leading whitespace and surrounding string-literal punctuation
+        // (`, ", #, r — for raw strings) so the BEGIN/COMMIT prefix checks work
+        // on the SQL content even when the literal's opening quote sits on the
+        // same line as the SQL.
+        let trimmed = line.trim_start_matches(|c: char| {
+            c.is_whitespace() || matches!(c, '`' | '"' | '#' | 'R')
+        });
+        if trimmed.starts_with("BEGIN;")
+            || trimmed == "BEGIN"
+            || trimmed.starts_with("BEGIN ")
+            || trimmed.contains("START TRANSACTION")
+        {
+            in_tx = true;
+            continue;
+        }
+        if trimmed.starts_with("COMMIT") || trimmed.starts_with("ROLLBACK") || trimmed == "END;" {
+            in_tx = false;
+            continue;
+        }
+        if !in_tx {
+            continue;
+        }
+        if line.contains("NOW()") || line.contains("CURRENT_TIMESTAMP") {
+            return true;
+        }
+    }
+    false
 }

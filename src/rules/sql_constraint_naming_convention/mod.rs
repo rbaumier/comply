@@ -1,6 +1,7 @@
 //! sql-constraint-naming-convention
 
-mod text;
+mod rust;
+mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
@@ -21,11 +22,51 @@ pub fn register() -> RuleDef {
     RuleDef {
         meta: META,
         backends: vec![
-            (Language::TypeScript, Backend::Text(Box::new(text::Check))),
-            (Language::JavaScript, Backend::Text(Box::new(text::Check))),
-            (Language::Tsx, Backend::Text(Box::new(text::Check))),
-            (Language::Rust, Backend::Text(Box::new(text::Check))),
-            (Language::Vue, Backend::Text(Box::new(text::Check))),
+            (Language::TypeScript, Backend::TreeSitter(Box::new(typescript::Check))),
+            (Language::JavaScript, Backend::TreeSitter(Box::new(typescript::Check))),
+            (Language::Tsx, Backend::TreeSitter(Box::new(typescript::Check))),
+            (Language::Rust, Backend::TreeSitter(Box::new(rust::Check))),
         ],
     }
+}
+
+const VALID_SUFFIXES: &[&str] = &["pk", "fk", "key", "chk", "exl", "idx"];
+
+fn extract_constraint_names(sql: &str) -> Vec<String> {
+    let upper = sql.to_ascii_uppercase();
+    let mut out = Vec::new();
+    let mut search_from = 0;
+    while let Some(rel) = upper[search_from..].find("CONSTRAINT ") {
+        let abs = search_from + rel + "CONSTRAINT ".len();
+        let after = sql[abs..].trim_start();
+        let mut name = String::new();
+        for ch in after.chars() {
+            if ch.is_alphanumeric() || ch == '_' || ch == '"' {
+                name.push(ch);
+            } else {
+                break;
+            }
+        }
+        let cleaned = name.replace('"', "");
+        if !cleaned.is_empty() {
+            out.push(cleaned);
+        }
+        search_from = abs;
+    }
+    out
+}
+
+fn has_valid_suffix(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    VALID_SUFFIXES
+        .iter()
+        .any(|s| lower.ends_with(&format!("_{s}")))
+}
+
+/// Returns names of constraints in the SQL string that don't end in a valid suffix.
+pub(super) fn find_bad_constraint_names(sql: &str) -> Vec<String> {
+    extract_constraint_names(sql)
+        .into_iter()
+        .filter(|n| !has_valid_suffix(n))
+        .collect()
 }

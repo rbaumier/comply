@@ -1,6 +1,7 @@
 //! sql-no-uuidv4-primary-key
 
-mod text;
+mod rust;
+mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
@@ -21,11 +22,31 @@ pub fn register() -> RuleDef {
     RuleDef {
         meta: META,
         backends: vec![
-            (Language::TypeScript, Backend::Text(Box::new(text::Check))),
-            (Language::JavaScript, Backend::Text(Box::new(text::Check))),
-            (Language::Tsx, Backend::Text(Box::new(text::Check))),
-            (Language::Rust, Backend::Text(Box::new(text::Check))),
-            (Language::Vue, Backend::Text(Box::new(text::Check))),
+            (Language::TypeScript, Backend::TreeSitter(Box::new(typescript::Check))),
+            (Language::JavaScript, Backend::TreeSitter(Box::new(typescript::Check))),
+            (Language::Tsx, Backend::TreeSitter(Box::new(typescript::Check))),
+            (Language::Rust, Backend::TreeSitter(Box::new(rust::Check))),
         ],
     }
+}
+
+/// Walk the SQL string per-line and return true if a UUIDv4 generator is
+/// used on a column declared as a primary key.
+pub(super) fn sql_uses_uuidv4_pk(sql: &str) -> bool {
+    for line in sql.lines() {
+        let upper = line.to_ascii_uppercase();
+        let has_v4 =
+            upper.contains("GEN_RANDOM_UUID()") || upper.contains("UUID_GENERATE_V4()");
+        if !has_v4 {
+            continue;
+        }
+        let mentions_pk = upper.contains("PRIMARY KEY")
+            || upper.contains(" ID UUID")
+            || upper.contains("\tID UUID")
+            || upper.starts_with("ID UUID");
+        if mentions_pk {
+            return true;
+        }
+    }
+    false
 }

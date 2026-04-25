@@ -1,6 +1,7 @@
 //! sql-require-search-path
 
-mod text;
+mod rust;
+mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
@@ -21,11 +22,28 @@ pub fn register() -> RuleDef {
     RuleDef {
         meta: META,
         backends: vec![
-            (Language::TypeScript, Backend::Text(Box::new(text::Check))),
-            (Language::JavaScript, Backend::Text(Box::new(text::Check))),
-            (Language::Tsx, Backend::Text(Box::new(text::Check))),
-            (Language::Rust, Backend::Text(Box::new(text::Check))),
-            (Language::Vue, Backend::Text(Box::new(text::Check))),
+            (Language::TypeScript, Backend::TreeSitter(Box::new(typescript::Check))),
+            (Language::JavaScript, Backend::TreeSitter(Box::new(typescript::Check))),
+            (Language::Tsx, Backend::TreeSitter(Box::new(typescript::Check))),
+            (Language::Rust, Backend::TreeSitter(Box::new(rust::Check))),
         ],
     }
+}
+
+pub(super) fn is_migration_path(path: &std::path::Path) -> bool {
+    path.components().any(|c| {
+        let s = c.as_os_str().to_string_lossy().to_ascii_lowercase();
+        s == "migrations" || s == "migration" || s.contains("migrate")
+    })
+}
+
+pub(super) fn sql_creates_or_alters_table(sql: &str) -> bool {
+    let upper = sql.to_ascii_uppercase();
+    upper.contains("CREATE TABLE") || upper.contains("ALTER TABLE")
+}
+
+pub(super) fn sql_sets_search_path(sql: &str) -> bool {
+    let upper = sql.to_ascii_uppercase();
+    let compact: String = upper.chars().filter(|c| !c.is_whitespace()).collect();
+    compact.contains("SETSEARCH_PATH=") || compact.contains("SETSEARCH_PATHTO")
 }

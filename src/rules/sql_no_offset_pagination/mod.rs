@@ -39,6 +39,7 @@
 //!   translated back to Vue file coordinates.
 
 mod rust;
+mod sql_text;
 mod typescript;
 mod vue;
 
@@ -72,6 +73,7 @@ pub fn register() -> RuleDef {
             (Language::Tsx, Backend::TreeSitter(Box::new(typescript::Check))),
             (Language::Rust, Backend::TreeSitter(Box::new(rust::Check))),
             (Language::Vue, Backend::TreeSitter(Box::new(vue::Check))),
+            (Language::Sql, Backend::Text(Box::new(sql_text::Check))),
         ],
     }
 }

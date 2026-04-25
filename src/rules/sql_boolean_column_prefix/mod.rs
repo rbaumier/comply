@@ -1,6 +1,7 @@
 //! sql-boolean-column-prefix
 
-mod text;
+mod rust;
+mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
@@ -21,11 +22,42 @@ pub fn register() -> RuleDef {
     RuleDef {
         meta: META,
         backends: vec![
-            (Language::TypeScript, Backend::Text(Box::new(text::Check))),
-            (Language::JavaScript, Backend::Text(Box::new(text::Check))),
-            (Language::Tsx, Backend::Text(Box::new(text::Check))),
-            (Language::Rust, Backend::Text(Box::new(text::Check))),
-            (Language::Vue, Backend::Text(Box::new(text::Check))),
+            (Language::TypeScript, Backend::TreeSitter(Box::new(typescript::Check))),
+            (Language::JavaScript, Backend::TreeSitter(Box::new(typescript::Check))),
+            (Language::Tsx, Backend::TreeSitter(Box::new(typescript::Check))),
+            (Language::Rust, Backend::TreeSitter(Box::new(rust::Check))),
         ],
     }
+}
+
+/// Scan the (already-confirmed-as-DDL) SQL string for BOOLEAN columns whose
+/// name doesn't start with `is_` or `has_`. Returns the offending column
+/// names in order. Examines each line independently — column definitions
+/// in PostgreSQL DDL are line-oriented in practice.
+pub(super) fn find_bad_boolean_columns(sql: &str) -> Vec<String> {
+    const KEYWORDS: &[&str] = &[
+        "not", "null", "default", "check", "unique", "constraint", "primary", "references",
+    ];
+    let mut out = Vec::new();
+    for line in sql.lines() {
+        let upper = line.to_ascii_uppercase();
+        let kw_pos = upper.find(" BOOLEAN").or_else(|| upper.find(" BOOL "));
+        let Some(pos) = kw_pos else { continue };
+        let prefix = &line[..pos];
+        let Some(col) = prefix
+            .rsplit(|c: char| !(c.is_alphanumeric() || c == '_'))
+            .find(|tok| !tok.is_empty())
+        else {
+            continue;
+        };
+        let lower = col.to_ascii_lowercase();
+        if lower.starts_with("is_") || lower.starts_with("has_") {
+            continue;
+        }
+        if KEYWORDS.contains(&lower.as_str()) {
+            continue;
+        }
+        out.push(col.to_string());
+    }
+    out
 }

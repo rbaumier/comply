@@ -20,7 +20,7 @@ pub(crate) fn parse_with_grammar(
         Language::Vue => tree_sitter_vue_updated::language(),
         Language::Css => tree_sitter_css::LANGUAGE.into(),
         Language::Yaml => tree_sitter_yaml::LANGUAGE.into(),
-        Language::Toml | Language::Json | Language::Dockerfile => return None,
+        Language::Toml | Language::Json | Language::Dockerfile | Language::Sql => return None,
     };
     parser.set_language(&lang).ok()?;
     parser.parse(source, None)

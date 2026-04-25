@@ -1,6 +1,7 @@
 //! sql-no-function-on-indexed-column
 
-mod text;
+mod rust;
+mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
@@ -21,11 +22,34 @@ pub fn register() -> RuleDef {
     RuleDef {
         meta: META,
         backends: vec![
-            (Language::TypeScript, Backend::Text(Box::new(text::Check))),
-            (Language::JavaScript, Backend::Text(Box::new(text::Check))),
-            (Language::Tsx, Backend::Text(Box::new(text::Check))),
-            (Language::Rust, Backend::Text(Box::new(text::Check))),
-            (Language::Vue, Backend::Text(Box::new(text::Check))),
+            (Language::TypeScript, Backend::TreeSitter(Box::new(typescript::Check))),
+            (Language::JavaScript, Backend::TreeSitter(Box::new(typescript::Check))),
+            (Language::Tsx, Backend::TreeSitter(Box::new(typescript::Check))),
+            (Language::Rust, Backend::TreeSitter(Box::new(rust::Check))),
         ],
     }
+}
+
+const BAD_FUNCS: &[&str] = &[
+    "DATE_TRUNC(",
+    "LOWER(",
+    "UPPER(",
+    "COALESCE(",
+    "EXTRACT(",
+    "CAST(",
+    "TO_CHAR(",
+];
+
+/// If the SQL string contains a banned function call after a WHERE clause,
+/// return the function name (without trailing paren). Otherwise None.
+pub(super) fn find_bad_func_in_where(sql: &str) -> Option<&'static str> {
+    let upper = sql.to_ascii_uppercase();
+    let where_pos = upper.find("WHERE")?;
+    let after = &upper[where_pos..];
+    for func in BAD_FUNCS {
+        if after.contains(func) {
+            return Some(func.trim_end_matches('('));
+        }
+    }
+    None
 }
