@@ -45,12 +45,12 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             _ => {}
         }
     }
-    if depth(node) <= MAX_DOTS { return; }
+    if depth(node) < MAX_DOTS { return; }
     diagnostics.push(Diagnostic::at_node(
         ctx.path,
         &node,
         super::META.id,
-        format!("Chain reaches more than {MAX_DOTS} levels deep. Ask the collaborator for a higher-level method."),
+        format!("Chain reaches {MAX_DOTS} or more levels deep. Ask the collaborator for a higher-level method."),
         Severity::Warning,
     ));
 }
@@ -71,7 +71,14 @@ mod tests {
     }
 
     #[test]
-    fn allows_two_level_chain() {
-        assert!(run("a.b.c").is_empty());
+    fn flags_two_level_chain() {
+        // Documented threshold (2 levels) — `a.b().c()` is the canonical
+        // example and must be flagged.
+        assert_eq!(run("a.b().c()").len(), 1);
+    }
+
+    #[test]
+    fn allows_one_level_chain() {
+        assert!(run("a.b").is_empty());
     }
 }

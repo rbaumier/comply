@@ -46,6 +46,12 @@ fn scan_client_apis(node: tree_sitter::Node<'_>, source: &[u8], found: &mut bool
     if *found {
         return;
     }
+    // Skip import statements entirely — `import { useState }` doesn't prove
+    // the file actually uses the hook. Only real call sites / references
+    // in the body should count.
+    if matches!(node.kind(), "import_statement" | "import_clause") {
+        return;
+    }
     match node.kind() {
         "identifier" | "property_identifier" | "shorthand_property_identifier" => {
             if let Ok(text) = node.utf8_text(source) {
@@ -150,5 +156,16 @@ export function H() { const h = window.location.href; return <div>{h}</div>; }
         let src = r#"export function T() { return <h1>Hi</h1>; }
 "#;
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_use_client_with_unused_import() {
+        // useState is imported but never referenced in the body — the file
+        // does not actually need to be a client component.
+        let src = r#""use client";
+import { useState } from "react";
+export function Title() { return <h1>Hi</h1>; }
+"#;
+        assert_eq!(run(src).len(), 1);
     }
 }

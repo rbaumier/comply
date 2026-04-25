@@ -22,6 +22,39 @@ fn is_exported_async_function(node: tree_sitter::Node<'_>, source: &[u8]) -> boo
     parent.kind() == "export_statement"
 }
 
+/// Find the body of an exported async arrow function:
+/// `export const action = async (...) => { ... }`.
+///
+/// Returns the arrow_function node when the pattern matches.
+fn exported_async_arrow_body<'a>(
+    node: tree_sitter::Node<'a>,
+    source: &[u8],
+) -> Option<tree_sitter::Node<'a>> {
+    // `node` is an `arrow_function`. Walk up: arrow_function ->
+    // variable_declarator -> lexical_declaration -> export_statement.
+    if node.kind() != "arrow_function" {
+        return None;
+    }
+    // Must be async.
+    let text = node.utf8_text(source).unwrap_or("");
+    if !text.trim_start().starts_with("async") {
+        return None;
+    }
+    let parent = node.parent()?;
+    if parent.kind() != "variable_declarator" {
+        return None;
+    }
+    let grandparent = parent.parent()?;
+    if grandparent.kind() != "lexical_declaration" && grandparent.kind() != "variable_declaration" {
+        return None;
+    }
+    let great = grandparent.parent()?;
+    if great.kind() != "export_statement" {
+        return None;
+    }
+    node.child_by_field_name("body")
+}
+
 fn await_call_target<'a>(
     await_node: tree_sitter::Node<'a>,
     source: &'a [u8],
@@ -80,10 +113,12 @@ fn collect_awaits<'a>(
 
 crate::ast_check! { |node, source, ctx, diagnostics|
     let _ = ctx;
-    if !is_exported_async_function(node, source) {
-        return;
-    }
-    let Some(body) = node.child_by_field_name("body") else { return };
+    let body = if is_exported_async_function(node, source) {
+        node.child_by_field_name("body")
+    } else {
+        exported_async_arrow_body(node, source)
+    };
+    let Some(body) = body else { return };
     let mut awaits = Vec::new();
     let mut cursor = body.walk();
     for child in body.children(&mut cursor) {
@@ -160,6 +195,32 @@ async function createUser(data) {
   const user = await db.insert(data);
   await analytics.track("user_created");
 }
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_exported_async_arrow() {
+        // `export const action = async (...) => { ... }` is also a
+        // server action shape — must be checked too.
+        let src = r#"
+export const action = async (data) => {
+  const user = await db.insert(data);
+  await analytics.track("user_created", user);
+  return user;
+};
+"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_exported_async_arrow_log_first() {
+        let src = r#"
+export const action = async (data) => {
+  await analytics.track("attempt");
+  const user = await db.insert(data);
+  return user;
+};
 "#;
         assert!(run(src).is_empty());
     }

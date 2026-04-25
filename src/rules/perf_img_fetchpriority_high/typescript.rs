@@ -1,7 +1,9 @@
 //! AST backend — walks JSX `<img>` elements and checks size hints / conflicting attrs.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::rules::jsx::{jsx_attribute_name, jsx_attribute_string_value, jsx_element_tag_name};
+use crate::rules::jsx::{
+    jsx_attribute_name, jsx_attribute_string_value, jsx_attribute_value, jsx_element_tag_name,
+};
 
 /// Threshold (in pixels) above which an image is considered "hero-sized"
 /// and should declare `fetchpriority="high"`. 600px covers typical hero
@@ -12,6 +14,24 @@ fn parse_dim(val: &str) -> Option<u32> {
     // strip trailing unit ("px") and whitespace
     let trimmed = val.trim().trim_end_matches("px").trim();
     trimmed.parse::<u32>().ok()
+}
+
+/// Extract a numeric value from a JSX attribute that uses an expression
+/// container, e.g. `width={1200}`. Returns `None` for non-numeric or
+/// non-expression values.
+fn jsx_attribute_numeric_expr(attr: tree_sitter::Node<'_>, source: &[u8]) -> Option<u32> {
+    let val = jsx_attribute_value(attr)?;
+    if val.kind() != "jsx_expression" {
+        return None;
+    }
+    let mut cursor = val.walk();
+    for child in val.named_children(&mut cursor) {
+        if child.kind() == "number" {
+            let text = child.utf8_text(source).ok()?;
+            return text.trim().parse::<u32>().ok();
+        }
+    }
+    None
 }
 
 crate::ast_check! { |node, source, ctx, diagnostics|
@@ -41,10 +61,14 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             "width" => {
                 if let Some(v) = jsx_attribute_string_value(child, source).and_then(parse_dim) {
                     width = Some(v);
+                } else if let Some(v) = jsx_attribute_numeric_expr(child, source) {
+                    width = Some(v);
                 }
             }
             "height" => {
                 if let Some(v) = jsx_attribute_string_value(child, source).and_then(parse_dim) {
+                    height = Some(v);
+                } else if let Some(v) = jsx_attribute_numeric_expr(child, source) {
                     height = Some(v);
                 }
             }
@@ -107,5 +131,20 @@ mod tests {
     #[test]
     fn allows_hero_with_fetchpriority_high() {
         assert!(run(r#"const x = <img src="h.jpg" width="1200" fetchpriority="high" />;"#).is_empty());
+    }
+
+    #[test]
+    fn flags_hero_with_numeric_expression_dimensions() {
+        // width={1200} is a JSX expression container around a number,
+        // not a string attribute. The rule must still detect hero size.
+        assert_eq!(
+            run(r#"const x = <img src="h.jpg" width={1200} height={800} />;"#).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn allows_small_img_with_numeric_expression_dimensions() {
+        assert!(run(r#"const x = <img src="a.jpg" width={48} height={48} />;"#).is_empty());
     }
 }

@@ -1,5 +1,35 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
+/// Validate a key against `^[a-z][a-zA-Z0-9]*(\.[a-z][a-zA-Z0-9]*)+$`:
+/// - at least 2 segments separated by `.`,
+/// - each segment starts with lowercase + only ASCII alphanumerics,
+/// - no consecutive dots, no slashes, no other separators.
+fn is_valid_namespaced(key: &str) -> bool {
+    if key.is_empty() {
+        return false;
+    }
+    let segments: Vec<&str> = key.split('.').collect();
+    if segments.len() < 2 {
+        return false;
+    }
+    for seg in &segments {
+        if seg.is_empty() {
+            return false; // catches `..`, leading `.`, trailing `.`
+        }
+        let mut chars = seg.chars();
+        let first = chars.next().unwrap();
+        if !first.is_ascii_lowercase() {
+            return false;
+        }
+        for c in chars {
+            if !c.is_ascii_alphanumeric() {
+                return false;
+            }
+        }
+    }
+    true
+}
+
 crate::ast_check! { |node, source, ctx, diagnostics|
     if node.kind() != "call_expression" { return; }
     let Some(func) = node.child_by_field_name("function") else { return };
@@ -17,12 +47,12 @@ crate::ast_check! { |node, source, ctx, diagnostics|
     if inner.is_empty() { return; }
     // Skip sentence-style keys — i18n-no-english-key owns that case.
     if inner.contains(' ') { return; }
-    if inner.contains('.') { return; }
+    if is_valid_namespaced(inner) { return; }
     diagnostics.push(Diagnostic::at_node(
         ctx.path,
         &first,
         super::META.id,
-        "t() key must be namespaced under a domain (e.g. `auth.title`).".into(),
+        "t() key must match `domain.subkey` (lowercase-leading segments, dot-separated).".into(),
         Severity::Warning,
     ));
 }
@@ -40,5 +70,21 @@ mod tests {
     #[test]
     fn allows_domain_key() {
         assert!(run("t('auth.title')").is_empty());
+    }
+
+    #[test]
+    fn flags_uppercase_leading_segment() {
+        // `Auth.Title` has uppercase-leading segments — invalid.
+        assert_eq!(run("t('Auth.Title')").len(), 1);
+    }
+
+    #[test]
+    fn flags_consecutive_dots() {
+        assert_eq!(run("t('auth..title')").len(), 1);
+    }
+
+    #[test]
+    fn flags_slash_separator() {
+        assert_eq!(run("t('auth/title')").len(), 1);
     }
 }

@@ -1,7 +1,26 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
 fn is_malformed(inner: &str) -> bool {
-    inner.contains("..") || inner.ends_with('.') || inner.starts_with('.')
+    if inner.is_empty() {
+        return false;
+    }
+    if inner.contains("..") || inner.ends_with('.') || inner.starts_with('.') {
+        return true;
+    }
+    // Empty segments inside (defense in depth — `..` already covers this).
+    if inner.split('.').any(str::is_empty) {
+        return true;
+    }
+    // Reject any character that isn't alphanumeric, dot, hyphen, or underscore.
+    // This catches slashes, spaces, punctuation, and other separators that
+    // can never resolve in a flat `auth.title`-style locale tree.
+    if inner
+        .chars()
+        .any(|c| !(c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_'))
+    {
+        return true;
+    }
+    false
 }
 
 crate::ast_check! { |node, source, ctx, diagnostics|
@@ -23,7 +42,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         ctx.path,
         &first,
         super::META.id,
-        "t() key is malformed (double dot, leading dot, or trailing dot) — it will not match any locale entry.".into(),
+        "t() key is malformed (consecutive/leading/trailing dots, empty segment, or non-alphanumeric character) — it cannot resolve to a locale entry.".into(),
         Severity::Warning,
     ));
 }
@@ -46,5 +65,20 @@ mod tests {
     #[test]
     fn allows_normal_key() {
         assert!(run("t('auth.title')").is_empty());
+    }
+
+    #[test]
+    fn flags_leading_dot() {
+        assert_eq!(run("t('.auth.title')").len(), 1);
+    }
+
+    #[test]
+    fn flags_slash_in_key() {
+        assert_eq!(run("t('auth/title')").len(), 1);
+    }
+
+    #[test]
+    fn flags_special_char_in_key() {
+        assert_eq!(run("t('auth.title!')").len(), 1);
     }
 }
