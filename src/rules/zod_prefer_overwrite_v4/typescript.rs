@@ -41,12 +41,32 @@ fn is_ident(s: &str) -> bool {
 /// Return true when `expr` is a shape-preserving expression for `param`.
 fn is_same_shape_expr(expr_text: &str, param: &str) -> bool {
     let t = expr_text.trim().trim_end_matches(';');
+    // Bare identifier identity (`s => s`).
+    if t == param { return true; }
     // `param.xxx(...)` — method call on the parameter.
     if let Some(rest) = t.strip_prefix(param)
         && rest.starts_with('.') { return true; }
     // `Math.round(param)` / `Math.floor(param)` / `Math.ceil(param)` / ...
     for fun in ["Math.round", "Math.floor", "Math.ceil", "Math.abs", "Math.trunc"] {
         if t.starts_with(fun) && t.contains(param) { return true; }
+    }
+    // Arithmetic on the parameter: `param + N`, `param - N`, `param * N`, `param / N`.
+    // Conservative: the operand on the other side must be a numeric literal so we
+    // know the result stays the same primitive type as `param`.
+    if let Some(rest) = t.strip_prefix(param) {
+        let rest = rest.trim_start();
+        for op in ['+', '-', '*', '/'] {
+            if let Some(rhs) = rest.strip_prefix(op) {
+                let rhs = rhs.trim();
+                if !rhs.is_empty() && rhs.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+                    return true;
+                }
+            }
+        }
+        // Nullish coalescing: `param ?? defaultValue`.
+        if rest.trim_start().starts_with("??") {
+            return true;
+        }
     }
     false
 }
@@ -129,5 +149,31 @@ mod tests {
     fn ignores_shape_changing_transform() {
         // `.length` changes type from string to number — not same shape.
         assert!(run("const S = z.string().transform(s => ({ len: s.length }));").is_empty());
+    }
+
+    #[test]
+    fn flags_identity_transform() {
+        assert_eq!(run("const S = z.string().transform(s => s);").len(), 1);
+    }
+
+    #[test]
+    fn flags_to_lower_case_transform() {
+        assert_eq!(
+            run("const S = z.string().transform(s => s.toLowerCase());").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn flags_arithmetic_transform() {
+        assert_eq!(run("const S = z.number().transform(n => n + 1);").len(), 1);
+    }
+
+    #[test]
+    fn flags_nullish_coalesce_transform() {
+        assert_eq!(
+            run("const S = z.string().transform(s => s ?? '');").len(),
+            1
+        );
     }
 }

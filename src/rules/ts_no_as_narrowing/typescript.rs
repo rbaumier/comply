@@ -20,15 +20,10 @@ crate::ast_check! { |node, source, ctx, diagnostics|
 
     // The second named child is the target type (first is the expression).
     let Some(target) = node.named_child(1) else { return };
-    let target_kind = target.kind();
 
-    // Narrowing targets: literal types, predefined narrow types.
-    let is_narrowing = matches!(
-        target_kind,
-        "literal_type" | "template_literal_type"
-    );
-
-    if !is_narrowing {
+    // Narrowing targets: literal types, template literal types, PascalCase
+    // user-defined types, and generic utility types like `NonNullable<T>`.
+    if !target_is_narrowing(target, source) {
         return;
     }
 
@@ -39,6 +34,42 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         "Avoid using `as` to narrow types; use a type predicate or `in`/`typeof` check.".into(),
         Severity::Warning,
     ));
+}
+
+/// Generic utility types from the standard library that produce narrower
+/// types than their input. Casts like `value as NonNullable<T>` are typically
+/// narrowing and would be better expressed via a runtime check.
+const NARROWING_UTILITY_TYPES: &[&str] = &[
+    "NonNullable",
+    "Exclude",
+    "Extract",
+    "Required",
+    "Readonly",
+    "Pick",
+    "Capitalize",
+    "Uncapitalize",
+    "Uppercase",
+    "Lowercase",
+];
+
+fn target_is_narrowing(target: tree_sitter::Node<'_>, source: &[u8]) -> bool {
+    match target.kind() {
+        "literal_type" | "template_literal_type" => true,
+        // `as TypeName` — flag PascalCase identifiers (likely user-defined
+        // narrowing types), allow lowercase aliases (e.g. type aliases for
+        // primitives) which are widening or neutral.
+        "type_identifier" => {
+            let Ok(name) = target.utf8_text(source) else { return false; };
+            name.chars().next().is_some_and(|c| c.is_ascii_uppercase())
+        }
+        // `as NonNullable<T>` / `as Exclude<T, U>` / `as Pick<T, K>`.
+        "generic_type" => {
+            let Some(name_node) = target.child_by_field_name("name") else { return false; };
+            let Ok(name) = name_node.utf8_text(source) else { return false; };
+            NARROWING_UTILITY_TYPES.contains(&name)
+        }
+        _ => false,
+    }
 }
 
 #[cfg(test)]
@@ -69,5 +100,35 @@ mod tests {
     #[test]
     fn allows_cast_to_regular_type() {
         assert!(run("const x = val as string;").is_empty());
+    }
+
+    #[test]
+    fn flags_cast_to_pascal_case_type() {
+        assert_eq!(run("const x = value as AdminUser;").len(), 1);
+    }
+
+    #[test]
+    fn flags_cast_to_non_nullable() {
+        assert_eq!(run("const x = value as NonNullable<T>;").len(), 1);
+    }
+
+    #[test]
+    fn flags_cast_to_exclude() {
+        assert_eq!(run("const x = value as Exclude<T, null>;").len(), 1);
+    }
+
+    #[test]
+    fn allows_cast_to_any() {
+        assert!(run("const x = value as any;").is_empty());
+    }
+
+    #[test]
+    fn allows_cast_to_unknown() {
+        assert!(run("const x = value as unknown;").is_empty());
+    }
+
+    #[test]
+    fn allows_cast_to_lowercase_alias() {
+        assert!(run("const x = value as myAlias;").is_empty());
     }
 }

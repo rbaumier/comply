@@ -2,10 +2,9 @@
 //! member expressions that are NOT inside `useEffect`/`useLayoutEffect`
 //! callbacks or nested functions (event handlers).
 //!
-//! We do not attempt to prove that a `typeof window !== 'undefined'` guard
-//! wraps the access — that would require full scope analysis. In practice
-//! flagging inside render + letting the user add an effect or guard is the
-//! expected remediation.
+//! Accesses guarded by `typeof window !== 'undefined'` /
+//! `typeof document !== 'undefined'` (in any enclosing `if` condition) are
+//! skipped — the rule's own remediation explicitly allows that pattern.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
@@ -67,7 +66,9 @@ fn scan_render_body(
 ) {
     let mut stack = vec![body];
     while let Some(n) = stack.pop() {
-        if let Some(name) = offending_member(n, source) {
+        if let Some(name) = offending_member(n, source)
+            && !is_guarded_by_typeof(n, source, name)
+        {
             diagnostics.push(Diagnostic::at_node(
                 path,
                 &n,
@@ -106,6 +107,33 @@ fn is_safe_callback_hook(n: tree_sitter::Node<'_>, source: &[u8]) -> bool {
     let Some(callee) = n.child_by_field_name("function") else { return false; };
     let Ok(name) = callee.utf8_text(source) else { return false; };
     SAFE_CALLBACK_HOOKS.contains(&name)
+}
+
+/// True when `n` is inside an `if_statement` (or surrounding ternary) whose
+/// condition contains `typeof <name> !== "undefined"` — string-matching the
+/// condition text is enough since the user's own remediation suggests that
+/// exact form.
+fn is_guarded_by_typeof(n: tree_sitter::Node<'_>, source: &[u8], name: &str) -> bool {
+    let needle_dq = format!("typeof {name} !== \"undefined\"");
+    let needle_sq = format!("typeof {name} !== 'undefined'");
+    let mut cur = n.parent();
+    while let Some(p) = cur {
+        if matches!(p.kind(), "if_statement" | "ternary_expression") {
+            let cond = p
+                .child_by_field_name("condition")
+                .or_else(|| p.named_child(0));
+            if let Some(c) = cond
+                && let Ok(t) = c.utf8_text(source)
+            {
+                let normalized: String = t.split_whitespace().collect::<Vec<_>>().join(" ");
+                if normalized.contains(&needle_dq) || normalized.contains(&needle_sq) {
+                    return true;
+                }
+            }
+        }
+        cur = p.parent();
+    }
+    false
 }
 
 fn offending_member(n: tree_sitter::Node<'_>, source: &[u8]) -> Option<&'static str> {
@@ -155,6 +183,22 @@ mod tests {
     #[test]
     fn allows_non_component() {
         let src = "function helper() { return window.location.href; }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_typeof_guarded_window() {
+        let src = "function Page() { \
+                   if (typeof window !== 'undefined') { const w = window.innerWidth; } \
+                   return null; }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_typeof_guarded_document_double_quoted() {
+        let src = "function Page() { \
+                   if (typeof document !== \"undefined\") { const t = document.title; } \
+                   return null; }";
         assert!(run(src).is_empty());
     }
 }

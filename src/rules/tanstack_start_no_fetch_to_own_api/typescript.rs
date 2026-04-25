@@ -1,4 +1,7 @@
-//! Flag `fetch('/api/...')` or `fetch(\`/api/...\`)`.
+//! Flag `fetch('/api/...')` or `fetch(\`/api/...\`)` — but only in files that
+//! import from `@tanstack/start` / `@tanstack/react-start`. We can't prove an
+//! equivalent server fn exists; the import gate keeps us from flagging plain
+//! React/Next/Remix codebases that legitimately call their own `/api/*`.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
@@ -12,6 +15,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
     let Some(first) = first_named_arg(args) else { return; };
     let Some(literal) = literal_string_value(first, source) else { return; };
     if !literal.starts_with("/api/") { return; }
+    if !file_uses_tanstack_start(source) { return; }
 
     diagnostics.push(Diagnostic::at_node(
         ctx.path,
@@ -23,6 +27,11 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         ),
         Severity::Warning,
     ));
+}
+
+fn file_uses_tanstack_start(source: &[u8]) -> bool {
+    let Ok(text) = std::str::from_utf8(source) else { return false; };
+    text.contains("@tanstack/start") || text.contains("@tanstack/react-start")
 }
 
 fn first_named_arg<'a>(args: tree_sitter::Node<'a>) -> Option<tree_sitter::Node<'a>> {
@@ -58,23 +67,35 @@ mod tests {
         crate::rules::test_helpers::run_ts(s, &Check)
     }
 
+    const TANSTACK_IMPORT: &str = "import { createServerFn } from '@tanstack/start';\n";
+
     #[test]
     fn flags_fetch_api_string() {
-        assert_eq!(run("fetch('/api/users');").len(), 1);
+        let src = format!("{TANSTACK_IMPORT}fetch('/api/users');");
+        assert_eq!(run(&src).len(), 1);
     }
 
     #[test]
     fn flags_fetch_api_template() {
-        assert_eq!(run("fetch(`/api/users`);").len(), 1);
+        let src = format!("{TANSTACK_IMPORT}fetch(`/api/users`);");
+        assert_eq!(run(&src).len(), 1);
     }
 
     #[test]
     fn allows_external_fetch() {
-        assert!(run("fetch('https://example.com/data');").is_empty());
+        let src = format!("{TANSTACK_IMPORT}fetch('https://example.com/data');");
+        assert!(run(&src).is_empty());
     }
 
     #[test]
     fn allows_non_api_path() {
-        assert!(run("fetch('/health');").is_empty());
+        let src = format!("{TANSTACK_IMPORT}fetch('/health');");
+        assert!(run(&src).is_empty());
+    }
+
+    #[test]
+    fn ignores_when_no_tanstack_start_import() {
+        // No TanStack Start in the file → don't flag (could be Next/Remix/etc.).
+        assert!(run("fetch('/api/users');").is_empty());
     }
 }

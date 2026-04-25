@@ -1,6 +1,25 @@
-//! zod-prefer-stringbool backend — flag `z.coerce.boolean()` calls.
+//! zod-prefer-stringbool backend — flag `z.coerce.boolean()` calls in files
+//! that show form/HTML-input indicators. The smell is only meaningful for
+//! string-typed inputs (form fields, query params); pure boolean coercion in
+//! other contexts is fine.
 
 use crate::diagnostic::{Diagnostic, Severity};
+
+const FORM_INDICATORS: &[&str] = &[
+    "react-hook-form",
+    "@tanstack/react-form",
+    "@tanstack/form",
+    "formik",
+    "FormData",
+    "URLSearchParams",
+    "useForm",
+    "searchParams",
+];
+
+fn file_has_form_context(source: &[u8]) -> bool {
+    let Ok(text) = std::str::from_utf8(source) else { return false; };
+    FORM_INDICATORS.iter().any(|m| text.contains(m))
+}
 
 crate::ast_check! { |node, source, ctx, diagnostics|
     if node.kind() != "call_expression" { return; }
@@ -8,6 +27,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
     if func.kind() != "member_expression" { return; }
     let Ok(func_text) = func.utf8_text(source) else { return };
     if func_text != "z.coerce.boolean" { return; }
+    if !file_has_form_context(source) { return; }
 
     let pos = node.start_position();
     diagnostics.push(Diagnostic {
@@ -31,17 +51,32 @@ mod tests {
     }
 
     #[test]
-    fn flags_coerce_boolean() {
-        assert_eq!(run("const S = z.coerce.boolean();").len(), 1);
+    fn flags_coerce_boolean_with_useform() {
+        let src = "import { useForm } from 'react-hook-form';\nconst S = z.coerce.boolean();";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_coerce_boolean_with_searchparams() {
+        let src = "const params = new URLSearchParams(); const S = z.coerce.boolean();";
+        assert_eq!(run(src).len(), 1);
     }
 
     #[test]
     fn allows_stringbool() {
-        assert!(run("const S = z.stringbool();").is_empty());
+        let src = "import { useForm } from 'react-hook-form';\nconst S = z.stringbool();";
+        assert!(run(src).is_empty());
     }
 
     #[test]
     fn allows_coerce_number() {
-        assert!(run("const S = z.coerce.number();").is_empty());
+        let src = "import { useForm } from 'react-hook-form';\nconst S = z.coerce.number();";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_coerce_boolean_outside_form_context() {
+        // No form/HTML-input context → don't flag.
+        assert!(run("const S = z.coerce.boolean();").is_empty());
     }
 }

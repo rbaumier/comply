@@ -1,10 +1,22 @@
 //! Detection: `macro_invocation` whose macro name is `println`,
-//! `eprintln`, `print` or `eprint`, located inside an async function.
-//! Reuses `rust_helpers::is_inside_async_fn`, the same walk that
-//! `rust-block-on-in-async` uses.
+//! `eprintln`, `print` or `eprint`, located inside async code — either an
+//! `async fn` or an `async { … }` / `async move { … }` block.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::rust_helpers::is_inside_async_fn;
+
+/// True when `node` lies inside an `async { … }` or `async move { … }` block.
+/// tree-sitter-rust represents these as `async_block` nodes.
+fn is_inside_async_block(node: tree_sitter::Node<'_>) -> bool {
+    let mut cur = node.parent();
+    while let Some(p) = cur {
+        if p.kind() == "async_block" { return true; }
+        // Stop at function boundaries — `is_inside_async_fn` covers those.
+        if p.kind() == "function_item" { return false; }
+        cur = p.parent();
+    }
+    false
+}
 
 crate::ast_check! { |node, source, ctx, diagnostics|
     if node.kind() != "macro_invocation" { return; }
@@ -19,7 +31,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         return;
     }
 
-    if !is_inside_async_fn(node, source) { return; }
+    if !is_inside_async_fn(node, source) && !is_inside_async_block(node) { return; }
 
     diagnostics.push(Diagnostic::at_node(
         ctx.path,
@@ -64,5 +76,17 @@ mod tests {
     fn allows_tracing_info_in_async_fn() {
         let src = "async fn f() { tracing::info!(\"hi\"); }";
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_println_in_async_block() {
+        let src = "fn f() { let _ = async { println!(\"hi\"); }; }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_println_in_async_move_block() {
+        let src = "fn f() { let _ = async move { println!(\"hi\"); }; }";
+        assert_eq!(run(src).len(), 1);
     }
 }

@@ -72,10 +72,27 @@ crate::ast_check! { |node, source, ctx, diagnostics|
     }
     if root.utf8_text(source).map(|t| t != "z").unwrap_or(true) { return; }
 
-    // Walk up to find the nearest enclosing function scope.
+    // Walk up to find the nearest enclosing function or loop scope.
     let mut cur = node.parent();
     while let Some(p) = cur {
         match p.kind() {
+            "for_statement"
+            | "for_in_statement"
+            | "while_statement"
+            | "do_statement" => {
+                let pos = node.start_position();
+                diagnostics.push(Diagnostic {
+                    path: ctx.path.to_path_buf(),
+                    line: pos.row + 1,
+                    column: pos.column + 1,
+                    rule_id: super::META.id.into(),
+                    message: "Zod schema built inside a loop body — hoist it outside the \
+                              loop so it is only constructed once.".into(),
+                    severity: Severity::Warning,
+                    span: None,
+                });
+                return;
+            }
             "function_declaration"
             | "function_expression"
             | "arrow_function"
@@ -133,5 +150,29 @@ mod tests {
     fn allows_schema_in_plain_helper() {
         let src = "function helper() { const S = z.object({ a: z.string() }); }";
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_schema_in_for_loop() {
+        let src = "for (let i = 0; i < 10; i++) { const S = z.string(); }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_schema_in_while_loop() {
+        let src = "while (running) { const S = z.string(); }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_schema_in_for_in_loop() {
+        let src = "for (const k in obj) { const S = z.string(); }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_schema_in_do_loop() {
+        let src = "do { const S = z.string(); } while (running);";
+        assert_eq!(run(src).len(), 1);
     }
 }

@@ -1,8 +1,12 @@
-//! Flag a `useEffect` callback that contains `navigate('/login')` (or any
-//! string arg starting with `/login`). That pattern redirects after render
-//! — in TanStack Start the correct approach is `beforeLoad` + `throw redirect()`.
+//! Flag a `useEffect` callback that contains a redirect to an auth-looking
+//! route (`/login`, `/signin`, `/auth`, etc.) via `navigate(...)`,
+//! `router.push(...)`, `router.replace(...)`, `redirect(...)`, or
+//! `window.location` assignments. The correct TanStack Start approach is
+//! `beforeLoad` + `throw redirect()`.
 
 use crate::diagnostic::{Diagnostic, Severity};
+
+const AUTH_PATH_MARKERS: &[&str] = &["login", "signin", "sign-in", "auth", "authenticate"];
 
 crate::ast_check! { |node, source, ctx, diagnostics|
     if node.kind() != "call_expression" { return; }
@@ -12,13 +16,13 @@ crate::ast_check! { |node, source, ctx, diagnostics|
 
     let Some(args) = node.child_by_field_name("arguments") else { return; };
     let Some(cb) = first_function_argument(args) else { return; };
-    if !contains_login_navigate(cb, source) { return; }
+    if !contains_auth_redirect(cb, source) { return; }
 
     diagnostics.push(Diagnostic::at_node(
         ctx.path,
         &node,
         super::META.id,
-        "Don't redirect to `/login` from `useEffect`. Move the guard to \
+        "Don't redirect to an auth route from `useEffect`. Move the guard to \
          `beforeLoad` and `throw redirect({ to: '/login' })` on the route."
             .into(),
         Severity::Warning,
@@ -31,17 +35,44 @@ fn first_function_argument<'a>(args: tree_sitter::Node<'a>) -> Option<tree_sitte
         .find(|c| matches!(c.kind(), "arrow_function" | "function_expression" | "function"))
 }
 
-fn contains_login_navigate(root: tree_sitter::Node<'_>, source: &[u8]) -> bool {
+fn contains_auth_redirect(root: tree_sitter::Node<'_>, source: &[u8]) -> bool {
     let mut stack = vec![root];
     while let Some(n) = stack.pop() {
+        // Call-form auth redirects: navigate(...), router.push(...),
+        // router.replace(...), redirect(...).
         if n.kind() == "call_expression"
             && let Some(callee) = n.child_by_field_name("function")
-                && let Ok(name) = callee.utf8_text(source)
-                    && (name == "navigate" || name.ends_with(".navigate"))
-                        && let Some(args) = n.child_by_field_name("arguments")
-                            && arg_targets_login(args, source) {
-                                return true;
-                            }
+            && let Ok(name) = callee.utf8_text(source)
+            && is_redirect_callee(name)
+            && let Some(args) = n.child_by_field_name("arguments")
+            && arg_targets_auth(args, source)
+        {
+            return true;
+        }
+
+        // window.location = '...' / window.location.href = '...' /
+        // window.location.assign('...') / .replace('...').
+        if n.kind() == "assignment_expression"
+            && let Some(left) = n.child_by_field_name("left")
+            && let Ok(lt) = left.utf8_text(source)
+            && (lt == "window.location" || lt == "window.location.href")
+            && let Some(right) = n.child_by_field_name("right")
+            && expr_is_auth_string(right, source)
+        {
+            return true;
+        }
+        if n.kind() == "call_expression"
+            && let Some(callee) = n.child_by_field_name("function")
+            && callee.kind() == "member_expression"
+            && let Ok(callee_text) = callee.utf8_text(source)
+            && (callee_text == "window.location.assign"
+                || callee_text == "window.location.replace")
+            && let Some(args) = n.child_by_field_name("arguments")
+            && arg_targets_auth(args, source)
+        {
+            return true;
+        }
+
         let mut cursor = n.walk();
         for c in n.children(&mut cursor) {
             stack.push(c);
@@ -50,20 +81,37 @@ fn contains_login_navigate(root: tree_sitter::Node<'_>, source: &[u8]) -> bool {
     false
 }
 
-fn arg_targets_login(args: tree_sitter::Node<'_>, source: &[u8]) -> bool {
+fn is_redirect_callee(name: &str) -> bool {
+    if name == "navigate" || name == "redirect" {
+        return true;
+    }
+    if name.ends_with(".navigate") || name.ends_with(".push") || name.ends_with(".replace") {
+        return true;
+    }
+    false
+}
+
+fn path_looks_like_auth(s: &str) -> bool {
+    let lower = s.to_ascii_lowercase();
+    AUTH_PATH_MARKERS.iter().any(|m| lower.contains(m))
+}
+
+fn expr_is_auth_string(n: tree_sitter::Node<'_>, source: &[u8]) -> bool {
+    if !matches!(n.kind(), "string" | "template_string") { return false; }
+    let Ok(t) = n.utf8_text(source) else { return false; };
+    let inner = t.trim_matches(|ch| ch == '"' || ch == '\'' || ch == '`');
+    path_looks_like_auth(inner)
+}
+
+fn arg_targets_auth(args: tree_sitter::Node<'_>, source: &[u8]) -> bool {
     let mut cursor = args.walk();
     for c in args.children(&mut cursor) {
         match c.kind() {
             "string" | "template_string" => {
-                if let Ok(t) = c.utf8_text(source) {
-                    let inner = t.trim_matches(|ch| ch == '"' || ch == '\'' || ch == '`');
-                    if inner.starts_with("/login") {
-                        return true;
-                    }
-                }
+                if expr_is_auth_string(c, source) { return true; }
             }
             "object" => {
-                // navigate({ to: '/login' })
+                // { to: '/login' } / { to: '/auth/sign-in' }
                 let mut cur = c.walk();
                 for pair in c.children(&mut cur) {
                     if pair.kind() != "pair" { continue; }
@@ -72,13 +120,7 @@ fn arg_targets_login(args: tree_sitter::Node<'_>, source: &[u8]) -> bool {
                     let kname = kt.trim_matches(|ch| ch == '"' || ch == '\'');
                     if kname != "to" { continue; }
                     let Some(v) = pair.child_by_field_name("value") else { continue; };
-                    if !matches!(v.kind(), "string" | "template_string") { continue; }
-                    if let Ok(vt) = v.utf8_text(source) {
-                        let inner = vt.trim_matches(|ch| ch == '"' || ch == '\'' || ch == '`');
-                        if inner.starts_with("/login") {
-                            return true;
-                        }
-                    }
+                    if expr_is_auth_string(v, source) { return true; }
                 }
             }
             _ => {}
@@ -117,5 +159,35 @@ mod tests {
     fn allows_navigate_to_other_route() {
         let src = "useEffect(() => { navigate('/dashboard'); }, []);";
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_router_push_to_signin() {
+        let src = "useEffect(() => { router.push('/signin'); }, []);";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_router_replace_to_auth() {
+        let src = "useEffect(() => { router.replace('/auth/callback'); }, []);";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_redirect_to_signin_dash() {
+        let src = "useEffect(() => { redirect('/sign-in'); }, []);";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_window_location_assignment() {
+        let src = "useEffect(() => { window.location.href = '/login'; }, []);";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_window_location_assign_call() {
+        let src = "useEffect(() => { window.location.assign('/login'); }, []);";
+        assert_eq!(run(src).len(), 1);
     }
 }

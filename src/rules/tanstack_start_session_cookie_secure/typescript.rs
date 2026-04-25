@@ -13,7 +13,12 @@ crate::ast_check! { |node, source, ctx, diagnostics|
     let Some(options) = first_object_argument(args) else { return; };
     let Some(cookie_value) = find_pair_value(options, source, "cookie") else { return; };
     if cookie_value.kind() != "object" { return; }
-    if has_key(cookie_value, source, "secure") { return; }
+    let secure_value = find_pair_value(cookie_value, source, "secure");
+    if let Some(v) = secure_value {
+        // Present and not literally `false` → trust the user.
+        let raw = v.utf8_text(source).unwrap_or("").trim();
+        if raw != "false" { return; }
+    }
 
     diagnostics.push(Diagnostic::at_node(
         ctx.path,
@@ -49,10 +54,6 @@ fn find_pair_value<'a>(
     None
 }
 
-fn has_key(object: tree_sitter::Node<'_>, source: &[u8], key: &str) -> bool {
-    find_pair_value(object, source, key).is_some()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -80,6 +81,14 @@ mod tests {
     fn allows_secure_expression() {
         assert!(
             run("useSession({ cookie: { secure: isProd, sameSite: 'lax' } });").is_empty()
+        );
+    }
+
+    #[test]
+    fn flags_secure_false() {
+        assert_eq!(
+            run("useSession({ cookie: { secure: false, sameSite: 'lax' } });").len(),
+            1
         );
     }
 }
