@@ -1,5 +1,10 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
+/// Threshold above which `matchErrorPartial` is considered "almost exhaustive"
+/// and the developer should likely use `matchError` instead. Below this, the
+/// partial match is probably intentional.
+const MIN_TAGS_TO_SUGGEST_EXHAUSTIVE: usize = 3;
+
 crate::ast_check! { |node, source, ctx, diagnostics|
     if node.kind() != "call_expression" {
         return;
@@ -12,6 +17,22 @@ crate::ast_check! { |node, source, ctx, diagnostics|
     if prop.utf8_text(source).unwrap_or("") != "matchErrorPartial" {
         return;
     }
+
+    // Without type info we can't know whether the union is fully enumerated.
+    // Conservative heuristic: only flag when the match object enumerates
+    // 3+ tags, suggesting the developer has covered most/all cases.
+    let Some(args) = node.child_by_field_name("arguments") else { return; };
+    let mut cursor = args.walk();
+    let Some(obj) = args.children(&mut cursor).find(|c| c.kind() == "object") else { return; };
+    let mut ocursor = obj.walk();
+    let tag_count = obj
+        .children(&mut ocursor)
+        .filter(|c| c.kind() == "pair" || c.kind() == "method_definition")
+        .count();
+    if tag_count < MIN_TAGS_TO_SUGGEST_EXHAUSTIVE {
+        return;
+    }
+
     diagnostics.push(Diagnostic::at_node(
         ctx.path,
         &node,
@@ -28,9 +49,19 @@ mod tests {
         crate::rules::test_helpers::run_ts(s, &Check)
     }
     #[test]
-    fn flags_match_error_partial() {
-        let src = "result.matchErrorPartial({ NotFound: () => 0 });";
+    fn flags_match_error_partial_with_three_tags() {
+        let src = "result.matchErrorPartial({ NotFound: () => 0, NetworkError: () => 1, ParseError: () => 2 });";
         assert_eq!(run(src).len(), 1);
+    }
+    #[test]
+    fn allows_match_error_partial_with_one_tag() {
+        let src = "result.matchErrorPartial({ NotFound: () => 0 });";
+        assert!(run(src).is_empty());
+    }
+    #[test]
+    fn allows_match_error_partial_with_two_tags() {
+        let src = "result.matchErrorPartial({ NotFound: () => 0, NetworkError: () => 1 });";
+        assert!(run(src).is_empty());
     }
     #[test]
     fn allows_match_error() {

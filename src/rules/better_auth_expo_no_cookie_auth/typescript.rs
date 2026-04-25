@@ -24,7 +24,9 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         return;
     }
 
-    if text.contains("expoClient") {
+    // Require an actual call `expoClient(` — bare identifiers in comments or
+    // unused imports do not satisfy the rule.
+    if text.contains("expoClient(") {
         return;
     }
 
@@ -65,6 +67,17 @@ mod tests {
             export const authClient = createAuthClient({ plugins: [expoClient()] });
         "#;
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_when_expoclient_only_in_comment() {
+        let src = r#"
+            import { View } from "react-native";
+            import { createAuthClient } from "better-auth/react";
+            // TODO: add expoClient plugin
+            export const authClient = createAuthClient({});
+        "#;
+        assert_eq!(run(src).len(), 1);
     }
 
     #[test]

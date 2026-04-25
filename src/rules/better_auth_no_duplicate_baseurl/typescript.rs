@@ -33,6 +33,12 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         return;
     }
 
+    // Only flag when the file actually references BETTER_AUTH_URL — otherwise
+    // there's no "duplication" to warn about.
+    if !ctx.source.contains("BETTER_AUTH_URL") {
+        return;
+    }
+
     let Some(args) = node.child_by_field_name("arguments") else { return };
     let mut cursor = args.walk();
     let Some(obj) = args.children(&mut cursor).find(|c| c.kind() == "object") else { return };
@@ -59,10 +65,8 @@ mod tests {
 
     #[test]
     fn flags_baseurl_in_config() {
-        assert_eq!(
-            run("betterAuth({ baseURL: \"https://app.example.com\" })").len(),
-            1
-        );
+        let src = "const url = process.env.BETTER_AUTH_URL;\nbetterAuth({ baseURL: \"https://app.example.com\" })";
+        assert_eq!(run(src).len(), 1);
     }
 
     #[test]
@@ -72,6 +76,12 @@ mod tests {
 
     #[test]
     fn ignores_baseurl_outside_betterauth() {
-        assert!(run("makeClient({ baseURL: \"https://app.example.com\" })").is_empty());
+        let src = "const url = process.env.BETTER_AUTH_URL;\nmakeClient({ baseURL: \"https://app.example.com\" })";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_baseurl_when_no_env_var_referenced() {
+        assert!(run("betterAuth({ baseURL: \"https://app.example.com\" })").is_empty());
     }
 }
