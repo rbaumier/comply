@@ -1489,19 +1489,6 @@ pub mod meta_registry;
 /// variants identically (either via the TS grammar or oxlint delegation).
 pub const TS_FAMILY: &[Language] = &[Language::TypeScript, Language::Tsx, Language::JavaScript];
 
-/// Text-scannable languages with JS-like syntax: TS-family + Vue.
-/// Used by rules that scan source text for JS-specific constructs — regex
-/// literals (`/pattern/flags`), JSDoc blocks (`/** */`) — which do NOT exist
-/// in Rust (regex is string-based via `Regex::new`, doc comments are `///`).
-/// Adding Rust here causes category-error false positives (URLs misread as
-/// regex literals, closures `|x|` misread as alternations, etc.).
-pub const ALL_TEXT_LANGUAGES: &[Language] = &[
-    Language::TypeScript,
-    Language::Tsx,
-    Language::JavaScript,
-    Language::Vue,
-];
-
 /// Helper for rules whose enforcement is 100% delegated to oxlint.
 /// Each entry in `languages` gets a `Backend::Oxlint { rule }` binding.
 pub fn oxlint_delegate(meta: RuleMeta, rule: &'static str, languages: &[Language]) -> RuleDef {

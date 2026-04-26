@@ -1,8 +1,4 @@
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::rules::backend::{CheckCtx, TextCheck};
-
-#[derive(Debug)]
-pub struct Check;
 
 /// Detects JSDoc descriptions that merely repeat the name of the symbol.
 /// Example:
@@ -10,25 +6,10 @@ pub struct Check;
 /// /** The foo function. */
 /// function foo() {}
 /// ```
-fn find_uninformative_docs(source: &str) -> Vec<(usize, usize)> {
-    let mut hits = Vec::new();
-    let lines: Vec<&str> = source.lines().collect();
-
-    for (idx, line) in lines.iter().enumerate() {
-        let trimmed = line.trim();
-
-        // Single-line JSDoc: /** ... */
-        if trimmed.starts_with("/**") && trimmed.ends_with("*/") {
-            let comment_body = extract_jsdoc_body(trimmed);
-            if let Some(name) = get_next_symbol_name(&lines, idx + 1)
-                && is_trivial_description(&comment_body, &name) {
-                    hits.push((idx, 0));
-                }
-        }
-    }
-    hits
-}
-
+///
+/// Walks tree-sitter `comment` nodes that are single-line JSDoc (`/** ... */`),
+/// extracts the description, then reads up to 3 source lines after the comment
+/// to identify the documented symbol's name.
 fn extract_jsdoc_body(line: &str) -> String {
     let s = line.trim_start_matches("/**").trim_end_matches("*/").trim();
     s.to_lowercase()
@@ -37,24 +18,27 @@ fn extract_jsdoc_body(line: &str) -> String {
 fn get_next_symbol_name(lines: &[&str], from: usize) -> Option<String> {
     for line in lines.iter().take(lines.len().min(from + 3)).skip(from) {
         let t = line.trim();
-        // function foo(
         if let Some(rest) = t.strip_prefix("function ") {
             return extract_ident(rest);
         }
-        // const foo =, let foo =, var foo =
-        for kw in &["const ", "let ", "var ", "export const ", "export let ", "export function "] {
+        for kw in &[
+            "const ",
+            "let ",
+            "var ",
+            "export const ",
+            "export let ",
+            "export function ",
+        ] {
             if let Some(rest) = t.strip_prefix(kw) {
                 return extract_ident(rest);
             }
         }
-        // class Foo
         if let Some(rest) = t.strip_prefix("class ") {
             return extract_ident(rest);
         }
         if let Some(rest) = t.strip_prefix("export class ") {
             return extract_ident(rest);
         }
-        // method: foo(
         if let Some(paren) = t.find('(') {
             let candidate = t[..paren].trim();
             if !candidate.is_empty() && candidate.chars().all(|c| c.is_alphanumeric() || c == '_') {
@@ -66,7 +50,10 @@ fn get_next_symbol_name(lines: &[&str], from: usize) -> Option<String> {
 }
 
 fn extract_ident(s: &str) -> Option<String> {
-    let ident: String = s.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
+    let ident: String = s
+        .chars()
+        .take_while(|c| c.is_alphanumeric() || *c == '_')
+        .collect();
     if ident.is_empty() {
         None
     } else {
@@ -78,7 +65,6 @@ fn is_trivial_description(body: &str, name: &str) -> bool {
     if body.is_empty() || name.is_empty() {
         return false;
     }
-    // "the foo function" / "foo" / "the foo" / "a foo" / "returns foo"
     let normalized = body
         .replace("the ", "")
         .replace("a ", "")
@@ -94,30 +80,38 @@ fn is_trivial_description(body: &str, name: &str) -> bool {
     normalized == *name || normalized.is_empty()
 }
 
-impl TextCheck for Check {
-    fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
-        let mut diagnostics = Vec::new();
-        for (line, col) in find_uninformative_docs(ctx.source) {
-            diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
-                line: line + 1,
-                column: col + 1,
-                rule_id: "jsdoc-informative-docs".into(),
-                message: "JSDoc description merely repeats the symbol name without adding useful information.".into(),
-                severity: Severity::Warning,
-                span: None,
-            });
-        }
-        diagnostics
-    }
+crate::ast_check! { |node, source, ctx, diagnostics|
+    if node.kind() != "comment" { return; }
+    let Ok(raw) = node.utf8_text(source) else { return };
+    let trimmed = raw.trim();
+    // Only single-line JSDoc: /** ... */ on one line.
+    if !(trimmed.starts_with("/**") && trimmed.ends_with("*/")) { return; }
+    if trimmed.contains('\n') { return; }
+
+    let body = extract_jsdoc_body(trimmed);
+    let start = node.start_position();
+
+    // Read source lines once to look ahead for the documented symbol.
+    let src_str = std::str::from_utf8(source).unwrap_or("");
+    let lines: Vec<&str> = src_str.lines().collect();
+    let Some(name) = get_next_symbol_name(&lines, start.row + 1) else { return };
+
+    if !is_trivial_description(&body, &name) { return; }
+
+    diagnostics.push(Diagnostic::at_node(
+        ctx.path,
+        &node,
+        super::META.id,
+        "JSDoc description merely repeats the symbol name without adding useful information.".into(),
+        Severity::Warning,
+    ));
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
-    fn run(source: &str) -> Vec<Diagnostic> {
-        Check.check(&CheckCtx::for_test(Path::new("t.ts"), source))
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_ts(s, &Check)
     }
 
     #[test]

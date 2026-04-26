@@ -1,10 +1,15 @@
 //! migration-needs-rollback
+//!
+//! AST-based detection of migration files that declare `up` but no
+//! `down` / `rollback`. Walks function-like AST nodes (declarations,
+//! methods, object pairs, `exports.up =` assignments) so identifiers
+//! containing the substring `up` (`setup`, `lookup`, …) cannot trigger
+//! the rule.
 
-mod text;
+mod rust;
+mod typescript;
 
 use crate::diagnostic::Severity;
-use crate::files::Language;
-use crate::rules::backend::Backend;
 use crate::rules::meta::RuleMeta;
 use crate::rules::RuleDef;
 
@@ -18,13 +23,5 @@ pub const META: RuleMeta = RuleMeta {
 };
 
 pub fn register() -> RuleDef {
-    RuleDef {
-        meta: META,
-        backends: vec![
-            (Language::TypeScript, Backend::Text(Box::new(text::Check))),
-            (Language::JavaScript, Backend::Text(Box::new(text::Check))),
-            (Language::Tsx, Backend::Text(Box::new(text::Check))),
-            (Language::Rust, Backend::Text(Box::new(text::Check))),
-        ],
-    }
+    crate::register_ts_family_with_rust!(META, typescript, rust)
 }

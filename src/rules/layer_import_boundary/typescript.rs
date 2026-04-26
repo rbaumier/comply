@@ -5,10 +5,6 @@
 //! - `infrastructure/` can import from anything
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::rules::backend::{CheckCtx, TextCheck};
-
-#[derive(Debug)]
-pub struct Check;
 
 #[derive(Debug, Clone, Copy)]
 enum Layer {
@@ -18,9 +14,7 @@ enum Layer {
 }
 
 fn detect_layer(path: &str) -> Option<Layer> {
-    // Normalize separators.
     let normalized = path.replace('\\', "/");
-    // Check path segments.
     for segment in normalized.split('/') {
         match segment {
             "domain" => return Some(Layer::Domain),
@@ -63,76 +57,42 @@ fn layer_name(layer: Layer) -> &'static str {
     }
 }
 
-/// Extract the import/require source string from a line.
-fn extract_import_source(line: &str) -> Option<&str> {
-    let trimmed = line.trim();
-    // import ... from "..."
-    if (trimmed.starts_with("import") || trimmed.starts_with("export"))
-        && let Some(from_idx) = trimmed.find("from")
-    {
-        let after = trimmed[from_idx + 4..].trim();
-        return extract_string_literal(after);
-    }
-    // require("...")
-    if let Some(req_idx) = trimmed.find("require(") {
-        let after = trimmed[req_idx + 8..].trim();
-        return extract_string_literal(after);
-    }
-    None
-}
+crate::ast_check! { |node, source, ctx, diagnostics|
+    // import_statement covers `import x from '...'` and `import '...';`.
+    // export_statement covers `export ... from '...'` re-exports.
+    let kind = node.kind();
+    if kind != "import_statement" && kind != "export_statement" { return; }
 
-fn extract_string_literal(s: &str) -> Option<&str> {
-    let quote = s.as_bytes().first()?;
-    if !matches!(quote, b'"' | b'\'' | b'`') {
-        return None;
-    }
-    let rest = &s[1..];
-    let end = rest.find(*quote as char)?;
-    Some(&rest[..end])
-}
+    let Some(src_node) = node.child_by_field_name("source") else { return };
 
-impl TextCheck for Check {
-    fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
-        let path_str = ctx.path.to_string_lossy();
-        let Some(file_layer) = detect_layer(&path_str) else {
-            return Vec::new();
-        };
+    let path_str = ctx.path.to_string_lossy();
+    let Some(file_layer) = detect_layer(&path_str) else { return };
 
-        let mut diagnostics = Vec::new();
-        for (idx, line) in ctx.source.lines().enumerate() {
-            let Some(source) = extract_import_source(line) else {
-                continue;
-            };
-            let Some(import_layer) = import_source_layer(source) else {
-                continue;
-            };
-            if is_forbidden(file_layer, import_layer) {
-                diagnostics.push(Diagnostic {
-                    path: ctx.path.to_path_buf(),
-                    line: idx + 1,
-                    column: 1,
-                    rule_id: "layer-import-boundary".into(),
-                    message: format!(
-                        "`{}` layer must not import from `{}` layer.",
-                        layer_name(file_layer),
-                        layer_name(import_layer),
-                    ),
-                    severity: Severity::Warning,
-                    span: None,
-                });
-            }
-        }
-        diagnostics
-    }
+    let raw = src_node.utf8_text(source).unwrap_or("");
+    let spec = raw.trim_matches(|c: char| c == '\'' || c == '"' || c == '`');
+    let Some(import_layer) = import_source_layer(spec) else { return };
+
+    if !is_forbidden(file_layer, import_layer) { return; }
+
+    diagnostics.push(Diagnostic::at_node(
+        ctx.path,
+        &src_node,
+        super::META.id,
+        format!(
+            "`{}` layer must not import from `{}` layer.",
+            layer_name(file_layer),
+            layer_name(import_layer),
+        ),
+        Severity::Warning,
+    ));
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
 
     fn run_with_path(path: &str, source: &str) -> Vec<Diagnostic> {
-        Check.check(&CheckCtx::for_test(Path::new(path), source))
+        crate::rules::test_helpers::run_ts_with_path(source, &Check, path)
     }
 
     #[test]

@@ -1,17 +1,16 @@
-//! no-implicit-deps — flag bare imports that are not declared in the nearest
-//! `package.json` and are not a Node.js builtin.
+//! no-implicit-deps backend — flag bare `import` specifiers that are not
+//! declared in the nearest ancestor `package.json` and are not Node.js
+//! builtins.
 //!
 //! Resolution steps for each bare import specifier:
 //!
 //! 1. Relative paths (`./x`, `../y`, `/abs`) — skip.
 //! 2. `node:` prefix or known Node builtin root — skip.
 //! 3. tsconfig path alias — walk up from the source file looking for the
-//!    nearest `tsconfig.json`. Parse `compilerOptions.paths`. If the
-//!    specifier's first segment matches any alias key (treating `*` as a
-//!    wildcard), skip. `extends` chains are intentionally NOT followed —
-//!    covers the common case without the resolution complexity. If a
-//!    project uses `extends` and that breaks this rule, the alias key can
-//!    still be satisfied by inlining it into the project's own tsconfig.
+//!    nearest `tsconfig.json`. If the specifier's first segment matches
+//!    any alias key (treating `*` as a wildcard), skip. `extends` chains
+//!    are intentionally NOT followed — covers the common case without
+//!    the resolution complexity.
 //! 4. Collapse the specifier to its root package name:
 //!    - `@scope/name/sub/path` -> `@scope/name`
 //!    - `pkg/sub/path`         -> `pkg`
@@ -27,10 +26,6 @@
 //! 6. Otherwise flag.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::rules::backend::{CheckCtx, TextCheck};
-
-#[derive(Debug)]
-pub struct Check;
 
 const NODE_BUILTINS: &[&str] = &[
     "assert",
@@ -74,53 +69,10 @@ const NODE_BUILTINS: &[&str] = &[
 
 fn is_node_builtin(specifier: &str) -> bool {
     if let Some(rest) = specifier.strip_prefix("node:") {
-        // node:fs, node:path, etc. — all valid
         return !rest.is_empty();
     }
-    // Check root module name (e.g. "fs/promises" -> "fs")
     let root = specifier.split('/').next().unwrap_or(specifier);
     NODE_BUILTINS.contains(&root)
-}
-
-/// Extract the module specifier from an import line.
-/// Matches: `import ... from 'spec'` / `import ... from "spec"` / `import 'spec'` / `import "spec"`
-fn extract_import_specifier(line: &str) -> Option<&str> {
-    let trimmed = line.trim();
-    if !trimmed.starts_with("import ") && !trimmed.starts_with("import\t") {
-        return None;
-    }
-    // Find the last quoted string on the line — that's the specifier
-    let spec = extract_quoted(trimmed)?;
-    Some(spec)
-}
-
-fn extract_quoted(s: &str) -> Option<&str> {
-    // Try single quotes first, then double quotes — pick the last occurrence
-    let single = s.rfind('\'').and_then(|end| {
-        let before = &s[..end];
-        let start = before.rfind('\'')?;
-        Some(&s[start + 1..end])
-    });
-    let double = s.rfind('"').and_then(|end| {
-        let before = &s[..end];
-        let start = before.rfind('"')?;
-        Some(&s[start + 1..end])
-    });
-    // Return whichever appears later in the string (the from-specifier, not a type string)
-    match (single, double) {
-        (Some(a), Some(b)) => {
-            let a_pos = s.rfind(&format!("'{a}'")).unwrap_or(0);
-            let b_pos = s.rfind(&format!("\"{b}\"")).unwrap_or(0);
-            if a_pos > b_pos {
-                Some(a)
-            } else {
-                Some(b)
-            }
-        }
-        (Some(a), None) => Some(a),
-        (None, Some(b)) => Some(b),
-        (None, None) => None,
-    }
 }
 
 fn is_bare_specifier(spec: &str) -> bool {
@@ -133,15 +85,13 @@ fn is_bare_specifier(spec: &str) -> bool {
 /// - `pkg`             -> `pkg`
 fn root_package_name(spec: &str) -> &str {
     if let Some(rest) = spec.strip_prefix('@') {
-        // Scoped: keep first TWO segments.
         let mut parts = rest.splitn(3, '/');
         match (parts.next(), parts.next()) {
             (Some(scope), Some(name)) => {
-                // Length = "@" + scope + "/" + name
                 let len = 1 + scope.len() + 1 + name.len();
                 &spec[..len]
             }
-            _ => spec, // Malformed scoped name — return as-is; lookup will just fail.
+            _ => spec,
         }
     } else {
         spec.split('/').next().unwrap_or(spec)
@@ -164,60 +114,72 @@ fn matches_alias(spec: &str, alias_prefixes: &[String]) -> bool {
     })
 }
 
-impl TextCheck for Check {
-    fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
-        // If there's no `package.json` anywhere above this file we can't
-        // prove anything; stay silent. `nearest_package_json` walks up from
-        // `ctx.path` and caches the parse on the shared `ProjectCtx` —
-        // monorepo safe (picks the workspace manifest, not the root).
-        let Some(pkg) = ctx.project.nearest_package_json(ctx.path) else {
-            return Vec::new();
-        };
-        let alias_prefixes = ctx
-            .project
-            .nearest_tsconfig(ctx.path)
-            .map(|t| t.alias_prefixes())
-            .unwrap_or_default();
+fn strip_quotes(s: &str) -> &str {
+    s.trim_matches(|c| c == '"' || c == '\'' || c == '`')
+}
 
-        let mut diagnostics = Vec::new();
-        for (idx, line) in ctx.source.lines().enumerate() {
-            let Some(spec) = extract_import_specifier(line) else {
-                continue;
-            };
-            if !is_bare_specifier(spec) {
-                continue;
-            }
-            if is_node_builtin(spec) {
-                continue;
-            }
-            if matches_alias(spec, &alias_prefixes) {
-                continue;
-            }
-            let root = root_package_name(spec);
-            if pkg.has_dep_or_engine(root) {
-                continue;
-            }
-            diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
-                line: idx + 1,
-                column: 1,
-                rule_id: "no-implicit-deps".into(),
-                message: format!(
-                    "Bare import `{spec}` is not listed in package.json (checked root `{root}`)."
-                ),
-                severity: Severity::Warning,
-                span: None,
-            });
-        }
-        diagnostics
+crate::ast_check! { |node, source, ctx, diagnostics|
+    if node.kind() != "import_statement" {
+        return;
     }
+    // Stay silent if there's no `package.json` anywhere above this file —
+    // we can't prove a dep is missing without a manifest to compare
+    // against. The lookup is cached on `ProjectCtx` and monorepo-safe
+    // (picks the workspace manifest, not the root).
+    let Some(pkg) = ctx.project.nearest_package_json(ctx.path) else {
+        return;
+    };
+    let alias_prefixes = ctx
+        .project
+        .nearest_tsconfig(ctx.path)
+        .map(|t| t.alias_prefixes())
+        .unwrap_or_default();
+
+    let Some(src_node) = node.child_by_field_name("source") else { return; };
+    let Ok(raw) = src_node.utf8_text(source) else { return; };
+    let spec = strip_quotes(raw);
+
+    if !is_bare_specifier(spec) {
+        return;
+    }
+    if is_node_builtin(spec) {
+        return;
+    }
+    if matches_alias(spec, &alias_prefixes) {
+        return;
+    }
+    let root = root_package_name(spec);
+    if pkg.has_dep_or_engine(root) {
+        return;
+    }
+    let pos = node.start_position();
+    diagnostics.push(Diagnostic {
+        path: ctx.path.to_path_buf(),
+        line: pos.row + 1,
+        column: pos.column + 1,
+        rule_id: "no-implicit-deps".into(),
+        message: format!(
+            "Bare import `{spec}` is not listed in package.json (checked root `{root}`)."
+        ),
+        severity: Severity::Warning,
+        span: None,
+    });
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rules::backend::{AstCheck, CheckCtx};
     use std::fs;
     use tempfile::TempDir;
+
+    fn parse(source: &str) -> tree_sitter::Tree {
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into())
+            .expect("grammar should load");
+        parser.parse(source, None).expect("parser should produce a tree")
+    }
 
     /// Build a temp project with an optional package.json body and an
     /// optional tsconfig body, then run the check on a source file placed
@@ -238,7 +200,8 @@ mod tests {
         fs::create_dir_all(&src_dir).unwrap();
         let file = src_dir.join("t.ts");
         fs::write(&file, source).unwrap();
-        let diags = Check.check(&CheckCtx::for_test(&file, source));
+        let tree = parse(source);
+        let diags = Check.check(&CheckCtx::for_test(&file, source), &tree);
         (dir, diags)
     }
 
@@ -314,7 +277,6 @@ mod tests {
 
     #[test]
     fn ignores_scoped_package_subpath() {
-        // The root "@scope/pkg" is declared; a subpath import should match.
         let (_d, diags) = run_in_project(
             Some(r#"{ "dependencies": { "@scope/pkg": "^1.0.0" } }"#),
             None,
@@ -375,12 +337,12 @@ mod tests {
 
     #[test]
     fn silent_when_no_package_json() {
-        // No package.json anywhere above — rule cannot prove anything.
         let dir = TempDir::new().unwrap();
         let file = dir.path().join("t.ts");
         let src = "import x from 'lodash';";
         fs::write(&file, src).unwrap();
-        let diags = Check.check(&CheckCtx::for_test(&file, src));
+        let tree = parse(src);
+        let diags = Check.check(&CheckCtx::for_test(&file, src), &tree);
         assert!(diags.is_empty(), "expected silence, got {diags:?}");
     }
 
@@ -406,7 +368,6 @@ mod tests {
 
     #[test]
     fn allows_engines_vscode() {
-        // VSCode extensions: engines.vscode implies `import vscode from 'vscode'`.
         let (_d, diags) = run_in_project(
             Some(r#"{ "engines": { "vscode": "^1.85.0" } }"#),
             None,
@@ -417,7 +378,6 @@ mod tests {
 
     #[test]
     fn allows_engines_electron() {
-        // Same pattern with a different host runtime.
         let (_d, diags) = run_in_project(
             Some(r#"{ "engines": { "electron": "^28.0.0" } }"#),
             None,
@@ -428,7 +388,6 @@ mod tests {
 
     #[test]
     fn still_flags_unlisted_bare_import_with_only_engines() {
-        // engines.vscode does NOT whitelist arbitrary imports — only 'vscode' itself.
         let (_d, diags) = run_in_project(
             Some(r#"{ "engines": { "vscode": "^1.85.0" } }"#),
             None,
