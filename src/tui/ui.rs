@@ -292,12 +292,11 @@ fn build_caret_line(diag: &Diagnostic, source_line: &str) -> (String, String) {
         Some((_, byte_len)) => byte_len.min(suffix.len()),
         None => suffix.len(),
     };
-    let spanned = &suffix[..floor_char_boundary(suffix, span_end_byte.max(1))];
-    let spanned = if spanned.is_empty() {
-        &suffix[..floor_char_boundary(suffix, 1).max(suffix.len().min(1))]
-    } else {
-        spanned
-    };
+    let boundary = floor_char_boundary(suffix, span_end_byte.max(1));
+    if boundary == 0 {
+        return (padding, "^".to_string());
+    }
+    let spanned = &suffix[..boundary];
 
     let caret_width = UnicodeWidthStr::width(spanned).max(1);
     let carets = "^".repeat(caret_width);
