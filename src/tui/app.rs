@@ -55,6 +55,7 @@ pub struct App {
     pending_g: bool,
     pub status_message: Option<String>,
     pub should_quit: bool,
+    pub needs_redraw: bool,
 
     pub visible_rows: Vec<Row>,
     pub group_summaries: HashMap<String, GroupSummary>,
@@ -117,18 +118,22 @@ impl App {
             pending_g: false,
             status_message: None,
             should_quit: false,
+            needs_redraw: false,
             visible_rows: Vec::new(),
             group_summaries: HashMap::new(),
             total_diagnostic_count: total,
             filtered_diagnostic_count: total,
         };
-        app.rebuild_visible_rows();
-        app.rebuild_summaries();
+        app.rebuild();
         app
     }
 
     pub fn run<B: Backend>(&mut self, terminal: &mut Terminal<B>) -> Result<()> {
         loop {
+            if self.needs_redraw {
+                terminal.clear()?;
+                self.needs_redraw = false;
+            }
             terminal.draw(|frame| ui::draw(frame, self))?;
             if event::handle_event(self)? {
                 break;
@@ -140,28 +145,28 @@ impl App {
         Ok(())
     }
 
-    fn group_iter(&self) -> Vec<(String, Vec<usize>)> {
-        match self.view_mode {
+    fn rebuild(&mut self) {
+        let mut rows: Vec<Row> = Vec::new();
+        let mut summaries: HashMap<String, GroupSummary> = HashMap::new();
+        let mut filtered_count = 0usize;
+
+        let groups: Vec<(String, &[usize])> = match self.view_mode {
             ViewMode::ByFile => self
                 .by_file
                 .iter()
-                .map(|(p, v)| (p.display().to_string(), v.clone()))
+                .map(|(p, v)| (p.display().to_string(), v.as_slice()))
                 .collect(),
             ViewMode::ByRule => self
                 .by_rule
                 .iter()
-                .map(|(k, v)| (k.clone(), v.clone()))
+                .map(|(k, v)| (k.clone(), v.as_slice()))
                 .collect(),
-        }
-    }
+        };
 
-    pub fn rebuild_visible_rows(&mut self) {
-        let mut rows: Vec<Row> = Vec::new();
-        let mut filtered_count = 0usize;
-
-        for (key, indices) in self.group_iter() {
+        for (key, indices) in &groups {
             let kept: Vec<usize> = indices
-                .into_iter()
+                .iter()
+                .copied()
                 .filter(|i| match &self.filtered_indices {
                     Some(set) => set.contains(i),
                     None => true,
@@ -171,7 +176,29 @@ impl App {
                 continue;
             }
             filtered_count += kept.len();
-            let expanded = self.expanded_groups.contains(&key);
+
+            let mut errors = 0usize;
+            let mut warnings = 0usize;
+            let mut files: HashSet<&PathBuf> = HashSet::new();
+            for &i in &kept {
+                let d = &self.diagnostics[i];
+                match d.severity {
+                    Severity::Error => errors += 1,
+                    Severity::Warning => warnings += 1,
+                }
+                files.insert(&d.path);
+            }
+            summaries.insert(
+                key.clone(),
+                GroupSummary {
+                    total: kept.len(),
+                    errors,
+                    warnings,
+                    file_count: files.len(),
+                },
+            );
+
+            let expanded = self.expanded_groups.contains(key);
             rows.push(Row::Group {
                 key: key.clone(),
                 expanded,
@@ -187,47 +214,11 @@ impl App {
         }
 
         self.visible_rows = rows;
+        self.group_summaries = summaries;
         self.filtered_diagnostic_count = filtered_count;
         if self.cursor >= self.visible_rows.len() {
             self.cursor = self.visible_rows.len().saturating_sub(1);
         }
-    }
-
-    pub fn rebuild_summaries(&mut self) {
-        let mut summaries: HashMap<String, GroupSummary> = HashMap::new();
-        for (key, indices) in self.group_iter() {
-            let kept: Vec<usize> = indices
-                .into_iter()
-                .filter(|i| match &self.filtered_indices {
-                    Some(set) => set.contains(i),
-                    None => true,
-                })
-                .collect();
-            if kept.is_empty() {
-                continue;
-            }
-            let mut errors = 0usize;
-            let mut warnings = 0usize;
-            let mut files: HashSet<PathBuf> = HashSet::new();
-            for &i in &kept {
-                let d = &self.diagnostics[i];
-                match d.severity {
-                    Severity::Error => errors += 1,
-                    Severity::Warning => warnings += 1,
-                }
-                files.insert(d.path.clone());
-            }
-            summaries.insert(
-                key,
-                GroupSummary {
-                    total: kept.len(),
-                    errors,
-                    warnings,
-                    file_count: files.len(),
-                },
-            );
-        }
-        self.group_summaries = summaries;
     }
 
     pub fn move_up(&mut self) {
@@ -258,7 +249,7 @@ impl App {
             Row::Group { key, expanded } => {
                 if !expanded {
                     self.expanded_groups.insert(key);
-                    self.rebuild_visible_rows();
+                    self.rebuild();
                 }
             }
             Row::Diag {
@@ -267,7 +258,7 @@ impl App {
             } => {
                 if !detail_expanded {
                     self.expanded_diags.insert(index);
-                    self.rebuild_visible_rows();
+                    self.rebuild();
                 }
             }
         }
@@ -284,12 +275,12 @@ impl App {
             } => {
                 if detail_expanded {
                     self.expanded_diags.remove(&index);
-                    self.rebuild_visible_rows();
+                    self.rebuild();
                 } else {
                     let parent_key = self.find_parent_group(index);
                     if let Some(key) = parent_key {
                         self.expanded_groups.remove(&key);
-                        self.rebuild_visible_rows();
+                        self.rebuild();
                         if let Some(pos) =
                             self.visible_rows.iter().position(|r| match r {
                                 Row::Group { key: k, .. } => k == &key,
@@ -304,7 +295,7 @@ impl App {
             Row::Group { key, expanded } => {
                 if expanded {
                     self.expanded_groups.remove(&key);
-                    self.rebuild_visible_rows();
+                    self.rebuild();
                 }
             }
         }
@@ -325,8 +316,7 @@ impl App {
         };
         self.expanded_groups.clear();
         self.cursor = 0;
-        self.rebuild_visible_rows();
-        self.rebuild_summaries();
+        self.rebuild();
     }
 
     pub fn enter_action(&mut self) {
@@ -347,8 +337,7 @@ impl App {
         self.input_mode = InputMode::Normal;
         self.search_query.clear();
         self.filtered_indices = None;
-        self.rebuild_visible_rows();
-        self.rebuild_summaries();
+        self.rebuild();
     }
 
     pub fn commit_search(&mut self) {
@@ -383,8 +372,7 @@ impl App {
                 .collect();
             self.filtered_indices = Some(set);
         }
-        self.rebuild_visible_rows();
-        self.rebuild_summaries();
+        self.rebuild();
         if self.cursor >= self.visible_rows.len() {
             self.cursor = self.visible_rows.len().saturating_sub(1);
         }
@@ -415,7 +403,10 @@ impl App {
         }
 
         let parts: Vec<&str> = editor.split_whitespace().collect();
-        let (cmd, extra_args) = (parts[0], &parts[1..]);
+        let Some((&cmd, extra_args)) = parts.split_first() else {
+            self.status_message = Some("set $EDITOR to open files".into());
+            return;
+        };
         let line_arg = format!("+{}", diag.line);
         let path_str = diag.path.display().to_string();
 
@@ -464,6 +455,7 @@ impl App {
                 crossterm::terminal::EnterAlternateScreen,
                 crossterm::event::EnableMouseCapture,
             );
+            self.needs_redraw = true;
         }
     }
 }

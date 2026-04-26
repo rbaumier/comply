@@ -18,8 +18,19 @@ use crate::diagnostic::Diagnostic;
 
 use app::App;
 
+fn restore_terminal() {
+    let _ = disable_raw_mode();
+    let _ = execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture);
+}
+
 pub fn run(diagnostics: Vec<Diagnostic>, sources: HashMap<PathBuf, String>) -> Result<()> {
     let mut app = App::new(diagnostics, sources);
+
+    let original_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        restore_terminal();
+        original_hook(info);
+    }));
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -30,13 +41,10 @@ pub fn run(diagnostics: Vec<Diagnostic>, sources: HashMap<PathBuf, String>) -> R
 
     let result = app.run(&mut terminal);
 
-    disable_raw_mode()?;
-    execute!(
-        terminal.backend_mut(),
-        LeaveAlternateScreen,
-        DisableMouseCapture
-    )?;
+    restore_terminal();
     terminal.show_cursor()?;
+
+    let _ = std::panic::take_hook();
 
     result
 }

@@ -119,7 +119,40 @@ fn draw_main_list(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(Paragraph::new(Text::from(visible)), area);
 }
 
-fn build_blocks<'a>(app: &'a App, _width: u16) -> Vec<VisualBlock<'a>> {
+fn truncate_line(line: Line<'_>, max_width: u16) -> Line<'_> {
+    let max = max_width as usize;
+    let total: usize = line.spans.iter().map(|s| UnicodeWidthStr::width(s.content.as_ref())).sum();
+    if total <= max {
+        return line;
+    }
+    let mut remaining = max.saturating_sub(1);
+    let mut spans = Vec::new();
+    for span in line.spans {
+        let w = UnicodeWidthStr::width(span.content.as_ref());
+        if w <= remaining {
+            remaining -= w;
+            spans.push(span);
+        } else {
+            let mut truncated = String::new();
+            for ch in span.content.chars() {
+                let cw = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+                if cw > remaining {
+                    break;
+                }
+                remaining -= cw;
+                truncated.push(ch);
+            }
+            if !truncated.is_empty() {
+                spans.push(Span::styled(truncated, span.style));
+            }
+            break;
+        }
+    }
+    spans.push(Span::styled("…", Style::default().fg(Color::DarkGray)));
+    Line::from(spans)
+}
+
+fn build_blocks<'a>(app: &'a App, width: u16) -> Vec<VisualBlock<'a>> {
     let mut blocks: Vec<VisualBlock<'a>> = Vec::with_capacity(app.visible_rows.len());
 
     for (row_index, row) in app.visible_rows.iter().enumerate() {
@@ -148,7 +181,7 @@ fn build_blocks<'a>(app: &'a App, _width: u16) -> Vec<VisualBlock<'a>> {
                     Span::styled(summary_text, Style::default().fg(Color::DarkGray)),
                 ]);
                 blocks.push(VisualBlock {
-                    lines: vec![line],
+                    lines: vec![truncate_line(line, width)],
                     row_index,
                 });
             }
@@ -178,7 +211,7 @@ fn build_blocks<'a>(app: &'a App, _width: u16) -> Vec<VisualBlock<'a>> {
                     ),
                 ]);
 
-                let mut lines = vec![header];
+                let mut lines = vec![truncate_line(header, width)];
 
                 if *detail_expanded {
                     let source_line = get_source_line(app, diag);
@@ -248,18 +281,29 @@ fn get_source_line<'a>(app: &'a App, diag: &Diagnostic) -> Option<&'a str> {
 
 fn build_caret_line(diag: &Diagnostic, source_line: &str) -> (String, String) {
     let col = diag.column.saturating_sub(1);
-    let prefix = if col <= source_line.len() {
-        &source_line[..col.min(source_line.len())]
-    } else {
-        source_line
-    };
-    let padding = " ".repeat(UnicodeWidthStr::width(prefix));
+    let chars: Vec<char> = source_line.chars().collect();
 
-    let caret_len = match diag.span {
-        Some((_, len)) => len.min(source_line.len().saturating_sub(col)).max(1),
-        None => source_line.len().saturating_sub(col).max(1),
+    let prefix_chars = col.min(chars.len());
+    let prefix: String = chars[..prefix_chars].iter().collect();
+    let padding = " ".repeat(UnicodeWidthStr::width(prefix.as_str()));
+
+    let remaining_chars = chars.len().saturating_sub(prefix_chars);
+    let caret_char_len = match diag.span {
+        Some((_, byte_len)) => {
+            // byte_len is from the span — convert to char count on this line
+            let spanned: String = chars[prefix_chars..].iter().collect();
+            let char_count = spanned
+                .char_indices()
+                .take_while(|&(byte_idx, _)| byte_idx < byte_len)
+                .count();
+            char_count.min(remaining_chars).max(1)
+        }
+        None => remaining_chars.max(1),
     };
-    let carets = "^".repeat(caret_len);
+
+    let spanned_str: String = chars[prefix_chars..prefix_chars + caret_char_len].iter().collect();
+    let caret_width = UnicodeWidthStr::width(spanned_str.as_str()).max(1);
+    let carets = "^".repeat(caret_width);
     (padding, carets)
 }
 

@@ -4,7 +4,7 @@ use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifier
 use super::app::{App, InputMode};
 
 pub fn handle_event(app: &mut App) -> Result<bool> {
-    if !event::poll(std::time::Duration::from_millis(100))? {
+    if !event::poll(std::time::Duration::from_millis(250))? {
         return Ok(false);
     }
 
