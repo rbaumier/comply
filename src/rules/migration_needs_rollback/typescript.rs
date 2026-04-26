@@ -31,6 +31,9 @@ const FN_NODE_KINDS: &[&str] = &[
 
 impl AstCheck for Check {
     fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
+        if !crate::rules::sql_helpers::is_migration_path(ctx.path) {
+            return vec![];
+        }
         let source = ctx.source.as_bytes();
         let mut has_up = false;
         let mut has_down = false;
@@ -92,7 +95,7 @@ mod tests {
     use super::*;
 
     fn run(src: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_ts(src, &Check)
+        crate::rules::test_helpers::run_ts_with_path(src, &Check, "/app/migrations/001.ts")
     }
 
     #[test]
@@ -149,5 +152,12 @@ mod tests {
     fn allows_exports_up_and_down_assignment() {
         let src = "exports.up = async () => {}; exports.down = async () => {};";
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn skips_non_migration_path() {
+        let src = "export async function up(db) { db.exec('CREATE TABLE t (id INT)'); }";
+        let diags = crate::rules::test_helpers::run_ts(src, &Check);
+        assert!(diags.is_empty());
     }
 }

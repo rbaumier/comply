@@ -10,6 +10,9 @@ pub struct Check;
 
 impl AstCheck for Check {
     fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
+        if !crate::rules::sql_helpers::is_migration_path(ctx.path) {
+            return vec![];
+        }
         let source_bytes = ctx.source.as_bytes();
         let mut diagnostics = Vec::new();
         for node in collect_nodes_of_kinds(tree, TS_STRING_KINDS) {
@@ -38,6 +41,10 @@ mod tests {
     use super::*;
 
     fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_ts_with_path(src, &Check, "/app/migrations/001.ts")
+    }
+
+    fn run_non_migration(src: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_ts(src, &Check)
     }
 
@@ -63,5 +70,11 @@ mod tests {
     fn does_not_flag_in_comment() {
         let src = "// CREATE INDEX idx_email ON users(email)\nconst x = 1;";
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn skips_non_migration_path() {
+        let src = r#"const q = `CREATE INDEX idx_email ON users(email)`;"#;
+        assert!(run_non_migration(src).is_empty());
     }
 }

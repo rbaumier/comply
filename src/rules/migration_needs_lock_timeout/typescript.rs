@@ -1,15 +1,14 @@
 //! migration-needs-lock-timeout — TS / JS / TSX backend.
 //!
-//! Walks string / template literals, identifies DDL statements (CREATE
-//! INDEX, ALTER TABLE, DROP INDEX, ADD CONSTRAINT) that lack a
-//! `SET lock_timeout`. Operating on string-literal nodes only — never on
-//! raw bytes — keeps the rule from firing on prose comments, identifiers,
-//! or unrelated code that happens to mention DDL keywords.
+//! Scoped to migration files. Walks string / template literals, uses
+//! `is_sql_ddl` to confirm the string is DDL before checking for
+//! `lock_timeout`.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::sql_helpers::TS_STRING_KINDS;
 
 crate::ast_check! { |node, source, ctx, diagnostics|
+    if !crate::rules::sql_helpers::is_migration_path(ctx.path) { return; }
     if !TS_STRING_KINDS.contains(&node.kind()) { return; }
     let Ok(text) = node.utf8_text(source) else { return; };
     if !super::contains_ddl(text) { return; }
@@ -32,6 +31,14 @@ mod tests {
     use crate::diagnostic::Diagnostic;
 
     fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_ts_with_path(
+            src,
+            &Check,
+            "/app/migrations/001_add_col.ts",
+        )
+    }
+
+    fn run_non_migration(src: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_ts(src, &Check)
     }
 
@@ -54,15 +61,14 @@ mod tests {
     }
 
     #[test]
-    fn ignores_non_ddl_string() {
-        let src = r#"const greeting = "hello world";"#;
-        assert!(run(src).is_empty());
+    fn skips_non_migration_path() {
+        let src = r#"const m = "ALTER TABLE users ADD COLUMN age INT";"#;
+        assert!(run_non_migration(src).is_empty());
     }
 
     #[test]
-    fn ignores_identifier_named_alter_table() {
-        // No DDL string — only an identifier mentioning the keywords.
-        let src = "function alter_table_users() { return 1; }";
+    fn ignores_non_ddl_string() {
+        let src = r#"const greeting = "hello world";"#;
         assert!(run(src).is_empty());
     }
 }

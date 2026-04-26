@@ -6,6 +6,9 @@ pub struct Check;
 
 impl TextCheck for Check {
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
+        if !crate::rules::sql_helpers::is_migration_path(ctx.path) {
+            return vec![];
+        }
         let mut diags = Vec::new();
         for (i, line) in ctx.source.lines().enumerate() {
             let upper = line.to_ascii_uppercase();
@@ -34,7 +37,11 @@ mod tests {
     use std::path::Path;
 
     fn run(src: &str) -> Vec<Diagnostic> {
-        Check.check(&CheckCtx::for_test(Path::new("t.ts"), src))
+        Check.check(&CheckCtx::for_test(Path::new("/app/migrations/001.sql"), src))
+    }
+
+    fn run_non_migration(src: &str) -> Vec<Diagnostic> {
+        Check.check(&CheckCtx::for_test(Path::new("/app/src/schema.sql"), src))
     }
 
     #[test]
@@ -61,5 +68,10 @@ mod tests {
             run(r#"const q = `CREATE INDEX idx_x ON t(x)`;"#).len(),
             1
         );
+    }
+
+    #[test]
+    fn skips_non_migration_path() {
+        assert!(run_non_migration("CREATE INDEX idx_email ON users(email);").is_empty());
     }
 }

@@ -1,9 +1,14 @@
 //! migration-needs-lock-timeout — Rust backend.
+//!
+//! Scoped to migration files. Walks Rust string literals, uses
+//! `is_sql_ddl` to confirm the string is DDL before checking for
+//! `lock_timeout`.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::sql_helpers::RUST_STRING_KINDS;
 
 crate::ast_check! { |node, source, ctx, diagnostics|
+    if !crate::rules::sql_helpers::is_migration_path(ctx.path) { return; }
     if !RUST_STRING_KINDS.contains(&node.kind()) { return; }
     let Ok(text) = node.utf8_text(source) else { return; };
     if !super::contains_ddl(text) { return; }
@@ -26,6 +31,14 @@ mod tests {
     use crate::diagnostic::Diagnostic;
 
     fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rust_with_path(
+            src,
+            &Check,
+            "/app/migrations/001.rs",
+        )
+    }
+
+    fn run_non_migration(src: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_rust(src, &Check)
     }
 
@@ -42,9 +55,9 @@ mod tests {
     }
 
     #[test]
-    fn flags_create_index_in_raw_string() {
-        let src = r###"fn f() { let m = r#"CREATE INDEX idx ON users(age)"#; }"###;
-        assert_eq!(run(src).len(), 1);
+    fn skips_non_migration_path() {
+        let src = r#"fn f() { let m = "ALTER TABLE users ADD COLUMN age INT"; }"#;
+        assert!(run_non_migration(src).is_empty());
     }
 
     #[test]

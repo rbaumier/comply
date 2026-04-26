@@ -7,6 +7,7 @@ use crate::diagnostic::Severity;
 use crate::files::Language;
 use crate::rules::backend::Backend;
 use crate::rules::meta::RuleMeta;
+pub(super) use crate::rules::sql_helpers::is_migration_path;
 use crate::rules::RuleDef;
 
 pub const META: RuleMeta = RuleMeta {
@@ -28,13 +29,6 @@ pub fn register() -> RuleDef {
             (Language::Rust, Backend::TreeSitter(Box::new(rust::Check))),
         ],
     }
-}
-
-pub(super) fn is_migration_path(path: &std::path::Path) -> bool {
-    path.components().any(|c| {
-        let s = c.as_os_str().to_string_lossy().to_ascii_lowercase();
-        s == "migrations" || s == "migration" || s.contains("migrate")
-    })
 }
 
 pub(super) fn sql_creates_or_alters_table(sql: &str) -> bool {

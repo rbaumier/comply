@@ -1,17 +1,20 @@
 //! migration-needs-lock-timeout
 //!
-//! Walks string-literal AST nodes for DDL statements that lack a
-//! `SET lock_timeout` declaration. Operating on string literals only
-//! (TS `string` / `template_string`, Rust `string_literal` /
-//! `raw_string_literal`) avoids matching DDL keywords appearing in
-//! comments, identifiers, or English prose.
+//! Scoped to migration files only (`**/migrations/**`). For `.sql` files
+//! the raw content is checked directly; for TS/Rust files, string literals
+//! containing DDL are checked. The path filter is the primary guard —
+//! `contains_ddl` only needs to identify DDL statements, not distinguish
+//! SQL from prose.
 
 mod rust;
+mod sql;
 mod typescript;
 
 use crate::diagnostic::Severity;
+use crate::files::Language;
+use crate::rules::backend::Backend;
 use crate::rules::meta::RuleMeta;
-use crate::rules::sql_helpers::contains_word;
+use crate::rules::sql_helpers::{contains_word, is_migration_path};
 use crate::rules::RuleDef;
 
 pub const META: RuleMeta = RuleMeta {
@@ -24,12 +27,12 @@ pub const META: RuleMeta = RuleMeta {
 };
 
 pub fn register() -> RuleDef {
-    crate::register_ts_family_with_rust!(META, typescript, rust)
+    let mut def = crate::register_ts_family_with_rust!(META, typescript, rust);
+    def.backends
+        .push((Language::Sql, Backend::Text(Box::new(sql::Check))));
+    def
 }
 
-/// Returns true if `text` contains a DDL phrase: `ALTER TABLE`,
-/// `CREATE INDEX`, `DROP INDEX`, or `ADD CONSTRAINT`. Each phrase is
-/// matched as two whole words so identifiers can't trigger.
 pub(super) fn contains_ddl(text: &str) -> bool {
     let lower = text.to_ascii_lowercase();
     (contains_word(&lower, "alter") && contains_word(&lower, "table"))
@@ -38,9 +41,6 @@ pub(super) fn contains_ddl(text: &str) -> bool {
         || (contains_word(&lower, "add") && contains_word(&lower, "constraint"))
 }
 
-/// Returns true if `text` contains `lock_timeout` (whole-word, case
-/// insensitive) — the marker that the migration already declared its
-/// lock timeout, regardless of the value or quoting style.
 pub(super) fn declares_lock_timeout(text: &str) -> bool {
     contains_word(&text.to_ascii_lowercase(), "lock_timeout")
 }
@@ -62,11 +62,6 @@ mod helper_tests {
     #[test]
     fn rejects_unrelated_text() {
         assert!(!contains_ddl("SELECT * FROM users"));
-    }
-
-    #[test]
-    fn rejects_identifier_with_alter_substring() {
-        assert!(!contains_ddl("alter_table_handler"));
     }
 
     #[test]

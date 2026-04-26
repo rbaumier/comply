@@ -52,6 +52,15 @@ pub(crate) fn is_ident_byte(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_'
 }
 
+/// True when `path` sits inside a migration directory — any path
+/// component named `migrations`, `migration`, or containing `migrate`.
+pub fn is_migration_path(path: &std::path::Path) -> bool {
+    path.components().any(|c| {
+        let s = c.as_os_str().to_string_lossy().to_ascii_lowercase();
+        s == "migrations" || s == "migration" || s.contains("migrate")
+    })
+}
+
 /// Returns true if `text` looks like a SQL query. Requires at least
 /// one DML keyword AND a `WHERE` or `FROM` clause keyword. Uses
 /// whole-word matching so identifiers containing the keywords don't
@@ -216,4 +225,5 @@ mod tests {
         // `varchar_value` should NOT match `varchar`.
         assert!(!word_followed_by_open_paren("varchar_value(arg)", "varchar"));
     }
+
 }
