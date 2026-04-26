@@ -280,10 +280,16 @@ fn get_source_line<'a>(app: &'a App, diag: &Diagnostic) -> Option<&'a str> {
 }
 
 fn build_caret_line(diag: &Diagnostic, source_line: &str) -> (String, String) {
-    let col = diag.column.saturating_sub(1);
+    let byte_col = diag.column.saturating_sub(1);
+    // column is byte-based (tree-sitter convention) — convert to char count
+    let prefix_chars = source_line
+        .get(..byte_col.min(source_line.len()))
+        .unwrap_or(source_line)
+        .chars()
+        .count();
     let chars: Vec<char> = source_line.chars().collect();
 
-    let prefix_chars = col.min(chars.len());
+    let prefix_chars = prefix_chars.min(chars.len());
     let prefix: String = chars[..prefix_chars].iter().collect();
     let padding = " ".repeat(UnicodeWidthStr::width(prefix.as_str()));
 
@@ -301,7 +307,11 @@ fn build_caret_line(diag: &Diagnostic, source_line: &str) -> (String, String) {
         None => remaining_chars.max(1),
     };
 
-    let spanned_str: String = chars[prefix_chars..prefix_chars + caret_char_len].iter().collect();
+    let end = (prefix_chars + caret_char_len).min(chars.len());
+    if end <= prefix_chars {
+        return (padding, "^".to_string());
+    }
+    let spanned_str: String = chars[prefix_chars..end].iter().collect();
     let caret_width = UnicodeWidthStr::width(spanned_str.as_str()).max(1);
     let carets = "^".repeat(caret_width);
     (padding, carets)

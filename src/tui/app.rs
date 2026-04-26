@@ -440,7 +440,6 @@ impl App {
             let _ = crossterm::execute!(
                 std::io::stdout(),
                 crossterm::terminal::LeaveAlternateScreen,
-                crossterm::event::DisableMouseCapture,
             );
 
             let _ = ProcessCommand::new(cmd)
@@ -453,7 +452,6 @@ impl App {
             let _ = crossterm::execute!(
                 std::io::stdout(),
                 crossterm::terminal::EnterAlternateScreen,
-                crossterm::event::EnableMouseCapture,
             );
             self.needs_redraw = true;
         }

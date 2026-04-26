@@ -7,7 +7,6 @@ use std::io;
 use std::path::PathBuf;
 
 use anyhow::Result;
-use crossterm::event::{DisableMouseCapture, EnableMouseCapture};
 use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -20,7 +19,7 @@ use app::App;
 
 fn restore_terminal() {
     let _ = disable_raw_mode();
-    let _ = execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture);
+    let _ = execute!(io::stdout(), LeaveAlternateScreen);
 }
 
 pub fn run(diagnostics: Vec<Diagnostic>, sources: HashMap<PathBuf, String>) -> Result<()> {
@@ -34,7 +33,7 @@ pub fn run(diagnostics: Vec<Diagnostic>, sources: HashMap<PathBuf, String>) -> R
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    execute!(stdout, EnterAlternateScreen)?;
 
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
