@@ -65,6 +65,10 @@ pub struct Cli {
     #[arg(long)]
     pub timings: bool,
 
+    /// Launch an interactive TUI to explore diagnostics.
+    #[arg(long, conflicts_with_all = ["should_emit_json", "fix"])]
+    pub tui: bool,
+
     /// Path to lint (default: current directory).
     pub path: Option<PathBuf>,
 }
@@ -173,6 +177,7 @@ mod tests {
             should_emit_json: false,
             fix: false,
             timings: false,
+            tui: false,
             path: None,
         }
     }

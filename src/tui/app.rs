@@ -1,0 +1,469 @@
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::path::{Path, PathBuf};
+use std::process::Command as ProcessCommand;
+
+use anyhow::Result;
+use ratatui::prelude::*;
+
+use crate::diagnostic::{Diagnostic, Severity};
+
+use super::event;
+use super::ui;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ViewMode {
+    ByFile,
+    ByRule,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InputMode {
+    Normal,
+    Search,
+}
+
+#[derive(Debug, Clone)]
+pub enum Row {
+    Group { key: String, expanded: bool },
+    Diag { index: usize, detail_expanded: bool },
+}
+
+pub struct GroupSummary {
+    pub total: usize,
+    pub errors: usize,
+    pub warnings: usize,
+    pub file_count: usize,
+}
+
+pub struct App {
+    pub diagnostics: Vec<Diagnostic>,
+    pub sources: HashMap<PathBuf, String>,
+    haystacks: Vec<String>,
+
+    pub view_mode: ViewMode,
+    by_file: BTreeMap<PathBuf, Vec<usize>>,
+    by_rule: BTreeMap<String, Vec<usize>>,
+
+    pub cursor: usize,
+    expanded_groups: HashSet<String>,
+    expanded_diags: HashSet<usize>,
+
+    pub input_mode: InputMode,
+    pub search_query: String,
+    filtered_indices: Option<HashSet<usize>>,
+
+    pending_g: bool,
+    pub status_message: Option<String>,
+    pub should_quit: bool,
+
+    pub visible_rows: Vec<Row>,
+    pub group_summaries: HashMap<String, GroupSummary>,
+    pub total_diagnostic_count: usize,
+    pub filtered_diagnostic_count: usize,
+}
+
+fn build_haystack(diag: &Diagnostic, sources: &HashMap<PathBuf, String>) -> String {
+    let source_line = sources
+        .get(&diag.path)
+        .and_then(|s| s.lines().nth(diag.line.saturating_sub(1)))
+        .unwrap_or("");
+    format!(
+        "{} {} {} {}",
+        diag.path.display(),
+        diag.rule_id,
+        diag.message,
+        source_line
+    )
+    .to_lowercase()
+}
+
+impl App {
+    pub fn new(diagnostics: Vec<Diagnostic>, sources: HashMap<PathBuf, String>) -> Self {
+        let mut by_file: BTreeMap<PathBuf, Vec<usize>> = BTreeMap::new();
+        let mut by_rule: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+        let mut haystacks: Vec<String> = Vec::with_capacity(diagnostics.len());
+
+        for (idx, diag) in diagnostics.iter().enumerate() {
+            by_file.entry(diag.path.clone()).or_default().push(idx);
+            by_rule.entry(diag.rule_id.clone()).or_default().push(idx);
+            haystacks.push(build_haystack(diag, &sources));
+        }
+
+        let sort = |indices: &mut Vec<usize>, diags: &[Diagnostic]| {
+            indices.sort_by_key(|&i| (diags[i].line, diags[i].column));
+        };
+        for v in by_file.values_mut() {
+            sort(v, &diagnostics);
+        }
+        for v in by_rule.values_mut() {
+            sort(v, &diagnostics);
+        }
+
+        let total = diagnostics.len();
+
+        let mut app = Self {
+            diagnostics,
+            sources,
+            haystacks,
+            view_mode: ViewMode::ByFile,
+            by_file,
+            by_rule,
+            cursor: 0,
+            expanded_groups: HashSet::new(),
+            expanded_diags: HashSet::new(),
+            input_mode: InputMode::Normal,
+            search_query: String::new(),
+            filtered_indices: None,
+            pending_g: false,
+            status_message: None,
+            should_quit: false,
+            visible_rows: Vec::new(),
+            group_summaries: HashMap::new(),
+            total_diagnostic_count: total,
+            filtered_diagnostic_count: total,
+        };
+        app.rebuild_visible_rows();
+        app.rebuild_summaries();
+        app
+    }
+
+    pub fn run<B: Backend>(&mut self, terminal: &mut Terminal<B>) -> Result<()> {
+        loop {
+            terminal.draw(|frame| ui::draw(frame, self))?;
+            if event::handle_event(self)? {
+                break;
+            }
+            if self.should_quit {
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    fn group_iter(&self) -> Vec<(String, Vec<usize>)> {
+        match self.view_mode {
+            ViewMode::ByFile => self
+                .by_file
+                .iter()
+                .map(|(p, v)| (p.display().to_string(), v.clone()))
+                .collect(),
+            ViewMode::ByRule => self
+                .by_rule
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
+        }
+    }
+
+    pub fn rebuild_visible_rows(&mut self) {
+        let mut rows: Vec<Row> = Vec::new();
+        let mut filtered_count = 0usize;
+
+        for (key, indices) in self.group_iter() {
+            let kept: Vec<usize> = indices
+                .into_iter()
+                .filter(|i| match &self.filtered_indices {
+                    Some(set) => set.contains(i),
+                    None => true,
+                })
+                .collect();
+            if kept.is_empty() {
+                continue;
+            }
+            filtered_count += kept.len();
+            let expanded = self.expanded_groups.contains(&key);
+            rows.push(Row::Group {
+                key: key.clone(),
+                expanded,
+            });
+            if expanded {
+                for idx in kept {
+                    rows.push(Row::Diag {
+                        index: idx,
+                        detail_expanded: self.expanded_diags.contains(&idx),
+                    });
+                }
+            }
+        }
+
+        self.visible_rows = rows;
+        self.filtered_diagnostic_count = filtered_count;
+        if self.cursor >= self.visible_rows.len() {
+            self.cursor = self.visible_rows.len().saturating_sub(1);
+        }
+    }
+
+    pub fn rebuild_summaries(&mut self) {
+        let mut summaries: HashMap<String, GroupSummary> = HashMap::new();
+        for (key, indices) in self.group_iter() {
+            let kept: Vec<usize> = indices
+                .into_iter()
+                .filter(|i| match &self.filtered_indices {
+                    Some(set) => set.contains(i),
+                    None => true,
+                })
+                .collect();
+            if kept.is_empty() {
+                continue;
+            }
+            let mut errors = 0usize;
+            let mut warnings = 0usize;
+            let mut files: HashSet<PathBuf> = HashSet::new();
+            for &i in &kept {
+                let d = &self.diagnostics[i];
+                match d.severity {
+                    Severity::Error => errors += 1,
+                    Severity::Warning => warnings += 1,
+                }
+                files.insert(d.path.clone());
+            }
+            summaries.insert(
+                key,
+                GroupSummary {
+                    total: kept.len(),
+                    errors,
+                    warnings,
+                    file_count: files.len(),
+                },
+            );
+        }
+        self.group_summaries = summaries;
+    }
+
+    pub fn move_up(&mut self) {
+        if self.cursor > 0 {
+            self.cursor -= 1;
+        }
+    }
+
+    pub fn move_down(&mut self) {
+        if self.cursor + 1 < self.visible_rows.len() {
+            self.cursor += 1;
+        }
+    }
+
+    pub fn go_top(&mut self) {
+        self.cursor = 0;
+    }
+
+    pub fn go_bottom(&mut self) {
+        self.cursor = self.visible_rows.len().saturating_sub(1);
+    }
+
+    pub fn expand(&mut self) {
+        if self.cursor >= self.visible_rows.len() {
+            return;
+        }
+        match self.visible_rows[self.cursor].clone() {
+            Row::Group { key, expanded } => {
+                if !expanded {
+                    self.expanded_groups.insert(key);
+                    self.rebuild_visible_rows();
+                }
+            }
+            Row::Diag {
+                index,
+                detail_expanded,
+            } => {
+                if !detail_expanded {
+                    self.expanded_diags.insert(index);
+                    self.rebuild_visible_rows();
+                }
+            }
+        }
+    }
+
+    pub fn collapse(&mut self) {
+        if self.cursor >= self.visible_rows.len() {
+            return;
+        }
+        match self.visible_rows[self.cursor].clone() {
+            Row::Diag {
+                index,
+                detail_expanded,
+            } => {
+                if detail_expanded {
+                    self.expanded_diags.remove(&index);
+                    self.rebuild_visible_rows();
+                } else {
+                    let parent_key = self.find_parent_group(index);
+                    if let Some(key) = parent_key {
+                        self.expanded_groups.remove(&key);
+                        self.rebuild_visible_rows();
+                        if let Some(pos) =
+                            self.visible_rows.iter().position(|r| match r {
+                                Row::Group { key: k, .. } => k == &key,
+                                _ => false,
+                            })
+                        {
+                            self.cursor = pos;
+                        }
+                    }
+                }
+            }
+            Row::Group { key, expanded } => {
+                if expanded {
+                    self.expanded_groups.remove(&key);
+                    self.rebuild_visible_rows();
+                }
+            }
+        }
+    }
+
+    fn find_parent_group(&self, diag_index: usize) -> Option<String> {
+        let diag = &self.diagnostics[diag_index];
+        match self.view_mode {
+            ViewMode::ByFile => Some(diag.path.display().to_string()),
+            ViewMode::ByRule => Some(diag.rule_id.clone()),
+        }
+    }
+
+    pub fn toggle_view(&mut self) {
+        self.view_mode = match self.view_mode {
+            ViewMode::ByFile => ViewMode::ByRule,
+            ViewMode::ByRule => ViewMode::ByFile,
+        };
+        self.expanded_groups.clear();
+        self.cursor = 0;
+        self.rebuild_visible_rows();
+        self.rebuild_summaries();
+    }
+
+    pub fn enter_action(&mut self) {
+        if self.cursor >= self.visible_rows.len() {
+            return;
+        }
+        match self.visible_rows[self.cursor].clone() {
+            Row::Group { .. } => self.expand(),
+            Row::Diag { .. } => self.open_editor(),
+        }
+    }
+
+    pub fn start_search(&mut self) {
+        self.input_mode = InputMode::Search;
+    }
+
+    pub fn cancel_search(&mut self) {
+        self.input_mode = InputMode::Normal;
+        self.search_query.clear();
+        self.filtered_indices = None;
+        self.rebuild_visible_rows();
+        self.rebuild_summaries();
+    }
+
+    pub fn commit_search(&mut self) {
+        self.input_mode = InputMode::Normal;
+    }
+
+    pub fn search_input(&mut self, c: char) {
+        self.search_query.push(c);
+        self.update_filter();
+    }
+
+    pub fn search_backspace(&mut self) {
+        self.search_query.pop();
+        self.update_filter();
+    }
+
+    pub fn search_clear(&mut self) {
+        self.search_query.clear();
+        self.update_filter();
+    }
+
+    fn update_filter(&mut self) {
+        if self.search_query.is_empty() {
+            self.filtered_indices = None;
+        } else {
+            let needle = self.search_query.to_lowercase();
+            let set: HashSet<usize> = self
+                .haystacks
+                .iter()
+                .enumerate()
+                .filter_map(|(i, h)| if h.contains(&needle) { Some(i) } else { None })
+                .collect();
+            self.filtered_indices = Some(set);
+        }
+        self.rebuild_visible_rows();
+        self.rebuild_summaries();
+        if self.cursor >= self.visible_rows.len() {
+            self.cursor = self.visible_rows.len().saturating_sub(1);
+        }
+    }
+
+    pub fn set_pending_g(&mut self, v: bool) {
+        self.pending_g = v;
+    }
+
+    pub fn pending_g(&self) -> bool {
+        self.pending_g
+    }
+
+    fn open_editor(&mut self) {
+        let row = &self.visible_rows[self.cursor];
+        let diag_idx = match row {
+            Row::Diag { index, .. } => *index,
+            _ => return,
+        };
+        let diag = &self.diagnostics[diag_idx];
+
+        let editor = std::env::var("EDITOR")
+            .or_else(|_| std::env::var("VISUAL"))
+            .unwrap_or_default();
+        if editor.is_empty() {
+            self.status_message = Some("set $EDITOR to open files".into());
+            return;
+        }
+
+        let parts: Vec<&str> = editor.split_whitespace().collect();
+        let (cmd, extra_args) = (parts[0], &parts[1..]);
+        let line_arg = format!("+{}", diag.line);
+        let path_str = diag.path.display().to_string();
+
+        let basename = Path::new(cmd)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(cmd);
+
+        const GUI_EDITORS: &[&str] = &[
+            "code",
+            "zed",
+            "subl",
+            "sublime_text",
+            "idea",
+            "goland",
+            "webstorm",
+            "atom",
+            "cursor",
+        ];
+
+        let is_gui = GUI_EDITORS.contains(&basename);
+
+        if is_gui {
+            let _ = ProcessCommand::new(cmd)
+                .args(extra_args.iter())
+                .arg(&line_arg)
+                .arg(&path_str)
+                .spawn();
+        } else {
+            let _ = crossterm::terminal::disable_raw_mode();
+            let _ = crossterm::execute!(
+                std::io::stdout(),
+                crossterm::terminal::LeaveAlternateScreen,
+                crossterm::event::DisableMouseCapture,
+            );
+
+            let _ = ProcessCommand::new(cmd)
+                .args(extra_args.iter())
+                .arg(&line_arg)
+                .arg(&path_str)
+                .status();
+
+            let _ = crossterm::terminal::enable_raw_mode();
+            let _ = crossterm::execute!(
+                std::io::stdout(),
+                crossterm::terminal::EnterAlternateScreen,
+                crossterm::event::EnableMouseCapture,
+            );
+        }
+    }
+}
