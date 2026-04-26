@@ -1,80 +1,63 @@
 //! no-invalid-remove-event-listener AST backend — flag `removeEventListener`
-//! with inline functions or `.bind()` calls.
+//! whose listener argument is an inline function expression / arrow function
+//! or a `.bind(...)` call. These create a fresh function reference at every
+//! call site, so the listener will never actually be removed.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-/// Detect `.removeEventListener(` followed by an inline listener that will
-/// never match: arrow/function expressions or `.bind(` calls.
-fn is_invalid_remove_listener(line: &str) -> bool {
-    let Some(pos) = line.find(".removeEventListener(") else {
+/// True if `callee` is a member expression `<x>.removeEventListener`.
+fn is_remove_listener(callee: tree_sitter::Node, source: &[u8]) -> bool {
+    if callee.kind() != "member_expression" {
+        return false;
+    }
+    let Some(prop) = callee.child_by_field_name("property") else {
         return false;
     };
-    let after = &line[pos + ".removeEventListener(".len()..];
-
-    let Some(comma) = find_top_level_comma(after) else {
-        return false;
-    };
-    let listener_part = after[comma + 1..].trim_start();
-
-    // Case 1: inline arrow or function expression
-    if listener_part.starts_with("(")
-        || listener_part.starts_with("function")
-        || listener_part.starts_with("function(")
-    {
-        return true;
-    }
-
-    // Case 2: `.bind(` call
-    if listener_part.contains(".bind(") {
-        return true;
-    }
-
-    false
+    prop.utf8_text(source).unwrap_or("") == "removeEventListener"
 }
 
-/// Find the first comma at parenthesis depth 0.
-fn find_top_level_comma(s: &str) -> Option<usize> {
-    let mut depth: i32 = 0;
-    let mut in_single = false;
-    let mut in_double = false;
-    let mut in_backtick = false;
-    let mut prev = '\0';
-
-    for (i, ch) in s.char_indices() {
-        match ch {
-            '\'' if !in_double && !in_backtick && prev != '\\' => in_single = !in_single,
-            '"' if !in_single && !in_backtick && prev != '\\' => in_double = !in_double,
-            '`' if !in_single && !in_double && prev != '\\' => in_backtick = !in_backtick,
-            '(' if !in_single && !in_double && !in_backtick => depth += 1,
-            ')' if !in_single && !in_double && !in_backtick => depth -= 1,
-            ',' if !in_single && !in_double && !in_backtick && depth == 0 => return Some(i),
-            _ => {}
+/// True if `arg` is an inline function expression / arrow / `.bind(...)`
+/// call — i.e. a value that creates a fresh reference at the call site.
+fn is_inline_listener(arg: tree_sitter::Node, source: &[u8]) -> bool {
+    match arg.kind() {
+        "arrow_function" | "function_expression" | "function" => true,
+        "call_expression" => {
+            let Some(callee) = arg.child_by_field_name("function") else {
+                return false;
+            };
+            if callee.kind() != "member_expression" {
+                return false;
+            }
+            let Some(prop) = callee.child_by_field_name("property") else {
+                return false;
+            };
+            prop.utf8_text(source).unwrap_or("") == "bind"
         }
-        prev = ch;
+        _ => false,
     }
-    None
 }
 
 crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "program" {
+    if node.kind() != "call_expression" {
         return;
     }
-
-    let text = std::str::from_utf8(source).unwrap_or("");
-    for (idx, line) in text.lines().enumerate() {
-        if is_invalid_remove_listener(line) {
-            diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
-                line: idx + 1,
-                column: 1,
-                rule_id: "no-invalid-remove-event-listener".into(),
-                message: "The listener argument should be a function reference — inline functions and `.bind()` create a new reference each call."
-                    .into(),
-                severity: Severity::Warning,
-                span: None,
-            });
-        }
+    let Some(callee) = node.child_by_field_name("function") else { return };
+    if !is_remove_listener(callee, source) {
+        return;
     }
+    let Some(args) = node.child_by_field_name("arguments") else { return };
+    let mut cursor = args.walk();
+    let Some(listener) = args.named_children(&mut cursor).nth(1) else { return };
+    if !is_inline_listener(listener, source) {
+        return;
+    }
+    diagnostics.push(Diagnostic::at_node(
+        ctx.path,
+        &node,
+        "no-invalid-remove-event-listener",
+        "The listener argument should be a function reference — inline functions and `.bind()` create a new reference each call.".into(),
+        Severity::Warning,
+    ));
 }
 
 #[cfg(test)]

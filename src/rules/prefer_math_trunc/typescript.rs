@@ -1,103 +1,94 @@
+//! prefer-math-trunc — flag bitwise truncation patterns that should be
+//! `Math.trunc(x)`.
+//!
+//! Detection:
+//!   - `unary_expression` whose operator is `~` and whose operand is
+//!     itself `~expr` → `~~x`.
+//!   - `binary_expression` with operator in `|`, `>>`, `<<`, `^` whose
+//!     right operand is the numeric literal `0` → `x | 0`, `x >> 0`, etc.
+//!   - `augmented_assignment_expression` with operator in `|=`, `>>=`,
+//!     `<<=`, `^=` whose right operand is the numeric literal `0`.
+
 use crate::diagnostic::{Diagnostic, Severity};
 
-/// Detects bitwise truncation patterns:
-/// - `value | 0`  /  `value |= 0`
-/// - `value >> 0` /  `value >>= 0`
-/// - `value << 0` /  `value <<= 0`
-/// - `value ^ 0`  /  `value ^= 0`
-/// - `~~value`
-fn find_bitwise_trunc(line: &str) -> Option<&'static str> {
-    let trimmed = line.trim();
+const BITWISE_TRUNC_OPS: &[&str] = &["|", ">>", "<<", "^"];
+const BITWISE_TRUNC_ASSIGN_OPS: &[&str] = &["|=", ">>=", "<<=", "^="];
 
-    // Double bitwise NOT: `~~expr`
-    if trimmed.contains("~~") {
-        let in_code = strip_strings_and_comments(trimmed);
-        if in_code.contains("~~") {
-            return Some("Use `Math.trunc(x)` instead of `~~x`.");
-        }
-    }
-
-    // Binary `| 0`, `>> 0`, `<< 0`, `^ 0` and assignment forms
-    let in_code = strip_strings_and_comments(trimmed);
-    for pat in &["| 0", "|0", ">> 0", ">>0", "<< 0", "<<0", "^ 0", "^0"] {
-        if in_code.contains(pat)
-            && let Some(pos) = in_code.find(pat) {
-                let end = pos + pat.len();
-                let next_char = in_code[end..].chars().next();
-                match next_char {
-                    None | Some(')') | Some(';') | Some(',') | Some(' ') | Some('\t') => {
-                        return Some("Use `Math.trunc(x)` instead of bitwise `| 0` / `>> 0`.");
-                    }
-                    _ => {}
-                }
-            }
-    }
-
-    // Assignment forms: `|= 0`, `>>= 0`, `<<= 0`, `^= 0`
-    for pat in &["|= 0", "|=0", ">>= 0", ">>=0", "<<= 0", "<<=0", "^= 0", "^=0"] {
-        if in_code.contains(pat)
-            && let Some(pos) = in_code.find(pat)
-        {
-            let end = pos + pat.len();
-            let next_char = in_code[end..].chars().next();
-            match next_char {
-                None | Some(')') | Some(';') | Some(',') | Some(' ') | Some('\t') => {
-                    return Some("Use `Math.trunc(x)` instead of bitwise assignment `|= 0`.");
-                }
-                _ => {}
-            }
-        }
-    }
-
-    None
-}
-
-/// Strip string literals and single-line comments to avoid false positives.
-fn strip_strings_and_comments(line: &str) -> String {
-    let mut result = String::with_capacity(line.len());
-    let mut chars = line.chars().peekable();
-    while let Some(c) = chars.next() {
-        match c {
-            '/' if chars.peek() == Some(&'/') => break,
-            '\'' | '"' | '`' => {
-                let quote = c;
-                let mut escape_next = false;
-                for inner in chars.by_ref() {
-                    if escape_next {
-                        escape_next = false;
-                        continue;
-                    }
-                    if inner == '\\' {
-                        escape_next = true;
-                    } else if inner == quote {
-                        break;
-                    }
-                }
-                result.push(' ');
-            }
-            _ => result.push(c),
-        }
-    }
-    result
+fn is_zero_literal(node: tree_sitter::Node, source: &[u8]) -> bool {
+    node.kind() == "number" && node.utf8_text(source).unwrap_or("") == "0"
 }
 
 crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "program" {
-        return;
-    }
-    let src = std::str::from_utf8(source).unwrap_or("");
-    for (idx, line) in src.lines().enumerate() {
-        if let Some(msg) = find_bitwise_trunc(line) {
-            diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
-                line: idx + 1,
-                column: 1,
-                rule_id: "prefer-math-trunc".into(),
-                message: msg.into(),
-                severity: Severity::Warning,
-                span: None,
-            });
+    match node.kind() {
+        "unary_expression" => {
+            // ~~x — outer unary is `~`, argument is another `~expr`.
+            let Some(op) = node.child_by_field_name("operator") else { return };
+            if op.utf8_text(source).unwrap_or("") != "~" {
+                return;
+            }
+            let Some(arg) = node.child_by_field_name("argument") else { return };
+            if arg.kind() != "unary_expression" {
+                return;
+            }
+            let Some(inner_op) = arg.child_by_field_name("operator") else { return };
+            if inner_op.utf8_text(source).unwrap_or("") != "~" {
+                return;
+            }
+            // Don't double-flag the inner unary when the walker visits it.
+            // We only fire on the outer `~~`. Skip if our parent is also `~`
+            // (i.e. `~~~x` — the outer `~~` is the parent's argument).
+            if let Some(parent) = node.parent()
+                && parent.kind() == "unary_expression"
+                && parent.child_by_field_name("operator")
+                    .and_then(|n| n.utf8_text(source).ok()) == Some("~")
+            {
+                return;
+            }
+            diagnostics.push(Diagnostic::at_node(
+                ctx.path,
+                &node,
+                "prefer-math-trunc",
+                "Use `Math.trunc(x)` instead of `~~x`.".into(),
+                Severity::Warning,
+            ));
         }
+        "binary_expression" => {
+            let Some(op_node) = node.child_by_field_name("operator") else { return };
+            let Some(op) = op_node.utf8_text(source).ok() else { return };
+            if !BITWISE_TRUNC_OPS.contains(&op) {
+                return;
+            }
+            let Some(right) = node.child_by_field_name("right") else { return };
+            if !is_zero_literal(right, source) {
+                return;
+            }
+            diagnostics.push(Diagnostic::at_node(
+                ctx.path,
+                &node,
+                "prefer-math-trunc",
+                format!("Use `Math.trunc(x)` instead of bitwise `{op} 0`."),
+                Severity::Warning,
+            ));
+        }
+        "augmented_assignment_expression" => {
+            let Some(op_node) = node.child_by_field_name("operator") else { return };
+            let Some(op) = op_node.utf8_text(source).ok() else { return };
+            if !BITWISE_TRUNC_ASSIGN_OPS.contains(&op) {
+                return;
+            }
+            let Some(right) = node.child_by_field_name("right") else { return };
+            if !is_zero_literal(right, source) {
+                return;
+            }
+            diagnostics.push(Diagnostic::at_node(
+                ctx.path,
+                &node,
+                "prefer-math-trunc",
+                format!("Use `Math.trunc(x)` instead of bitwise assignment `{op} 0`."),
+                Severity::Warning,
+            ));
+        }
+        _ => {}
     }
 }
 

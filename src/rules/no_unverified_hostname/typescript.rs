@@ -1,45 +1,48 @@
 //! no-unverified-hostname AST backend — disabled TLS hostname verification.
+//!
+//! Walks `pair` nodes whose key is `checkServerIdentity` and whose value is
+//! either `null`, an arrow function, or a plain function expression. A
+//! caller-supplied named callback (e.g. `checkServerIdentity: verifyHost`)
+//! is allowed because the verifier may actually enforce identity checks.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-fn disables_hostname_check(line: &str) -> bool {
-    let trimmed = line.trim();
-    if trimmed.contains("checkServerIdentity") && trimmed.contains("null") {
-        return true;
-    }
-    if let Some(pos) = trimmed.find("checkServerIdentity") {
-        let after = &trimmed[pos + "checkServerIdentity".len()..];
-        let after = after.trim_start().trim_start_matches(':').trim_start();
-        if after.starts_with("()")
-            || after.starts_with("function(")
-            || after.starts_with("function (")
-        {
-            return true;
-        }
-    }
-    false
+/// Strip surrounding quotes from a property-name node text.
+fn unquote(s: &str) -> &str {
+    s.trim_matches(|c| c == '"' || c == '\'' || c == '`')
 }
 
 crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "program" {
+    if node.kind() != "pair" {
         return;
     }
 
-    let text = std::str::from_utf8(source).unwrap_or("");
-    for (idx, line) in text.lines().enumerate() {
-        if disables_hostname_check(line) {
-            diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
-                line: idx + 1,
-                column: 1,
-                rule_id: "no-unverified-hostname".into(),
-                message: "`checkServerIdentity` override disables TLS hostname verification."
-                    .into(),
-                severity: Severity::Error,
-                span: None,
-            });
-        }
+    let Some(key) = node.child_by_field_name("key") else { return };
+    let Ok(key_text) = key.utf8_text(source) else { return };
+    if unquote(key_text) != "checkServerIdentity" {
+        return;
     }
+
+    let Some(value) = node.child_by_field_name("value") else { return };
+    let kind = value.kind();
+    let is_disabled = matches!(
+        kind,
+        "null" | "arrow_function" | "function_expression" | "function"
+    );
+    if !is_disabled {
+        return;
+    }
+
+    let pos = node.start_position();
+    diagnostics.push(Diagnostic {
+        path: ctx.path.to_path_buf(),
+        line: pos.row + 1,
+        column: pos.column + 1,
+        rule_id: "no-unverified-hostname".into(),
+        message: "`checkServerIdentity` override disables TLS hostname verification.".into(),
+        severity: Severity::Error,
+        span: None,
+    });
 }
 
 #[cfg(test)]
@@ -52,22 +55,25 @@ mod tests {
 
     #[test]
     fn flags_arrow_noop() {
-        assert_eq!(run_on("  checkServerIdentity: () => {},").len(), 1);
+        assert_eq!(run_on("const x = { checkServerIdentity: () => {} };").len(), 1);
     }
 
     #[test]
     fn flags_function_noop() {
-        assert_eq!(run_on("  checkServerIdentity: function() {},").len(), 1);
+        assert_eq!(
+            run_on("const x = { checkServerIdentity: function() {} };").len(),
+            1
+        );
     }
 
     #[test]
     fn flags_null() {
-        assert_eq!(run_on("  checkServerIdentity: null,").len(), 1);
+        assert_eq!(run_on("const x = { checkServerIdentity: null };").len(), 1);
     }
 
     #[test]
     fn allows_proper_check() {
-        assert!(run_on("  checkServerIdentity: verifyHost,").is_empty());
+        assert!(run_on("const x = { checkServerIdentity: verifyHost };").is_empty());
     }
 
     #[test]

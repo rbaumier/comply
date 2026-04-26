@@ -1,42 +1,37 @@
-//! no-sort-without-comparator backend — `.sort()` without comparator.
+//! no-sort-without-comparator backend — `.sort()` called with no comparator.
+//!
+//! Walks `call_expression` nodes whose function is `<expr>.sort` and whose
+//! arguments list is empty. A bare `.sort()` sorts lexicographically, which
+//! silently breaks numeric arrays.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-/// `.sort()` or `.sort(  )` — no comparator argument.
-fn has_empty_sort(line: &str) -> bool {
-    let mut start = 0;
-    while let Some(pos) = line[start..].find(".sort(") {
-        let abs = start + pos + 6; // skip past ".sort("
-        let rest = &line[abs..];
-        let trimmed = rest.trim_start();
-        if trimmed.starts_with(')') {
-            return true;
-        }
-        start = abs;
-    }
-    false
-}
-
 crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "program" {
+    if node.kind() != "call_expression" {
         return;
     }
 
-    let text = std::str::from_utf8(source).unwrap_or("");
-
-    for (idx, line) in text.lines().enumerate() {
-        if has_empty_sort(line) {
-            diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
-                line: idx + 1,
-                column: 1,
-                rule_id: "no-sort-without-comparator".into(),
-                message: "`.sort()` without comparator sorts lexicographically — pass an explicit compare function.".into(),
-                severity: Severity::Error,
-                span: None,
-            });
-        }
+    let Some(func) = node.child_by_field_name("function") else { return };
+    if func.kind() != "member_expression" {
+        return;
     }
+    let Some(prop) = func.child_by_field_name("property") else { return };
+    if prop.utf8_text(source).unwrap_or("") != "sort" {
+        return;
+    }
+
+    let Some(args) = node.child_by_field_name("arguments") else { return };
+    if args.named_child_count() != 0 {
+        return;
+    }
+
+    diagnostics.push(Diagnostic::at_node(
+        ctx.path,
+        &node,
+        "no-sort-without-comparator",
+        "`.sort()` without comparator sorts lexicographically — pass an explicit compare function.".into(),
+        Severity::Error,
+    ));
 }
 
 #[cfg(test)]

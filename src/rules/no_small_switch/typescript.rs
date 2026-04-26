@@ -1,77 +1,35 @@
-//! no-small-switch backend — switch with fewer than 3 cases.
+//! no-small-switch backend — `switch` with fewer than 3 `case` clauses.
+//!
+//! Walks `switch_statement` nodes and counts `switch_case` children inside
+//! their body. `switch_default` is excluded — only real `case` clauses count.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-/// Count `case ` keywords within the brace-delimited switch body.
-fn count_cases(switch_line: usize, lines: &[&str], len: usize) -> usize {
-    let mut depth: i32 = 0;
-    let mut found_open = false;
-    let mut cases = 0;
-
-    for (i, line) in lines.iter().enumerate().take(len).skip(switch_line) {
-        for ch in line.chars() {
-            if ch == '{' {
-                depth += 1;
-                found_open = true;
-            } else if ch == '}' {
-                depth -= 1;
-            }
-        }
-
-        // Count `case ` on lines inside the switch body (after opening brace).
-        if found_open && i > switch_line {
-            let trimmed = line.trim();
-            if trimmed.starts_with("case ") || trimmed.starts_with("case\t") {
-                cases += 1;
-            }
-        }
-
-        if found_open && depth <= 0 {
-            break;
-        }
-    }
-
-    cases
-}
-
 crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "program" {
+    let _ = source;
+    if node.kind() != "switch_statement" {
         return;
     }
 
-    let text = std::str::from_utf8(source).unwrap_or("");
-    let lines: Vec<&str> = text.lines().collect();
-    let len = lines.len();
+    let Some(body) = node.child_by_field_name("body") else { return };
 
-    for (idx, line) in lines.iter().enumerate() {
-        let trimmed = line.trim();
-        if !trimmed.contains("switch") || !trimmed.contains('(') {
-            continue;
+    let mut case_count: usize = 0;
+    let named_count = body.named_child_count();
+    for i in 0..named_count {
+        let Some(child) = body.named_child(i) else { continue };
+        if child.kind() == "switch_case" {
+            case_count += 1;
         }
-        if let Some(sw_pos) = trimmed.find("switch") {
-            let after = &trimmed[sw_pos + 6..];
-            if !after.starts_with(' ') && !after.starts_with('(') {
-                continue;
-            }
-        } else {
-            continue;
-        }
+    }
 
-        let case_count = count_cases(idx, &lines, len);
-        if case_count < 3 {
-            diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
-                line: idx + 1,
-                column: 1,
-                rule_id: "no-small-switch".into(),
-                message: format!(
-                    "`switch` has only {} case(s) — use `if/else` instead.",
-                    case_count
-                ),
-                severity: Severity::Warning,
-                span: None,
-            });
-        }
+    if case_count < 3 {
+        diagnostics.push(Diagnostic::at_node(
+            ctx.path,
+            &node,
+            "no-small-switch",
+            format!("`switch` has only {case_count} case(s) — use `if/else` instead."),
+            Severity::Warning,
+        ));
     }
 }
 

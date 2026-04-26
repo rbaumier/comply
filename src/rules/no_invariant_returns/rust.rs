@@ -1,104 +1,122 @@
 //! no-invariant-returns Rust backend.
 //!
-//! Flag functions that always return the same literal value.
+//! Walks `function_item` nodes, collects the `return_expression` nodes
+//! belonging directly to the function body plus the function block's tail
+//! expression (Rust's implicit return), and flags the function when every
+//! resulting value is the same literal.
+//!
+//! Nested `function_item` and `closure_expression` subtrees are skipped so
+//! an inner closure's `return` is not attributed to the outer function.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-fn extract_return_literal(line: &str) -> Option<&str> {
-    let trimmed = line.trim();
-    let after_return = trimmed.strip_prefix("return ")?;
-    let value = after_return
-        .strip_suffix(';')
-        .unwrap_or(after_return)
-        .trim();
-    if value.is_empty() {
+/// Recursively scan `node`'s subtree for `return_expression` nodes,
+/// stopping at nested function/closure boundaries so inner returns
+/// are attributed to the inner function only.
+fn collect_returns<'t>(node: tree_sitter::Node<'t>, out: &mut Vec<tree_sitter::Node<'t>>) {
+    let count = node.child_count();
+    for i in 0..count {
+        let Some(child) = node.child(i) else { continue };
+        match child.kind() {
+            "function_item" | "closure_expression" => {
+                // Skip — its returns belong to that inner function.
+            }
+            "return_expression" => {
+                out.push(child);
+            }
+            _ => collect_returns(child, out),
+        }
+    }
+}
+
+/// Extract a normalized literal text from a `return_expression` value, or
+/// from a tail expression. Returns `None` for non-literals.
+fn literal_text<'a>(value: tree_sitter::Node, source: &'a [u8]) -> Option<&'a str> {
+    let kind = value.kind();
+    let text = value.utf8_text(source).ok()?.trim();
+    match kind {
+        "integer_literal" | "float_literal" | "string_literal" | "char_literal"
+        | "boolean_literal" | "raw_string_literal" => Some(text),
+        // `None` shows up as a regular identifier in expression position.
+        "identifier" if text == "None" => Some(text),
+        _ => None,
+    }
+}
+
+/// Pull the value of a `return_expression`, if any (bare `return` has no
+/// child). Returns `None` for bare returns and non-literal values.
+fn return_value_literal<'a>(
+    ret: tree_sitter::Node,
+    source: &'a [u8],
+) -> Option<&'a str> {
+    let value = ret.named_child(0)?;
+    literal_text(value, source)
+}
+
+/// True if `block` is a `block` node whose final child is an expression
+/// (Rust's implicit return). Returns the expression node when it is.
+fn block_tail_expression<'t>(block: tree_sitter::Node<'t>) -> Option<tree_sitter::Node<'t>> {
+    if block.kind() != "block" {
         return None;
     }
-    if value == "true"
-        || value == "false"
-        || value == "None"
-        || value.parse::<f64>().is_ok()
-        || (value.starts_with('"') && value.ends_with('"'))
-    {
-        Some(value)
-    } else {
-        None
+    let last = block.named_child(block.named_child_count().checked_sub(1)?)?;
+    // The block grammar tags the trailing expression node as the last named
+    // child; statements end with `;` and are nodes like `let_declaration`,
+    // `expression_statement`. An expression node is anything else with a
+    // value-producing kind.
+    let kind = last.kind();
+    if kind == "let_declaration" || kind == "expression_statement" {
+        return None;
     }
-}
-
-fn is_function_head(trimmed: &str) -> bool {
-    trimmed.starts_with("fn ")
-        || trimmed.starts_with("pub fn ")
-        || trimmed.starts_with("pub(crate) fn ")
-        || trimmed.starts_with("async fn ")
-        || trimmed.starts_with("pub async fn ")
-}
-
-fn find_invariant_returns(source: &str) -> Vec<usize> {
-    let lines: Vec<&str> = source.lines().collect();
-    let mut flagged_lines: Vec<usize> = Vec::new();
-
-    let mut i = 0;
-    while i < lines.len() {
-        let trimmed = lines[i].trim();
-        let is_fn = is_function_head(trimmed);
-
-        if is_fn && trimmed.contains('{') {
-            let fn_start = i;
-            let mut depth: i32 = 0;
-            let mut returns: Vec<(usize, &str)> = Vec::new();
-            let mut j = i;
-
-            while j < lines.len() {
-                for ch in lines[j].chars() {
-                    if ch == '{' {
-                        depth += 1;
-                    } else if ch == '}' {
-                        depth -= 1;
-                    }
-                }
-                if let Some(lit) = extract_return_literal(lines[j]) {
-                    returns.push((j, lit));
-                }
-                if depth <= 0 && j > fn_start {
-                    break;
-                }
-                j += 1;
-            }
-
-            if returns.len() >= 2 {
-                let first = returns[0].1;
-                if returns.iter().all(|(_, v)| *v == first) {
-                    flagged_lines.push(fn_start);
-                }
-            }
-
-            i = j + 1;
-            continue;
-        }
-        i += 1;
-    }
-
-    flagged_lines
+    Some(last)
 }
 
 crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "source_file" {
+    if node.kind() != "function_item" {
         return;
     }
 
-    let text = std::str::from_utf8(source).unwrap_or("");
-    for line_idx in find_invariant_returns(text) {
-        diagnostics.push(Diagnostic {
-            path: ctx.path.to_path_buf(),
-            line: line_idx + 1,
-            column: 1,
-            rule_id: "no-invariant-returns".into(),
-            message: "Function always returns the same literal value \u{2014} consider using a constant instead.".into(),
-            severity: Severity::Warning,
-            span: None,
-        });
+    let Some(body) = node.child_by_field_name("body") else { return };
+
+    let mut returns: Vec<tree_sitter::Node> = Vec::new();
+    collect_returns(body, &mut returns);
+
+    let mut literals: Vec<&str> = Vec::new();
+    for ret in &returns {
+        let Some(lit) = return_value_literal(*ret, source) else {
+            return; // Non-literal return — can't prove invariance.
+        };
+        literals.push(lit);
     }
+
+    if let Some(tail) = block_tail_expression(body) {
+        let Some(lit) = literal_text(tail, source) else {
+            // Tail is a non-literal expression — bail out unless there are
+            // no return statements at all (in which case we have nothing).
+            return;
+        };
+        literals.push(lit);
+    }
+
+    if literals.len() < 2 {
+        return;
+    }
+
+    let first = literals[0];
+    if !literals.iter().all(|l| *l == first) {
+        return;
+    }
+
+    let pos = node.start_position();
+    diagnostics.push(Diagnostic {
+        path: ctx.path.to_path_buf(),
+        line: pos.row + 1,
+        column: pos.column + 1,
+        rule_id: "no-invariant-returns".into(),
+        message: "Function always returns the same literal value \u{2014} consider using a constant instead.".into(),
+        severity: Severity::Warning,
+        span: None,
+    });
 }
 
 #[cfg(test)]

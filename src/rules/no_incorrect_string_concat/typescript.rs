@@ -1,4 +1,10 @@
-//! no-incorrect-string-concat AST backend — flag `"..." + numericVar`.
+//! no-incorrect-string-concat AST backend — flag `"..." + identifier`
+//! where the identifier's name suggests it holds a number.
+//!
+//! Walks `binary_expression` nodes with operator `+` whose left side is a
+//! string literal and whose right side is an identifier (or member
+//! expression) whose final segment name contains a known "numeric hint"
+//! (`count`, `total`, `index`, …). Symmetrically flags `identifier + "..."`.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
@@ -7,68 +13,67 @@ const NUMERIC_HINTS: &[&str] = &[
     "offset", "width", "height", "price", "cost",
 ];
 
-/// Detect `"..." + identifier` patterns where the identifier name suggests a number.
-fn has_string_plus_number_var(line: &str) -> bool {
-    let bytes = line.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'"' || bytes[i] == b'\'' {
-            let quote = bytes[i];
-            i += 1;
-            while i < bytes.len() && bytes[i] != quote {
-                if bytes[i] == b'\\' {
-                    i += 1;
-                }
-                i += 1;
-            }
-            if i >= bytes.len() {
-                break;
-            }
-            i += 1;
-
-            let rest = &line[i..];
-            let trimmed = rest.trim_start();
-            if let Some(after_plus) = trimmed.strip_prefix('+') {
-                let ident_part = after_plus.trim_start();
-                let ident_end = ident_part
-                    .find(|c: char| !c.is_alphanumeric() && c != '_')
-                    .unwrap_or(ident_part.len());
-                let ident = &ident_part[..ident_end];
-                if !ident.is_empty() {
-                    let lower = ident.to_ascii_lowercase();
-                    if !ident.starts_with('"') && !ident.starts_with('\'') {
-                        for hint in NUMERIC_HINTS {
-                            if lower.contains(hint) {
-                                return true;
-                            }
-                        }
-                    }
-                }
-            }
+/// Extract a final identifier name from a node that's an identifier or a
+/// dotted member expression (e.g. `obj.prop` → `prop`).
+fn final_ident_name<'a>(node: tree_sitter::Node, source: &'a [u8]) -> Option<&'a str> {
+    match node.kind() {
+        "identifier" | "property_identifier" => node.utf8_text(source).ok(),
+        "member_expression" => {
+            let prop = node.child_by_field_name("property")?;
+            prop.utf8_text(source).ok()
         }
-        i += 1;
+        _ => None,
     }
-    false
+}
+
+/// True if `name` looks like a numeric value based on the hint list.
+fn looks_numeric(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    NUMERIC_HINTS.iter().any(|h| lower.contains(h))
+}
+
+/// True if `node` is a string literal (TS `string`) or a template string.
+fn is_string_literal(node: tree_sitter::Node) -> bool {
+    matches!(node.kind(), "string")
 }
 
 crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "program" {
+    if node.kind() != "binary_expression" {
         return;
     }
+    let op = node
+        .child_by_field_name("operator")
+        .and_then(|n| n.utf8_text(source).ok());
+    if op != Some("+") {
+        return;
+    }
+    let Some(left) = node.child_by_field_name("left") else { return };
+    let Some(right) = node.child_by_field_name("right") else { return };
 
-    let text = std::str::from_utf8(source).unwrap_or("");
-    for (idx, line) in text.lines().enumerate() {
-        if has_string_plus_number_var(line) {
-            diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
-                line: idx + 1,
-                column: 1,
-                rule_id: "no-incorrect-string-concat".into(),
-                message: "Suspicious string concatenation with a numeric variable \u{2014} use explicit conversion or template literals.".into(),
-                severity: Severity::Warning,
-                span: None,
-            });
-        }
+    // Pattern A: "string" + numericIdent
+    let flagged = if is_string_literal(left)
+        && let Some(name) = final_ident_name(right, source)
+        && looks_numeric(name)
+    {
+        true
+    // Pattern B: numericIdent + "string"
+    } else if is_string_literal(right)
+        && let Some(name) = final_ident_name(left, source)
+        && looks_numeric(name)
+    {
+        true
+    } else {
+        false
+    };
+
+    if flagged {
+        diagnostics.push(Diagnostic::at_node(
+            ctx.path,
+            &node,
+            "no-incorrect-string-concat",
+            "Suspicious string concatenation with a numeric variable \u{2014} use explicit conversion or template literals.".into(),
+            Severity::Warning,
+        ));
     }
 }
 

@@ -1,148 +1,138 @@
 //! no-unused-collection AST backend — collection populated but never read.
+//!
+//! Walks `variable_declarator` nodes whose initializer is an array literal
+//! or a `new Map/Set/Array/WeakMap/WeakSet(...)` expression. For each
+//! candidate, scans the surrounding tree for identifier usages and
+//! classifies each as a write (mutation method call) or a read (anything
+//! else). Flags when a collection is written but never read.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-/// Collection constructor patterns on the right side of `const x = ...`.
-const COLLECTION_CONSTRUCTORS: &[&str] = &[
-    "[]",
-    "new Map(",
-    "new Set(",
-    "new Array(",
-    "new WeakMap(",
-    "new WeakSet(",
-];
+/// Mutation methods — when called on the collection identifier, count as a write.
+const WRITE_METHODS: &[&str] = &["push", "add", "set", "unshift", "splice"];
 
-/// Mutation methods — indicate the collection is written to.
-const WRITE_METHODS: &[&str] = &[".push(", ".add(", ".set(", ".unshift(", ".splice("];
-
-/// Read patterns — indicate the collection value is consumed.
-const READ_METHODS: &[&str] = &[
-    ".forEach(",
-    ".map(",
-    ".filter(",
-    ".find(",
-    ".some(",
-    ".every(",
-    ".reduce(",
-    ".includes(",
-    ".indexOf(",
-    ".get(",
-    ".has(",
-    ".keys(",
-    ".values(",
-    ".entries(",
-    ".join(",
-    ".flat(",
-    ".flatMap(",
-    ".slice(",
-    ".length",
-    ".size",
-    "[",
-];
-
-/// Extract the variable name from `const <name> = <constructor>`.
-fn extract_collection_name(line: &str) -> Option<String> {
-    let trimmed = line.trim();
-    let rest = trimmed.strip_prefix("const ")?;
-    let eq_pos = rest.find('=')?;
-    let name = rest[..eq_pos].trim();
-    if name.is_empty() || !name.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$') {
+/// Returns the constructor name for `new <Name>(...)`, or `None`.
+fn new_expression_ctor<'a>(value: tree_sitter::Node<'a>, source: &'a [u8]) -> Option<&'a str> {
+    if value.kind() != "new_expression" {
         return None;
     }
-    let rhs = rest[eq_pos + 1..].trim();
-    let is_collection = COLLECTION_CONSTRUCTORS.iter().any(|c| rhs.starts_with(c));
-    if is_collection {
-        Some(name.to_string())
-    } else {
-        None
-    }
+    let ctor = value.child_by_field_name("constructor")?;
+    ctor.utf8_text(source).ok()
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "program" {
-        return;
+/// True if `value` is a recognised collection initializer.
+fn is_collection_initializer(value: tree_sitter::Node, source: &[u8]) -> bool {
+    if value.kind() == "array" {
+        return true;
     }
+    matches!(
+        new_expression_ctor(value, source),
+        Some("Map" | "Set" | "Array" | "WeakMap" | "WeakSet")
+    )
+}
 
-    let text = std::str::from_utf8(source).unwrap_or("");
-    let lines: Vec<&str> = text.lines().collect();
-
-    // First pass: find all collection declarations.
-    let mut collections: Vec<(String, usize)> = Vec::new();
-    for (idx, line) in lines.iter().enumerate() {
-        if let Some(name) = extract_collection_name(line) {
-            collections.push((name, idx));
-        }
+/// True when `id_node` is the `object` part of `<id>.<method>(...)` and
+/// `<method>` is a known mutation method.
+fn is_write_usage(id_node: tree_sitter::Node, source: &[u8]) -> bool {
+    let Some(parent) = id_node.parent() else { return false };
+    if parent.kind() != "member_expression" {
+        return false;
     }
+    // Identifier must be the *object*, not the property — otherwise `foo.push`
+    // accessing a property named the same as our collection would be misread.
+    let Some(obj) = parent.child_by_field_name("object") else { return false };
+    if obj.id() != id_node.id() {
+        return false;
+    }
+    let Some(grand) = parent.parent() else { return false };
+    if grand.kind() != "call_expression" {
+        return false;
+    }
+    // Ensure the member_expression is the *callee*, not an argument.
+    let Some(callee) = grand.child_by_field_name("function") else { return false };
+    if callee.id() != parent.id() {
+        return false;
+    }
+    let Some(prop) = parent.child_by_field_name("property") else { return false };
+    let method = prop.utf8_text(source).unwrap_or("");
+    WRITE_METHODS.contains(&method)
+}
 
-    // Second pass: for each collection, check if it's written but never read.
-    for (name, decl_line) in &collections {
-        let mut is_written = false;
-        let mut is_read = false;
-
-        for (idx, line) in lines.iter().enumerate() {
-            if idx == *decl_line {
-                continue;
-            }
-            if !line.contains(name.as_str()) {
-                continue;
-            }
-
-            for wm in WRITE_METHODS {
-                let pattern = format!("{name}{wm}");
-                if line.contains(&pattern) {
+/// Walk the whole tree under `root` and return (`is_written`, `is_read`)
+/// for `name`, ignoring the declarator node itself.
+fn classify_usages(
+    root: tree_sitter::Node,
+    decl_id_byte: usize,
+    name: &str,
+    source: &[u8],
+) -> (bool, bool) {
+    let mut is_written = false;
+    let mut is_read = false;
+    let mut cursor = root.walk();
+    let mut stack: Vec<tree_sitter::Node> = vec![root];
+    while let Some(n) = stack.pop() {
+        if n.kind() == "identifier" && n.utf8_text(source).unwrap_or("") == name {
+            // Skip the declarator's own name node.
+            if n.start_byte() != decl_id_byte {
+                if is_write_usage(n, source) {
                     is_written = true;
-                }
-            }
-
-            for rm in READ_METHODS {
-                let pattern = format!("{name}{rm}");
-                if line.contains(&pattern) {
+                } else {
                     is_read = true;
                 }
             }
-
-            let trimmed = line.trim();
-
-            if trimmed.starts_with("return ") && trimmed.contains(name.as_str()) {
-                is_read = true;
-            }
-
-            let spread = format!("...{name}");
-            if line.contains(&spread) {
-                is_read = true;
-            }
-
-            let call_pattern = format!("({name})");
-            let call_pattern2 = format!("({name},");
-            let call_pattern3 = format!(", {name})");
-            let call_pattern4 = format!(", {name},");
-            if line.contains(&call_pattern)
-                || line.contains(&call_pattern2)
-                || line.contains(&call_pattern3)
-                || line.contains(&call_pattern4)
-            {
-                is_read = true;
-            }
-
-            let for_of = format!("of {name}");
-            if line.contains(&for_of) {
-                is_read = true;
-            }
         }
-
-        if is_written && !is_read {
-            diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
-                line: decl_line + 1,
-                column: 1,
-                rule_id: "no-unused-collection".into(),
-                message: format!(
-                    "Collection `{name}` is populated but never read."
-                ),
-                severity: Severity::Warning,
-                span: None,
-            });
+        for child in n.named_children(&mut cursor) {
+            stack.push(child);
         }
+    }
+    (is_written, is_read)
+}
+
+crate::ast_check! { |node, source, ctx, diagnostics|
+    if node.kind() != "variable_declarator" {
+        return;
+    }
+
+    // Only `const x = ...` declarations.
+    let Some(decl) = node.parent() else { return };
+    if decl.kind() != "lexical_declaration" {
+        return;
+    }
+    let kind_text = decl.child(0)
+        .and_then(|c| c.utf8_text(source).ok())
+        .unwrap_or("");
+    if kind_text != "const" {
+        return;
+    }
+
+    let Some(name_node) = node.child_by_field_name("name") else { return };
+    if name_node.kind() != "identifier" {
+        return;
+    }
+    let Ok(name) = name_node.utf8_text(source) else { return };
+
+    let Some(value) = node.child_by_field_name("value") else { return };
+    if !is_collection_initializer(value, source) {
+        return;
+    }
+
+    // Scan from the program root so that usages anywhere in the file count.
+    let mut root = node;
+    while let Some(parent) = root.parent() {
+        root = parent;
+    }
+
+    let (is_written, is_read) =
+        classify_usages(root, name_node.start_byte(), name, source);
+
+    if is_written && !is_read {
+        diagnostics.push(Diagnostic::at_node(
+            ctx.path,
+            &name_node,
+            "no-unused-collection",
+            format!("Collection `{name}` is populated but never read."),
+            Severity::Warning,
+        ));
     }
 }
 

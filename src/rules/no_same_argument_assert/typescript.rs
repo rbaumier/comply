@@ -1,83 +1,83 @@
 //! no-same-argument-assert backend — asserting a value equals itself.
+//!
+//! Walks `call_expression` nodes shaped like `expect(<actual>).toBe(<arg>)`
+//! or `.toEqual(<arg>)` and flags the call when both arguments have the
+//! same textual content. Restricted to test files (`.test.`, `.spec.`,
+//! `__tests__`, `_test.`) because the same shape is legitimate elsewhere.
 
 use crate::diagnostic::{Diagnostic, Severity};
+use tree_sitter::Node;
 
 fn is_test_file(path: &std::path::Path) -> bool {
     let s = path.to_string_lossy();
     s.contains(".test.") || s.contains(".spec.") || s.contains("__tests__") || s.contains("_test.")
 }
 
-/// Extract content inside balanced parentheses, starting right after `(`.
-fn extract_paren_content(s: &str) -> Option<&str> {
-    let mut depth = 1;
-    for (i, ch) in s.char_indices() {
-        match ch {
-            '(' => depth += 1,
-            ')' => {
-                depth -= 1;
-                if depth == 0 {
-                    return Some(&s[..i]);
-                }
-            }
-            _ => {}
-        }
+/// Return the single named argument inside an `arguments` node, normalized
+/// by stripping outer whitespace from its source slice.
+fn single_arg_text<'a>(args: Node, source: &'a [u8]) -> Option<&'a str> {
+    let mut cursor = args.walk();
+    let mut named = args.named_children(&mut cursor);
+    let first = named.next()?;
+    if named.next().is_some() {
+        return None; // exactly one argument required
     }
-    None
-}
-
-fn check_same_arg(line: &str) -> bool {
-    let Some(expect_pos) = line.find("expect(") else {
-        return false;
-    };
-    let after_expect = &line[expect_pos + 7..];
-    let expect_arg = match extract_paren_content(after_expect) {
-        Some(a) => a.trim(),
-        None => return false,
-    };
-
-    if expect_arg.is_empty() {
-        return false;
-    }
-
-    let matchers = [".toBe(", ".toEqual("];
-    for matcher in matchers {
-        if let Some(pos) = line.find(matcher) {
-            let after_matcher = &line[pos + matcher.len()..];
-            if let Some(matcher_arg) = extract_paren_content(after_matcher)
-                && expect_arg == matcher_arg.trim() {
-                    return true;
-                }
-        }
-    }
-    false
+    let r = first.byte_range();
+    std::str::from_utf8(&source[r.start..r.end]).ok().map(str::trim)
 }
 
 crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "program" {
-        return;
-    }
-
     if !is_test_file(ctx.path) {
         return;
     }
-
-    let text = std::str::from_utf8(source).unwrap_or("");
-
-    for (idx, line) in text.lines().enumerate() {
-        if check_same_arg(line) {
-            diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
-                line: idx + 1,
-                column: 1,
-                rule_id: "no-same-argument-assert".into(),
-                message:
-                    "Asserting a value equals itself — this is always true and tests nothing."
-                        .into(),
-                severity: Severity::Error,
-                span: None,
-            });
-        }
+    if node.kind() != "call_expression" {
+        return;
     }
+
+    // Outer call shape: <member_expression>(<arguments>) where the member
+    // property is `toBe` or `toEqual` and the object is `expect(<actual>)`.
+    let Some(func) = node.child_by_field_name("function") else { return };
+    if func.kind() != "member_expression" {
+        return;
+    }
+    let Some(prop) = func.child_by_field_name("property") else { return };
+    let prop_text = std::str::from_utf8(&source[prop.byte_range()]).unwrap_or("");
+    if prop_text != "toBe" && prop_text != "toEqual" {
+        return;
+    }
+
+    let Some(obj) = func.child_by_field_name("object") else { return };
+    if obj.kind() != "call_expression" {
+        return;
+    }
+    let Some(expect_callee) = obj.child_by_field_name("function") else { return };
+    if expect_callee.kind() != "identifier" {
+        return;
+    }
+    if std::str::from_utf8(&source[expect_callee.byte_range()]).unwrap_or("") != "expect" {
+        return;
+    }
+
+    let Some(expect_args) = obj.child_by_field_name("arguments") else { return };
+    let Some(matcher_args) = node.child_by_field_name("arguments") else { return };
+
+    let Some(actual_text) = single_arg_text(expect_args, source) else { return };
+    let Some(expected_text) = single_arg_text(matcher_args, source) else { return };
+
+    if actual_text.is_empty() || actual_text != expected_text {
+        return;
+    }
+
+    let pos = node.start_position();
+    diagnostics.push(Diagnostic {
+        path: ctx.path.to_path_buf(),
+        line: pos.row + 1,
+        column: pos.column + 1,
+        rule_id: "no-same-argument-assert".into(),
+        message: "Asserting a value equals itself — this is always true and tests nothing.".into(),
+        severity: Severity::Error,
+        span: None,
+    });
 }
 
 #[cfg(test)]

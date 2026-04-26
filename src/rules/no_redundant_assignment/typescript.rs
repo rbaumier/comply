@@ -1,114 +1,110 @@
 //! no-redundant-assignment backend — variable assigned then immediately overwritten.
+//!
+//! Walks every block-like container (`program`, `statement_block`) and inspects
+//! consecutive statement children. When two adjacent statements both assign to
+//! the same identifier, the first assignment is dead. Pure tree-sitter AST —
+//! no text scanning.
 
 use crate::diagnostic::{Diagnostic, Severity};
+use tree_sitter::Node;
 
-/// Try to extract the variable name from an assignment statement.
-/// Handles:
-///   `let x = ...;`  `const x = ...;`  `var x = ...;`  `x = ...;`
-/// Returns the variable name if found.
-fn extract_assignment_target(line: &str) -> Option<&str> {
-    let trimmed = line.trim();
+/// Information extracted from a single statement that performs an assignment.
+struct AssignTarget<'a> {
+    name: &'a str,
+    /// True for `const` declarators — these are not flagged because a later
+    /// assignment would be a syntax error anyway, so the second statement
+    /// must belong to a different scope or destructuring.
+    is_const: bool,
+}
 
-    // Skip comments, control flow, return statements
-    if trimmed.starts_with("//")
-        || trimmed.starts_with('*')
-        || trimmed.starts_with("/*")
-        || trimmed.starts_with("if ")
-        || trimmed.starts_with("if(")
-        || trimmed.starts_with("for ")
-        || trimmed.starts_with("for(")
-        || trimmed.starts_with("while ")
-        || trimmed.starts_with("return ")
-        || trimmed.starts_with("else")
-        || trimmed.starts_with('{')
-        || trimmed.starts_with('}')
-    {
-        return None;
+/// Pull the assignment target out of a top-level statement, if any.
+fn statement_target<'a>(stmt: Node<'a>, source: &'a [u8]) -> Option<AssignTarget<'a>> {
+    match stmt.kind() {
+        // `let x = ...;` / `const x = ...;` — flag only when there's exactly
+        // one declarator with a simple identifier and an initializer.
+        "lexical_declaration" | "variable_declaration" => {
+            let mut cursor = stmt.walk();
+            let declarators: Vec<Node> = stmt
+                .named_children(&mut cursor)
+                .filter(|c| c.kind() == "variable_declarator")
+                .collect();
+            if declarators.len() != 1 {
+                return None;
+            }
+            let decl = declarators[0];
+            let name_node = decl.child_by_field_name("name")?;
+            if name_node.kind() != "identifier" {
+                return None;
+            }
+            decl.child_by_field_name("value")?; // require an initializer
+            let name = std::str::from_utf8(name_node.byte_range_text(source)).ok()?;
+            let is_const = stmt
+                .child(0)
+                .map(|c| c.kind() == "const")
+                .unwrap_or(false);
+            Some(AssignTarget { name, is_const })
+        }
+        // `x = ...;`
+        "expression_statement" => {
+            let mut cursor = stmt.walk();
+            let expr = stmt.named_children(&mut cursor).next()?;
+            if expr.kind() != "assignment_expression" {
+                return None;
+            }
+            let lhs = expr.child_by_field_name("left")?;
+            if lhs.kind() != "identifier" {
+                return None;
+            }
+            let name = std::str::from_utf8(lhs.byte_range_text(source)).ok()?;
+            Some(AssignTarget { name, is_const: false })
+        }
+        _ => None,
     }
+}
 
-    // Strip let/const/var prefix
-    let rest = if let Some(r) = trimmed.strip_prefix("let ") {
-        r.trim_start()
-    } else if let Some(r) = trimmed.strip_prefix("const ") {
-        r.trim_start()
-    } else if let Some(r) = trimmed.strip_prefix("var ") {
-        r.trim_start()
-    } else {
-        trimmed
-    };
-
-    // Find `=` (but not `==` or `===` or `=>`)
-    let eq_pos = rest.find('=')?;
-    if eq_pos == 0 {
-        return None;
-    }
-    // Check the character after `=` — must not be `=` or `>`
-    let after = rest.as_bytes().get(eq_pos + 1)?;
-    if *after == b'=' || *after == b'>' {
-        return None;
-    }
-
-    let candidate = rest[..eq_pos].trim();
-
-    // Must be a simple identifier (with optional type annotation)
-    // Strip type annotation: `x: number` -> `x`
-    let name = if let Some(colon) = candidate.find(':') {
-        candidate[..colon].trim()
-    } else {
-        candidate
-    };
-
-    if name.is_empty() {
-        return None;
-    }
-
-    // Validate that name is a simple identifier (alphanumeric + underscore + optional dots for member access)
-    if name
-        .chars()
-        .all(|c| c.is_alphanumeric() || c == '_' || c == '.')
-    {
-        Some(name)
-    } else {
-        None
+/// Convenience trait so we can pull a node's textual slice from `source`
+/// without an external helper.
+trait ByteRangeText {
+    fn byte_range_text<'a>(&self, source: &'a [u8]) -> &'a [u8];
+}
+impl<'tree> ByteRangeText for Node<'tree> {
+    fn byte_range_text<'a>(&self, source: &'a [u8]) -> &'a [u8] {
+        let r = self.byte_range();
+        &source[r.start..r.end]
     }
 }
 
 crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "program" {
+    let kind = node.kind();
+    if kind != "program" && kind != "statement_block" {
         return;
     }
 
-    let text = std::str::from_utf8(source).unwrap_or("");
-    let lines: Vec<&str> = text.lines().collect();
+    let mut cursor = node.walk();
+    let stmts: Vec<Node> = node.named_children(&mut cursor).collect();
 
-    for i in 0..lines.len().saturating_sub(1) {
-        let current = extract_assignment_target(lines[i]);
-        let next = extract_assignment_target(lines[i + 1]);
-
-        if let (Some(curr_var), Some(next_var)) = (current, next)
-            && curr_var == next_var {
-                // Don't flag `const` — reassigning a const would be a syntax error,
-                // so the second line is actually a different scope or destructuring.
-                let curr_trimmed = lines[i].trim();
-                if curr_trimmed.starts_with("const ") {
-                    continue;
-                }
-
-                diagnostics.push(Diagnostic {
-                    path: ctx.path.to_path_buf(),
-                    line: i + 1,
-                    column: 1,
-                    rule_id: "no-redundant-assignment".into(),
-                    message: format!(
-                        "Variable `{}` is assigned on line {} then immediately overwritten on line {}.",
-                        curr_var,
-                        i + 1,
-                        i + 2,
-                    ),
-                    severity: Severity::Error,
-                    span: None,
-                });
-            }
+    for pair in stmts.windows(2) {
+        let (a, b) = (pair[0], pair[1]);
+        let Some(ta) = statement_target(a, source) else { continue };
+        let Some(tb) = statement_target(b, source) else { continue };
+        if ta.is_const || ta.name != tb.name {
+            continue;
+        }
+        let pos = a.start_position();
+        diagnostics.push(Diagnostic {
+            path: ctx.path.to_path_buf(),
+            line: pos.row + 1,
+            column: pos.column + 1,
+            rule_id: "no-redundant-assignment".into(),
+            message: format!(
+                "Variable `{}` is assigned on line {} then immediately overwritten on line {}.",
+                ta.name,
+                pos.row + 1,
+                b.start_position().row + 1,
+            ),
+            severity: Severity::Error,
+            span: None,
+        });
     }
 }
 

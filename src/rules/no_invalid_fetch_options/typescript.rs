@@ -1,146 +1,184 @@
-//! no-invalid-fetch-options AST backend — flag `fetch()`/`new Request()` with
-//! `body` on GET or HEAD requests.
+//! no-invalid-fetch-options AST backend — flag `fetch(...)` /
+//! `new Request(...)` calls whose options object has a `body` while the
+//! `method` is `GET` (default) or `HEAD`.
+//!
+//! Walks `call_expression` (for `fetch`) and `new_expression` (for
+//! `new Request`) and inspects the second argument when it is an object
+//! literal. A spread element (`...options`) without an explicit `method`
+//! is considered safe — the spread may bring its own method.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-/// Check if a property name exists in the block (as an object key).
-fn has_property(block: &str, name: &str) -> bool {
-    let patterns = [format!("{name}:"), format!("{name} :")];
-    for pat in &patterns {
-        if let Some(pos) = block.find(pat.as_str()) {
-            if pos == 0 {
-                return true;
-            }
-            let prev = block.as_bytes()[pos - 1];
-            if !prev.is_ascii_alphanumeric() && prev != b'_' && prev != b'.' {
-                return true;
-            }
-        }
-    }
-    false
+/// Lookup result for a property in an object literal.
+enum PropValue<'a> {
+    /// Property is present with this string-literal value (already unquoted).
+    StringLiteral(&'a str),
+    /// Property is present but value is not a string literal.
+    Other,
+    /// Property absent.
+    Missing,
 }
 
-/// Extract the value after `name:` up to the next comma or closing brace.
-fn get_property_value(block: &str, name: &str) -> Option<String> {
-    let patterns = [format!("{name}:"), format!("{name} :")];
-    for pat in &patterns {
-        if let Some(pos) = block.find(pat.as_str()) {
-            if pos > 0 {
-                let prev = block.as_bytes()[pos - 1];
-                if prev.is_ascii_alphanumeric() || prev == b'_' || prev == b'.' {
-                    continue;
-                }
-            }
-            let after = &block[pos + pat.len()..];
-            let after = after.trim_start();
-            let end = after.find([',', '}', ')']).unwrap_or(after.len());
-            return Some(after[..end].trim().to_string());
+fn unquote(s: &str) -> &str {
+    s.trim_matches(|c| c == '"' || c == '\'' || c == '`')
+}
+
+fn lookup_property<'a>(
+    obj: tree_sitter::Node,
+    source: &'a [u8],
+    name: &str,
+) -> PropValue<'a> {
+    if obj.kind() != "object" {
+        return PropValue::Missing;
+    }
+    let mut cursor = obj.walk();
+    for prop in obj.named_children(&mut cursor) {
+        if prop.kind() != "pair" {
+            continue;
+        }
+        let Some(key) = prop.child_by_field_name("key") else {
+            continue;
+        };
+        let Ok(raw_key) = key.utf8_text(source) else {
+            continue;
+        };
+        if unquote(raw_key) != name {
+            continue;
+        }
+        let Some(value) = prop.child_by_field_name("value") else {
+            return PropValue::Other;
+        };
+        if value.kind() == "string"
+            && let Ok(text) = value.utf8_text(source)
+        {
+            return PropValue::StringLiteral(unquote(text));
+        }
+        return PropValue::Other;
+    }
+    PropValue::Missing
+}
+
+fn has_spread(obj: tree_sitter::Node) -> bool {
+    if obj.kind() != "object" {
+        return false;
+    }
+    let mut cursor = obj.walk();
+    obj.named_children(&mut cursor)
+        .any(|c| c.kind() == "spread_element")
+}
+
+/// True if `value` is the literal `null` or `undefined`.
+fn is_nullish_literal(prop: tree_sitter::Node, source: &[u8]) -> bool {
+    if prop.kind() != "pair" {
+        return false;
+    }
+    let Some(value) = prop.child_by_field_name("value") else {
+        return false;
+    };
+    match value.kind() {
+        "null" | "undefined" => true,
+        "identifier" => value.utf8_text(source).unwrap_or("") == "undefined",
+        _ => false,
+    }
+}
+
+/// Find a property by name and return its full `pair` node (so callers can
+/// inspect both key and value, including detecting `null`/`undefined`).
+fn find_property<'a>(
+    obj: tree_sitter::Node<'a>,
+    source: &[u8],
+    name: &str,
+) -> Option<tree_sitter::Node<'a>> {
+    if obj.kind() != "object" {
+        return None;
+    }
+    let mut cursor = obj.walk();
+    for prop in obj.named_children(&mut cursor) {
+        if prop.kind() != "pair" {
+            continue;
+        }
+        let Some(key) = prop.child_by_field_name("key") else {
+            continue;
+        };
+        let Ok(raw_key) = key.utf8_text(source) else {
+            continue;
+        };
+        if unquote(raw_key) == name {
+            return Some(prop);
         }
     }
     None
 }
 
-/// Analyze a `fetch(…)` or `new Request(…)` call block for body + method.
-fn analyze_call_block(
-    block: &str,
-    ctx: &crate::rules::backend::CheckCtx,
-    line_idx: usize,
-) -> Option<Diagnostic> {
-    let has_body = has_property(block, "body");
-    if !has_body {
+/// Inspect an options object for the GET/HEAD + body violation. Returns
+/// the offending method (`"GET"` or `"HEAD"`) when violation detected.
+fn detect_violation(obj: tree_sitter::Node, source: &[u8]) -> Option<&'static str> {
+    let body_pair = find_property(obj, source, "body")?;
+    if is_nullish_literal(body_pair, source) {
         return None;
     }
 
-    if let Some(body_val) = get_property_value(block, "body") {
-        let val = body_val.trim();
-        if val == "undefined" || val == "null" {
-            return None;
+    let method = match lookup_property(obj, source, "method") {
+        PropValue::StringLiteral(s) => s.to_ascii_uppercase(),
+        PropValue::Other => return None,
+        PropValue::Missing => {
+            // No method: default GET — but a spread might bring one.
+            if has_spread(obj) {
+                return None;
+            }
+            "GET".to_string()
         }
-    }
-
-    let method = if let Some(method_val) = get_property_value(block, "method") {
-        method_val
-            .trim()
-            .trim_matches(|c| c == '\'' || c == '"')
-            .to_uppercase()
-    } else {
-        if block.contains("...") {
-            return None;
-        }
-        "GET".to_string()
     };
 
-    if method != "GET" && method != "HEAD" {
-        return None;
+    if method == "GET" {
+        Some("GET")
+    } else if method == "HEAD" {
+        Some("HEAD")
+    } else {
+        None
     }
+}
 
-    Some(Diagnostic {
-        path: ctx.path.to_path_buf(),
-        line: line_idx + 1,
-        column: 1,
-        rule_id: "no-invalid-fetch-options".into(),
-        message: format!("`body` is not allowed when method is \"{}\".", method),
-        severity: Severity::Error,
-        span: None,
-    })
+/// True if `callee` is the bare identifier `fetch`.
+fn is_fetch_callee(callee: tree_sitter::Node, source: &[u8]) -> bool {
+    callee.kind() == "identifier" && callee.utf8_text(source).unwrap_or("") == "fetch"
+}
+
+/// True if `constructor` of a `new_expression` is `Request`.
+fn is_request_constructor(ctor: tree_sitter::Node, source: &[u8]) -> bool {
+    ctor.kind() == "identifier" && ctor.utf8_text(source).unwrap_or("") == "Request"
 }
 
 crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "program" {
+    let kind = node.kind();
+    let (relevant, args_field) = match kind {
+        "call_expression" => {
+            let Some(callee) = node.child_by_field_name("function") else { return };
+            (is_fetch_callee(callee, source), "arguments")
+        }
+        "new_expression" => {
+            let Some(ctor) = node.child_by_field_name("constructor") else { return };
+            (is_request_constructor(ctor, source), "arguments")
+        }
+        _ => return,
+    };
+    if !relevant {
         return;
     }
-
-    let text = std::str::from_utf8(source).unwrap_or("");
-    let lines: Vec<&str> = text.lines().collect();
-    let mut i = 0;
-
-    while i < lines.len() {
-        let line = lines[i];
-        let is_fetch = line.contains("fetch(")
-            && !line.contains("fetchOptions")
-            && !line.contains("fetcher");
-        let is_request = line.contains("new Request(");
-
-        if !is_fetch && !is_request {
-            i += 1;
-            continue;
-        }
-
-        let start_line = i;
-        let trigger = if is_fetch { "fetch(" } else { "new Request(" };
-        let trigger_pos = line.find(trigger).unwrap();
-        let mut depth: i32 = 0;
-        let mut block = String::new();
-
-        for ch in line[trigger_pos..].chars() {
-            match ch {
-                '(' => depth += 1,
-                ')' => depth -= 1,
-                _ => {}
-            }
-        }
-        block.push_str(&line[trigger_pos..]);
-
-        let mut j = i + 1;
-        while depth > 0 && j < lines.len() {
-            let next = lines[j];
-            block.push(' ');
-            block.push_str(next.trim());
-            for ch in next.chars() {
-                match ch {
-                    '(' => depth += 1,
-                    ')' => depth -= 1,
-                    _ => {}
-                }
-            }
-            j += 1;
-        }
-
-        if let Some(diag) = analyze_call_block(&block, ctx, start_line) {
-            diagnostics.push(diag);
-        }
-
-        i = j.max(i + 1);
+    let Some(args) = node.child_by_field_name(args_field) else { return };
+    let mut cursor = args.walk();
+    let Some(opts) = args.named_children(&mut cursor).nth(1) else { return };
+    if opts.kind() != "object" {
+        return;
+    }
+    if let Some(method) = detect_violation(opts, source) {
+        diagnostics.push(Diagnostic::at_node(
+            ctx.path,
+            &node,
+            "no-invalid-fetch-options",
+            format!("`body` is not allowed when method is \"{}\".", method),
+            Severity::Error,
+        ));
     }
 }
 

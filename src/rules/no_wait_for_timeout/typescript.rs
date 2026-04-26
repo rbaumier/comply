@@ -1,4 +1,6 @@
-//! no-wait-for-timeout AST backend — flag `waitForTimeout` in test files.
+//! no-wait-for-timeout AST backend — flag `<receiver>.waitForTimeout(...)`
+//! invocations in test files. Walks `call_expression` nodes whose
+//! callee is a `member_expression` with property `waitForTimeout`.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
@@ -13,30 +15,33 @@ fn is_test_file(path: &std::path::Path) -> bool {
 }
 
 crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "program" {
-        return;
-    }
-
     if !is_test_file(ctx.path) {
         return;
     }
-
-    let text = std::str::from_utf8(source).unwrap_or("");
-    for (idx, line) in text.lines().enumerate() {
-        if let Some(col) = line.find("waitForTimeout(") {
-            diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
-                line: idx + 1,
-                column: col + 1,
-                rule_id: "no-wait-for-timeout".into(),
-                message: "`waitForTimeout` is a fixed sleep — replace with a \
-                          web-first assertion or `waitForResponse`."
-                    .into(),
-                severity: Severity::Error,
-                span: None,
-            });
-        }
+    if node.kind() != "call_expression" {
+        return;
     }
+    let Some(func) = node.child_by_field_name("function") else { return };
+    if func.kind() != "member_expression" {
+        return;
+    }
+    let Some(prop) = func.child_by_field_name("property") else { return };
+    let name = std::str::from_utf8(&source[prop.byte_range()]).unwrap_or("");
+    if name != "waitForTimeout" {
+        return;
+    }
+    // Anchor diagnostic on the `waitForTimeout` identifier so the
+    // (line, column) matches the property name (matches legacy text-based
+    // behaviour expected by `correct_line_and_column`).
+    diagnostics.push(Diagnostic::at_node(
+        ctx.path,
+        &prop,
+        super::META.id,
+        "`waitForTimeout` is a fixed sleep — replace with a \
+         web-first assertion or `waitForResponse`."
+            .into(),
+        Severity::Error,
+    ));
 }
 
 #[cfg(test)]

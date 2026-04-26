@@ -1,82 +1,105 @@
-//! no-inferred-any AST backend — detect likely untyped patterns that infer `any`.
+//! no-inferred-any AST backend — patterns whose inferred type is `any`.
+//!
+//! Three AST patterns are flagged:
+//!   1. A `type_annotation` whose inner type is `predefined_type "any"`
+//!      (e.g. `const x: any = ...`, `function f(x: any) {}`).
+//!   2. A `call_expression` to `JSON.parse(...)` whose result is not
+//!      narrowed by an enclosing `as` cast or `satisfies` clause.
+//!   3. A `call_expression` to `<expr>.json()` (Response#json) under the
+//!      same narrowing conditions.
 
 use crate::diagnostic::{Diagnostic, Severity};
+use tree_sitter::Node;
 
-/// Returns true if the rest of the line contains a type narrowing keyword.
-fn has_type_narrowing(rest: &str) -> bool {
-    let trimmed = rest.trim();
-    trimmed.contains(" as ")
-        || trimmed.starts_with("as ")
-        || trimmed.contains(" satisfies ")
-        || trimmed.starts_with("satisfies ")
-        || trimmed.contains(": ")
+/// True if the call expression appears as the operand of a surrounding
+/// `as`/`satisfies` cast — walking up through parenthesized/await wrappers.
+fn is_narrowed(mut node: Node) -> bool {
+    while let Some(parent) = node.parent() {
+        match parent.kind() {
+            "as_expression" | "satisfies_expression" => return true,
+            "parenthesized_expression" | "await_expression" | "non_null_expression" => {
+                node = parent;
+            }
+            _ => return false,
+        }
+    }
+    false
+}
+
+fn is_ts_or_tsx(ctx: &crate::rules::backend::CheckCtx) -> bool {
+    let ext = ctx.path.extension().and_then(|e| e.to_str()).unwrap_or("");
+    ext == "ts" || ext == "tsx"
 }
 
 crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "program" {
+    if !is_ts_or_tsx(ctx) {
         return;
     }
 
-    // Only flag .ts/.tsx files, not .js
-    let ext = ctx
-        .path
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("");
-    if ext != "ts" && ext != "tsx" {
-        return;
-    }
-
-    let text = std::str::from_utf8(source).unwrap_or("");
-    for (idx, line) in text.lines().enumerate() {
-        let trimmed = line.trim();
-
-        // Pattern: `const x: any =`
-        if trimmed.contains(": any =") || trimmed.contains(": any;") {
+    match node.kind() {
+        // Pattern 1: explicit `: any` annotation anywhere.
+        "type_annotation" => {
+            let mut cursor = node.walk();
+            let inner = node.named_children(&mut cursor).next();
+            let Some(inner) = inner else { return };
+            if inner.kind() != "predefined_type" {
+                return;
+            }
+            let text = std::str::from_utf8(&source[inner.byte_range()]).unwrap_or("");
+            if text != "any" {
+                return;
+            }
+            let pos = node.start_position();
             diagnostics.push(Diagnostic {
                 path: ctx.path.to_path_buf(),
-                line: idx + 1,
-                column: 1,
+                line: pos.row + 1,
+                column: pos.column + 1,
                 rule_id: "no-inferred-any".into(),
                 message: "Explicit `any` annotation — use a concrete type or `unknown`.".into(),
                 severity: Severity::Warning,
                 span: None,
             });
-            continue;
         }
-
-        // Pattern: `= JSON.parse(` without type narrowing
-        if let Some(pos) = trimmed.find("JSON.parse(") {
-            let rest = &trimmed[pos + 11..];
-            if !has_type_narrowing(rest) && !has_type_narrowing(&trimmed[..pos]) {
-                diagnostics.push(Diagnostic {
-                    path: ctx.path.to_path_buf(),
-                    line: idx + 1,
-                    column: 1,
-                    rule_id: "no-inferred-any".into(),
-                    message: "`JSON.parse()` returns `any` — add a type assertion or `satisfies` clause.".into(),
-                    severity: Severity::Warning,
-                    span: None,
-                });
-                continue;
+        // Patterns 2 and 3: JSON.parse / .json() call without narrowing.
+        "call_expression" => {
+            let Some(func) = node.child_by_field_name("function") else { return };
+            if func.kind() != "member_expression" {
+                return;
             }
-        }
+            let Some(obj) = func.child_by_field_name("object") else { return };
+            let Some(prop) = func.child_by_field_name("property") else { return };
+            let prop_text = std::str::from_utf8(&source[prop.byte_range()]).unwrap_or("");
 
-        // Pattern: `= await response.json()` or `.json()` without type narrowing
-        if let Some(pos) = trimmed.find(".json()") {
-            let rest = &trimmed[pos + 7..];
-            if !has_type_narrowing(rest) && !has_type_narrowing(&trimmed[..pos]) {
-                diagnostics.push(Diagnostic {
-                    path: ctx.path.to_path_buf(),
-                    line: idx + 1,
-                    column: 1,
-                    rule_id: "no-inferred-any".into(),
-                    message: "`.json()` returns `any` — add a type assertion or `satisfies` clause.".into(),
-                    severity: Severity::Warning,
-                    span: None,
-                });
+            let (is_json_parse, is_response_json) = (
+                prop_text == "parse"
+                    && std::str::from_utf8(&source[obj.byte_range()]).unwrap_or("") == "JSON",
+                prop_text == "json",
+            );
+
+            if !is_json_parse && !is_response_json {
+                return;
             }
+            if is_narrowed(node) {
+                return;
+            }
+
+            let pos = node.start_position();
+            let message = if is_json_parse {
+                "`JSON.parse()` returns `any` — add a type assertion or `satisfies` clause."
+            } else {
+                "`.json()` returns `any` — add a type assertion or `satisfies` clause."
+            };
+            diagnostics.push(Diagnostic {
+                path: ctx.path.to_path_buf(),
+                line: pos.row + 1,
+                column: pos.column + 1,
+                rule_id: "no-inferred-any".into(),
+                message: message.into(),
+                severity: Severity::Warning,
+                span: None,
+            });
         }
+        _ => {}
     }
 }
 

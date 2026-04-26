@@ -1,52 +1,45 @@
-//! no-useless-intersection AST backend — intersection with `any` or `unknown`.
+//! no-useless-intersection AST backend — intersection containing `any` or `unknown`.
+//!
+//! Walks `intersection_type` nodes and flags those whose direct members include
+//! a `predefined_type` matching `any` or `unknown`. tree-sitter parses
+//! `A & B & C` as a left-recursive `intersection_type(intersection_type(A, B), C)`,
+//! so we only need to inspect each `intersection_type` node's own children
+//! (any nested intersection is already its own visit).
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-/// Detect `& any`, `& unknown`, `any &`, `unknown &` in type expressions.
-fn has_useless_intersection(line: &str) -> bool {
-    let trimmed = line.trim();
-    for pattern in &["& any", "& unknown", "any &", "unknown &"] {
-        if let Some(pos) = trimmed.find(pattern) {
-            let before = if pos > 0 {
-                trimmed.as_bytes()[pos - 1]
-            } else {
-                b' '
-            };
-            let end = pos + pattern.len();
-            let after = if end < trimmed.len() {
-                trimmed.as_bytes()[end]
-            } else {
-                b' '
-            };
-            if !before.is_ascii_alphanumeric() && before != b'_'
-                && !after.is_ascii_alphanumeric() && after != b'_'
-            {
-                return true;
-            }
-        }
-    }
-    false
-}
-
 crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "program" {
+    if node.kind() != "intersection_type" {
         return;
     }
 
-    let text = std::str::from_utf8(source).unwrap_or("");
-    for (idx, line) in text.lines().enumerate() {
-        if has_useless_intersection(line) {
-            diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
-                line: idx + 1,
-                column: 1,
-                rule_id: "no-useless-intersection".into(),
-                message: "Intersection with `any` or `unknown` is useless — remove it.".into(),
-                severity: Severity::Warning,
-                span: None,
-            });
+    let mut cursor = node.walk();
+    let mut found = false;
+    for child in node.children(&mut cursor) {
+        if child.kind() != "predefined_type" {
+            continue;
+        }
+        let text = std::str::from_utf8(&source[child.byte_range()]).unwrap_or("");
+        if text == "any" || text == "unknown" {
+            found = true;
+            break;
         }
     }
+
+    if !found {
+        return;
+    }
+
+    let pos = node.start_position();
+    diagnostics.push(Diagnostic {
+        path: ctx.path.to_path_buf(),
+        line: pos.row + 1,
+        column: pos.column + 1,
+        rule_id: "no-useless-intersection".into(),
+        message: "Intersection with `any` or `unknown` is useless — remove it.".into(),
+        severity: Severity::Warning,
+        span: None,
+    });
 }
 
 #[cfg(test)]

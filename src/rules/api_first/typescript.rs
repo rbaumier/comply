@@ -1,62 +1,89 @@
-//! api-first AST backend — route handler files should define an API schema.
+//! api-first AST backend — flag files that register an HTTP route
+//! (e.g. `app.get(...)`, `router.post(...)`) without referencing any
+//! schema validator.
+//!
+//! Fires once per file at the `program` root, then walks the AST to:
+//!   1. Find the first `call_expression` whose callee is a `member_expression`
+//!      with property in {get, post, put, delete} — the route registration.
+//!   2. Search the AST for any schema indicator: an identifier named `z`,
+//!      `createRoute`, `openapi`, `schema`, or `zodValidator`.
+//!
+//! If a route exists and no schema indicator is found, emit a diagnostic
+//! anchored on the route call.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
 const ROUTE_METHODS: &[&str] = &["get", "post", "put", "delete"];
 const SCHEMA_INDICATORS: &[&str] = &["z", "createRoute", "openapi", "schema", "zodValidator"];
 
+/// Walk `root` and return the first `call_expression` node whose callee
+/// is `<recv>.<method>` with method in [`ROUTE_METHODS`].
+fn find_route_call<'a>(
+    root: tree_sitter::Node<'a>,
+    source: &[u8],
+) -> Option<tree_sitter::Node<'a>> {
+    let mut stack = vec![root];
+    let mut found: Option<tree_sitter::Node<'a>> = None;
+    while let Some(n) = stack.pop() {
+        if n.kind() == "call_expression"
+            && let Some(func) = n.child_by_field_name("function")
+            && func.kind() == "member_expression"
+            && let Some(prop) = func.child_by_field_name("property")
+        {
+            let name = std::str::from_utf8(&source[prop.byte_range()]).unwrap_or("");
+            if ROUTE_METHODS.contains(&name) {
+                // Pick the earliest in source order.
+                let start = n.start_byte();
+                if found.map(|f| start < f.start_byte()).unwrap_or(true) {
+                    found = Some(n);
+                }
+            }
+        }
+        let mut cursor = n.walk();
+        for child in n.children(&mut cursor) {
+            stack.push(child);
+        }
+    }
+    found
+}
+
+/// Walk `root` looking for any identifier matching one of
+/// [`SCHEMA_INDICATORS`]. Tree-sitter exposes references as either
+/// `identifier`, `property_identifier`, or `type_identifier`.
+fn has_schema_indicator(root: tree_sitter::Node<'_>, source: &[u8]) -> bool {
+    let mut stack = vec![root];
+    while let Some(n) = stack.pop() {
+        let kind = n.kind();
+        if kind == "identifier" || kind == "property_identifier" || kind == "type_identifier" {
+            let name = std::str::from_utf8(&source[n.byte_range()]).unwrap_or("");
+            if SCHEMA_INDICATORS.contains(&name) {
+                return true;
+            }
+        }
+        let mut cursor = n.walk();
+        for child in n.children(&mut cursor) {
+            stack.push(child);
+        }
+    }
+    false
+}
+
 crate::ast_check! { |node, source, ctx, diagnostics|
-    // We only fire once, at the program (root) level.
+    // Fire once per file.
     if node.kind() != "program" {
         return;
     }
-
-    let text = std::str::from_utf8(source).unwrap_or("");
-
-    // Pass 1: does the file contain a route definition?
-    // Look for `.get(`, `.post(`, `.put(`, `.delete(` patterns.
-    let has_route = text.lines().any(|line| {
-        ROUTE_METHODS.iter().any(|m| {
-            let pat = format!(".{}(", m);
-            line.contains(&pat)
-        })
-    });
-
-    if !has_route {
+    let Some(route) = find_route_call(node, source) else { return };
+    if has_schema_indicator(node, source) {
         return;
     }
-
-    // Pass 2: does the file contain a schema indicator?
-    let has_schema = text.lines().any(|line| {
-        SCHEMA_INDICATORS.iter().any(|s| line.contains(s))
-    });
-
-    if has_schema {
-        return;
-    }
-
-    // Find the first route definition line to report against.
-    let route_line = text
-        .lines()
-        .enumerate()
-        .find(|(_, line)| {
-            ROUTE_METHODS.iter().any(|m| {
-                let pat = format!(".{}(", m);
-                line.contains(&pat)
-            })
-        })
-        .map(|(idx, _)| idx + 1)
-        .unwrap_or(1);
-
-    diagnostics.push(Diagnostic {
-        path: ctx.path.to_path_buf(),
-        line: route_line,
-        column: 1,
-        rule_id: "api-first".into(),
-        message: "Route handler without schema definition — define the API schema (e.g. `z.object`, `zodValidator`) before the handler.".into(),
-        severity: Severity::Warning,
-        span: None,
-    });
+    diagnostics.push(Diagnostic::at_node(
+        ctx.path,
+        &route,
+        super::META.id,
+        "Route handler without schema definition — define the API schema (e.g. `z.object`, `zodValidator`) before the handler.".into(),
+        Severity::Warning,
+    ));
 }
 
 #[cfg(test)]

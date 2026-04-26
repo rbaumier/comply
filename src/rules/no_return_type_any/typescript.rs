@@ -1,43 +1,76 @@
 //! no-return-type-any backend — functions with explicit `: any` return type.
+//!
+//! Walks function-shaped nodes (`function_declaration`, `function_expression`,
+//! `arrow_function`, `method_definition`, `method_signature`,
+//! `abstract_method_signature`) and inspects the direct child `type_annotation`
+//! that follows the parameter list. The annotation is flagged when its inner
+//! type resolves to `any` directly or as `Promise<any>`.
 
 use crate::diagnostic::{Diagnostic, Severity};
+use tree_sitter::Node;
 
-/// Detect ): any { or ): any => or ): Promise<any>
-fn has_return_type_any(line: &str) -> bool {
-    let trimmed = line.trim();
-
-    if trimmed.contains("): any {") || trimmed.contains("): any =>") || trimmed.contains("): any;")
-    {
-        return true;
+/// True if the given type-bearing node is `any` or `Promise<any>` (top-level
+/// type argument).
+fn resolves_to_any(node: Node, source: &[u8]) -> bool {
+    match node.kind() {
+        "predefined_type" => {
+            std::str::from_utf8(&source[node.byte_range()]).unwrap_or("") == "any"
+        }
+        "generic_type" => {
+            let Some(name) = node.child_by_field_name("name") else { return false };
+            if std::str::from_utf8(&source[name.byte_range()]).unwrap_or("") != "Promise" {
+                return false;
+            }
+            let Some(args) = node.child_by_field_name("type_arguments") else { return false };
+            let mut cursor = args.walk();
+            args.named_children(&mut cursor)
+                .any(|c| resolves_to_any(c, source))
+        }
+        _ => false,
     }
+}
 
-    if trimmed.contains("): Promise<any>") {
-        return true;
-    }
-
-    false
+/// Find the return-type `type_annotation` that is a direct child of a
+/// function-like node, sitting between the parameter list and the body.
+fn return_type_annotation<'a>(node: Node<'a>) -> Option<Node<'a>> {
+    let mut cursor = node.walk();
+    node.children(&mut cursor)
+        .find(|c| c.kind() == "type_annotation")
 }
 
 crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "program" {
+    let kind = node.kind();
+    let is_fn_like = matches!(
+        kind,
+        "function_declaration"
+            | "function_expression"
+            | "arrow_function"
+            | "method_definition"
+            | "method_signature"
+            | "abstract_method_signature"
+    );
+    if !is_fn_like {
         return;
     }
 
-    let text = std::str::from_utf8(source).unwrap_or("");
+    let Some(type_ann) = return_type_annotation(node) else { return };
+    let mut cursor = type_ann.walk();
+    let Some(inner) = type_ann.named_children(&mut cursor).next() else { return };
 
-    for (idx, line) in text.lines().enumerate() {
-        if has_return_type_any(line) {
-            diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
-                line: idx + 1,
-                column: 1,
-                rule_id: "no-return-type-any".into(),
-                message: "Function has explicit `: any` return type — use a specific type or `unknown`.".into(),
-                severity: Severity::Error,
-                span: None,
-            });
-        }
+    if !resolves_to_any(inner, source) {
+        return;
     }
+
+    let pos = type_ann.start_position();
+    diagnostics.push(Diagnostic {
+        path: ctx.path.to_path_buf(),
+        line: pos.row + 1,
+        column: pos.column + 1,
+        rule_id: "no-return-type-any".into(),
+        message: "Function has explicit `: any` return type — use a specific type or `unknown`.".into(),
+        severity: Severity::Error,
+        span: None,
+    });
 }
 
 #[cfg(test)]

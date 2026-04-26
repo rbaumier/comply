@@ -1,58 +1,44 @@
+//! prefer-modern-dom-apis — flag legacy DOM mutation methods that have
+//! modern replacements (`insertBefore` → `before`, `replaceChild` →
+//! `replaceWith`).
+//!
+//! Detection: walk `call_expression` nodes whose callee is a
+//! `member_expression` and whose property name is one of the legacy DOM
+//! method names.
+
 use crate::diagnostic::{Diagnostic, Severity};
 
-/// True if the byte could be the tail of a callee expression.
-fn is_callee_char(b: u8) -> bool {
-    b.is_ascii_alphanumeric() || b == b'_' || b == b'$' || b == b')' || b == b']'
-}
-
-const PATTERNS: &[(&str, &str, &str)] = &[
+const PATTERNS: &[(&str, &str)] = &[
     (
-        ".insertBefore(",
         "insertBefore",
         "Prefer `ref.before(newNode)` over `parent.insertBefore(newNode, ref)`.",
     ),
     (
-        ".replaceChild(",
         "replaceChild",
         "Prefer `old.replaceWith(newNode)` over `parent.replaceChild(newNode, old)`.",
     ),
 ];
 
 crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "program" {
+    if node.kind() != "call_expression" {
         return;
     }
-    let src = std::str::from_utf8(source).unwrap_or("");
-    for (idx, line) in src.lines().enumerate() {
-        let trimmed = line.trim();
-        if trimmed.starts_with("//") || trimmed.starts_with('*') {
-            continue;
-        }
-        let bytes = line.as_bytes();
-        for &(pattern, _method, message) in PATTERNS {
-            let mut start = 0;
-            while start + pattern.len() <= bytes.len() {
-                if let Some(rel) = line[start..].find(pattern) {
-                    let abs = start + rel;
-                    if abs > 0 && is_callee_char(bytes[abs - 1]) {
-                        diagnostics.push(Diagnostic {
-                            path: ctx.path.to_path_buf(),
-                            line: idx + 1,
-                            column: abs + 2,
-                            rule_id: "prefer-modern-dom-apis".into(),
-                            message: message.into(),
-                            severity: Severity::Warning,
-                            span: None,
-                        });
-                        break;
-                    }
-                    start = abs + pattern.len();
-                } else {
-                    break;
-                }
-            }
-        }
+    let Some(callee) = node.child_by_field_name("function") else { return };
+    if callee.kind() != "member_expression" {
+        return;
     }
+    let Some(prop) = callee.child_by_field_name("property") else { return };
+    let Some(name) = prop.utf8_text(source).ok() else { return };
+    let Some((_, message)) = PATTERNS.iter().find(|(p, _)| *p == name) else {
+        return;
+    };
+    diagnostics.push(Diagnostic::at_node(
+        ctx.path,
+        &node,
+        "prefer-modern-dom-apis",
+        (*message).into(),
+        Severity::Warning,
+    ));
 }
 
 #[cfg(test)]

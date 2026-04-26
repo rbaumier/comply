@@ -1,51 +1,90 @@
 //! no-unverified-certificate backend for Rust.
 //!
-//! Flags `danger_accept_invalid_certs(true)` (reqwest) and
-//! `set_verify(SslVerifyMode::NONE)` (openssl) — disabling TLS
-//! certificate verification enables MITM attacks.
+//! Walks `call_expression` nodes for:
+//! - `danger_accept_invalid_certs(true)` (reqwest)
+//! - `set_verify(SslVerifyMode::NONE)` / `set_verify(SSL_VERIFY_NONE)` (openssl)
+//! - `dangerous().set_certificate_verifier(...)` (rustls)
+//!
+//! Disabling TLS certificate verification enables MITM attacks.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-fn has_disabled_cert_verification(line: &str) -> bool {
-    let lower = line.to_ascii_lowercase();
-
-    // reqwest: `.danger_accept_invalid_certs(true)`
-    if lower.contains("danger_accept_invalid_certs") && lower.contains("true") {
-        return true;
+/// Return the method name of a call expression whose function is a
+/// `field_expression` (Rust's equivalent of `.method`). For non-method
+/// calls or generic call shapes returns `None`.
+fn method_name<'a>(call: tree_sitter::Node, source: &'a [u8]) -> Option<&'a str> {
+    let func = call.child_by_field_name("function")?;
+    if func.kind() != "field_expression" {
+        return None;
     }
+    let field = func.child_by_field_name("field")?;
+    field.utf8_text(source).ok()
+}
 
-    // openssl: `set_verify(SslVerifyMode::NONE)`
-    if lower.contains("sslverifymode::none") || lower.contains("ssl_verify_none") {
-        return true;
+/// Iterate over the named argument nodes of a `call_expression`.
+fn argument_nodes<'t>(call: tree_sitter::Node<'t>) -> Vec<tree_sitter::Node<'t>> {
+    let Some(args) = call.child_by_field_name("arguments") else { return Vec::new() };
+    let mut out = Vec::new();
+    let mut cursor = args.walk();
+    for child in args.named_children(&mut cursor) {
+        out.push(child);
     }
+    out
+}
 
-    // rustls: `dangerous().set_certificate_verifier`
-    if lower.contains("dangerous()") && lower.contains("certificate_verifier") {
-        return true;
+/// True if any argument's text matches one of the unsafe markers.
+fn arg_text_matches(call: tree_sitter::Node, source: &[u8], markers: &[&str]) -> bool {
+    for arg in argument_nodes(call) {
+        let Ok(text) = arg.utf8_text(source) else { continue };
+        let trimmed = text.trim();
+        if markers.iter().any(|m| trimmed == *m || trimmed.contains(m)) {
+            return true;
+        }
     }
-
     false
 }
 
 crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "source_file" {
+    if node.kind() != "call_expression" {
         return;
     }
 
-    let text = std::str::from_utf8(source).unwrap_or("");
-    for (idx, line) in text.lines().enumerate() {
-        if has_disabled_cert_verification(line) {
-            diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
-                line: idx + 1,
-                column: 1,
-                rule_id: "no-unverified-certificate".into(),
-                message: "Disabled SSL certificate verification — enables MITM attacks.".into(),
-                severity: Severity::Error,
-                span: None,
-            });
+    let Some(name) = method_name(node, source) else { return };
+
+    let is_violation = match name {
+        "danger_accept_invalid_certs" | "danger_accept_invalid_hostnames" => {
+            arg_text_matches(node, source, &["true"])
         }
+        "set_verify" => arg_text_matches(
+            node,
+            source,
+            &["SslVerifyMode::NONE", "SSL_VERIFY_NONE"],
+        ),
+        "set_certificate_verifier" => {
+            // rustls: only flag when chained off `.dangerous()`.
+            let func = node.child_by_field_name("function");
+            let Some(field) = func else { return };
+            let Some(receiver) = field.child_by_field_name("value") else { return };
+            let Ok(text) = receiver.utf8_text(source) else { return };
+            text.contains("dangerous()")
+        }
+        _ => false,
+    };
+
+    if !is_violation {
+        return;
     }
+
+    let pos = node.start_position();
+    diagnostics.push(Diagnostic {
+        path: ctx.path.to_path_buf(),
+        line: pos.row + 1,
+        column: pos.column + 1,
+        rule_id: "no-unverified-certificate".into(),
+        message: "Disabled SSL certificate verification — enables MITM attacks.".into(),
+        severity: Severity::Error,
+        span: None,
+    });
 }
 
 #[cfg(test)]

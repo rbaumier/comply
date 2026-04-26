@@ -1,3 +1,13 @@
+//! prefer-global-this — flag `window.X` / `self.X` / `global.X` accesses
+//! that should be `globalThis.X`.
+//!
+//! Detection: walk `member_expression` nodes whose object is the bare
+//! identifier `window`, `self`, or `global`. Skip when:
+//!   - The property is window-specific (e.g. `innerWidth`, `addEventListener`).
+//!   - The expression is the operand of a `typeof` check.
+//!   - The project's package.json declares a browser-like target
+//!     (browserslist / engines.vscode / engines.electron).
+
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::project::ProjectCtx;
 use std::path::Path;
@@ -83,97 +93,69 @@ const WINDOW_SPECIFIC: &[&str] = &[
     "onunload",
 ];
 
-fn is_ident_char(c: u8) -> bool {
-    c.is_ascii_alphanumeric() || c == b'_' || c == b'$'
-}
-
-/// Check if a `window.X` usage is window-specific (should NOT be flagged).
-fn is_window_specific_api(line: &str, dot_pos: usize) -> bool {
-    let after = &line[dot_pos + 1..];
-    let prop: String = after
-        .chars()
-        .take_while(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '$')
-        .collect();
-    WINDOW_SPECIFIC.iter().any(|&api| api == prop)
-}
-
-/// Find usages of `window.`, `self.`, or `global.` that should be `globalThis.`.
-fn find_global_this_violations(line: &str) -> Vec<String> {
-    let mut violations = Vec::new();
-    let globals = &["window", "self", "global"];
-
-    for &name in globals {
-        let pattern = format!("{name}.");
-        let bytes = line.as_bytes();
-        let mut start = 0;
-
-        while start + pattern.len() <= bytes.len() {
-            let Some(rel) = line[start..].find(&pattern) else {
-                break;
-            };
-            let abs = start + rel;
-
-            let preceded_by_ident = abs > 0 && is_ident_char(bytes[abs - 1]);
-            let dot_pos = abs + name.len();
-
-            let followed_by_prop = dot_pos + 1 < bytes.len() && is_ident_char(bytes[dot_pos + 1]);
-
-            if !preceded_by_ident && followed_by_prop {
-                if name == "window" && is_window_specific_api(line, dot_pos) {
-                    start = abs + pattern.len();
-                    continue;
-                }
-
-                let before = line[..abs].trim_end();
-                if before.ends_with("typeof") {
-                    start = abs + pattern.len();
-                    continue;
-                }
-
-                let trimmed = line.trim_start();
-                if trimmed.starts_with("//")
-                    || trimmed.starts_with('*')
-                    || trimmed.starts_with("/*")
-                {
-                    break;
-                }
-
-                violations.push(format!(
-                    "Prefer `globalThis` over `{name}`. Replace `{name}.` with `globalThis.`."
-                ));
-                break;
-            }
-            start = abs + pattern.len();
+/// True if `node` is the operand of a `typeof` unary expression.
+fn is_under_typeof(node: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut cur = node;
+    while let Some(parent) = cur.parent() {
+        if parent.kind() == "unary_expression"
+            && parent
+                .child_by_field_name("operator")
+                .and_then(|o| o.utf8_text(source).ok())
+                == Some("typeof")
+        {
+            return true;
         }
+        // Stop walking up once we're past the immediate member chain;
+        // typeof binds to its argument, which can be a member chain.
+        if !matches!(parent.kind(), "member_expression" | "subscript_expression") {
+            return false;
+        }
+        cur = parent;
     }
-
-    violations
+    false
 }
 
 crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "program" {
+    if node.kind() != "member_expression" {
         return;
     }
-    // Projects declaring a browser/WebView-like runtime (VSCode extension,
-    // Electron app, browser build target) may legitimately use `window` as
-    // the real DOM Window object. Only fire on pure-Node projects.
+    // Project allowlist — browser-like targets keep `window` as the real
+    // DOM Window object.
     if project_allows_window(ctx.project, ctx.path) {
         return;
     }
-    let src = std::str::from_utf8(source).unwrap_or("");
-    for (idx, line) in src.lines().enumerate() {
-        for msg in find_global_this_violations(line) {
-            diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
-                line: idx + 1,
-                column: 1,
-                rule_id: "prefer-global-this".into(),
-                message: msg,
-                severity: Severity::Warning,
-                span: None,
-            });
-        }
+
+    let Some(obj) = node.child_by_field_name("object") else { return };
+    if obj.kind() != "identifier" {
+        return;
     }
+    let name = obj.utf8_text(source).unwrap_or("");
+    if !matches!(name, "window" | "self" | "global") {
+        return;
+    }
+
+    // Only the innermost `window.X` in a chain like `window.a.b` matches
+    // (object = bare identifier `window`). Outer member expressions have
+    // `object` set to another member_expression, so they pass the
+    // identifier check above and are skipped naturally.
+    let Some(prop) = node.child_by_field_name("property") else { return };
+    let prop_text = prop.utf8_text(source).unwrap_or("");
+
+    if name == "window" && WINDOW_SPECIFIC.contains(&prop_text) {
+        return;
+    }
+
+    if is_under_typeof(node, source) {
+        return;
+    }
+
+    diagnostics.push(Diagnostic::at_node(
+        ctx.path,
+        &node,
+        "prefer-global-this",
+        format!("Prefer `globalThis` over `{name}`. Replace `{name}.` with `globalThis.`."),
+        Severity::Warning,
+    ));
 }
 
 #[cfg(test)]

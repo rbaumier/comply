@@ -1,66 +1,122 @@
+//! prefer-includes — flag `arr.indexOf(x)`/`str.lastIndexOf(x)` existence
+//! checks that should be `.includes(x)`.
+//!
+//! Detection: walk `binary_expression` nodes whose operator is one of the
+//! existence-check shapes (`!== -1`, `!= -1`, `> -1`, `>= 0`, `=== -1`,
+//! `== -1`, `< 0`) and whose other operand is a `call_expression` on
+//! `.indexOf(...)` or `.lastIndexOf(...)`.
+
 use crate::diagnostic::{Diagnostic, Severity};
 
-/// Walk past a balanced parenthesised group starting at `bytes[start]` == `(`.
-fn skip_parens(bytes: &[u8], start: usize) -> Option<usize> {
-    let mut depth = 1u32;
-    let mut i = start + 1;
-    while i < bytes.len() && depth > 0 {
-        match bytes[i] {
-            b'(' => depth += 1,
-            b')' => depth -= 1,
-            _ => {}
-        }
-        i += 1;
+/// Strip TS assertion / parenthesised wrappers off an operand so the
+/// underlying call_expression is visible.
+fn unwrap_expr(mut node: tree_sitter::Node) -> tree_sitter::Node {
+    while matches!(
+        node.kind(),
+        "non_null_expression"
+            | "parenthesized_expression"
+            | "as_expression"
+            | "satisfies_expression"
+            | "type_assertion"
+    ) {
+        let Some(child) = node.named_child(0) else { break };
+        node = child;
     }
-    if depth == 0 { Some(i) } else { None }
+    node
 }
 
-/// Detect `.indexOf(…) !== -1`, `.indexOf(…) != -1`, `.indexOf(…) > -1`,
-/// `.indexOf(…) >= 0`, `.indexOf(…) === -1`, `.indexOf(…) == -1`,
-/// `.indexOf(…) < 0`.
-fn has_indexof_existence_check(line: &str) -> bool {
-    for method in &[".indexOf(", ".lastIndexOf("] {
-        let mut start = 0;
-        while let Some(pos) = line[start..].find(method) {
-            let open_paren = start + pos + method.len() - 1;
-            let bytes = line.as_bytes();
-            if let Some(after_paren) = skip_parens(bytes, open_paren) {
-                let rest = line[after_paren..].trim_start();
-                if rest.starts_with("!== -1")
-                    || rest.starts_with("!= -1")
-                    || rest.starts_with("> -1")
-                    || rest.starts_with(">= 0")
-                    || rest.starts_with("=== -1")
-                    || rest.starts_with("== -1")
-                    || rest.starts_with("< 0")
-                {
-                    return true;
-                }
-            }
-            start = open_paren + 1;
+/// True if `node` is a call expression on `.indexOf(...)` or `.lastIndexOf(...)`.
+fn is_indexof_call(node: tree_sitter::Node, source: &[u8]) -> bool {
+    if node.kind() != "call_expression" {
+        return false;
+    }
+    let Some(callee) = node.child_by_field_name("function") else { return false };
+    if callee.kind() != "member_expression" {
+        return false;
+    }
+    let Some(prop) = callee.child_by_field_name("property") else { return false };
+    matches!(prop.utf8_text(source).unwrap_or(""), "indexOf" | "lastIndexOf")
+}
+
+/// Return Some(true) if (operand_kind, op, literal_text) is one of the
+/// existence-check shapes. `lhs_call` indicates whether the indexOf call
+/// was on the left (true) or right (false) of the binary expression.
+fn is_existence_check(op: &str, lit: &str, lhs_call: bool) -> bool {
+    // Normalize so the call is conceptually on the left:
+    //   indexOf(x) !== -1   → op="!==", lit="-1"
+    //   -1 !== indexOf(x)   → op="!==", lit="-1" (lhs_call=false)
+    // Operators are symmetric for ==/!=/===/!==, but ordering matters for </>/<=/>=.
+    matches!(
+        (op, lit, lhs_call),
+        ("!==", "-1", _)
+            | ("!=", "-1", _)
+            | ("===", "-1", _)
+            | ("==", "-1", _)
+            | (">", "-1", true)
+            | ("<", "-1", false)
+            | (">=", "0", true)
+            | ("<=", "0", false)
+            | ("<", "0", true)
+            | (">", "0", false)
+    )
+}
+
+/// If `node` is a numeric literal `0` or `-1` (with optional leading `-`),
+/// return its canonical text. Handles both `unary_expression(-, 1)` and
+/// the bare `number` token "-1" some grammars produce.
+fn literal_text(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
+    let n = unwrap_expr(node);
+    if n.kind() == "number" {
+        let t = n.utf8_text(source).ok()?;
+        if t == "0" || t == "-1" {
+            return Some(t.to_string());
         }
     }
-    false
+    if n.kind() == "unary_expression" {
+        let op = n.child_by_field_name("operator")?.utf8_text(source).ok()?;
+        let arg = n.child_by_field_name("argument")?;
+        if op == "-" && arg.kind() == "number" && arg.utf8_text(source).ok()? == "1" {
+            return Some("-1".to_string());
+        }
+    }
+    None
 }
 
 crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "program" {
+    if node.kind() != "binary_expression" {
         return;
     }
-    let src = std::str::from_utf8(source).unwrap_or("");
-    for (idx, line) in src.lines().enumerate() {
-        if has_indexof_existence_check(line) {
-            diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
-                line: idx + 1,
-                column: 1,
-                rule_id: "prefer-includes".into(),
-                message: "Prefer `.includes(x)` over `.indexOf(x) !== -1` — more readable.".into(),
-                severity: Severity::Warning,
-                span: None,
-            });
-        }
+    let Some(op_node) = node.child_by_field_name("operator") else { return };
+    let Some(op) = op_node.utf8_text(source).ok() else { return };
+    let Some(left) = node.child_by_field_name("left") else { return };
+    let Some(right) = node.child_by_field_name("right") else { return };
+
+    let l = unwrap_expr(left);
+    let r = unwrap_expr(right);
+
+    // Try call on left, literal on right.
+    let (call_node, lit_text, lhs_call) =
+        if is_indexof_call(l, source) {
+            let Some(lit) = literal_text(r, source) else { return };
+            (l, lit, true)
+        } else if is_indexof_call(r, source) {
+            let Some(lit) = literal_text(l, source) else { return };
+            (r, lit, false)
+        } else {
+            return;
+        };
+
+    if !is_existence_check(op, &lit_text, lhs_call) {
+        return;
     }
+
+    diagnostics.push(Diagnostic::at_node(
+        ctx.path,
+        &call_node,
+        "prefer-includes",
+        "Prefer `.includes(x)` over `.indexOf(x) !== -1` — more readable.".into(),
+        Severity::Warning,
+    ));
 }
 
 #[cfg(test)]

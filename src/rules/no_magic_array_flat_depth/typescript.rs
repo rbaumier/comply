@@ -1,74 +1,58 @@
-//! no-magic-array-flat-depth AST backend — flag `.flat(N)` where N is a
-//! magic number (not 1).
+//! no-magic-array-flat-depth AST backend — flag `arr.flat(N)` where `N`
+//! is a numeric literal other than `1`. `Infinity` is allowed (it has
+//! semantic meaning) and so are non-literal arguments (a named constant
+//! or expression).
+//!
+//! Walks `call_expression` nodes whose callee is `<x>.flat` and whose
+//! single argument is a `number` literal.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-/// Detect `.flat(N)` where N is a numeric literal that is NOT 1.
-fn has_magic_flat_depth(line: &str) -> bool {
-    let trimmed = line.trim();
-    if trimmed.is_empty() || trimmed.starts_with("//") || trimmed.starts_with('*') {
+/// True if `callee` is a member expression `<x>.flat`.
+fn is_flat_call(callee: tree_sitter::Node, source: &[u8]) -> bool {
+    if callee.kind() != "member_expression" {
         return false;
     }
+    let Some(prop) = callee.child_by_field_name("property") else {
+        return false;
+    };
+    prop.utf8_text(source).unwrap_or("") == "flat"
+}
 
-    let mut search_from = 0;
-    while let Some(pos) = trimmed[search_from..].find(".flat(") {
-        let abs_pos = search_from + pos;
-        let after_flat = abs_pos + ".flat(".len();
-
-        let rest = &trimmed[after_flat..];
-        let close = match rest.find(')') {
-            Some(p) => p,
-            None => {
-                search_from = after_flat;
-                continue;
-            }
-        };
-
-        let arg = rest[..close].trim();
-
-        if arg.is_empty() {
-            search_from = after_flat + close;
-            continue;
-        }
-
-        if arg == "Infinity" || arg == "Number.POSITIVE_INFINITY" {
-            search_from = after_flat + close;
-            continue;
-        }
-
-        if let Ok(val) = arg.parse::<f64>() {
-            if (val - 1.0).abs() < f64::EPSILON {
-                search_from = after_flat + close;
-                continue;
-            }
-            return true;
-        }
-
-        search_from = after_flat + close;
+/// True if the argument node is a numeric literal that is NOT `1`.
+fn is_magic_depth(arg: tree_sitter::Node, source: &[u8]) -> bool {
+    if arg.kind() != "number" {
+        return false;
     }
-
-    false
+    let text = arg.utf8_text(source).unwrap_or("").trim();
+    if let Ok(val) = text.parse::<f64>() {
+        (val - 1.0).abs() >= f64::EPSILON
+    } else {
+        false
+    }
 }
 
 crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "program" {
+    if node.kind() != "call_expression" {
         return;
     }
-
-    let text = std::str::from_utf8(source).unwrap_or("");
-    for (idx, line) in text.lines().enumerate() {
-        if has_magic_flat_depth(line) {
-            diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
-                line: idx + 1,
-                column: 1,
-                rule_id: "no-magic-array-flat-depth".into(),
-                message: "Magic number as `.flat()` depth is not allowed. Use a named constant or `Infinity`.".into(),
-                severity: Severity::Warning,
-                span: None,
-            });
-        }
+    let Some(callee) = node.child_by_field_name("function") else { return };
+    if !is_flat_call(callee, source) {
+        return;
     }
+    let Some(args) = node.child_by_field_name("arguments") else { return };
+    let mut cursor = args.walk();
+    let Some(first) = args.named_children(&mut cursor).next() else { return };
+    if !is_magic_depth(first, source) {
+        return;
+    }
+    diagnostics.push(Diagnostic::at_node(
+        ctx.path,
+        &node,
+        "no-magic-array-flat-depth",
+        "Magic number as `.flat()` depth is not allowed. Use a named constant or `Infinity`.".into(),
+        Severity::Warning,
+    ));
 }
 
 #[cfg(test)]

@@ -1,19 +1,16 @@
 //! no-logger-in-business-logic AST backend — flag logging calls in
 //! service/domain/core/model/entity layers.
+//!
+//! Walks `call_expression` nodes whose callee is a `member_expression`
+//! whose object is `console` (with property `log`/`info`/`warn`/`error`/
+//! `debug`/`trace`) or whose root object is `logger`. Files outside a
+//! business-logic directory are ignored.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
 const BUSINESS_DIRS: &[&str] = &["service", "domain", "core", "model", "entity"];
 
-const LOG_PATTERNS: &[&str] = &[
-    "logger.",
-    "console.log",
-    "console.info",
-    "console.warn",
-    "console.error",
-    "console.debug",
-    "console.trace",
-];
+const CONSOLE_METHODS: &[&str] = &["log", "info", "warn", "error", "debug", "trace"];
 
 fn is_business_logic_path(path: &std::path::Path) -> bool {
     let path_str = path.to_string_lossy();
@@ -22,8 +19,24 @@ fn is_business_logic_path(path: &std::path::Path) -> bool {
     })
 }
 
+/// Return the leftmost identifier in a (possibly chained) member expression.
+/// `console.log` -> `console`; `logger.scoped.info` -> `logger`.
+fn root_identifier<'a>(mut node: tree_sitter::Node, source: &'a [u8]) -> Option<&'a str> {
+    loop {
+        match node.kind() {
+            "identifier" | "this" => {
+                return node.utf8_text(source).ok();
+            }
+            "member_expression" => {
+                node = node.child_by_field_name("object")?;
+            }
+            _ => return None,
+        }
+    }
+}
+
 crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "program" {
+    if node.kind() != "call_expression" {
         return;
     }
 
@@ -31,30 +44,35 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         return;
     }
 
-    let text = std::str::from_utf8(source).unwrap_or("");
-    for (idx, line) in text.lines().enumerate() {
-        let trimmed = line.trim();
-        // Skip comments.
-        if trimmed.starts_with("//") || trimmed.starts_with('*') || trimmed.starts_with("/*") {
-            continue;
-        }
-        for pattern in LOG_PATTERNS {
-            if trimmed.contains(pattern) {
-                diagnostics.push(Diagnostic {
-                    path: ctx.path.to_path_buf(),
-                    line: idx + 1,
-                    column: 1,
-                    rule_id: "no-logger-in-business-logic".into(),
-                    message: format!(
-                        "`{pattern}` in business logic — use a `withLogging()` wrapper or domain events instead."
-                    ),
-                    severity: Severity::Warning,
-                    span: None,
-                });
-                break;
-            }
-        }
+    let Some(callee) = node.child_by_field_name("function") else { return };
+    if callee.kind() != "member_expression" {
+        return;
     }
+
+    let Some(object) = callee.child_by_field_name("object") else { return };
+    let Some(prop) = callee.child_by_field_name("property") else { return };
+    let Ok(prop_text) = prop.utf8_text(source) else { return };
+
+    let Some(root) = root_identifier(object, source) else { return };
+
+    let pattern = match root {
+        "console" if CONSOLE_METHODS.contains(&prop_text) => format!("console.{prop_text}"),
+        "logger" => "logger.".to_string(),
+        _ => return,
+    };
+
+    let pos = node.start_position();
+    diagnostics.push(Diagnostic {
+        path: ctx.path.to_path_buf(),
+        line: pos.row + 1,
+        column: pos.column + 1,
+        rule_id: "no-logger-in-business-logic".into(),
+        message: format!(
+            "`{pattern}` in business logic — use a `withLogging()` wrapper or domain events instead."
+        ),
+        severity: Severity::Warning,
+        span: None,
+    });
 }
 
 #[cfg(test)]

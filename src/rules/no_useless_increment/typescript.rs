@@ -1,51 +1,41 @@
-//! no-useless-increment AST backend — `return x++` returns value before mutation.
+//! no-useless-increment AST backend — `return x++` returns the value
+//! before the mutation, which is almost always a bug.
+//!
+//! Walks `return_statement` nodes whose returned expression is a postfix
+//! `update_expression` (`x++` or `x--`). Prefix updates (`++x`) are fine
+//! because they evaluate to the new value.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-/// Matches `return <identifier>++;` or `return <identifier>--;`.
-fn has_useless_post_increment(line: &str) -> bool {
-    let trimmed = line.trim();
-    let rest = match trimmed.strip_prefix("return ") {
-        Some(r) => r,
-        None => return false,
-    };
-    let rest = rest.trim_start();
-    if let Some(pos) = rest.find("++") {
-        let ident = rest[..pos].trim();
-        let after = rest[pos + 2..].trim().trim_end_matches(';').trim();
-        if !ident.is_empty() && ident.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$' || c == '.') && after.is_empty() {
-            return true;
-        }
-    }
-    if let Some(pos) = rest.find("--") {
-        let ident = rest[..pos].trim();
-        let after = rest[pos + 2..].trim().trim_end_matches(';').trim();
-        if !ident.is_empty() && ident.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$' || c == '.') && after.is_empty() {
-            return true;
-        }
-    }
-    false
+/// True for `x++` / `x--` (postfix), false for `++x` / `--x` (prefix).
+fn is_postfix_update(update: tree_sitter::Node) -> bool {
+    let Some(arg) = update.child_by_field_name("argument") else { return false };
+    let Some(op) = update.child_by_field_name("operator") else { return false };
+    arg.start_byte() < op.start_byte()
 }
 
 crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "program" {
+    let _ = source;
+    if node.kind() != "return_statement" {
         return;
     }
 
-    let text = std::str::from_utf8(source).unwrap_or("");
-    for (idx, line) in text.lines().enumerate() {
-        if has_useless_post_increment(line) {
-            diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
-                line: idx + 1,
-                column: 1,
-                rule_id: "no-useless-increment".into(),
-                message: "`return x++` / `return x--` returns the value before the mutation — use prefix or separate statements.".into(),
-                severity: Severity::Error,
-                span: None,
-            });
-        }
+    // The returned expression is the first named child, if any.
+    let Some(value) = node.named_child(0) else { return };
+    if value.kind() != "update_expression" {
+        return;
     }
+    if !is_postfix_update(value) {
+        return;
+    }
+
+    diagnostics.push(Diagnostic::at_node(
+        ctx.path,
+        &node,
+        "no-useless-increment",
+        "`return x++` / `return x--` returns the value before the mutation — use prefix or separate statements.".into(),
+        Severity::Error,
+    ));
 }
 
 #[cfg(test)]

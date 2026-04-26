@@ -1,63 +1,121 @@
-//! no-useless-react-setstate AST backend — `setX(x)` is a no-op.
+//! no-useless-react-setstate AST backend — flag `setX(x)` where the
+//! single argument is the corresponding state variable from the same
+//! `useState` destructuring (a literal no-op).
+//!
+//! Two passes over the AST:
+//! 1. Walk `variable_declarator` nodes whose initializer is a
+//!    `useState(...)` call_expression and whose name is an
+//!    `array_pattern` of two identifiers — collect (state, setter) pairs.
+//! 2. Walk `call_expression` nodes whose callee identifier matches one
+//!    of the collected setters and whose single argument is the matching
+//!    state identifier.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-/// Collect (state_name, setter_name) pairs from `useState` declarations.
-fn collect_state_pairs(source: &str) -> Vec<(String, String)> {
+fn node_text<'a>(node: tree_sitter::Node<'_>, source: &'a [u8]) -> &'a str {
+    std::str::from_utf8(&source[node.byte_range()]).unwrap_or("")
+}
+
+/// If `decl` is `const [state, setState] = useState(...)`, return
+/// `(state, setter)`.
+fn extract_state_pair<'a>(
+    decl: tree_sitter::Node<'_>,
+    source: &'a [u8],
+) -> Option<(&'a str, &'a str)> {
+    if decl.kind() != "variable_declarator" {
+        return None;
+    }
+    let value = decl.child_by_field_name("value")?;
+    if value.kind() != "call_expression" {
+        return None;
+    }
+    let func = value.child_by_field_name("function")?;
+    if node_text(func, source) != "useState" {
+        return None;
+    }
+    let name = decl.child_by_field_name("name")?;
+    if name.kind() != "array_pattern" {
+        return None;
+    }
+    let mut cursor = name.walk();
+    let idents: Vec<tree_sitter::Node> = name
+        .named_children(&mut cursor)
+        .filter(|c| {
+            c.kind() == "identifier" || c.kind() == "shorthand_property_identifier_pattern"
+        })
+        .collect();
+    if idents.len() != 2 {
+        return None;
+    }
+    let state = node_text(idents[0], source);
+    let setter = node_text(idents[1], source);
+    if state.is_empty() || !setter.starts_with("set") {
+        return None;
+    }
+    Some((state, setter))
+}
+
+/// Collect every `(state, setter)` pair under `root`.
+fn collect_pairs<'a>(root: tree_sitter::Node<'_>, source: &'a [u8]) -> Vec<(&'a str, &'a str)> {
     let mut pairs = Vec::new();
-    for line in source.lines() {
-        let trimmed = line.trim();
-        if !trimmed.contains("useState") {
-            continue;
+    let mut stack = vec![root];
+    while let Some(n) = stack.pop() {
+        if let Some(pair) = extract_state_pair(n, source) {
+            pairs.push(pair);
         }
-        if let Some(bracket_start) = trimmed.find('[')
-            && let Some(bracket_end) = trimmed.find(']') {
-                let inside = &trimmed[bracket_start + 1..bracket_end];
-                let parts: Vec<&str> = inside.split(',').collect();
-                if parts.len() == 2 {
-                    let state = parts[0].trim().to_string();
-                    let setter = parts[1].trim().to_string();
-                    if !state.is_empty() && setter.starts_with("set") {
-                        pairs.push((state, setter));
-                    }
-                }
-            }
+        let mut cursor = n.walk();
+        for child in n.children(&mut cursor) {
+            stack.push(child);
+        }
     }
     pairs
 }
 
 crate::ast_check! { |node, source, ctx, diagnostics|
+    // Fire once at the program root, then walk internally.
     if node.kind() != "program" {
         return;
     }
-
-    let text = std::str::from_utf8(source).unwrap_or("");
-    let pairs = collect_state_pairs(text);
+    let pairs = collect_pairs(node, source);
     if pairs.is_empty() {
         return;
     }
 
-    for (idx, line) in text.lines().enumerate() {
-        let trimmed = line.trim();
-        if trimmed.contains("useState") {
+    // Walk all call_expression nodes and check `setter(state)` shape.
+    let mut stack = vec![node];
+    while let Some(n) = stack.pop() {
+        let mut cursor = n.walk();
+        for child in n.children(&mut cursor) {
+            stack.push(child);
+        }
+        if n.kind() != "call_expression" {
             continue;
         }
-        for (state, setter) in &pairs {
-            let call = format!("{setter}({state})");
-            if trimmed.contains(&call) {
-                diagnostics.push(Diagnostic {
-                    path: ctx.path.to_path_buf(),
-                    line: idx + 1,
-                    column: 1,
-                    rule_id: "no-useless-react-setstate".into(),
-                    message: format!(
-                        "`{setter}({state})` is a no-op — setting state to its current value."
-                    ),
-                    severity: Severity::Warning,
-                    span: None,
-                });
-            }
+        let Some(func) = n.child_by_field_name("function") else { continue };
+        if func.kind() != "identifier" {
+            continue;
         }
+        let callee = node_text(func, source);
+        let Some((state, setter)) = pairs.iter().find(|(_, s)| *s == callee).copied() else {
+            continue;
+        };
+        let Some(args) = n.child_by_field_name("arguments") else { continue };
+        let mut arg_cursor = args.walk();
+        let named: Vec<tree_sitter::Node> = args.named_children(&mut arg_cursor).collect();
+        if named.len() != 1 {
+            continue;
+        }
+        let arg = named[0];
+        if arg.kind() != "identifier" || node_text(arg, source) != state {
+            continue;
+        }
+        diagnostics.push(Diagnostic::at_node(
+            ctx.path,
+            &n,
+            super::META.id,
+            format!("`{setter}({state})` is a no-op — setting state to its current value."),
+            Severity::Warning,
+        ));
     }
 }
 
