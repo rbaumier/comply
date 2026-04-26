@@ -11,3 +11,4 @@
 .comply/
 tools/node_modules
 .DS_Store
+.claude/worktrees/
