@@ -28,6 +28,40 @@ use crate::rules::file_ctx::FileCtx;
 use crate::rules::walker::walk_tree;
 use crate::rules::{self, backend::Backend, backend::CheckCtx, meta::RuleMeta, RuleDef};
 
+/// Pre-computed per-language dispatch table. Built once in `lint_files`,
+/// shared read-only across all rayon workers.
+struct LangDispatch<'a> {
+    applicable: Vec<(&'a RuleMeta, &'a Backend)>,
+    multiplexed: Vec<(&'a RuleMeta, &'a dyn AstCheck)>,
+    legacy: Vec<(&'a RuleMeta, &'a dyn AstCheck)>,
+    dispatch: HashMap<&'static str, Vec<usize>>,
+}
+
+impl<'a> LangDispatch<'a> {
+    fn build(rule_defs: &'a [RuleDef], language: Language) -> Self {
+        let applicable = collect_applicable(rule_defs, language);
+        let mut multiplexed: Vec<(&'a RuleMeta, &'a dyn AstCheck)> = Vec::new();
+        let mut legacy: Vec<(&'a RuleMeta, &'a dyn AstCheck)> = Vec::new();
+        for &(meta, ref backend) in &applicable {
+            if let Backend::TreeSitter(check) = backend {
+                let check: &dyn AstCheck = &**check;
+                if check.interested_kinds().is_some() {
+                    multiplexed.push((meta, check));
+                } else {
+                    legacy.push((meta, check));
+                }
+            }
+        }
+        let mut dispatch: HashMap<&str, Vec<usize>> = HashMap::new();
+        for (i, (_, check)) in multiplexed.iter().enumerate() {
+            for kind in check.interested_kinds().unwrap() {
+                dispatch.entry(kind).or_default().push(i);
+            }
+        }
+        Self { applicable, multiplexed, legacy, dispatch }
+    }
+}
+
 /// Apply every registered rule to the given files.
 ///
 /// `config` is the resolved per-project configuration. We use it to:
@@ -39,26 +73,22 @@ use crate::rules::{self, backend::Backend, backend::CheckCtx, meta::RuleMeta, Ru
 pub fn lint_files(files: &[&SourceFile], config: &Config) -> Result<Vec<Diagnostic>> {
     let rule_defs = rules::all_rule_defs();
 
-    // Project context loads once at the top of the run. `Arc` so every
-    // rayon worker gets a cheap clone of the reference — the inner state
-    // (manifest caches, lazy OnceLocks) is shared and synchronised via
-    // Mutex / OnceLock internally.
     let project = Arc::new(ProjectCtx::load(files, config));
 
-    // Parallel per-file fan-out. `map_init` gives each rayon worker its
-    // own `Parser` — tree_sitter::Parser is !Sync, so we can't share one
-    // across threads, but rayon's worker-local init solves this by
-    // allocating a Parser per worker thread and reusing it across the
-    // files that worker processes. The rule registry (`rule_defs`) and
-    // config are read-only and Send+Sync via the trait bounds in
-    // `src/rules/backend.rs`.
-    //
-    // A file that fails to read is logged to stderr and contributes zero
-    // diagnostics — same skip-and-warn behavior as the sequential path.
+    // Pre-compute dispatch tables once per language instead of per-file.
+    let languages: Vec<Language> = files.iter().map(|f| f.language).collect::<std::collections::HashSet<_>>().into_iter().collect();
+    let lang_dispatches: HashMap<Language, LangDispatch> = languages
+        .into_iter()
+        .map(|lang| (lang, LangDispatch::build(&rule_defs, lang)))
+        .collect();
+
     let mut diagnostics: Vec<Diagnostic> = files
         .par_iter()
         .map_init(Parser::new, |parser, file| {
-            match lint_one_file(file, &rule_defs, parser, config, &project) {
+            let Some(ld) = lang_dispatches.get(&file.language) else {
+                return Vec::new();
+            };
+            match lint_one_file_with_dispatch(file, ld, parser, config, &project) {
                 Ok(file_diags) => file_diags,
                 Err(e) => {
                     eprintln!("comply: skipping {}: {e:#}", file.path.display());
@@ -69,11 +99,6 @@ pub fn lint_files(files: &[&SourceFile], config: &Config) -> Result<Vec<Diagnost
         .flatten()
         .collect();
 
-    // A rule's own source files (doc comments, tests, and fixture strings)
-    // legitimately mention the pattern the rule is designed to flag.
-    // Drop any diagnostic where rule R fires on a file under
-    // `src/rules/<R>/**` — the path mapping rule-id → directory is
-    // deterministic (replace dashes with underscores).
     diagnostics.retain(|d| !is_self_reference(d));
     Ok(diagnostics)
 }
@@ -136,42 +161,30 @@ fn collect_applicable(
         .collect()
 }
 
-/// Dispatch each backend variant to produce diagnostics.
-///
-/// Per-rule and per-glob filtering happens here, before the rule even
-/// runs: a disabled rule's `Check::check` is never called, so the user
-/// pays nothing for rules they've turned off. Severity overrides are
-/// applied after the diagnostic is produced.
-fn dispatch_backends(
+/// Dispatch using a pre-computed `LangDispatch`. Only per-file work
+/// (path-based rule filtering, parsing, state creation) happens here.
+fn dispatch_with_lang(
     file: &SourceFile,
     source: &str,
-    applicable: &[(&RuleMeta, &Backend)],
+    ld: &LangDispatch,
     parser: &mut Parser,
     config: &Config,
     project: &ProjectCtx,
 ) -> Vec<Diagnostic> {
-    // Cull disabled rules up front so we can decide whether parsing the
-    // AST is even worth the cost.
-    let active: Vec<&(&RuleMeta, &Backend)> = applicable
-        .iter()
-        .filter(|(meta, _)| config.is_rule_enabled(meta.id, &file.path))
-        .collect();
-    if active.is_empty() {
-        return Vec::new();
-    }
+    let path = &file.path;
 
-    let needs_ast = active
-        .iter()
-        .any(|(_, b)| matches!(b, Backend::TreeSitter(_)));
+    let needs_ast = ld.applicable.iter().any(|(meta, b)| {
+        matches!(b, Backend::TreeSitter(_)) && config.is_rule_enabled(meta.id, path)
+    });
     let tree = if needs_ast {
         crate::parsing::parse_with_grammar(parser, file.language, source.as_bytes())
     } else {
         None
     };
 
-    let file_ctx = FileCtx::build(&file.path, source, file.language, project);
+    let file_ctx = FileCtx::build(path, source, file.language, project);
     let ctx = CheckCtx {
-        path: &file.path,
+        path,
         source,
         config,
         project,
@@ -179,7 +192,10 @@ fn dispatch_backends(
     };
     let mut diagnostics = Vec::new();
 
-    for (meta, backend) in &active {
+    for &(meta, ref backend) in &ld.applicable {
+        if !config.is_rule_enabled(meta.id, path) {
+            continue;
+        }
         let mut produced = match backend {
             Backend::Text(check) => check.check(&ctx),
             Backend::Oxlint { .. }
@@ -197,39 +213,30 @@ fn dispatch_backends(
     }
 
     if let Some(ref t) = tree {
-        let mut multiplexed: Vec<(&RuleMeta, &dyn AstCheck)> = Vec::new();
-        let mut legacy: Vec<(&RuleMeta, &dyn AstCheck)> = Vec::new();
-        for elem in &active {
-            let (meta, backend) = **elem;
-            if let Backend::TreeSitter(check) = backend {
-                let check: &dyn AstCheck = &**check;
-                if check.interested_kinds().is_some() {
-                    multiplexed.push((meta, check));
-                } else {
-                    legacy.push((meta, check));
-                }
-            }
-        }
-
-        if !multiplexed.is_empty() {
-            let mut dispatch: HashMap<&str, Vec<usize>> = HashMap::new();
-            for (i, (_, check)) in multiplexed.iter().enumerate() {
-                for kind in check.interested_kinds().unwrap() {
-                    dispatch.entry(kind).or_default().push(i);
-                }
-            }
-
-            let mut states: Vec<Option<Box<dyn std::any::Any>>> = multiplexed
+        // Multiplexed walk — dispatch table is shared, only states are per-file.
+        if !ld.multiplexed.is_empty() {
+            let enabled: Vec<bool> = ld
+                .multiplexed
                 .iter()
-                .map(|(_, check)| check.create_state())
+                .map(|(meta, _)| config.is_rule_enabled(meta.id, path))
+                .collect();
+
+            let mut states: Vec<Option<Box<dyn std::any::Any>>> = ld
+                .multiplexed
+                .iter()
+                .enumerate()
+                .map(|(i, (_, check))| if enabled[i] { check.create_state() } else { None })
                 .collect();
             let mut per_rule_diags: Vec<Vec<Diagnostic>> =
-                (0..multiplexed.len()).map(|_| Vec::new()).collect();
+                (0..ld.multiplexed.len()).map(|_| Vec::new()).collect();
 
             walk_tree(t, |node| {
-                if let Some(indices) = dispatch.get(node.kind()) {
+                if let Some(indices) = ld.dispatch.get(node.kind()) {
                     for &i in indices {
-                        let (_, check) = &multiplexed[i];
+                        if !enabled[i] {
+                            continue;
+                        }
+                        let (_, check) = &ld.multiplexed[i];
                         check.visit_node(
                             node,
                             &ctx,
@@ -240,7 +247,10 @@ fn dispatch_backends(
                 }
             });
 
-            for (i, (meta, check)) in multiplexed.iter().enumerate() {
+            for (i, (meta, check)) in ld.multiplexed.iter().enumerate() {
+                if !enabled[i] {
+                    continue;
+                }
                 check.finish(&ctx, states[i].take(), &mut per_rule_diags[i]);
                 if let Some(sev) = config.severity_for(meta.id) {
                     for d in &mut per_rule_diags[i] {
@@ -251,7 +261,10 @@ fn dispatch_backends(
             }
         }
 
-        for (meta, check) in &legacy {
+        for (meta, check) in &ld.legacy {
+            if !config.is_rule_enabled(meta.id, path) {
+                continue;
+            }
             let mut produced = check.check(&ctx, t);
             if let Some(sev) = config.severity_for(meta.id) {
                 for d in &mut produced {
@@ -265,23 +278,35 @@ fn dispatch_backends(
     diagnostics
 }
 
-/// Apply every applicable rule to one file. Parses the AST once if any of
-/// the file's applicable backends is a TreeSitter backend.
-fn lint_one_file(
+/// Dispatch each backend variant to produce diagnostics.
+/// Used by the LSP path (`lint_in_memory`) which doesn't pre-build
+/// a `LangDispatch`.
+fn dispatch_backends(
     file: &SourceFile,
-    rule_defs: &[RuleDef],
+    source: &str,
+    _applicable: &[(&RuleMeta, &Backend)],
+    parser: &mut Parser,
+    config: &Config,
+    project: &ProjectCtx,
+) -> Vec<Diagnostic> {
+    let rule_defs = rules::all_rule_defs();
+    let ld = LangDispatch::build(&rule_defs, file.language);
+    dispatch_with_lang(file, source, &ld, parser, config, project)
+}
+
+fn lint_one_file_with_dispatch(
+    file: &SourceFile,
+    ld: &LangDispatch,
     parser: &mut Parser,
     config: &Config,
     project: &ProjectCtx,
 ) -> Result<Vec<Diagnostic>> {
     let source = fs::read_to_string(&file.path)
         .with_context(|| format!("failed to read {}", file.path.display()))?;
-
-    let applicable = collect_applicable(rule_defs, file.language);
-    if applicable.is_empty() {
+    if ld.applicable.is_empty() {
         return Ok(vec![]);
     }
-    Ok(dispatch_backends(file, &source, &applicable, parser, config, project))
+    Ok(dispatch_with_lang(file, &source, ld, parser, config, project))
 }
 
 /// True if the diagnostic's rule fires on its OWN source directory,

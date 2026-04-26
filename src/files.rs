@@ -37,7 +37,7 @@ pub struct SourceFile {
 /// can pick the correct tree-sitter grammar — TSX requires `LANGUAGE_TSX`,
 /// otherwise JSX syntax produces ERROR nodes and bogus diagnostics.
 #[non_exhaustive]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Language {
     /// Plain `.ts` / `.mts`.
     TypeScript,
