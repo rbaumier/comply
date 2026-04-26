@@ -51,7 +51,7 @@ crate::ast_check! { on ["component"] => |node, source, ctx, diagnostics|
         };
         if let Some(method) = flagged_call(expr) {
             diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
+                path: std::sync::Arc::clone(&ctx.path_arc),
                 line: idx + 1,
                 column: 1,
                 rule_id: super::META.id.into(),

@@ -221,7 +221,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
     if let Some((metric, value, threshold)) = offender {
         let pos = node.start_position();
         diagnostics.push(Diagnostic {
-            path: ctx.path.to_path_buf(),
+            path: std::sync::Arc::clone(&ctx.path_arc),
             line: pos.row + 1,
             column: pos.column + 1,
             rule_id: "halstead-complexity".into(),

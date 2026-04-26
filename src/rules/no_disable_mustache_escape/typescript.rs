@@ -35,7 +35,7 @@ match node.kind() {
                 if prop == name && val == bad_val {
                     let pos = node.start_position();
                     diagnostics.push(Diagnostic {
-                        path: ctx.path.to_path_buf(),
+                        path: std::sync::Arc::clone(&ctx.path_arc),
                         line: pos.row + 1,
                         column: pos.column + 1,
                         rule_id: "no-disable-mustache-escape".into(),
@@ -61,7 +61,7 @@ match node.kind() {
                 if key_text == name && val_text == bad_val {
                     let pos = node.start_position();
                     diagnostics.push(Diagnostic {
-                        path: ctx.path.to_path_buf(),
+                        path: std::sync::Arc::clone(&ctx.path_arc),
                         line: pos.row + 1,
                         column: pos.column + 1,
                         rule_id: "no-disable-mustache-escape".into(),

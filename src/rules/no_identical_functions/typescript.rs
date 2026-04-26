@@ -246,7 +246,7 @@ crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
             for j in 0..i {
                 if local_functions[i].2 == local_functions[j].2 {
                     diagnostics.push(Diagnostic {
-                        path: ctx.path.to_path_buf(),
+                        path: std::sync::Arc::clone(&ctx.path_arc),
                         line: local_functions[i].1,
                         column: 1,
                         rule_id: "no-identical-functions".into(),
@@ -281,7 +281,7 @@ crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
         if !fired.insert((h, *line)) { continue }
         let message = format_group_message(group, ctx.path, *line);
         diagnostics.push(Diagnostic {
-            path: ctx.path.to_path_buf(),
+            path: std::sync::Arc::clone(&ctx.path_arc),
             line: *line,
             column: 1,
             rule_id: "no-identical-functions".into(),

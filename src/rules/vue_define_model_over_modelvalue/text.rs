@@ -38,7 +38,7 @@ crate::ast_check! { on ["component"] => |node, source, ctx, diagnostics|
         && has_update_emit
     {
         diagnostics.push(Diagnostic {
-            path: ctx.path.to_path_buf(),
+            path: std::sync::Arc::clone(&ctx.path_arc),
             line: line + 1,
             column: 1,
             rule_id: super::META.id.into(),

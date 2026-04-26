@@ -52,7 +52,7 @@ fn push_mixed(
         .unwrap_or("<type>");
     let pos = container.start_position();
     diagnostics.push(Diagnostic {
-        path: ctx_path.to_path_buf(),
+        path: std::sync::Arc::from(ctx_path),
         line: pos.row + 1,
         column: pos.column + 1,
         rule_id: "ts-no-mixed-types".into(),

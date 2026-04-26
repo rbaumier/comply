@@ -189,7 +189,7 @@ fn merge_and_emit(
         if keep {
             let lines_in_clone = clone_line_span(file_data, rfi, rstart, last_rstart);
             out.push(Diagnostic {
-                path: files[rfi].path.clone(),
+                path: std::sync::Arc::from(files[rfi].path.as_path()),
                 line: rline,
                 column: 1,
                 rule_id: RULE_ID.into(),

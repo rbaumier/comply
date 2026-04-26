@@ -56,7 +56,7 @@ crate::ast_check! { on ["jsx_element", "jsx_fragment"] => |node, source, ctx, di
             if between.is_empty() {
                 let pos = child_b.start_position();
                 diagnostics.push(Diagnostic {
-                    path: ctx.path.to_path_buf(),
+                    path: std::sync::Arc::clone(&ctx.path_arc),
                     line: pos.row + 1,
                     column: pos.column + 1,
                     rule_id: "react-no-adjacent-inline-elements".into(),

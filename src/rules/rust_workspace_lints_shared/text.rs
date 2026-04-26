@@ -37,7 +37,7 @@ impl TextCheck for Check {
 
         if has_workspace && !has_workspace_lints {
             diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
+                path: std::sync::Arc::clone(&ctx.path_arc),
                 line: 1,
                 column: 1,
                 rule_id: super::META.id.into(),
@@ -68,7 +68,7 @@ impl TextCheck for Check {
             }
             if !inherits {
                 diagnostics.push(Diagnostic {
-                    path: ctx.path.to_path_buf(),
+                    path: std::sync::Arc::clone(&ctx.path_arc),
                     line: 1,
                     column: 1,
                     rule_id: super::META.id.into(),

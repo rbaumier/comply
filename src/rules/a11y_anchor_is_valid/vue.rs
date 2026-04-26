@@ -19,7 +19,7 @@ impl TextCheck for Check {
             }
             if !has_attr(elem.attrs, "href") {
                 diagnostics.push(Diagnostic {
-                    path: ctx.path.to_path_buf(),
+                    path: std::sync::Arc::clone(&ctx.path_arc),
                     line: elem.line,
                     column: 1,
                     rule_id: "a11y-anchor-is-valid".into(),
@@ -32,7 +32,7 @@ impl TextCheck for Check {
             if let Some(val) = attr_value(elem.attrs, "href") {
                 if val == "#" {
                     diagnostics.push(Diagnostic {
-                        path: ctx.path.to_path_buf(),
+                        path: std::sync::Arc::clone(&ctx.path_arc),
                         line: elem.line,
                         column: 1,
                         rule_id: "a11y-anchor-is-valid".into(),
@@ -42,7 +42,7 @@ impl TextCheck for Check {
                     });
                 } else if val.contains("javascript:") {
                     diagnostics.push(Diagnostic {
-                        path: ctx.path.to_path_buf(),
+                        path: std::sync::Arc::clone(&ctx.path_arc),
                         line: elem.line,
                         column: 1,
                         rule_id: "a11y-anchor-is-valid".into(),

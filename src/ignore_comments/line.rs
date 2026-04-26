@@ -88,7 +88,7 @@ fn make_bad_ignore_diagnostic(
     rule_id: &str,
 ) -> Diagnostic {
     Diagnostic {
-        path: path.to_path_buf(),
+        path: std::sync::Arc::from(path),
         line,
         column: char_column + 1,
         rule_id: "comply-ignore-missing-justification".into(),

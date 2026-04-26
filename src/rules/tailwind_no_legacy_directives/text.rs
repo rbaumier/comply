@@ -9,7 +9,7 @@ crate::ast_check! { on ["at_rule"] => |node, source, ctx, diagnostics|
 
     let pos = node.start_position();
     diagnostics.push(Diagnostic {
-        path: ctx.path.to_path_buf(),
+        path: std::sync::Arc::clone(&ctx.path_arc),
         line: pos.row + 1,
         column: pos.column + 1,
         rule_id: super::META.id.into(),

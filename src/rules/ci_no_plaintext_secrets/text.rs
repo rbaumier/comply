@@ -43,7 +43,7 @@ crate::ast_check! { on ["block_mapping_pair"] => |node, source, ctx, diagnostics
     let key_node = node.named_child(0).unwrap_or(node);
     let pos = key_node.start_position();
     diagnostics.push(Diagnostic {
-        path: ctx.path.to_path_buf(),
+        path: std::sync::Arc::clone(&ctx.path_arc),
         line: pos.row + 1,
         column: pos.column + 1,
         rule_id: "ci-no-plaintext-secrets".into(),

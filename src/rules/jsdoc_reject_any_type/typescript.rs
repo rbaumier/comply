@@ -38,7 +38,7 @@ crate::ast_check! { on ["comment"] => |node, source, ctx, diagnostics|
             let abs_line = start.row + line_idx + 1;
             let abs_col = if line_idx == 0 { start.column + col + 1 } else { col + 1 };
             diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
+                path: std::sync::Arc::clone(&ctx.path_arc),
                 line: abs_line,
                 column: abs_col,
                 rule_id: super::META.id.into(),

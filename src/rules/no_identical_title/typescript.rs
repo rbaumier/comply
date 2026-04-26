@@ -112,7 +112,7 @@ fn check_scope(
         if !seen.insert(key) {
             let pos = expr.start_position();
             diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
+                path: std::sync::Arc::clone(&ctx.path_arc),
                 line: pos.row + 1,
                 column: pos.column + 1,
                 rule_id: "no-identical-title".into(),

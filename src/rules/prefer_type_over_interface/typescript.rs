@@ -98,7 +98,7 @@ impl AstCheck for Check {
             }
             let name = &c.name;
             diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
+                path: std::sync::Arc::clone(&ctx.path_arc),
                 line: c.line,
                 column: c.column,
                 rule_id: "prefer-type-over-interface".into(),

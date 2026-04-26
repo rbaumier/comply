@@ -86,7 +86,7 @@ impl AstCheck for Check {
             }
             let first = group.first().expect("group is non-empty");
             diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
+                path: std::sync::Arc::clone(&ctx.path_arc),
                 line: first.row + 1,
                 column: first.col + 1,
                 rule_id: "no-commented-out-code".into(),

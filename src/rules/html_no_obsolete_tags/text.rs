@@ -29,7 +29,7 @@ impl TextCheck for Check {
             let tag_lower = elem.tag.to_ascii_lowercase();
             if OBSOLETE_TAGS.contains(&tag_lower.as_str()) {
                 diagnostics.push(Diagnostic {
-                    path: ctx.path.to_path_buf(),
+                    path: std::sync::Arc::clone(&ctx.path_arc),
                     line: elem.line,
                     column: 1,
                     rule_id: super::META.id.into(),
@@ -51,7 +51,7 @@ impl TextCheck for Check {
                     continue;
                 }
                 diagnostics.push(Diagnostic {
-                    path: ctx.path.to_path_buf(),
+                    path: std::sync::Arc::clone(&ctx.path_arc),
                     line: elem.line,
                     column: 1,
                     rule_id: super::META.id.into(),

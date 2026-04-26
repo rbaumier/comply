@@ -18,7 +18,7 @@ crate::ast_check! { on ["comment"] => |node, source, ctx, diagnostics|
             let after_type = strip_type_annotation(&tag.value);
             if !value_has_description(after_type) {
                 diagnostics.push(Diagnostic {
-                    path: ctx.path.to_path_buf(),
+                    path: std::sync::Arc::clone(&ctx.path_arc),
                     line: block.start_line + tag.line_offset + 1 + line_offset,
                     column: 1,
                     rule_id: "jsdoc/require-yields-description".into(),

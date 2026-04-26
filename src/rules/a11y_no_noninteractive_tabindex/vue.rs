@@ -23,7 +23,7 @@ impl TextCheck for Check {
                 // tabindex="-1" is OK
                 if val != "-1" {
                     diagnostics.push(Diagnostic {
-                        path: ctx.path.to_path_buf(),
+                        path: std::sync::Arc::clone(&ctx.path_arc),
                         line: elem.line,
                         column: 1,
                         rule_id: "a11y-no-noninteractive-tabindex".into(),

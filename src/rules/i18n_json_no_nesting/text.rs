@@ -94,7 +94,7 @@ impl TextCheck for Check {
             if let Some(first) = nested_keys.first() {
                 let root = first.split('.').next().unwrap_or(first);
                 return vec![Diagnostic {
-                    path: ctx.path.to_path_buf(),
+                    path: std::sync::Arc::clone(&ctx.path_arc),
                     line: find_line_for_key(ctx.source, root),
                     column: 1,
                     rule_id: super::META.id.into(),
@@ -120,7 +120,7 @@ impl TextCheck for Check {
         };
 
         vec![Diagnostic {
-            path: ctx.path.to_path_buf(),
+            path: std::sync::Arc::clone(&ctx.path_arc),
             line: 1,
             column: 1,
             rule_id: super::META.id.into(),

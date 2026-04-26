@@ -68,7 +68,7 @@ crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
                     let (_, prop) = call_member_parts(inner, source)
                         .unwrap_or(("vi", "mock"));
                     diagnostics.push(Diagnostic {
-                        path: ctx.path.to_path_buf(),
+                        path: std::sync::Arc::clone(&ctx.path_arc),
                         line: pos.row + 1,
                         column: pos.column + 1,
                         rule_id: "vitest-hoisted-apis-on-top".into(),

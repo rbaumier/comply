@@ -50,7 +50,7 @@ impl crate::rules::backend::AstCheck for Check {
                         let (line, column) =
                             byte_offset_to_line_col(ctx.source, ref_span.start as usize);
                         diagnostics.push(Diagnostic {
-                            path: ctx.path.to_path_buf(),
+                            path: std::sync::Arc::clone(&ctx.path_arc),
                             line,
                             column,
                             rule_id: "ts-no-use-before-define".into(),

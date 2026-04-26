@@ -35,7 +35,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
     if is_self_closing {
         let pos = node.start_position();
         diagnostics.push(Diagnostic {
-            path: ctx.path.to_path_buf(),
+            path: std::sync::Arc::clone(&ctx.path_arc),
             line: pos.row + 1,
             column: pos.column + 1,
             rule_id: "a11y-anchor-has-content".into(),
@@ -62,7 +62,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
     if !has_content {
         let pos = node.start_position();
         diagnostics.push(Diagnostic {
-            path: ctx.path.to_path_buf(),
+            path: std::sync::Arc::clone(&ctx.path_arc),
             line: pos.row + 1,
             column: pos.column + 1,
             rule_id: "a11y-anchor-has-content".into(),

@@ -37,7 +37,7 @@ crate::ast_check! { on ["function_declaration"] => |node, _source, ctx, diagnost
     }
     let pos = node.start_position();
     diagnostics.push(Diagnostic {
-        path: ctx.path.to_path_buf(),
+        path: std::sync::Arc::clone(&ctx.path_arc),
         line: pos.row + 1,
         column: pos.column + 1,
         rule_id: "no-function-declaration-in-block".into(),

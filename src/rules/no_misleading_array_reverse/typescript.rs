@@ -71,7 +71,7 @@ fn check_declaration(
         if is_mutating_call(value, source) {
             let pos = value.start_position();
             diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
+                path: std::sync::Arc::clone(&ctx.path_arc),
                 line: pos.row + 1,
                 column: pos.column + 1,
                 rule_id: "no-misleading-array-reverse".into(),
@@ -94,7 +94,7 @@ fn check_return(
         if is_mutating_call(child, source) {
             let pos = child.start_position();
             diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
+                path: std::sync::Arc::clone(&ctx.path_arc),
                 line: pos.row + 1,
                 column: pos.column + 1,
                 rule_id: "no-misleading-array-reverse".into(),

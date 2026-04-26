@@ -86,7 +86,7 @@ impl AstCheck for Check {
         if !is_identifier_used_in(body, param_name, source) {
             let pos = param_node.start_position();
             diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
+                path: std::sync::Arc::clone(&ctx.path_arc),
                 line: pos.row + 1,
                 column: pos.column + 1,
                 rule_id: "prefer-optional-catch-binding".into(),

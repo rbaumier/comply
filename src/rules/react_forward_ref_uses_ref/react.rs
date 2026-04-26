@@ -28,7 +28,7 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
         // No params at all — definitely missing ref.
         let pos = node.start_position();
         diagnostics.push(Diagnostic {
-            path: ctx.path.to_path_buf(),
+            path: std::sync::Arc::clone(&ctx.path_arc),
             line: pos.row + 1,
             column: pos.column + 1,
             rule_id: "react-forward-ref-uses-ref".into(),
@@ -54,7 +54,7 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     if param_count < 2 {
         let pos = node.start_position();
         diagnostics.push(Diagnostic {
-            path: ctx.path.to_path_buf(),
+            path: std::sync::Arc::clone(&ctx.path_arc),
             line: pos.row + 1,
             column: pos.column + 1,
             rule_id: "react-forward-ref-uses-ref".into(),

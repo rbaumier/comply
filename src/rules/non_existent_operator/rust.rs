@@ -42,7 +42,7 @@ crate::ast_check! { on ["assignment_expression"] => |node, source, ctx, diagnost
         _ => return,
     };
     diagnostics.push(Diagnostic {
-        path: ctx.path.to_path_buf(),
+        path: std::sync::Arc::clone(&ctx.path_arc),
         line: pos.row + 1,
         column: pos.column + 1,
         rule_id: "non-existent-operator".into(),

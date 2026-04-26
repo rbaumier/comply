@@ -146,12 +146,12 @@ impl App {
         let mut haystacks: Vec<String> = Vec::with_capacity(diagnostics.len());
 
         for (idx, diag) in diagnostics.iter().enumerate() {
-            by_file.entry(diag.path.clone()).or_default().push(idx);
-            by_rule.entry(diag.rule_id.clone()).or_default().push(idx);
+            by_file.entry(diag.path.to_path_buf()).or_default().push(idx);
+            by_rule.entry(diag.rule_id.as_ref().to_string()).or_default().push(idx);
             let src_line = sources
-                .get(&diag.path)
+                .get(diag.path.as_ref() as &std::path::Path)
                 .and_then(|s| {
-                    let offs = line_offsets.get(&diag.path)?;
+                    let offs = line_offsets.get(diag.path.as_ref() as &std::path::Path)?;
                     get_line(s, offs, diag.line)
                 })
                 .unwrap_or("");
@@ -200,7 +200,7 @@ impl App {
         app
     }
 
-    pub fn source_line(&self, path: &PathBuf, line: usize) -> Option<&str> {
+    pub fn source_line(&self, path: &std::path::Path, line: usize) -> Option<&str> {
         let source = self.sources.get(path)?;
         if source.is_empty() {
             return None;
@@ -260,14 +260,14 @@ impl App {
 
             let mut errors = 0usize;
             let mut warnings = 0usize;
-            let mut files: HashSet<&PathBuf> = HashSet::new();
+            let mut files: HashSet<&std::path::Path> = HashSet::new();
             for &i in &kept {
                 let d = &self.diagnostics[i];
                 match d.severity {
                     Severity::Error => errors += 1,
                     Severity::Warning => warnings += 1,
                 }
-                files.insert(&d.path);
+                files.insert(d.path.as_ref());
             }
             summaries.insert(
                 key.clone(),
@@ -386,7 +386,7 @@ impl App {
         let diag = &self.diagnostics[diag_index];
         match self.view_mode {
             ViewMode::ByFile => Some(diag.path.display().to_string()),
-            ViewMode::ByRule => Some(diag.rule_id.clone()),
+            ViewMode::ByRule => Some(diag.rule_id.as_ref().to_string()),
         }
     }
 

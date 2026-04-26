@@ -50,7 +50,7 @@ crate::ast_check! { on ["if_statement"] => |node, source, ctx, diagnostics|
 
     let pos = last_else_if_node.start_position();
     diagnostics.push(Diagnostic {
-        path: ctx.path.to_path_buf(),
+        path: std::sync::Arc::clone(&ctx.path_arc),
         line: pos.row + 1,
         column: pos.column + 1,
         rule_id: "elseif-without-else".into(),

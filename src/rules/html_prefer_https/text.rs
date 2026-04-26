@@ -26,7 +26,7 @@ impl TextCheck for Check {
                         let remainder = &line[url_start..];
                         if !ALLOWED_HOSTS.iter().any(|h| remainder.starts_with(h)) {
                             diagnostics.push(Diagnostic {
-                                path: ctx.path.to_path_buf(),
+                                path: std::sync::Arc::clone(&ctx.path_arc),
                                 line: i + 1,
                                 column: match_start + 1,
                                 rule_id: super::META.id.into(),

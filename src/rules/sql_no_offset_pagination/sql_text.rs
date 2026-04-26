@@ -26,7 +26,7 @@ impl TextCheck for Check {
             if line.contains(';') {
                 if super::sql_uses_offset_pagination(&buf) {
                     diagnostics.push(Diagnostic {
-                        path: ctx.path.to_path_buf(),
+                        path: std::sync::Arc::clone(&ctx.path_arc),
                         line: start_line,
                         column: 1,
                         rule_id: "sql-no-offset-pagination".into(),
@@ -44,7 +44,7 @@ impl TextCheck for Check {
         // Trailing statement without semicolon.
         if !buf.trim().is_empty() && super::sql_uses_offset_pagination(&buf) {
             diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
+                path: std::sync::Arc::clone(&ctx.path_arc),
                 line: start_line,
                 column: 1,
                 rule_id: "sql-no-offset-pagination".into(),

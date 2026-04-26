@@ -47,6 +47,42 @@ where
     }
 }
 
+/// Visit only nodes whose `kind_id` flag is set in the `interesting` bitmap.
+///
+/// Faster than `walk_tree` when most nodes are uninteresting: the bitmap
+/// lookup is a single bounds check + bool index, vs. a HashMap probe on the
+/// kind string for every node. Skips ERROR nodes the same way `walk_tree`
+/// does, but does NOT skip subtrees rooted at errors — error recovery
+/// produces phantom intermediate nodes, so callers using this fast path
+/// trade a small amount of correctness for the throughput win. In practice
+/// rules listed in `interested_kinds` care about high-signal node kinds
+/// (e.g. `function_declaration`, `call_expression`) which tree-sitter
+/// recovery rarely synthesizes.
+pub fn walk_tree_filtered<F>(tree: &tree_sitter::Tree, interesting: &[bool], mut visit: F)
+where
+    F: FnMut(tree_sitter::Node),
+{
+    let mut cursor = tree.walk();
+    loop {
+        let node = cursor.node();
+        let kid = node.kind_id() as usize;
+        if kid < interesting.len() && interesting[kid] && !node.is_error() {
+            visit(node);
+        }
+        if cursor.goto_first_child() {
+            continue;
+        }
+        loop {
+            if cursor.goto_next_sibling() {
+                break;
+            }
+            if !cursor.goto_parent() {
+                return;
+            }
+        }
+    }
+}
+
 /// Collect every node whose kind is in `kinds` into a Vec whose
 /// lifetime is tied to the tree. Use this instead of `walk_tree`
 /// when you need to keep node references after the walk completes —

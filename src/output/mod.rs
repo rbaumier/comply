@@ -83,11 +83,11 @@ pub fn format_json(diagnostics: &[Diagnostic]) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
+    use std::path::Path;
 
     fn diag(severity: Severity) -> Diagnostic {
         Diagnostic {
-            path: PathBuf::from("foo.ts"),
+            path: std::sync::Arc::from(Path::new("foo.ts")),
             line: 10,
             column: 5,
             rule_id: "no-throw".into(),

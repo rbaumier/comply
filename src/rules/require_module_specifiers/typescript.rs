@@ -19,7 +19,7 @@ crate::ast_check! { on ["import_statement", "export_statement"] => |node, source
                 if ic_child.kind() == "named_imports" && ic_child.named_child_count() == 0 {
                     let pos = node.start_position();
                     diagnostics.push(Diagnostic {
-                        path: ctx.path.to_path_buf(),
+                        path: std::sync::Arc::clone(&ctx.path_arc),
                         line: pos.row + 1,
                         column: pos.column + 1,
                         rule_id: "require-module-specifiers".into(),
@@ -45,7 +45,7 @@ crate::ast_check! { on ["import_statement", "export_statement"] => |node, source
             if has_source {
                 let pos = node.start_position();
                 diagnostics.push(Diagnostic {
-                    path: ctx.path.to_path_buf(),
+                    path: std::sync::Arc::clone(&ctx.path_arc),
                     line: pos.row + 1,
                     column: pos.column + 1,
                     rule_id: "require-module-specifiers".into(),

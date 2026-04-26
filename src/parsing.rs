@@ -3,15 +3,11 @@
 use crate::files::Language;
 use tree_sitter::Parser;
 
-/// Configure the parser for the language and parse the source.
-///
-/// Returns None when no tree-sitter grammar is bundled for the language.
-pub(crate) fn parse_with_grammar(
-    parser: &mut Parser,
-    language: Language,
-    source: &[u8],
-) -> Option<tree_sitter::Tree> {
-    let lang: tree_sitter::Language = match language {
+/// Map a `crate::files::Language` to the corresponding tree-sitter grammar
+/// `Language` object, or `None` for languages we don't have a grammar for
+/// (e.g. Toml/Json/Sql).
+pub(crate) fn ts_language_for(language: Language) -> Option<tree_sitter::Language> {
+    Some(match language {
         Language::TypeScript | Language::JavaScript => {
             tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()
         }
@@ -22,7 +18,18 @@ pub(crate) fn parse_with_grammar(
         Language::Yaml => tree_sitter_yaml::LANGUAGE.into(),
         Language::Dockerfile => tree_sitter_dockerfile_updated::language(),
         Language::Toml | Language::Json | Language::Sql => return None,
-    };
+    })
+}
+
+/// Configure the parser for the language and parse the source.
+///
+/// Returns None when no tree-sitter grammar is bundled for the language.
+pub(crate) fn parse_with_grammar(
+    parser: &mut Parser,
+    language: Language,
+    source: &[u8],
+) -> Option<tree_sitter::Tree> {
+    let lang = ts_language_for(language)?;
     parser.set_language(&lang).ok()?;
     parser.parse(source, None)
 }

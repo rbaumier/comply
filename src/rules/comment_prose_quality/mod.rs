@@ -110,7 +110,7 @@ pub(crate) fn lint_comment_nodes(
             for &weasel in WEASEL_WORDS {
                 if contains_word(&lower, weasel) {
                     diagnostics.push(Diagnostic {
-                        path: ctx.path.to_path_buf(),
+                        path: std::sync::Arc::clone(&ctx.path_arc),
                         line: line_no,
                         column: 1,
                         rule_id: META.id.into(),
@@ -128,7 +128,7 @@ pub(crate) fn lint_comment_nodes(
             for &passive in PASSIVE_PATTERNS {
                 if lower.contains(passive) {
                     diagnostics.push(Diagnostic {
-                        path: ctx.path.to_path_buf(),
+                        path: std::sync::Arc::clone(&ctx.path_arc),
                         line: line_no,
                         column: 1,
                         rule_id: META.id.into(),
@@ -153,7 +153,7 @@ pub(crate) fn lint_comment_nodes(
                 && first.to_lowercase() == *prev
             {
                 diagnostics.push(Diagnostic {
-                    path: ctx.path.to_path_buf(),
+                    path: std::sync::Arc::clone(&ctx.path_arc),
                     line: line_no,
                     column: 1,
                     rule_id: META.id.into(),

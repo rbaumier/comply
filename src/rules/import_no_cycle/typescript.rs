@@ -71,7 +71,7 @@ crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
     if let Some(cycle) = find_cycle(index, &canon, &canon, &mut visited, &mut path) {
         let formatted = format_cycle(&cycle, ctx.project.project_root.as_deref());
         diagnostics.push(Diagnostic {
-            path: ctx.path.to_path_buf(),
+            path: std::sync::Arc::clone(&ctx.path_arc),
             line: 1,
             column: 1,
             rule_id: "import-no-cycle".into(),

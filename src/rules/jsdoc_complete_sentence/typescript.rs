@@ -64,7 +64,7 @@ impl AstCheck for Check {
         if let Some(ch) = first_text.chars().next()
             && ch.is_alphabetic() && !ch.is_uppercase() {
                 diagnostics.push(Diagnostic {
-                    path: ctx.path.to_path_buf(),
+                    path: std::sync::Arc::clone(&ctx.path_arc),
                     line: comment_start_row + first_offset + 1,
                     column: 1,
                     rule_id: "jsdoc-complete-sentence".into(),
@@ -79,7 +79,7 @@ impl AstCheck for Check {
         if let Some(ch) = last_text.trim_end().chars().last()
             && ch != '.' && ch != '!' && ch != '?' {
                 diagnostics.push(Diagnostic {
-                    path: ctx.path.to_path_buf(),
+                    path: std::sync::Arc::clone(&ctx.path_arc),
                     line: comment_start_row + last_offset + 1,
                     column: 1,
                     rule_id: "jsdoc-complete-sentence".into(),

@@ -88,7 +88,7 @@ impl TextCheck for Check {
             for &weasel in WEASEL_WORDS {
                 if contains_word(&lower, weasel) {
                     diagnostics.push(Diagnostic {
-                        path: ctx.path.to_path_buf(),
+                        path: std::sync::Arc::clone(&ctx.path_arc),
                         line: idx + 1,
                         column: 1,
                         rule_id: "comment-prose-quality".into(),
@@ -106,7 +106,7 @@ impl TextCheck for Check {
             for &passive in PASSIVE_PATTERNS {
                 if lower.contains(passive) {
                     diagnostics.push(Diagnostic {
-                        path: ctx.path.to_path_buf(),
+                        path: std::sync::Arc::clone(&ctx.path_arc),
                         line: idx + 1,
                         column: 1,
                         rule_id: "comment-prose-quality".into(),
@@ -128,7 +128,7 @@ impl TextCheck for Check {
                 && first.to_lowercase() == *prev
             {
                 diagnostics.push(Diagnostic {
-                    path: ctx.path.to_path_buf(),
+                    path: std::sync::Arc::clone(&ctx.path_arc),
                     line: idx + 1,
                     column: 1,
                     rule_id: "comment-prose-quality".into(),

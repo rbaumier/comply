@@ -72,7 +72,7 @@ crate::ast_check! { on ["comment"] => |node, source, ctx, diagnostics|
             continue;
         }
         diagnostics.push(Diagnostic {
-            path: ctx.path.to_path_buf(),
+            path: std::sync::Arc::clone(&ctx.path_arc),
             line: block.start_line + 1 + line_offset,
             column: 1,
             rule_id: "jsdoc/require-template".into(),

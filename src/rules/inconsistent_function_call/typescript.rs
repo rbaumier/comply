@@ -74,7 +74,7 @@ crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
         let decl_path = ctx.path.display().to_string();
         for site in news.iter().chain(plains.iter()) {
             diagnostics.push(Diagnostic {
-                path: site.path.clone(),
+                path: site.path.clone().into(),
                 line: site.line,
                 column: site.column,
                 rule_id: "inconsistent-function-call".into(),
@@ -350,7 +350,8 @@ const c = Widget();
         assert!(diags.iter().all(|d| d.message.contains("Widget")));
         // Diagnostics are emitted on the call-sites in the importer files —
         // not on the declaring file.
-        let mut importer_paths: Vec<_> = diags.iter().map(|d| d.path.clone()).collect();
+        let mut importer_paths: Vec<std::path::PathBuf> =
+            diags.iter().map(|d| d.path.to_path_buf()).collect();
         importer_paths.sort();
         let mut expected = vec![paths[1].clone(), paths[2].clone()];
         expected.sort();

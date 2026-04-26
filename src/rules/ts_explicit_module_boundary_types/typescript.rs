@@ -83,7 +83,7 @@ fn check_function_node(
     // Return type check — direct `type_annotation` child of the function.
     if !has_return_type(func) {
         diagnostics.push(Diagnostic {
-            path: ctx.path.to_path_buf(),
+            path: std::sync::Arc::clone(&ctx.path_arc),
             line: pos.row + 1,
             column: pos.column + 1,
             rule_id: "ts-explicit-module-boundary-types".into(),
@@ -103,7 +103,7 @@ fn check_function_node(
                 let param_name = extract_param_name(param, source).unwrap_or("<param>");
                 let ppos = param.start_position();
                 diagnostics.push(Diagnostic {
-                    path: ctx.path.to_path_buf(),
+                    path: std::sync::Arc::clone(&ctx.path_arc),
                     line: ppos.row + 1,
                     column: ppos.column + 1,
                     rule_id: "ts-explicit-module-boundary-types".into(),

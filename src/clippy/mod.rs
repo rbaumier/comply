@@ -349,12 +349,12 @@ fn parse_clippy_jsonl(
         };
 
         let rule_id = match mapped_meta {
-            Some(meta) => meta.id.to_string(),
-            None => code.code.clone(),
+            Some(meta) => std::borrow::Cow::Borrowed(meta.id),
+            None => std::borrow::Cow::Owned(code.code.clone()),
         };
 
         diagnostics.push(Diagnostic {
-            path: span_path,
+            path: std::sync::Arc::from(span_path.as_path()),
             line: span.line_start.max(1),
             column: span.column_start.max(1),
             rule_id,

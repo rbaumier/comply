@@ -159,7 +159,7 @@ impl crate::rules::backend::AstCheck for Check {
             if !mutated_in_tests.contains(name) { continue; }
             if reset_in_before_each.contains(name) { continue; }
             diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
+                path: std::sync::Arc::clone(&ctx.path_arc),
                 line: range.start_point.row + 1,
                 column: range.start_point.column + 1,
                 rule_id: super::META.id.into(),

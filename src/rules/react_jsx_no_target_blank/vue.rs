@@ -22,7 +22,7 @@ impl TextCheck for Check {
                 .is_some_and(|v| v.to_ascii_lowercase().contains("noreferrer"));
             if !has_safe_rel {
                 diagnostics.push(Diagnostic {
-                    path: ctx.path.to_path_buf(),
+                    path: std::sync::Arc::clone(&ctx.path_arc),
                     line: elem.line,
                     column: 1,
                     rule_id: "react-jsx-no-target-blank".into(),

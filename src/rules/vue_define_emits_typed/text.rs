@@ -14,7 +14,7 @@ impl TextCheck for Check {
             }
             if t.contains("defineEmits([") {
                 diags.push(Diagnostic {
-                    path: ctx.path.to_path_buf(),
+                    path: std::sync::Arc::clone(&ctx.path_arc),
                     line: i + 1,
                     column: line.find("defineEmits").unwrap_or(0) + 1,
                     rule_id: super::META.id.into(),

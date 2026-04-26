@@ -42,7 +42,7 @@ crate::ast_check! { on ["source_file"] => |node, source, ctx, diagnostics|
     results.sort_by_key(|(line, _)| *line);
     for (line, message) in results {
         diagnostics.push(Diagnostic {
-            path: ctx.path.to_path_buf(),
+            path: std::sync::Arc::clone(&ctx.path_arc),
             line,
             column: 1,
             rule_id: "data-clumps".into(),

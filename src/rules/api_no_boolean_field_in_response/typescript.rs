@@ -73,7 +73,7 @@ fn push_boolean_props(
             .unwrap_or("<field>");
         let pos = member.start_position();
         diagnostics.push(Diagnostic {
-            path: ctx_path.to_path_buf(),
+            path: ctx_path.to_path_buf().into(),
             line: pos.row + 1,
             column: pos.column + 1,
             rule_id: "api-no-boolean-field-in-response".into(),

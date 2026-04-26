@@ -51,7 +51,7 @@ impl TextCheck for Check {
 
             if looks_like_paraphrase(fn_name, comment_body, max_comment_tokens, overlap_threshold) {
                 diagnostics.push(Diagnostic {
-                    path: ctx.path.to_path_buf(),
+                    path: std::sync::Arc::clone(&ctx.path_arc),
                     line: i, // comment line (1-based: i is 0-based for prev line)
                     column: 1,
                     rule_id: "comment-paraphrases-code".into(),

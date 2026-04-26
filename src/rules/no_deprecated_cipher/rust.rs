@@ -22,7 +22,7 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
         if callee_text.ends_with(deprecated) || callee_text == deprecated {
             let pos = node.start_position();
             diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
+                path: std::sync::Arc::clone(&ctx.path_arc),
                 line: pos.row + 1,
                 column: pos.column + 1,
                 rule_id: "no-deprecated-cipher".into(),

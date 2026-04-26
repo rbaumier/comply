@@ -59,7 +59,7 @@ crate::ast_check! { on ["comment"] => |node, source, ctx, diagnostics|
 
         if has_yields_tag && !yields_in_body {
             diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
+                path: std::sync::Arc::clone(&ctx.path_arc),
                 line: block.start_line + 1 + line_offset,
                 column: 1,
                 rule_id: "jsdoc/require-yields-check".into(),
@@ -69,7 +69,7 @@ crate::ast_check! { on ["comment"] => |node, source, ctx, diagnostics|
             });
         } else if is_gen && yields_in_body && !has_yields_tag {
             diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
+                path: std::sync::Arc::clone(&ctx.path_arc),
                 line: block.start_line + 1 + line_offset,
                 column: 1,
                 rule_id: "jsdoc/require-yields-check".into(),

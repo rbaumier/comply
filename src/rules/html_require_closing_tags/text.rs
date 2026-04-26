@@ -58,7 +58,7 @@ impl TextCheck for Check {
             let closes = close_counts.get(tag).copied().unwrap_or(0);
             if *n > closes {
                 diagnostics.push(Diagnostic {
-                    path: ctx.path.to_path_buf(),
+                    path: std::sync::Arc::clone(&ctx.path_arc),
                     line: *line,
                     column: 1,
                     rule_id: super::META.id.into(),

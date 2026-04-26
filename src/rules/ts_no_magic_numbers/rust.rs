@@ -50,7 +50,7 @@ crate::ast_check! { on ["integer_literal", "float_literal"] => |node, source, ct
 
     let pos = node.start_position();
     diagnostics.push(Diagnostic {
-        path: ctx.path.to_path_buf(),
+        path: std::sync::Arc::clone(&ctx.path_arc),
         line: pos.row + 1,
         column: pos.column + 1,
         rule_id: "ts-no-magic-numbers".into(),

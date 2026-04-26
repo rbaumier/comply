@@ -40,7 +40,7 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
                 if WEAK_ALGOS.contains(&inner.as_str()) {
                     let pos = node.start_position();
                     diagnostics.push(Diagnostic {
-                        path: ctx.path.to_path_buf(),
+                        path: std::sync::Arc::clone(&ctx.path_arc),
                         line: pos.row + 1,
                         column: pos.column + 1,
                         rule_id: "no-weak-hashing".into(),
@@ -67,7 +67,7 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     if callee_name == "MD5" || callee_name == "SHA1" {
         let pos = node.start_position();
         diagnostics.push(Diagnostic {
-            path: ctx.path.to_path_buf(),
+            path: std::sync::Arc::clone(&ctx.path_arc),
             line: pos.row + 1,
             column: pos.column + 1,
             rule_id: "no-weak-hashing".into(),

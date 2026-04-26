@@ -36,7 +36,7 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     if contains_this_state(args, source) {
         let pos = node.start_position();
         diagnostics.push(Diagnostic {
-            path: ctx.path.to_path_buf(),
+            path: std::sync::Arc::clone(&ctx.path_arc),
             line: pos.row + 1,
             column: pos.column + 1,
             rule_id: "react-no-access-state-in-setstate".into(),

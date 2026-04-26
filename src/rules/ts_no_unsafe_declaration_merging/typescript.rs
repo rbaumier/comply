@@ -69,7 +69,7 @@ impl AstCheck for Check {
         for (iface_name, line, col) in &state.interface_names {
             if state.class_names.iter().any(|(c, _, _)| c == iface_name) {
                 diagnostics.push(Diagnostic {
-                    path: ctx.path.to_path_buf(),
+                    path: std::sync::Arc::clone(&ctx.path_arc),
                     line: *line,
                     column: *col,
                     rule_id: "ts-no-unsafe-declaration-merging".into(),
@@ -86,7 +86,7 @@ impl AstCheck for Check {
         for (class_name, line, col) in &state.class_names {
             if state.interface_names.iter().any(|(i, _, _)| i == class_name) {
                 diagnostics.push(Diagnostic {
-                    path: ctx.path.to_path_buf(),
+                    path: std::sync::Arc::clone(&ctx.path_arc),
                     line: *line,
                     column: *col,
                     rule_id: "ts-no-unsafe-declaration-merging".into(),

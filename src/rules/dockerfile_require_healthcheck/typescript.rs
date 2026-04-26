@@ -20,7 +20,7 @@ crate::ast_check! { on ["source_file"] => |node, source, ctx, diagnostics|
     }
     if saw_from && !saw_healthcheck {
         diagnostics.push(Diagnostic {
-            path: ctx.path.to_path_buf(),
+            path: std::sync::Arc::clone(&ctx.path_arc),
             line: 1,
             column: 1,
             rule_id: super::META.id.into(),

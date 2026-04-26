@@ -235,7 +235,8 @@ fn lint_project(cli: &Cli) -> Result<bool> {
         let changed = changed_lines::changed_lines(&mode)?;
         let repo_root = changed_lines::git_repo_root().unwrap_or_default();
         for diag in &mut after_suppressions {
-            diag.path = changed_lines::normalise_path(&diag.path, &repo_root);
+            let normalised = changed_lines::normalise_path(diag.path.as_ref(), &repo_root);
+            diag.path = std::sync::Arc::from(normalised);
         }
         changed_lines::retain_in_diff(&mut after_suppressions, &changed);
     }
@@ -249,13 +250,15 @@ fn lint_project(cli: &Cli) -> Result<bool> {
             std::process::exit(2);
         }
         if has_violations {
-            let paths: std::collections::HashSet<_> =
-                after_suppressions.iter().map(|d| &d.path).collect();
+            let paths: std::collections::HashSet<&std::path::Path> = after_suppressions
+                .iter()
+                .map(|d| d.path.as_ref())
+                .collect();
             let sources: std::collections::HashMap<std::path::PathBuf, String> = paths
                 .into_iter()
                 .map(|p| {
                     let content = std::fs::read_to_string(p).unwrap_or_default();
-                    (p.clone(), content)
+                    (p.to_path_buf(), content)
                 })
                 .collect();
             tui::run(after_suppressions, sources)?;
@@ -320,9 +323,9 @@ fn apply_config_filters(
     mut diagnostics: Vec<Diagnostic>,
     config: &Config,
 ) -> Vec<Diagnostic> {
-    diagnostics.retain(|d| config.is_rule_enabled(&d.rule_id, &d.path));
+    diagnostics.retain(|d| config.is_rule_enabled(d.rule_id.as_ref(), d.path.as_ref()));
     for d in &mut diagnostics {
-        if let Some(override_sev) = config.severity_for(&d.rule_id) {
+        if let Some(override_sev) = config.severity_for(d.rule_id.as_ref()) {
             d.severity = override_sev;
         }
     }

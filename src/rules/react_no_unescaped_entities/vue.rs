@@ -39,7 +39,7 @@ impl TextCheck for Check {
                     if segment.contains(PROBLEMATIC) {
                         let line = lines_before + 1 + template[..text_start].matches('\n').count();
                         diagnostics.push(Diagnostic {
-                            path: ctx.path.to_path_buf(),
+                            path: std::sync::Arc::clone(&ctx.path_arc),
                             line,
                             column: 1,
                             rule_id: "react-no-unescaped-entities".into(),

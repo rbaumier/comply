@@ -81,7 +81,7 @@ impl AstCheck for Check {
                     break;
                 }
                 diagnostics.push(Diagnostic {
-                    path: ctx.path.to_path_buf(),
+                    path: std::sync::Arc::clone(&ctx.path_arc),
                     line: ins.line,
                     column: ins.column,
                     rule_id: super::META.id.into(),

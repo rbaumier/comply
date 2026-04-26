@@ -11,7 +11,7 @@ impl TextCheck for Check {
     let line_upper = line.to_ascii_uppercase();
             if line_upper.contains("IN (SELECT") || line_upper.contains("IN(SELECT") {
                 diagnostics.push(Diagnostic {
-                    path: ctx.path.to_path_buf(),
+                    path: std::sync::Arc::clone(&ctx.path_arc),
                     line: idx + 1,
                     column: 1,
                     rule_id: "sql-prefer-exists-over-in".into(),

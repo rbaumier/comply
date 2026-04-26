@@ -85,7 +85,7 @@ crate::ast_check! { on ["new_expression", "call_expression"] => |node, source, c
 
     let pos = check_node.start_position();
     diagnostics.push(Diagnostic {
-        path: ctx.path.to_path_buf(),
+        path: std::sync::Arc::clone(&ctx.path_arc),
         line: pos.row + 1,
         column: pos.column + 1,
         rule_id: "no-xml-external-entity".into(),

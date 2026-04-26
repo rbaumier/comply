@@ -32,7 +32,7 @@ crate::ast_check! { on ["unary_expression"] => |node, source, ctx, diagnostics|
     let op_str = std::str::from_utf8(bin_op_text).unwrap_or("??");
     let suggested = if op_str == "&&" { "||" } else { "&&" };
     diagnostics.push(Diagnostic {
-        path: ctx.path.to_path_buf(),
+        path: std::sync::Arc::clone(&ctx.path_arc),
         line: pos.row + 1,
         column: pos.column + 1,
         rule_id: "de-morgan-simplify".into(),

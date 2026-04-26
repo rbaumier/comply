@@ -168,7 +168,7 @@ crate::ast_check! { on ["subscript_expression"] => |node, source, ctx, diagnosti
     let pos = node.start_position();
     let which = if is_first { "first" } else { "last" };
     diagnostics.push(Diagnostic {
-        path: ctx.path.to_path_buf(),
+        path: std::sync::Arc::clone(&ctx.path_arc),
         line: pos.row + 1,
         column: pos.column + 1,
         rule_id: "boundary-condition".into(),

@@ -21,7 +21,7 @@ crate::ast_check! { on ["comment"] => |node, source, ctx, diagnostics|
                     let body = tag.body.trim();
                     if !is_semverish(body) {
                         diagnostics.push(Diagnostic {
-                            path: ctx.path.to_path_buf(),
+                            path: std::sync::Arc::clone(&ctx.path_arc),
                             line: tag.line + line_offset,
                             column: 1,
                             rule_id: super::META.id.into(),
@@ -38,7 +38,7 @@ crate::ast_check! { on ["comment"] => |node, source, ctx, diagnostics|
                     let body = tag.body.trim();
                     if body.is_empty() {
                         diagnostics.push(Diagnostic {
-                            path: ctx.path.to_path_buf(),
+                            path: std::sync::Arc::clone(&ctx.path_arc),
                             line: tag.line + line_offset,
                             column: 1,
                             rule_id: super::META.id.into(),

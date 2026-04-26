@@ -43,7 +43,7 @@ fn check_block(
                     } else if HOOKS.contains(&name) && seen_test {
                         let pos = expr.start_position();
                         diagnostics.push(Diagnostic {
-                            path: ctx.path.to_path_buf(),
+                            path: std::sync::Arc::clone(&ctx.path_arc),
                             line: pos.row + 1,
                             column: pos.column + 1,
                             rule_id: "playwright-prefer-hooks-on-top".into(),

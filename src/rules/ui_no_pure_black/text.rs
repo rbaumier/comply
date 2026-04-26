@@ -7,7 +7,7 @@ crate::ast_check! { on ["declaration"] => |node, source, ctx, diagnostics|
     let Some((offender, label)) = find_pure_black(node, source) else { return };
     let pos = offender.start_position();
     diagnostics.push(Diagnostic {
-        path: ctx.path.to_path_buf(),
+        path: std::sync::Arc::clone(&ctx.path_arc),
         line: pos.row + 1,
         column: pos.column + 1,
         rule_id: super::META.id.into(),

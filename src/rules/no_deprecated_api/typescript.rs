@@ -31,7 +31,7 @@ match node.kind() {
             if name == "Buffer" {
                 let pos = node.start_position();
                 diagnostics.push(Diagnostic {
-                    path: ctx.path.to_path_buf(),
+                    path: std::sync::Arc::clone(&ctx.path_arc),
                     line: pos.row + 1,
                     column: pos.column + 1,
                     rule_id: "no-deprecated-api".into(),
@@ -56,7 +56,7 @@ match node.kind() {
                             if val == module {
                                 let pos = node.start_position();
                                 diagnostics.push(Diagnostic {
-                                    path: ctx.path.to_path_buf(),
+                                    path: std::sync::Arc::clone(&ctx.path_arc),
                                     line: pos.row + 1,
                                     column: pos.column + 1,
                                     rule_id: "no-deprecated-api".into(),
@@ -81,7 +81,7 @@ match node.kind() {
                     if obj_text == o && prop_text == p {
                         let pos = node.start_position();
                         diagnostics.push(Diagnostic {
-                            path: ctx.path.to_path_buf(),
+                            path: std::sync::Arc::clone(&ctx.path_arc),
                             line: pos.row + 1,
                             column: pos.column + 1,
                             rule_id: "no-deprecated-api".into(),
@@ -112,7 +112,7 @@ match node.kind() {
                                 }
                     let pos = node.start_position();
                     diagnostics.push(Diagnostic {
-                        path: ctx.path.to_path_buf(),
+                        path: std::sync::Arc::clone(&ctx.path_arc),
                         line: pos.row + 1,
                         column: pos.column + 1,
                         rule_id: "no-deprecated-api".into(),

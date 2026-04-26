@@ -35,7 +35,7 @@ crate::ast_check! { on ["import_statement"] => |node, source, ctx, diagnostics|
                 if !seen.insert(local_name.to_string()) {
                     let pos = spec.start_position();
                     diagnostics.push(Diagnostic {
-                        path: ctx.path.to_path_buf(),
+                        path: std::sync::Arc::clone(&ctx.path_arc),
                         line: pos.row + 1,
                         column: pos.column + 1,
                         rule_id: "import-dedupe".into(),

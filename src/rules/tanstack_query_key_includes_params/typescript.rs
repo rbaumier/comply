@@ -196,7 +196,7 @@ crate::ast_check! { on ["pair"] => |node, source, ctx, diagnostics|
         .collect::<Vec<_>>()
         .join(", ");
     diagnostics.push(Diagnostic {
-        path: ctx.path.to_path_buf(),
+        path: std::sync::Arc::clone(&ctx.path_arc),
         line: pos.row + 1,
         column: pos.column + 1,
         rule_id: "tanstack-query-key-includes-params".into(),

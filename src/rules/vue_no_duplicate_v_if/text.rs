@@ -42,7 +42,7 @@ impl TextCheck for Check {
                 }
                 for &neg_line in neg_lines {
                     diagnostics.push(Diagnostic {
-                        path: ctx.path.to_path_buf(),
+                        path: std::sync::Arc::clone(&ctx.path_arc),
                         line: neg_line,
                         column: 1,
                         rule_id: "vue-no-duplicate-v-if".into(),

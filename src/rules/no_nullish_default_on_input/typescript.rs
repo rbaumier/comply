@@ -125,7 +125,7 @@ impl AstCheck for Check {
             let op_text = &c.op_text;
             let name = &c.name;
             diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
+                path: std::sync::Arc::clone(&ctx.path_arc),
                 line: c.line,
                 column: c.column,
                 rule_id: "no-nullish-default-on-input".into(),

@@ -76,7 +76,7 @@ crate::ast_check! { on ["function_declaration", "arrow_function"] => |node, sour
 
     for (line, column) in positions {
         diagnostics.push(Diagnostic {
-            path: ctx.path.to_path_buf(),
+            path: std::sync::Arc::clone(&ctx.path_arc),
             line,
             column,
             rule_id: "react-no-this-in-sfc".into(),

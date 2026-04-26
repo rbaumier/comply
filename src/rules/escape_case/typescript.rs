@@ -49,7 +49,7 @@ crate::ast_check! { on ["string", "template_string"] => |node, source, ctx, diag
         };
 
         diagnostics.push(Diagnostic {
-            path: ctx.path.to_path_buf(),
+            path: std::sync::Arc::clone(&ctx.path_arc),
             line: base_line + newlines + 1,
             column: col + 1,
             rule_id: "escape-case".into(),

@@ -72,7 +72,7 @@ impl AstCheck for Check {
         for arm in wildcard_arms {
             let pos = arm.start_position();
             diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
+                path: std::sync::Arc::clone(&ctx.path_arc),
                 line: pos.row + 1,
                 column: pos.column + 1,
                 rule_id: "rust-explicit-enum-match-arms".into(),

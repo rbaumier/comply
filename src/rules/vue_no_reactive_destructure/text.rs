@@ -24,7 +24,7 @@ impl TextCheck for Check {
                 && trimmed.contains("= reactive(")
             {
                 diagnostics.push(Diagnostic {
-                    path: ctx.path.to_path_buf(),
+                    path: std::sync::Arc::clone(&ctx.path_arc),
                     line: idx + 1,
                     column: 1,
                     rule_id: "vue-no-reactive-destructure".into(),

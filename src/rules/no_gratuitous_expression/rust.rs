@@ -13,7 +13,7 @@ match node.kind() {
             if inner == "true" {
                 let pos = node.start_position();
                 diagnostics.push(Diagnostic {
-                    path: ctx.path.to_path_buf(),
+                    path: std::sync::Arc::clone(&ctx.path_arc),
                     line: pos.row + 1,
                     column: pos.column + 1,
                     rule_id: "no-gratuitous-expression".into(),
@@ -24,7 +24,7 @@ match node.kind() {
             } else if inner == "false" {
                 let pos = node.start_position();
                 diagnostics.push(Diagnostic {
-                    path: ctx.path.to_path_buf(),
+                    path: std::sync::Arc::clone(&ctx.path_arc),
                     line: pos.row + 1,
                     column: pos.column + 1,
                     rule_id: "no-gratuitous-expression".into(),
@@ -40,7 +40,7 @@ match node.kind() {
             if text.ends_with("&& false") || text.contains("&& false)") || text.contains("&& false;") {
                 let pos = node.start_position();
                 diagnostics.push(Diagnostic {
-                    path: ctx.path.to_path_buf(),
+                    path: std::sync::Arc::clone(&ctx.path_arc),
                     line: pos.row + 1,
                     column: pos.column + 1,
                     rule_id: "no-gratuitous-expression".into(),
@@ -53,7 +53,7 @@ match node.kind() {
             if text.ends_with("|| true") || text.contains("|| true)") || text.contains("|| true;") {
                 let pos = node.start_position();
                 diagnostics.push(Diagnostic {
-                    path: ctx.path.to_path_buf(),
+                    path: std::sync::Arc::clone(&ctx.path_arc),
                     line: pos.row + 1,
                     column: pos.column + 1,
                     rule_id: "no-gratuitous-expression".into(),
@@ -81,7 +81,7 @@ match node.kind() {
                     "Gratuitous expression: comparison `x == x` is always true."
                 };
                 diagnostics.push(Diagnostic {
-                    path: ctx.path.to_path_buf(),
+                    path: std::sync::Arc::clone(&ctx.path_arc),
                     line: pos.row + 1,
                     column: pos.column + 1,
                     rule_id: "no-gratuitous-expression".into(),

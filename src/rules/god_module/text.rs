@@ -59,7 +59,7 @@ impl TextCheck for Check {
         // Percentage shown in the message is floor(importer_count * 100 / total).
         let percent = (importer_count * 100) / total_files;
         vec![Diagnostic {
-            path: ctx.path.to_path_buf(),
+            path: std::sync::Arc::clone(&ctx.path_arc),
             line: 1,
             column: 1,
             rule_id: RULE_ID.into(),
@@ -110,6 +110,7 @@ mod tests {
         let file_ctx = FileCtx::empty();
         let ctx = CheckCtx {
             path: &target_path,
+            path_arc: std::sync::Arc::from(target_path.as_path()),
             source: &source,
             config: &config,
             project: &project,

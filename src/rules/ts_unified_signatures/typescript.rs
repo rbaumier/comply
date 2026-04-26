@@ -47,7 +47,7 @@ crate::ast_check! { on ["interface_body", "object_type"] => |node, source, ctx, 
                 format!("`{name}` signatures")
             };
             diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
+                path: std::sync::Arc::clone(&ctx.path_arc),
                 line: row + 1,
                 column: 1,
                 rule_id: "ts-unified-signatures".into(),

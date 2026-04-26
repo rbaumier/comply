@@ -59,7 +59,7 @@ crate::ast_check! { on ["function_item", "closure_expression"] => |node, _source
     if has_value && has_bare {
         let pos = node.start_position();
         diagnostics.push(Diagnostic {
-            path: ctx.path.to_path_buf(),
+            path: std::sync::Arc::clone(&ctx.path_arc),
             line: pos.row + 1,
             column: pos.column + 1,
             rule_id: "no-inconsistent-returns".into(),

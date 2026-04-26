@@ -18,7 +18,7 @@ impl TextCheck for Check {
         for elem in extract_elements(ctx.source) {
             if DISTRACTING.contains(&elem.tag) {
                 diagnostics.push(Diagnostic {
-                    path: ctx.path.to_path_buf(),
+                    path: std::sync::Arc::clone(&ctx.path_arc),
                     line: elem.line,
                     column: 1,
                     rule_id: "a11y-no-distracting-elements".into(),

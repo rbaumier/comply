@@ -55,7 +55,7 @@ impl crate::rules::backend::AstCheck for Check {
                 let span = scoping.symbol_span(symbol_id);
                 let (line, column) = byte_offset_to_line_col(ctx.source, span.start as usize);
                 diagnostics.push(Diagnostic {
-                    path: ctx.path.to_path_buf(),
+                    path: std::sync::Arc::clone(&ctx.path_arc),
                     line,
                     column,
                     rule_id: "ts-no-unused-vars".into(),

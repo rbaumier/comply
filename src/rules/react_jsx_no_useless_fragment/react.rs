@@ -50,7 +50,7 @@ crate::ast_check! { on ["jsx_element"] => |node, source, ctx, diagnostics|
     if meaningful_children <= 1 {
         let pos = node.start_position();
         diagnostics.push(Diagnostic {
-            path: ctx.path.to_path_buf(),
+            path: std::sync::Arc::clone(&ctx.path_arc),
             line: pos.row + 1,
             column: pos.column + 1,
             rule_id: "react-jsx-no-useless-fragment".into(),

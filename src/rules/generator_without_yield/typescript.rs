@@ -84,7 +84,7 @@ impl AstCheck for Check {
                 }
                 if !has_yield {
                     diagnostics.push(Diagnostic {
-                        path: ctx.path.to_path_buf(),
+                        path: std::sync::Arc::clone(&ctx.path_arc),
                         line: start_line + 1,
                         column: col + 1,
                         rule_id: "generator-without-yield".into(),

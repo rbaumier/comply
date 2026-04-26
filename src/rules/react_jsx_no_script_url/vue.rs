@@ -18,7 +18,7 @@ impl TextCheck for Check {
                 && href.to_ascii_lowercase().contains("javascript:")
             {
                 diagnostics.push(Diagnostic {
-                    path: ctx.path.to_path_buf(),
+                    path: std::sync::Arc::clone(&ctx.path_arc),
                     line: elem.line,
                     column: 1,
                     rule_id: "react-jsx-no-script-url".into(),

@@ -187,7 +187,7 @@ impl AstCheck for Check {
                     let prop_text = &c.prop_text;
                     let obj_text = &c.obj_text;
                     diagnostics.push(Diagnostic {
-                        path: ctx.path.to_path_buf(),
+                        path: std::sync::Arc::clone(&ctx.path_arc),
                         line: c.line,
                         column: c.column,
                         rule_id: "consistent-destructuring".into(),

@@ -16,7 +16,7 @@ crate::ast_check! { on ["comment"] => |node, source, ctx, diagnostics|
     if stripped.starts_with("tslint:enable") || stripped.starts_with("tslint:disable") {
         let pos = node.start_position();
         diagnostics.push(Diagnostic {
-            path: ctx.path.to_path_buf(),
+            path: std::sync::Arc::clone(&ctx.path_arc),
             line: pos.row + 1,
             column: pos.column + 1,
             rule_id: "ts-ban-tslint-comment".into(),

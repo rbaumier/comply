@@ -124,7 +124,7 @@ impl AstCheck for Check {
         for (idx, line) in ctx.source.lines().enumerate() {
             if has_implicit_length_check(line) {
                 diagnostics.push(Diagnostic {
-                    path: ctx.path.to_path_buf(),
+                    path: std::sync::Arc::clone(&ctx.path_arc),
                     line: idx + 1,
                     column: 1,
                     rule_id: "explicit-length-check".into(),

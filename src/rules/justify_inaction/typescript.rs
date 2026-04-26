@@ -45,7 +45,7 @@ fn flag_empty(
     }
     let pos = container.start_position();
     diagnostics.push(Diagnostic {
-        path: ctx.path.to_path_buf(),
+        path: std::sync::Arc::clone(&ctx.path_arc),
         line: pos.row + 1,
         column: pos.column + 1,
         rule_id: "justify-inaction".into(),
@@ -104,7 +104,7 @@ match node.kind() {
             if body_empty {
                 let pos = node.start_position();
                 diagnostics.push(Diagnostic {
-                    path: ctx.path.to_path_buf(),
+                    path: std::sync::Arc::clone(&ctx.path_arc),
                     line: pos.row + 1,
                     column: pos.column + 1,
                     rule_id: "justify-inaction".into(),

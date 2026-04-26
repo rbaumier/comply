@@ -106,7 +106,7 @@ crate::ast_check! { on ["assignment_pattern", "required_parameter", "optional_pa
     };
 
     diagnostics.push(Diagnostic {
-        path: ctx.path.to_path_buf(),
+        path: std::sync::Arc::clone(&ctx.path_arc),
         line: pos.row + 1,
         column: pos.column + 1,
         rule_id: "no-object-as-default-parameter".into(),

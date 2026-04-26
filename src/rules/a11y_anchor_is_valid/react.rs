@@ -25,7 +25,7 @@ crate::ast_check! { on ["jsx_self_closing_element", "jsx_opening_element"] => |n
 
     if !has_href {
         diagnostics.push(Diagnostic {
-            path: ctx.path.to_path_buf(),
+            path: std::sync::Arc::clone(&ctx.path_arc),
             line: pos.row + 1,
             column: pos.column + 1,
             rule_id: "a11y-anchor-is-valid".into(),
@@ -39,7 +39,7 @@ crate::ast_check! { on ["jsx_self_closing_element", "jsx_opening_element"] => |n
     if let Some(val) = &href_value {
         if val == "\"#\"" || val == "'#'" {
             diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
+                path: std::sync::Arc::clone(&ctx.path_arc),
                 line: pos.row + 1,
                 column: pos.column + 1,
                 rule_id: "a11y-anchor-is-valid".into(),
@@ -49,7 +49,7 @@ crate::ast_check! { on ["jsx_self_closing_element", "jsx_opening_element"] => |n
             });
         } else if val.contains("javascript:") {
             diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
+                path: std::sync::Arc::clone(&ctx.path_arc),
                 line: pos.row + 1,
                 column: pos.column + 1,
                 rule_id: "a11y-anchor-is-valid".into(),

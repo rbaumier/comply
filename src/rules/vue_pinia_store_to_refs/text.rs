@@ -18,7 +18,7 @@ impl TextCheck for Check {
                 && !t.contains("storeToRefs(")
             {
                 diags.push(Diagnostic {
-                    path: ctx.path.to_path_buf(),
+                    path: std::sync::Arc::clone(&ctx.path_arc),
                     line: i + 1,
                     column: 1,
                     rule_id: super::META.id.into(),

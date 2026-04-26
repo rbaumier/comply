@@ -96,7 +96,7 @@ fn check_banned_word(
     }
     let pos = node.start_position();
     Some(Diagnostic {
-        path: path.to_path_buf(),
+        path: path.to_path_buf().into(),
         line: pos.row + 1,
         column: pos.column + 1,
         rule_id: "no-generic-names".into(),
@@ -125,7 +125,7 @@ fn check_banned_prefix(
     let prefix = matched_banned_prefix(name)?;
     let pos = node.start_position();
     Some(Diagnostic {
-        path: path.to_path_buf(),
+        path: path.to_path_buf().into(),
         line: pos.row + 1,
         column: pos.column + 1,
         rule_id: "no-generic-names".into(),

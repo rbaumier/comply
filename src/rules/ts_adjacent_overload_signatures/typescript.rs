@@ -42,7 +42,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         if was_seen && !is_adjacent {
             let pos = child.start_position();
             diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
+                path: std::sync::Arc::clone(&ctx.path_arc),
                 line: pos.row + 1,
                 column: pos.column + 1,
                 rule_id: "ts-adjacent-overload-signatures".into(),

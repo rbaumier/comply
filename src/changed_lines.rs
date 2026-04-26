@@ -57,7 +57,7 @@ pub fn changed_lines(mode: &ScanMode) -> Result<ChangedLines> {
 #[must_use]
 pub fn diag_in_diff(diag: &Diagnostic, changed: &ChangedLines) -> bool {
     changed
-        .get(&diag.path)
+        .get(diag.path.as_ref() as &Path)
         .is_some_and(|lines| lines.contains(&diag.line))
 }
 
@@ -289,7 +289,7 @@ diff --git a/x.rs b/x.rs
         let diff = "+++ b/m.rs\n@@ -0,0 +3,2 @@\n+a\n+b\n";
         let changed = parse_unified_diff(diff);
         let on_hit = Diagnostic {
-            path: PathBuf::from("m.rs"),
+            path: std::sync::Arc::from(std::path::Path::new("m.rs")),
             line: 4,
             column: 1,
             rule_id: "r".into(),
@@ -298,7 +298,7 @@ diff --git a/x.rs b/x.rs
             span: None,
         };
         let on_miss = Diagnostic {
-            path: PathBuf::from("m.rs"),
+            path: std::sync::Arc::from(std::path::Path::new("m.rs")),
             line: 10,
             column: 1,
             rule_id: "r".into(),
@@ -315,7 +315,7 @@ diff --git a/x.rs b/x.rs
         use crate::diagnostic::Severity;
         let changed: ChangedLines = HashMap::new();
         let diag = Diagnostic {
-            path: PathBuf::from("nope.rs"),
+            path: std::sync::Arc::from(std::path::Path::new("nope.rs")),
             line: 1,
             column: 1,
             rule_id: "r".into(),
@@ -333,7 +333,7 @@ diff --git a/x.rs b/x.rs
         let changed = parse_unified_diff(diff);
         let mut diags = vec![
             Diagnostic {
-                path: PathBuf::from("k.rs"),
+                path: std::sync::Arc::from(std::path::Path::new("k.rs")),
                 line: 5,
                 column: 1,
                 rule_id: "keep".into(),
@@ -342,7 +342,7 @@ diff --git a/x.rs b/x.rs
                 span: None,
             },
             Diagnostic {
-                path: PathBuf::from("k.rs"),
+                path: std::sync::Arc::from(std::path::Path::new("k.rs")),
                 line: 99,
                 column: 1,
                 rule_id: "drop".into(),

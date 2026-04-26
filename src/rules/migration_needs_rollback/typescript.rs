@@ -72,7 +72,7 @@ impl AstCheck for Check {
         let (has_up, has_down) = *st;
         if has_up && !has_down {
             diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
+                path: std::sync::Arc::clone(&ctx.path_arc),
                 line: 1,
                 column: 1,
                 rule_id: "migration-needs-rollback".into(),

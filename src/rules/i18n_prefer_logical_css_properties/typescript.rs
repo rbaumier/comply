@@ -70,7 +70,7 @@ crate::ast_check! { on ["string", "template_string"] => |node, source, ctx, diag
                     col + 1
                 };
                 diagnostics.push(Diagnostic {
-                    path: ctx.path.to_path_buf(),
+                    path: std::sync::Arc::clone(&ctx.path_arc),
                     line: line_no,
                     column,
                     rule_id: super::META.id.into(),

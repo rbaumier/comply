@@ -27,6 +27,7 @@ use crate::diagnostic::Diagnostic;
 use crate::project::ProjectCtx;
 use crate::rules::file_ctx::FileCtx;
 use std::path::Path;
+use std::sync::Arc;
 
 /// Read-only context handed to in-process check implementations.
 ///
@@ -34,9 +35,14 @@ use std::path::Path;
 /// overrides). `project` exposes parsed manifests and framework detection
 /// loaded once per run. `file` exposes per-file directives, RSC classification
 /// and path-segment flags built per file in `dispatch_backends`.
+///
+/// `path_arc` is the same path as `path`, but reference-counted so rules can
+/// hand it to `Diagnostic` without per-diagnostic `to_path_buf()` allocation.
+/// The Arc is built once per file in `dispatch_with_lang`.
 #[derive(Debug)]
 pub struct CheckCtx<'a> {
     pub path: &'a Path,
+    pub path_arc: Arc<Path>,
     pub source: &'a str,
     pub config: &'a Config,
     pub project: &'a ProjectCtx,
@@ -53,6 +59,7 @@ impl<'a> CheckCtx<'a> {
     pub fn for_test(path: &'a Path, source: &'a str) -> Self {
         Self {
             path,
+            path_arc: Arc::from(path),
             source,
             config: default_static_config(),
             project: crate::project::default_static_project_ctx(),
@@ -72,6 +79,7 @@ impl<'a> CheckCtx<'a> {
     ) -> Self {
         Self {
             path,
+            path_arc: Arc::from(path),
             source,
             config: default_static_config(),
             project,
@@ -89,6 +97,7 @@ impl<'a> CheckCtx<'a> {
     ) -> Self {
         Self {
             path,
+            path_arc: Arc::from(path),
             source,
             config: default_static_config(),
             project: crate::project::default_static_project_ctx(),
@@ -107,6 +116,7 @@ impl<'a> CheckCtx<'a> {
     ) -> Self {
         Self {
             path,
+            path_arc: Arc::from(path),
             source,
             config: default_static_config(),
             project,

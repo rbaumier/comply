@@ -21,7 +21,7 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     // `cors()` with no arguments — defaults to `origin: '*'`.
     if args_text == "()" {
         diagnostics.push(Diagnostic {
-            path: ctx.path.to_path_buf(),
+            path: std::sync::Arc::clone(&ctx.path_arc),
             line: pos.row + 1,
             column: pos.column + 1,
             rule_id: "hono-cors-permissive".into(),
@@ -37,7 +37,7 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     // `origin: '*'` or `origin: "*"`.
     if norm.contains("origin:'*'") || norm.contains("origin:\"*\"") {
         diagnostics.push(Diagnostic {
-            path: ctx.path.to_path_buf(),
+            path: std::sync::Arc::clone(&ctx.path_arc),
             line: pos.row + 1,
             column: pos.column + 1,
             rule_id: "hono-cors-permissive".into(),
@@ -54,7 +54,7 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
             && !norm.contains("origin:\"*\"");
         if !has_specific_origin {
             diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
+                path: std::sync::Arc::clone(&ctx.path_arc),
                 line: pos.row + 1,
                 column: pos.column + 1,
                 rule_id: "hono-cors-permissive".into(),

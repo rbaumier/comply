@@ -44,7 +44,7 @@ impl TextCheck for Check {
                 let key_pattern = format!(":key=\"{index_var}\"");
                 if line.contains(&key_pattern) {
                     diagnostics.push(Diagnostic {
-                        path: ctx.path.to_path_buf(),
+                        path: std::sync::Arc::clone(&ctx.path_arc),
                         line: elem.line,
                         column: 1,
                         rule_id: "react-no-array-index-key".into(),

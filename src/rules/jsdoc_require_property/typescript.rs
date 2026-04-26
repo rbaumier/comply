@@ -29,7 +29,7 @@ crate::ast_check! { on ["comment"] => |node, source, ctx, diagnostics|
             .any(|t| matches!(t.name.as_str(), "property" | "prop"));
         if !has_property {
             diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
+                path: std::sync::Arc::clone(&ctx.path_arc),
                 line: typedef.line + line_offset,
                 column: 1,
                 rule_id: super::META.id.into(),

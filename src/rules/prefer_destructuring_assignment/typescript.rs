@@ -58,7 +58,7 @@ crate::ast_check! { on ["statement_block", "program"] => |node, source, ctx, dia
             if count >= 2 {
                 let pos = child.start_position();
                 diagnostics.push(Diagnostic {
-                    path: ctx.path.to_path_buf(),
+                    path: std::sync::Arc::clone(&ctx.path_arc),
                     line: pos.row + 1,
                     column: pos.column + 1,
                     rule_id: "prefer-destructuring-assignment".into(),

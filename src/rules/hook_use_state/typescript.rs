@@ -62,7 +62,7 @@ impl crate::rules::backend::AstCheck for Check {
                 let span = setter_ident.span();
                 let (line, column) = byte_offset_to_line_col(ctx.source, span.start as usize);
                 diagnostics.push(Diagnostic {
-                    path: ctx.path.to_path_buf(),
+                    path: std::sync::Arc::clone(&ctx.path_arc),
                     line,
                     column,
                     rule_id: "hook-use-state".into(),

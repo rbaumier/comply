@@ -20,7 +20,7 @@ impl TextCheck for Check {
         match (template_line, script_line) {
             (Some(tl), Some(sl)) if tl < sl => {
                 vec![Diagnostic {
-                    path: ctx.path.to_path_buf(),
+                    path: std::sync::Arc::clone(&ctx.path_arc),
                     line: tl + 1,
                     column: 1,
                     rule_id: super::META.id.into(),

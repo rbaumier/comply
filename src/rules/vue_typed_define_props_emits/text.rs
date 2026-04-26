@@ -29,7 +29,7 @@ crate::ast_check! { on ["component"] => |node, source, ctx, diagnostics|
             for pat in runtime_starts {
                 if line.contains(pat) {
                     diagnostics.push(Diagnostic {
-                        path: ctx.path.to_path_buf(),
+                        path: std::sync::Arc::clone(&ctx.path_arc),
                         line: idx + 1,
                         column: 1,
                         rule_id: super::META.id.into(),

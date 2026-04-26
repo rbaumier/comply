@@ -69,7 +69,7 @@ impl TextCheck for Check {
             for w in keys.windows(2) {
                 if w[0].to_lowercase() > w[1].to_lowercase() {
                     diagnostics.push(Diagnostic {
-                        path: ctx.path.to_path_buf(),
+                        path: std::sync::Arc::clone(&ctx.path_arc),
                         line: section_line,
                         column: 1,
                         rule_id: "package-json-sorted-deps".into(),

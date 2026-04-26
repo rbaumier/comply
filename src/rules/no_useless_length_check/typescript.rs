@@ -91,7 +91,7 @@ crate::ast_check! { on ["binary_expression"] => |node, source, ctx, diagnostics|
                 && len_name == call_name && method == "some" {
                     let pos = left.start_position();
                     diagnostics.push(Diagnostic {
-                        path: ctx.path.to_path_buf(),
+                        path: std::sync::Arc::clone(&ctx.path_arc),
                         line: pos.row + 1,
                         column: pos.column + 1,
                         rule_id: "no-useless-length-check".into(),
@@ -109,7 +109,7 @@ crate::ast_check! { on ["binary_expression"] => |node, source, ctx, diagnostics|
                 && len_name == call_name && method == "every" {
                     let pos = left.start_position();
                     diagnostics.push(Diagnostic {
-                        path: ctx.path.to_path_buf(),
+                        path: std::sync::Arc::clone(&ctx.path_arc),
                         line: pos.row + 1,
                         column: pos.column + 1,
                         rule_id: "no-useless-length-check".into(),

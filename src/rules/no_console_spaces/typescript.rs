@@ -48,7 +48,7 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
         if !is_first && val.len() > 1 && val.starts_with(' ') && !val.starts_with("  ") {
             let pos = arg.start_position();
             diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
+                path: std::sync::Arc::clone(&ctx.path_arc),
                 line: pos.row + 1,
                 column: pos.column + 1,
                 rule_id: "no-console-spaces".into(),
@@ -62,7 +62,7 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
         if !is_last && val.len() > 1 && val.ends_with(' ') && !val.ends_with("  ") {
             let pos = arg.start_position();
             diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
+                path: std::sync::Arc::clone(&ctx.path_arc),
                 line: pos.row + 1,
                 column: pos.column + 1,
                 rule_id: "no-console-spaces".into(),

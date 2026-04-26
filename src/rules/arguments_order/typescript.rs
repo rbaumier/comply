@@ -125,7 +125,7 @@ fn check_call_args(
     if let Some(swap) = find_likely_swap(params, &args) {
         let pos = call.start_position();
         diagnostics.push(Diagnostic {
-            path: path.to_path_buf(),
+            path: path.to_path_buf().into(),
             line: pos.row + 1,
             column: pos.column + 1,
             rule_id: "arguments-order".into(),

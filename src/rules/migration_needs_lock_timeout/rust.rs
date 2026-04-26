@@ -13,7 +13,7 @@ crate::ast_check! { on ["string_literal", "raw_string_literal"] => |node, source
     if super::declares_lock_timeout(text) { return; }
     let pos = node.start_position();
     diagnostics.push(Diagnostic {
-        path: ctx.path.to_path_buf(),
+        path: std::sync::Arc::clone(&ctx.path_arc),
         line: pos.row + 1,
         column: pos.column + 1,
         rule_id: "migration-needs-lock-timeout".into(),

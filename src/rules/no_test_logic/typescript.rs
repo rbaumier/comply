@@ -140,7 +140,7 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     for (hit, label) in hits {
         let pos = hit.start_position();
         diagnostics.push(Diagnostic {
-            path: ctx.path.to_path_buf(),
+            path: std::sync::Arc::clone(&ctx.path_arc),
             line: pos.row + 1,
             column: pos.column + 1,
             rule_id: "no-test-logic".into(),

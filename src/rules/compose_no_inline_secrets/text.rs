@@ -44,7 +44,7 @@ crate::ast_check! { on ["block_mapping_pair"] => |node, source, ctx, diagnostics
             let value_node = pair.named_child(1).unwrap_or(pair);
             let pos = value_node.start_position();
             diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
+                path: std::sync::Arc::clone(&ctx.path_arc),
                 line: pos.row + 1,
                 column: 1,
                 rule_id: super::META.id.into(),
@@ -78,7 +78,7 @@ crate::ast_check! { on ["block_mapping_pair"] => |node, source, ctx, diagnostics
             if val.is_empty() || is_var_ref(val) { continue; }
             let pos = item_value.start_position();
             diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
+                path: std::sync::Arc::clone(&ctx.path_arc),
                 line: pos.row + 1,
                 column: 1,
                 rule_id: super::META.id.into(),

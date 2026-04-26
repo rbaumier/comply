@@ -19,7 +19,7 @@ match node.kind() {
             let var_name = name_node.utf8_text(source).unwrap_or("");
             let pos = node.start_position();
             diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
+                path: std::sync::Arc::clone(&ctx.path_arc),
                 line: pos.row + 1,
                 column: pos.column + 1,
                 rule_id: "no-this-assignment".into(),
@@ -39,7 +39,7 @@ match node.kind() {
             let var_name = left.utf8_text(source).unwrap_or("");
             let pos = node.start_position();
             diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
+                path: std::sync::Arc::clone(&ctx.path_arc),
                 line: pos.row + 1,
                 column: pos.column + 1,
                 rule_id: "no-this-assignment".into(),

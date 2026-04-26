@@ -19,7 +19,7 @@ impl TextCheck for Check {
                 i > 0 && (lines[i - 1].contains("sanitize") || lines[i - 1].contains("// safe"));
             if !prev_has_sanitize {
                 diags.push(Diagnostic {
-                    path: ctx.path.to_path_buf(),
+                    path: std::sync::Arc::clone(&ctx.path_arc),
                     line: i + 1,
                     column: line.find("v-html").unwrap_or(0) + 1,
                     rule_id: super::META.id.into(),

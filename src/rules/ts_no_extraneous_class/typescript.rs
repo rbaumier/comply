@@ -28,7 +28,7 @@ crate::ast_check! { on ["class_declaration", "class"] => |node, source, ctx, dia
     if members.is_empty() {
         let pos = node.start_position();
         diagnostics.push(Diagnostic {
-            path: ctx.path.to_path_buf(),
+            path: std::sync::Arc::clone(&ctx.path_arc),
             line: pos.row + 1,
             column: pos.column + 1,
             rule_id: "ts-no-extraneous-class".into(),
@@ -106,7 +106,7 @@ crate::ast_check! { on ["class_declaration", "class"] => |node, source, ctx, dia
     };
     let pos = node.start_position();
     diagnostics.push(Diagnostic {
-        path: ctx.path.to_path_buf(),
+        path: std::sync::Arc::clone(&ctx.path_arc),
         line: pos.row + 1,
         column: pos.column + 1,
         rule_id: "ts-no-extraneous-class".into(),

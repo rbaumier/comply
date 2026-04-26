@@ -22,7 +22,7 @@ impl TextCheck for Check {
             let has_tabindex = has_attr(elem.attrs, "tabindex");
             if has_handler && has_role && !has_tabindex {
                 diagnostics.push(Diagnostic {
-                    path: ctx.path.to_path_buf(),
+                    path: std::sync::Arc::clone(&ctx.path_arc),
                     line: elem.line,
                     column: 1,
                     rule_id: "a11y-interactive-supports-focus".into(),

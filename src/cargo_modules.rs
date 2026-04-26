@@ -85,7 +85,7 @@ fn parse_orphans(text: &str, workspace: &Path) -> Vec<Diagnostic> {
         let path_part = rest[at_pos + 4..].trim().to_string();
         let absolute = workspace.join(&path_part);
         diagnostics.push(Diagnostic {
-            path: absolute,
+            path: absolute.into(),
             line: 1,
             column: 1,
             rule_id: RULE_ID.into(),

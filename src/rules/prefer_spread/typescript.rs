@@ -15,7 +15,7 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
         if obj_text == "Array" && prop_text == "from" {
             let pos = node.start_position();
             diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
+                path: std::sync::Arc::clone(&ctx.path_arc),
                 line: pos.row + 1,
                 column: pos.column + 1,
                 rule_id: "prefer-spread".into(),
@@ -30,7 +30,7 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
         if prop_text == "concat" {
             let pos = node.start_position();
             diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
+                path: std::sync::Arc::clone(&ctx.path_arc),
                 line: pos.row + 1,
                 column: pos.column + 1,
                 rule_id: "prefer-spread".into(),
@@ -56,7 +56,7 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
             if is_copy {
                 let pos = node.start_position();
                 diagnostics.push(Diagnostic {
-                    path: ctx.path.to_path_buf(),
+                    path: std::sync::Arc::clone(&ctx.path_arc),
                     line: pos.row + 1,
                     column: pos.column + 1,
                     rule_id: "prefer-spread".into(),

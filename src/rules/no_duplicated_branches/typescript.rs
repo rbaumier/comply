@@ -33,7 +33,7 @@ crate::ast_check! { on ["if_statement"] => |node, source, ctx, diagnostics|
             }
             if bodies[i].1 == bodies[j].1 && reported.insert(bodies[j].0) {
                 diagnostics.push(Diagnostic {
-                    path: ctx.path.to_path_buf(),
+                    path: std::sync::Arc::clone(&ctx.path_arc),
                     line: bodies[j].0,
                     column: 1,
                     rule_id: "no-duplicated-branches".into(),

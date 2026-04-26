@@ -28,7 +28,7 @@ impl TextCheck for Check {
                 || has_attr(elem.attrs, "v-on:keypress");
             if !has_key {
                 diagnostics.push(Diagnostic {
-                    path: ctx.path.to_path_buf(),
+                    path: std::sync::Arc::clone(&ctx.path_arc),
                     line: elem.line,
                     column: 1,
                     rule_id: "a11y-click-events-have-key-events".into(),

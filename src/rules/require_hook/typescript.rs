@@ -170,7 +170,7 @@ crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
         }
         let pos = stmt.start_position();
         diagnostics.push(Diagnostic {
-            path: ctx.path.to_path_buf(),
+            path: std::sync::Arc::clone(&ctx.path_arc),
             line: pos.row + 1,
             column: pos.column + 1,
             rule_id: "require-hook".into(),

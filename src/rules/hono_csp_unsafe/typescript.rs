@@ -19,7 +19,7 @@ crate::ast_check! { on ["string_fragment"] => |node, source, ctx, diagnostics|
     if text.contains("unsafe-inline") {
         let pos = node.start_position();
         diagnostics.push(Diagnostic {
-            path: ctx.path.to_path_buf(),
+            path: std::sync::Arc::clone(&ctx.path_arc),
             line: pos.row + 1,
             column: pos.column + 1,
             rule_id: "hono-csp-unsafe".into(),
@@ -32,7 +32,7 @@ crate::ast_check! { on ["string_fragment"] => |node, source, ctx, diagnostics|
     if text.contains("unsafe-eval") {
         let pos = node.start_position();
         diagnostics.push(Diagnostic {
-            path: ctx.path.to_path_buf(),
+            path: std::sync::Arc::clone(&ctx.path_arc),
             line: pos.row + 1,
             column: pos.column + 1,
             rule_id: "hono-csp-unsafe".into(),
@@ -54,7 +54,7 @@ crate::ast_check! { on ["string_fragment"] => |node, source, ctx, diagnostics|
                     if key_text == "defaultSrc" {
                         let pos = node.start_position();
                         diagnostics.push(Diagnostic {
-                            path: ctx.path.to_path_buf(),
+                            path: std::sync::Arc::clone(&ctx.path_arc),
                             line: pos.row + 1,
                             column: pos.column + 1,
                             rule_id: "hono-csp-unsafe".into(),

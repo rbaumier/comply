@@ -41,7 +41,7 @@ crate::ast_check! { on ["program"] => |node, _source, ctx, diagnostics|
 
     for (name, line) in duplicates {
         diagnostics.push(Diagnostic {
-            path: ctx.path.to_path_buf(),
+            path: std::sync::Arc::clone(&ctx.path_arc),
             line,
             column: 1,
             rule_id: "import-export".into(),

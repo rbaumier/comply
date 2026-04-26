@@ -25,7 +25,7 @@ impl TextCheck for Check {
         let line = source[..html_offset].bytes().filter(|b| *b == b'\n').count() + 1;
 
         vec![Diagnostic {
-            path: ctx.path.to_path_buf(),
+            path: std::sync::Arc::clone(&ctx.path_arc),
             line,
             column: 1,
             rule_id: super::META.id.into(),

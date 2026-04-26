@@ -80,7 +80,7 @@ crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
         if level > max_seen + 1 {
             let pos = heading_node.start_position();
             diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
+                path: std::sync::Arc::clone(&ctx.path_arc),
                 line: pos.row + 1,
                 column: pos.column + 1,
                 rule_id: "html-no-skip-heading-levels".into(),

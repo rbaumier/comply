@@ -37,7 +37,7 @@ impl AstCheck for Check {
         for (idx, line) in lines.iter().enumerate() {
             if line.contains("setCookie(") && !has_safe_samesite(&lines, idx) {
                 diagnostics.push(Diagnostic {
-                    path: ctx.path.to_path_buf(),
+                    path: std::sync::Arc::clone(&ctx.path_arc),
                     line: idx + 1,
                     column: 1,
                     rule_id: "hono-cookie-no-samesite".into(),

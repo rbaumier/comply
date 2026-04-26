@@ -23,7 +23,7 @@ crate::ast_check! { on ["binary_expression"] => |node, source, ctx, diagnostics|
     if has_nan && matches!(op, "+" | "-" | "*" | "/") {
         let pos = node.start_position();
         diagnostics.push(Diagnostic {
-            path: ctx.path.to_path_buf(),
+            path: std::sync::Arc::clone(&ctx.path_arc),
             line: pos.row + 1,
             column: pos.column + 1,
             rule_id: "operation-returning-nan".into(),
@@ -38,7 +38,7 @@ crate::ast_check! { on ["binary_expression"] => |node, source, ctx, diagnostics|
     if op == "/" && (right_text == "0" || right_text == "0.0") {
         let pos = node.start_position();
         diagnostics.push(Diagnostic {
-            path: ctx.path.to_path_buf(),
+            path: std::sync::Arc::clone(&ctx.path_arc),
             line: pos.row + 1,
             column: pos.column + 1,
             rule_id: "operation-returning-nan".into(),

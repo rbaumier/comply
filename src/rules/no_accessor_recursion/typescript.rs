@@ -97,7 +97,7 @@ crate::ast_check! { on ["this"] => |node, source, ctx, diagnostics|
         if !is_write_target {
             let pos = parent.start_position();
             diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
+                path: std::sync::Arc::clone(&ctx.path_arc),
                 line: pos.row + 1,
                 column: pos.column + 1,
                 rule_id: "no-accessor-recursion".into(),
@@ -123,7 +123,7 @@ crate::ast_check! { on ["this"] => |node, source, ctx, diagnostics|
         if is_write_target {
             let pos = parent.start_position();
             diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
+                path: std::sync::Arc::clone(&ctx.path_arc),
                 line: pos.row + 1,
                 column: pos.column + 1,
                 rule_id: "no-accessor-recursion".into(),

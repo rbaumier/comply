@@ -42,7 +42,7 @@ crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
                     if inner.kind() == "function_declaration" && !is_async_func(inner, source) {
                         let pos = inner.start_position();
                         diagnostics.push(Diagnostic {
-                            path: ctx.path.to_path_buf(),
+                            path: std::sync::Arc::clone(&ctx.path_arc),
                             line: pos.row + 1,
                             column: pos.column + 1,
                             rule_id: "react-async-server-action".into(),
@@ -76,7 +76,7 @@ crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
                         if is_use_server(stmt, source) && !is_async_func(n, source) {
                             let pos = n.start_position();
                             diagnostics.push(Diagnostic {
-                                path: ctx.path.to_path_buf(),
+                                path: std::sync::Arc::clone(&ctx.path_arc),
                                 line: pos.row + 1,
                                 column: pos.column + 1,
                                 rule_id: "react-async-server-action".into(),

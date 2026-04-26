@@ -25,7 +25,7 @@ crate::ast_check! { on ["import_statement", "export_statement"] => |node, source
                         let stmt_type = if kind == "import_statement" { "import" } else { "export" };
                         let pos = child.start_position();
                         diagnostics.push(Diagnostic {
-                            path: ctx.path.to_path_buf(),
+                            path: std::sync::Arc::clone(&ctx.path_arc),
                             line: pos.row + 1,
                             column: pos.column + 1,
                             rule_id: "require-module-attributes".into(),
@@ -54,7 +54,7 @@ crate::ast_check! { on ["import_statement", "export_statement"] => |node, source
                 let stmt_type = if kind == "import_statement" { "import" } else { "export" };
                 let pos = node.start_position();
                 diagnostics.push(Diagnostic {
-                    path: ctx.path.to_path_buf(),
+                    path: std::sync::Arc::clone(&ctx.path_arc),
                     line: pos.row + 1,
                     column: pos.column + 1,
                     rule_id: "require-module-attributes".into(),

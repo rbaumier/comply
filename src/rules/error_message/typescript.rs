@@ -40,7 +40,7 @@ crate::ast_check! { on ["new_expression", "call_expression"] => |node, source, c
                     if !BUILTIN_ERRORS.contains(&ctor_name) { return; }
                     let pos = node.start_position();
                     diagnostics.push(Diagnostic {
-                        path: ctx.path.to_path_buf(),
+                        path: std::sync::Arc::clone(&ctx.path_arc),
                         line: pos.row + 1,
                         column: pos.column + 1,
                         rule_id: "error-message".into(),
@@ -104,7 +104,7 @@ crate::ast_check! { on ["new_expression", "call_expression"] => |node, source, c
             // No message argument provided.
             let pos = node.start_position();
             diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
+                path: std::sync::Arc::clone(&ctx.path_arc),
                 line: pos.row + 1,
                 column: pos.column + 1,
                 rule_id: "error-message".into(),
@@ -123,7 +123,7 @@ crate::ast_check! { on ["new_expression", "call_expression"] => |node, source, c
             if kind == "array" || kind == "object" {
                 let pos = arg.start_position();
                 diagnostics.push(Diagnostic {
-                    path: ctx.path.to_path_buf(),
+                    path: std::sync::Arc::clone(&ctx.path_arc),
                     line: pos.row + 1,
                     column: pos.column + 1,
                     rule_id: "error-message".into(),
@@ -138,7 +138,7 @@ crate::ast_check! { on ["new_expression", "call_expression"] => |node, source, c
             if kind == "string" && (text == "\"\"" || text == "''") {
                 let pos = arg.start_position();
                 diagnostics.push(Diagnostic {
-                    path: ctx.path.to_path_buf(),
+                    path: std::sync::Arc::clone(&ctx.path_arc),
                     line: pos.row + 1,
                     column: pos.column + 1,
                     rule_id: "error-message".into(),
@@ -153,7 +153,7 @@ crate::ast_check! { on ["new_expression", "call_expression"] => |node, source, c
             if kind == "template_string" && text == "``" {
                 let pos = arg.start_position();
                 diagnostics.push(Diagnostic {
-                    path: ctx.path.to_path_buf(),
+                    path: std::sync::Arc::clone(&ctx.path_arc),
                     line: pos.row + 1,
                     column: pos.column + 1,
                     rule_id: "error-message".into(),
@@ -168,7 +168,7 @@ crate::ast_check! { on ["new_expression", "call_expression"] => |node, source, c
             if kind == "number" || kind == "true" || kind == "false" {
                 let pos = arg.start_position();
                 diagnostics.push(Diagnostic {
-                    path: ctx.path.to_path_buf(),
+                    path: std::sync::Arc::clone(&ctx.path_arc),
                     line: pos.row + 1,
                     column: pos.column + 1,
                     rule_id: "error-message".into(),

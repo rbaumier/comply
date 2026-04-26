@@ -179,7 +179,7 @@ crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
         let pos = input.start_position();
         let name = get_jsx_element_name(input, source).unwrap_or("input");
         diagnostics.push(Diagnostic {
-            path: ctx.path.to_path_buf(),
+            path: std::sync::Arc::clone(&ctx.path_arc),
             line: pos.row + 1,
             column: pos.column + 1,
             rule_id: "html-require-input-label".into(),

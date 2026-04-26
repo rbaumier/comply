@@ -80,7 +80,7 @@ impl TextCheck for Check {
             .map(|key| {
                 let line = find_line_for_key(ctx.source, &key);
                 Diagnostic {
-                    path: ctx.path.to_path_buf(),
+                    path: std::sync::Arc::clone(&ctx.path_arc),
                     line,
                     column: 1,
                     rule_id: super::META.id.into(),

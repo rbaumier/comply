@@ -63,7 +63,7 @@ crate::ast_check! { on ["import_statement"] => |node, source, ctx, diagnostics|
 
     let pos = node.start_position();
     diagnostics.push(Diagnostic {
-        path: ctx.path.to_path_buf(),
+        path: std::sync::Arc::clone(&ctx.path_arc),
         line: pos.row + 1,
         column: pos.column + 1,
         rule_id: "ts-no-restricted-imports".into(),
@@ -115,6 +115,7 @@ mod tests {
         let tree = parser.parse(source, None).expect("parse");
         let ctx = CheckCtx {
             path: Path::new("t.ts"),
+            path_arc: std::sync::Arc::from(Path::new("t.ts")),
             source,
             config: &cfg,
             project: crate::project::default_static_project_ctx(),

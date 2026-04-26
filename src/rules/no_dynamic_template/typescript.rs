@@ -22,7 +22,7 @@ match node.kind() {
                 if lhs_text.ends_with(prop) {
                     let pos = node.start_position();
                     diagnostics.push(Diagnostic {
-                        path: ctx.path.to_path_buf(),
+                        path: std::sync::Arc::clone(&ctx.path_arc),
                         line: pos.row + 1,
                         column: pos.column + 1,
                         rule_id: "no-dynamic-template".into(),
@@ -40,7 +40,7 @@ match node.kind() {
             if lhs_text.ends_with("location.href") || lhs_text == "location.href" {
                 let pos = node.start_position();
                 diagnostics.push(Diagnostic {
-                    path: ctx.path.to_path_buf(),
+                    path: std::sync::Arc::clone(&ctx.path_arc),
                     line: pos.row + 1,
                     column: pos.column + 1,
                     rule_id: "no-dynamic-template".into(),
@@ -57,7 +57,7 @@ match node.kind() {
                 if name == *method || name.ends_with(&format!(".{method}")) {
                     let pos = node.start_position();
                     diagnostics.push(Diagnostic {
-                        path: ctx.path.to_path_buf(),
+                        path: std::sync::Arc::clone(&ctx.path_arc),
                         line: pos.row + 1,
                         column: pos.column + 1,
                         rule_id: "no-dynamic-template".into(),
@@ -78,7 +78,7 @@ match node.kind() {
             if text.contains("dangerouslySetInnerHTML") {
                 let pos = node.start_position();
                 diagnostics.push(Diagnostic {
-                    path: ctx.path.to_path_buf(),
+                    path: std::sync::Arc::clone(&ctx.path_arc),
                     line: pos.row + 1,
                     column: pos.column + 1,
                     rule_id: "no-dynamic-template".into(),

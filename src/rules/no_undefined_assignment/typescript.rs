@@ -18,7 +18,7 @@ crate::ast_check! { on ["variable_declarator", "assignment_expression"] => |node
 
     let pos = node.start_position();
     diagnostics.push(Diagnostic {
-        path: ctx.path.to_path_buf(),
+        path: std::sync::Arc::clone(&ctx.path_arc),
         line: pos.row + 1,
         column: pos.column + 1,
         rule_id: "no-undefined-assignment".into(),

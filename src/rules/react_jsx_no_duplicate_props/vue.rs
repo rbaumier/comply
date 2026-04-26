@@ -20,7 +20,7 @@ impl TextCheck for Check {
             for name in &names {
                 if !seen.insert(*name) {
                     diagnostics.push(Diagnostic {
-                        path: ctx.path.to_path_buf(),
+                        path: std::sync::Arc::clone(&ctx.path_arc),
                         line: elem.line,
                         column: 1,
                         rule_id: "react-jsx-no-duplicate-props".into(),

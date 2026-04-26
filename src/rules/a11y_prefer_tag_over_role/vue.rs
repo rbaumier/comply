@@ -28,7 +28,7 @@ impl TextCheck for Check {
                 for &(mapped_role, suggested) in ROLE_TO_TAG {
                     if role == mapped_role {
                         diagnostics.push(Diagnostic {
-                            path: ctx.path.to_path_buf(),
+                            path: std::sync::Arc::clone(&ctx.path_arc),
                             line: elem.line,
                             column: 1,
                             rule_id: "a11y-prefer-tag-over-role".into(),

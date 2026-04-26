@@ -43,7 +43,7 @@ crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
     if next_start_row == import_end_row + 1 {
         let pos = last_import.start_position();
         diagnostics.push(Diagnostic {
-            path: ctx.path.to_path_buf(),
+            path: std::sync::Arc::clone(&ctx.path_arc),
             line: pos.row + 1,
             column: 1,
             rule_id: "newline-after-import".into(),

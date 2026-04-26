@@ -35,7 +35,7 @@ crate::ast_check! { on ["comment"] => |node, source, ctx, diagnostics|
             for (bad, good) in PREFERENCES {
                 if contains_identifier(type_expr, bad) {
                     diagnostics.push(Diagnostic {
-                        path: ctx.path.to_path_buf(),
+                        path: std::sync::Arc::clone(&ctx.path_arc),
                         line: tag.line + line_offset,
                         column: 1,
                         rule_id: super::META.id.into(),

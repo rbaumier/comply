@@ -25,7 +25,7 @@ impl TextCheck for Check {
             // If not self-closing and has text content, flag it
             if !elem.self_closing && has_text_content(ctx.source, elem.line - 1, elem.tag) {
                 diagnostics.push(Diagnostic {
-                    path: ctx.path.to_path_buf(),
+                    path: std::sync::Arc::clone(&ctx.path_arc),
                     line: elem.line,
                     column: 1,
                     rule_id: "react-void-dom-elements-no-children".into(),

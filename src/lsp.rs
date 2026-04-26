@@ -216,7 +216,7 @@ fn comply_to_lsp_diagnostic(d: &ComplyDiagnostic) -> LspDiagnostic {
             Severity::Error => DiagnosticSeverity::ERROR,
             Severity::Warning => DiagnosticSeverity::WARNING,
         }),
-        code: Some(tower_lsp::lsp_types::NumberOrString::String(d.rule_id.clone())),
+        code: Some(tower_lsp::lsp_types::NumberOrString::String(d.rule_id.clone().into_owned())),
         source: Some("comply".to_string()),
         message: d.message.clone(),
         ..LspDiagnostic::default()
@@ -230,7 +230,7 @@ mod tests {
     #[test]
     fn comply_diag_maps_to_one_indexed_lsp_position() {
         let d = ComplyDiagnostic {
-            path: PathBuf::from("/tmp/x.ts"),
+            path: std::sync::Arc::from(std::path::Path::new("/tmp/x.ts")),
             line: 10,
             column: 5,
             rule_id: "no-throw".into(),
@@ -247,7 +247,7 @@ mod tests {
     #[test]
     fn line_zero_does_not_underflow() {
         let d = ComplyDiagnostic {
-            path: PathBuf::from("/tmp/x.ts"),
+            path: std::sync::Arc::from(std::path::Path::new("/tmp/x.ts")),
             line: 0,
             column: 0,
             rule_id: "x".into(),

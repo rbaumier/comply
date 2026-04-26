@@ -101,7 +101,7 @@ fn convert_findings(findings: Vec<Finding>, workspace: &Path) -> Result<Vec<Diag
         let (line, column) =
             byte_offset_to_line_col(&manifest_path, offset).unwrap_or((1, 1));
         diagnostics.push(Diagnostic {
-            path: manifest_path,
+            path: manifest_path.into(),
             line,
             column,
             rule_id: RULE_ID.into(),

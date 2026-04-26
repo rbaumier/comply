@@ -41,7 +41,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 && ((m1 == "add" && m2 == "remove") || (m1 == "remove" && m2 == "add")) {
                     let pos = node.start_position();
                     diagnostics.push(Diagnostic {
-                        path: ctx.path.to_path_buf(),
+                        path: std::sync::Arc::clone(&ctx.path_arc),
                         line: pos.row + 1,
                         column: pos.column + 1,
                         rule_id: "prefer-classlist-toggle".into(),
@@ -71,7 +71,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 && ((m1 == "add" && m2 == "remove") || (m1 == "remove" && m2 == "add")) {
                     let pos = node.start_position();
                     diagnostics.push(Diagnostic {
-                        path: ctx.path.to_path_buf(),
+                        path: std::sync::Arc::clone(&ctx.path_arc),
                         line: pos.row + 1,
                         column: pos.column + 1,
                         rule_id: "prefer-classlist-toggle".into(),
@@ -106,7 +106,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         if has_add && has_remove {
             let pos = node.start_position();
             diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
+                path: std::sync::Arc::clone(&ctx.path_arc),
                 line: pos.row + 1,
                 column: pos.column + 1,
                 rule_id: "prefer-classlist-toggle".into(),

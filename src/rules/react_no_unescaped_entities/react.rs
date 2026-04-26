@@ -15,7 +15,7 @@ crate::ast_check! { on ["jsx_text"] => |node, source, ctx, diagnostics|
         if text.contains(*ch) {
             let pos = node.start_position();
             diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
+                path: std::sync::Arc::clone(&ctx.path_arc),
                 line: pos.row + 1,
                 column: pos.column + 1,
                 rule_id: "react-no-unescaped-entities".into(),

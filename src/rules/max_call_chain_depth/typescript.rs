@@ -58,7 +58,7 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     if depth > max {
         let pos = node.start_position();
         diagnostics.push(Diagnostic {
-            path: ctx.path.to_path_buf(),
+            path: std::sync::Arc::clone(&ctx.path_arc),
             line: pos.row + 1,
             column: pos.column + 1,
             rule_id: "max-call-chain-depth".into(),

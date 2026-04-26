@@ -27,7 +27,7 @@ crate::ast_check! { on ["switch_body"] => |node, source, ctx, diagnostics|
                 let default_node = node.named_child(di).unwrap();
                 let pos = default_node.start_position();
                 diagnostics.push(Diagnostic {
-                    path: ctx.path.to_path_buf(),
+                    path: std::sync::Arc::clone(&ctx.path_arc),
                     line: pos.row + 1,
                     column: pos.column + 1,
                     rule_id: "prefer-default-last".into(),

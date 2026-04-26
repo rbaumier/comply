@@ -32,7 +32,7 @@ impl TextCheck for Check {
                 // Skip if inside an HTML comment context or a <script> tag.
                 // Simple heuristic: just flag bare comment-like text.
                 diagnostics.push(Diagnostic {
-                    path: ctx.path.to_path_buf(),
+                    path: std::sync::Arc::clone(&ctx.path_arc),
                     line: lines_before + 1 + i,
                     column: 1,
                     rule_id: "react-jsx-no-comment-textnodes".into(),

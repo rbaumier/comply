@@ -81,7 +81,7 @@ impl AstCheck for Check {
             if lines.len() >= 2 {
                 for &line_num in lines {
                     diagnostics.push(Diagnostic {
-                        path: ctx.path.to_path_buf(),
+                        path: std::sync::Arc::clone(&ctx.path_arc),
                         line: line_num,
                         column: 1,
                         rule_id: "use-type-alias".into(),

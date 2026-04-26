@@ -24,7 +24,7 @@ match node.kind() {
             if key.kind() == "property_identifier" && is_then_name(key, source) {
                 let pos = key.start_position();
                 diagnostics.push(Diagnostic {
-                    path: ctx.path.to_path_buf(),
+                    path: std::sync::Arc::clone(&ctx.path_arc),
                     line: pos.row + 1,
                     column: pos.column + 1,
                     rule_id: "no-thenable".into(),
@@ -45,7 +45,7 @@ match node.kind() {
                 if is_then_name(name_node, source) {
                     let pos = name_node.start_position();
                     diagnostics.push(Diagnostic {
-                        path: ctx.path.to_path_buf(),
+                        path: std::sync::Arc::clone(&ctx.path_arc),
                         line: pos.row + 1,
                         column: pos.column + 1,
                         rule_id: "no-thenable".into(),
@@ -65,7 +65,7 @@ match node.kind() {
             if is_then_name(name_node, source) {
                 let pos = name_node.start_position();
                 diagnostics.push(Diagnostic {
-                    path: ctx.path.to_path_buf(),
+                    path: std::sync::Arc::clone(&ctx.path_arc),
                     line: pos.row + 1,
                     column: pos.column + 1,
                     rule_id: "no-thenable".into(),
@@ -85,7 +85,7 @@ match node.kind() {
             if is_then_name(name_node, source) {
                 let pos = name_node.start_position();
                 diagnostics.push(Diagnostic {
-                    path: ctx.path.to_path_buf(),
+                    path: std::sync::Arc::clone(&ctx.path_arc),
                     line: pos.row + 1,
                     column: pos.column + 1,
                     rule_id: "no-thenable".into(),
@@ -105,7 +105,7 @@ match node.kind() {
                             && is_then_name(name_node, source) {
                                 let pos = name_node.start_position();
                                 diagnostics.push(Diagnostic {
-                                    path: ctx.path.to_path_buf(),
+                                    path: std::sync::Arc::clone(&ctx.path_arc),
                                     line: pos.row + 1,
                                     column: pos.column + 1,
                                     rule_id: "no-thenable".into(),
@@ -128,7 +128,7 @@ match node.kind() {
                 && is_then_name(exp, source) {
                     let pos = exp.start_position();
                     diagnostics.push(Diagnostic {
-                        path: ctx.path.to_path_buf(),
+                        path: std::sync::Arc::clone(&ctx.path_arc),
                         line: pos.row + 1,
                         column: pos.column + 1,
                         rule_id: "no-thenable".into(),

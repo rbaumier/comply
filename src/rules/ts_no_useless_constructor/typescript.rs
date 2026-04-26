@@ -57,7 +57,7 @@ crate::ast_check! { on ["method_definition"] => |node, source, ctx, diagnostics|
     if stmts.is_empty() {
         let pos = node.start_position();
         diagnostics.push(Diagnostic {
-            path: ctx.path.to_path_buf(),
+            path: std::sync::Arc::clone(&ctx.path_arc),
             line: pos.row + 1,
             column: pos.column + 1,
             rule_id: "ts-no-useless-constructor".into(),
@@ -141,7 +141,7 @@ crate::ast_check! { on ["method_definition"] => |node, source, ctx, diagnostics|
     if formatted_params == arg_names {
         let pos = node.start_position();
         diagnostics.push(Diagnostic {
-            path: ctx.path.to_path_buf(),
+            path: std::sync::Arc::clone(&ctx.path_arc),
             line: pos.row + 1,
             column: pos.column + 1,
             rule_id: "ts-no-useless-constructor".into(),

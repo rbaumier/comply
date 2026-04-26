@@ -18,7 +18,7 @@ impl TextCheck for Check {
                 "img" => {
                     if !has_attr(elem.attrs, "alt") {
                         diagnostics.push(Diagnostic {
-                            path: ctx.path.to_path_buf(),
+                            path: std::sync::Arc::clone(&ctx.path_arc),
                             line: elem.line,
                             column: 1,
                             rule_id: "a11y-alt-text".into(),
@@ -31,7 +31,7 @@ impl TextCheck for Check {
                 "area" => {
                     if !has_attr(elem.attrs, "alt") {
                         diagnostics.push(Diagnostic {
-                            path: ctx.path.to_path_buf(),
+                            path: std::sync::Arc::clone(&ctx.path_arc),
                             line: elem.line,
                             column: 1,
                             rule_id: "a11y-alt-text".into(),
@@ -44,7 +44,7 @@ impl TextCheck for Check {
                 "input" => {
                     if elem.attrs.contains("type=\"image\"") && !has_attr(elem.attrs, "alt") {
                         diagnostics.push(Diagnostic {
-                            path: ctx.path.to_path_buf(),
+                            path: std::sync::Arc::clone(&ctx.path_arc),
                             line: elem.line,
                             column: 1,
                             rule_id: "a11y-alt-text".into(),

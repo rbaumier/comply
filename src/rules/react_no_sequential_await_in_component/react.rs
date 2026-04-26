@@ -99,7 +99,7 @@ fn flush_run(run: &mut Vec<AwaitStmt>, diagnostics: &mut Vec<Diagnostic>, path: 
     if run.len() >= 2 {
         for stmt in run.iter() {
             diagnostics.push(Diagnostic {
-                path: path.to_path_buf(),
+                path: path.to_path_buf().into(),
                 line: stmt.row + 1,
                 column: stmt.col + 1,
                 rule_id: "react-no-sequential-await-in-component".into(),

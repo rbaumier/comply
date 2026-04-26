@@ -49,7 +49,7 @@ impl TextCheck for Check {
             let has_inline_comment = line.contains("--");
             if !prev_is_comment && !has_inline_comment {
                 diags.push(Diagnostic {
-                    path: ctx.path.to_path_buf(),
+                    path: std::sync::Arc::clone(&ctx.path_arc),
                     line: i + 1,
                     column: 1,
                     rule_id: super::META.id.into(),

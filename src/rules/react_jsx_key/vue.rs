@@ -24,7 +24,7 @@ impl TextCheck for Check {
                 || has_attr(elem.attrs, "v-bind:key");
             if !has_key {
                 diagnostics.push(Diagnostic {
-                    path: ctx.path.to_path_buf(),
+                    path: std::sync::Arc::clone(&ctx.path_arc),
                     line: elem.line,
                     column: 1,
                     rule_id: "react-jsx-key".into(),

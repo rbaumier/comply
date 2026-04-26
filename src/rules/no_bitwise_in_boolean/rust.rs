@@ -42,7 +42,7 @@ crate::ast_check! { on ["if_expression", "while_expression"] => |node, source, c
     if has_bitwise_op(condition, source) {
         let pos = condition.start_position();
         diagnostics.push(Diagnostic {
-            path: ctx.path.to_path_buf(),
+            path: std::sync::Arc::clone(&ctx.path_arc),
             line: pos.row + 1,
             column: pos.column + 1,
             rule_id: "no-bitwise-in-boolean".into(),

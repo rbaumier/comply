@@ -45,7 +45,7 @@ crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
 
     for (line, col) in empty_export_positions {
         diagnostics.push(Diagnostic {
-            path: ctx.path.to_path_buf(),
+            path: std::sync::Arc::clone(&ctx.path_arc),
             line,
             column: col,
             rule_id: "ts-no-useless-empty-export".into(),

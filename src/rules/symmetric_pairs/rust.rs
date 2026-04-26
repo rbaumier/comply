@@ -91,7 +91,7 @@ impl AstCheck for Check {
                     let expected = format!("{counterpart_pfx}{suffix}");
                     if !names.iter().any(|n| *n == expected) {
                         diagnostics.push(Diagnostic {
-                            path: ctx.path.to_path_buf(),
+                            path: std::sync::Arc::clone(&ctx.path_arc),
                             line: *line,
                             column: *col,
                             rule_id: "symmetric-pairs".into(),

@@ -39,7 +39,7 @@ crate::ast_check! { on ["await_expression"] => |node, source, ctx, diagnostics|
             let pos = node.start_position();
             let loop_line = p.start_position().row + 1;
             diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
+                path: std::sync::Arc::clone(&ctx.path_arc),
                 line: pos.row + 1,
                 column: pos.column + 1,
                 rule_id: "db-no-n-plus-one".into(),
@@ -63,7 +63,7 @@ crate::ast_check! { on ["await_expression"] => |node, source, ctx, diagnostics|
                             let pos = node.start_position();
                             let loop_line = p.start_position().row + 1;
                             diagnostics.push(Diagnostic {
-                                path: ctx.path.to_path_buf(),
+                                path: std::sync::Arc::clone(&ctx.path_arc),
                                 line: pos.row + 1,
                                 column: pos.column + 1,
                                 rule_id: "db-no-n-plus-one".into(),

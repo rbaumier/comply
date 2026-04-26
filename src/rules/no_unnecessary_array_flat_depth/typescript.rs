@@ -28,7 +28,7 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     if arg.kind() == "number" && arg.utf8_text(source).unwrap_or("") == "1" {
         let pos = node.start_position();
         diagnostics.push(Diagnostic {
-            path: ctx.path.to_path_buf(),
+            path: std::sync::Arc::clone(&ctx.path_arc),
             line: pos.row + 1,
             column: pos.column + 1,
             rule_id: "no-unnecessary-array-flat-depth".into(),

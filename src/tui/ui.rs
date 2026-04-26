@@ -241,7 +241,7 @@ fn build_blocks<'a>(app: &'a App, width: u16) -> Vec<VisualBlock<'a>> {
                         }
                     }
 
-                    if let Some(meta) = meta_registry::lookup(&diag.rule_id) {
+                    if let Some(meta) = meta_registry::lookup(diag.rule_id.as_ref()) {
                         lines.push(Line::from(vec![
                             Span::raw("    "),
                             Span::styled(
@@ -272,7 +272,7 @@ fn build_blocks<'a>(app: &'a App, width: u16) -> Vec<VisualBlock<'a>> {
 }
 
 fn get_source_line<'a>(app: &'a App, diag: &Diagnostic) -> Option<&'a str> {
-    app.source_line(&diag.path, diag.line)
+    app.source_line(diag.path.as_ref(), diag.line)
 }
 
 fn build_caret_line(diag: &Diagnostic, source_line: &str) -> (String, String) {

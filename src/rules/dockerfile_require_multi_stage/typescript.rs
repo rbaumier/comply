@@ -26,7 +26,7 @@ crate::ast_check! { on ["source_file"] => |node, source, ctx, diagnostics|
     }
     let pos = from_nodes[0].start_position();
     diagnostics.push(Diagnostic {
-        path: ctx.path.to_path_buf(),
+        path: std::sync::Arc::clone(&ctx.path_arc),
         line: pos.row + 1,
         column: 1,
         rule_id: super::META.id.into(),

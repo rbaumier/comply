@@ -41,7 +41,7 @@ crate::ast_check! { on ["component"] => |node, source, ctx, diagnostics|
                     let is_word_after = after.is_alphanumeric() || after == '_';
                     if !is_word && !is_word_after {
                         diagnostics.push(Diagnostic {
-                            path: ctx.path.to_path_buf(),
+                            path: std::sync::Arc::clone(&ctx.path_arc),
                             line: base_line + idx + 1,
                             column: abs + 1,
                             rule_id: super::META.id.into(),

@@ -82,7 +82,7 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     if BANNED_DOMAINS.iter().any(|d| url.contains(d)) {
         let pos = first.start_position();
         diagnostics.push(Diagnostic {
-            path: ctx.path.to_path_buf(),
+            path: std::sync::Arc::clone(&ctx.path_arc),
             line: pos.row + 1,
             column: pos.column + 1,
             rule_id: "testing-no-real-external-service".into(),

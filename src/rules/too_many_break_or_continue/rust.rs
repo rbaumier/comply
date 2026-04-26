@@ -37,7 +37,7 @@ crate::ast_check! { on ["for_expression", "while_expression", "loop_expression"]
     if bc_count >= 2 {
         let pos = node.start_position();
         diagnostics.push(Diagnostic {
-            path: ctx.path.to_path_buf(),
+            path: std::sync::Arc::clone(&ctx.path_arc),
             line: pos.row + 1,
             column: pos.column + 1,
             rule_id: "too-many-break-or-continue".into(),

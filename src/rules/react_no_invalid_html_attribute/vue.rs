@@ -40,7 +40,7 @@ impl TextCheck for Check {
             for token in rel_val.split_whitespace() {
                 if !valid_rels.contains(&token) {
                     diagnostics.push(Diagnostic {
-                        path: ctx.path.to_path_buf(),
+                        path: std::sync::Arc::clone(&ctx.path_arc),
                         line: elem.line,
                         column: 1,
                         rule_id: "react-no-invalid-html-attribute".into(),

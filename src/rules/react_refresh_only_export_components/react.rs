@@ -88,7 +88,7 @@ crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
 
     for (name, line) in &non_component_exports {
         diagnostics.push(Diagnostic {
-            path: ctx.path.to_path_buf(),
+            path: std::sync::Arc::clone(&ctx.path_arc),
             line: *line,
             column: 1,
             rule_id: "react-refresh-only-export-components".into(),

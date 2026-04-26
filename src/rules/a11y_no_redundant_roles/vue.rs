@@ -26,7 +26,7 @@ impl TextCheck for Check {
                 for &(tag, redundant_role) in REDUNDANT_PAIRS {
                     if elem.tag == tag && role == redundant_role {
                         diagnostics.push(Diagnostic {
-                            path: ctx.path.to_path_buf(),
+                            path: std::sync::Arc::clone(&ctx.path_arc),
                             line: elem.line,
                             column: 1,
                             rule_id: "a11y-no-redundant-roles".into(),

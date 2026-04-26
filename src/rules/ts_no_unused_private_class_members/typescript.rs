@@ -110,7 +110,7 @@ crate::ast_check! { on ["class_declaration", "class"] => |node, source, ctx, dia
         let ref_count = all_references.iter().filter(|r| r.as_str() == name.as_str()).count();
         if ref_count == 0 {
             diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
+                path: std::sync::Arc::clone(&ctx.path_arc),
                 line: pos.row + 1,
                 column: pos.column + 1,
                 rule_id: "ts-no-unused-private-class-members".into(),

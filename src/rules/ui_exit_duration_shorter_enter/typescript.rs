@@ -38,7 +38,7 @@ crate::ast_check! { on ["jsx_opening_element", "jsx_self_closing_element"] => |n
     let report_node = exit_node.unwrap_or(node);
     let pos = report_node.start_position();
     diagnostics.push(Diagnostic {
-        path: ctx.path.to_path_buf(),
+        path: std::sync::Arc::clone(&ctx.path_arc),
         line: pos.row + 1,
         column: pos.column + 1,
         rule_id: super::META.id.into(),

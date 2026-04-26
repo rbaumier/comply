@@ -94,7 +94,7 @@ pub fn scan_dense_lines(
         }
         reported_lines.insert(start.row);
         diagnostics.push(Diagnostic {
-            path: ctx.path.to_path_buf(),
+            path: std::sync::Arc::clone(&ctx.path_arc),
             line: start.row + 1,
             column: 1,
             rule_id: "no-multi-op-oneliner".into(),

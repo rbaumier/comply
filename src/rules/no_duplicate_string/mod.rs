@@ -98,7 +98,7 @@ pub(super) fn collect_diagnostics(
         for node in &nodes[min_occurrences - 1..] {
             let pos = node.start_position();
             diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
+                path: std::sync::Arc::clone(&ctx.path_arc),
                 line: pos.row + 1,
                 column: pos.column + 1,
                 rule_id: "no-duplicate-string".into(),

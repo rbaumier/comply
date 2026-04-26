@@ -65,7 +65,7 @@ pub fn apply_suppressions(
         let is_suppressed = ignore_result
             .suppressions
             .get(&diag.line)
-            .is_some_and(|rules| rules.contains(diag.rule_id.as_str()));
+            .is_some_and(|rules| rules.contains(diag.rule_id.as_ref()));
         if !is_suppressed {
             result.push(diag);
         }
@@ -91,7 +91,7 @@ pub fn apply_to_all(
     let mut by_file: HashMap<std::path::PathBuf, Vec<Diagnostic>> =
         HashMap::with_capacity(diagnostics.len());
     for d in diagnostics {
-        let key = canonical_key(&d.path);
+        let key = canonical_key(d.path.as_ref());
         by_file.entry(key).or_default().push(d);
     }
 
@@ -128,9 +128,9 @@ mod tests {
     use super::*;
     use crate::diagnostic::Severity;
 
-    fn diag(line: usize, rule_id: &str) -> Diagnostic {
+    fn diag(line: usize, rule_id: &'static str) -> Diagnostic {
         Diagnostic {
-            path: Path::new("t.ts").to_path_buf(),
+            path: std::sync::Arc::from(Path::new("t.ts")),
             line,
             column: 1,
             rule_id: rule_id.into(),

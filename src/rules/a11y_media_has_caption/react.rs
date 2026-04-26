@@ -51,7 +51,7 @@ crate::ast_check! { on ["jsx_opening_element", "jsx_self_closing_element"] => |n
     if node.kind() == "jsx_self_closing_element" {
         let pos = node.start_position();
         diagnostics.push(Diagnostic {
-            path: ctx.path.to_path_buf(),
+            path: std::sync::Arc::clone(&ctx.path_arc),
             line: pos.row + 1,
             column: pos.column + 1,
             rule_id: "a11y-media-has-caption".into(),
@@ -73,7 +73,7 @@ crate::ast_check! { on ["jsx_opening_element", "jsx_self_closing_element"] => |n
     if !has_caption_track(parent, source) {
         let pos = node.start_position();
         diagnostics.push(Diagnostic {
-            path: ctx.path.to_path_buf(),
+            path: std::sync::Arc::clone(&ctx.path_arc),
             line: pos.row + 1,
             column: pos.column + 1,
             rule_id: "a11y-media-has-caption".into(),

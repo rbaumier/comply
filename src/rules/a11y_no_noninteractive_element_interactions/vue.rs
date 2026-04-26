@@ -28,7 +28,7 @@ impl TextCheck for Check {
             let has_role = has_attr(elem.attrs, "role");
             if has_handler && !has_role {
                 diagnostics.push(Diagnostic {
-                    path: ctx.path.to_path_buf(),
+                    path: std::sync::Arc::clone(&ctx.path_arc),
                     line: elem.line,
                     column: 1,
                     rule_id: "a11y-no-noninteractive-element-interactions".into(),

@@ -21,7 +21,7 @@ impl TextCheck for Check {
             return vec![];
         }
         vec![Diagnostic {
-            path: ctx.path.to_path_buf(),
+            path: std::sync::Arc::clone(&ctx.path_arc),
             line: 1,
             column: 1,
             rule_id: super::META.id.into(),

@@ -28,7 +28,7 @@ crate::ast_check! { on ["add_instruction"] => |node, source, ctx, diagnostics|
     if is_archive(trimmed) || is_remote(trimmed) { return; }
     let pos = node.start_position();
     diagnostics.push(Diagnostic {
-        path: ctx.path.to_path_buf(),
+        path: std::sync::Arc::clone(&ctx.path_arc),
         line: pos.row + 1,
         column: pos.column + 1,
         rule_id: super::META.id.into(),

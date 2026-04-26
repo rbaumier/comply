@@ -28,7 +28,7 @@ impl TextCheck for Check {
             if !line.contains(FORBIDDEN) { continue; }
             let column = line.find(FORBIDDEN).unwrap_or(0) + 1;
             diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
+                path: std::sync::Arc::clone(&ctx.path_arc),
                 line: idx + 1,
                 column,
                 rule_id: super::META.id.into(),

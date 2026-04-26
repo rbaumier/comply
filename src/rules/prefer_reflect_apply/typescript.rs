@@ -27,7 +27,7 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     let full_text = func.utf8_text(source).unwrap_or("");
     if full_text.contains("Function.prototype.apply.call") {
         diagnostics.push(Diagnostic {
-            path: ctx.path.to_path_buf(),
+            path: std::sync::Arc::clone(&ctx.path_arc),
             line: pos.row + 1,
             column: pos.column + 1,
             rule_id: "prefer-reflect-apply".into(),
@@ -39,7 +39,7 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     }
 
     diagnostics.push(Diagnostic {
-        path: ctx.path.to_path_buf(),
+        path: std::sync::Arc::clone(&ctx.path_arc),
         line: pos.row + 1,
         column: pos.column + 1,
         rule_id: "prefer-reflect-apply".into(),

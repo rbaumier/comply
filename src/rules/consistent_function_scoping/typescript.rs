@@ -86,7 +86,7 @@ impl crate::rules::backend::AstCheck for Check {
                     }
                 };
                 diagnostics.push(Diagnostic {
-                    path: ctx.path.to_path_buf(),
+                    path: std::sync::Arc::clone(&ctx.path_arc),
                     line,
                     column,
                     rule_id: "consistent-function-scoping".into(),

@@ -11,7 +11,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         if callee.kind() == "identifier" && callee.utf8_text(source).unwrap_or("") == "require" {
             let pos = node.start_position();
             diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
+                path: std::sync::Arc::clone(&ctx.path_arc),
                 line: pos.row + 1,
                 column: pos.column + 1,
                 rule_id: "import-no-commonjs".into(),
@@ -33,7 +33,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         if obj_name == "module" && prop_name == "exports" {
             let pos = node.start_position();
             diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
+                path: std::sync::Arc::clone(&ctx.path_arc),
                 line: pos.row + 1,
                 column: pos.column + 1,
                 rule_id: "import-no-commonjs".into(),

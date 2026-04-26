@@ -26,7 +26,7 @@ impl TextCheck for Check {
             for &ambiguous in AMBIGUOUS_TEXTS {
                 if trimmed == ambiguous {
                     diagnostics.push(Diagnostic {
-                        path: ctx.path.to_path_buf(),
+                        path: std::sync::Arc::clone(&ctx.path_arc),
                         line: elem.line,
                         column: 1,
                         rule_id: "a11y-anchor-ambiguous-text".into(),

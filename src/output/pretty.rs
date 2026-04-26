@@ -41,7 +41,7 @@ pub fn render_pretty(diagnostics: &[Diagnostic]) -> String {
     // Within a file we preserve the caller's original order.
     let mut by_file: BTreeMap<&std::path::Path, Vec<&Diagnostic>> = BTreeMap::new();
     for d in diagnostics {
-        by_file.entry(d.path.as_path()).or_default().push(d);
+        by_file.entry(d.path.as_ref()).or_default().push(d);
     }
 
     for (path, diags) in by_file {
@@ -69,7 +69,7 @@ pub fn render_pretty(diagnostics: &[Diagnostic]) -> String {
             let name = format!(" {}:{}:{} ", path.display(), d.line, d.column);
             let md = MietteDiag {
                 diag: d,
-                meta: meta_registry::lookup(&d.rule_id),
+                meta: meta_registry::lookup(d.rule_id.as_ref()),
                 source: NamedSource::new(name, Arc::clone(&source_arc)),
                 span: SourceSpan::new(span_pair.0.into(), span_pair.1),
             };
@@ -112,7 +112,7 @@ impl std::error::Error for MietteDiag<'_> {}
 
 impl miette::Diagnostic for MietteDiag<'_> {
     fn code<'b>(&'b self) -> Option<Box<dyn std::fmt::Display + 'b>> {
-        Some(Box::new(self.diag.rule_id.as_str()))
+        Some(Box::new(self.diag.rule_id.as_ref()))
     }
 
     fn severity(&self) -> Option<miette::Severity> {
@@ -165,7 +165,7 @@ mod tests {
     fn renders_rule_id_message_and_source_frame() {
         let path = write_fixture("fixture_a.ts", "const x = 1;\n");
         let diag = Diagnostic {
-            path: path.clone(),
+            path: std::sync::Arc::from(path.as_path()),
             line: 1,
             column: 7,
             rule_id: "no-weak-cipher".into(), // real rule id in registry
@@ -183,7 +183,7 @@ mod tests {
     fn unreadable_file_falls_back_to_eslint_line() {
         let path = PathBuf::from("/definitely/does/not/exist/xyz/foo.ts");
         let diag = Diagnostic {
-            path: path.clone(),
+            path: std::sync::Arc::from(path.as_path()),
             line: 10,
             column: 5,
             rule_id: "no-weak-cipher".into(),
@@ -202,7 +202,7 @@ mod tests {
     fn unknown_rule_id_still_renders_frame_without_help() {
         let path = write_fixture("fixture_b.ts", "abc\n");
         let diag = Diagnostic {
-            path,
+            path: std::sync::Arc::from(path.as_path()),
             line: 1,
             column: 1,
             rule_id: "not-a-real-rule-id".into(),
@@ -219,7 +219,7 @@ mod tests {
     fn diag_without_span_resolves_whole_line() {
         let path = write_fixture("fixture_c.ts", "first\nsecond\n");
         let diag = Diagnostic {
-            path,
+            path: std::sync::Arc::from(path.as_path()),
             line: 2,
             column: 1,
             rule_id: "no-weak-cipher".into(),

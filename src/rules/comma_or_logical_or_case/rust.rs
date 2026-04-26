@@ -20,7 +20,7 @@ crate::ast_check! { on ["match_arm"] => |node, source, ctx, diagnostics|
 
     let pos = pattern.start_position();
     diagnostics.push(Diagnostic {
-        path: ctx.path.to_path_buf(),
+        path: std::sync::Arc::clone(&ctx.path_arc),
         line: pos.row + 1,
         column: pos.column + 1,
         rule_id: "comma-or-logical-or-case".into(),

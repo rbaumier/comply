@@ -64,7 +64,7 @@ fn check_mock_call(
         if MOCKED_MODULES.contains(&module) {
             let pos = node.start_position();
             diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
+                path: std::sync::Arc::clone(&ctx.path_arc),
                 line: pos.row + 1,
                 column: pos.column + 1,
                 rule_id: "no-mock-fetch-directly".into(),
@@ -111,7 +111,7 @@ fn check_fetch_assignment(
         };
         let pos = node.start_position();
         diagnostics.push(Diagnostic {
-            path: ctx.path.to_path_buf(),
+            path: std::sync::Arc::clone(&ctx.path_arc),
             line: pos.row + 1,
             column: pos.column + 1,
             rule_id: "no-mock-fetch-directly".into(),

@@ -48,7 +48,7 @@ crate::ast_check! { on ["export_statement"] => |node, source, ctx, diagnostics|
         let label = if is_fn { "function" } else { "class" };
         let pos = node.start_position();
         diagnostics.push(Diagnostic {
-            path: ctx.path.to_path_buf(),
+            path: std::sync::Arc::clone(&ctx.path_arc),
             line: pos.row + 1,
             column: pos.column + 1,
             rule_id: "no-anonymous-default-export".into(),

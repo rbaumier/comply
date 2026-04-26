@@ -26,7 +26,7 @@ crate::ast_check! { on ["if_statement"] => |node, source, ctx, diagnostics|
                     if prev_text == cond_text {
                         let pos = cond.start_position();
                         diagnostics.push(Diagnostic {
-                            path: ctx.path.to_path_buf(),
+                            path: std::sync::Arc::clone(&ctx.path_arc),
                             line: pos.row + 1,
                             column: pos.column + 1,
                             rule_id: "no-identical-conditions".into(),

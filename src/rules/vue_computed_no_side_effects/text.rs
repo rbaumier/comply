@@ -54,7 +54,7 @@ crate::ast_check! { on ["component"] => |node, source, ctx, diagnostics|
             for marker in SIDE_EFFECT_MARKERS {
                 if line.contains(marker) {
                     diagnostics.push(Diagnostic {
-                        path: ctx.path.to_path_buf(),
+                        path: std::sync::Arc::clone(&ctx.path_arc),
                         line: base_line + line_off + 1,
                         column: 1,
                         rule_id: super::META.id.into(),
@@ -70,7 +70,7 @@ crate::ast_check! { on ["component"] => |node, source, ctx, diagnostics|
             let trimmed = line.trim_start();
             if trimmed.contains(".value =") && !trimmed.contains("==") {
                 diagnostics.push(Diagnostic {
-                    path: ctx.path.to_path_buf(),
+                    path: std::sync::Arc::clone(&ctx.path_arc),
                     line: base_line + line_off + 1,
                     column: 1,
                     rule_id: super::META.id.into(),

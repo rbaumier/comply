@@ -20,7 +20,7 @@ crate::ast_check! { on ["comment"] => |node, source, ctx, diagnostics|
     if text.contains("path=") || text.contains("types=") {
         let pos = node.start_position();
         diagnostics.push(Diagnostic {
-            path: ctx.path.to_path_buf(),
+            path: std::sync::Arc::clone(&ctx.path_arc),
             line: pos.row + 1,
             column: pos.column + 1,
             rule_id: "ts-triple-slash-reference".into(),

@@ -17,7 +17,7 @@ impl TextCheck for Check {
             let upper = line.to_ascii_uppercase();
             if let Some(ft) = FLOAT_TYPES.iter().find(|t| upper.contains(*t)) {
                 diagnostics.push(Diagnostic {
-                    path: ctx.path.to_path_buf(), line: idx + 1, column: 1,
+                    path: std::sync::Arc::clone(&ctx.path_arc), line: idx + 1, column: 1,
                     rule_id: "sql-no-float-for-money".into(),
                     message: format!("`{ft}` near a monetary column — use `NUMERIC(precision, scale)` to avoid floating-point rounding errors."),
                     severity: Severity::Error,

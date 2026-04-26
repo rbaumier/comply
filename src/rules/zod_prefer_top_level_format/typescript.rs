@@ -61,7 +61,7 @@ impl AstCheck for Check {
         {
             let pos = node.start_position();
             diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
+                path: std::sync::Arc::clone(&ctx.path_arc),
                 line: pos.row + 1,
                 column: pos.column + 1,
                 rule_id: "zod-prefer-top-level-format".into(),
@@ -78,7 +78,7 @@ impl AstCheck for Check {
         if method_name == "int" && is_z_number_call(object, source_bytes) {
             let pos = node.start_position();
             diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
+                path: std::sync::Arc::clone(&ctx.path_arc),
                 line: pos.row + 1,
                 column: pos.column + 1,
                 rule_id: "zod-prefer-top-level-format".into(),

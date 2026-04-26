@@ -44,7 +44,7 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
         if element.kind() == "await_expression" {
             let pos = element.start_position();
             diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
+                path: std::sync::Arc::clone(&ctx.path_arc),
                 line: pos.row + 1,
                 column: pos.column + 1,
                 rule_id: "no-await-in-promise-methods".into(),

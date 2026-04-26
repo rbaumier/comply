@@ -40,7 +40,7 @@ crate::ast_check! { on ["component"] => |node, source, ctx, diagnostics|
                 let arg = &line[after..after + close_rel];
                 if is_primitive_arg(arg) {
                     diagnostics.push(Diagnostic {
-                        path: ctx.path.to_path_buf(),
+                        path: std::sync::Arc::clone(&ctx.path_arc),
                         line: idx + 1,
                         column: abs + 1,
                         rule_id: super::META.id.into(),

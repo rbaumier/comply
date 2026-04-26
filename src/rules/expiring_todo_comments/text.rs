@@ -123,7 +123,7 @@ impl TextCheck for Check {
 
             if expired {
                 diagnostics.push(Diagnostic {
-                    path: ctx.path.to_path_buf(),
+                    path: std::sync::Arc::clone(&ctx.path_arc),
                     line: idx + 1,
                     column: 1,
                     rule_id: "expiring-todo-comments".into(),

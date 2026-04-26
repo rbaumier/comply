@@ -11,7 +11,7 @@ crate::ast_check! { on ["jsx_self_closing_element", "jsx_opening_element"] => |n
             let Ok(name) = name_node.utf8_text(source) else { return };
             let pos = name_node.start_position();
             diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
+                path: std::sync::Arc::clone(&ctx.path_arc),
                 line: pos.row + 1,
                 column: pos.column + 1,
                 rule_id: "react-no-namespace".into(),
@@ -34,7 +34,7 @@ crate::ast_check! { on ["jsx_self_closing_element", "jsx_opening_element"] => |n
             let Ok(name) = attr_name.utf8_text(source) else { continue };
             let pos = attr_name.start_position();
             diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
+                path: std::sync::Arc::clone(&ctx.path_arc),
                 line: pos.row + 1,
                 column: pos.column + 1,
                 rule_id: "react-no-namespace".into(),

@@ -30,7 +30,7 @@ crate::ast_check! { on ["enum_declaration"] => |node, source, ctx, diagnostics|
         if seen.contains(&val.to_string()) {
             let pos = value_node.start_position();
             diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
+                path: std::sync::Arc::clone(&ctx.path_arc),
                 line: pos.row + 1,
                 column: pos.column + 1,
                 rule_id: "ts-no-duplicate-enum-values".into(),

@@ -37,7 +37,7 @@ impl AstCheck for Check {
             let name = extract_exported_name(child, source).unwrap_or("<anonymous>");
             let pos = child.start_position();
             diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
+                path: std::sync::Arc::clone(&ctx.path_arc),
                 line: pos.row + 1,
                 column: pos.column + 1,
                 rule_id: "jsdoc-missing-example".into(),

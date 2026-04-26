@@ -51,7 +51,7 @@ crate::ast_check! { on ["type_annotation", "call_expression"] => |node, source, 
             }
             let pos = node.start_position();
             diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
+                path: std::sync::Arc::clone(&ctx.path_arc),
                 line: pos.row + 1,
                 column: pos.column + 1,
                 rule_id: "no-inferred-any".into(),
@@ -90,7 +90,7 @@ crate::ast_check! { on ["type_annotation", "call_expression"] => |node, source, 
                 "`.json()` returns `any` — add a type assertion or `satisfies` clause."
             };
             diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
+                path: std::sync::Arc::clone(&ctx.path_arc),
                 line: pos.row + 1,
                 column: pos.column + 1,
                 rule_id: "no-inferred-any".into(),

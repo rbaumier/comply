@@ -49,7 +49,7 @@ impl TextCheck for Check {
             }
             let line = lines_before + 1 + template[..open_lt].matches('\n').count();
             diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
+                path: std::sync::Arc::clone(&ctx.path_arc),
                 line,
                 column: 1,
                 rule_id: "react-self-closing-comp".into(),

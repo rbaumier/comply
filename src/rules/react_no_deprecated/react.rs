@@ -56,7 +56,7 @@ match node.kind() {
             let obj_str = std::str::from_utf8(obj).unwrap_or("?");
             let prop_str = std::str::from_utf8(prop).unwrap_or("?");
             diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
+                path: std::sync::Arc::clone(&ctx.path_arc),
                 line: pos.row + 1,
                 column: pos.column + 1,
                 rule_id: "react-no-deprecated".into(),
@@ -79,7 +79,7 @@ match node.kind() {
             let pos = node.start_position();
             let name_str = std::str::from_utf8(name_bytes).unwrap_or("?");
             diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
+                path: std::sync::Arc::clone(&ctx.path_arc),
                 line: pos.row + 1,
                 column: pos.column + 1,
                 rule_id: "react-no-deprecated".into(),

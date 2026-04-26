@@ -71,7 +71,7 @@ impl TextCheck for Check {
             for (needle, message) in PATTERNS {
                 if let Some(col) = line.find(needle) {
                     diags.push(Diagnostic {
-                        path: ctx.path.to_path_buf(),
+                        path: std::sync::Arc::clone(&ctx.path_arc),
                         line: i + 1,
                         column: col + 1,
                         rule_id: super::META.id.into(),

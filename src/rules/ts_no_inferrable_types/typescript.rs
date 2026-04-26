@@ -53,7 +53,7 @@ crate::ast_check! { on ["variable_declarator"] => |node, source, ctx, diagnostic
     if let Some(type_name) = is_inferrable(type_str, value_kind) {
         let pos = type_ann.start_position();
         diagnostics.push(Diagnostic {
-            path: ctx.path.to_path_buf(),
+            path: std::sync::Arc::clone(&ctx.path_arc),
             line: pos.row + 1,
             column: pos.column + 1,
             rule_id: "ts-no-inferrable-types".into(),

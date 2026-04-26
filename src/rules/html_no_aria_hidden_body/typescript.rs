@@ -48,7 +48,7 @@ crate::ast_check! { on ["jsx_opening_element", "jsx_self_closing_element"] => |n
         }
         let pos = child.start_position();
         diagnostics.push(Diagnostic {
-            path: ctx.path.to_path_buf(),
+            path: std::sync::Arc::clone(&ctx.path_arc),
             line: pos.row + 1,
             column: pos.column + 1,
             rule_id: "html-no-aria-hidden-body".into(),

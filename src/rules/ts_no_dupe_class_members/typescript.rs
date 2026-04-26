@@ -55,7 +55,7 @@ crate::ast_check! { on ["class_body"] => |node, source, ctx, diagnostics|
         // Flag all but the first with a body.
         for &(row, _) in &with_body[1..] {
             diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
+                path: std::sync::Arc::clone(&ctx.path_arc),
                 line: row + 1,
                 column: 1,
                 rule_id: "ts-no-dupe-class-members".into(),

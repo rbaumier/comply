@@ -24,7 +24,7 @@ impl TextCheck for Check {
                 || has_attr(elem.attrs, "role");
             if has_aria_or_role {
                 diagnostics.push(Diagnostic {
-                    path: ctx.path.to_path_buf(),
+                    path: std::sync::Arc::clone(&ctx.path_arc),
                     line: elem.line,
                     column: 1,
                     rule_id: "a11y-aria-unsupported-elements".into(),

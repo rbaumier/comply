@@ -85,7 +85,7 @@ fn check_if_branches(
             }
             if key(&branches[i]) == kj && reported.insert(branches[j].line) {
                 diagnostics.push(Diagnostic {
-                    path: ctx.path.to_path_buf(),
+                    path: std::sync::Arc::clone(&ctx.path_arc),
                     line: branches[j].line,
                     column: 1,
                     rule_id: "no-duplicated-branches".into(),
@@ -193,7 +193,7 @@ fn check_match_arms(
         for i in 0..j {
             if arm_bodies[i].1 == arm_bodies[j].1 && reported.insert(arm_bodies[j].0) {
                 diagnostics.push(Diagnostic {
-                    path: ctx.path.to_path_buf(),
+                    path: std::sync::Arc::clone(&ctx.path_arc),
                     line: arm_bodies[j].0,
                     column: 1,
                     rule_id: "no-duplicated-branches".into(),

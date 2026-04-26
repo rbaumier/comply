@@ -69,7 +69,7 @@ impl AstCheck for Check {
             return;
         }
         diagnostics.push(Diagnostic {
-            path: ctx.path.to_path_buf(),
+            path: std::sync::Arc::clone(&ctx.path_arc),
             line: hono_line.unwrap_or(1),
             column: 1,
             rule_id: "hono-missing-secure-headers".into(),

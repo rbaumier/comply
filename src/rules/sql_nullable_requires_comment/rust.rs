@@ -29,7 +29,7 @@ impl AstCheck for Check {
         let pos = node.start_position();
         for offset in super::nullable_lines_without_comment(text) {
             diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
+                path: std::sync::Arc::clone(&ctx.path_arc),
                 line: pos.row + 1 + offset,
                 column: 1,
                 rule_id: super::META.id.into(),

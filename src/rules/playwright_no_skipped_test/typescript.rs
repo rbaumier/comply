@@ -31,7 +31,7 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     if TEST_FNS.contains(&obj_text) && prop_text == "skip" {
         let pos = node.start_position();
         diagnostics.push(Diagnostic {
-            path: ctx.path.to_path_buf(),
+            path: std::sync::Arc::clone(&ctx.path_arc),
             line: pos.row + 1,
             column: pos.column + 1,
             rule_id: "playwright-no-skipped-test".into(),
@@ -51,7 +51,7 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
                 if TEST_FNS.contains(&inner_obj_text) && inner_prop_text == "skip" {
                     let pos = node.start_position();
                     diagnostics.push(Diagnostic {
-                        path: ctx.path.to_path_buf(),
+                        path: std::sync::Arc::clone(&ctx.path_arc),
                         line: pos.row + 1,
                         column: pos.column + 1,
                         rule_id: "playwright-no-skipped-test".into(),

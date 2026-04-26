@@ -25,7 +25,7 @@ impl TextCheck for Check {
                 while let Some(rel) = line[search_from..].find(pattern) {
                     let match_start = search_from + rel;
                     diagnostics.push(Diagnostic {
-                        path: ctx.path.to_path_buf(),
+                        path: std::sync::Arc::clone(&ctx.path_arc),
                         line: i + 1,
                         column: match_start + 1,
                         rule_id: super::META.id.into(),

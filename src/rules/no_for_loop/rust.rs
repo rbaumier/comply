@@ -22,7 +22,7 @@ crate::ast_check! { on ["while_expression"] => |node, source, ctx, diagnostics|
     if body_text.contains("+= 1") || body_text.contains("= i + 1") {
         let pos = node.start_position();
         diagnostics.push(Diagnostic {
-            path: ctx.path.to_path_buf(),
+            path: std::sync::Arc::clone(&ctx.path_arc),
             line: pos.row + 1,
             column: pos.column + 1,
             rule_id: "no-for-loop".into(),

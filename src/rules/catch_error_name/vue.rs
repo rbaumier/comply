@@ -82,7 +82,7 @@ fn inspect_catch(
     };
 
     diagnostics.push(Diagnostic {
-        path: ctx.path.to_path_buf(),
+        path: std::sync::Arc::clone(&ctx.path_arc),
         line: file_row + 1,
         column: file_col + 1,
         rule_id: "catch-error-name".into(),

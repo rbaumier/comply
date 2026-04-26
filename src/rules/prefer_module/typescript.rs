@@ -24,7 +24,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
 
             let pos = node.start_position();
             diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
+                path: std::sync::Arc::clone(&ctx.path_arc),
                 line: pos.row + 1,
                 column: pos.column + 1,
                 rule_id: "prefer-module".into(),
@@ -44,7 +44,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
 
             let pos = node.start_position();
             diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
+                path: std::sync::Arc::clone(&ctx.path_arc),
                 line: pos.row + 1,
                 column: pos.column + 1,
                 rule_id: "prefer-module".into(),
@@ -77,7 +77,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             if obj_name == "module" && prop_name == "exports" {
                 let pos = node.start_position();
                 diagnostics.push(Diagnostic {
-                    path: ctx.path.to_path_buf(),
+                    path: std::sync::Arc::clone(&ctx.path_arc),
                     line: pos.row + 1,
                     column: pos.column + 1,
                     rule_id: "prefer-module".into(),
@@ -89,7 +89,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 // `exports.foo` but NOT `module.exports`
                 let pos = node.start_position();
                 diagnostics.push(Diagnostic {
-                    path: ctx.path.to_path_buf(),
+                    path: std::sync::Arc::clone(&ctx.path_arc),
                     line: pos.row + 1,
                     column: pos.column + 1,
                     rule_id: "prefer-module".into(),

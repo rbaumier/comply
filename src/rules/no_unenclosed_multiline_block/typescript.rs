@@ -35,7 +35,7 @@ crate::ast_check! { on ["if_statement", "for_statement", "for_in_statement", "wh
     if body_line > stmt_line {
         let pos = node.start_position();
         diagnostics.push(Diagnostic {
-            path: ctx.path.to_path_buf(),
+            path: std::sync::Arc::clone(&ctx.path_arc),
             line: pos.row + 1,
             column: pos.column + 1,
             rule_id: "no-unenclosed-multiline-block".into(),

@@ -36,7 +36,7 @@ crate::ast_check! { on ["jsx_opening_element", "jsx_self_closing_element"] => |n
                 if child_count > 2 {
                     let pos = node.start_position();
                     diagnostics.push(Diagnostic {
-                        path: ctx.path.to_path_buf(),
+                        path: std::sync::Arc::clone(&ctx.path_arc),
                         line: pos.row + 1,
                         column: pos.column + 1,
                         rule_id: "react-void-dom-elements-no-children".into(),
@@ -62,7 +62,7 @@ crate::ast_check! { on ["jsx_opening_element", "jsx_self_closing_element"] => |n
         if attr_name == "children" || attr_name == "dangerouslySetInnerHTML" {
             let pos = node.start_position();
             diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
+                path: std::sync::Arc::clone(&ctx.path_arc),
                 line: pos.row + 1,
                 column: pos.column + 1,
                 rule_id: "react-void-dom-elements-no-children".into(),

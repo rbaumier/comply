@@ -198,7 +198,7 @@ impl TextCheck for Check {
                 }
                 if let Some(col) = prop_mutation_column(line) {
                     diags.push(Diagnostic {
-                        path: ctx.path.to_path_buf(),
+                        path: std::sync::Arc::clone(&ctx.path_arc),
                         line: idx + 1,
                         column: col + 1,
                         rule_id: super::META.id.into(),

@@ -16,7 +16,7 @@ match node.kind() {
     if contains_assignment(condition) {
         let pos = condition.start_position();
         diagnostics.push(Diagnostic {
-            path: _ctx.path.to_path_buf(),
+            path: std::sync::Arc::clone(&_ctx.path_arc),
             line: pos.row + 1,
             column: pos.column + 1,
             rule_id: "no-nested-assignment".into(),

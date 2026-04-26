@@ -48,7 +48,7 @@ crate::ast_check! { on ["assignment_expression"] => |node, source, ctx, diagnost
 
     let pos = node.start_position();
     diagnostics.push(Diagnostic {
-        path: ctx.path.to_path_buf(),
+        path: std::sync::Arc::clone(&ctx.path_arc),
         line: pos.row + 1,
         column: pos.column + 1,
         rule_id: "no-unsanitized-property".into(),

@@ -91,7 +91,7 @@ crate::ast_check! { on ["function_declaration", "function", "arrow_function"] =>
     if !body_uses_param(body_text, param_name) {
         let pos = node.start_position();
         diagnostics.push(Diagnostic {
-            path: ctx.path.to_path_buf(),
+            path: std::sync::Arc::clone(&ctx.path_arc),
             line: pos.row + 1,
             column: pos.column + 1,
             rule_id: "node-handle-callback-err".into(),

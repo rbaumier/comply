@@ -14,8 +14,9 @@
 
 use anyhow::{Context, Result};
 use rayon::prelude::*;
+use rustc_hash::FxHashMap;
 use std::collections::HashMap;
-use std::fs;
+use std::io::Read;
 use std::sync::Arc;
 use tree_sitter::Parser;
 
@@ -25,16 +26,24 @@ use crate::files::{Language, SourceFile};
 use crate::project::ProjectCtx;
 use crate::rules::backend::AstCheck;
 use crate::rules::file_ctx::FileCtx;
-use crate::rules::walker::walk_tree;
+use crate::rules::walker::walk_tree_filtered;
 use crate::rules::{self, backend::Backend, backend::CheckCtx, meta::RuleMeta, RuleDef};
 
 /// Pre-computed per-language dispatch table. Built once in `lint_files`,
 /// shared read-only across all rayon workers.
+///
+/// Dispatch keys are tree-sitter `kind_id` values (u16) rather than the
+/// node-kind strings — a `kind_id` lookup is one integer hash op and
+/// avoids the per-node `node.kind()` string materialization.
+/// `interesting` is a Vec<bool> indexed by kind_id, used as a fast
+/// pre-filter in the walk to skip the closure entirely for uninteresting
+/// nodes (most nodes in any tree).
 struct LangDispatch<'a> {
     applicable: Vec<(&'a RuleMeta, &'a Backend)>,
     multiplexed: Vec<(&'a RuleMeta, &'a dyn AstCheck)>,
     legacy: Vec<(&'a RuleMeta, &'a dyn AstCheck)>,
-    dispatch: HashMap<&'static str, Vec<usize>>,
+    dispatch: FxHashMap<u16, Vec<usize>>,
+    interesting: Vec<bool>,
 }
 
 impl<'a> LangDispatch<'a> {
@@ -52,13 +61,61 @@ impl<'a> LangDispatch<'a> {
                 }
             }
         }
-        let mut dispatch: HashMap<&str, Vec<usize>> = HashMap::new();
-        for (i, (_, check)) in multiplexed.iter().enumerate() {
-            for kind in check.interested_kinds().unwrap() {
-                dispatch.entry(kind).or_default().push(i);
+        let ts_lang = crate::parsing::ts_language_for(language);
+        let mut dispatch: FxHashMap<u16, Vec<usize>> = FxHashMap::default();
+        let mut max_kind_id: u16 = 0;
+        if let Some(ref tsl) = ts_lang {
+            for (i, (_, check)) in multiplexed.iter().enumerate() {
+                for kind in check.interested_kinds().unwrap() {
+                    let kid = tsl.id_for_node_kind(kind, true);
+                    // id_for_node_kind returns 0 for unknown kinds (= the ERROR
+                    // kind sentinel). Skip those — they'd cause every error
+                    // node to dispatch into rules that didn't ask for it.
+                    if kid == 0 {
+                        continue;
+                    }
+                    if kid > max_kind_id {
+                        max_kind_id = kid;
+                    }
+                    dispatch.entry(kid).or_default().push(i);
+                }
             }
         }
-        Self { applicable, multiplexed, legacy, dispatch }
+        let mut interesting = vec![false; max_kind_id as usize + 1];
+        for &kid in dispatch.keys() {
+            interesting[kid as usize] = true;
+        }
+        Self {
+            applicable,
+            multiplexed,
+            legacy,
+            dispatch,
+            interesting,
+        }
+    }
+}
+
+/// Per-worker reusable scratch buffers. Created once per rayon thread by
+/// `map_init` and reused across every file that thread processes, so the
+/// hot allocations (parser, source string, per-rule diag vectors) survive
+/// between files instead of being thrown away each iteration.
+struct WorkerState {
+    parser: Parser,
+    enabled: Vec<bool>,
+    states: Vec<Option<Box<dyn std::any::Any>>>,
+    per_rule_diags: Vec<Vec<Diagnostic>>,
+    source_buf: String,
+}
+
+impl WorkerState {
+    fn new() -> Self {
+        Self {
+            parser: Parser::new(),
+            enabled: Vec::new(),
+            states: Vec::new(),
+            per_rule_diags: Vec::new(),
+            source_buf: String::new(),
+        }
     }
 }
 
@@ -84,11 +141,11 @@ pub fn lint_files(files: &[&SourceFile], config: &Config) -> Result<Vec<Diagnost
 
     let mut diagnostics: Vec<Diagnostic> = files
         .par_iter()
-        .map_init(Parser::new, |parser, file| {
+        .map_init(WorkerState::new, |worker, file| {
             let Some(ld) = lang_dispatches.get(&file.language) else {
                 return Vec::new();
             };
-            match lint_one_file_with_dispatch(file, ld, parser, config, &project) {
+            match lint_one_file_with_dispatch(file, ld, worker, config, &project) {
                 Ok(file_diags) => file_diags,
                 Err(e) => {
                     eprintln!("comply: skipping {}: {e:#}", file.path.display());
@@ -131,7 +188,7 @@ pub fn lint_in_memory(
         path: path.to_path_buf(),
         language,
     };
-    let mut parser = Parser::new();
+    let mut worker = WorkerState::new();
     // LSP callers that haven't built a ProjectCtx yet get the empty default:
     // `nearest_*` still walks disk, only eager root fields are absent.
     let empty;
@@ -142,7 +199,7 @@ pub fn lint_in_memory(
             &empty
         }
     };
-    dispatch_backends(&file, source, &applicable, &mut parser, config, project)
+    dispatch_backends(&file, source, &applicable, &mut worker, config, project)
 }
 
 /// Flatten `RuleDef[]` into `(meta, backend)` pairs that apply to `language`.
@@ -163,11 +220,14 @@ fn collect_applicable(
 
 /// Dispatch using a pre-computed `LangDispatch`. Only per-file work
 /// (path-based rule filtering, parsing, state creation) happens here.
+/// Reuses `worker.enabled`, `worker.states`, `worker.per_rule_diags`
+/// across files so the multiplexed walk doesn't re-allocate them on
+/// every file.
 fn dispatch_with_lang(
     file: &SourceFile,
     source: &str,
     ld: &LangDispatch,
-    parser: &mut Parser,
+    worker: &mut WorkerState,
     config: &Config,
     project: &ProjectCtx,
 ) -> Vec<Diagnostic> {
@@ -177,14 +237,16 @@ fn dispatch_with_lang(
         matches!(b, Backend::TreeSitter(_)) && config.is_rule_enabled(meta.id, path)
     });
     let tree = if needs_ast {
-        crate::parsing::parse_with_grammar(parser, file.language, source.as_bytes())
+        crate::parsing::parse_with_grammar(&mut worker.parser, file.language, source.as_bytes())
     } else {
         None
     };
 
     let file_ctx = FileCtx::build(path, source, file.language, project);
+    let path_arc: std::sync::Arc<std::path::Path> = std::sync::Arc::from(path.as_path());
     let ctx = CheckCtx {
         path,
+        path_arc,
         source,
         config,
         project,
@@ -215,23 +277,50 @@ fn dispatch_with_lang(
     if let Some(ref t) = tree {
         // Multiplexed walk — dispatch table is shared, only states are per-file.
         if !ld.multiplexed.is_empty() {
-            let enabled: Vec<bool> = ld
-                .multiplexed
-                .iter()
-                .map(|(meta, _)| config.is_rule_enabled(meta.id, path))
-                .collect();
+            let n = ld.multiplexed.len();
 
-            let mut states: Vec<Option<Box<dyn std::any::Any>>> = ld
-                .multiplexed
-                .iter()
-                .enumerate()
-                .map(|(i, (_, check))| if enabled[i] { check.create_state() } else { None })
-                .collect();
-            let mut per_rule_diags: Vec<Vec<Diagnostic>> =
-                (0..ld.multiplexed.len()).map(|_| Vec::new()).collect();
+            // Reset worker buffers for this file. We resize-then-fill instead
+            // of allocating fresh Vecs — `Vec::resize_with(n, default)` keeps
+            // existing capacity and only re-runs the closure for new slots.
+            worker.enabled.clear();
+            worker.enabled.extend(
+                ld.multiplexed
+                    .iter()
+                    .map(|(meta, _)| config.is_rule_enabled(meta.id, path)),
+            );
 
-            walk_tree(t, |node| {
-                if let Some(indices) = ld.dispatch.get(node.kind()) {
+            // Old states from a previous file may linger in the Vec — drop
+            // them before resizing. (resize_with would keep the old Box's.)
+            worker.states.clear();
+            worker.states.extend(
+                ld.multiplexed
+                    .iter()
+                    .enumerate()
+                    .map(|(i, (_, check))| {
+                        if worker.enabled[i] {
+                            check.create_state()
+                        } else {
+                            None
+                        }
+                    }),
+            );
+
+            // Reuse the per-rule diag Vecs — clear each but keep capacity.
+            if worker.per_rule_diags.len() < n {
+                worker.per_rule_diags.resize_with(n, Vec::new);
+            }
+            for v in worker.per_rule_diags.iter_mut().take(n) {
+                v.clear();
+            }
+
+            // Split the borrow so the walker closure can mutate states/diags
+            // without re-borrowing `worker`.
+            let enabled = &worker.enabled;
+            let states = &mut worker.states;
+            let per_rule_diags = &mut worker.per_rule_diags;
+
+            walk_tree_filtered(t, &ld.interesting, |node| {
+                if let Some(indices) = ld.dispatch.get(&node.kind_id()) {
                     for &i in indices {
                         if !enabled[i] {
                             continue;
@@ -285,35 +374,46 @@ fn dispatch_backends(
     file: &SourceFile,
     source: &str,
     _applicable: &[(&RuleMeta, &Backend)],
-    parser: &mut Parser,
+    worker: &mut WorkerState,
     config: &Config,
     project: &ProjectCtx,
 ) -> Vec<Diagnostic> {
     let rule_defs = rules::all_rule_defs();
     let ld = LangDispatch::build(&rule_defs, file.language);
-    dispatch_with_lang(file, source, &ld, parser, config, project)
+    dispatch_with_lang(file, source, &ld, worker, config, project)
 }
 
 fn lint_one_file_with_dispatch(
     file: &SourceFile,
     ld: &LangDispatch,
-    parser: &mut Parser,
+    worker: &mut WorkerState,
     config: &Config,
     project: &ProjectCtx,
 ) -> Result<Vec<Diagnostic>> {
-    let source = fs::read_to_string(&file.path)
+    // Read into the worker's reusable String buffer instead of letting
+    // `fs::read_to_string` allocate a fresh one per file. `File::read_to_string`
+    // appends, so clear() first keeps capacity and just reuses the heap chunk.
+    worker.source_buf.clear();
+    std::fs::File::open(&file.path)
+        .and_then(|mut f| f.read_to_string(&mut worker.source_buf))
         .with_context(|| format!("failed to read {}", file.path.display()))?;
     if ld.applicable.is_empty() {
         return Ok(vec![]);
     }
-    Ok(dispatch_with_lang(file, &source, ld, parser, config, project))
+    // Take the buffer out so we can hand a &str to dispatch_with_lang while
+    // still passing &mut worker. Put it back when done so the next file
+    // reuses the allocation.
+    let source = std::mem::take(&mut worker.source_buf);
+    let diagnostics = dispatch_with_lang(file, &source, ld, worker, config, project);
+    worker.source_buf = source;
+    Ok(diagnostics)
 }
 
 /// True if the diagnostic's rule fires on its OWN source directory,
 /// i.e. `rule_id = "banned-comment-words"` firing on a path containing
 /// `src/rules/banned_comment_words/`.
 fn is_self_reference(d: &Diagnostic) -> bool {
-    let dir_fragment = d.rule_id.replace('-', "_");
+    let dir_fragment = d.rule_id.as_ref().replace('-', "_");
     let needle = format!("src/rules/{dir_fragment}/");
     let alt_needle = format!("src\\rules\\{dir_fragment}\\");
     let path_str = d.path.to_string_lossy();

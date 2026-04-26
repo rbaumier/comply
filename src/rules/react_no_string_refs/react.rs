@@ -20,7 +20,7 @@ crate::ast_check! { on ["jsx_self_closing_element", "jsx_opening_element"] => |n
         if val_node.kind() == "string" {
             let pos = child.start_position();
             diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
+                path: std::sync::Arc::clone(&ctx.path_arc),
                 line: pos.row + 1,
                 column: pos.column + 1,
                 rule_id: "react-no-string-refs".into(),

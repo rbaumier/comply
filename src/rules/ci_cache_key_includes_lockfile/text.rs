@@ -30,7 +30,7 @@ crate::ast_check! { on ["block_mapping_pair"] => |node, source, ctx, diagnostics
 
     let Some(key_pair) = key_pair else {
         diagnostics.push(Diagnostic {
-            path: ctx.path.to_path_buf(),
+            path: std::sync::Arc::clone(&ctx.path_arc),
             line: pos.row + 1,
             column: 1,
             rule_id: "ci-cache-key-includes-lockfile".into(),
@@ -48,7 +48,7 @@ crate::ast_check! { on ["block_mapping_pair"] => |node, source, ctx, diagnostics
         let key_value = key_pair.named_child(1).unwrap_or(key_pair);
         let kpos = key_value.start_position();
         diagnostics.push(Diagnostic {
-            path: ctx.path.to_path_buf(),
+            path: std::sync::Arc::clone(&ctx.path_arc),
             line: kpos.row + 1,
             column: 1,
             rule_id: "ci-cache-key-includes-lockfile".into(),

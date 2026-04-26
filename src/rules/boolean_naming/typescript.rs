@@ -60,7 +60,7 @@ fn check_node(
     let problem = classify_name(name)?;
     let pos = node.start_position();
     Some(Diagnostic {
-        path: path.to_path_buf(),
+        path: path.to_path_buf().into(),
         line: pos.row + 1,
         column: pos.column + 1,
         rule_id: "boolean-naming".into(),

@@ -23,7 +23,7 @@ crate::ast_check! { on ["comment"] => |node, source, ctx, diagnostics|
             }
             if !property_tag_has_name(&tag.value) {
                 diagnostics.push(Diagnostic {
-                    path: ctx.path.to_path_buf(),
+                    path: std::sync::Arc::clone(&ctx.path_arc),
                     line: block.start_line + tag.line_offset + 1 + line_offset,
                     column: 1,
                     rule_id: "jsdoc/require-property-name".into(),

@@ -137,7 +137,7 @@ pub(super) fn check_string_content(
             m.start() + 1
         };
         diagnostics.push(Diagnostic {
-            path: path.to_path_buf(),
+            path: path.to_path_buf().into(),
             line: diag_line,
             column: diag_col,
             rule_id: "sql-index-needs-rationale-comment".into(),

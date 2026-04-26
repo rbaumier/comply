@@ -30,7 +30,7 @@ impl TextCheck for Check {
                 let pattern = format!(":key=\"{name}\"");
                 if line.contains(&pattern) {
                     diagnostics.push(Diagnostic {
-                        path: ctx.path.to_path_buf(),
+                        path: std::sync::Arc::clone(&ctx.path_arc),
                         line: idx + 1,
                         column: 1,
                         rule_id: "vue-v-for-needs-stable-key".into(),

@@ -78,7 +78,7 @@ impl AstCheck for Check {
             let line = node.start_position().row + 1;
             if flagged_lines.insert(line) {
                 diagnostics.push(Diagnostic {
-                    path: ctx.path.to_path_buf(),
+                    path: std::sync::Arc::clone(&ctx.path_arc),
                     line,
                     column: node.start_position().column + 1,
                     rule_id: "nested-control-flow".into(),

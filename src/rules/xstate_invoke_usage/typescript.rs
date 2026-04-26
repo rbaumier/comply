@@ -44,7 +44,7 @@ fn validate_invoke_object(
         if !VALID_INVOKE_PROPS.contains(&key) {
             let pos = key_node.start_position();
             diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
+                path: std::sync::Arc::clone(&ctx.path_arc),
                 line: pos.row + 1,
                 column: pos.column + 1,
                 rule_id: super::META.id.into(),
@@ -60,7 +60,7 @@ fn validate_invoke_object(
     if !has_src {
         let pos = obj.start_position();
         diagnostics.push(Diagnostic {
-            path: ctx.path.to_path_buf(),
+            path: std::sync::Arc::clone(&ctx.path_arc),
             line: pos.row + 1,
             column: pos.column + 1,
             rule_id: super::META.id.into(),
@@ -93,7 +93,7 @@ crate::ast_check! { on ["pair"] => |node, source, ctx, diagnostics|
         other => {
             let pos = value_node.start_position();
             diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
+                path: std::sync::Arc::clone(&ctx.path_arc),
                 line: pos.row + 1,
                 column: pos.column + 1,
                 rule_id: super::META.id.into(),

@@ -67,7 +67,7 @@ fn contains_test_call(root: tree_sitter::Node, source: &[u8]) -> bool {
 fn push(diagnostics: &mut Vec<Diagnostic>, ctx: &crate::rules::backend::CheckCtx, node: tree_sitter::Node, kind: &str) {
     let pos = node.start_position();
     diagnostics.push(Diagnostic {
-        path: ctx.path.to_path_buf(),
+        path: std::sync::Arc::clone(&ctx.path_arc),
         line: pos.row + 1,
         column: pos.column + 1,
         rule_id: "testing-prefer-test-each".into(),

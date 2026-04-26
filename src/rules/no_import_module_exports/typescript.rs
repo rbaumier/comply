@@ -37,7 +37,7 @@ crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
     for me_node in module_exports_nodes {
         let pos = me_node.start_position();
         diagnostics.push(Diagnostic {
-            path: ctx.path.to_path_buf(),
+            path: std::sync::Arc::clone(&ctx.path_arc),
             line: pos.row + 1,
             column: pos.column + 1,
             rule_id: "no-import-module-exports".into(),

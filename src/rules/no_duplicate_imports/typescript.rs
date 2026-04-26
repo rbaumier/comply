@@ -48,7 +48,7 @@ impl AstCheck for Check {
         let line_num = pos.row + 1;
         if let Some(&first_line) = state.seen.get(&module) {
             diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
+                path: std::sync::Arc::clone(&ctx.path_arc),
                 line: line_num,
                 column: pos.column + 1,
                 rule_id: "no-duplicate-imports".into(),

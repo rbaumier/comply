@@ -134,9 +134,12 @@ fn into_diagnostic(d: OxlintDiag, remap: &HashMap<String, &'static RuleMeta>) ->
 
     let oxlint_code = d.code.clone().unwrap_or_default();
     let (rule_id, severity) = match remap.get(&oxlint_code) {
-        Some(meta) => (meta.id.to_string(), meta.severity),
+        Some(meta) => (
+            std::borrow::Cow::Borrowed(meta.id),
+            meta.severity,
+        ),
         None => (
-            d.code.unwrap_or_else(|| "oxlint/unknown".into()),
+            std::borrow::Cow::Owned(d.code.unwrap_or_else(|| "oxlint/unknown".into())),
             match d.severity {
                 OxlintSeverity::Warning | OxlintSeverity::Advice => Severity::Warning,
                 OxlintSeverity::Error => Severity::Error,
@@ -145,7 +148,7 @@ fn into_diagnostic(d: OxlintDiag, remap: &HashMap<String, &'static RuleMeta>) ->
     };
 
     Diagnostic {
-        path: d.filename.into(),
+        path: std::sync::Arc::from(std::path::PathBuf::from(d.filename).as_path()),
         line,
         column,
         rule_id,

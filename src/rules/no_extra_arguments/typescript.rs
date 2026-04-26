@@ -155,7 +155,7 @@ fn check_calls<'a>(
         if arg_count > info.param_count {
             let pos = node.start_position();
             diagnostics.push(Diagnostic {
-                path: path.to_path_buf(),
+                path: std::sync::Arc::from(path),
                 line: pos.row + 1,
                 column: pos.column + 1,
                 rule_id: "no-extra-arguments".into(),

@@ -23,7 +23,7 @@ crate::ast_check! { on ["jsx_opening_element", "jsx_self_closing_element"] => |n
         if !seen.insert(name.to_string()) {
             let pos = child.start_position();
             diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
+                path: std::sync::Arc::clone(&ctx.path_arc),
                 line: pos.row + 1,
                 column: pos.column + 1,
                 rule_id: "react-jsx-no-duplicate-props".into(),
