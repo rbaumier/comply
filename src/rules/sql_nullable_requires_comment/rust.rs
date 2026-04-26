@@ -16,6 +16,9 @@ impl AstCheck for Check {
             let Ok(text) = node.utf8_text(source_bytes) else {
                 continue;
             };
+            if !crate::rules::sql_helpers::is_sql_ddl(text) {
+                continue;
+            }
             let pos = node.start_position();
             for offset in super::nullable_lines_without_comment(text) {
                 diagnostics.push(Diagnostic {
@@ -45,13 +48,13 @@ mod tests {
 
     #[test]
     fn flags_nullable_in_raw_string() {
-        let src = "fn f() { let q = r#\"\n  deleted_at TIMESTAMP,\n\"#; }";
+        let src = "fn f() { let q = r#\"CREATE TABLE t (\n  deleted_at TIMESTAMP,\n)\"#; }";
         assert_eq!(run(src).len(), 1);
     }
 
     #[test]
     fn allows_inline_comment() {
-        let src = "fn f() { let q = r#\"\n  deleted_at TIMESTAMP, -- nullable\n\"#; }";
+        let src = "fn f() { let q = r#\"CREATE TABLE t (\n  deleted_at TIMESTAMP, -- nullable\n)\"#; }";
         assert!(run(src).is_empty());
     }
 }

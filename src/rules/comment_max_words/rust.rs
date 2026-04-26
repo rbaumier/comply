@@ -24,7 +24,7 @@ mod tests {
 
     #[test]
     fn flags_long_sentence_rust() {
-        let src = "// this comment goes on and on and on and on and on and on forever\nfn f() {}";
+        let src = "// this comment goes on and on and on and on and on and on and on and on and on and on forever and ever and never stops\nfn f() {}";
         assert_eq!(run(src).len(), 1);
     }
 

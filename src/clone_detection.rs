@@ -16,6 +16,14 @@ use crate::parsing;
 pub const RULE_ID: &str = "no-clones";
 const MIN_TOKENS: usize = 100;
 const BUCKET_SATURATED: usize = 64;
+/// Minimum number of distinct token-text trigrams required in a match window.
+///
+/// Filters out low-entropy boilerplate (e.g. registration tables of
+/// `(Lang, Backend::TreeSitter(Box::new(foo::Check)))`) where 100+ tokens
+/// can match exactly across files but consist mostly of repeated 3-token
+/// subsequences. Genuine duplicated logic — each statement carrying fresh
+/// identifiers — yields many more distinct trigrams than this threshold.
+const MIN_DISTINCT_TRIGRAMS: usize = 145;
 
 struct Token {
     kind_id: u16,
@@ -112,6 +120,37 @@ fn verify_tokens(a: &FileTokens, a_start: usize, b: &FileTokens, b_start: usize)
     true
 }
 
+/// Diversity gate. Counts distinct token-text trigrams across the
+/// `[first_tok, last_tok]` range of `ft` (inclusive of the trailing
+/// `MIN_TOKENS`-wide window starting at `last_tok`). Trigrams penalise
+/// repeated subsequences — e.g. a registration table with four
+/// `(Language::X, Backend::TreeSitter(Box::new(typescript::Check)))`
+/// rows yields very few distinct trigrams, while genuine duplicated
+/// logic (each statement carrying fresh identifiers) yields many.
+/// The clone is rejected when the merged span has fewer than
+/// `MIN_DISTINCT_TRIGRAMS` distinct trigrams.
+fn has_enough_distinct_texts(ft: &FileTokens, first_tok: usize, last_window_tok: usize) -> bool {
+    use std::collections::HashSet;
+    let last_tok = (last_window_tok + MIN_TOKENS - 1).min(ft.tokens.len() - 1);
+    if last_tok < first_tok + 2 {
+        return false;
+    }
+    let mut seen: HashSet<(&[u8], &[u8], &[u8])> = HashSet::new();
+    for i in first_tok..=last_tok - 2 {
+        let a = &ft.tokens[i];
+        let b = &ft.tokens[i + 1];
+        let c = &ft.tokens[i + 2];
+        let ta = &ft.source[a.start_byte..a.end_byte];
+        let tb = &ft.source[b.start_byte..b.end_byte];
+        let tc = &ft.source[c.start_byte..c.end_byte];
+        seen.insert((ta, tb, tc));
+        if seen.len() >= MIN_DISTINCT_TRIGRAMS {
+            return true;
+        }
+    }
+    seen.len() >= MIN_DISTINCT_TRIGRAMS
+}
+
 fn merge_and_emit(
     raw: &mut Vec<RawClone>,
     file_data: &[Option<FileTokens>],
@@ -141,19 +180,27 @@ fn merge_and_emit(
             break;
         }
 
-        let lines_in_clone = clone_line_span(file_data, rfi, rstart, last_rstart);
-        out.push(Diagnostic {
-            path: files[rfi].path.clone(),
-            line: rline,
-            column: 1,
-            rule_id: RULE_ID.into(),
-            message: format!(
-                "Duplicated block ({lines_in_clone} lines) — also in `{}` at line {cline}.",
-                files[cfi].path.display(),
-            ),
-            severity: Severity::Warning,
-            span: None,
-        });
+        // Identifier-diversity gate, applied to the merged span. Filters
+        // low-entropy boilerplate clones (e.g. registration tables) without
+        // breaking the adjacency-merge of contiguous real clones.
+        let keep = file_data[rfi]
+            .as_ref()
+            .is_some_and(|ft| has_enough_distinct_texts(ft, rstart, last_rstart));
+        if keep {
+            let lines_in_clone = clone_line_span(file_data, rfi, rstart, last_rstart);
+            out.push(Diagnostic {
+                path: files[rfi].path.clone(),
+                line: rline,
+                column: 1,
+                rule_id: RULE_ID.into(),
+                message: format!(
+                    "Duplicated block ({lines_in_clone} lines) — also in `{}` at line {cline}.",
+                    files[cfi].path.display(),
+                ),
+                severity: Severity::Warning,
+                span: None,
+            });
+        }
         i = j;
     }
     out
@@ -426,16 +473,28 @@ mod tests {
 
     #[test]
     fn hash_collision_with_first_mismatch() {
-        // File 0 and 2 share bytes ("aaaa"), file 1 differs ("bbbb") but
-        // tokens have identical kind_id/hash → same window_hash.
-        // find_raw_clones must reject file 1 via verify_tokens and match
-        // file 2 against file 0.
+        // File 0 and 2 share bytes (varied per-token to clear the diversity
+        // gate), file 1 differs but tokens have identical kind_id/hash →
+        // same window_hash. find_raw_clones must reject file 1 via
+        // verify_tokens and match file 2 against file 0.
+        //
+        // Each token points at a distinct 4-byte slice so the window has
+        // 100 distinct texts and clears MIN_DISTINCT_TEXTS.
+        let make_source = |prefix: u8| -> Vec<u8> {
+            (0..MIN_TOKENS)
+                .flat_map(|i| {
+                    let mut s = vec![prefix];
+                    s.extend_from_slice(format!("{i:03}").as_bytes());
+                    s
+                })
+                .collect()
+        };
         let make_tokens = |n: usize| -> Vec<Token> {
             (0..n)
                 .map(|i| Token {
                     kind_id: 1,
-                    start_byte: 0,
-                    end_byte: 4,
+                    start_byte: i * 4,
+                    end_byte: i * 4 + 4,
                     line: i + 1,
                     hash: 42 + i as u64,
                 })
@@ -443,9 +502,9 @@ mod tests {
         };
 
         let file_data: Vec<Option<FileTokens>> = vec![
-            Some(FileTokens { source: b"aaaa".to_vec(), tokens: make_tokens(MIN_TOKENS) }),
-            Some(FileTokens { source: b"bbbb".to_vec(), tokens: make_tokens(MIN_TOKENS) }),
-            Some(FileTokens { source: b"aaaa".to_vec(), tokens: make_tokens(MIN_TOKENS) }),
+            Some(FileTokens { source: make_source(b'a'), tokens: make_tokens(MIN_TOKENS) }),
+            Some(FileTokens { source: make_source(b'b'), tokens: make_tokens(MIN_TOKENS) }),
+            Some(FileTokens { source: make_source(b'a'), tokens: make_tokens(MIN_TOKENS) }),
         ];
 
         let raw = find_raw_clones(&file_data);
@@ -486,25 +545,34 @@ mod tests {
         ];
         let file_refs: Vec<&SourceFile> = files.iter().collect();
 
+        // Each token points at a distinct 4-byte slice so the merged span
+        // has plenty of distinct trigrams and clears the diversity gate.
         let make_ft = |n: usize| -> FileTokens {
+            let source: Vec<u8> = (0..n)
+                .flat_map(|i| format!("t{i:03}").into_bytes())
+                .collect();
             FileTokens {
-                source: b"x".to_vec(),
+                source,
                 tokens: (0..n).map(|i| Token {
-                    kind_id: 1, start_byte: 0, end_byte: 1,
+                    kind_id: 1, start_byte: i * 4, end_byte: i * 4 + 4,
                     line: i + 1, hash: i as u64,
                 }).collect(),
             }
         };
         let file_data: Vec<Option<FileTokens>> = vec![
-            Some(make_ft(MIN_TOKENS + 50)),
-            Some(make_ft(MIN_TOKENS + 80)),
+            Some(make_ft(MIN_TOKENS + 250)),
+            Some(make_ft(MIN_TOKENS + 250)),
         ];
-        let mut raw: Vec<RawClone> = vec![
-            //  (rfi, rstart, rline, cfi, cstart, cline)
-            (0, 0, 1, 1, 0, 1),
-            (0, 1, 2, 1, 1, 2),   // both sides advance → merge
-            (0, 10, 20, 1, 50, 80), // gap on both sides → separate
-        ];
+        // First run: 50 adjacent raw clones merge into one span covering
+        // tokens [0, 49 + MIN_TOKENS - 1]. Long enough to clear the
+        // diversity gate's trigram threshold.
+        let mut raw: Vec<RawClone> = (0..50)
+            .map(|k| (0usize, k, k + 1, 1usize, k, k + 1))
+            .collect();
+        // Second run: starts after a gap → separate clone, also long enough.
+        raw.extend((0..50).map(|k| {
+            (0usize, 10 + 50 + k, 20 + 50 + k, 1usize, 50 + k, 80 + k)
+        }));
         let diags = merge_and_emit(&mut raw, &file_data, &file_refs);
         assert_eq!(diags.len(), 2);
     }
@@ -551,5 +619,31 @@ mod tests {
             let text = std::str::from_utf8(&ft.source[t.start_byte..t.end_byte]).unwrap();
             assert!(!text.starts_with("//"));
         }
+    }
+
+    #[test]
+    fn low_entropy_boilerplate_not_flagged() {
+        // Repeated registration-table boilerplate — many matching tokens but
+        // very few distinct identifier-like texts. The diversity gate must
+        // reject this even though byte-for-byte verify_tokens succeeds.
+        let dir = tempfile::tempdir().unwrap();
+        let block: String = (1..=40)
+            .map(|_| "(L::T, B::TS(Box::new(m::C))),".to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let wrapped = format!("fn r() -> Vec<X> {{ vec![\n{block}\n] }}");
+        let pa = dir.path().join("a.rs");
+        let pb = dir.path().join("b.rs");
+        std::fs::write(&pa, &wrapped).unwrap();
+        std::fs::write(&pb, &wrapped).unwrap();
+        let fa = SourceFile { path: pa, language: Language::Rust };
+        let fb = SourceFile { path: pb, language: Language::Rust };
+        let diags = lint_files(&[&fa, &fb]);
+        assert!(
+            diags.is_empty(),
+            "expected no clones for low-entropy boilerplate, got {}: {:?}",
+            diags.len(),
+            diags.iter().map(|d| &d.message).collect::<Vec<_>>(),
+        );
     }
 }

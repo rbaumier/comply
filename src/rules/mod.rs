@@ -665,6 +665,7 @@ pub mod rust_no_unwrap;
 pub mod rust_no_unwrap_in_from_impl;
 pub mod rust_prefer_channel_over_arc_mutex_vec;
 pub mod rust_prefer_once_lock;
+pub mod rust_prefer_strum;
 pub mod rust_prefer_unwrap_or_explicit;
 pub mod rust_ptr_arg;
 pub mod rust_pub_enum_without_non_exhaustive;
@@ -855,7 +856,6 @@ pub mod error_message_is_remediation;
 pub mod factory_di_shape;
 pub mod file_extension_in_import;
 pub mod filename_naming_convention;
-pub mod folder_naming_convention;
 pub mod for_loop_increment_sign;
 pub mod fsd_no_cross_slice_dependency;
 pub mod fsd_no_global_store_imports;
@@ -2154,7 +2154,6 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         error_message_is_remediation::register(),
         factory_di_shape::register(),
         filename_naming_convention::register(),
-        folder_naming_convention::register(),
         fsd_no_cross_slice_dependency::register(),
         fsd_no_global_store_imports::register(),
         fsd_no_relative_imports::register(),
@@ -2576,6 +2575,7 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         layer_import_boundary::register(),
         // v2.12 — rules derived from code-review feedback.
         rust_no_as_numeric_cast::register(),
+        rust_prefer_strum::register(),
         rust_prefer_unwrap_or_explicit::register(),
         rust_constants_top_of_file::register(),
         rust_explicit_enum_match_arms::register(),

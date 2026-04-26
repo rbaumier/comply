@@ -1,114 +1,94 @@
 //! no-inconsistent-returns AST backend — flag functions that mix
 //! `return expr;` with bare `return;`.
+//!
+//! Walks tree-sitter AST nodes for every function-kind node
+//! (declarations, expressions, arrows, methods, generators) and collects
+//! only their direct `return_statement` children. Nested function/arrow
+//! bodies are skipped so an inner callback's return is not attributed
+//! to its enclosing function.
+//!
+//! A `return_statement` with a named child returns a value; otherwise bare.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-/// Check if a line starts a function (fn, function, arrow with block body).
-fn is_function_head(trimmed: &str) -> bool {
-    trimmed.starts_with("function ")
-        || trimmed.starts_with("function(")
-        || trimmed.starts_with("async function ")
-        || trimmed.starts_with("async function(")
-        || trimmed.contains("function ") && trimmed.contains('(')
-        || trimmed.starts_with("fn ")
+const FUNCTION_KINDS: &[&str] = &[
+    "function_declaration",
+    "function_expression",
+    "function",
+    "arrow_function",
+    "method_definition",
+    "generator_function_declaration",
+    "generator_function",
+];
+
+fn is_function_kind(kind: &str) -> bool {
+    FUNCTION_KINDS.contains(&kind)
 }
 
-/// Find the line index containing the opening `{` starting from `start`.
-fn find_open_brace(lines: &[&str], start: usize) -> Option<usize> {
-    (start..lines.len().min(start + 5)).find(|&i| lines[i].contains('{'))
-}
-
-/// Find the matching `}` for a `{` on `open_line`, counting brace depth.
-fn find_matching_close(lines: &[&str], open_line: usize) -> Option<usize> {
-    let mut depth: i32 = 0;
-    for (i, line) in lines.iter().enumerate().skip(open_line) {
-        for ch in line.chars() {
-            if ch == '{' {
-                depth += 1;
-            } else if ch == '}' {
-                depth -= 1;
-                if depth == 0 {
-                    return Some(i);
-                }
-            }
-        }
-    }
-    None
-}
-
-/// Scan lines between open and close braces (exclusive of nested functions)
-/// and return (has_value_return, has_bare_return).
-fn scan_returns(lines: &[&str], start: usize, end: usize) -> (bool, bool) {
-    let mut has_value_return = false;
-    let mut has_bare_return = false;
-    let mut depth: i32 = 0;
-    let mut skip_depth: Option<i32> = None;
-
-    for line in lines.iter().take(end + 1).skip(start) {
-        let trimmed = line.trim();
-
-        if skip_depth.is_none() && depth >= 1 && is_function_head(trimmed) {
-            skip_depth = Some(depth);
-        }
-
-        for ch in line.chars() {
-            if ch == '{' {
-                depth += 1;
-            } else if ch == '}' {
-                depth -= 1;
-            }
-        }
-
-        if let Some(sd) = skip_depth {
-            if depth <= sd {
-                skip_depth = None;
-            }
+/// Walk `node`'s subtree collecting `return_statement` nodes that belong
+/// directly to `node` — descend into control-flow constructs (if, blocks,
+/// loops, try, switch, ...) but stop at any nested function-kind node.
+fn collect_returns<'t>(node: tree_sitter::Node<'t>, out: &mut Vec<tree_sitter::Node<'t>>) {
+    let count = node.child_count();
+    for i in 0..count {
+        let Some(child) = node.child(i) else { continue };
+        let kind = child.kind();
+        if is_function_kind(kind) {
+            // Inner function/arrow: its returns belong to it, not us.
             continue;
         }
-
-        if depth >= 1 {
-            if trimmed == "return;" || trimmed == "return" {
-                has_bare_return = true;
-            } else if trimmed.starts_with("return ") || trimmed.starts_with("return\t") {
-                has_value_return = true;
-            }
+        if kind == "return_statement" {
+            out.push(child);
+            // Don't descend — any expression inside is the return value.
+            continue;
         }
+        collect_returns(child, out);
     }
-
-    (has_value_return, has_bare_return)
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "program" {
+/// True if a `return_statement` carries a value (has a named child).
+fn return_has_value(ret: tree_sitter::Node) -> bool {
+    ret.named_child_count() > 0
+}
+
+crate::ast_check! { |node, _source, ctx, diagnostics|
+    if !is_function_kind(node.kind()) {
         return;
     }
 
-    let text = std::str::from_utf8(source).unwrap_or("");
-    let lines: Vec<&str> = text.lines().collect();
-    let mut i = 0;
+    // Find the body. For declarations/methods/expressions/generators the
+    // body field is "body" pointing at a statement_block. For arrow
+    // functions the body may be a statement_block or a bare expression
+    // (no return_statement possible in the latter).
+    let Some(body) = node.child_by_field_name("body") else { return };
+    if body.kind() != "statement_block" {
+        return;
+    }
 
-    while i < lines.len() {
-        let trimmed = lines[i].trim();
-        if is_function_head(trimmed)
-            && let Some(body_start) = find_open_brace(&lines, i)
-                && let Some(body_end) = find_matching_close(&lines, body_start) {
-                    let (has_value_return, has_bare_return) =
-                        scan_returns(&lines, body_start, body_end);
-                    if has_value_return && has_bare_return {
-                        diagnostics.push(Diagnostic {
-                            path: ctx.path.to_path_buf(),
-                            line: i + 1,
-                            column: 1,
-                            rule_id: "no-inconsistent-returns".into(),
-                            message: "Function has inconsistent returns — some paths return a value, others return nothing.".into(),
-                            severity: Severity::Warning,
-                            span: None,
-                        });
-                    }
-                    i = body_end + 1;
-                    continue;
-                }
-        i += 1;
+    let mut returns: Vec<tree_sitter::Node> = Vec::new();
+    collect_returns(body, &mut returns);
+
+    let mut has_value = false;
+    let mut has_bare = false;
+    for ret in &returns {
+        if return_has_value(*ret) {
+            has_value = true;
+        } else {
+            has_bare = true;
+        }
+    }
+
+    if has_value && has_bare {
+        let pos = node.start_position();
+        diagnostics.push(Diagnostic {
+            path: ctx.path.to_path_buf(),
+            line: pos.row + 1,
+            column: pos.column + 1,
+            rule_id: "no-inconsistent-returns".into(),
+            message: "Function has inconsistent returns — some paths return a value, others return nothing.".into(),
+            severity: Severity::Warning,
+            span: None,
+        });
     }
 }
 
@@ -170,5 +150,51 @@ async function fetchData(url) {
 }
 "#;
         assert_eq!(run_on(code).len(), 1);
+    }
+
+    #[test]
+    fn does_not_attribute_arrow_returns_to_outer_fn() {
+        // Outer fn has only `return 1;`. Inner arrow has `return;`.
+        let code = r#"
+function outer() {
+    const cb = (x) => {
+        if (x === 0) {
+            return;
+        }
+        console.log(x);
+    };
+    return 1;
+}
+"#;
+        assert!(run_on(code).is_empty());
+    }
+
+    #[test]
+    fn flags_arrow_with_inconsistent_returns() {
+        let code = r#"
+const f = (x) => {
+    if (x === 0) {
+        return;
+    }
+    return x + 1;
+};
+"#;
+        assert_eq!(run_on(code).len(), 1);
+    }
+
+    #[test]
+    fn does_not_attribute_method_shorthand_returns_to_outer() {
+        let code = r#"
+function outer() {
+    const obj = {
+        foo() {
+            if (true) return;
+            console.log("ok");
+        },
+    };
+    return 1;
+}
+"#;
+        assert!(run_on(code).is_empty());
     }
 }

@@ -7,7 +7,7 @@ use crate::rules::RuleDef;
 
 pub const META: RuleMeta = RuleMeta {
     id: "comment-max-words",
-    description: "Comment sentence exceeds 10 words.",
+    description: "Comment sentence exceeds 25 words.",
     remediation: "Split long comment sentences — one idea per sentence keeps the intent scannable.",
     severity: Severity::Warning,
     doc_url: None,
@@ -18,7 +18,7 @@ pub fn register() -> RuleDef {
     crate::register_ts_family_with_rust!(META, typescript, rust)
 }
 
-pub(crate) const MAX_WORDS_PER_SENTENCE: usize = 10;
+pub(crate) const MAX_WORDS_PER_SENTENCE: usize = 25;
 
 /// Strip comment markers (`//`, `/*`, `*/`, `///`, `//!`, `/**`) and return the
 /// inner body. Operates on the raw slice emitted by tree-sitter.

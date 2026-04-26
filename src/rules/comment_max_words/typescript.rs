@@ -24,7 +24,7 @@ mod tests {
 
     #[test]
     fn flags_long_sentence() {
-        let src = "// this comment goes on and on and on and on and on forever please stop";
+        let src = "// this comment goes on and on and on and on and on and on and on and on and on and on forever please stop right now";
         assert_eq!(run(src).len(), 1);
     }
 
