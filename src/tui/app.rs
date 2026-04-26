@@ -38,6 +38,8 @@ pub struct GroupSummary {
 pub struct App {
     pub diagnostics: Vec<Diagnostic>,
     pub sources: HashMap<PathBuf, String>,
+    /// Pre-indexed line offsets: (start_byte, end_byte) per line, per file.
+    line_offsets: HashMap<PathBuf, Vec<(usize, usize)>>,
     haystacks: Vec<String>,
 
     pub view_mode: ViewMode,
@@ -63,23 +65,82 @@ pub struct App {
     pub filtered_diagnostic_count: usize,
 }
 
-fn build_haystack(diag: &Diagnostic, sources: &HashMap<PathBuf, String>) -> String {
-    let source_line = sources
-        .get(&diag.path)
-        .and_then(|s| s.lines().nth(diag.line.saturating_sub(1)))
-        .unwrap_or("");
-    format!(
-        "{} {} {} {}",
-        diag.path.display(),
-        diag.rule_id,
-        diag.message,
-        source_line
-    )
-    .to_lowercase()
+fn build_line_offsets(source: &str) -> Vec<(usize, usize)> {
+    let mut offsets = Vec::new();
+    let mut start = 0;
+    for (i, b) in source.bytes().enumerate() {
+        if b == b'\n' {
+            let end = if i > start && source.as_bytes()[i - 1] == b'\r' {
+                i - 1
+            } else {
+                i
+            };
+            offsets.push((start, end));
+            start = i + 1;
+        }
+    }
+    if start <= source.len() {
+        offsets.push((start, source.len()));
+    }
+    offsets
+}
+
+fn get_line<'a>(
+    source: &'a str,
+    offsets: &[(usize, usize)],
+    line: usize,
+) -> Option<&'a str> {
+    let (start, end) = *offsets.get(line.checked_sub(1)?)?;
+    source.get(start..end)
+}
+
+/// Returns true if the editor is GUI (fork), false if terminal (suspend).
+fn build_editor_args(
+    basename: &str,
+    line: usize,
+    column: usize,
+    path: &str,
+    args: &mut Vec<String>,
+) -> bool {
+    match basename {
+        // VS Code / Cursor: --goto path:line:col
+        "code" | "cursor" => {
+            args.push("--goto".into());
+            args.push(format!("{path}:{line}:{column}"));
+            true
+        }
+        // Zed / Sublime: path:line:col
+        "zed" | "subl" | "sublime_text" => {
+            args.push(format!("{path}:{line}:{column}"));
+            true
+        }
+        // JetBrains: --line LINE path
+        "idea" | "goland" | "webstorm" => {
+            args.push("--line".into());
+            args.push(line.to_string());
+            args.push(path.into());
+            true
+        }
+        "atom" => {
+            args.push(format!("{path}:{line}:{column}"));
+            true
+        }
+        // Terminal editors: +LINE path
+        _ => {
+            args.push(format!("+{line}"));
+            args.push(path.into());
+            false
+        }
+    }
 }
 
 impl App {
     pub fn new(diagnostics: Vec<Diagnostic>, sources: HashMap<PathBuf, String>) -> Self {
+        let line_offsets: HashMap<PathBuf, Vec<(usize, usize)>> = sources
+            .iter()
+            .map(|(p, s)| (p.clone(), build_line_offsets(s)))
+            .collect();
+
         let mut by_file: BTreeMap<PathBuf, Vec<usize>> = BTreeMap::new();
         let mut by_rule: BTreeMap<String, Vec<usize>> = BTreeMap::new();
         let mut haystacks: Vec<String> = Vec::with_capacity(diagnostics.len());
@@ -87,7 +148,17 @@ impl App {
         for (idx, diag) in diagnostics.iter().enumerate() {
             by_file.entry(diag.path.clone()).or_default().push(idx);
             by_rule.entry(diag.rule_id.clone()).or_default().push(idx);
-            haystacks.push(build_haystack(diag, &sources));
+            let src_line = sources
+                .get(&diag.path)
+                .and_then(|s| {
+                    let offs = line_offsets.get(&diag.path)?;
+                    get_line(s, offs, diag.line)
+                })
+                .unwrap_or("");
+            haystacks.push(
+                format!("{} {} {} {}", diag.path.display(), diag.rule_id, diag.message, src_line)
+                    .to_lowercase(),
+            );
         }
 
         let sort = |indices: &mut Vec<usize>, diags: &[Diagnostic]| {
@@ -105,6 +176,7 @@ impl App {
         let mut app = Self {
             diagnostics,
             sources,
+            line_offsets,
             haystacks,
             view_mode: ViewMode::ByFile,
             by_file,
@@ -126,6 +198,15 @@ impl App {
         };
         app.rebuild();
         app
+    }
+
+    pub fn source_line(&self, path: &PathBuf, line: usize) -> Option<&str> {
+        let source = self.sources.get(path)?;
+        if source.is_empty() {
+            return None;
+        }
+        let offsets = self.line_offsets.get(path)?;
+        get_line(source, offsets, line)
     }
 
     pub fn run<B: Backend>(&mut self, terminal: &mut Terminal<B>) -> Result<()> {
@@ -407,7 +488,6 @@ impl App {
             self.status_message = Some("set $EDITOR to open files".into());
             return;
         };
-        let line_arg = format!("+{}", diag.line);
         let path_str = diag.path.display().to_string();
 
         let basename = Path::new(cmd)
@@ -415,25 +495,12 @@ impl App {
             .and_then(|n| n.to_str())
             .unwrap_or(cmd);
 
-        const GUI_EDITORS: &[&str] = &[
-            "code",
-            "zed",
-            "subl",
-            "sublime_text",
-            "idea",
-            "goland",
-            "webstorm",
-            "atom",
-            "cursor",
-        ];
-
-        let is_gui = GUI_EDITORS.contains(&basename);
+        let mut editor_args: Vec<String> = extra_args.iter().map(|s| s.to_string()).collect();
+        let is_gui = build_editor_args(basename, diag.line, diag.column, &path_str, &mut editor_args);
 
         if is_gui {
             let _ = ProcessCommand::new(cmd)
-                .args(extra_args.iter())
-                .arg(&line_arg)
-                .arg(&path_str)
+                .args(&editor_args)
                 .spawn();
         } else {
             let _ = crossterm::terminal::disable_raw_mode();
@@ -443,9 +510,7 @@ impl App {
             );
 
             let _ = ProcessCommand::new(cmd)
-                .args(extra_args.iter())
-                .arg(&line_arg)
-                .arg(&path_str)
+                .args(&editor_args)
                 .status();
 
             let _ = crossterm::terminal::enable_raw_mode();

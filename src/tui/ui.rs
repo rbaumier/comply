@@ -272,49 +272,44 @@ fn build_blocks<'a>(app: &'a App, width: u16) -> Vec<VisualBlock<'a>> {
 }
 
 fn get_source_line<'a>(app: &'a App, diag: &Diagnostic) -> Option<&'a str> {
-    let source = app.sources.get(&diag.path)?;
-    if source.is_empty() {
-        return None;
-    }
-    source.lines().nth(diag.line.saturating_sub(1))
+    app.source_line(&diag.path, diag.line)
 }
 
 fn build_caret_line(diag: &Diagnostic, source_line: &str) -> (String, String) {
-    let byte_col = diag.column.saturating_sub(1);
-    // column is byte-based (tree-sitter convention) — convert to char count
-    let prefix_chars = source_line
-        .get(..byte_col.min(source_line.len()))
-        .unwrap_or(source_line)
-        .chars()
-        .count();
-    let chars: Vec<char> = source_line.chars().collect();
+    let byte_col = diag.column.saturating_sub(1).min(source_line.len());
+    // Snap to char boundary (floor)
+    let byte_col = floor_char_boundary(source_line, byte_col);
 
-    let prefix_chars = prefix_chars.min(chars.len());
-    let prefix: String = chars[..prefix_chars].iter().collect();
-    let padding = " ".repeat(UnicodeWidthStr::width(prefix.as_str()));
+    let prefix = &source_line[..byte_col];
+    let padding = " ".repeat(UnicodeWidthStr::width(prefix));
 
-    let remaining_chars = chars.len().saturating_sub(prefix_chars);
-    let caret_char_len = match diag.span {
-        Some((_, byte_len)) => {
-            // byte_len is from the span — convert to char count on this line
-            let spanned: String = chars[prefix_chars..].iter().collect();
-            let char_count = spanned
-                .char_indices()
-                .take_while(|&(byte_idx, _)| byte_idx < byte_len)
-                .count();
-            char_count.min(remaining_chars).max(1)
-        }
-        None => remaining_chars.max(1),
-    };
-
-    let end = (prefix_chars + caret_char_len).min(chars.len());
-    if end <= prefix_chars {
+    let suffix = &source_line[byte_col..];
+    if suffix.is_empty() {
         return (padding, "^".to_string());
     }
-    let spanned_str: String = chars[prefix_chars..end].iter().collect();
-    let caret_width = UnicodeWidthStr::width(spanned_str.as_str()).max(1);
+
+    let span_end_byte = match diag.span {
+        Some((_, byte_len)) => byte_len.min(suffix.len()),
+        None => suffix.len(),
+    };
+    let spanned = &suffix[..floor_char_boundary(suffix, span_end_byte.max(1))];
+    let spanned = if spanned.is_empty() {
+        &suffix[..floor_char_boundary(suffix, 1).max(suffix.len().min(1))]
+    } else {
+        spanned
+    };
+
+    let caret_width = UnicodeWidthStr::width(spanned).max(1);
     let carets = "^".repeat(caret_width);
     (padding, carets)
+}
+
+fn floor_char_boundary(s: &str, byte_idx: usize) -> usize {
+    let mut idx = byte_idx.min(s.len());
+    while idx > 0 && !s.is_char_boundary(idx) {
+        idx -= 1;
+    }
+    idx
 }
 
 fn draw_help_bar(frame: &mut Frame, app: &App, area: Rect) {

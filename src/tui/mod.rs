@@ -31,19 +31,24 @@ pub fn run(diagnostics: Vec<Diagnostic>, sources: HashMap<PathBuf, String>) -> R
         original_hook(info);
     }));
 
+    let result = run_inner(&mut app);
+
+    restore_terminal();
+
+    // Restore the original panic hook (take_hook replaces with default,
+    // but the original was captured in our closure which is now dropped)
+    let _ = std::panic::take_hook();
+
+    result
+}
+
+fn run_inner(app: &mut App) -> Result<()> {
     enable_raw_mode()?;
-    let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
+    let stdout = io::stdout();
+    execute!(io::stdout(), EnterAlternateScreen)?;
 
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let result = app.run(&mut terminal);
-
-    restore_terminal();
-    terminal.show_cursor()?;
-
-    let _ = std::panic::take_hook();
-
-    result
+    app.run(&mut terminal)
 }
