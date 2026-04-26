@@ -24,7 +24,6 @@ const BLOCKING_ITEM_KINDS: &[&str] = &[
     "enum_item",
     "impl_item",
     "trait_item",
-    "mod_item",
     "type_item",
     "union_item",
 ];
@@ -42,6 +41,14 @@ impl AstCheck for Check {
         for child in root.named_children(&mut cursor) {
             let kind = child.kind();
             if BLOCKING_ITEM_KINDS.contains(&kind) {
+                seen_blocking_item = true;
+                continue;
+            }
+            // `mod foo;` (no body) is a declaration like `use` — not blocking.
+            // `mod foo { ... }` (with body) is blocking.
+            if kind == "mod_item"
+                && child.child_by_field_name("body").is_some()
+            {
                 seen_blocking_item = true;
                 continue;
             }
@@ -123,5 +130,19 @@ mod tests {
     fn allows_use_between_const_and_fn() {
         let source = "const C: u32 = 1;\nuse std::fmt;\nfn f() {}";
         assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_const_after_mod_declaration() {
+        let source = "mod sub;\nconst C: u32 = 1;\nfn f() {}";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_const_after_mod_block() {
+        let source = "mod sub { fn inner() {} }\nconst C: u32 = 1;";
+        let diags = run_on(source);
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].line, 2);
     }
 }
