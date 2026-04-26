@@ -122,6 +122,8 @@ pub struct ImportedSymbol {
     pub source_path: Option<PathBuf>,
     /// 1-based line number of the `import` keyword.
     pub line: usize,
+    /// `import type { X }` or `import { type X }` — value never needed at runtime.
+    pub is_type_only: bool,
 }
 
 /// One use-site of a cross-file exported symbol — i.e. a matching import.
@@ -165,6 +167,15 @@ pub struct CallSite {
     pub args: Vec<Option<String>>,
 }
 
+/// Aggregated info about a bare specifier (npm package) across all files.
+#[derive(Debug, Clone, Default)]
+pub struct BareSpecifierInfo {
+    /// Every import from this package is `import type` — no runtime dependency.
+    pub type_only: bool,
+    /// Files that import this package.
+    pub importers: Vec<PathBuf>,
+}
+
 /// Snapshot of exports, imports, and cross-file symbol usages for the input
 /// set. Frozen after `build` — all fields are read-only for rule consumers.
 #[derive(Debug, Default)]
@@ -172,14 +183,16 @@ pub struct ImportIndex {
     exports: HashMap<PathBuf, Vec<ExportedSymbol>>,
     imports: HashMap<PathBuf, Vec<ImportedSymbol>>,
     /// `(exporting_file, exported_name)` → every importer that pulls it in.
-    /// `*` re-export imports never populate this map — they carry no specific
-    /// name to link against.
+    /// Populated after re-export propagation so barrel usages flow through.
     symbol_usages: HashMap<(PathBuf, String), Vec<Usage>>,
     /// `(exporting_file, exported_name)` → every cross-file call/new site that
     /// references it. Populated only for named + default imports that resolve
     /// to a known exporting file. Namespace imports (`import * as ns`) and
     /// member-access calls (`ns.Foo()`) are not tracked.
     call_sites: HashMap<(PathBuf, String), Vec<CallSite>>,
+    /// Bare specifiers (npm package names) seen across all files, mapped to
+    /// whether ALL imports from that package are type-only.
+    bare_specifiers: HashMap<String, BareSpecifierInfo>,
 }
 
 impl ImportIndex {
@@ -298,11 +311,19 @@ impl ImportIndex {
             }
         }
 
+        // Fourth pass: propagate re-exports. When barrel.ts does
+        // `export { X } from './impl'`, usages on barrel flow to impl.
+        propagate_reexports(&exports, &imports, &mut symbol_usages);
+
+        // Fifth pass: collect bare specifiers (npm packages).
+        let bare_specifiers = collect_bare_specifiers(&imports);
+
         Self {
             exports,
             imports,
             symbol_usages,
             call_sites,
+            bare_specifiers,
         }
     }
 
@@ -385,6 +406,34 @@ impl ImportIndex {
             .map(|(p, v)| (p.as_path(), v.as_slice()))
     }
 
+    /// Bare specifiers (npm package names) collected from all imports.
+    #[must_use]
+    pub fn bare_specifiers(&self) -> &HashMap<String, BareSpecifierInfo> {
+        &self.bare_specifiers
+    }
+
+    /// Files reachable from `roots` via import edges (BFS). Unreachable files
+    /// in the indexed set are candidates for the `unused-file` rule.
+    #[must_use]
+    pub fn reachable_from(&self, roots: &[&Path]) -> std::collections::HashSet<PathBuf> {
+        let mut visited = std::collections::HashSet::new();
+        let mut queue: std::collections::VecDeque<PathBuf> =
+            roots.iter().map(|p| p.to_path_buf()).collect();
+        while let Some(current) = queue.pop_front() {
+            if !visited.insert(current.clone()) {
+                continue;
+            }
+            for imp in self.get_imports(&current) {
+                if let Some(src) = &imp.source_path
+                    && !visited.contains(src)
+                {
+                    queue.push_back(src.clone());
+                }
+            }
+        }
+        visited
+    }
+
     /// True when no TS/JS/TSX file was indexed. Cross-file rules use this
     /// to short-circuit in contexts that don't build a real index — the LSP
     /// path and unit tests constructed via `CheckCtx::for_test`.
@@ -400,6 +449,147 @@ impl ImportIndex {
     pub fn indexed_paths(&self) -> impl Iterator<Item = &Path> {
         self.exports.keys().map(PathBuf::as_path)
     }
+}
+
+/// Fixed-point propagation: when `barrel.ts` re-exports `{ X } from './impl'`,
+/// any usage of `X` on barrel should count as a usage of `X` on impl.
+fn propagate_reexports(
+    exports: &HashMap<PathBuf, Vec<ExportedSymbol>>,
+    imports: &HashMap<PathBuf, Vec<ImportedSymbol>>,
+    symbol_usages: &mut HashMap<(PathBuf, String), Vec<Usage>>,
+) {
+    // Build re-export edges: for each `export { X } from './m'` or
+    // `export { X as Y } from './m'`, find the matching import and link
+    // (barrel, exported_name) → (origin, origin_name).
+    //
+    // Matching strategy: the re-export's `reexport_source` specifier
+    // must match the import's `specifier`, AND the names must align.
+    // This avoids false edges when a barrel imports the same name from
+    // multiple modules.
+    let mut reexport_edges: Vec<(PathBuf, String, PathBuf, String)> = Vec::new();
+    for (barrel_path, exps) in exports {
+        let Some(imps) = imports.get(barrel_path) else {
+            continue;
+        };
+        for exp in exps {
+            if !matches!(exp.kind, ExportKind::ReExport) {
+                continue;
+            }
+            let Some(reexport_spec) = &exp.reexport_source else {
+                continue;
+            };
+            for imp in imps {
+                if imp.specifier != *reexport_spec {
+                    continue;
+                }
+                let Some(origin) = &imp.source_path else {
+                    continue;
+                };
+                let name_matches = match imp.kind {
+                    ImportKind::Named => imp.local_name == exp.name,
+                    ImportKind::Default => exp.name == "default",
+                    _ => false,
+                };
+                if name_matches {
+                    let origin_name = match imp.kind {
+                        ImportKind::Default => "default".to_string(),
+                        _ => imp.imported_name.clone(),
+                    };
+                    reexport_edges.push((
+                        barrel_path.clone(),
+                        exp.name.clone(),
+                        origin.clone(),
+                        origin_name,
+                    ));
+                    break;
+                }
+            }
+        }
+    }
+
+    // Fixed-point: propagate usages through re-export chains.
+    let mut changed = true;
+    let mut iterations = 0;
+    while changed && iterations < 20 {
+        changed = false;
+        iterations += 1;
+        for (barrel, barrel_name, origin, origin_name) in &reexport_edges {
+            let barrel_usages = symbol_usages
+                .get(&(barrel.clone(), barrel_name.clone()))
+                .cloned()
+                .unwrap_or_default();
+            if barrel_usages.is_empty() {
+                continue;
+            }
+            let origin_usages = symbol_usages
+                .entry((origin.clone(), origin_name.clone()))
+                .or_default();
+            for usage in &barrel_usages {
+                if !origin_usages.iter().any(|u| u.importer == usage.importer && u.line == usage.line) {
+                    origin_usages.push(usage.clone());
+                    changed = true;
+                }
+            }
+        }
+    }
+}
+
+/// Extract bare specifier → package name mapping from all imports.
+/// `@scope/pkg/path` → `@scope/pkg`, `lodash/fp` → `lodash`.
+fn collect_bare_specifiers(
+    imports: &HashMap<PathBuf, Vec<ImportedSymbol>>,
+) -> HashMap<String, BareSpecifierInfo> {
+    let mut result: HashMap<String, BareSpecifierInfo> = HashMap::new();
+    for (file, imps) in imports {
+        for imp in imps {
+            if imp.source_path.is_some() || imp.specifier.starts_with('.') {
+                continue;
+            }
+            let pkg = extract_package_name(&imp.specifier);
+            if pkg.is_empty() || is_builtin_module(&pkg) {
+                continue;
+            }
+            let entry = result.entry(pkg).or_insert(BareSpecifierInfo {
+                type_only: true,
+                importers: Vec::new(),
+            });
+            if !imp.is_type_only {
+                entry.type_only = false;
+            }
+            if !entry.importers.contains(file) {
+                entry.importers.push(file.clone());
+            }
+        }
+    }
+    result
+}
+
+/// `@scope/pkg/deep/path` → `@scope/pkg`, `lodash/fp` → `lodash`.
+fn extract_package_name(specifier: &str) -> String {
+    if specifier.starts_with('@') {
+        let parts: Vec<&str> = specifier.splitn(3, '/').collect();
+        if parts.len() >= 2 && !parts[1].is_empty() {
+            return format!("{}/{}", parts[0], parts[1]);
+        }
+        return String::new();
+    }
+    specifier.split('/').next().unwrap_or("").to_string()
+}
+
+fn is_builtin_module(name: &str) -> bool {
+    // Node.js built-in modules — bare imports that aren't npm packages.
+    let name = name.strip_prefix("node:").unwrap_or(name);
+    matches!(
+        name,
+        "assert" | "async_hooks" | "buffer" | "child_process" | "cluster"
+        | "console" | "constants" | "crypto" | "dgram" | "diagnostics_channel"
+        | "dns" | "domain" | "events" | "fs" | "http" | "http2" | "https"
+        | "inspector" | "module" | "net" | "os" | "path" | "perf_hooks"
+        | "process" | "punycode" | "querystring" | "readline" | "repl"
+        | "stream" | "string_decoder" | "sys" | "test" | "timers"
+        | "tls" | "trace_events" | "tty" | "url" | "util" | "v8" | "vm"
+        | "wasi" | "worker_threads" | "zlib"
+    )
 }
 
 fn is_indexable(lang: Language) -> bool {
@@ -530,6 +720,12 @@ fn extract_import(node: Node, source: &[u8], out: &mut Vec<ImportedSymbol>) {
     };
     let line = node.start_position().row + 1;
 
+    // `import type { X }` — statement-level type-only: the second child
+    // (index 1, right after `import`) is the `type` keyword.
+    let stmt_type_only = node
+        .child(1)
+        .is_some_and(|c| c.kind() == "type");
+
     // Find the import clause child — if absent, it's a side-effect import.
     let clause = node
         .named_children(&mut node.walk())
@@ -542,6 +738,7 @@ fn extract_import(node: Node, source: &[u8], out: &mut Vec<ImportedSymbol>) {
             specifier,
             source_path: None,
             line,
+            is_type_only: false,
         });
         return;
     };
@@ -559,6 +756,7 @@ fn extract_import(node: Node, source: &[u8], out: &mut Vec<ImportedSymbol>) {
                     specifier: specifier.clone(),
                     source_path: None,
                     line,
+                    is_type_only: stmt_type_only,
                 });
             }
             "namespace_import" => {
@@ -575,6 +773,7 @@ fn extract_import(node: Node, source: &[u8], out: &mut Vec<ImportedSymbol>) {
                         specifier: specifier.clone(),
                         source_path: None,
                         line,
+                        is_type_only: stmt_type_only,
                     });
                 }
             }
@@ -584,6 +783,9 @@ fn extract_import(node: Node, source: &[u8], out: &mut Vec<ImportedSymbol>) {
                     if spec.kind() != "import_specifier" {
                         continue;
                     }
+                    // Per-specifier `type`: `import { type X }`.
+                    let spec_type_only = stmt_type_only
+                        || spec.children(&mut spec.walk()).any(|c| c.kind() == "type");
                     let (imported, local) = import_specifier_names(spec, source);
                     out.push(ImportedSymbol {
                         local_name: local,
@@ -592,6 +794,7 @@ fn extract_import(node: Node, source: &[u8], out: &mut Vec<ImportedSymbol>) {
                         specifier: specifier.clone(),
                         source_path: None,
                         line,
+                        is_type_only: spec_type_only,
                     });
                 }
             }
@@ -1068,6 +1271,7 @@ fn extract_rust_use(
             specifier: specifier.clone(),
             source_path: None,
             line,
+            is_type_only: false,
         });
 
         if is_pub && leaf.imported != "*" {

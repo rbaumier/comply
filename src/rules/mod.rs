@@ -1081,6 +1081,10 @@ pub mod import_namespace;
 pub mod import_no_amd;
 pub mod import_no_commonjs;
 pub mod import_no_cycle;
+pub mod type_only_dependency;
+pub mod unlisted_dependency;
+pub mod unused_dependency;
+pub mod unused_file;
 pub mod import_no_duplicates;
 pub mod import_no_dynamic_require;
 pub mod import_no_empty_named_blocks;
@@ -2209,6 +2213,10 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         import_named::register(),
         import_namespace::register(),
         import_no_cycle::register(),
+        type_only_dependency::register(),
+        unlisted_dependency::register(),
+        unused_dependency::register(),
+        unused_file::register(),
         import_no_duplicates::register(),
         import_no_named_as_default::register(),
         import_no_unresolved::register(),
