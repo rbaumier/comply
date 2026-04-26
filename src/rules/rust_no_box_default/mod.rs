@@ -9,9 +9,9 @@
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
+use crate::rules::RuleDef;
 use crate::rules::backend::Backend;
 use crate::rules::meta::RuleMeta;
-use crate::rules::RuleDef;
 
 pub const META: RuleMeta = RuleMeta {
     id: "rust-no-box-default",
@@ -30,7 +30,33 @@ pub fn register() -> RuleDef {
         meta: META,
         backends: vec![(
             Language::Rust,
-            Backend::Clippy { lint: "clippy::box_default" },
+            Backend::Clippy {
+                lint: "clippy::box_default",
+            },
         )],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::diagnostic::Severity;
+    use crate::rules::test_helpers::assert_clippy_rule;
+
+    use super::*;
+
+    #[test]
+    fn registers_box_default() {
+        assert_clippy_rule(
+            register(),
+            "rust-no-box-default",
+            Severity::Warning,
+            &["clippy::box_default"],
+        );
+    }
+
+    #[test]
+    fn metadata_mentions_box_default_idiom() {
+        assert!(META.remediation.contains("Box::<T>::default()"));
+        assert_eq!(META.categories, &["rust"]);
     }
 }

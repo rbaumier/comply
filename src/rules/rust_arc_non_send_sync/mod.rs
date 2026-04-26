@@ -13,9 +13,9 @@
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
+use crate::rules::RuleDef;
 use crate::rules::backend::Backend;
 use crate::rules::meta::RuleMeta;
-use crate::rules::RuleDef;
 
 pub const META: RuleMeta = RuleMeta {
     id: "rust-arc-non-send-sync",
@@ -34,7 +34,33 @@ pub fn register() -> RuleDef {
         meta: META,
         backends: vec![(
             Language::Rust,
-            Backend::Clippy { lint: "clippy::arc_with_non_send_sync" },
+            Backend::Clippy {
+                lint: "clippy::arc_with_non_send_sync",
+            },
         )],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::diagnostic::Severity;
+    use crate::rules::test_helpers::assert_clippy_rule;
+
+    use super::*;
+
+    #[test]
+    fn registers_arc_with_non_send_sync() {
+        assert_clippy_rule(
+            register(),
+            "rust-arc-non-send-sync",
+            Severity::Error,
+            &["clippy::arc_with_non_send_sync"],
+        );
+    }
+
+    #[test]
+    fn metadata_names_refcell_case() {
+        assert!(META.remediation.contains("Arc<RefCell<T>>"));
+        assert_eq!(META.categories, &["rust"]);
     }
 }

@@ -14,86 +14,31 @@
 //!
 //! See TODO.md "Architecture" for the full rationale. // comply-ignore: todo-needs-issue-link — file reference, not marker.
 
-pub mod backend;
-pub mod file_ctx;
-pub mod arrow_this_in_function;
-pub mod ban_dependencies;
-pub mod banned_comment_words;
-pub mod block_scope_case;
-pub mod better_auth_no_disable_csrf;
-pub mod better_auth_no_disable_origin_check;
-pub mod better_auth_plugin_import_path;
-pub mod better_auth_require_rate_limit;
-pub mod better_auth_trusted_providers;
-pub mod boolean_naming;
-pub mod boundary_condition;
-pub mod call_expression;
-pub mod comment_paraphrases_code;
-pub mod db_no_n_plus_one;
-pub mod db_no_string_concat_sql;
-pub mod delegated;
-pub mod drizzle_chunk_large_batch_insert;
-pub mod drizzle_fk_needs_index;
-pub mod drizzle_no_select_without_limit;
-pub mod drizzle_no_sql_raw_with_variable;
-pub mod drizzle_returning_on_insert_update;
-pub mod drizzle_timestamp_with_timezone;
-pub mod drizzle_zod_prefer_generated_schema;
-pub mod enforce_delete_with_where;
-pub mod enforce_update_with_where;
-pub mod pg_require_limit;
-pub mod post_message_origin;
-pub mod error_without_cause;
-pub mod exception_use_error_cause;
-pub mod explicit_units;
-pub mod jsdoc_check_property_names;
-pub mod jsdoc_check_tag_names;
-pub mod jsdoc_check_template_names;
-pub mod jsdoc_check_types;
-pub mod jsdoc_check_values;
-pub mod jsdoc_helpers;
-pub mod jsdoc_missing_example;
-pub mod jsdoc_require_hyphen_before_param_description;
-pub mod jsdoc_require_param_description;
-pub mod jsdoc_require_param_name;
-pub mod jsdoc_require_property;
-pub mod jsdoc_require_property_description;
-pub mod jsdoc_require_property_name;
-pub mod jsdoc_require_next_description;
-pub mod jsdoc_require_rejects;
-pub mod jsdoc_require_returns_description;
-pub mod jsdoc_require_tags;
-pub mod jsdoc_require_template;
-pub mod jsdoc_require_template_description;
-pub mod jsdoc_require_yields;
-pub mod jsdoc_require_yields_check;
-pub mod jsdoc_require_yields_description;
-pub mod jsdoc_text_helpers;
-pub mod jsdoc_valid_types;
-pub mod jsx;
-pub mod meta;
-pub mod migration_needs_lock_timeout;
-pub mod migration_needs_rollback;
-pub mod sql_helpers;
-pub mod vue_sfc;
-pub mod vue_template_helpers;
-pub mod yaml_k8s_helpers;
 pub mod api_branded_id_types;
 pub mod api_no_internal_ids_in_response;
 pub mod api_no_nullable_variant_fields;
 pub mod api_put_vs_patch;
 pub mod api_separate_input_output_types;
 pub mod api_validate_at_boundaries;
+pub mod arrow_this_in_function;
+pub mod backend;
+pub mod ban_dependencies;
+pub mod banned_comment_words;
 pub mod better_auth_client_framework_import;
 pub mod better_auth_drizzle_useplural;
 pub mod better_auth_email_verification_handler;
 pub mod better_auth_expo_no_cookie_auth;
+pub mod better_auth_no_disable_csrf;
+pub mod better_auth_no_disable_origin_check;
 pub mod better_auth_no_duplicate_baseurl;
 pub mod better_auth_no_duplicate_secret;
+pub mod better_auth_plugin_import_path;
+pub mod better_auth_require_rate_limit;
 pub mod better_auth_required_user_fields;
 pub mod better_auth_reset_password_handler;
 pub mod better_auth_secret_min_length;
 pub mod better_auth_session_infer_type;
+pub mod better_auth_trusted_providers;
 pub mod better_result_await_inside_gen;
 pub mod better_result_caller_must_handle;
 pub mod better_result_catch_returns_tagged;
@@ -114,6 +59,10 @@ pub mod better_result_tag_matches_classname;
 pub mod better_result_tagged_error_cause_unknown;
 pub mod better_result_tagged_error_message;
 pub mod better_result_try_requires_catch;
+pub mod block_scope_case;
+pub mod boolean_naming;
+pub mod boundary_condition;
+pub mod call_expression;
 pub mod ci_cache_key_includes_lockfile;
 pub mod ci_checkout_action_pinned;
 pub mod ci_docker_gha_cache;
@@ -124,6 +73,7 @@ pub mod ci_postgres_healthcheck;
 pub mod ci_setup_node_cache_enabled;
 pub mod ci_use_npm_ci;
 pub mod comment_max_words;
+pub mod comment_paraphrases_code;
 pub mod compose_bind_localhost_ports;
 pub mod compose_cap_drop_all;
 pub mod compose_depends_on_condition;
@@ -131,38 +81,124 @@ pub mod compose_no_inline_secrets;
 pub mod compose_no_latest_tag;
 pub mod compose_no_privileged;
 pub mod compose_require_resource_limits;
+pub mod css_calc_needs_spaces;
+pub mod css_custom_property_needs_var;
+pub mod css_font_family_needs_generic;
+pub mod css_font_family_quotes;
+pub mod css_keyframe_no_duplicate_selectors;
+pub mod css_keyframe_no_important;
+pub mod css_no_deprecated_at_rule;
+pub mod css_no_deprecated_media_type;
+pub mod css_no_deprecated_property_value;
+pub mod css_no_duplicate_custom_properties;
+pub mod css_no_duplicate_font_family;
+pub mod css_no_duplicate_imports;
+pub mod css_no_duplicate_properties;
+pub mod css_no_empty_block;
+pub mod css_no_empty_comment;
+pub mod css_no_invalid_hex;
+pub mod css_no_invalid_media_query;
+pub mod css_no_nonstandard_gradient_direction;
+pub mod css_no_redundant_longhand;
+pub mod css_no_shorthand_overrides_longhand;
+pub mod css_no_unknown_function;
+pub mod css_no_unknown_media_feature;
+pub mod css_no_unknown_media_value;
+pub mod css_no_unknown_property_value;
+pub mod css_no_vendor_prefix_at_rule;
+pub mod css_no_vendor_prefix_media;
+pub mod css_no_vendor_prefix_property;
+pub mod css_no_vendor_prefix_selector;
+pub mod css_no_vendor_prefix_value;
+pub mod css_outline_none_needs_focus;
+pub mod db_no_n_plus_one;
+pub mod db_no_string_concat_sql;
+pub mod delegated;
+pub mod dockerfile_absolute_workdir;
+pub mod dockerfile_add_for_archive_extract;
+pub mod dockerfile_apk_no_cache;
+pub mod dockerfile_apt_clean_lists;
+pub mod dockerfile_apt_get_y_flag;
+pub mod dockerfile_apt_no_recommends;
 pub mod dockerfile_copy_after_install;
+pub mod dockerfile_copy_from_known_stage;
+pub mod dockerfile_copy_from_not_self;
+pub mod dockerfile_copy_needs_workdir;
+pub mod dockerfile_copy_trailing_slash;
+pub mod dockerfile_dnf_clean_all;
+pub mod dockerfile_dnf_y_flag;
+pub mod dockerfile_env_no_self_reference;
 pub mod dockerfile_exec_form_cmd;
+pub mod dockerfile_instruction_order;
+pub mod dockerfile_label_not_empty;
+pub mod dockerfile_label_url_format;
+pub mod dockerfile_no_add_for_files;
+pub mod dockerfile_no_apt_end_user;
+pub mod dockerfile_no_cd_in_run;
+pub mod dockerfile_no_curl_and_wget;
+pub mod dockerfile_no_from_platform;
 pub mod dockerfile_no_latest_tag;
+pub mod dockerfile_no_maintainer;
+pub mod dockerfile_no_multiple_cmd;
+pub mod dockerfile_no_multiple_entrypoint;
+pub mod dockerfile_no_onbuild_recursion;
 pub mod dockerfile_no_secrets_in_arg;
 pub mod dockerfile_no_secrets_in_copy;
 pub mod dockerfile_no_secrets_in_env;
+pub mod dockerfile_no_shell_utils_in_run;
+pub mod dockerfile_no_sudo;
+pub mod dockerfile_no_zypper_dist_upgrade;
 pub mod dockerfile_pin_exact_version;
+pub mod dockerfile_pip_no_cache_dir;
+pub mod dockerfile_pipefail;
 pub mod dockerfile_require_dockerignore;
 pub mod dockerfile_require_healthcheck;
 pub mod dockerfile_require_multi_stage;
 pub mod dockerfile_require_non_root_user;
+pub mod dockerfile_single_healthcheck;
+pub mod dockerfile_unique_stage_names;
 pub mod dockerfile_use_cache_mount;
 pub mod dockerfile_use_frozen_lockfile;
 pub mod dockerfile_use_npm_ci;
+pub mod dockerfile_useradd_low_uid;
+pub mod dockerfile_valid_port;
+pub mod dockerfile_wget_progress_flag;
+pub mod dockerfile_yarn_cache_clean;
+pub mod dockerfile_yum_clean_all;
+pub mod dockerfile_yum_y_flag;
+pub mod dockerfile_zypper_clean;
+pub mod dockerfile_zypper_non_interactive;
 pub mod dockerignore_must_exclude_sensitive;
 pub mod drizzle_camel_snake_column_names;
+pub mod drizzle_chunk_large_batch_insert;
 pub mod drizzle_config_satisfies;
 pub mod drizzle_consistent_table_naming;
 pub mod drizzle_created_at_default_now;
+pub mod drizzle_fk_needs_index;
 pub mod drizzle_json_requires_type;
 pub mod drizzle_junction_composite_pk;
 pub mod drizzle_multi_statement_tx;
 pub mod drizzle_no_new_pool_per_request;
+pub mod drizzle_no_select_without_limit;
+pub mod drizzle_no_sql_raw_with_variable;
 pub mod drizzle_pool_requires_timeouts;
 pub mod drizzle_prefer_findmany_relations;
 pub mod drizzle_prefer_inarray;
 pub mod drizzle_prefer_infer_select;
 pub mod drizzle_prepared_placeholder;
+pub mod drizzle_returning_on_insert_update;
 pub mod drizzle_serverless_pool_max_one;
 pub mod drizzle_soft_delete_filter;
+pub mod drizzle_timestamp_with_timezone;
 pub mod drizzle_updated_at_on_update;
 pub mod drizzle_zod_omit_generated;
+pub mod drizzle_zod_prefer_generated_schema;
+pub mod enforce_delete_with_where;
+pub mod enforce_update_with_where;
+pub mod error_without_cause;
+pub mod exception_use_error_cause;
+pub mod explicit_units;
+pub mod file_ctx;
 pub mod function_doc_banned_verbs;
 pub mod i18n_key_exists;
 pub mod i18n_key_requires_domain_prefix;
@@ -170,12 +206,75 @@ pub mod i18n_max_key_depth;
 pub mod i18n_no_english_key;
 pub mod i18n_no_manual_list_join;
 pub mod i18n_use_singleton_outside_react;
+pub mod jsdoc_check_property_names;
+pub mod jsdoc_check_tag_names;
+pub mod jsdoc_check_template_names;
+pub mod jsdoc_check_types;
+pub mod jsdoc_check_values;
+pub mod jsdoc_helpers;
+pub mod jsdoc_missing_example;
+pub mod jsdoc_require_hyphen_before_param_description;
+pub mod jsdoc_require_next_description;
+pub mod jsdoc_require_param_description;
+pub mod jsdoc_require_param_name;
+pub mod jsdoc_require_property;
+pub mod jsdoc_require_property_description;
+pub mod jsdoc_require_property_name;
+pub mod jsdoc_require_rejects;
+pub mod jsdoc_require_returns_description;
+pub mod jsdoc_require_tags;
+pub mod jsdoc_require_template;
+pub mod jsdoc_require_template_description;
+pub mod jsdoc_require_yields;
+pub mod jsdoc_require_yields_check;
+pub mod jsdoc_require_yields_description;
+pub mod jsdoc_text_helpers;
+pub mod jsdoc_valid_types;
+pub mod jsx;
+pub mod k8s_dangling_hpa;
+pub mod k8s_dangling_ingress;
+pub mod k8s_dangling_network_policy;
+pub mod k8s_dangling_network_policy_peer;
+pub mod k8s_dangling_service;
+pub mod k8s_dangling_service_monitor;
+pub mod k8s_deployment_anti_affinity;
 pub mod k8s_disallow_privilege_escalation;
+pub mod k8s_dnsconfig_options;
+pub mod k8s_env_value_from_resolves;
+pub mod k8s_hpa_min_three_replicas;
+pub mod k8s_invalid_target_ports;
+pub mod k8s_job_ttl_required;
 pub mod k8s_min_replicas_two;
+pub mod k8s_mismatching_selector;
+pub mod k8s_no_allow_privileged_scc;
 pub mod k8s_no_default_service_account;
+pub mod k8s_no_deprecated_extensions_api;
+pub mod k8s_no_deprecated_service_account_field;
+pub mod k8s_no_docker_sock_mount;
+pub mod k8s_no_duplicate_env_vars;
+pub mod k8s_no_exposed_services;
+pub mod k8s_no_host_ipc;
+pub mod k8s_no_host_network;
+pub mod k8s_no_host_pid;
 pub mod k8s_no_latest_image_tag;
 pub mod k8s_no_plaintext_secret_in_git;
+pub mod k8s_no_privileged_container;
+pub mod k8s_no_privileged_ports;
+pub mod k8s_no_secret_in_env_literal;
 pub mod k8s_no_secrets_in_configmap;
+pub mod k8s_no_sensitive_host_mounts;
+pub mod k8s_no_ssh_port;
+pub mod k8s_no_unsafe_proc_mount;
+pub mod k8s_no_unsafe_sysctls;
+pub mod k8s_no_writable_host_mount;
+pub mod k8s_non_existent_service_account;
+pub mod k8s_pdb_eviction_policy;
+pub mod k8s_prefer_secret_files_over_env;
+pub mod k8s_priority_class_name;
+pub mod k8s_probe_port_exists;
+pub mod k8s_rbac_no_cluster_admin_binding;
+pub mod k8s_rbac_no_create_pods;
+pub mod k8s_rbac_no_secret_access;
 pub mod k8s_rbac_no_wildcard_resources;
 pub mod k8s_rbac_no_wildcard_verbs;
 pub mod k8s_require_drop_all_caps;
@@ -190,8 +289,12 @@ pub mod k8s_require_resource_limits;
 pub mod k8s_require_resource_requests;
 pub mod k8s_require_run_as_non_root;
 pub mod k8s_require_standard_labels;
+pub mod k8s_restart_policy_required;
 pub mod k8s_rolling_update_zero_unavailable;
 pub mod law_of_demeter_max_dots;
+pub mod meta;
+pub mod migration_needs_lock_timeout;
+pub mod migration_needs_rollback;
 pub mod no_history_in_comments;
 pub mod no_shallow_passthrough_method;
 pub mod perf_font_face_display_swap;
@@ -202,6 +305,8 @@ pub mod perf_no_google_fonts_link;
 pub mod perf_no_render_blocking_css;
 pub mod perf_prefers_reduced_motion;
 pub mod perf_route_level_code_split;
+pub mod pg_require_limit;
+pub mod post_message_origin;
 pub mod react_no_barrel_import_known_libs;
 pub mod react_no_blocking_log_after_mutation;
 pub mod react_no_boolean_variant_props;
@@ -264,6 +369,7 @@ pub mod sql_add_constraint_not_valid;
 pub mod sql_boolean_column_prefix;
 pub mod sql_constraint_naming_convention;
 pub mod sql_fk_naming_convention;
+pub mod sql_helpers;
 pub mod sql_no_disable_autovacuum;
 pub mod sql_no_drop_column_without_expand;
 pub mod sql_no_function_on_indexed_column;
@@ -363,12 +469,15 @@ pub mod vue_no_watch_reactive_property;
 pub mod vue_ref_value_in_script;
 pub mod vue_scoped_styles_preferred;
 pub mod vue_setup_store_return_all;
+pub mod vue_sfc;
 pub mod vue_shallowref_for_primitives;
+pub mod vue_template_helpers;
 pub mod vue_typed_define_props_emits;
 pub mod vue_use_template_ref;
 pub mod vue_v_memo_requires_v_for;
 pub mod vue_watch_immediate_over_onmounted;
 pub mod vue_withdefaults_factory;
+pub mod yaml_k8s_helpers;
 pub mod zod_no_coerce_on_financial;
 pub mod zod_no_manual_types;
 pub mod zod_no_schema_in_hot_path;
@@ -383,9 +492,10 @@ pub mod zod_require_multipleof_currency;
 // rust_must_use_on_result intentionally not declared — see mod.rs
 // below for the rationale.
 pub mod cognitive_complexity;
-pub mod halstead_complexity;
+pub mod display_name;
 pub mod generator_without_yield;
 pub mod god_module;
+pub mod halstead_complexity;
 pub mod jsdoc_needs_description;
 pub mod mysql_no_multiple_statements;
 pub mod no_abbreviated_names;
@@ -404,6 +514,7 @@ pub mod no_double_cast;
 pub mod no_duplicate_string;
 pub mod no_enum;
 pub mod no_equals_in_for_termination;
+pub mod no_error_details_in_response;
 pub mod no_eval;
 pub mod no_extraneous_import;
 pub mod no_fire_event;
@@ -419,12 +530,11 @@ pub mod no_hardcoded_secret;
 pub mod no_identical_functions;
 pub mod no_identical_title;
 pub mod no_ignored_exceptions;
+pub mod no_indexof_equality;
 pub mod no_inline_function_event_listener;
 pub mod no_inline_param_type;
 pub mod no_interpolation_in_snapshots;
-pub mod no_indexof_equality;
 pub mod no_inverted_boolean_check;
-pub mod no_error_details_in_response;
 pub mod no_json_parse_cast;
 pub mod no_large_snapshots;
 pub mod no_manual_rtl_cleanup;
@@ -438,13 +548,13 @@ pub mod no_nested_template_literal;
 pub mod no_nested_ternary;
 pub mod no_new_regex_with_variable;
 pub mod no_nullish_default_on_input;
+pub mod no_one_iteration_loop;
 pub mod no_open_redirect;
 pub mod no_page_click_deprecated;
 pub mod no_path_traversal;
 pub mod no_property_mutation;
 pub mod no_prototype_pollution;
 pub mod no_redundant_assignment;
-pub mod no_one_iteration_loop;
 pub mod no_redundant_boolean;
 pub mod no_section_divider_comments;
 pub mod no_set_x_to_y;
@@ -471,15 +581,15 @@ pub mod object_literal;
 pub mod operation_returning_nan;
 pub mod os_command;
 pub mod prefer_called_exactly_once_with;
-pub mod prefer_early_return;
 pub mod prefer_called_with;
+pub mod prefer_early_return;
 pub mod prefer_expect_resolves;
 pub mod prefer_exponentiation_operator;
 pub mod prefer_immediate_return;
-pub mod prefer_single_boolean_return;
 pub mod prefer_less_than;
 pub mod prefer_mock_promise_shorthand;
 pub mod prefer_object_has_own;
+pub mod prefer_single_boolean_return;
 pub mod prefer_spy_on;
 pub mod prefer_switch_over_chained_if;
 pub mod prefer_timer_args;
@@ -499,11 +609,10 @@ pub mod react_no_class_component_in_server_component;
 pub mod react_no_client_hook_in_server_component;
 pub mod react_no_client_only_in_server_component;
 pub mod react_no_cookies_in_layout;
+pub mod react_no_deprecated;
 pub mod react_no_derived_state_in_effect;
 pub mod react_no_empty_effect;
 pub mod react_no_event_handler_in_server_component;
-pub mod display_name;
-pub mod react_no_deprecated;
 pub mod react_no_find_dom_node;
 pub mod react_no_generate_static_params_in_client;
 pub mod react_no_initialize_state_in_effect;
@@ -523,6 +632,8 @@ pub mod react_server_action_requires_auth;
 pub mod react_server_action_requires_validation;
 pub mod react_use_state_initializer_function;
 pub mod react_use_state_lazy_init;
+pub mod regex_ast;
+pub mod rust_anyhow_context_on_question_mark;
 pub mod rust_arc_non_send_sync;
 pub mod rust_await_holding_lock;
 pub mod rust_block_on_in_async;
@@ -531,11 +642,11 @@ pub mod rust_constants_top_of_file;
 pub mod rust_duration_over_integer_with_unit;
 pub mod rust_explicit_enum_match_arms;
 pub mod rust_explicit_iter_loop;
-pub mod regex_ast;
 pub mod rust_helpers;
 pub mod rust_impl_debug_on_public_types;
 pub mod rust_large_enum_variant;
 pub mod rust_mod_tests_without_cfg_test;
+pub mod rust_must_use_on_result_fn;
 pub mod rust_no_as_numeric_cast;
 pub mod rust_no_bool_return_from_fallible;
 pub mod rust_no_box_default;
@@ -552,6 +663,8 @@ pub mod rust_no_pub_use_glob;
 pub mod rust_no_static_mut;
 pub mod rust_no_unwrap;
 pub mod rust_no_unwrap_in_from_impl;
+pub mod rust_prefer_channel_over_arc_mutex_vec;
+pub mod rust_prefer_once_lock;
 pub mod rust_prefer_unwrap_or_explicit;
 pub mod rust_ptr_arg;
 pub mod rust_pub_enum_without_non_exhaustive;
@@ -560,19 +673,15 @@ pub mod rust_redundant_clone;
 pub mod rust_serde_deny_unknown_fields;
 pub mod rust_string_as_error;
 pub mod rust_sync_io_in_async;
-pub mod rust_thread_sleep_in_async;
-pub mod rust_anyhow_context_on_question_mark;
-pub mod rust_must_use_on_result_fn;
-pub mod rust_prefer_channel_over_arc_mutex_vec;
-pub mod rust_prefer_once_lock;
 pub mod rust_thiserror_for_lib;
+pub mod rust_thread_sleep_in_async;
 pub mod rust_tokio_spawn_without_handle;
 pub mod rust_unbounded_channel;
-pub mod rust_unsafe_ffi_isolation;
-pub mod rust_vec_with_capacity;
 pub mod rust_undocumented_unsafe;
 pub mod rust_unit_error_result;
+pub mod rust_unsafe_ffi_isolation;
 pub mod rust_unsafe_impl_without_comment;
+pub mod rust_vec_with_capacity;
 #[cfg(test)]
 pub mod test_helpers;
 pub mod test_methods;
@@ -628,19 +737,19 @@ pub mod sql_no_varchar;
 pub mod sql_nullable_requires_comment;
 pub mod sql_prefer_exists_over_in;
 pub mod sql_require_transaction_timeout;
+pub mod tailwind_classnames_order;
 pub mod tailwind_enforces_negative_arbitrary_values;
 pub mod tailwind_no_apply_for_variants;
 pub mod tailwind_no_arbitrary_z_index;
 pub mod tailwind_no_conflicting_classes;
+pub mod tailwind_no_deprecated_classes;
 pub mod tailwind_no_duplicate_classes;
 pub mod tailwind_no_dynamic_class;
 pub mod tailwind_no_important_modifier;
 pub mod tailwind_no_unnecessary_whitespace;
 pub mod tailwind_prefer_cn_utility;
-pub mod tailwind_prefer_size_shorthand;
-pub mod tailwind_classnames_order;
-pub mod tailwind_no_deprecated_classes;
 pub mod tailwind_prefer_shorthand;
+pub mod tailwind_prefer_size_shorthand;
 pub mod tanstack_query_array_key;
 pub mod tanstack_query_fn_must_throw_on_error;
 pub mod tanstack_query_key_includes_params;
@@ -748,13 +857,13 @@ pub mod file_extension_in_import;
 pub mod filename_naming_convention;
 pub mod folder_naming_convention;
 pub mod for_loop_increment_sign;
-pub mod function_component_definition;
-pub mod function_inside_loop;
-pub mod function_return_type;
 pub mod fsd_no_cross_slice_dependency;
 pub mod fsd_no_global_store_imports;
 pub mod fsd_no_relative_imports;
 pub mod fsd_no_ui_in_business_logic;
+pub mod function_component_definition;
+pub mod function_inside_loop;
+pub mod function_return_type;
 pub mod hono_cookie_no_httponly;
 pub mod hono_cookie_no_samesite;
 pub mod hono_cookie_no_secure;
@@ -763,6 +872,7 @@ pub mod hono_csp_unsafe;
 pub mod hono_csrf_missing;
 pub mod hono_missing_secure_headers;
 pub mod hono_secure_headers_disabled;
+pub mod hook_use_state;
 pub mod html_no_abstract_roles;
 pub mod html_no_aria_hidden_body;
 pub mod html_no_duplicate_attrs;
@@ -796,7 +906,6 @@ pub mod jsx_handler_names;
 pub mod jsx_no_leaked_render;
 pub mod jsx_no_new_function_as_prop;
 pub mod jsx_no_undef;
-pub mod hook_use_state;
 pub mod justify_inaction;
 pub mod max_call_chain_depth;
 pub mod max_union_size;
@@ -805,18 +914,9 @@ pub mod no_arguments_usage;
 pub mod no_array_constructor;
 pub mod no_array_delete;
 pub mod no_associative_arrays;
+pub mod no_async_array_callback;
 pub mod no_async_constructor;
 pub mod no_async_without_await;
-pub mod no_async_array_callback;
-pub mod no_floating_promise;
-pub mod no_redundant_await;
-pub mod no_redundant_state;
-pub mod no_unused_locators;
-pub mod unused_component_prop;
-pub mod valid_expect;
-pub mod valid_expect_in_promise;
-pub mod playwright_no_duplicate_slow;
-pub mod playwright_no_slowed_test;
 pub mod no_bidi_characters;
 pub mod no_bitwise_in_boolean;
 pub mod no_built_in_override;
@@ -835,6 +935,7 @@ pub mod no_ecb_mode;
 pub mod no_electron_node_integration;
 pub mod no_element_overwrite;
 pub mod no_empty_test_file;
+pub mod no_floating_promise;
 pub mod no_globals_shadowing;
 pub mod no_hardcoded_secret_signature;
 pub mod no_hook_setter_in_body;
@@ -861,9 +962,11 @@ pub mod no_primitive_wrappers;
 pub mod no_promise_reject;
 pub mod no_pseudo_random;
 pub mod no_raw_db_entity_in_handler;
+pub mod no_redundant_await;
 pub mod no_redundant_clsx;
 pub mod no_redundant_jump;
 pub mod no_redundant_optional;
+pub mod no_redundant_state;
 pub mod no_return_type_any;
 pub mod no_same_argument_assert;
 pub mod no_small_switch;
@@ -874,6 +977,7 @@ pub mod no_undefined_assignment;
 pub mod no_unenclosed_multiline_block;
 pub mod no_uniq_key;
 pub mod no_unthrown_error;
+pub mod no_unused_locators;
 pub mod no_unverified_certificate;
 pub mod no_unverified_hostname;
 pub mod no_useless_increment;
@@ -886,6 +990,8 @@ pub mod no_weak_ssl;
 pub mod no_xml_external_entity;
 pub mod non_existent_operator;
 pub mod option_vs_result;
+pub mod playwright_no_duplicate_slow;
+pub mod playwright_no_slowed_test;
 pub mod prefer_default_last;
 pub mod prefer_destructuring_assignment;
 pub mod prefer_object_literal;
@@ -956,19 +1062,24 @@ pub mod testing_no_undefined_mock_var;
 pub mod testing_prefer_msw;
 pub mod testing_prefer_test_each;
 pub mod too_many_break_or_continue;
+pub mod unused_component_prop;
 pub mod use_type_alias;
 pub mod useless_string_operation;
+pub mod valid_expect;
+pub mod valid_expect_in_promise;
 
 // eslint-plugin-import rules (native implementations).
 pub mod exports_last;
+pub mod file_name_differ_from_class;
+pub mod id_length;
 pub mod import_consistent_type_specifier_style;
-pub mod import_dynamic_import_chunkname;
-pub mod import_no_amd;
-pub mod import_no_commonjs;
 pub mod import_default;
+pub mod import_dynamic_import_chunkname;
 pub mod import_export;
 pub mod import_named;
 pub mod import_namespace;
+pub mod import_no_amd;
+pub mod import_no_commonjs;
 pub mod import_no_cycle;
 pub mod import_no_duplicates;
 pub mod import_no_dynamic_require;
@@ -976,8 +1087,6 @@ pub mod import_no_empty_named_blocks;
 pub mod import_no_named_as_default;
 pub mod import_no_unresolved;
 pub mod import_no_webpack_loader_syntax;
-pub mod require_not_empty;
-pub mod id_length;
 pub mod imports_first;
 pub mod max_dependencies;
 pub mod newline_after_import;
@@ -989,11 +1098,11 @@ pub mod no_import_node_modules_by_path;
 pub mod no_import_node_test;
 pub mod no_mocks_import;
 pub mod no_mutable_exports;
-pub mod no_useless_path_segments;
 pub mod no_namespace_import;
 pub mod no_self_import;
 pub mod no_unassigned_import;
-pub mod file_name_differ_from_class;
+pub mod no_useless_path_segments;
+pub mod require_not_empty;
 
 // eslint-plugin-unicorn rules (native implementations).
 pub mod catch_error_name;
@@ -1004,6 +1113,8 @@ pub mod consistent_existence_index_check;
 pub mod consistent_function_scoping;
 pub mod consistent_template_literal_escape;
 pub mod custom_error_definition;
+pub mod detect_dangerous_redirects;
+pub mod detect_option_rejectunauthorized;
 pub mod empty_brace_spaces;
 pub mod error_message;
 pub mod escape_case;
@@ -1021,31 +1132,26 @@ pub mod no_array_sort_mutation;
 pub mod no_assign_mutated_array;
 pub mod no_await_expression_member;
 pub mod no_await_in_promise_methods;
+pub mod no_catch_log_rethrow;
+pub mod no_catch_without_use;
 pub mod no_console_spaces;
+pub mod no_delete;
 pub mod no_document_cookie;
 pub mod no_document_domain;
 pub mod no_document_write;
-pub mod no_inner_html;
-pub mod no_unsafe_alloc;
-pub mod no_unsafe_shell_exec;
-pub mod detect_dangerous_redirects;
-pub mod detect_option_rejectunauthorized;
-pub mod react_no_javascript_urls;
-pub mod no_catch_log_rethrow;
-pub mod no_catch_without_use;
 pub mod no_empty_catch;
 pub mod no_empty_file;
 pub mod no_extra_arguments;
 pub mod no_for_loop;
 pub mod no_hex_escape;
 pub mod no_immediate_mutation;
+pub mod no_inner_html;
 pub mod no_instanceof_builtins;
 pub mod no_invalid_fetch_options;
 pub mod no_invalid_remove_event_listener;
 pub mod no_keyword_prefix;
-pub mod no_lonely_if;
-pub mod no_delete;
 pub mod no_let;
+pub mod no_lonely_if;
 pub mod no_magic_array_flat_depth;
 pub mod no_mutating_assign;
 pub mod no_mutating_methods;
@@ -1059,8 +1165,8 @@ pub mod no_process_exit;
 pub mod no_single_promise_in_promise_methods;
 pub mod no_static_only_class;
 pub mod no_thenable;
-pub mod no_this_mutation;
 pub mod no_this_assignment;
+pub mod no_this_mutation;
 pub mod no_typeof_undefined;
 pub mod no_unknown_property;
 pub mod no_unnecessary_array_flat_depth;
@@ -1069,6 +1175,8 @@ pub mod no_unnecessary_await;
 pub mod no_unnecessary_slice_end;
 pub mod no_unreadable_array_destructuring;
 pub mod no_unreadable_iife;
+pub mod no_unsafe_alloc;
+pub mod no_unsafe_shell_exec;
 pub mod no_useless_collection_argument;
 pub mod no_useless_error_capture_stack_trace;
 pub mod no_useless_fallback_in_spread;
@@ -1095,8 +1203,8 @@ pub mod node_prefer_promises_fs;
 pub mod number_literal_case;
 pub mod numeric_separators_style;
 pub mod prefer_add_event_listener;
-pub mod prefer_array_find;
 pub mod prefer_array_fill;
+pub mod prefer_array_find;
 pub mod prefer_array_flat;
 pub mod prefer_array_from_map;
 pub mod prefer_array_index_of;
@@ -1157,6 +1265,7 @@ pub mod prefer_ternary;
 pub mod prefer_to_have_length;
 pub mod prefer_top_level_await;
 pub mod prefer_type_error;
+pub mod react_no_javascript_urls;
 pub mod relative_url_style;
 pub mod require_array_join_separator;
 pub mod require_explicit_undefined;
@@ -1173,9 +1282,9 @@ pub mod switch_case_break_position;
 pub mod template_indent;
 pub mod text_encoding_identifier_case;
 pub mod throw_error_values;
+pub mod throw_new_error;
 pub mod try_catch_json_parse;
 pub mod try_catch_new_url;
-pub mod throw_new_error;
 // typescript-eslint rules (native implementations).
 pub mod ts_adjacent_overload_signatures;
 pub mod ts_ban_ts_comment;
@@ -1216,9 +1325,9 @@ pub mod ts_no_magic_numbers;
 pub mod ts_no_misused_new;
 pub mod ts_no_mixed_types;
 pub mod ts_no_namespace;
-pub mod ts_no_non_null_assertion;
 pub mod ts_no_non_null_asserted_nullish_coalescing;
 pub mod ts_no_non_null_asserted_optional_chain;
+pub mod ts_no_non_null_assertion;
 pub mod ts_no_redeclare;
 pub mod ts_no_restricted_imports;
 pub mod ts_no_restricted_types;
@@ -1285,26 +1394,30 @@ pub mod react_refresh_only_export_components;
 // eslint-plugin-playwright (native implementation).
 pub mod comment_prose_quality;
 pub mod layer_import_boundary;
+pub mod no_index_file;
 pub mod package_json_sorted_deps;
 pub mod package_json_unique_deps;
-pub mod no_index_file;
-pub mod top_level_function;
-pub mod proper_arrows_name;
 pub mod playwright_missing_await;
 pub mod playwright_no_eval;
+pub mod proper_arrows_name;
+pub mod top_level_function;
 pub mod vitest_hoisted_apis_on_top;
 pub mod vitest_no_disabled_tests;
 // v3.0 — Skill-driven rules: Batch 1 (TypeScript/Architecture)
 pub mod avoid_barrel_files;
-pub mod avoid_re_export_all;
 pub mod avoid_importing_barrel_files;
+pub mod avoid_re_export_all;
 pub mod import_dedupe;
+pub mod no_default_export;
 pub mod no_full_import;
 pub mod no_test_imports_in_prod;
-pub mod no_default_export;
 pub mod prefer_promise_all;
 pub mod ts_prefer_using_declaration;
 // v3.0 — Skill-driven rules: Batch 11 (i18n)
+pub mod better_auth_middleware_requires_headers;
+pub mod better_auth_require_secure_cookies;
+pub mod drizzle_no_push_in_production;
+pub mod express_session_require_name;
 pub mod i18n_json_identical_keys;
 pub mod i18n_json_identical_placeholders;
 pub mod i18n_json_no_empty_values;
@@ -1315,12 +1428,8 @@ pub mod i18n_no_concat_translation_key;
 pub mod i18n_no_hardcoded_string_in_jsx;
 pub mod i18n_no_manual_pluralization;
 pub mod i18n_no_string_concat_with_translation;
-pub mod i18n_prefer_intl_api;
-pub mod better_auth_middleware_requires_headers;
-pub mod better_auth_require_secure_cookies;
-pub mod express_session_require_name;
-pub mod drizzle_no_push_in_production;
 pub mod i18n_no_unnecessary_trans_component;
+pub mod i18n_prefer_intl_api;
 pub mod i18n_prefer_logical_css_properties;
 pub mod no_conditional_async_return;
 pub mod no_conditional_tests;
@@ -1329,15 +1438,16 @@ pub mod no_unsanitized_method;
 pub mod rust_no_mutex_in_single_threaded;
 pub mod rust_prefer_cow;
 pub mod rust_prefer_fast_hasher;
+pub mod serialize_javascript_no_unsafe;
 pub mod tailwind_no_magic_spacing;
 pub mod tailwind_read_theme_before_classes;
 pub mod tanstack_start_loader_stale_time;
 pub mod tanstack_start_no_client_import_in_server_fn;
-pub mod serialize_javascript_no_unsafe;
 pub mod testing_no_real_external_service;
 pub mod ts_prefer_satisfies;
 pub mod valid_describe_callback;
 pub mod vue_no_mutate_prop;
+pub mod xpath_injection;
 pub mod xstate_entry_exit_action;
 pub mod xstate_event_names;
 pub mod xstate_invoke_usage;
@@ -1351,13 +1461,12 @@ pub mod xstate_no_invalid_transition_props;
 pub mod xstate_no_misplaced_on_transition;
 pub mod xstate_no_ondone_outside_compound_state;
 pub mod xstate_state_names;
-pub mod xpath_injection;
 pub mod zod_brand_ids;
-pub mod zod_transform_requires_pipe;
-pub mod zod_validate_env_at_startup;
 pub mod zod_no_optional_and_default_together;
 pub mod zod_no_unknown_schema;
 pub mod zod_require_schema_suffix;
+pub mod zod_transform_requires_pipe;
+pub mod zod_validate_env_at_startup;
 use crate::diagnostic::Severity;
 use crate::files::Language;
 use backend::Backend;
@@ -1964,7 +2073,6 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
 
         // thread '<unnamed>' (63760602) panicked at src/rules/regex_prefer_quantifier/text.rs:47:33:
         // byte index 24 is not a char boundary; it is inside '—' (bytes 23..26) of `** Service return type — dates are Date objects, Hono serializes to ISO strings *`
-
         regex_prefer_quantifier::register(),
         regex_use_unicode_flag::register(),
         regex_no_octal::register(),
@@ -2693,6 +2801,36 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         ci_setup_node_cache_enabled::register(),
         ci_use_npm_ci::register(),
         comment_max_words::register(),
+        css_calc_needs_spaces::register(),
+        css_custom_property_needs_var::register(),
+        css_font_family_needs_generic::register(),
+        css_font_family_quotes::register(),
+        css_keyframe_no_duplicate_selectors::register(),
+        css_keyframe_no_important::register(),
+        css_no_deprecated_media_type::register(),
+        css_no_deprecated_property_value::register(),
+        css_no_duplicate_custom_properties::register(),
+        css_no_duplicate_font_family::register(),
+        css_no_duplicate_properties::register(),
+        css_no_empty_block::register(),
+        css_no_empty_comment::register(),
+        css_no_invalid_hex::register(),
+        css_no_invalid_media_query::register(),
+        css_no_nonstandard_gradient_direction::register(),
+        css_no_redundant_longhand::register(),
+        css_no_shorthand_overrides_longhand::register(),
+        css_no_unknown_function::register(),
+        css_no_unknown_media_feature::register(),
+        css_no_unknown_media_value::register(),
+        css_no_unknown_property_value::register(),
+        css_no_vendor_prefix_property::register(),
+        css_no_vendor_prefix_value::register(),
+        css_no_vendor_prefix_selector::register(),
+        css_no_vendor_prefix_at_rule::register(),
+        css_no_vendor_prefix_media::register(),
+        css_no_deprecated_at_rule::register(),
+        css_outline_none_needs_focus::register(),
+        css_no_duplicate_imports::register(),
         compose_bind_localhost_ports::register(),
         compose_cap_drop_all::register(),
         compose_depends_on_condition::register(),
@@ -2700,20 +2838,60 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         compose_no_latest_tag::register(),
         compose_no_privileged::register(),
         compose_require_resource_limits::register(),
+        dockerfile_absolute_workdir::register(),
+        dockerfile_add_for_archive_extract::register(),
+        dockerfile_apk_no_cache::register(),
+        dockerfile_apt_clean_lists::register(),
+        dockerfile_apt_get_y_flag::register(),
+        dockerfile_apt_no_recommends::register(),
         dockerfile_copy_after_install::register(),
+        dockerfile_copy_from_known_stage::register(),
+        dockerfile_copy_from_not_self::register(),
+        dockerfile_copy_needs_workdir::register(),
+        dockerfile_copy_trailing_slash::register(),
+        dockerfile_dnf_clean_all::register(),
+        dockerfile_dnf_y_flag::register(),
+        dockerfile_env_no_self_reference::register(),
         dockerfile_exec_form_cmd::register(),
+        dockerfile_instruction_order::register(),
+        dockerfile_no_add_for_files::register(),
+        dockerfile_no_apt_end_user::register(),
+        dockerfile_no_cd_in_run::register(),
         dockerfile_no_latest_tag::register(),
+        dockerfile_no_from_platform::register(),
+        dockerfile_no_maintainer::register(),
+        dockerfile_no_multiple_cmd::register(),
+        dockerfile_no_multiple_entrypoint::register(),
+        dockerfile_no_onbuild_recursion::register(),
         dockerfile_no_secrets_in_arg::register(),
         dockerfile_no_secrets_in_copy::register(),
         dockerfile_no_secrets_in_env::register(),
+        dockerfile_no_shell_utils_in_run::register(),
+        dockerfile_no_sudo::register(),
+        dockerfile_no_zypper_dist_upgrade::register(),
         dockerfile_pin_exact_version::register(),
+        dockerfile_pip_no_cache_dir::register(),
+        dockerfile_pipefail::register(),
         dockerfile_require_dockerignore::register(),
         dockerfile_require_healthcheck::register(),
         dockerfile_require_multi_stage::register(),
         dockerfile_require_non_root_user::register(),
+        dockerfile_single_healthcheck::register(),
+        dockerfile_unique_stage_names::register(),
         dockerfile_use_cache_mount::register(),
         dockerfile_use_frozen_lockfile::register(),
         dockerfile_use_npm_ci::register(),
+        dockerfile_no_curl_and_wget::register(),
+        dockerfile_useradd_low_uid::register(),
+        dockerfile_wget_progress_flag::register(),
+        dockerfile_label_not_empty::register(),
+        dockerfile_label_url_format::register(),
+        dockerfile_valid_port::register(),
+        dockerfile_yarn_cache_clean::register(),
+        dockerfile_yum_clean_all::register(),
+        dockerfile_yum_y_flag::register(),
+        dockerfile_zypper_clean::register(),
+        dockerfile_zypper_non_interactive::register(),
         dockerignore_must_exclude_sensitive::register(),
         drizzle_camel_snake_column_names::register(),
         drizzle_config_satisfies::register(),
@@ -2739,12 +2917,36 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         i18n_no_english_key::register(),
         i18n_no_manual_list_join::register(),
         i18n_use_singleton_outside_react::register(),
+        k8s_deployment_anti_affinity::register(),
         k8s_disallow_privilege_escalation::register(),
+        k8s_hpa_min_three_replicas::register(),
+        k8s_job_ttl_required::register(),
         k8s_min_replicas_two::register(),
+        k8s_no_allow_privileged_scc::register(),
         k8s_no_default_service_account::register(),
+        k8s_no_deprecated_extensions_api::register(),
+        k8s_no_deprecated_service_account_field::register(),
+        k8s_no_docker_sock_mount::register(),
+        k8s_no_duplicate_env_vars::register(),
+        k8s_no_exposed_services::register(),
+        k8s_no_host_ipc::register(),
+        k8s_no_host_network::register(),
+        k8s_no_host_pid::register(),
         k8s_no_latest_image_tag::register(),
         k8s_no_plaintext_secret_in_git::register(),
+        k8s_no_privileged_container::register(),
+        k8s_no_privileged_ports::register(),
+        k8s_no_secret_in_env_literal::register(),
         k8s_no_secrets_in_configmap::register(),
+        k8s_no_sensitive_host_mounts::register(),
+        k8s_no_unsafe_proc_mount::register(),
+        k8s_no_unsafe_sysctls::register(),
+        k8s_no_writable_host_mount::register(),
+        k8s_pdb_eviction_policy::register(),
+        k8s_prefer_secret_files_over_env::register(),
+        k8s_rbac_no_cluster_admin_binding::register(),
+        k8s_rbac_no_create_pods::register(),
+        k8s_rbac_no_secret_access::register(),
         k8s_rbac_no_wildcard_resources::register(),
         k8s_rbac_no_wildcard_verbs::register(),
         k8s_require_drop_all_caps::register(),
@@ -2759,7 +2961,22 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         k8s_require_resource_requests::register(),
         k8s_require_run_as_non_root::register(),
         k8s_require_standard_labels::register(),
+        k8s_restart_policy_required::register(),
         k8s_rolling_update_zero_unavailable::register(),
+        k8s_mismatching_selector::register(),
+        k8s_probe_port_exists::register(),
+        k8s_invalid_target_ports::register(),
+        k8s_no_ssh_port::register(),
+        k8s_priority_class_name::register(),
+        k8s_dnsconfig_options::register(),
+        k8s_dangling_hpa::register(),
+        k8s_dangling_ingress::register(),
+        k8s_dangling_network_policy::register(),
+        k8s_dangling_network_policy_peer::register(),
+        k8s_dangling_service::register(),
+        k8s_dangling_service_monitor::register(),
+        k8s_non_existent_service_account::register(),
+        k8s_env_value_from_resolves::register(),
         law_of_demeter_max_dots::register(),
         no_history_in_comments::register(),
         no_shallow_passthrough_method::register(),

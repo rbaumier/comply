@@ -27,11 +27,15 @@
 #![cfg(test)]
 
 use std::path::Path;
+use std::path::PathBuf;
 
 use crate::diagnostic::Diagnostic;
+use crate::diagnostic::Severity;
+use crate::files::{Language, SourceFile};
 use crate::project::ProjectCtx;
-use crate::rules::backend::{AstCheck, CheckCtx};
+use crate::rules::backend::{AstCheck, Backend, CheckCtx};
 use crate::rules::file_ctx::FileCtx;
+use crate::rules::RuleDef;
 
 /// Run a tree-sitter `Check` against `source` parsed with the standard
 /// TypeScript grammar (covers `.ts` and plain JS).
@@ -165,6 +169,69 @@ pub fn run_yaml_with_path(source: &str, check: &dyn AstCheck, fake_path: &str) -
     )
 }
 
+/// YAML variant with a caller-supplied project context. Use for
+/// Kubernetes rules that rely on the cross-file `K8sIndex`.
+#[must_use]
+pub fn run_yaml_with_project_and_path(
+    source: &str,
+    check: &dyn AstCheck,
+    project: &ProjectCtx,
+    fake_path: &Path,
+) -> Vec<Diagnostic> {
+    let mut parser = tree_sitter::Parser::new();
+    parser
+        .set_language(&tree_sitter_yaml::LANGUAGE.into())
+        .expect("grammar should load");
+    let tree = parser.parse(source, None).expect("parser should produce a tree");
+    check.check(
+        &CheckCtx::for_test_with_project(fake_path, source, project),
+        &tree,
+    )
+}
+
+/// Build a temporary YAML project for cross-manifest Kubernetes rule tests.
+#[must_use]
+pub fn k8s_project_from_sources(
+    sources: &[(&str, &str)],
+) -> (tempfile::TempDir, ProjectCtx, Vec<PathBuf>) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut paths = Vec::new();
+    let mut files = Vec::new();
+    for (name, source) in sources {
+        let path = dir.path().join(name);
+        std::fs::write(&path, source).expect("write yaml fixture");
+        paths.push(path.clone());
+        files.push(SourceFile {
+            path,
+            language: Language::Yaml,
+        });
+    }
+    let refs: Vec<&SourceFile> = files.iter().collect();
+    let project = ProjectCtx::for_test_with_files(&refs);
+    (dir, project, paths)
+}
+
+/// Assert a Rust-only rule delegates to exact Clippy lint set.
+pub fn assert_clippy_rule(rule: RuleDef, id: &str, severity: Severity, expected_lints: &[&str]) {
+    assert_eq!(rule.meta.id, id);
+    assert_eq!(rule.meta.severity, severity);
+    assert_eq!(rule.backends.len(), expected_lints.len());
+
+    let actual_lints: Vec<&str> = rule
+        .backends
+        .iter()
+        .map(|(language, backend)| {
+            assert_eq!(*language, Language::Rust);
+            match backend {
+                Backend::Clippy { lint } => *lint,
+                other => panic!("expected Clippy backend, got {other:?}"),
+            }
+        })
+        .collect();
+
+    assert_eq!(actual_lints, expected_lints);
+}
+
 /// Run a tree-sitter `Check` against `source` parsed with the CSS
 /// grammar. Use for rules that target `Language::Css`.
 #[must_use]
@@ -224,7 +291,6 @@ fn run_with_grammar(
     let tree = parser.parse(source, None).expect("parser should produce a tree");
     check.check(&CheckCtx::for_test(Path::new(fake_path), source), &tree)
 }
-
 
 fn run_with_grammar_and_file(
     source: &str,

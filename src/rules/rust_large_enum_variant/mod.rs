@@ -2,9 +2,9 @@
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
+use crate::rules::RuleDef;
 use crate::rules::backend::Backend;
 use crate::rules::meta::RuleMeta;
-use crate::rules::RuleDef;
 
 pub const META: RuleMeta = RuleMeta {
     id: "rust-large-enum-variant",
@@ -23,7 +23,33 @@ pub fn register() -> RuleDef {
         meta: META,
         backends: vec![(
             Language::Rust,
-            Backend::Clippy { lint: "clippy::large_enum_variant" },
+            Backend::Clippy {
+                lint: "clippy::large_enum_variant",
+            },
         )],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::diagnostic::Severity;
+    use crate::rules::test_helpers::assert_clippy_rule;
+
+    use super::*;
+
+    #[test]
+    fn registers_large_enum_variant() {
+        assert_clippy_rule(
+            register(),
+            "rust-large-enum-variant",
+            Severity::Warning,
+            &["clippy::large_enum_variant"],
+        );
+    }
+
+    #[test]
+    fn metadata_mentions_boxed_payload() {
+        assert!(META.remediation.contains("Box<T>"));
+        assert_eq!(META.categories, &["rust"]);
     }
 }

@@ -30,9 +30,11 @@ use crate::config::Config;
 use crate::files::SourceFile;
 
 pub mod import_index;
+pub mod k8s_index;
 pub mod locale_index;
 
 pub use import_index::ImportIndex;
+pub use k8s_index::K8sIndex;
 pub use locale_index::LocaleIndex;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -241,6 +243,11 @@ pub struct ProjectCtx {
 
     // Cross-file i18n locale index. Built lazily when first accessed.
     locale_index: OnceLock<LocaleIndex>,
+
+    // Cross-file Kubernetes resource index. Eagerly built by `load`
+    // when YAML files are in the input set; empty (still queryable)
+    // otherwise — the same lazy-fallback pattern as `import_index`.
+    k8s_index: OnceLock<K8sIndex>,
 }
 
 impl ProjectCtx {
@@ -296,6 +303,12 @@ impl ProjectCtx {
         // `ImportIndex` and never contend on `OnceLock::get_or_init`.
         let index = ImportIndex::build(files);
         let _ = ctx.import_index.set(index);
+
+        // Cross-file Kubernetes index. Same eager-build rationale as
+        // `import_index`: pay the cost once before rule dispatch fans
+        // out so consumers never contend on `OnceLock::get_or_init`.
+        let k8s_idx = K8sIndex::build(files);
+        let _ = ctx.k8s_index.set(k8s_idx);
         ctx
     }
 
@@ -314,6 +327,14 @@ impl ProjectCtx {
         self.locale_index.get_or_init(LocaleIndex::default)
     }
 
+    /// Cross-file Kubernetes resource index. Always returns a handle:
+    /// when the index wasn't pre-built (e.g. `ProjectCtx::empty()` from
+    /// the LSP), falls back to a shared empty index so callers never
+    /// need to branch on availability.
+    pub fn k8s_index(&self) -> &K8sIndex {
+        self.k8s_index.get_or_init(K8sIndex::default)
+    }
+
     /// Test-only constructor that seeds `import_index` from an arbitrary set
     /// of `SourceFile`s. Lets cross-file rule tests exercise the index
     /// without spinning up a full `load`.
@@ -323,6 +344,8 @@ impl ProjectCtx {
         let ctx = ProjectCtx::default();
         let index = ImportIndex::build(files);
         let _ = ctx.import_index.set(index);
+        let k8s_index = K8sIndex::build(files);
+        let _ = ctx.k8s_index.set(k8s_index);
         ctx
     }
 

@@ -2,9 +2,9 @@
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
+use crate::rules::RuleDef;
 use crate::rules::backend::Backend;
 use crate::rules::meta::RuleMeta;
-use crate::rules::RuleDef;
 
 pub const META: RuleMeta = RuleMeta {
     id: "rust-explicit-iter-loop",
@@ -23,8 +23,42 @@ pub fn register() -> RuleDef {
     RuleDef {
         meta: META,
         backends: vec![
-            (Language::Rust, Backend::Clippy { lint: "clippy::explicit_iter_loop" }),
-            (Language::Rust, Backend::Clippy { lint: "clippy::needless_range_loop" }),
+            (
+                Language::Rust,
+                Backend::Clippy {
+                    lint: "clippy::explicit_iter_loop",
+                },
+            ),
+            (
+                Language::Rust,
+                Backend::Clippy {
+                    lint: "clippy::needless_range_loop",
+                },
+            ),
         ],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::diagnostic::Severity;
+    use crate::rules::test_helpers::assert_clippy_rule;
+
+    use super::*;
+
+    #[test]
+    fn registers_iter_loop_lints() {
+        assert_clippy_rule(
+            register(),
+            "rust-explicit-iter-loop",
+            Severity::Warning,
+            &["clippy::explicit_iter_loop", "clippy::needless_range_loop"],
+        );
+    }
+
+    #[test]
+    fn metadata_mentions_iterator_replacement() {
+        assert!(META.remediation.contains("for x in &vec"));
+        assert_eq!(META.categories, &["rust"]);
     }
 }

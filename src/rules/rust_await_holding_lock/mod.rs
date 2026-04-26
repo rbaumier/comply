@@ -2,9 +2,9 @@
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
+use crate::rules::RuleDef;
 use crate::rules::backend::Backend;
 use crate::rules::meta::RuleMeta;
-use crate::rules::RuleDef;
 
 pub const META: RuleMeta = RuleMeta {
     id: "rust-await-holding-lock",
@@ -23,7 +23,33 @@ pub fn register() -> RuleDef {
         meta: META,
         backends: vec![(
             Language::Rust,
-            Backend::Clippy { lint: "clippy::await_holding_lock" },
+            Backend::Clippy {
+                lint: "clippy::await_holding_lock",
+            },
         )],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::diagnostic::Severity;
+    use crate::rules::test_helpers::assert_clippy_rule;
+
+    use super::*;
+
+    #[test]
+    fn registers_await_holding_lock() {
+        assert_clippy_rule(
+            register(),
+            "rust-await-holding-lock",
+            Severity::Error,
+            &["clippy::await_holding_lock"],
+        );
+    }
+
+    #[test]
+    fn metadata_requires_drop_before_await() {
+        assert!(META.remediation.contains("Drop the guard before awaiting"));
+        assert_eq!(META.categories, &["rust"]);
     }
 }

@@ -2,9 +2,9 @@
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
+use crate::rules::RuleDef;
 use crate::rules::backend::Backend;
 use crate::rules::meta::RuleMeta;
-use crate::rules::RuleDef;
 
 pub const META: RuleMeta = RuleMeta {
     id: "rust-no-linkedlist",
@@ -23,7 +23,33 @@ pub fn register() -> RuleDef {
         meta: META,
         backends: vec![(
             Language::Rust,
-            Backend::Clippy { lint: "clippy::linkedlist" },
+            Backend::Clippy {
+                lint: "clippy::linkedlist",
+            },
         )],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::diagnostic::Severity;
+    use crate::rules::test_helpers::assert_clippy_rule;
+
+    use super::*;
+
+    #[test]
+    fn registers_linkedlist() {
+        assert_clippy_rule(
+            register(),
+            "rust-no-linkedlist",
+            Severity::Warning,
+            &["clippy::linkedlist"],
+        );
+    }
+
+    #[test]
+    fn metadata_names_vec_replacements() {
+        assert!(META.remediation.contains("Vec<T>"));
+        assert!(META.remediation.contains("VecDeque<T>"));
     }
 }
