@@ -2,9 +2,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "return_statement" { return; }
-
+crate::ast_check! { on ["return_statement"] => |node, source, ctx, diagnostics|
     // A `return;` with no argument has no named child. `return expr;` has the
     // expression as a named child.
     if node.named_child(0).is_some() { return; }

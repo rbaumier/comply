@@ -39,8 +39,7 @@ fn top_level_line(body: &str, line_off: usize) -> bool {
     depth == 0
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "component" { return; }
+crate::ast_check! { on ["component"] => |node, source, ctx, diagnostics|
     let _ = source;
     let src = ctx.source;
     let Some((start, end, base_line)) = find_define_store_body(src) else {

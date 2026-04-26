@@ -9,11 +9,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "jsx_attribute" {
-        return;
-    }
-
+crate::ast_check! { on ["jsx_attribute"] => |node, source, ctx, diagnostics|
     let Some(value_node) = crate::rules::jsx::jsx_attribute_value(node) else { return };
     // `{...}` wrappers are `jsx_expression` nodes — unwrap to the inner expression.
     if value_node.kind() != "jsx_expression" {

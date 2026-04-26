@@ -2,11 +2,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "binary_expression" {
-        return;
-    }
-
+crate::ast_check! { on ["binary_expression"] => |node, source, ctx, diagnostics|
     // One side must be a `typeof` unary expression, the other must be "undefined" string.
     let Some(left) = node.child_by_field_name("left") else { return };
     let Some(right) = node.child_by_field_name("right") else { return };

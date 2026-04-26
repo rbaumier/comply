@@ -18,7 +18,6 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::walker::walk_tree;
 
 fn starts_with_uppercase(name: &str) -> bool {
     name.chars().next().is_some_and(|c| c.is_ascii_uppercase())
@@ -87,42 +86,45 @@ fn inside_component_body(node: tree_sitter::Node, source: &[u8]) -> bool {
 pub struct Check;
 
 impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
-        let source = ctx.source.as_bytes();
-        let mut diagnostics = Vec::new();
-        walk_tree(tree, |node| {
-            // Match `const x = <...>` or `let x = <...>`.
-            if node.kind() != "variable_declarator" {
-                return;
-            }
-            let Some(value) = node.child_by_field_name("value") else {
-                return;
-            };
-            if !matches!(value.kind(), "jsx_element" | "jsx_self_closing_element") {
-                return;
-            }
-            if !inside_component_body(node, source) {
-                return;
-            }
-            if !is_static_jsx(value, source) {
-                return;
-            }
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        Some(&["variable_declarator"])
+    }
 
-            let pos = value.start_position();
-            diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
-                line: pos.row + 1,
-                column: pos.column + 1,
-                rule_id: "react-hoist-static-jsx".into(),
-                message: "Static JSX inside a component is rebuilt every render. \
-                          Move this element to a module-level `const` above the \
-                          component so it's built once."
-                    .into(),
-                severity: Severity::Warning,
-                span: None,
-            });
+    fn visit_node(
+        &self,
+        node: tree_sitter::Node,
+        ctx: &CheckCtx,
+        _state: Option<&mut dyn std::any::Any>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
+        let source = ctx.source.as_bytes();
+        // Match `const x = <...>` or `let x = <...>`.
+        let Some(value) = node.child_by_field_name("value") else {
+            return;
+        };
+        if !matches!(value.kind(), "jsx_element" | "jsx_self_closing_element") {
+            return;
+        }
+        if !inside_component_body(node, source) {
+            return;
+        }
+        if !is_static_jsx(value, source) {
+            return;
+        }
+
+        let pos = value.start_position();
+        diagnostics.push(Diagnostic {
+            path: ctx.path.to_path_buf(),
+            line: pos.row + 1,
+            column: pos.column + 1,
+            rule_id: "react-hoist-static-jsx".into(),
+            message: "Static JSX inside a component is rebuilt every render. \
+                      Move this element to a module-level `const` above the \
+                      component so it's built once."
+                .into(),
+            severity: Severity::Warning,
+            span: None,
         });
-        diagnostics
     }
 }
 

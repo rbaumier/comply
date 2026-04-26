@@ -8,8 +8,7 @@ use crate::rules::jsdoc_text_helpers::{
     find_jsdoc_blocks, parse_tags, strip_type_annotation, value_has_description,
 };
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "comment" { return; }
+crate::ast_check! { on ["comment"] => |node, source, ctx, diagnostics|
     let Ok(text) = node.utf8_text(source) else { return; };
     if !text.starts_with("/**") { return; }
     let line_offset = node.start_position().row;

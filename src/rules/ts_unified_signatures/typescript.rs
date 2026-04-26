@@ -8,12 +8,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use std::collections::HashMap;
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    let kind = node.kind();
-    if kind != "interface_body" && kind != "object_type" {
-        return;
-    }
-
+crate::ast_check! { on ["interface_body", "object_type"] => |node, source, ctx, diagnostics|
     // Collect method signatures grouped by name.
     let mut seen: HashMap<String, Vec<usize>> = HashMap::new();
     let child_count = node.named_child_count();

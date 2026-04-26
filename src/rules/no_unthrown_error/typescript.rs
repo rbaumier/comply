@@ -7,11 +7,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "new_expression" {
-        return;
-    }
-
+crate::ast_check! { on ["new_expression"] => |node, source, ctx, diagnostics|
     let Some(ctor) = node.child_by_field_name("constructor") else { return };
     let ctor_name = ctor.utf8_text(source).unwrap_or("");
     if ctor_name != "Error" {

@@ -2,8 +2,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "copy_instruction" { return; }
+crate::ast_check! { on ["copy_instruction"] => |node, source, ctx, diagnostics|
     let mut paths: Vec<tree_sitter::Node> = Vec::new();
     for i in 0..node.child_count() {
         let child = node.child(i).unwrap();

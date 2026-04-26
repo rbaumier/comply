@@ -115,9 +115,51 @@ impl<'a> CheckCtx<'a> {
     }
 }
 
-/// A tree-sitter-backed check — receives a parsed AST.
+/// Tree-sitter AST check. Rules implement either `check` (legacy full walk)
+/// or `interested_kinds` + `visit_node` (multiplexed single walk).
 pub trait AstCheck: Send + Sync {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic>;
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        None
+    }
+
+    // State must be 'static owned data — no Node<'tree> or &str into source.
+    fn create_state(&self) -> Option<Box<dyn std::any::Any>> {
+        None
+    }
+
+    fn visit_node(
+        &self,
+        node: tree_sitter::Node,
+        ctx: &CheckCtx,
+        state: Option<&mut dyn std::any::Any>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
+        let _ = (node, ctx, state, diagnostics);
+    }
+
+    fn finish(
+        &self,
+        ctx: &CheckCtx,
+        state: Option<Box<dyn std::any::Any>>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
+        let _ = (ctx, state, diagnostics);
+    }
+
+    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
+        if let Some(kinds) = self.interested_kinds() {
+            let mut state = self.create_state();
+            let mut diagnostics = Vec::new();
+            crate::rules::walker::walk_tree(tree, |node| {
+                if kinds.contains(&node.kind()) {
+                    self.visit_node(node, ctx, state.as_deref_mut(), &mut diagnostics);
+                }
+            });
+            self.finish(ctx, state, &mut diagnostics);
+            return diagnostics;
+        }
+        Vec::new()
+    }
 }
 
 /// A text-only check — no AST needed.

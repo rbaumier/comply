@@ -13,15 +13,10 @@ fn is_test_file(path: &std::path::Path) -> bool {
 const DISABLED_IDENTIFIERS: &[&str] = &["xtest", "xit", "xdescribe"];
 const TEST_FNS: &[&str] = &["test", "it", "describe"];
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     if !is_test_file(ctx.path) {
         return;
     }
-
-    if node.kind() != "call_expression" {
-        return;
-    }
-
     let Some(callee) = node.child_by_field_name("function") else { return };
 
     match callee.kind() {

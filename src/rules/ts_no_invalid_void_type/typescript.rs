@@ -7,11 +7,8 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["predefined_type"] => |node, source, ctx, diagnostics|
     // tree-sitter-typescript uses "predefined_type" for `void`, `never`, etc.
-    if node.kind() != "predefined_type" {
-        return;
-    }
     let text = &source[node.byte_range()];
     if text != b"void" {
         return;

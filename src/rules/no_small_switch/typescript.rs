@@ -5,12 +5,8 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["switch_statement"] => |node, source, ctx, diagnostics|
     let _ = source;
-    if node.kind() != "switch_statement" {
-        return;
-    }
-
     let Some(body) = node.child_by_field_name("body") else { return };
 
     let mut case_count: usize = 0;

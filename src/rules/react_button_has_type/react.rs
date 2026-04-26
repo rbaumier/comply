@@ -6,11 +6,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 
 const VALID_TYPES: &[&str] = &["button", "submit", "reset"];
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "jsx_self_closing_element" && node.kind() != "jsx_opening_element" {
-        return;
-    }
-
+crate::ast_check! { on ["jsx_self_closing_element", "jsx_opening_element"] => |node, source, ctx, diagnostics|
     let Some(name_node) = node.child_by_field_name("name") else { return };
     let Ok(tag) = name_node.utf8_text(source) else { return };
 

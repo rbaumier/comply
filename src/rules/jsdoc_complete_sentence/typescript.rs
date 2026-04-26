@@ -3,7 +3,6 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::walker::walk_tree;
 
 #[derive(Debug)]
 pub struct Check;
@@ -33,61 +32,62 @@ fn extract_description_lines(text: &str) -> Vec<(String, usize)> {
 }
 
 impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        Some(&["comment"])
+    }
+
+    fn visit_node(
+        &self,
+        node: tree_sitter::Node,
+        ctx: &CheckCtx,
+        _state: Option<&mut dyn std::any::Any>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
         let source_bytes = ctx.source.as_bytes();
-        let mut diagnostics = Vec::new();
+        let text = match node.utf8_text(source_bytes) {
+            Ok(t) => t,
+            Err(_) => return,
+        };
+        if !text.starts_with("/**") {
+            return;
+        }
 
-        walk_tree(tree, |node| {
-            if node.kind() != "comment" {
-                return;
+        let description_lines = extract_description_lines(text);
+        if description_lines.is_empty() {
+            return;
+        }
+
+        let comment_start_row = node.start_position().row;
+
+        // First line must start with a capital letter.
+        let (first_text, first_offset) = &description_lines[0];
+        if let Some(ch) = first_text.chars().next()
+            && ch.is_alphabetic() && !ch.is_uppercase() {
+                diagnostics.push(Diagnostic {
+                    path: ctx.path.to_path_buf(),
+                    line: comment_start_row + first_offset + 1,
+                    column: 1,
+                    rule_id: "jsdoc-complete-sentence".into(),
+                    message: "JSDoc description must start with a capital letter.".into(),
+                    severity: Severity::Warning,
+                    span: None,
+                });
             }
-            let text = match node.utf8_text(source_bytes) {
-                Ok(t) => t,
-                Err(_) => return,
-            };
-            if !text.starts_with("/**") {
-                return;
+
+        // Last line must end with punctuation.
+        let (last_text, last_offset) = &description_lines[description_lines.len() - 1];
+        if let Some(ch) = last_text.trim_end().chars().last()
+            && ch != '.' && ch != '!' && ch != '?' {
+                diagnostics.push(Diagnostic {
+                    path: ctx.path.to_path_buf(),
+                    line: comment_start_row + last_offset + 1,
+                    column: 1,
+                    rule_id: "jsdoc-complete-sentence".into(),
+                    message: "JSDoc description must end with `.`, `!`, or `?`.".into(),
+                    severity: Severity::Warning,
+                    span: None,
+                });
             }
-
-            let description_lines = extract_description_lines(text);
-            if description_lines.is_empty() {
-                return;
-            }
-
-            let comment_start_row = node.start_position().row;
-
-            // First line must start with a capital letter.
-            let (first_text, first_offset) = &description_lines[0];
-            if let Some(ch) = first_text.chars().next()
-                && ch.is_alphabetic() && !ch.is_uppercase() {
-                    diagnostics.push(Diagnostic {
-                        path: ctx.path.to_path_buf(),
-                        line: comment_start_row + first_offset + 1,
-                        column: 1,
-                        rule_id: "jsdoc-complete-sentence".into(),
-                        message: "JSDoc description must start with a capital letter.".into(),
-                        severity: Severity::Warning,
-                        span: None,
-                    });
-                }
-
-            // Last line must end with punctuation.
-            let (last_text, last_offset) = &description_lines[description_lines.len() - 1];
-            if let Some(ch) = last_text.trim_end().chars().last()
-                && ch != '.' && ch != '!' && ch != '?' {
-                    diagnostics.push(Diagnostic {
-                        path: ctx.path.to_path_buf(),
-                        line: comment_start_row + last_offset + 1,
-                        column: 1,
-                        rule_id: "jsdoc-complete-sentence".into(),
-                        message: "JSDoc description must end with `.`, `!`, or `?`.".into(),
-                        severity: Severity::Warning,
-                        span: None,
-                    });
-                }
-        });
-
-        diagnostics
     }
 }
 

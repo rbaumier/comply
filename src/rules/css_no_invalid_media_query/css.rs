@@ -1,7 +1,6 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "media_statement" { return; }
+crate::ast_check! { on ["media_statement"] => |node, source, ctx, diagnostics|
     let _ = source;
     if !node.has_error() { return; }
     diagnostics.push(Diagnostic::at_node(

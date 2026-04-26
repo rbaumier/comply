@@ -2,8 +2,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "from_instruction" { return; }
+crate::ast_check! { on ["from_instruction"] => |node, source, ctx, diagnostics|
     // Find image_spec child.
     let mut image_spec = None;
     for i in 0..node.child_count() {

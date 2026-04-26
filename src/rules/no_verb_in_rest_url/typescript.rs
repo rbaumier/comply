@@ -12,10 +12,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "string" {
-        return;
-    }
+crate::ast_check! { on ["string"] => |node, source, ctx, diagnostics|
     let Ok(text) = node.utf8_text(source) else {
         return;
     };

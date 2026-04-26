@@ -2,8 +2,8 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    match node.kind() {
+crate::ast_check! { on ["import_statement", "call_expression"] => |node, source, ctx, diagnostics|
+match node.kind() {
         "import_statement" => {
             let Some(src_node) = node.child_by_field_name("source") else { return };
             let Ok(raw) = src_node.utf8_text(source) else { return };

@@ -36,14 +36,8 @@ fn has_bitwise_op(node: tree_sitter::Node, source: &[u8]) -> bool {
     }
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    let condition = match node.kind() {
-        "if_expression" => node.child_by_field_name("condition"),
-        "while_expression" => node.child_by_field_name("condition"),
-        _ => return,
-    };
-
-    let Some(condition) = condition else { return };
+crate::ast_check! { on ["if_expression", "while_expression"] => |node, source, ctx, diagnostics|
+    let Some(condition) = node.child_by_field_name("condition") else { return };
 
     if has_bitwise_op(condition, source) {
         let pos = condition.start_position();

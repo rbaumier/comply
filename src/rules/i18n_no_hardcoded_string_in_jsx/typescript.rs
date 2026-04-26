@@ -1,7 +1,6 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "jsx_text" { return; }
+crate::ast_check! { on ["jsx_text"] => |node, source, ctx, diagnostics|
     let text = node.utf8_text(source).unwrap_or("").trim();
     if text.is_empty() || !text.contains(' ') || text.len() <= 2 { return; }
     if text.chars().all(|c| c.is_ascii_digit() || c.is_ascii_punctuation()) { return; }

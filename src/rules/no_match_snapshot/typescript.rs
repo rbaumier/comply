@@ -8,50 +8,52 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::walker::walk_tree;
 
 #[derive(Debug)]
 pub struct Check;
 
 impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        Some(&["call_expression"])
+    }
+
+    fn visit_node(
+        &self,
+        node: tree_sitter::Node,
+        ctx: &CheckCtx,
+        _state: Option<&mut dyn std::any::Any>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
         let source_bytes = ctx.source.as_bytes();
-        let mut diagnostics = Vec::new();
-        walk_tree(tree, |node| {
-            if node.kind() != "call_expression" {
-                return;
-            }
-            let Some(function) = node.child_by_field_name("function") else {
-                return;
-            };
-            if function.kind() != "member_expression" {
-                return;
-            }
-            let Some(property) = function.child_by_field_name("property") else {
-                return;
-            };
-            let Ok(method) = property.utf8_text(source_bytes) else {
-                return;
-            };
-            if method != "toMatchSnapshot" && method != "toMatchInlineSnapshot" {
-                return;
-            }
-            let pos = node.start_position();
-            diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
-                line: pos.row + 1,
-                column: pos.column + 1,
-                rule_id: "no-match-snapshot".into(),
-                message: format!(
-                    "`{method}()` is a maintenance trap — unrelated \
-                     refactors break it and reviewers blindly update \
-                     snapshots. Assert on specific fields instead."
-                ),
-                severity: Severity::Warning,
-                span: None,
-            });
+        let Some(function) = node.child_by_field_name("function") else {
+            return;
+        };
+        if function.kind() != "member_expression" {
+            return;
+        }
+        let Some(property) = function.child_by_field_name("property") else {
+            return;
+        };
+        let Ok(method) = property.utf8_text(source_bytes) else {
+            return;
+        };
+        if method != "toMatchSnapshot" && method != "toMatchInlineSnapshot" {
+            return;
+        }
+        let pos = node.start_position();
+        diagnostics.push(Diagnostic {
+            path: ctx.path.to_path_buf(),
+            line: pos.row + 1,
+            column: pos.column + 1,
+            rule_id: "no-match-snapshot".into(),
+            message: format!(
+                "`{method}()` is a maintenance trap — unrelated \
+                 refactors break it and reviewers blindly update \
+                 snapshots. Assert on specific fields instead."
+            ),
+            severity: Severity::Warning,
+            span: None,
         });
-        diagnostics
     }
 }
 

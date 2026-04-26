@@ -22,8 +22,7 @@ const SHARING_WRAPPERS: &[&str] = &[
     "OnceCell",
 ];
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "generic_type" { return; }
+crate::ast_check! { on ["generic_type"] => |node, source, ctx, diagnostics|
     if is_in_test_context(node, source) { return; }
 
     let Some(type_node) = node.child_by_field_name("type") else { return; };

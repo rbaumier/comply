@@ -2,12 +2,8 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["member_expression"] => |node, source, ctx, diagnostics|
     // Look for member_expression with property `length`
-    if node.kind() != "member_expression" {
-        return;
-    }
-
     let Some(prop) = node.child_by_field_name("property") else { return };
     if prop.utf8_text(source).unwrap_or("") != "length" {
         return;

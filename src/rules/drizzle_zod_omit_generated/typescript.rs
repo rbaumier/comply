@@ -74,10 +74,7 @@ fn object_has_key(object: tree_sitter::Node<'_>, source: &[u8], needle: &str) ->
     false
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "call_expression" {
-        return;
-    }
+crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     let Some(func) = node.child_by_field_name("function") else { return };
     if func.kind() != "identifier" {
         return;

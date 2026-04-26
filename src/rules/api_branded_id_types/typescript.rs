@@ -101,10 +101,7 @@ fn is_export_statement(node: Option<tree_sitter::Node<'_>>) -> bool {
     matches!(node.map(|n| n.kind()), Some("export_statement"))
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "required_parameter" && node.kind() != "optional_parameter" {
-        return;
-    }
+crate::ast_check! { on ["required_parameter", "optional_parameter"] => |node, source, ctx, diagnostics|
     let Some(name) = extract_param_name(node, source) else { return };
     if !name_looks_like_id(name) { return }
     let Some(type_ann) = node.child_by_field_name("type") else { return };

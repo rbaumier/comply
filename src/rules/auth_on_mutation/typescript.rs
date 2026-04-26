@@ -15,11 +15,7 @@ fn has_auth_reference(node: tree_sitter::Node, source: &[u8]) -> bool {
     AUTH_KEYWORDS.iter().any(|k| lower.contains(k))
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "call_expression" {
-        return;
-    }
-
+crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     // Match `app.post(`, `app.put(`, `app.delete(`, `app.patch(`
     let Some(func) = node.child_by_field_name("function") else { return };
     if func.kind() != "member_expression" {

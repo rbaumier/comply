@@ -8,10 +8,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "import_statement" {
-        return;
-    }
+crate::ast_check! { on ["import_statement"] => |node, source, ctx, diagnostics|
     // Check if import already has top-level `type`: `import type { ... }`
     // In tree-sitter-typescript, `import type` has "type" as a direct
     // child token right after `import`.

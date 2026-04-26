@@ -44,11 +44,7 @@ fn arg_text_matches(call: tree_sitter::Node, source: &[u8], markers: &[&str]) ->
     false
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "call_expression" {
-        return;
-    }
-
+crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     let Some(name) = method_name(node, source) else { return };
 
     let is_violation = match name {

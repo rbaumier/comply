@@ -51,11 +51,7 @@ fn is_valid_this_context(node: tree_sitter::Node) -> bool {
     false
 }
 
-crate::ast_check! { |node, _source, ctx, diagnostics|
-    if node.kind() != "this" {
-        return;
-    }
-
+crate::ast_check! { on ["this"] => |node, _source, ctx, diagnostics|
     if is_valid_this_context(node) {
         return;
     }

@@ -30,11 +30,7 @@ fn is_non_error_value(kind: &str) -> bool {
     )
 }
 
-crate::ast_check! { |node, _source, ctx, diagnostics|
-    if node.kind() != "throw_statement" {
-        return;
-    }
-
+crate::ast_check! { on ["throw_statement"] => |node, _source, ctx, diagnostics|
     let Some(mut arg) = node.named_child(0) else { return };
 
     while arg.kind() == "parenthesized_expression" {

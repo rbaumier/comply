@@ -2,8 +2,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 
 const PREFIXES: &[&str] = &["@-webkit-", "@-moz-", "@-ms-", "@-o-"];
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if !matches!(node.kind(), "at_rule" | "keyframes_statement") { return; }
+crate::ast_check! { on ["at_rule", "keyframes_statement"] => |node, source, ctx, diagnostics|
     let mut c = node.walk();
     let Some(kw) = node.children(&mut c).find(|n| n.kind() == "at_keyword") else { return; };
     let text = kw.utf8_text(source).unwrap_or_default();

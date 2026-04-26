@@ -10,7 +10,6 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::sql_helpers::is_sql_string;
-use crate::rules::walker::collect_nodes_of_kinds;
 
 const FORMAT_MACROS: &[&str] = &[
     "format",
@@ -27,45 +26,51 @@ const FORMAT_MACROS: &[&str] = &[
 pub struct Check;
 
 impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        Some(&["macro_invocation"])
+    }
+
+    fn visit_node(
+        &self,
+        node: tree_sitter::Node,
+        ctx: &CheckCtx,
+        _state: Option<&mut dyn std::any::Any>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
         let source_bytes = ctx.source.as_bytes();
-        let mut diagnostics = Vec::new();
-        for node in collect_nodes_of_kinds(tree, &["macro_invocation"]) {
-            let Some(mac) = node.child_by_field_name("macro") else {
-                continue;
-            };
-            let Ok(mac_name) = mac.utf8_text(source_bytes) else {
-                continue;
-            };
-            if !FORMAT_MACROS.contains(&mac_name) {
-                continue;
-            }
-            let Some(format_string) = first_string_literal_in_macro(node, source_bytes) else {
-                continue;
-            };
-            if !is_sql_string(format_string) {
-                continue;
-            }
-            // Require interpolation (`{}` or `{...}` placeholders) — a
-            // bare `format!("SELECT ...")` with no args is harmless
-            // (caller could just have written a string literal).
-            if !format_string.contains('{') {
-                continue;
-            }
-            let pos = node.start_position();
-            diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
-                line: pos.row + 1,
-                column: pos.column + 1,
-                rule_id: "db-no-string-concat-sql".into(),
-                message: "String interpolation with SQL keywords — use \
-                          parameterized queries (`$1`, `?`) instead."
-                    .into(),
-                severity: Severity::Error,
-                span: None,
-            });
+        let Some(mac) = node.child_by_field_name("macro") else {
+            return;
+        };
+        let Ok(mac_name) = mac.utf8_text(source_bytes) else {
+            return;
+        };
+        if !FORMAT_MACROS.contains(&mac_name) {
+            return;
         }
-        diagnostics
+        let Some(format_string) = first_string_literal_in_macro(node, source_bytes) else {
+            return;
+        };
+        if !is_sql_string(format_string) {
+            return;
+        }
+        // Require interpolation (`{}` or `{...}` placeholders) — a
+        // bare `format!("SELECT ...")` with no args is harmless
+        // (caller could just have written a string literal).
+        if !format_string.contains('{') {
+            return;
+        }
+        let pos = node.start_position();
+        diagnostics.push(Diagnostic {
+            path: ctx.path.to_path_buf(),
+            line: pos.row + 1,
+            column: pos.column + 1,
+            rule_id: "db-no-string-concat-sql".into(),
+            message: "String interpolation with SQL keywords — use \
+                      parameterized queries (`$1`, `?`) instead."
+                .into(),
+            severity: Severity::Error,
+            span: None,
+        });
     }
 }
 

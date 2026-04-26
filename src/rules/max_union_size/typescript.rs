@@ -22,11 +22,7 @@ fn count_union_members(node: tree_sitter::Node) -> u32 {
     count
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "union_type" {
-        return;
-    }
-
+crate::ast_check! { on ["union_type"] => |node, source, ctx, diagnostics|
     // Only flag the outermost union_type (skip nested ones that are children of a union_type).
     if let Some(parent) = node.parent()
         && parent.kind() == "union_type"

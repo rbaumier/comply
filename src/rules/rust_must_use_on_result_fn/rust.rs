@@ -8,9 +8,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "function_item" { return; }
-
+crate::ast_check! { on ["function_item"] => |node, source, ctx, diagnostics|
     if !is_pub(node, source) { return; }
 
     let ret = match node.child_by_field_name("return_type") {

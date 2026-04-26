@@ -14,12 +14,8 @@ fn is_postfix_update(update: tree_sitter::Node) -> bool {
     arg.start_byte() < op.start_byte()
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["return_statement"] => |node, source, ctx, diagnostics|
     let _ = source;
-    if node.kind() != "return_statement" {
-        return;
-    }
-
     // The returned expression is the first named child, if any.
     let Some(value) = node.named_child(0) else { return };
     if value.kind() != "update_expression" {

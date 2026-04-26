@@ -26,8 +26,8 @@ const ENFORCE_NEW: &[&str] = &[
 /// Builtins that MUST NOT be called with `new`.
 const DISALLOW_NEW: &[&str] = &["Symbol", "BigInt"];
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    match node.kind() {
+crate::ast_check! { on ["call_expression", "new_expression"] => |node, source, ctx, diagnostics|
+match node.kind() {
         // `Map()` without `new` — should be `new Map()`.
         "call_expression" => {
             let Some(func) = node.child_by_field_name("function") else { return };

@@ -14,8 +14,7 @@ fn is_remote(src: &str) -> bool {
     src.starts_with("http://") || src.starts_with("https://")
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "add_instruction" { return; }
+crate::ast_check! { on ["add_instruction"] => |node, source, ctx, diagnostics|
     let mut first_path: Option<&str> = None;
     for i in 0..node.child_count() {
         let child = node.child(i).unwrap();

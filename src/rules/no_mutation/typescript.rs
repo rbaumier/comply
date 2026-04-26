@@ -131,8 +131,8 @@ fn report(
     ));
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    match node.kind() {
+crate::ast_check! { on ["assignment_expression", "augmented_assignment_expression", "update_expression", "unary_expression", "call_expression"] => |node, source, ctx, diagnostics|
+match node.kind() {
         // obj.prop = x, obj.prop += x
         "assignment_expression" | "augmented_assignment_expression" => {
             let Some(left) = node.child_by_field_name("left") else { return };

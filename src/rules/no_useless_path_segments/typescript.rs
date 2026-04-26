@@ -8,7 +8,7 @@ fn has_useless_segment(spec: &str) -> bool {
     inner.contains("/../") || inner.contains("/./")
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["import_statement", "call_expression"] => |node, source, ctx, diagnostics|
     let kind = node.kind();
 
     if kind == "import_statement" {

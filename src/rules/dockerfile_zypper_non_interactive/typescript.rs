@@ -1,7 +1,6 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "run_instruction" { return; }
+crate::ast_check! { on ["run_instruction"] => |node, source, ctx, diagnostics|
     let shell_text = shell_command_text(node, source);
     let mentions_install = shell_text.contains("zypper install") || shell_text.contains("zypper in ");
     if !mentions_install { return; }

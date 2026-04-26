@@ -8,9 +8,7 @@ fn is_node_test(spec: &str) -> bool {
     inner == "node:test"
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "import_statement" { return; }
-
+crate::ast_check! { on ["import_statement"] => |node, source, ctx, diagnostics|
     let Some(src) = node.child_by_field_name("source") else { return };
     let text = src.utf8_text(source).unwrap_or("");
     if !is_node_test(text) { return; }

@@ -35,10 +35,7 @@ fn has_useless_set_op(pattern: &str) -> bool {
     false
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "regex" {
-        return;
-    }
+crate::ast_check! { on ["regex"] => |node, source, ctx, diagnostics|
     let Some((pattern, flags)) = pattern_and_flags(&node, source) else { return };
     if !flags.contains('v') {
         return;

@@ -76,7 +76,7 @@ fn is_fresh_array(node: Node<'_>, source: &[u8]) -> bool {
     }
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["variable_declarator", "assignment_expression"] => |node, source, ctx, diagnostics|
     let rhs = match node.kind() {
         "variable_declarator" => node.child_by_field_name("value"),
         "assignment_expression" => node.child_by_field_name("right"),

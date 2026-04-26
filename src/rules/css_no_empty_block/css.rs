@@ -1,7 +1,6 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "rule_set" { return; }
+crate::ast_check! { on ["rule_set"] => |node, source, ctx, diagnostics|
     let mut c = node.walk();
     let Some(block) = node.children(&mut c).find(|n| n.kind() == "block") else { return; };
     let mut bc = block.walk();

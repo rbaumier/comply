@@ -9,11 +9,8 @@ fn is_store_hook_name(name: &str) -> bool {
     name.starts_with("use") && name.ends_with("Store") && name.len() > "useStore".len() - 1
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["variable_declarator"] => |node, source, ctx, diagnostics|
     let _ = ctx;
-    if node.kind() != "variable_declarator" {
-        return;
-    }
     let Some(pattern) = node.child_by_field_name("name") else { return };
     if pattern.kind() != "object_pattern" {
         return;

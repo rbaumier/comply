@@ -28,8 +28,7 @@ fn service_has_memory_limit(svc_map: tree_sitter::Node<'_>, source: &[u8]) -> bo
         .unwrap_or(false)
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "block_mapping_pair" { return; }
+crate::ast_check! { on ["block_mapping_pair"] => |node, source, ctx, diagnostics|
     if pair_key_text(node, source).as_deref() != Some("services") { return; }
     if !looks_like_compose(ctx.path, ctx.source) { return; }
 

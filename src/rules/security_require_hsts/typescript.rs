@@ -3,53 +3,52 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::walker::walk_tree;
 
 #[derive(Debug)]
 pub struct Check;
 
 impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        Some(&["call_expression"])
+    }
+
+    fn visit_node(
+        &self,
+        node: tree_sitter::Node,
+        ctx: &CheckCtx,
+        _state: Option<&mut dyn std::any::Any>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
         if !ctx.source.contains("express") {
-            return Vec::new();
+            return;
         }
         // helmet() installs HSTS by default, so that's accepted.
         if ctx.source.contains("helmet(") {
-            return Vec::new();
+            return;
         }
         // Explicit HSTS header is also accepted.
         if ctx.source.contains("Strict-Transport-Security")
             || ctx.source.contains("strict-transport-security")
         {
-            return Vec::new();
+            return;
         }
-
+        if !diagnostics.is_empty() {
+            return;
+        }
         let source_bytes = ctx.source.as_bytes();
-        let mut diagnostics = Vec::new();
-
-        walk_tree(tree, |node| {
-            if !diagnostics.is_empty() {
-                return;
-            }
-            if node.kind() != "call_expression" {
-                return;
-            }
-            let Some(name) = crate::rules::call_expression::call_function_name(node, source_bytes)
-            else {
-                return;
-            };
-            if name == "express" {
-                diagnostics.push(Diagnostic::at_node(
-                    ctx.path,
-                    &node,
-                    super::META.id,
-                    "Express app has no HSTS header — install `helmet()` or set `Strict-Transport-Security`.".into(),
-                    Severity::Error,
-                ));
-            }
-        });
-
-        diagnostics
+        let Some(name) = crate::rules::call_expression::call_function_name(node, source_bytes)
+        else {
+            return;
+        };
+        if name == "express" {
+            diagnostics.push(Diagnostic::at_node(
+                ctx.path,
+                &node,
+                super::META.id,
+                "Express app has no HSTS header — install `helmet()` or set `Strict-Transport-Security`.".into(),
+                Severity::Error,
+            ));
+        }
     }
 }
 

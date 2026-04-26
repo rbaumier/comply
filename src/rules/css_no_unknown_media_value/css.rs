@@ -11,9 +11,7 @@ fn inside_media(node: tree_sitter::Node) -> bool {
     false
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    let kind = node.kind();
-    if kind != "feature_query" && kind != "parenthesized_value" { return; }
+crate::ast_check! { on ["feature_query", "parenthesized_value"] => |node, source, ctx, diagnostics|
     if !inside_media(node) { return; }
     let mut c = node.walk();
     let kids: Vec<_> = node.children(&mut c).collect();

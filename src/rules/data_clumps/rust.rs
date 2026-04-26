@@ -6,11 +6,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use std::collections::{HashMap, HashSet};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "source_file" {
-        return;
-    }
-
+crate::ast_check! { on ["source_file"] => |node, source, ctx, diagnostics|
     let mut struct_fields: Vec<(usize, Vec<String>)> = Vec::new();
     collect_structs(node, source, &mut struct_fields);
 

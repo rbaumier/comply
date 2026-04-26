@@ -64,16 +64,12 @@ fn check_describe_depth(
     }
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
     if !is_test_file(ctx.path) {
         return;
     }
 
     // Only trigger on the root program node to avoid double counting.
-    if node.kind() != "program" {
-        return;
-    }
-
     let max_depth = ctx.config.threshold("playwright-max-nested-describe", "max");
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {

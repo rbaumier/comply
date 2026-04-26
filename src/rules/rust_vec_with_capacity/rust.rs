@@ -8,9 +8,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "let_declaration" { return; }
-
+crate::ast_check! { on ["let_declaration"] => |node, source, ctx, diagnostics|
     let Some(value) = node.child_by_field_name("value") else { return; };
     if value.kind() != "call_expression" { return; }
     let Some(fn_node) = value.child_by_field_name("function") else { return; };

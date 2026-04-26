@@ -38,12 +38,7 @@ fn return_has_value(ret: tree_sitter::Node) -> bool {
     ret.named_child_count() > 0
 }
 
-crate::ast_check! { |node, _source, ctx, diagnostics|
-    let kind = node.kind();
-    if kind != "function_item" && kind != "closure_expression" {
-        return;
-    }
-
+crate::ast_check! { on ["function_item", "closure_expression"] => |node, _source, ctx, diagnostics|
     // Body location: function_item has a "body" field (block);
     // closure_expression has a "body" field (block or expression).
     let Some(body) = node.child_by_field_name("body") else { return };

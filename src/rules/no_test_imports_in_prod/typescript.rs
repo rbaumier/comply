@@ -18,10 +18,7 @@ fn strip_quotes(s: &str) -> &str {
     s.trim_matches(|c| c == '\'' || c == '"' || c == '`')
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "import_statement" {
-        return;
-    }
+crate::ast_check! { on ["import_statement"] => |node, source, ctx, diagnostics|
     // Skip if the current file is itself a test file.
     let current_path = ctx.path.to_string_lossy();
     if is_test_path(&current_path) {

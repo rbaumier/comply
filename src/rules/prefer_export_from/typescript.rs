@@ -58,12 +58,9 @@ fn collect_named_imports(
     map
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
     // Anchor on `program` so the import-collection pass runs once per file
     // and we can correlate exports against it.
-    if node.kind() != "program" {
-        return;
-    }
     let imports = collect_named_imports(node, source);
     if imports.is_empty() {
         return;

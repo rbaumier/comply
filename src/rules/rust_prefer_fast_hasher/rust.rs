@@ -18,9 +18,7 @@ const INT_PRIMITIVES: &[&str] = &[
     "u8", "u16", "u32", "u64", "u128", "usize", "i8", "i16", "i32", "i64", "i128", "isize",
 ];
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "generic_type" { return; }
-
+crate::ast_check! { on ["generic_type"] => |node, source, ctx, diagnostics|
     let Some(type_node) = node.child_by_field_name("type") else { return; };
     let type_text = type_node.utf8_text(source).unwrap_or("");
     // Accept `HashMap`, `std::collections::HashMap`, etc. — trailing segment wins.

@@ -97,18 +97,9 @@ fn is_interleaved(ops: &[Op]) -> bool {
     runs >= 3
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["function_declaration", "function_expression", "arrow_function", "method_definition"] => |node, source, ctx, diagnostics|
     let _ = ctx;
-    if !matches!(
-        node.kind(),
-        "function_declaration"
-            | "function_expression"
-            | "arrow_function"
-            | "method_definition"
-    ) {
-        return;
-    }
-    let Some(body) = node.child_by_field_name("body") else { return };
+        let Some(body) = node.child_by_field_name("body") else { return };
     let mut ops = Vec::new();
     collect_ops(body, source, &mut ops);
     if !is_interleaved(&ops) {

@@ -6,7 +6,6 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::walker::walk_tree;
 
 // Match the TypeScript list: only flag GENUINELY obscure abbreviations,
 // not ecosystem idioms. `cfg`, `ctx`, `idx`, `err`, `fmt`, `ret`, `val`,
@@ -31,45 +30,48 @@ const BANNED_ABBREVIATIONS: &[(&str, &str)] = &[
 pub struct Check;
 
 impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        Some(&["identifier"])
+    }
+
+    fn visit_node(
+        &self,
+        node: tree_sitter::Node,
+        ctx: &CheckCtx,
+        _state: Option<&mut dyn std::any::Any>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
         let source_bytes = ctx.source.as_bytes();
-        let mut diagnostics = Vec::new();
-        walk_tree(tree, |node| {
-            if node.kind() != "identifier" {
-                return;
-            }
-            // Only flag at declaration sites.
-            let Some(parent) = node.parent() else {
-                return;
-            };
-            if !matches!(
-                parent.kind(),
-                "let_declaration" | "parameter" | "function_item" | "const_item" | "static_item"
-            ) {
-                return;
-            }
-            let Ok(name) = node.utf8_text(source_bytes) else {
-                return;
-            };
-            let Some((abbr, full)) = matches_banned(name) else {
-                return;
-            };
-            let pos = node.start_position();
-            diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
-                line: pos.row + 1,
-                column: pos.column + 1,
-                rule_id: "no-abbreviated-names".into(),
-                message: format!(
-                    "Identifier '{name}' contains abbreviation '{abbr}' — \
-                     use the full word '{full}'. Editors auto-complete; \
-                     readers don't."
-                ),
-                severity: Severity::Warning,
-                span: None,
-            });
+        // Only flag at declaration sites.
+        let Some(parent) = node.parent() else {
+            return;
+        };
+        if !matches!(
+            parent.kind(),
+            "let_declaration" | "parameter" | "function_item" | "const_item" | "static_item"
+        ) {
+            return;
+        }
+        let Ok(name) = node.utf8_text(source_bytes) else {
+            return;
+        };
+        let Some((abbr, full)) = matches_banned(name) else {
+            return;
+        };
+        let pos = node.start_position();
+        diagnostics.push(Diagnostic {
+            path: ctx.path.to_path_buf(),
+            line: pos.row + 1,
+            column: pos.column + 1,
+            rule_id: "no-abbreviated-names".into(),
+            message: format!(
+                "Identifier '{name}' contains abbreviation '{abbr}' — \
+                 use the full word '{full}'. Editors auto-complete; \
+                 readers don't."
+            ),
+            severity: Severity::Warning,
+            span: None,
         });
-        diagnostics
     }
 }
 

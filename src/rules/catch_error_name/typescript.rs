@@ -2,11 +2,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "catch_clause" {
-        return;
-    }
-
+crate::ast_check! { on ["catch_clause"] => |node, source, ctx, diagnostics|
     // The catch parameter lives in the `parameter` field. A bare
     // `catch {}` with no parens exposes no parameter node, which is
     // fine — nothing to check.

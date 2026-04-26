@@ -48,7 +48,7 @@ fn has_return_or_tail_expr(node: tree_sitter::Node) -> bool {
     false
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     if !is_iterator_method_call(node, source) {
         return;
     }

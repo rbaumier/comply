@@ -11,11 +11,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 
 const EQUALITY_OPS: &[&str] = &["===", "!==", "==", "!="];
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "binary_expression" {
-        return;
-    }
-
+crate::ast_check! { on ["binary_expression"] => |node, source, ctx, diagnostics|
     let Some(op) = node.child_by_field_name("operator") else { return };
     let Ok(op_text) = op.utf8_text(source) else { return };
     if !EQUALITY_OPS.contains(&op_text) {

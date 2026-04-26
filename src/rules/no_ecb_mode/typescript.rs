@@ -17,11 +17,8 @@ fn contains_ecb(text: &str) -> bool {
     false
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["string_fragment"] => |node, source, ctx, diagnostics|
     // Only check string_fragment to avoid double-counting (string parent also matches).
-    if node.kind() != "string_fragment" {
-        return;
-    }
     let Ok(text) = node.utf8_text(source) else { return };
     if !contains_ecb(text) {
         return;

@@ -86,8 +86,8 @@ fn push_boolean_props(
     }
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    match node.kind() {
+crate::ast_check! { on ["interface_declaration", "type_alias_declaration"] => |node, source, ctx, diagnostics|
+match node.kind() {
         "interface_declaration" => {
             let Some(name_node) = node.child_by_field_name("name") else { return };
             let Ok(name) = std::str::from_utf8(&source[name_node.byte_range()]) else { return };

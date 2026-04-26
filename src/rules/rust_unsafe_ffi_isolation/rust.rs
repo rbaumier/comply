@@ -9,9 +9,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 
 const SAFE_MOD_NAMES: &[&str] = &["sys", "ffi", "raw", "bindings"];
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "foreign_mod_item" { return; }
-
+crate::ast_check! { on ["foreign_mod_item"] => |node, source, ctx, diagnostics|
     let mut current = node.parent();
     while let Some(ancestor) = current {
         if ancestor.kind() == "mod_item"

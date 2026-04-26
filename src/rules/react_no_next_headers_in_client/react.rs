@@ -10,14 +10,11 @@ fn module_source<'a>(node: tree_sitter::Node, source: &'a [u8]) -> Option<&'a st
     Some(raw.trim_matches(|c| c == '"' || c == '\''))
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["import_statement"] => |node, source, ctx, diagnostics|
     if ctx.project.framework != Framework::NextJs {
         return;
     }
     if ctx.file.rsc_context != RscContext::ClientComponent {
-        return;
-    }
-    if node.kind() != "import_statement" {
         return;
     }
     let Some(module) = module_source(node, source) else { return };

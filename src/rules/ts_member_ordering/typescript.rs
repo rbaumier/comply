@@ -32,12 +32,7 @@ fn method_rank(source: &[u8], node: tree_sitter::Node) -> u8 {
     3 // regular methods
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    let kind = node.kind();
-    if kind != "class_body" && kind != "interface_body" && kind != "object_type" {
-        return;
-    }
-
+crate::ast_check! { on ["class_body", "interface_body", "object_type"] => |node, source, ctx, diagnostics|
     let mut max_rank: u8 = 0;
     let child_count = node.named_child_count();
 

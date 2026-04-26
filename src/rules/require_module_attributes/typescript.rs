@@ -4,12 +4,8 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["import_statement", "export_statement"] => |node, source, ctx, diagnostics|
     let kind = node.kind();
-    if kind != "import_statement" && kind != "export_statement" {
-        return;
-    }
-
     // Look for a child that is an import attribute clause (`with { ... }`)
     // In tree-sitter-typescript this appears as `import_attribute` nodes
     let mut cursor = node.walk();

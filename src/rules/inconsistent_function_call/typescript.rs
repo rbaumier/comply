@@ -20,12 +20,8 @@ use std::collections::HashMap;
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::project::import_index::CallKind;
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
     // Run once per file, at the root.
-    if node.kind() != "program" {
-        return;
-    }
-
     // 1. Collect every top-level `function_declaration` name + whether it is
     //    exported (so cross-file call-sites can join the analysis).
     let mut declared: HashMap<String, DeclInfo> = HashMap::new();

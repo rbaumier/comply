@@ -23,8 +23,7 @@ fn is_mock_callee(func: tree_sitter::Node, source: &[u8]) -> bool {
     matches!(obj_txt, "vi" | "jest") && prop_txt == "mock"
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "call_expression" { return; }
+crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     let Some(func) = node.child_by_field_name("function") else { return; };
     if !is_mock_callee(func, source) { return; }
 

@@ -59,11 +59,7 @@ fn return_literal_text<'a>(ret: tree_sitter::Node, source: &'a [u8]) -> Option<&
     }
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if !is_function_kind(node.kind()) {
-        return;
-    }
-
+crate::ast_check! { on ["function_declaration", "function_expression", "function", "arrow_function", "method_definition", "generator_function_declaration", "generator_function"] => |node, source, ctx, diagnostics|
     let Some(body) = node.child_by_field_name("body") else { return };
     if body.kind() != "statement_block" {
         return;

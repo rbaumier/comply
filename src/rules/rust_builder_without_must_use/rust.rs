@@ -9,47 +9,49 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::walker::walk_tree;
 
 #[derive(Debug)]
 pub struct Check;
 
 impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        Some(&["struct_item"])
+    }
+
+    fn visit_node(
+        &self,
+        node: tree_sitter::Node,
+        ctx: &CheckCtx,
+        _state: Option<&mut dyn std::any::Any>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
         let source_bytes = ctx.source.as_bytes();
-        let mut diagnostics = Vec::new();
-        walk_tree(tree, |node| {
-            if node.kind() != "struct_item" {
-                return;
-            }
-            let Some(name_node) = node.child_by_field_name("name") else {
-                return;
-            };
-            let Ok(name) = name_node.utf8_text(source_bytes) else {
-                return;
-            };
-            if !name.ends_with("Builder") {
-                return;
-            }
-            if has_must_use_attribute(node, source_bytes) {
-                return;
-            }
-            let pos = node.start_position();
-            diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
-                line: pos.row + 1,
-                column: pos.column + 1,
-                rule_id: "rust-builder-without-must-use".into(),
-                message: format!(
-                    "`{name}` looks like a builder but has no `#[must_use]`. \
-                     Without it, a caller who forgets `.build()` gets a \
-                     silent no-op."
-                ),
-                severity: Severity::Warning,
-                span: None,
-            });
+        let Some(name_node) = node.child_by_field_name("name") else {
+            return;
+        };
+        let Ok(name) = name_node.utf8_text(source_bytes) else {
+            return;
+        };
+        if !name.ends_with("Builder") {
+            return;
+        }
+        if has_must_use_attribute(node, source_bytes) {
+            return;
+        }
+        let pos = node.start_position();
+        diagnostics.push(Diagnostic {
+            path: ctx.path.to_path_buf(),
+            line: pos.row + 1,
+            column: pos.column + 1,
+            rule_id: "rust-builder-without-must-use".into(),
+            message: format!(
+                "`{name}` looks like a builder but has no `#[must_use]`. \
+                 Without it, a caller who forgets `.build()` gets a \
+                 silent no-op."
+            ),
+            severity: Severity::Warning,
+            span: None,
         });
-        diagnostics
     }
 }
 

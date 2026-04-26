@@ -53,11 +53,8 @@ fn object_pairs<'a>(
     pairs.into_iter()
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["pair"] => |node, source, ctx, diagnostics|
     // Anchor on `states: { ... }` pairs.
-    if node.kind() != "pair" {
-        return;
-    }
     let Some(key) = node.child_by_field_name("key") else { return };
     let key_text = unquote(key.utf8_text(source).unwrap_or(""));
     if key_text != "states" {

@@ -10,11 +10,7 @@ const VOID_ELEMENTS: &[&str] = &[
     "meta", "param", "source", "track", "wbr",
 ];
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "jsx_element" {
-        return;
-    }
-
+crate::ast_check! { on ["jsx_element"] => |node, source, ctx, diagnostics|
     // Must have opening + closing tag but no meaningful children.
     let child_count = node.child_count();
     if child_count < 2 {

@@ -12,8 +12,8 @@ fn is_empty_string_literal(text: &str) -> bool {
     matches!(text, "''" | "\"\"")
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    match node.kind() {
+crate::ast_check! { on ["import_statement", "call_expression"] => |node, source, ctx, diagnostics|
+match node.kind() {
         "import_statement" => {
             let Some(src) = node.child_by_field_name("source") else { return };
             let text = src.utf8_text(source).unwrap_or("");

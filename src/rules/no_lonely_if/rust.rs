@@ -3,11 +3,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, _source, ctx, diagnostics|
-    if node.kind() != "if_expression" {
-        return;
-    }
-
+crate::ast_check! { on ["if_expression"] => |node, _source, ctx, diagnostics|
     // Is this if_expression the sole child of a block that is inside
     // an else_clause?
     //

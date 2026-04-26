@@ -21,11 +21,7 @@ fn is_positive_tabindex(attr: tree_sitter::Node, source: &[u8]) -> bool {
     false
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "jsx_opening_element" && node.kind() != "jsx_self_closing_element" {
-        return;
-    }
-
+crate::ast_check! { on ["jsx_opening_element", "jsx_self_closing_element"] => |node, source, ctx, diagnostics|
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         if child.kind() != "jsx_attribute" {

@@ -38,10 +38,7 @@ fn count_logical_ops(node: tree_sitter::Node, source: &[u8]) -> usize {
     count
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "if_statement" {
-        return;
-    }
+crate::ast_check! { on ["if_statement"] => |node, source, ctx, diagnostics|
     let Some(condition) = node.child_by_field_name("condition") else { return };
     let min_ops = ctx.config.threshold("intermediate-variables", "min_ops");
     if count_logical_ops(condition, source) < min_ops {

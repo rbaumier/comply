@@ -14,13 +14,9 @@ fn is_void_element(name: &str) -> bool {
     VOID_ELEMENTS.contains(&name)
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["jsx_opening_element", "jsx_self_closing_element"] => |node, source, ctx, diagnostics|
     // Match both opening elements (with children) and self-closing elements (with bad props)
     let kind = node.kind();
-    if kind != "jsx_opening_element" && kind != "jsx_self_closing_element" {
-        return;
-    }
-
     // Extract the element name
     let Some(name_node) = node.child_by_field_name("name") else { return };
     let Ok(tag_name) = name_node.utf8_text(source) else { return };

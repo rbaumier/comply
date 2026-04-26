@@ -14,10 +14,7 @@ fn is_reactdom_render(call: tree_sitter::Node, source: &[u8]) -> bool {
     &source[object.byte_range()] == b"ReactDOM" && &source[property.byte_range()] == b"render"
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "call_expression" {
-        return;
-    }
+crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     if !is_reactdom_render(node, source) {
         return;
     }

@@ -8,7 +8,7 @@ fn targets_dist(spec: &str) -> bool {
     inner.contains("/dist/") || inner.starts_with("dist/")
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["import_statement", "call_expression"] => |node, source, ctx, diagnostics|
     let kind = node.kind();
 
     if kind == "import_statement" {

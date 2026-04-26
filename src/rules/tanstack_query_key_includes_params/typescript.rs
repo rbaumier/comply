@@ -110,9 +110,7 @@ fn goto_next(cursor: &mut tree_sitter::TreeCursor, root_id: usize) -> bool {
     }
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "pair" { return; }
-
+crate::ast_check! { on ["pair"] => |node, source, ctx, diagnostics|
     // Key must be queryFn.
     let Some(key_node) = node.child_by_field_name("key") else { return; };
     let Ok(key_text) = key_node.utf8_text(source) else { return; };

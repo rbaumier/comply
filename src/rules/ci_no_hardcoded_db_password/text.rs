@@ -3,8 +3,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::yaml_k8s_helpers::{pair_key_text, pair_scalar_value};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "block_mapping_pair" { return; }
+crate::ast_check! { on ["block_mapping_pair"] => |node, source, ctx, diagnostics|
     if pair_key_text(node, source).as_deref() != Some("POSTGRES_PASSWORD") { return; }
     let Some(value) = pair_scalar_value(node, source) else { return; };
     let value = value.split('#').next().unwrap_or("").trim();

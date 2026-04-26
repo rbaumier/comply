@@ -142,11 +142,7 @@ impl<'a> InputCollector<'a> {
     }
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "program" {
-        return;
-    }
-
+crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
     let mut label_collector = LabelCollector::new();
     label_collector.collect(node, source);
 

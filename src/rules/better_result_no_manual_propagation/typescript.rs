@@ -1,9 +1,6 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "if_statement" {
-        return;
-    }
+crate::ast_check! { on ["if_statement"] => |node, source, ctx, diagnostics|
     let Some(cond) = node.child_by_field_name("condition") else { return; };
     let cond_text = cond.utf8_text(source).unwrap_or("");
     if !cond_text.contains(".isErr()") {

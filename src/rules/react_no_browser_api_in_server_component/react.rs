@@ -34,14 +34,10 @@ fn is_inside_typeof(node: tree_sitter::Node, source: &[u8]) -> bool {
     false
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["member_expression"] => |node, source, ctx, diagnostics|
     if ctx.file.rsc_context != RscContext::ServerComponent {
         return;
     }
-    if node.kind() != "member_expression" {
-        return;
-    }
-
     let Some(object) = node.child_by_field_name("object") else { return };
     if object.kind() != "identifier" {
         return;

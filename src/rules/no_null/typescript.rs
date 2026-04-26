@@ -1,10 +1,6 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "null" {
-        return;
-    }
-
+crate::ast_check! { on ["null"] => |node, source, ctx, diagnostics|
     // Skip if inside a comment (parent is a comment node).
     if let Some(parent) = node.parent()
         && parent.kind() == "comment" {

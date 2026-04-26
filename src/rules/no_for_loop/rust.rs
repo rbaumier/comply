@@ -6,11 +6,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "while_expression" {
-        return;
-    }
-
+crate::ast_check! { on ["while_expression"] => |node, source, ctx, diagnostics|
     let Some(condition) = node.child_by_field_name("condition") else { return };
     let Ok(cond_text) = condition.utf8_text(source) else { return };
 

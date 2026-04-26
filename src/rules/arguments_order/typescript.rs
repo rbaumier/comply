@@ -8,9 +8,7 @@ use std::collections::HashMap;
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "program" { return; }
-
+crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
     // 1. Collect function declarations with their parameter names
     let mut signatures: HashMap<String, Vec<String>> = HashMap::new();
     collect_function_signatures(node, source, &mut signatures);

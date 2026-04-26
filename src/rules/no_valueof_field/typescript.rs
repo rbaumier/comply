@@ -29,8 +29,8 @@ fn push(
     });
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    match node.kind() {
+crate::ast_check! { on ["method_definition", "method_signature", "property_signature", "pair", "public_field_definition"] => |node, source, ctx, diagnostics|
+match node.kind() {
         // Class method or object-literal shorthand method: `valueOf() {}`
         "method_definition" => {
             let parent = node.parent();

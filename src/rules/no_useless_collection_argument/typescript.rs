@@ -51,10 +51,7 @@ fn useless_arg_label(arg: tree_sitter::Node, source: &[u8]) -> Option<&'static s
     }
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "new_expression" {
-        return;
-    }
+crate::ast_check! { on ["new_expression"] => |node, source, ctx, diagnostics|
     let Some(constructor) = node.child_by_field_name("constructor") else { return };
     let Ok(name) = std::str::from_utf8(&source[constructor.byte_range()]) else { return };
     if !COLLECTIONS.contains(&name) {

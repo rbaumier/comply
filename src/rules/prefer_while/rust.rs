@@ -5,11 +5,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "loop_expression" {
-        return;
-    }
-
+crate::ast_check! { on ["loop_expression"] => |node, source, ctx, diagnostics|
     // Get the body block.
     let Some(body) = node.child_by_field_name("body") else { return };
     if body.kind() != "block" {

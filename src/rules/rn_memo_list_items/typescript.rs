@@ -17,8 +17,7 @@ fn source_wraps_in_memo(source: &[u8], ident: &str) -> bool {
     patterns.iter().any(|p| text.contains(p.as_str()))
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "jsx_attribute" { return; }
+crate::ast_check! { on ["jsx_attribute"] => |node, source, ctx, diagnostics|
     let Some(name) = crate::rules::jsx::jsx_attribute_name(node, source) else { return };
     if name != "renderItem" { return; }
     let Some(value) = crate::rules::jsx::jsx_attribute_value(node) else { return };

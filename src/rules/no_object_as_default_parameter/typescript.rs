@@ -50,7 +50,7 @@ fn is_param_default(node: tree_sitter::Node) -> bool {
     }
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["assignment_pattern", "required_parameter", "optional_parameter"] => |node, source, ctx, diagnostics|
     // Handle both `assignment_pattern` (plain JS) and
     // `required_parameter`/`optional_parameter` (TypeScript) with a default value.
     let (left_field, right_field) = match node.kind() {

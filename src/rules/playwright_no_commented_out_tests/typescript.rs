@@ -22,16 +22,12 @@ fn looks_like_test_comment(text: &str) -> bool {
     false
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["comment"] => |node, source, ctx, diagnostics|
     if !is_test_file(ctx.path) {
         return;
     }
 
     // Only look at comment nodes.
-    if node.kind() != "comment" {
-        return;
-    }
-
     let text = node.utf8_text(source).unwrap_or("");
 
     // Strip comment prefixes.

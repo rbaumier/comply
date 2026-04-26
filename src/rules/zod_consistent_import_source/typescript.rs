@@ -13,9 +13,7 @@ fn is_zod_subpath(spec: &str) -> bool {
     inner.starts_with("zod/")
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "import_statement" { return; }
-
+crate::ast_check! { on ["import_statement"] => |node, source, ctx, diagnostics|
     let Some(src) = node.child_by_field_name("source") else { return };
     let text = src.utf8_text(source).unwrap_or("");
     if !is_zod_subpath(text) { return; }

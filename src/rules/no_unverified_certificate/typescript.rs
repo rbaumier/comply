@@ -34,7 +34,7 @@ fn is_node_tls_lhs(node: tree_sitter::Node, source: &[u8]) -> bool {
     text.contains("NODE_TLS_REJECT_UNAUTHORIZED")
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["pair", "assignment_expression"] => |node, source, ctx, diagnostics|
     let kind = node.kind();
 
     if kind == "pair" {

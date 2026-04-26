@@ -6,11 +6,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "array_pattern" {
-        return;
-    }
-
+crate::ast_check! { on ["array_pattern"] => |node, source, ctx, diagnostics|
     // Walk children and count consecutive "holes" (unnamed null elements).
     // In tree-sitter, an elision in `[,, x]` appears as consecutive ","
     // punctuation tokens with no named child in between.

@@ -26,10 +26,7 @@ fn has_conditional_ancestor(node: tree_sitter::Node) -> bool {
     false
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "call_expression" {
-        return;
-    }
+crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     let Some(function) = node.child_by_field_name("function") else { return };
     // Only flag direct calls — `test.each([1])('a', ...)` has an outer
     // `call_expression` whose function child is another call; we only want

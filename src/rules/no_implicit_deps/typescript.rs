@@ -118,10 +118,7 @@ fn strip_quotes(s: &str) -> &str {
     s.trim_matches(|c| c == '"' || c == '\'' || c == '`')
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "import_statement" {
-        return;
-    }
+crate::ast_check! { on ["import_statement"] => |node, source, ctx, diagnostics|
     // Stay silent if there's no `package.json` anywhere above this file —
     // we can't prove a dep is missing without a manifest to compare
     // against. The lookup is cached on `ProjectCtx` and monorepo-safe

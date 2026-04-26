@@ -3,10 +3,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, _source, ctx, diagnostics|
-    if node.kind() != "switch_statement" {
-        return;
-    }
+crate::ast_check! { on ["switch_statement"] => |node, _source, ctx, diagnostics|
     // Walk ancestors — if any parent is also a switch_statement, flag it
     let mut parent = node.parent();
     while let Some(p) = parent {

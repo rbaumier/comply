@@ -2,11 +2,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 
 const WRAPPER_TYPES: &[&str] = &["String", "Number", "Boolean"];
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "new_expression" {
-        return;
-    }
-
+crate::ast_check! { on ["new_expression"] => |node, source, ctx, diagnostics|
     let Some(constructor) = node.child_by_field_name("constructor") else { return };
     if constructor.kind() != "identifier" {
         return;

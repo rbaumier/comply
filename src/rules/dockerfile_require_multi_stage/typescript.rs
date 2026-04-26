@@ -5,11 +5,8 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["source_file"] => |node, source, ctx, diagnostics|
     let _ = source;
-    if node.kind() != "source_file" {
-        return;
-    }
     let mut from_nodes: Vec<tree_sitter::Node> = Vec::new();
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {

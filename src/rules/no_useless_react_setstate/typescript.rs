@@ -71,11 +71,8 @@ fn collect_pairs<'a>(root: tree_sitter::Node<'_>, source: &'a [u8]) -> Vec<(&'a 
     pairs
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
     // Fire once at the program root, then walk internally.
-    if node.kind() != "program" {
-        return;
-    }
     let pairs = collect_pairs(node, source);
     if pairs.is_empty() {
         return;

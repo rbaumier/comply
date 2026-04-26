@@ -26,11 +26,7 @@ fn is_async_func(node: tree_sitter::Node, source: &[u8]) -> bool {
     text.starts_with("async ")
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "program" {
-        return;
-    }
-
+crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
     // Check for file-level "use server" directive (in the first few statements)
     let mut cursor = node.walk();
     let children: Vec<_> = node.children(&mut cursor).collect();

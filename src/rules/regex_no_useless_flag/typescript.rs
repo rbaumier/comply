@@ -104,10 +104,7 @@ fn regex_parts<'a>(node: &tree_sitter::Node<'_>, source: &'a [u8]) -> Option<(&'
     Some((&inner[..last_slash], &inner[last_slash + 1..]))
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "regex" {
-        return;
-    }
+crate::ast_check! { on ["regex"] => |node, source, ctx, diagnostics|
     let Some((pattern, flags)) = regex_parts(&node, source) else { return };
     if flags.is_empty() {
         return;

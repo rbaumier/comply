@@ -7,7 +7,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["call_expression", "generic_type"] => |node, source, ctx, diagnostics|
     if !ctx.source.contains(".lock()") || !ctx.source.contains(".push(") { return; }
 
     let matched = match node.kind() {

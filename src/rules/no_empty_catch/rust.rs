@@ -11,8 +11,8 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    match node.kind() {
+crate::ast_check! { on ["match_arm", "let_condition", "let_chain", "if_expression"] => |node, source, ctx, diagnostics|
+match node.kind() {
         "match_arm" => {
             let Some(pattern) = node.child_by_field_name("pattern") else { return };
             if !pattern_is_err(&pattern, source) {

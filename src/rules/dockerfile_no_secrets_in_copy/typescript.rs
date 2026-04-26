@@ -2,8 +2,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "copy_instruction" { return; }
+crate::ast_check! { on ["copy_instruction"] => |node, source, ctx, diagnostics|
     // Collect all `path` children — last is destination, all before are sources.
     let mut paths: Vec<&str> = Vec::new();
     for i in 0..node.child_count() {

@@ -31,11 +31,7 @@ fn object_has_key(object: tree_sitter::Node, source: &[u8], names: &[&str]) -> b
     false
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "pair" {
-        return;
-    }
-
+crate::ast_check! { on ["pair"] => |node, source, ctx, diagnostics|
     let Some(key_text) = pair_key_text(node, source) else { return };
     if key_text != "onDone" {
         return;

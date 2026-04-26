@@ -46,11 +46,7 @@ fn body_has_type_check(body: tree_sitter::Node, source: &[u8]) -> bool {
     false
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "function_declaration" {
-        return;
-    }
-
+crate::ast_check! { on ["function_declaration"] => |node, source, ctx, diagnostics|
     // Get function name — must start with "is" followed by uppercase
     let Some(name_node) = node.child_by_field_name("name") else { return };
     let Ok(name) = name_node.utf8_text(source) else { return };

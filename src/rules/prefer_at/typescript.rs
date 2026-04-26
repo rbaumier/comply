@@ -2,8 +2,8 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    match node.kind() {
+crate::ast_check! { on ["subscript_expression", "call_expression"] => |node, source, ctx, diagnostics|
+match node.kind() {
         // Pattern 1: `arr[arr.length - N]`
         "subscript_expression" => {
             let Some(obj) = node.child_by_field_name("object") else { return };

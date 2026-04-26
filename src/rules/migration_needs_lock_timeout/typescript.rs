@@ -5,11 +5,9 @@
 //! `lock_timeout`.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::rules::sql_helpers::TS_STRING_KINDS;
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["string", "template_string"] => |node, source, ctx, diagnostics|
     if !crate::rules::sql_helpers::is_migration_path(ctx.path) { return; }
-    if !TS_STRING_KINDS.contains(&node.kind()) { return; }
     let Ok(text) = node.utf8_text(source) else { return; };
     if !super::contains_ddl(text) { return; }
     if super::declares_lock_timeout(text) { return; }

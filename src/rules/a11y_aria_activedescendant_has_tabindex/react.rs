@@ -1,11 +1,7 @@
 //! a11y-aria-activedescendant-has-tabindex backend — AST-based detection.
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "jsx_self_closing_element" && node.kind() != "jsx_opening_element" {
-        return;
-    }
-
+crate::ast_check! { on ["jsx_self_closing_element", "jsx_opening_element"] => |node, source, ctx, diagnostics|
     // Check if this element has aria-activedescendant
     let mut cursor = node.walk();
     let has_aria_ad = node.children(&mut cursor).any(|child| {

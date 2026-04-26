@@ -40,10 +40,7 @@ fn is_screaming_snake(s: &str) -> bool {
     chars.all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "pair" {
-        return;
-    }
+crate::ast_check! { on ["pair"] => |node, source, ctx, diagnostics|
     let Some(parent_object) = node.parent() else { return };
     if !is_on_object(parent_object, source) {
         return;

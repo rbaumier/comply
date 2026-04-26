@@ -4,11 +4,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, _source, ctx, diagnostics|
-    if node.kind() != "if_expression" {
-        return;
-    }
-
+crate::ast_check! { on ["if_expression"] => |node, _source, ctx, diagnostics|
     // The outer if must NOT have an else clause.
     if node.child_by_field_name("alternative").is_some() {
         return;

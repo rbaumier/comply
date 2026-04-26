@@ -51,11 +51,7 @@ fn return_has_value(ret: tree_sitter::Node) -> bool {
     ret.named_child_count() > 0
 }
 
-crate::ast_check! { |node, _source, ctx, diagnostics|
-    if !is_function_kind(node.kind()) {
-        return;
-    }
-
+crate::ast_check! { on ["function_declaration", "function_expression", "function", "arrow_function", "method_definition", "generator_function_declaration", "generator_function"] => |node, _source, ctx, diagnostics|
     // Find the body. For declarations/methods/expressions/generators the
     // body field is "body" pointing at a statement_block. For arrow
     // functions the body may be a statement_block or a bare expression

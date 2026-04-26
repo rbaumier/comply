@@ -5,7 +5,6 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::walker::walk_tree;
 
 #[derive(Debug)]
 pub struct Check;
@@ -71,13 +70,20 @@ fn collect_if_branches(if_node: tree_sitter::Node, source: &[u8]) -> Vec<String>
 }
 
 impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
-        let source_bytes = ctx.source.as_bytes();
-        let mut diagnostics = Vec::new();
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        Some(&["if_expression", "match_expression"])
+    }
 
-        walk_tree(tree, |node| {
-            match node.kind() {
-                "if_expression" => {
+    fn visit_node(
+        &self,
+        node: tree_sitter::Node,
+        ctx: &CheckCtx,
+        _state: Option<&mut dyn std::any::Any>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
+        let source_bytes = ctx.source.as_bytes();
+        match node.kind() {
+            "if_expression" => {
                     if let Some(parent) = node.parent()
                         && parent.kind() == "else_clause" {
                             return;
@@ -133,11 +139,8 @@ impl AstCheck for Check {
                         });
                     }
                 }
-                _ => {}
-            }
-        });
-
-        diagnostics
+            _ => {}
+        }
     }
 }
 

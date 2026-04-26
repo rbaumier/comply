@@ -21,9 +21,7 @@ fn find_const_init<'a>(root: Node<'a>, source: &'a [u8], name: &str) -> Option<N
     None
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "program" { return; }
-
+crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
     // Find every generic_type that looks like `z.infer<typeof X>`.
     let mut stack = vec![node];
     while let Some(n) = stack.pop() {

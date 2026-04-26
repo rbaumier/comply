@@ -39,8 +39,7 @@ fn keyframe_selector_text<'t>(kb: tree_sitter::Node<'t>, source: &[u8]) -> Strin
     parts.join(" ")
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "keyframes_statement" { return; }
+crate::ast_check! { on ["keyframes_statement"] => |node, source, ctx, diagnostics|
     let blocks = collect_keyframe_blocks(node);
     let mut seen: Vec<String> = Vec::new();
     for kb in blocks {

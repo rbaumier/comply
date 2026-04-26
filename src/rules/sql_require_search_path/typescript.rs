@@ -3,50 +3,81 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::sql_helpers::TS_STRING_KINDS;
-use crate::rules::walker::collect_nodes_of_kinds;
+
+#[derive(Default)]
+struct State {
+    any_sets_search_path: bool,
+    /// Location of the first CREATE/ALTER TABLE string seen, for the
+    /// diagnostic emitted in `finish` when no search_path is set.
+    first_ddl: Option<(usize, usize, usize, usize)>, // line, col, byte_start, byte_len
+}
 
 #[derive(Debug)]
 pub struct Check;
 
 impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        Some(TS_STRING_KINDS)
+    }
+
+    fn create_state(&self) -> Option<Box<dyn std::any::Any>> {
+        Some(Box::<State>::default())
+    }
+
+    fn visit_node(
+        &self,
+        node: tree_sitter::Node,
+        ctx: &CheckCtx,
+        state: Option<&mut dyn std::any::Any>,
+        _diagnostics: &mut Vec<Diagnostic>,
+    ) {
         if !super::is_migration_path(ctx.path) {
-            return Vec::new();
+            return;
         }
-        let source_bytes = ctx.source.as_bytes();
-        let nodes = collect_nodes_of_kinds(tree, TS_STRING_KINDS);
+        let Ok(text) = node.utf8_text(ctx.source.as_bytes()) else {
+            return;
+        };
+        let Some(state) = state.and_then(|s| s.downcast_mut::<State>()) else {
+            return;
+        };
+        if super::sql_sets_search_path(text) {
+            state.any_sets_search_path = true;
+            return;
+        }
+        if state.first_ddl.is_none() && super::sql_creates_or_alters_table(text) {
+            let pos = node.start_position();
+            let range = node.byte_range();
+            state.first_ddl = Some((pos.row + 1, pos.column + 1, range.start, range.len()));
+        }
+    }
 
-        // First pass: does any string set search_path?
-        let mut any_sets_search_path = false;
-        for n in &nodes {
-            if let Ok(text) = n.utf8_text(source_bytes)
-                && super::sql_sets_search_path(text)
-            {
-                any_sets_search_path = true;
-                break;
-            }
+    fn finish(
+        &self,
+        ctx: &CheckCtx,
+        state: Option<Box<dyn std::any::Any>>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
+        if !super::is_migration_path(ctx.path) {
+            return;
         }
-        if any_sets_search_path {
-            return Vec::new();
+        let Some(state) = state.and_then(|s| s.downcast::<State>().ok()) else {
+            return;
+        };
+        if state.any_sets_search_path {
+            return;
         }
-
-        // Otherwise, flag the first SQL string containing CREATE/ALTER TABLE.
-        for n in &nodes {
-            let Ok(text) = n.utf8_text(source_bytes) else {
-                continue;
-            };
-            if !super::sql_creates_or_alters_table(text) {
-                continue;
-            }
-            return vec![Diagnostic::at_node(
-                ctx.path,
-                n,
-                super::META.id,
-                "Migration must `SET search_path = pg_catalog, public;` (or use schema-qualified names) to prevent identifier hijacking.".into(),
-                Severity::Warning,
-            )];
-        }
-        Vec::new()
+        let Some((line, column, byte_start, byte_len)) = state.first_ddl else {
+            return;
+        };
+        diagnostics.push(Diagnostic {
+            path: ctx.path.to_path_buf(),
+            line,
+            column,
+            rule_id: super::META.id.into(),
+            message: "Migration must `SET search_path = pg_catalog, public;` (or use schema-qualified names) to prevent identifier hijacking.".into(),
+            severity: Severity::Warning,
+            span: Some((byte_start, byte_len)),
+        });
     }
 }
 

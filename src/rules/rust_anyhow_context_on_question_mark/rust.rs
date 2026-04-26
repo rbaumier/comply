@@ -8,9 +8,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "try_expression" { return; }
-
+crate::ast_check! { on ["try_expression"] => |node, source, ctx, diagnostics|
     let path_str = ctx.path.to_string_lossy();
     if !path_str.contains("main.rs") && !path_str.contains("src/bin/") && !path_str.contains("src/cli") {
         return;

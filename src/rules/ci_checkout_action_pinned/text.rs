@@ -16,8 +16,7 @@ fn is_forbidden_ref(r: &str) -> bool {
     false
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "block_mapping_pair" { return; }
+crate::ast_check! { on ["block_mapping_pair"] => |node, source, ctx, diagnostics|
     if pair_key_text(node, source).as_deref() != Some("uses") { return; }
     let Some(value) = pair_scalar_value(node, source) else { return; };
     let Some((name, at_ref)) = value.split_once('@') else { return; };

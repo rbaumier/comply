@@ -6,11 +6,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "ternary_expression" {
-        return;
-    }
-
+crate::ast_check! { on ["ternary_expression"] => |node, source, ctx, diagnostics|
     let test = match node.child_by_field_name("condition") {
         Some(c) => c,
         None => return,

@@ -4,8 +4,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 
 const SECRET_SUBSTRINGS: &[&str] = &["SECRET", "TOKEN", "PASSWORD", "PASSWD", "APIKEY"];
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "env_instruction" { return; }
+crate::ast_check! { on ["env_instruction"] => |node, source, ctx, diagnostics|
     // Iterate env_pair children. Each env_pair has either:
     //   unquoted_string `=` unquoted_string  (KEY=VALUE form)
     //   unquoted_string unquoted_string      (legacy KEY VALUE form)

@@ -7,10 +7,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, _source, ctx, diagnostics|
-    if node.kind() != "program" {
-        return;
-    }
+crate::ast_check! { on ["program"] => |node, _source, ctx, diagnostics|
     if !(ctx.file.directives.use_client && ctx.file.directives.use_server) {
         return;
     }

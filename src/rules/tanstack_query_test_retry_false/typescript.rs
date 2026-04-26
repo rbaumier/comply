@@ -8,9 +8,8 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["new_expression"] => |node, source, ctx, diagnostics|
     if !is_test_file(ctx.path) { return; }
-    if node.kind() != "new_expression" { return; }
     let Some(constructor) = node.child_by_field_name("constructor") else { return; };
     if constructor.utf8_text(source).ok() != Some("QueryClient") { return; }
 

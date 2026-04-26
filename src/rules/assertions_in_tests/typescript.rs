@@ -54,15 +54,10 @@ fn extract_test_name(args: tree_sitter::Node, source: &[u8]) -> String {
     "unnamed".to_string()
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     if !is_test_file(ctx.path) {
         return;
     }
-
-    if node.kind() != "call_expression" {
-        return;
-    }
-
     let Some(func) = node.child_by_field_name("function") else { return };
     if func.kind() != "identifier" {
         return;

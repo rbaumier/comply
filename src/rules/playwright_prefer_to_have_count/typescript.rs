@@ -35,12 +35,8 @@ fn is_await_count(node: tree_sitter::Node, source: &[u8]) -> bool {
     args.named_child_count() == 0
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     // We hook on the outer call: expect(await locator.count()).toBe(n)
-    if node.kind() != "call_expression" {
-        return;
-    }
-
     // callee must be `<expect-call>.toBe` / `.toEqual` / `.toStrictEqual`
     let Some(callee) = node.child_by_field_name("function") else { return };
     if callee.kind() != "member_expression" {

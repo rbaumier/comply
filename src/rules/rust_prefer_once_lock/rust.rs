@@ -7,7 +7,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["macro_invocation", "generic_type"] => |node, source, ctx, diagnostics|
     let msg = "Use `std::sync::LazyLock` or `OnceLock` (stable since Rust 1.70) instead of `lazy_static!` or `once_cell`.";
 
     if node.kind() == "macro_invocation" {

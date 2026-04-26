@@ -16,10 +16,7 @@ const PACKAGE_MANAGERS: &[&str] = &[
     "apt-get install",
 ];
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "run_instruction" {
-        return;
-    }
+crate::ast_check! { on ["run_instruction"] => |node, source, ctx, diagnostics|
     let full_text = node.utf8_text(source).unwrap_or("");
     let shell_text = run_shell_text(node, source);
     if !PACKAGE_MANAGERS.iter().any(|m| shell_text.contains(m)) {

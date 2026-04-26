@@ -9,8 +9,8 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    match node.kind() {
+crate::ast_check! { on ["if_statement", "statement_block"] => |node, source, ctx, diagnostics|
+match node.kind() {
         "if_statement" => check_if_else(node, source, ctx, diagnostics),
         "statement_block" => check_sibling_return(node, source, ctx, diagnostics),
         _ => {}

@@ -64,12 +64,10 @@ fn inside_media(node: tree_sitter::Node) -> bool {
     false
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["feature_query", "parenthesized_value"] => |node, source, ctx, diagnostics|
     // tree-sitter-css represents `(min-width: 768px)` as a `feature_query`
     // (or `parenthesized_value` in older grammars). The first plain_value
     // inside is the feature name.
-    let kind = node.kind();
-    if kind != "feature_query" && kind != "parenthesized_value" { return; }
     if !inside_media(node) { return; }
     let mut c = node.walk();
     let Some(name_node) = node.children(&mut c).find(|n| n.kind() == "feature_name" || n.kind() == "plain_value") else { return; };

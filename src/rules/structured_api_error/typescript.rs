@@ -23,11 +23,7 @@ fn is_route_file(source: &[u8]) -> bool {
     })
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "new_expression" {
-        return;
-    }
-
+crate::ast_check! { on ["new_expression"] => |node, source, ctx, diagnostics|
     // constructor must be `Error`
     let Some(ctor) = node.child_by_field_name("constructor") else { return };
     if ctor.kind() != "identifier" || ctor.utf8_text(source).unwrap_or("") != "Error" {

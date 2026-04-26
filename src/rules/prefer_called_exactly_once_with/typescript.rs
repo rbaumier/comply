@@ -70,14 +70,9 @@ fn is_literal_one(args: Node<'_>, source: &[u8]) -> bool {
     arg.utf8_text(source).map(str::trim).unwrap_or("") == "1"
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["statement_block", "program"] => |node, source, ctx, diagnostics|
     // We scan any node that can contain a sequence of sibling statements.
     // `program` is the file root; `statement_block` is `{ ... }` bodies.
-    let kind = node.kind();
-    if kind != "statement_block" && kind != "program" {
-        return;
-    }
-
     let count = node.named_child_count();
     if count < 2 {
         return;

@@ -2,11 +2,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "await_expression" {
-        return;
-    }
-
+crate::ast_check! { on ["await_expression"] => |node, source, ctx, diagnostics|
     // Walk up: if we're inside any function scope, this is not top-level.
     let mut current = node.parent();
     while let Some(ancestor) = current {

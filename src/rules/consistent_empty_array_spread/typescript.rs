@@ -4,11 +4,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "spread_element" {
-        return;
-    }
-
+crate::ast_check! { on ["spread_element"] => |node, source, ctx, diagnostics|
     // The spread_element's child is the expression being spread.
     // If it's a ternary_expression, it's unparenthesized.
     // If it's a parenthesized_expression wrapping a ternary, it's OK.

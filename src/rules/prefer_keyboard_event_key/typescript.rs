@@ -2,13 +2,10 @@ use crate::diagnostic::{Diagnostic, Severity};
 
 const DEPRECATED_PROPS: &[&str] = &["keyCode", "charCode", "which"];
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["member_expression"] => |node, source, ctx, diagnostics|
     // Flag `<event>.keyCode` / `.charCode` / `.which` member access. Walking
     // `member_expression` (instead of textual scanning) keeps comments,
     // strings, and unrelated identifiers from triggering false positives.
-    if node.kind() != "member_expression" {
-        return;
-    }
     let Some(prop) = node.child_by_field_name("property") else {
         return;
     };

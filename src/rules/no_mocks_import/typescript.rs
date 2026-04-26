@@ -8,9 +8,7 @@ fn targets_mocks(spec: &str) -> bool {
     inner.contains("__mocks__")
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "import_statement" { return; }
-
+crate::ast_check! { on ["import_statement"] => |node, source, ctx, diagnostics|
     let Some(src) = node.child_by_field_name("source") else { return };
     let text = src.utf8_text(source).unwrap_or("");
     if !targets_mocks(text) { return; }

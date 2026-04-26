@@ -10,7 +10,6 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::walker::walk_tree;
 
 // Predicate prefixes accepted by the rule. The first row is the classic
 // API-surface set (`is_ready`, `has_items`, `should_retry`, …). The
@@ -29,15 +28,20 @@ const NEGATIVE_SUBSTRINGS: &[&str] = &["_not_", "isnt_", "cannot_", "shouldnt_"]
 pub struct Check;
 
 impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
-        let source_bytes = ctx.source.as_bytes();
-        let mut diagnostics = Vec::new();
-        walk_tree(tree, |node| {
-            if let Some(d) = check_node(node, source_bytes, ctx.path) {
-                diagnostics.push(d);
-            }
-        });
-        diagnostics
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        Some(&["let_declaration", "parameter"])
+    }
+
+    fn visit_node(
+        &self,
+        node: tree_sitter::Node,
+        ctx: &CheckCtx,
+        _state: Option<&mut dyn std::any::Any>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
+        if let Some(d) = check_node(node, ctx.source.as_bytes(), ctx.path) {
+            diagnostics.push(d);
+        }
     }
 }
 

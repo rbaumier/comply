@@ -28,12 +28,8 @@ fn is_string_index(node: tree_sitter::Node) -> bool {
     node.kind() == "string"
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["assignment_expression"] => |node, source, ctx, diagnostics|
     // Look for assignment expressions: arr["key"] = value
-    if node.kind() != "assignment_expression" {
-        return;
-    }
-
     let Some(left) = node.child_by_field_name("left") else { return };
     if left.kind() != "subscript_expression" {
         return;

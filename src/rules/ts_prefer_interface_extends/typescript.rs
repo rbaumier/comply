@@ -10,12 +10,8 @@ fn is_named_type_ref(node: tree_sitter::Node) -> bool {
     matches!(node.kind(), "type_identifier" | "generic_type" | "nested_type_identifier")
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["type_alias_declaration"] => |node, source, ctx, diagnostics|
     let _ = source;
-    if node.kind() != "type_alias_declaration" {
-        return;
-    }
-
     let Some(value) = node.child_by_field_name("value") else { return };
     if value.kind() != "intersection_type" {
         return;

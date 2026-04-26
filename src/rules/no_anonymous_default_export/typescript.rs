@@ -3,11 +3,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "export_statement" {
-        return;
-    }
-
+crate::ast_check! { on ["export_statement"] => |node, source, ctx, diagnostics|
     // Look for a `default` keyword child.
     let mut has_default = false;
     let mut cursor = node.walk();

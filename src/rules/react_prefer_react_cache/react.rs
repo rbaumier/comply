@@ -50,11 +50,7 @@ fn starts_with_uppercase(name: &str) -> bool {
     name.chars().next().is_some_and(|c| c.is_ascii_uppercase())
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "export_statement" {
-        return;
-    }
-
+crate::ast_check! { on ["export_statement"] => |node, source, ctx, diagnostics|
     // Only flag when at module scope (parent is `program`).
     match node.parent() {
         Some(p) if p.kind() == "program" => {}

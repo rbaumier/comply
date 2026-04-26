@@ -4,14 +4,10 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["spread_element"] => |node, source, ctx, diagnostics|
     // We look for spread_element nodes inside object literals whose
     // argument is a logical expression (`||` or `??`) with `{}` as the
     // right-hand side.
-    if node.kind() != "spread_element" {
-        return;
-    }
-
     let Some(parent) = node.parent() else { return };
     if parent.kind() != "object" {
         return;

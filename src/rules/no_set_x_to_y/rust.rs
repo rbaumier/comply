@@ -18,14 +18,8 @@ fn is_set_x_to_y(name: &str) -> bool {
     false
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    let name_node = match node.kind() {
-        "function_item" | "function_signature_item" => {
-            node.child_by_field_name("name")
-        }
-        _ => return,
-    };
-    let Some(name_node) = name_node else { return };
+crate::ast_check! { on ["function_item", "function_signature_item"] => |node, source, ctx, diagnostics|
+    let Some(name_node) = node.child_by_field_name("name") else { return };
     let Ok(name) = name_node.utf8_text(source) else { return };
 
     if !is_set_x_to_y(name) {

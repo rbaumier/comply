@@ -1,8 +1,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["maintainer_instruction"] => |node, source, ctx, diagnostics|
     let _ = source;
-    if node.kind() != "maintainer_instruction" { return; }
     let pos = node.start_position();
     diagnostics.push(Diagnostic {
         path: ctx.path.to_path_buf(),

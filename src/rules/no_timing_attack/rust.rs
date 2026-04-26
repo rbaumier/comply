@@ -12,10 +12,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 
 use super::helpers::is_sensitive_identifier;
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "binary_expression" {
-        return;
-    }
+crate::ast_check! { on ["binary_expression"] => |node, source, ctx, diagnostics|
     let Some(op) = node.child_by_field_name("operator") else { return };
     let op_text = op.utf8_text(source).unwrap_or("");
     if op_text != "==" && op_text != "!=" {

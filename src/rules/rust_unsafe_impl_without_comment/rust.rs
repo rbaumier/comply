@@ -8,47 +8,51 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::walker::walk_tree;
+
+const KINDS: &[&str] = &["impl_item"];
 
 #[derive(Debug)]
 pub struct Check;
 
 impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        Some(KINDS)
+    }
+
+    fn visit_node(
+        &self,
+        node: tree_sitter::Node,
+        ctx: &CheckCtx,
+        _state: Option<&mut dyn std::any::Any>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
         let source_bytes = ctx.source.as_bytes();
-        let mut diagnostics = Vec::new();
-        walk_tree(tree, |node| {
-            if node.kind() != "impl_item" {
-                return;
-            }
-            // Check the impl's source prefix for the `unsafe` keyword.
-            // tree-sitter-rust doesn't expose `unsafe` as a named child
-            // on impl_item, so we read the first chunk of the node's text.
-            let Ok(text) = node.utf8_text(source_bytes) else {
-                return;
-            };
-            if !text.trim_start().starts_with("unsafe impl") {
-                return;
-            }
-            if has_safety_comment_above(node, ctx.source) {
-                return;
-            }
-            let pos = node.start_position();
-            diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
-                line: pos.row + 1,
-                column: pos.column + 1,
-                rule_id: "rust-unsafe-impl-without-comment".into(),
-                message: "`unsafe impl` without a `// SAFETY:` comment — \
-                          spell out which invariants of the unsafe trait \
-                          the type upholds. The comment is the entire \
-                          audit trail for the unsafe contract."
-                    .into(),
-                severity: Severity::Error,
-                span: None,
-            });
+        // Check the impl's source prefix for the `unsafe` keyword.
+        // tree-sitter-rust doesn't expose `unsafe` as a named child
+        // on impl_item, so we read the first chunk of the node's text.
+        let Ok(text) = node.utf8_text(source_bytes) else {
+            return;
+        };
+        if !text.trim_start().starts_with("unsafe impl") {
+            return;
+        }
+        if has_safety_comment_above(node, ctx.source) {
+            return;
+        }
+        let pos = node.start_position();
+        diagnostics.push(Diagnostic {
+            path: ctx.path.to_path_buf(),
+            line: pos.row + 1,
+            column: pos.column + 1,
+            rule_id: "rust-unsafe-impl-without-comment".into(),
+            message: "`unsafe impl` without a `// SAFETY:` comment — \
+                      spell out which invariants of the unsafe trait \
+                      the type upholds. The comment is the entire \
+                      audit trail for the unsafe contract."
+                .into(),
+            severity: Severity::Error,
+            span: None,
         });
-        diagnostics
     }
 }
 

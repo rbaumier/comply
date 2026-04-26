@@ -39,10 +39,7 @@ fn is_in_skip_context(node: tree_sitter::Node) -> bool {
     false
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "integer_literal" && node.kind() != "float_literal" {
-        return;
-    }
+crate::ast_check! { on ["integer_literal", "float_literal"] => |node, source, ctx, diagnostics|
     let text = std::str::from_utf8(&source[node.byte_range()]).unwrap_or("");
     if is_allowed(text) {
         return;

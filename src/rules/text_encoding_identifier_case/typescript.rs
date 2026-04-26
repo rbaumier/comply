@@ -16,12 +16,8 @@ const ENCODINGS: &[(&str, &str)] = &[
     ("Ascii", "ascii"),
 ];
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["string_fragment"] => |node, source, ctx, diagnostics|
     // Only check string_fragment to avoid double-counting (parent `string` also matches).
-    let kind = node.kind();
-    if kind != "string_fragment" {
-        return;
-    }
     let text = &source[node.byte_range()];
     let Ok(content) = std::str::from_utf8(text) else {
         return;

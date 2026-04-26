@@ -68,9 +68,7 @@ fn single_return_expr<'a>(func: Node<'a>) -> Option<Node<'a>> {
     ret.named_child(0)
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "call_expression" { return; }
-
+crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     // Callee must be a member access ending in `.mockImplementation`.
     let Some(callee) = node.child_by_field_name("function") else { return; };
     if callee.kind() != "member_expression" { return; }

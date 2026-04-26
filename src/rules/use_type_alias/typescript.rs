@@ -10,7 +10,6 @@ use std::collections::HashMap;
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::walker::walk_tree;
 
 #[derive(Debug)]
 pub struct Check;
@@ -21,37 +20,64 @@ fn is_complex_type(kind: &str) -> bool {
     kind == "union_type" || kind == "intersection_type"
 }
 
+#[derive(Default)]
+struct State {
+    annotation_lines: HashMap<String, Vec<usize>>,
+}
+
 impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        Some(&["union_type", "intersection_type"])
+    }
+
+    fn create_state(&self) -> Option<Box<dyn std::any::Any>> {
+        Some(Box::new(State::default()))
+    }
+
+    fn visit_node(
+        &self,
+        node: tree_sitter::Node,
+        ctx: &CheckCtx,
+        state: Option<&mut dyn std::any::Any>,
+        _diagnostics: &mut Vec<Diagnostic>,
+    ) {
         let source = ctx.source.as_bytes();
-        let mut annotation_lines: HashMap<String, Vec<usize>> = HashMap::new();
+        let Some(state) = state.and_then(|s| s.downcast_mut::<State>()) else {
+            return;
+        };
+        // Skip nested union/intersection — only count the outermost.
+        if let Some(parent) = node.parent()
+            && is_complex_type(parent.kind())
+        {
+            return;
+        }
+        let text = match node.utf8_text(source) {
+            Ok(t) => t,
+            Err(_) => return,
+        };
+        // Must have at least 2 members to be worth aliasing.
+        if text.len() <= 5 {
+            return;
+        }
+        let line = node.start_position().row + 1;
+        state
+            .annotation_lines
+            .entry(text.to_string())
+            .or_default()
+            .push(line);
+    }
 
-        walk_tree(tree, |node| {
-            if !is_complex_type(node.kind()) {
-                return;
-            }
-            // Skip nested union/intersection — only count the outermost.
-            if let Some(parent) = node.parent()
-                && is_complex_type(parent.kind()) {
-                    return;
-                }
-            let text = match node.utf8_text(source) {
-                Ok(t) => t,
-                Err(_) => return,
-            };
-            // Must have at least 2 members to be worth aliasing.
-            if text.len() <= 5 {
-                return;
-            }
-            let line = node.start_position().row + 1;
-            annotation_lines
-                .entry(text.to_string())
-                .or_default()
-                .push(line);
-        });
-
-        let mut diagnostics = Vec::new();
-        for (annotation, lines) in &annotation_lines {
+    fn finish(
+        &self,
+        ctx: &CheckCtx,
+        state: Option<Box<dyn std::any::Any>>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
+        let Some(state) = state.and_then(|s| s.downcast::<State>().ok()) else {
+            return;
+        };
+        let start = diagnostics.len();
+        for (annotation, lines) in &state.annotation_lines {
             if lines.len() >= 2 {
                 for &line_num in lines {
                     diagnostics.push(Diagnostic {
@@ -70,9 +96,7 @@ impl AstCheck for Check {
                 }
             }
         }
-
-        diagnostics.sort_by_key(|d| d.line);
-        diagnostics
+        diagnostics[start..].sort_by_key(|d| d.line);
     }
 }
 

@@ -7,7 +7,6 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::walker::walk_tree;
 
 const FUNCTION_KINDS: &[&str] = &[
     "function_declaration",
@@ -18,6 +17,8 @@ const FUNCTION_KINDS: &[&str] = &[
     "generator_function",
     "generator_function_declaration",
 ];
+
+const KINDS: &[&str] = &["call_expression"];
 
 fn is_inside_try_body(node: tree_sitter::Node) -> bool {
     let mut current = node.parent();
@@ -48,38 +49,41 @@ fn is_inside_try_body(node: tree_sitter::Node) -> bool {
 pub struct Check;
 
 impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        Some(KINDS)
+    }
+
+    fn visit_node(
+        &self,
+        node: tree_sitter::Node,
+        ctx: &CheckCtx,
+        _state: Option<&mut dyn std::any::Any>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
         let source = ctx.source.as_bytes();
-        let mut diagnostics = Vec::new();
-        walk_tree(tree, |node| {
-            if node.kind() != "call_expression" {
-                return;
-            }
-            let Some(callee) = node.child_by_field_name("function") else { return };
-            if callee.kind() != "member_expression" {
-                return;
-            }
-            let Ok(text) = callee.utf8_text(source) else { return };
-            if text != "JSON.parse" {
-                return;
-            }
-            if is_inside_try_body(node) {
-                return;
-            }
-            let pos = node.start_position();
-            diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
-                line: pos.row + 1,
-                column: pos.column + 1,
-                rule_id: "try-catch-json-parse".into(),
-                message: "`JSON.parse` can throw on invalid input — wrap it in \
-                          try/catch or use a safe parser (Zod, schema validator)."
-                    .into(),
-                severity: Severity::Warning,
-                span: None,
-            });
+        let Some(callee) = node.child_by_field_name("function") else { return };
+        if callee.kind() != "member_expression" {
+            return;
+        }
+        let Ok(text) = callee.utf8_text(source) else { return };
+        if text != "JSON.parse" {
+            return;
+        }
+        if is_inside_try_body(node) {
+            return;
+        }
+        let pos = node.start_position();
+        diagnostics.push(Diagnostic {
+            path: ctx.path.to_path_buf(),
+            line: pos.row + 1,
+            column: pos.column + 1,
+            rule_id: "try-catch-json-parse".into(),
+            message: "`JSON.parse` can throw on invalid input — wrap it in \
+                      try/catch or use a safe parser (Zod, schema validator)."
+                .into(),
+            severity: Severity::Warning,
+            span: None,
         });
-        diagnostics
     }
 }
 

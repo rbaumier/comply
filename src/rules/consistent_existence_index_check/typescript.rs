@@ -8,12 +8,8 @@ use crate::diagnostic::{Diagnostic, Severity};
 
 const INDEX_METHODS: &[&str] = &["indexOf", "lastIndexOf", "findIndex", "findLastIndex"];
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["binary_expression"] => |node, source, ctx, diagnostics|
     // Match binary expressions like `expr < 0`, `expr >= 0`, `expr > -1`
-    if node.kind() != "binary_expression" {
-        return;
-    }
-
     let Some(op_node) = node.child_by_field_name("operator") else { return };
     let op = op_node.utf8_text(source).unwrap_or("");
 

@@ -2,7 +2,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["assignment_expression"] => |node, source, ctx, diagnostics|
     // We look for assignment_expression nodes where the right side starts
     // with a unary +, -, or ! — this is the AST shape produced by `x =+ 1`,
     // `x =- 1`, `x =! y`.  The user likely meant `+=`, `-=`, `!=`.
@@ -11,10 +11,6 @@ crate::ast_check! { |node, source, ctx, diagnostics|
     // where the RHS is a unary_expression (`+1`).
     // For `=!`: tree-sitter parses `x =! y` as an assignment where the
     // RHS is a unary_expression (`!y`).
-    if node.kind() != "assignment_expression" {
-        return;
-    }
-
     // Must be a plain `=` assignment (not `+=`, `-=`, etc.)
     let Some(op_node) = node.child(1) else { return };
     let op_text = op_node.utf8_text(source).unwrap_or("");

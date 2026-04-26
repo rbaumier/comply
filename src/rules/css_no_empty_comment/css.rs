@@ -1,7 +1,6 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "comment" { return; }
+crate::ast_check! { on ["comment"] => |node, source, ctx, diagnostics|
     let text = node.utf8_text(source).unwrap_or_default();
     let inner = text.strip_prefix("/*").and_then(|s| s.strip_suffix("*/")).unwrap_or(text);
     if !inner.trim().is_empty() { return; }

@@ -15,10 +15,7 @@ const INSTALL_NEEDLES: &[&str] = &[
     "pip install",
 ];
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "source_file" {
-        return;
-    }
+crate::ast_check! { on ["source_file"] => |node, source, ctx, diagnostics|
     let mut install_seen = false;
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {

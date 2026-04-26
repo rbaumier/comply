@@ -36,8 +36,7 @@ fn strip_quotes(s: &str) -> &str {
     }
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "import_statement" { return; }
+crate::ast_check! { on ["import_statement"] => |node, source, ctx, diagnostics|
     if !is_functions_file(ctx) { return; }
 
     // Resolve the imported module path.

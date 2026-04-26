@@ -45,9 +45,7 @@ fn receiver_uses_z_object(node: tree_sitter::Node<'_>, source: &[u8]) -> bool {
     text.contains("z.object(")
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "call_expression" { return; }
-
+crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     let Some(function) = node.child_by_field_name("function") else { return };
     if function.kind() != "member_expression" { return; }
 

@@ -17,49 +17,117 @@ use std::collections::HashSet;
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::walker::walk_tree;
 
 #[derive(Debug)]
 pub struct Check;
 
+/// Visit-time state: collected parameter names plus pending candidate
+/// `binary_expression` nodes. Parameters are gathered as we encounter them
+/// during the single AST walk; `binary_expression` candidates are recorded
+/// the same way and resolved in `finish`, since a binary expression may
+/// appear before all of its enclosing function's parameters have been seen
+/// in pre-order traversal (e.g. parameters come first, but defaults can
+/// reference identifiers introduced later in unrelated scopes — using
+/// `finish` keeps the logic tolerant of traversal order).
+#[derive(Default)]
+struct State {
+    params: HashSet<String>,
+    candidates: Vec<Candidate>,
+}
+
+struct Candidate {
+    op_text: String,
+    name: String,
+    line: usize,
+    column: usize,
+}
+
 impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        Some(&[
+            "required_parameter",
+            "optional_parameter",
+            "binary_expression",
+        ])
+    }
+
+    fn create_state(&self) -> Option<Box<dyn std::any::Any>> {
+        Some(Box::new(State::default()))
+    }
+
+    fn visit_node(
+        &self,
+        node: tree_sitter::Node,
+        ctx: &CheckCtx,
+        state: Option<&mut dyn std::any::Any>,
+        _diagnostics: &mut Vec<Diagnostic>,
+    ) {
         let source_bytes = ctx.source.as_bytes();
-        let params = collect_all_parameters(tree, source_bytes);
-        if params.is_empty() {
-            return vec![];
+        let Some(state) = state.and_then(|s| s.downcast_mut::<State>()) else {
+            return;
+        };
+        let kind = node.kind();
+        if kind == "required_parameter" || kind == "optional_parameter" {
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                if child.kind() == "identifier"
+                    && let Ok(name) = child.utf8_text(source_bytes)
+                {
+                    state.params.insert(name.to_string());
+                }
+            }
+            return;
         }
-        let mut diagnostics = Vec::new();
-        walk_tree(tree, |node| {
-            if node.kind() != "binary_expression" {
-                return;
+        // binary_expression
+        let Some(op) = node.child_by_field_name("operator") else {
+            return;
+        };
+        let Ok(op_text) = op.utf8_text(source_bytes) else {
+            return;
+        };
+        if op_text != "??" && op_text != "||" {
+            return;
+        }
+        let Some(left) = node.child_by_field_name("left") else {
+            return;
+        };
+        if left.kind() != "identifier" {
+            return;
+        }
+        let Ok(name) = left.utf8_text(source_bytes) else {
+            return;
+        };
+        let pos = node.start_position();
+        state.candidates.push(Candidate {
+            op_text: op_text.to_string(),
+            name: name.to_string(),
+            line: pos.row + 1,
+            column: pos.column + 1,
+        });
+    }
+
+    fn finish(
+        &self,
+        ctx: &CheckCtx,
+        state: Option<Box<dyn std::any::Any>>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
+        let Some(state) = state.and_then(|s| s.downcast::<State>().ok()) else {
+            return;
+        };
+        if state.params.is_empty() {
+            return;
+        }
+        for c in &state.candidates {
+            if !state.params.contains(&c.name) {
+                continue;
             }
-            let Some(op) = node.child_by_field_name("operator") else {
-                return;
-            };
-            let Ok(op_text) = op.utf8_text(source_bytes) else {
-                return;
-            };
-            if op_text != "??" && op_text != "||" {
-                return;
-            }
-            let Some(left) = node.child_by_field_name("left") else {
-                return;
-            };
-            if left.kind() != "identifier" {
-                return;
-            }
-            let Ok(name) = left.utf8_text(source_bytes) else {
-                return;
-            };
-            if !params.contains(name) {
-                return;
-            }
-            let pos = node.start_position();
+            let op_text = &c.op_text;
+            let name = &c.name;
             diagnostics.push(Diagnostic {
                 path: ctx.path.to_path_buf(),
-                line: pos.row + 1,
-                column: pos.column + 1,
+                line: c.line,
+                column: c.column,
                 rule_id: "no-nullish-default-on-input".into(),
                 message: format!(
                     "Using '{op_text}' to default a function parameter '{name}' \
@@ -69,31 +137,8 @@ impl AstCheck for Check {
                 severity: Severity::Warning,
                 span: None,
             });
-        });
-        diagnostics
+        }
     }
-}
-
-/// Walk the tree and collect the names of every function parameter.
-/// The result is a flat set — we don't track scopes, which means a local
-/// variable sharing a param name would be a false positive. Accepted for
-/// v1.1; scoped tracking is a future improvement.
-fn collect_all_parameters(tree: &tree_sitter::Tree, source: &[u8]) -> HashSet<String> {
-    let mut params = HashSet::new();
-    walk_tree(tree, |node| {
-        if node.kind() != "required_parameter" && node.kind() != "optional_parameter" {
-            return;
-        }
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            if child.kind() == "identifier"
-                && let Ok(name) = child.utf8_text(source)
-            {
-                params.insert(name.to_string());
-            }
-        }
-    });
-    params
 }
 
 #[cfg(test)]

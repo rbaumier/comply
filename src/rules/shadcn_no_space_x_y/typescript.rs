@@ -9,10 +9,7 @@ fn is_space_class(class: &str) -> bool {
     utility.starts_with("space-x-") || utility.starts_with("space-y-")
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "jsx_attribute" {
-        return;
-    }
+crate::ast_check! { on ["jsx_attribute"] => |node, source, ctx, diagnostics|
     if crate::rules::jsx::jsx_attribute_name(node, source) != Some("className") {
         return;
     }

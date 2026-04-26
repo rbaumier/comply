@@ -5,48 +5,63 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::walker::collect_nodes_of_kinds;
 use std::collections::HashMap;
 
 #[derive(Debug)]
 pub struct Check;
 
-impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
-        let source = ctx.source.as_bytes();
-        let mut seen: HashMap<String, usize> = HashMap::new();
-        let mut diagnostics = Vec::new();
+#[derive(Default)]
+struct State {
+    seen: HashMap<String, usize>,
+}
 
-        for node in collect_nodes_of_kinds(tree, &["import_statement"]) {
-            let Some(source_node) = node.child_by_field_name("source") else { continue };
-            let module = source_node
-                .utf8_text(source)
-                .unwrap_or("")
-                .trim_matches(|c: char| c == '\'' || c == '"')
-                .to_string();
-            if module.is_empty() {
-                continue;
-            }
-            let pos = node.start_position();
-            let line_num = pos.row + 1;
-            if let Some(&first_line) = seen.get(&module) {
-                diagnostics.push(Diagnostic {
-                    path: ctx.path.to_path_buf(),
-                    line: line_num,
-                    column: pos.column + 1,
-                    rule_id: "no-duplicate-imports".into(),
-                    message: format!(
-                        "Duplicate import from `{}` — already imported on line {}. Merge into a single statement.",
-                        module, first_line
-                    ),
-                    severity: Severity::Warning,
-                    span: None,
-                });
-            } else {
-                seen.insert(module, line_num);
-            }
+impl AstCheck for Check {
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        Some(&["import_statement"])
+    }
+
+    fn create_state(&self) -> Option<Box<dyn std::any::Any>> {
+        Some(Box::new(State::default()))
+    }
+
+    fn visit_node(
+        &self,
+        node: tree_sitter::Node,
+        ctx: &CheckCtx,
+        state: Option<&mut dyn std::any::Any>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
+        let Some(state) = state.and_then(|s| s.downcast_mut::<State>()) else {
+            return;
+        };
+        let source = ctx.source.as_bytes();
+        let Some(source_node) = node.child_by_field_name("source") else { return };
+        let module = source_node
+            .utf8_text(source)
+            .unwrap_or("")
+            .trim_matches(|c: char| c == '\'' || c == '"')
+            .to_string();
+        if module.is_empty() {
+            return;
         }
-        diagnostics
+        let pos = node.start_position();
+        let line_num = pos.row + 1;
+        if let Some(&first_line) = state.seen.get(&module) {
+            diagnostics.push(Diagnostic {
+                path: ctx.path.to_path_buf(),
+                line: line_num,
+                column: pos.column + 1,
+                rule_id: "no-duplicate-imports".into(),
+                message: format!(
+                    "Duplicate import from `{}` — already imported on line {}. Merge into a single statement.",
+                    module, first_line
+                ),
+                severity: Severity::Warning,
+                span: None,
+            });
+        } else {
+            state.seen.insert(module, line_num);
+        }
     }
 }
 

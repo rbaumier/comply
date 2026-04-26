@@ -2,12 +2,8 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["public_field_definition"] => |node, source, ctx, diagnostics|
     // public_field_definition is the tree-sitter node for class fields
-    if node.kind() != "public_field_definition" {
-        return;
-    }
-
     let Ok(text) = node.utf8_text(source) else { return };
 
     // Must be a field (has `=`) not a method

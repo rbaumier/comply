@@ -105,11 +105,8 @@ fn declarator_binds_sort(
     None
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["subscript_expression"] => |node, source, ctx, diagnostics|
     let _ = ctx;
-    if node.kind() != "subscript_expression" {
-        return;
-    }
     let Some(object) = node.child_by_field_name("object") else { return };
     let Some(index) = node.child_by_field_name("index") else { return };
     if !is_zero(index, source) && !is_length_minus_one(index, source) {

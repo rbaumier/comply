@@ -20,7 +20,6 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::walker::walk_tree;
 
 const FUNCTION_KINDS: &[&str] = &[
     "function_declaration",
@@ -144,42 +143,45 @@ fn advance(cursor: &mut tree_sitter::TreeCursor, body: tree_sitter::Node) -> boo
 pub struct Check;
 
 impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        Some(FUNCTION_KINDS)
+    }
+
+    fn visit_node(
+        &self,
+        node: tree_sitter::Node,
+        ctx: &CheckCtx,
+        _state: Option<&mut dyn std::any::Any>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
         let source = ctx.source.as_bytes();
-        let mut diagnostics = Vec::new();
-        walk_tree(tree, |node| {
-            if !FUNCTION_KINDS.contains(&node.kind()) {
-                return;
-            }
-            if is_async_function(node, source) {
-                return;
-            }
-            let Some(body) = node.child_by_field_name("body") else {
-                return;
-            };
-            // Arrow with expression body (no statement_block) cannot mix
-            // branches at the return-statement level — skip it.
-            if body.kind() != "statement_block" {
-                return;
-            }
-            let kinds = collect_return_kinds(body, source);
-            let has_sync = kinds.contains(&ReturnKind::Sync);
-            let has_promise = kinds.contains(&ReturnKind::Promise);
-            if !(has_sync && has_promise) {
-                return;
-            }
-            let pos = node.start_position();
-            diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
-                line: pos.row + 1,
-                column: pos.column + 1,
-                rule_id: super::META.id.into(),
-                message: "Function mixes sync and promise-returning branches — unify to `Promise<T>` (async) or plain `T` everywhere.".into(),
-                severity: Severity::Warning,
-                span: None,
-            });
+        if is_async_function(node, source) {
+            return;
+        }
+        let Some(body) = node.child_by_field_name("body") else {
+            return;
+        };
+        // Arrow with expression body (no statement_block) cannot mix
+        // branches at the return-statement level — skip it.
+        if body.kind() != "statement_block" {
+            return;
+        }
+        let kinds = collect_return_kinds(body, source);
+        let has_sync = kinds.contains(&ReturnKind::Sync);
+        let has_promise = kinds.contains(&ReturnKind::Promise);
+        if !(has_sync && has_promise) {
+            return;
+        }
+        let pos = node.start_position();
+        diagnostics.push(Diagnostic {
+            path: ctx.path.to_path_buf(),
+            line: pos.row + 1,
+            column: pos.column + 1,
+            rule_id: super::META.id.into(),
+            message: "Function mixes sync and promise-returning branches — unify to `Promise<T>` (async) or plain `T` everywhere.".into(),
+            severity: Severity::Warning,
+            span: None,
         });
-        diagnostics
     }
 }
 

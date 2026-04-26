@@ -17,10 +17,8 @@ fn is_test_file(path: &std::path::Path) -> bool {
     TEST_MARKERS.iter().any(|m| s.contains(m))
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["variable_declarator"] => |node, source, ctx, diagnostics|
     if !is_test_file(ctx.path) { return; }
-    if node.kind() != "variable_declarator" { return; }
-
     // value must be `vi.fn()` or `jest.fn()` with no named child arg.
     let Some(value) = node.child_by_field_name("value") else { return; };
     if value.kind() != "call_expression" { return; }

@@ -39,12 +39,8 @@ fn split_prefix(name: &str) -> Option<(&str, &str)> {
     None
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
     // Run once at the program root — collect all exported fn names, then check.
-    if node.kind() != "program" {
-        return;
-    }
-
     let mut exports: Vec<(usize, String)> = Vec::new();
     let mut cursor = node.walk();
 

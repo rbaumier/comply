@@ -11,11 +11,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "if_statement" {
-        return;
-    }
-
+crate::ast_check! { on ["if_statement"] => |node, source, ctx, diagnostics|
     // Check: is this if_statement the sole child of a statement_block
     // that is inside an else_clause?
     let Some(parent) = node.parent() else { return };

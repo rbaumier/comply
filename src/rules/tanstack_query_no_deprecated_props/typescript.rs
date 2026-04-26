@@ -15,7 +15,6 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::walker::walk_tree;
 
 const QUERY_HOOKS: &[&str] = &[
     "useQuery",
@@ -33,41 +32,46 @@ const DEPRECATED: &[(&str, &str)] = &[
     ("onSettled", "removed from useQuery in v5 — use useEffect"),
 ];
 
+const KINDS: &[&str] = &["pair"];
+
 #[derive(Debug)]
 pub struct Check;
 
 impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        Some(KINDS)
+    }
+
+    fn visit_node(
+        &self,
+        node: tree_sitter::Node,
+        ctx: &CheckCtx,
+        _state: Option<&mut dyn std::any::Any>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
         let source_bytes = ctx.source.as_bytes();
-        let mut diagnostics = Vec::new();
-        walk_tree(tree, |node| {
-            if node.kind() != "pair" {
-                return;
-            }
-            if !inside_query_hook(node, source_bytes) {
-                return;
-            }
-            let Some(key) = node.child_by_field_name("key") else {
-                return;
-            };
-            let Ok(key_text) = key.utf8_text(source_bytes) else {
-                return;
-            };
-            let Some((_, reason)) = DEPRECATED.iter().find(|(k, _)| *k == key_text) else {
-                return;
-            };
-            let pos = node.start_position();
-            diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
-                line: pos.row + 1,
-                column: pos.column + 1,
-                rule_id: "tanstack-query-no-deprecated-props".into(),
-                message: format!("`{key_text}` is deprecated — {reason}."),
-                severity: Severity::Error,
-                span: None,
-            });
+        if !inside_query_hook(node, source_bytes) {
+            return;
+        }
+        let Some(key) = node.child_by_field_name("key") else {
+            return;
+        };
+        let Ok(key_text) = key.utf8_text(source_bytes) else {
+            return;
+        };
+        let Some((_, reason)) = DEPRECATED.iter().find(|(k, _)| *k == key_text) else {
+            return;
+        };
+        let pos = node.start_position();
+        diagnostics.push(Diagnostic {
+            path: ctx.path.to_path_buf(),
+            line: pos.row + 1,
+            column: pos.column + 1,
+            rule_id: "tanstack-query-no-deprecated-props".into(),
+            message: format!("`{key_text}` is deprecated — {reason}."),
+            severity: Severity::Error,
+            span: None,
         });
-        diagnostics
     }
 }
 

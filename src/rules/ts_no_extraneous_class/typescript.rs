@@ -5,12 +5,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    let kind = node.kind();
-    if kind != "class_declaration" && kind != "class" {
-        return;
-    }
-    // Skip classes with a superclass (extends)
+crate::ast_check! { on ["class_declaration", "class"] => |node, source, ctx, diagnostics|    // Skip classes with a superclass (extends)
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {
         if child.kind() == "class_heritage" || child.kind() == "extends_clause" {

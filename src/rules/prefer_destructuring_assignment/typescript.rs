@@ -35,13 +35,8 @@ fn extract_object_name<'a>(node: tree_sitter::Node<'a>, source: &'a [u8]) -> Opt
     obj.utf8_text(source).ok()
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["statement_block", "program"] => |node, source, ctx, diagnostics|
     // We look at statement blocks / program to find consecutive declarations
-    let kind = node.kind();
-    if kind != "statement_block" && kind != "program" {
-        return;
-    }
-
     let child_count = node.named_child_count();
     let mut i = 0;
     while i < child_count {

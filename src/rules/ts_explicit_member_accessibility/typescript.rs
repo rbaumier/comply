@@ -9,12 +9,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    let kind = node.kind();
-    if kind != "method_definition" && kind != "public_field_definition" {
-        return;
-    }
-
+crate::ast_check! { on ["method_definition", "public_field_definition"] => |node, source, ctx, diagnostics|
     // Only flag members directly inside a class body.
     let Some(parent) = node.parent() else { return };
     if parent.kind() != "class_body" {

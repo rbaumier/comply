@@ -2,9 +2,9 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["string", "template_string", "string_fragment"] => |node, source, ctx, diagnostics|
     // Only check string/template literals.
-    match node.kind() {
+match node.kind() {
         "string" | "template_string" | "string_fragment" => {}
         _ => return,
     }

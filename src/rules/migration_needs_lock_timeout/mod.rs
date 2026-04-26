@@ -14,7 +14,7 @@ use crate::diagnostic::Severity;
 use crate::files::Language;
 use crate::rules::backend::Backend;
 use crate::rules::meta::RuleMeta;
-use crate::rules::sql_helpers::{contains_word, is_migration_path};
+use crate::rules::sql_helpers::contains_word;
 use crate::rules::RuleDef;
 
 pub const META: RuleMeta = RuleMeta {

@@ -12,7 +12,6 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::walker::walk_tree;
 
 struct AwaitStmt {
     binding: String,
@@ -120,60 +119,63 @@ fn flush_run(run: &mut Vec<AwaitStmt>, diagnostics: &mut Vec<Diagnostic>, path: 
 pub struct Check;
 
 impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
-        let source = ctx.source.as_bytes();
-        let mut diagnostics = Vec::new();
-        walk_tree(tree, |node| {
-            if node.kind() != "statement_block" {
-                return;
-            }
-            if !is_async_component_body(node, source) {
-                return;
-            }
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        Some(&["statement_block"])
+    }
 
-            let mut run: Vec<AwaitStmt> = Vec::new();
-            let mut cursor = node.walk();
-            for child in node.children(&mut cursor) {
-                if child.kind() != "lexical_declaration" {
-                    flush_run(&mut run, &mut diagnostics, ctx.path);
-                    continue;
-                }
-                let Some(decl) = child.named_child(0) else {
-                    flush_run(&mut run, &mut diagnostics, ctx.path);
-                    continue;
-                };
-                if decl.kind() != "variable_declarator" {
-                    flush_run(&mut run, &mut diagnostics, ctx.path);
-                    continue;
-                }
-                let Some(name_node) = decl.child_by_field_name("name") else {
-                    flush_run(&mut run, &mut diagnostics, ctx.path);
-                    continue;
-                };
-                let Some(val_node) = decl.child_by_field_name("value") else {
-                    flush_run(&mut run, &mut diagnostics, ctx.path);
-                    continue;
-                };
-                if val_node.kind() != "await_expression" {
-                    flush_run(&mut run, &mut diagnostics, ctx.path);
-                    continue;
-                }
-                let binding = name_node.utf8_text(source).unwrap_or("").to_owned();
-                let call_text = val_node.utf8_text(source).unwrap_or("").to_owned();
-                let pos = child.start_position();
-                let dependent = run.iter().any(|s| contains_word(&call_text, &s.binding));
-                if dependent {
-                    flush_run(&mut run, &mut diagnostics, ctx.path);
-                }
-                run.push(AwaitStmt {
-                    binding,
-                    row: pos.row,
-                    col: pos.column,
-                });
+    fn visit_node(
+        &self,
+        node: tree_sitter::Node,
+        ctx: &CheckCtx,
+        _state: Option<&mut dyn std::any::Any>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
+        let source = ctx.source.as_bytes();
+        if !is_async_component_body(node, source) {
+            return;
+        }
+
+        let mut run: Vec<AwaitStmt> = Vec::new();
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if child.kind() != "lexical_declaration" {
+                flush_run(&mut run, diagnostics, ctx.path);
+                continue;
             }
-            flush_run(&mut run, &mut diagnostics, ctx.path);
-        });
-        diagnostics
+            let Some(decl) = child.named_child(0) else {
+                flush_run(&mut run, diagnostics, ctx.path);
+                continue;
+            };
+            if decl.kind() != "variable_declarator" {
+                flush_run(&mut run, diagnostics, ctx.path);
+                continue;
+            }
+            let Some(name_node) = decl.child_by_field_name("name") else {
+                flush_run(&mut run, diagnostics, ctx.path);
+                continue;
+            };
+            let Some(val_node) = decl.child_by_field_name("value") else {
+                flush_run(&mut run, diagnostics, ctx.path);
+                continue;
+            };
+            if val_node.kind() != "await_expression" {
+                flush_run(&mut run, diagnostics, ctx.path);
+                continue;
+            }
+            let binding = name_node.utf8_text(source).unwrap_or("").to_owned();
+            let call_text = val_node.utf8_text(source).unwrap_or("").to_owned();
+            let pos = child.start_position();
+            let dependent = run.iter().any(|s| contains_word(&call_text, &s.binding));
+            if dependent {
+                flush_run(&mut run, diagnostics, ctx.path);
+            }
+            run.push(AwaitStmt {
+                binding,
+                row: pos.row,
+                col: pos.column,
+            });
+        }
+        flush_run(&mut run, diagnostics, ctx.path);
     }
 }
 

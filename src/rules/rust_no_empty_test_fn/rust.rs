@@ -8,48 +8,52 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::walker::walk_tree;
+
+const KINDS: &[&str] = &["function_item"];
 
 #[derive(Debug)]
 pub struct Check;
 
 impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        Some(KINDS)
+    }
+
+    fn visit_node(
+        &self,
+        node: tree_sitter::Node,
+        ctx: &CheckCtx,
+        _state: Option<&mut dyn std::any::Any>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
         let source_bytes = ctx.source.as_bytes();
-        let mut diagnostics = Vec::new();
-        walk_tree(tree, |node| {
-            if node.kind() != "function_item" {
-                return;
-            }
-            if !has_test_attribute(node, source_bytes) {
-                return;
-            }
-            let Some(body) = node.child_by_field_name("body") else {
-                return;
-            };
-            if body.named_child_count() != 0 {
-                return;
-            }
-            let name = node
-                .child_by_field_name("name")
-                .and_then(|n| n.utf8_text(source_bytes).ok())
-                .unwrap_or("test");
-            let pos = node.start_position();
-            diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
-                line: pos.row + 1,
-                column: pos.column + 1,
-                rule_id: "rust-no-empty-test-fn".into(),
-                message: format!(
-                    "`#[test] fn {name}` has an empty body — it always \
-                     passes without exercising any code. Fill it in or \
-                     delete it."
-                ),
-                severity: Severity::Error,
-                span: None,
-            });
+        if !has_test_attribute(node, source_bytes) {
+            return;
+        }
+        let Some(body) = node.child_by_field_name("body") else {
+            return;
+        };
+        if body.named_child_count() != 0 {
+            return;
+        }
+        let name = node
+            .child_by_field_name("name")
+            .and_then(|n| n.utf8_text(source_bytes).ok())
+            .unwrap_or("test");
+        let pos = node.start_position();
+        diagnostics.push(Diagnostic {
+            path: ctx.path.to_path_buf(),
+            line: pos.row + 1,
+            column: pos.column + 1,
+            rule_id: "rust-no-empty-test-fn".into(),
+            message: format!(
+                "`#[test] fn {name}` has an empty body — it always \
+                 passes without exercising any code. Fill it in or \
+                 delete it."
+            ),
+            severity: Severity::Error,
+            span: None,
         });
-        diagnostics
     }
 }
 

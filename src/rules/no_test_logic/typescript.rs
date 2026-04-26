@@ -125,11 +125,8 @@ fn collect_control_flow<'t>(
     }
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     if !is_test_file(ctx.path) {
-        return;
-    }
-    if node.kind() != "call_expression" {
         return;
     }
     if !is_test_call(node, source) {

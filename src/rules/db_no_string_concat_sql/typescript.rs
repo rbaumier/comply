@@ -21,97 +21,105 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::sql_helpers::is_sql_string;
-use crate::rules::walker::collect_nodes_of_kinds;
 
 #[derive(Debug)]
 pub struct Check;
 
 impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        Some(&["template_string", "binary_expression"])
+    }
+
+    fn visit_node(
+        &self,
+        node: tree_sitter::Node,
+        ctx: &CheckCtx,
+        _state: Option<&mut dyn std::any::Any>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
         let source_bytes = ctx.source.as_bytes();
-        let mut diagnostics = Vec::new();
+        match node.kind() {
+            "template_string" => {
+                if !template_has_interpolation(node) {
+                    return;
+                }
+                let static_text = template_static_text(node, source_bytes);
+                if !is_sql_string(&static_text) {
+                    return;
+                }
+                if static_text.contains("$1") || static_text.contains("$2") {
+                    return;
+                }
+                let pos = node.start_position();
+                diagnostics.push(Diagnostic {
+                    path: ctx.path.to_path_buf(),
+                    line: pos.row + 1,
+                    column: pos.column + 1,
+                    rule_id: "db-no-string-concat-sql".into(),
+                    message: "Template literal with SQL keywords and \
+                              interpolation \u{2014} SQL injection risk. Use \
+                              parameterized queries (`$1`, `?`) instead."
+                        .into(),
+                    severity: Severity::Error,
+                    span: None,
+                });
+            }
+            "binary_expression" => {
+                let Some(op) = node.child_by_field_name("operator") else {
+                    return;
+                };
+                if op.utf8_text(source_bytes).unwrap_or("") != "+" {
+                    return;
+                }
+                let Some(left) = node.child_by_field_name("left") else {
+                    return;
+                };
+                let Some(right) = node.child_by_field_name("right") else {
+                    return;
+                };
 
-        for node in collect_nodes_of_kinds(tree, &["template_string"]) {
-            if !template_has_interpolation(node) {
-                continue;
+                let left_sql = string_node_is_sql(left, source_bytes);
+                let right_sql = string_node_is_sql(right, source_bytes);
+
+                // At least one side must be a SQL string AND the other side
+                // must be a non-string-literal expression (so this is
+                // actual concatenation, not two static strings stuck
+                // together).
+                let one_side_sql = left_sql || right_sql;
+                if !one_side_sql {
+                    return;
+                }
+                let other_side_dynamic = if left_sql {
+                    !is_string_node(right)
+                } else {
+                    !is_string_node(left)
+                };
+                if !other_side_dynamic {
+                    return;
+                }
+                // Skip if the SQL string already uses placeholders ($1, $2,
+                // $N) — that's a parameterised query and the concatenation
+                // is harmless.
+                let combined = node.utf8_text(source_bytes).unwrap_or("");
+                if combined.contains("$1") || combined.contains("$2") {
+                    return;
+                }
+                let pos = node.start_position();
+                diagnostics.push(Diagnostic {
+                    path: ctx.path.to_path_buf(),
+                    line: pos.row + 1,
+                    column: pos.column + 1,
+                    rule_id: "db-no-string-concat-sql".into(),
+                    message: "String concatenation with SQL keywords \
+                              — SQL injection risk. Use parameterized queries \
+                              (`$1`, `?`) instead."
+                        .into(),
+                    severity: Severity::Error,
+                    span: None,
+                });
             }
-            let static_text = template_static_text(node, source_bytes);
-            if !is_sql_string(&static_text) {
-                continue;
-            }
-            if static_text.contains("$1") || static_text.contains("$2") {
-                continue;
-            }
-            let pos = node.start_position();
-            diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
-                line: pos.row + 1,
-                column: pos.column + 1,
-                rule_id: "db-no-string-concat-sql".into(),
-                message: "Template literal with SQL keywords and \
-                          interpolation \u{2014} SQL injection risk. Use \
-                          parameterized queries (`$1`, `?`) instead."
-                    .into(),
-                severity: Severity::Error,
-                span: None,
-            });
+            _ => {}
         }
-
-        for node in collect_nodes_of_kinds(tree, &["binary_expression"]) {
-            let Some(op) = node.child_by_field_name("operator") else {
-                continue;
-            };
-            if op.utf8_text(source_bytes).unwrap_or("") != "+" {
-                continue;
-            }
-            let Some(left) = node.child_by_field_name("left") else {
-                continue;
-            };
-            let Some(right) = node.child_by_field_name("right") else {
-                continue;
-            };
-
-            let left_sql = string_node_is_sql(left, source_bytes);
-            let right_sql = string_node_is_sql(right, source_bytes);
-
-            // At least one side must be a SQL string AND the other side
-            // must be a non-string-literal expression (so this is
-            // actual concatenation, not two static strings stuck
-            // together).
-            let one_side_sql = left_sql || right_sql;
-            if !one_side_sql {
-                continue;
-            }
-            let other_side_dynamic = if left_sql {
-                !is_string_node(right)
-            } else {
-                !is_string_node(left)
-            };
-            if !other_side_dynamic {
-                continue;
-            }
-            // Skip if the SQL string already uses placeholders ($1, $2,
-            // $N) — that's a parameterised query and the concatenation
-            // is harmless.
-            let combined = node.utf8_text(source_bytes).unwrap_or("");
-            if combined.contains("$1") || combined.contains("$2") {
-                continue;
-            }
-            let pos = node.start_position();
-            diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
-                line: pos.row + 1,
-                column: pos.column + 1,
-                rule_id: "db-no-string-concat-sql".into(),
-                message: "String concatenation with SQL keywords \
-                          — SQL injection risk. Use parameterized queries \
-                          (`$1`, `?`) instead."
-                    .into(),
-                severity: Severity::Error,
-                span: None,
-            });
-        }
-        diagnostics
     }
 }
 

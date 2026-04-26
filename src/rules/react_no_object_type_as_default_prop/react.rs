@@ -62,17 +62,13 @@ fn has_object_defaults(node: tree_sitter::Node, _source: &[u8]) -> bool {
     false
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["function_declaration", "arrow_function", "lexical_declaration", "export_statement"] => |node, source, ctx, diagnostics|
     // We want function declarations or arrow functions that look like
     // React components and have destructured params with object defaults.
     let is_fn_decl = node.kind() == "function_declaration";
     let is_arrow = node.kind() == "arrow_function";
     let is_lex = node.kind() == "lexical_declaration";
     let is_export = node.kind() == "export_statement";
-
-    if !is_fn_decl && !is_arrow && !is_lex && !is_export {
-        return;
-    }
 
     // For lexical_declaration and export_statement, delegate to
     // is_component_fn which recurses. For function_declaration and

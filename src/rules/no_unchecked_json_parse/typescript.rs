@@ -12,7 +12,6 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::walker::walk_tree;
 
 fn is_json_parse_call(node: tree_sitter::Node, source: &[u8]) -> bool {
     if node.kind() != "call_expression" {
@@ -67,28 +66,34 @@ fn is_wrapped_in_validator(call: tree_sitter::Node, source: &[u8]) -> bool {
 pub struct Check;
 
 impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        Some(&["call_expression"])
+    }
+
+    fn visit_node(
+        &self,
+        node: tree_sitter::Node,
+        ctx: &CheckCtx,
+        _state: Option<&mut dyn std::any::Any>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
         let source = ctx.source.as_bytes();
-        let mut diagnostics = Vec::new();
-        walk_tree(tree, |node| {
-            if !is_json_parse_call(node, source) {
-                return;
-            }
-            if is_wrapped_in_validator(node, source) {
-                return;
-            }
-            let pos = node.start_position();
-            diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
-                line: pos.row + 1,
-                column: pos.column + 1,
-                rule_id: super::META.id.into(),
-                message: "`JSON.parse()` returns `any` — wrap it with a Zod schema or type guard before using the result.".into(),
-                severity: Severity::Warning,
-                span: None,
-            });
+        if !is_json_parse_call(node, source) {
+            return;
+        }
+        if is_wrapped_in_validator(node, source) {
+            return;
+        }
+        let pos = node.start_position();
+        diagnostics.push(Diagnostic {
+            path: ctx.path.to_path_buf(),
+            line: pos.row + 1,
+            column: pos.column + 1,
+            rule_id: super::META.id.into(),
+            message: "`JSON.parse()` returns `any` — wrap it with a Zod schema or type guard before using the result.".into(),
+            severity: Severity::Warning,
+            span: None,
         });
-        diagnostics
     }
 }
 

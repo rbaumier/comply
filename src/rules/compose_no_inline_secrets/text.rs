@@ -26,8 +26,7 @@ fn is_var_ref(value: &str) -> bool {
     value.starts_with('$') || value.starts_with("${")
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "block_mapping_pair" { return; }
+crate::ast_check! { on ["block_mapping_pair"] => |node, source, ctx, diagnostics|
     if pair_key_text(node, source).as_deref() != Some("environment") { return; }
     if !looks_like_compose(ctx.path, ctx.source) { return; }
 

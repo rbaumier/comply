@@ -8,12 +8,7 @@ const DATA_HINTS: &[&str] = &[
     "counter", "count", "price", "amount", "metric", "stat", "number", "value-display",
 ];
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    let kind = node.kind();
-    if kind != "jsx_opening_element" && kind != "jsx_self_closing_element" {
-        return;
-    }
-
+crate::ast_check! { on ["jsx_opening_element", "jsx_self_closing_element"] => |node, source, ctx, diagnostics|
     // Walk attributes to find className string.
     let mut class_value: Option<String> = None;
     let mut cursor = node.walk();

@@ -80,8 +80,7 @@ fn is_trivial_description(body: &str, name: &str) -> bool {
     normalized == *name || normalized.is_empty()
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "comment" { return; }
+crate::ast_check! { on ["comment"] => |node, source, ctx, diagnostics|
     let Ok(raw) = node.utf8_text(source) else { return };
     let trimmed = raw.trim();
     // Only single-line JSDoc: /** ... */ on one line.

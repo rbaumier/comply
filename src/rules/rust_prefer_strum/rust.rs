@@ -15,11 +15,7 @@ use std::collections::HashSet;
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "source_file" {
-        return;
-    }
-
+crate::ast_check! { on ["source_file"] => |node, source, ctx, diagnostics|
     let mut enums: Vec<(tree_sitter::Node, String)> = Vec::new();
     let mut display_targets: HashSet<String> = HashSet::new();
     let mut from_str_targets: HashSet<String> = HashSet::new();

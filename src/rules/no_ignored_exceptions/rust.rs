@@ -9,11 +9,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::rust_helpers::is_in_test_context;
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "let_declaration" {
-        return;
-    }
-
+crate::ast_check! { on ["let_declaration"] => |node, source, ctx, diagnostics|
     // Check if the pattern is `_` (wildcard).
     let Some(pattern) = node.child_by_field_name("pattern") else { return };
     let Ok(pat_text) = pattern.utf8_text(source) else { return };

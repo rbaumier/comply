@@ -34,7 +34,7 @@ const ARRAY_PATTERNS: &[(&str, &str, &str)] = &[
 /// Delegation methods: `.call(`, `.apply(`, `.bind(`
 const DELEGATION: &[&str] = &["call", "apply", "bind"];
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     // We look for: `{}.method.call(…)` or `[].method.call(…)`.
     // In tree-sitter this is:
     //   call_expression
@@ -43,10 +43,6 @@ crate::ast_check! { |node, source, ctx, diagnostics|
     //         object: object / array           ← `{}` or `[]`
     //         property: identifier             ← method name
     //       property: identifier               ← `call`/`apply`/`bind`
-    if node.kind() != "call_expression" {
-        return;
-    }
-
     let Some(func) = node.child_by_field_name("function") else { return };
     if func.kind() != "member_expression" { return; }
 

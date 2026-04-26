@@ -92,15 +92,10 @@ fn check_hook_order(
     }
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
     if !is_test_file(ctx.path) {
         return;
     }
-
-    if node.kind() != "program" {
-        return;
-    }
-
     check_hook_order(node, source, ctx, diagnostics);
 }
 

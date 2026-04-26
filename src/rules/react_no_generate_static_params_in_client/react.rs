@@ -24,14 +24,11 @@ fn exports_function_named(
     false
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["export_statement"] => |node, source, ctx, diagnostics|
     if ctx.project.framework != Framework::NextJs {
         return;
     }
     if ctx.file.rsc_context != RscContext::ClientComponent {
-        return;
-    }
-    if node.kind() != "export_statement" {
         return;
     }
     if !exports_function_named(node, source, "generateStaticParams") {

@@ -97,11 +97,7 @@ fn has_side_effects(node: tree_sitter::Node) -> bool {
     }
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "expression_statement" {
-        return;
-    }
-
+crate::ast_check! { on ["expression_statement"] => |node, source, ctx, diagnostics|
     // Get the expression child
     let Some(expr) = node.named_child(0) else {
         return;

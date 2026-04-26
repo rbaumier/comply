@@ -30,8 +30,7 @@ fn is_secret_reference(value: &str) -> bool {
     value.contains("${{")
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "block_mapping_pair" { return; }
+crate::ast_check! { on ["block_mapping_pair"] => |node, source, ctx, diagnostics|
     let Some(key) = pair_key_text(node, source) else { return; };
     if !key_looks_like_secret(&key) { return; }
     let Some(value) = pair_scalar_value(node, source) else { return; };

@@ -57,11 +57,7 @@ fn format_cycle(cycle: &[PathBuf], root: Option<&Path>) -> String {
     names.join(" → ")
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "program" {
-        return;
-    }
-
+crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
     let index = ctx.project.import_index();
     if index.is_empty() {
         return;

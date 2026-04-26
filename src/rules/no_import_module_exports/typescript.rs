@@ -3,12 +3,8 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
     // Only process at program level to scan the whole file once.
-    if node.kind() != "program" {
-        return;
-    }
-
     let mut has_import = false;
     let mut module_exports_nodes: Vec<tree_sitter::Node> = Vec::new();
 

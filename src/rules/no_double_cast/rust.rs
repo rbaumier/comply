@@ -2,10 +2,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, _source, ctx, diagnostics|
-    if node.kind() != "type_cast_expression" {
-        return;
-    }
+crate::ast_check! { on ["type_cast_expression"] => |node, _source, ctx, diagnostics|
     // The inner expression (left side of `as`) is the first named child.
     let Some(inner) = node.child_by_field_name("value") else { return };
     if inner.kind() != "type_cast_expression" {

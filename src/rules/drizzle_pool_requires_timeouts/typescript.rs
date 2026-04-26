@@ -33,10 +33,7 @@ fn has_key(obj: tree_sitter::Node<'_>, src: &[u8], key: &str) -> bool {
     false
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "new_expression" {
-        return;
-    }
+crate::ast_check! { on ["new_expression"] => |node, source, ctx, diagnostics|
     if !constructor_is_pool(&node, source) {
         return;
     }

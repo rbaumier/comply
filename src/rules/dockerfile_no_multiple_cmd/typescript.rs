@@ -1,8 +1,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["cmd_instruction"] => |node, source, ctx, diagnostics|
     let _ = source;
-    if node.kind() != "cmd_instruction" { return; }
     // Walk previous siblings up to the most recent FROM. If we find another
     // cmd_instruction in that range, flag the current one as a duplicate.
     let mut prev = node.prev_sibling();

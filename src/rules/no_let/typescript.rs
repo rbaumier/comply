@@ -7,10 +7,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "lexical_declaration" {
-        return;
-    }
+crate::ast_check! { on ["lexical_declaration"] => |node, source, ctx, diagnostics|
     let Some(first) = node.child(0) else { return };
     let Ok(text) = first.utf8_text(source) else { return };
     if text != "let" {

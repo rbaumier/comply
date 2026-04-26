@@ -4,10 +4,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 
 const TEST_MARKERS: &[&str] = &[".test.", ".spec.", "__tests__", "_test."];
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "member_expression" {
-        return;
-    }
+crate::ast_check! { on ["member_expression"] => |node, source, ctx, diagnostics|
     let Ok(text) = node.utf8_text(source) else { return };
     if !text.starts_with("fireEvent.") {
         return;

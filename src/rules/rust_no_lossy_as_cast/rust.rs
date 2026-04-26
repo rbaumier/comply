@@ -14,7 +14,8 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::walker::walk_tree;
+
+const KINDS: &[&str] = &["type_cast_expression"];
 
 const NARROWING_TARGETS: &[&str] = &[
     "u8", "u16", "u32", "i8", "i16", "i32", "f32",
@@ -24,44 +25,47 @@ const NARROWING_TARGETS: &[&str] = &[
 pub struct Check;
 
 impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        Some(KINDS)
+    }
+
+    fn visit_node(
+        &self,
+        node: tree_sitter::Node,
+        ctx: &CheckCtx,
+        _state: Option<&mut dyn std::any::Any>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
         let source_bytes = ctx.source.as_bytes();
-        let mut diagnostics = Vec::new();
-        walk_tree(tree, |node| {
-            if node.kind() != "type_cast_expression" {
-                return;
-            }
-            let Some(type_node) = node.child_by_field_name("type") else {
-                return;
-            };
-            let Ok(target) = type_node.utf8_text(source_bytes) else {
-                return;
-            };
-            let target = target.trim();
-            if !NARROWING_TARGETS.contains(&target) {
-                return;
-            }
-            // Avoid false positive on widening when the source is also small.
-            // We can't easily infer source types from a single AST node, so
-            // accept the false positive — `try_into()` / `From::from()` are
-            // both better than `as` even for "safe" casts.
-            let pos = node.start_position();
-            diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
-                line: pos.row + 1,
-                column: pos.column + 1,
-                rule_id: "rust-no-lossy-as-cast".into(),
-                message: format!(
-                    "`as {target}` truncates / loses precision silently \
-                     on overflow. Use `try_into()` (returns Result) for \
-                     fallible narrowing, or `From::from(x)` if the cast \
-                     is provably total."
-                ),
-                severity: Severity::Warning,
-                span: None,
-            });
+        let Some(type_node) = node.child_by_field_name("type") else {
+            return;
+        };
+        let Ok(target) = type_node.utf8_text(source_bytes) else {
+            return;
+        };
+        let target = target.trim();
+        if !NARROWING_TARGETS.contains(&target) {
+            return;
+        }
+        // Avoid false positive on widening when the source is also small.
+        // We can't easily infer source types from a single AST node, so
+        // accept the false positive — `try_into()` / `From::from()` are
+        // both better than `as` even for "safe" casts.
+        let pos = node.start_position();
+        diagnostics.push(Diagnostic {
+            path: ctx.path.to_path_buf(),
+            line: pos.row + 1,
+            column: pos.column + 1,
+            rule_id: "rust-no-lossy-as-cast".into(),
+            message: format!(
+                "`as {target}` truncates / loses precision silently \
+                 on overflow. Use `try_into()` (returns Result) for \
+                 fallible narrowing, or `From::from(x)` if the cast \
+                 is provably total."
+            ),
+            severity: Severity::Warning,
+            span: None,
         });
-        diagnostics
     }
 }
 

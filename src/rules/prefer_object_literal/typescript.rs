@@ -2,8 +2,8 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    match node.kind() {
+crate::ast_check! { on ["new_expression", "call_expression"] => |node, source, ctx, diagnostics|
+match node.kind() {
         // `new Object()`
         "new_expression" => {
             let Some(ctor) = node.child_by_field_name("constructor") else { return };

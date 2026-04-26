@@ -11,7 +11,6 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::walker::walk_tree;
 
 // See the Rust backend for the rationale — classic predicate prefixes
 // plus `in`/`seen`/`found` for loop/state-machine idioms
@@ -26,15 +25,20 @@ const NEGATIVE_SUBSTRINGS: &[&str] = &["Not", "Isnt", "Cannot", "Cant", "Shouldn
 pub struct Check;
 
 impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
-        let source_bytes = ctx.source.as_bytes();
-        let mut diagnostics = Vec::new();
-        walk_tree(tree, |node| {
-            if let Some(d) = check_node(node, source_bytes, ctx.path) {
-                diagnostics.push(d);
-            }
-        });
-        diagnostics
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        Some(&["variable_declarator", "required_parameter"])
+    }
+
+    fn visit_node(
+        &self,
+        node: tree_sitter::Node,
+        ctx: &CheckCtx,
+        _state: Option<&mut dyn std::any::Any>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
+        if let Some(d) = check_node(node, ctx.source.as_bytes(), ctx.path) {
+            diagnostics.push(d);
+        }
     }
 }
 

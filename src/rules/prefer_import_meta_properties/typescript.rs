@@ -106,11 +106,7 @@ fn single_argument<'a>(args: tree_sitter::Node<'a>, _source: &[u8]) -> Option<tr
     found
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "call_expression" {
-        return;
-    }
-
+crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     // Order matters: the `dirname(...)` and `path.dirname(...)` matches
     // wrap a `fileURLToPath(import.meta.url)` call, so when those match
     // the inner call's diagnostic would be redundant. We dedupe by checking

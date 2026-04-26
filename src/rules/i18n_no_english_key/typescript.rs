@@ -1,7 +1,6 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "call_expression" { return; }
+crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     let Some(func) = node.child_by_field_name("function") else { return };
     let func_text = func.utf8_text(source).unwrap_or("");
     if func_text != "t" && func_text != "i18n.t" { return; }

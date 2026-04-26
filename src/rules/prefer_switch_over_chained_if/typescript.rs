@@ -16,47 +16,49 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::walker::walk_tree;
 
 #[derive(Debug)]
 pub struct Check;
 
 impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        Some(&["if_statement"])
+    }
+
+    fn visit_node(
+        &self,
+        node: tree_sitter::Node,
+        ctx: &CheckCtx,
+        _state: Option<&mut dyn std::any::Any>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
         let min_arms = ctx
             .config
             .threshold("prefer-switch-over-chained-if", "min_arms");
-        let mut diagnostics = Vec::new();
-        walk_tree(tree, |node| {
-            if node.kind() != "if_statement" {
-                return;
-            }
-            // Only count chain roots — skip nested if-statements that are
-            // themselves the else-branch of another if.
-            if is_else_branch(node) {
-                return;
-            }
-            let arms = count_chained_arms(node);
-            if arms < min_arms {
-                return;
-            }
-            let pos = node.start_position();
-            diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
-                line: pos.row + 1,
-                column: pos.column + 1,
-                rule_id: "prefer-switch-over-chained-if".into(),
-                message: format!(
-                    "{arms}-branch if/else-if chain — convert to a \
-                     `switch` statement. Switch makes the discriminant \
-                     obvious and the TypeScript compiler can warn on \
-                     missing cases for union-typed values."
-                ),
-                severity: Severity::Warning,
-                span: None,
-            });
+        // Only count chain roots — skip nested if-statements that are
+        // themselves the else-branch of another if.
+        if is_else_branch(node) {
+            return;
+        }
+        let arms = count_chained_arms(node);
+        if arms < min_arms {
+            return;
+        }
+        let pos = node.start_position();
+        diagnostics.push(Diagnostic {
+            path: ctx.path.to_path_buf(),
+            line: pos.row + 1,
+            column: pos.column + 1,
+            rule_id: "prefer-switch-over-chained-if".into(),
+            message: format!(
+                "{arms}-branch if/else-if chain — convert to a \
+                 `switch` statement. Switch makes the discriminant \
+                 obvious and the TypeScript compiler can warn on \
+                 missing cases for union-typed values."
+            ),
+            severity: Severity::Warning,
+            span: None,
         });
-        diagnostics
     }
 }
 

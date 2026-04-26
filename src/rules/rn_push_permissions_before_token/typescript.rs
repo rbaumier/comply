@@ -50,8 +50,7 @@ fn callee_name<'a>(call: tree_sitter::Node<'a>, source: &'a [u8]) -> Option<&'a 
     Some(text)
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "call_expression" { return; }
+crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     let Some(name) = callee_name(node, source) else { return };
     if !name.ends_with("getExpoPushTokenAsync") { return; }
     let Some(body) = enclosing_fn_body(node) else { return };

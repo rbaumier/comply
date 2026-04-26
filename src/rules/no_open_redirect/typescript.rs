@@ -24,10 +24,7 @@ fn argument_references_user_data(text: &str) -> bool {
     USER_DATA_NEEDLES.iter().any(|n| text.contains(n))
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "call_expression" {
-        return;
-    }
+crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     let Some(name) = crate::rules::call_expression::call_function_name(node, source) else {
         return;
     };

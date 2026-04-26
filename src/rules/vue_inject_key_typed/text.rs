@@ -10,8 +10,7 @@ fn starts_with_string_literal(arg: &str) -> bool {
     matches!(arg.chars().next(), Some('"') | Some('\'') | Some('`'))
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "component" { return; }
+crate::ast_check! { on ["component"] => |node, source, ctx, diagnostics|
     let _ = source;
     for (idx, line) in ctx.source.lines().enumerate() {
         for fn_name in ["provide(", "inject("] {

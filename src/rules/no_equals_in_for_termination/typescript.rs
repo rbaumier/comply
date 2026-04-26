@@ -32,10 +32,7 @@ fn contains_equality_op(s: &str) -> bool {
     false
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "for_statement" {
-        return;
-    }
+crate::ast_check! { on ["for_statement"] => |node, source, ctx, diagnostics|
     // The condition is the second named child (after initializer).
     // In tree-sitter, for_statement has fields: initializer, condition, increment, body
     let Some(condition) = node.child_by_field_name("condition") else { return };

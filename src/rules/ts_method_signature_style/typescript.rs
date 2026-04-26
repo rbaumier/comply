@@ -8,11 +8,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "method_signature" {
-        return;
-    }
-
+crate::ast_check! { on ["method_signature"] => |node, source, ctx, diagnostics|
     // Only flag inside interface bodies and type literals.
     let Some(parent) = node.parent() else { return };
     let pk = parent.kind();

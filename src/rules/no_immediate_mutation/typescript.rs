@@ -121,11 +121,7 @@ fn is_property_assignment(stmt: tree_sitter::Node, var_name: &str, source: &[u8]
     }
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "variable_declarator" {
-        return;
-    }
-
+crate::ast_check! { on ["variable_declarator"] => |node, source, ctx, diagnostics|
     let Some(var_name) = get_declared_name(node, source) else { return };
     let Some(value) = node.child_by_field_name("value") else { return };
 

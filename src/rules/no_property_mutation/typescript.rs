@@ -1,7 +1,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    match node.kind() {
+crate::ast_check! { on ["assignment_expression", "augmented_assignment_expression", "update_expression", "unary_expression"] => |node, source, ctx, diagnostics|
+match node.kind() {
         // obj.prop = value or obj['prop'] = value
         "assignment_expression" | "augmented_assignment_expression" => {
             let Some(left) = node.child_by_field_name("left") else { return; };

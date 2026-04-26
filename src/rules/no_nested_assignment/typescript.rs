@@ -5,8 +5,8 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, _ctx, diagnostics|
-    match node.kind() {
+crate::ast_check! { on ["if_statement", "while_statement"] => |node, source, _ctx, diagnostics|
+match node.kind() {
         "if_statement" | "while_statement" => {}
         _ => return,
     }

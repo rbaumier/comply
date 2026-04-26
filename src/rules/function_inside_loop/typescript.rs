@@ -2,14 +2,8 @@ use crate::diagnostic::{Diagnostic, Severity};
 
 const LOOP_KINDS: &[&str] = &["for_statement", "for_in_statement", "while_statement", "do_statement"];
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["function_declaration", "function_expression", "arrow_function"] => |node, source, ctx, diagnostics|
     // Check for function/arrow inside loop body
-    if node.kind() != "function_declaration"
-        && node.kind() != "function_expression"
-        && node.kind() != "arrow_function" {
-        return;
-    }
-
     // Walk up to see if we're inside a loop
     let mut current = node.parent();
     while let Some(parent) = current {

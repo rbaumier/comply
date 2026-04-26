@@ -60,12 +60,7 @@ fn member_name<'a>(member: tree_sitter::Node<'a>, source: &'a [u8]) -> Option<(&
     None
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "class_declaration" && node.kind() != "class" {
-        return;
-    }
-
-    let Some(body) = node.child_by_field_name("body") else {
+crate::ast_check! { on ["class_declaration", "class"] => |node, source, ctx, diagnostics|    let Some(body) = node.child_by_field_name("body") else {
         return;
     };
 

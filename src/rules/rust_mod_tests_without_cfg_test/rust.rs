@@ -6,47 +6,49 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::walker::walk_tree;
 
 #[derive(Debug)]
 pub struct Check;
 
 impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        Some(&["mod_item"])
+    }
+
+    fn visit_node(
+        &self,
+        node: tree_sitter::Node,
+        ctx: &CheckCtx,
+        _state: Option<&mut dyn std::any::Any>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
         let source_bytes = ctx.source.as_bytes();
-        let mut diagnostics = Vec::new();
-        walk_tree(tree, |node| {
-            if node.kind() != "mod_item" {
-                return;
-            }
-            let Some(name_node) = node.child_by_field_name("name") else {
-                return;
-            };
-            let Ok(name) = name_node.utf8_text(source_bytes) else {
-                return;
-            };
-            if name != "tests" && name != "test" {
-                return;
-            }
-            if has_cfg_test_attribute(node, source_bytes) {
-                return;
-            }
-            let pos = node.start_position();
-            diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
-                line: pos.row + 1,
-                column: pos.column + 1,
-                rule_id: "rust-mod-tests-without-cfg-test".into(),
-                message: format!(
-                    "`mod {name}` is not gated by `#[cfg(test)]` — every \
-                     test function will ship in the release binary. Add \
-                     `#[cfg(test)]` immediately above the module declaration."
-                ),
-                severity: Severity::Error,
-                span: None,
-            });
+        let Some(name_node) = node.child_by_field_name("name") else {
+            return;
+        };
+        let Ok(name) = name_node.utf8_text(source_bytes) else {
+            return;
+        };
+        if name != "tests" && name != "test" {
+            return;
+        }
+        if has_cfg_test_attribute(node, source_bytes) {
+            return;
+        }
+        let pos = node.start_position();
+        diagnostics.push(Diagnostic {
+            path: ctx.path.to_path_buf(),
+            line: pos.row + 1,
+            column: pos.column + 1,
+            rule_id: "rust-mod-tests-without-cfg-test".into(),
+            message: format!(
+                "`mod {name}` is not gated by `#[cfg(test)]` — every \
+                 test function will ship in the release binary. Add \
+                 `#[cfg(test)]` immediately above the module declaration."
+            ),
+            severity: Severity::Error,
+            span: None,
         });
-        diagnostics
     }
 }
 

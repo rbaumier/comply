@@ -8,53 +8,58 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::walker::walk_tree;
 
 #[derive(Debug)]
 pub struct Check;
 
 impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        Some(&["function_declaration", "method_definition", "variable_declarator"])
+    }
+
+    fn visit_node(
+        &self,
+        node: tree_sitter::Node,
+        ctx: &CheckCtx,
+        _state: Option<&mut dyn std::any::Any>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
         let source = ctx.source.as_bytes();
-        let mut diagnostics = Vec::new();
-        walk_tree(tree, |node| {
-            let name_node = match node.kind() {
-                "function_declaration" | "method_definition" => {
-                    node.child_by_field_name("name")
-                }
-                "variable_declarator" => {
-                    let value = node.child_by_field_name("value");
-                    match value.map(|v| v.kind()) {
-                        Some("arrow_function") | Some("function_expression") => {
-                            node.child_by_field_name("name")
-                        }
-                        _ => None,
-                    }
-                }
-                _ => None,
-            };
-            let Some(name_node) = name_node else { return };
-            let Ok(name) = name_node.utf8_text(source) else { return };
-            if !contains_and_boundary(name) {
-                return;
+        let name_node = match node.kind() {
+            "function_declaration" | "method_definition" => {
+                node.child_by_field_name("name")
             }
-            let pos = name_node.start_position();
-            diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
-                line: pos.row + 1,
-                column: pos.column + 1,
-                rule_id: "no-and-in-function-name".into(),
-                message: format!(
-                    "Function `{name}` has `And` in its name — that signals two \
-                     responsibilities glued together (CQS violation). Split into two \
-                     functions named after each responsibility and let the caller \
-                     sequence them."
-                ),
-                severity: Severity::Error,
-                span: None,
-            });
+            "variable_declarator" => {
+                let value = node.child_by_field_name("value");
+                match value.map(|v| v.kind()) {
+                    Some("arrow_function") | Some("function_expression") => {
+                        node.child_by_field_name("name")
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+        let Some(name_node) = name_node else { return };
+        let Ok(name) = name_node.utf8_text(source) else { return };
+        if !contains_and_boundary(name) {
+            return;
+        }
+        let pos = name_node.start_position();
+        diagnostics.push(Diagnostic {
+            path: ctx.path.to_path_buf(),
+            line: pos.row + 1,
+            column: pos.column + 1,
+            rule_id: "no-and-in-function-name".into(),
+            message: format!(
+                "Function `{name}` has `And` in its name — that signals two \
+                 responsibilities glued together (CQS violation). Split into two \
+                 functions named after each responsibility and let the caller \
+                 sequence them."
+            ),
+            severity: Severity::Error,
+            span: None,
         });
-        diagnostics
     }
 }
 

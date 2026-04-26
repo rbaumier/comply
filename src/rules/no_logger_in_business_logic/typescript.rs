@@ -35,11 +35,7 @@ fn root_identifier<'a>(mut node: tree_sitter::Node, source: &'a [u8]) -> Option<
     }
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "call_expression" {
-        return;
-    }
-
+crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     if !is_business_logic_path(ctx.path) {
         return;
     }

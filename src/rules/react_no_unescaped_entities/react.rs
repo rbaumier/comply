@@ -8,11 +8,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 
 const PROBLEMATIC: &[char] = &['"', '\'', '}'];
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "jsx_text" {
-        return;
-    }
-
+crate::ast_check! { on ["jsx_text"] => |node, source, ctx, diagnostics|
     let Ok(text) = node.utf8_text(source) else { return };
 
     for ch in PROBLEMATIC {

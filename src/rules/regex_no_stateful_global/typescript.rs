@@ -88,10 +88,7 @@ fn has_stateful_usage(root: tree_sitter::Node<'_>, source: &[u8], var_name: &str
     }
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "regex" {
-        return;
-    }
+crate::ast_check! { on ["regex"] => |node, source, ctx, diagnostics|
     let Some((_pattern, flags)) = pattern_and_flags(&node, source) else { return };
     if !flags.contains('g') {
         return;

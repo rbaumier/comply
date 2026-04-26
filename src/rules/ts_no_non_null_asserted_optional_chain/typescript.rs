@@ -25,10 +25,7 @@ fn contains_optional_chain(node: tree_sitter::Node) -> bool {
     false
 }
 
-crate::ast_check! { |node, _source, ctx, diagnostics|
-    if node.kind() != "non_null_expression" {
-        return;
-    }
+crate::ast_check! { on ["non_null_expression"] => |node, _source, ctx, diagnostics|
     let Some(inner) = node.named_child(0) else {
         return;
     };

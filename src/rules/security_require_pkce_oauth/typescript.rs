@@ -9,12 +9,8 @@ fn looks_like_authorize_url(text: &str) -> bool {
         && (lower.contains("client_id") || lower.contains("response_type"))
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["string", "template_string"] => |node, source, ctx, diagnostics|
     // Detect string or template_string literals that build an OAuth authorize URL.
-    let kind = node.kind();
-    if kind != "string" && kind != "template_string" {
-        return;
-    }
     let Ok(text) = node.utf8_text(source) else {
         return;
     };

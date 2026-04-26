@@ -42,11 +42,8 @@ fn has_version_suffix(key: &str) -> bool {
     !suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_digit())
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     let _ = ctx;
-    if node.kind() != "call_expression" {
-        return;
-    }
     if !is_localstorage_setitem(node, source) {
         return;
     }

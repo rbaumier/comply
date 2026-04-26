@@ -12,11 +12,7 @@ fn is_style_import(source: &str) -> bool {
     STYLE_EXTENSIONS.iter().any(|ext| source.ends_with(ext))
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "import_statement" {
-        return;
-    }
-
+crate::ast_check! { on ["import_statement"] => |node, source, ctx, diagnostics|
     // A side-effect import has no import clause — just `import 'foo';`.
     // In tree-sitter, an import with specifiers has an "import_clause" child.
     // If there's no import_clause, it's a bare side-effect import.

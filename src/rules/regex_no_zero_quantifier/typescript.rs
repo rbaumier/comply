@@ -17,10 +17,7 @@ fn has_zero_quantifier(pattern: &str) -> bool {
     pattern.contains("{0}") || pattern.contains("{0,0}")
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "regex" {
-        return;
-    }
+crate::ast_check! { on ["regex"] => |node, source, ctx, diagnostics|
     let Some((pattern, _flags)) = pattern_and_flags(&node, source) else { return };
     if !has_zero_quantifier(pattern) {
         return;

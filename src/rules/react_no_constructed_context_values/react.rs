@@ -7,12 +7,8 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["jsx_attribute"] => |node, source, ctx, diagnostics|
     // Match jsx_attribute nodes named "value"
-    if node.kind() != "jsx_attribute" {
-        return;
-    }
-
     let Some(name_node) = node.child(0) else { return };
     let Ok(name_text) = name_node.utf8_text(source) else { return };
     if name_text != "value" {

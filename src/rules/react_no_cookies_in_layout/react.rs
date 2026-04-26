@@ -9,7 +9,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 
 const DYNAMIC_FNS: &[&str] = &["cookies", "headers"];
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     // Only fire on files named `layout.*`.
     let file_stem = ctx.path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
     if file_stem != "layout" {
@@ -17,10 +17,6 @@ crate::ast_check! { |node, source, ctx, diagnostics|
     }
 
     // Match call_expression nodes.
-    if node.kind() != "call_expression" {
-        return;
-    }
-
     let Some(callee) = node.child_by_field_name("function") else { return };
     let Ok(callee_text) = callee.utf8_text(source) else { return };
 

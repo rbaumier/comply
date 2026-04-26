@@ -35,8 +35,8 @@ fn is_location_navigation_call(name: &str) -> bool {
     receiver.ends_with("location")
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    match node.kind() {
+crate::ast_check! { on ["assignment_expression", "call_expression"] => |node, source, ctx, diagnostics|
+match node.kind() {
         "assignment_expression" => {
             let Some(lhs) = node.child_by_field_name("left") else { return };
             let Ok(lhs_text) = lhs.utf8_text(source) else { return };

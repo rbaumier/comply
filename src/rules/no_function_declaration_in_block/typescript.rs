@@ -31,10 +31,7 @@ fn is_inside_control_flow(node: tree_sitter::Node) -> bool {
     false
 }
 
-crate::ast_check! { |node, _source, ctx, diagnostics|
-    if node.kind() != "function_declaration" {
-        return;
-    }
+crate::ast_check! { on ["function_declaration"] => |node, _source, ctx, diagnostics|
     if !is_inside_control_flow(node) {
         return;
     }

@@ -80,10 +80,7 @@ fn is_async_looking_member_call(call: tree_sitter::Node, source: &[u8]) -> bool 
     ASYNC_LOOKING_METHODS.contains(&method)
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "expression_statement" {
-        return;
-    }
+crate::ast_check! { on ["expression_statement"] => |node, source, ctx, diagnostics|
     let Some(expr) = node.named_child(0) else { return };
     if expr.kind() != "call_expression" {
         return;

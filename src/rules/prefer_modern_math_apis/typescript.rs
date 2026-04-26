@@ -164,8 +164,8 @@ fn is_sum_of_squares(node: tree_sitter::Node, source: &[u8]) -> bool {
     terms.iter().all(|t| is_squared(*t, source) || is_self_mul(*t, source))
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    match node.kind() {
+crate::ast_check! { on ["binary_expression", "call_expression"] => |node, source, ctx, diagnostics|
+match node.kind() {
         "binary_expression" => {
             if let Some(msg) = log_violation_message(node, source) {
                 diagnostics.push(Diagnostic::at_node(

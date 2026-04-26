@@ -16,14 +16,10 @@ fn is_hook_name(name: &str) -> bool {
         && chars.next().is_some_and(|c| c.is_ascii_uppercase())
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     if ctx.file.rsc_context != RscContext::ServerComponent {
         return;
     }
-    if node.kind() != "call_expression" {
-        return;
-    }
-
     let Some(func) = node.child_by_field_name("function") else { return };
     if func.kind() != "identifier" {
         return;

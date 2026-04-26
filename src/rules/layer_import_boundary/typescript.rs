@@ -57,12 +57,9 @@ fn layer_name(layer: Layer) -> &'static str {
     }
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["import_statement", "export_statement"] => |node, source, ctx, diagnostics|
     // import_statement covers `import x from '...'` and `import '...';`.
     // export_statement covers `export ... from '...'` re-exports.
-    let kind = node.kind();
-    if kind != "import_statement" && kind != "export_statement" { return; }
-
     let Some(src_node) = node.child_by_field_name("source") else { return };
 
     let path_str = ctx.path.to_string_lossy();

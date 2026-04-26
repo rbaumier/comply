@@ -4,7 +4,6 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::walker::walk_tree;
 
 const PAIRS: &[(&str, &str)] = &[
     ("get_", "set_"),
@@ -25,6 +24,8 @@ const PREFIXES: &[&str] = &[
     "delete_", "destroy_",
 ];
 
+const KINDS: &[&str] = &["function_item"];
+
 fn split_prefix(name: &str) -> Option<(&str, &str)> {
     for &pfx in PREFIXES {
         if name.len() > pfx.len() && name.starts_with(pfx) {
@@ -34,51 +35,65 @@ fn split_prefix(name: &str) -> Option<(&str, &str)> {
     None
 }
 
+#[derive(Default)]
+struct State {
+    /// (name, line, col) for each `pub fn` collected.
+    pub_fns: Vec<(String, usize, usize)>,
+}
+
 #[derive(Debug)]
 pub struct Check;
 
 impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        Some(KINDS)
+    }
+
+    fn create_state(&self) -> Option<Box<dyn std::any::Any>> {
+        Some(Box::<State>::default())
+    }
+
+    fn visit_node(
+        &self,
+        node: tree_sitter::Node,
+        ctx: &CheckCtx,
+        state: Option<&mut dyn std::any::Any>,
+        _diagnostics: &mut Vec<Diagnostic>,
+    ) {
         let source = ctx.source.as_bytes();
-        let mut pub_fns: Vec<String> = Vec::new();
+        let Ok(text) = node.utf8_text(source) else { return };
+        if !text.starts_with("pub ") {
+            return;
+        }
+        let Some(name_node) = node.child_by_field_name("name") else { return };
+        let Ok(name) = name_node.utf8_text(source) else { return };
+        let pos = name_node.start_position();
+        let Some(state) = state.and_then(|s| s.downcast_mut::<State>()) else {
+            return;
+        };
+        state.pub_fns.push((name.to_string(), pos.row + 1, pos.column + 1));
+    }
 
-        // Collect all `pub fn` names.
-        walk_tree(tree, |node| {
-            if node.kind() != "function_item" {
-                return;
-            }
-            let Ok(text) = node.utf8_text(source) else { return };
-            if !text.starts_with("pub ") {
-                return;
-            }
-            if let Some(name_node) = node.child_by_field_name("name")
-                && let Ok(name) = name_node.utf8_text(source) {
-                    pub_fns.push(name.to_string());
-                }
-        });
-
-        let mut diagnostics = Vec::new();
-        walk_tree(tree, |node| {
-            if node.kind() != "function_item" {
-                return;
-            }
-            let Ok(text) = node.utf8_text(source) else { return };
-            if !text.starts_with("pub ") {
-                return;
-            }
-            let Some(name_node) = node.child_by_field_name("name") else { return };
-            let Ok(name) = name_node.utf8_text(source) else { return };
-            let Some((prefix, suffix)) = split_prefix(name) else { return };
-
+    fn finish(
+        &self,
+        ctx: &CheckCtx,
+        state: Option<Box<dyn std::any::Any>>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
+        let Some(state) = state.and_then(|s| s.downcast::<State>().ok()) else {
+            return;
+        };
+        let names: Vec<&str> = state.pub_fns.iter().map(|(n, _, _)| n.as_str()).collect();
+        for (name, line, col) in &state.pub_fns {
+            let Some((prefix, suffix)) = split_prefix(name) else { continue };
             for &(pfx, counterpart_pfx) in PAIRS {
                 if pfx == prefix {
                     let expected = format!("{counterpart_pfx}{suffix}");
-                    if !pub_fns.contains(&expected) {
-                        let pos = name_node.start_position();
+                    if !names.iter().any(|n| *n == expected) {
                         diagnostics.push(Diagnostic {
                             path: ctx.path.to_path_buf(),
-                            line: pos.row + 1,
-                            column: pos.column + 1,
+                            line: *line,
+                            column: *col,
                             rule_id: "symmetric-pairs".into(),
                             message: format!(
                                 "`pub fn {name}` has no `{expected}` counterpart."
@@ -90,8 +105,7 @@ impl AstCheck for Check {
                     }
                 }
             }
-        });
-        diagnostics
+        }
     }
 }
 

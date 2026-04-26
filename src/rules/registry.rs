@@ -183,6 +183,35 @@ macro_rules! register_ts_family_with_clippy_marker {
 /// Rule of Three duplication across ~50 files.
 #[macro_export]
 macro_rules! ast_check {
+    (on [$($kind:expr),+ $(,)?] => |$node:ident, $source:ident, $ctx:ident, $diagnostics:ident| $($body:tt)*) => {
+        #[derive(Debug)]
+        pub struct Check;
+
+        impl $crate::rules::backend::AstCheck for Check {
+            fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+                Some(&[$($kind),+])
+            }
+
+            fn visit_node(
+                &self,
+                ast_check_node: tree_sitter::Node,
+                ast_check_ctx: &$crate::rules::backend::CheckCtx,
+                _ast_check_state: Option<&mut dyn std::any::Any>,
+                ast_check_diagnostics: &mut Vec<$crate::diagnostic::Diagnostic>,
+            ) {
+                #[allow(unused_variables)]
+                let $node = ast_check_node;
+                #[allow(unused_variables)]
+                let $source: &[u8] = ast_check_ctx.source.as_bytes();
+                #[allow(unused_variables)]
+                let $ctx: &$crate::rules::backend::CheckCtx = ast_check_ctx;
+                #[allow(unused_variables)]
+                let $diagnostics: &mut Vec<$crate::diagnostic::Diagnostic> = ast_check_diagnostics;
+                $($body)*
+            }
+        }
+    };
+
     (|$node:ident, $source:ident, $ctx:ident, $diagnostics:ident| $($body:tt)*) => {
         #[derive(Debug)]
         pub struct Check;

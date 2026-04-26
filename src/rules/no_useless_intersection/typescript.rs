@@ -8,11 +8,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "intersection_type" {
-        return;
-    }
-
+crate::ast_check! { on ["intersection_type"] => |node, source, ctx, diagnostics|
     let mut cursor = node.walk();
     let mut found = false;
     for child in node.children(&mut cursor) {

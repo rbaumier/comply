@@ -31,11 +31,8 @@ fn is_inside_export(node: tree_sitter::Node) -> bool {
     false
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["function_declaration"] => |node, source, ctx, diagnostics|
     if ctx.file.rsc_context != RscContext::ClientComponent {
-        return;
-    }
-    if node.kind() != "function_declaration" {
         return;
     }
     if !is_inside_export(node) {

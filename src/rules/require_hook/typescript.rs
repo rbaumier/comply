@@ -159,14 +159,10 @@ fn top_level_is_allowed(stmt: tree_sitter::Node, source: &[u8]) -> bool {
     }
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
     if !is_test_file(ctx.path) {
         return;
     }
-    if node.kind() != "program" {
-        return;
-    }
-
     let mut cur = node.walk();
     for stmt in node.named_children(&mut cur) {
         if top_level_is_allowed(stmt, source) {

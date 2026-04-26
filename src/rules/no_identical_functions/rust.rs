@@ -12,12 +12,8 @@ fn normalize_body(text: &str) -> String {
         .join("\n")
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["source_file"] => |node, source, ctx, diagnostics|
     // Only process at the root (source_file) to collect all functions once.
-    if node.kind() != "source_file" {
-        return;
-    }
-
     let mut functions: Vec<(String, usize, String)> = Vec::new();
 
     let child_count = node.named_child_count();

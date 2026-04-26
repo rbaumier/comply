@@ -66,13 +66,9 @@ fn file_reads_theme(source: &str) -> bool {
     THEME_MARKERS.iter().any(|m| source.contains(m))
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["string"] => |node, source, ctx, diagnostics|
     // Only look at full string literals that can carry class tokens.
     // `string` wraps a `string_fragment`; firing on both would double-report.
-    if node.kind() != "string" {
-        return;
-    }
-
     let Ok(text) = node.utf8_text(source) else { return; };
     let Some(_) = class_contains_arbitrary(text) else { return; };
 

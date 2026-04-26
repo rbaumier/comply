@@ -40,10 +40,7 @@ fn contains_t_call(node: tree_sitter::Node, source: &[u8]) -> bool {
     false
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "binary_expression" {
-        return;
-    }
+crate::ast_check! { on ["binary_expression"] => |node, source, ctx, diagnostics|
     let Some(op_node) = node.child_by_field_name("operator") else { return };
     if op_node.utf8_text(source).unwrap_or("") != "+" {
         return;

@@ -13,55 +13,59 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::walker::walk_tree;
 
 const TAILWIND_PREFIXES: &[&str] = &[
     "bg-", "text-", "border-", "ring-", "shadow-", "from-", "to-", "via-",
     "fill-", "stroke-", "outline-", "accent-", "caret-", "divide-", "placeholder-",
 ];
 
+const KINDS: &[&str] = &["template_string"];
+
 #[derive(Debug)]
 pub struct Check;
 
 impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        Some(KINDS)
+    }
+
+    fn visit_node(
+        &self,
+        node: tree_sitter::Node,
+        ctx: &CheckCtx,
+        _state: Option<&mut dyn std::any::Any>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
         let source_bytes = ctx.source.as_bytes();
-        let mut diagnostics = Vec::new();
-        walk_tree(tree, |node| {
-            if node.kind() != "template_string" {
-                return;
-            }
-            // Must contain a template_substitution child.
-            let mut cursor = node.walk();
-            let has_substitution = node
-                .children(&mut cursor)
-                .any(|c| c.kind() == "template_substitution");
-            if !has_substitution {
-                return;
-            }
-            // The literal must look like a Tailwind class fragment.
-            let Ok(text) = node.utf8_text(source_bytes) else {
-                return;
-            };
-            if !TAILWIND_PREFIXES.iter().any(|p| text.contains(p)) {
-                return;
-            }
-            let pos = node.start_position();
-            diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
-                line: pos.row + 1,
-                column: pos.column + 1,
-                rule_id: "tailwind-no-dynamic-class".into(),
-                message: "Dynamic Tailwind class via template literal — \
-                          purge only sees full static strings, so the \
-                          generated class won't ship. Use a static map: \
-                          `const colors = { blue: 'bg-blue-500', ... }`."
-                    .into(),
-                severity: Severity::Warning,
-                span: None,
-            });
+        // Must contain a template_substitution child.
+        let mut cursor = node.walk();
+        let has_substitution = node
+            .children(&mut cursor)
+            .any(|c| c.kind() == "template_substitution");
+        if !has_substitution {
+            return;
+        }
+        // The literal must look like a Tailwind class fragment.
+        let Ok(text) = node.utf8_text(source_bytes) else {
+            return;
+        };
+        if !TAILWIND_PREFIXES.iter().any(|p| text.contains(p)) {
+            return;
+        }
+        let pos = node.start_position();
+        diagnostics.push(Diagnostic {
+            path: ctx.path.to_path_buf(),
+            line: pos.row + 1,
+            column: pos.column + 1,
+            rule_id: "tailwind-no-dynamic-class".into(),
+            message: "Dynamic Tailwind class via template literal — \
+                      purge only sees full static strings, so the \
+                      generated class won't ship. Use a static map: \
+                      `const colors = { blue: 'bg-blue-500', ... }`."
+                .into(),
+            severity: Severity::Warning,
+            span: None,
         });
-        diagnostics
     }
 }
 

@@ -35,11 +35,7 @@ fn has_parameters(func: tree_sitter::Node) -> bool {
     params.named_children(&mut cursor).any(|_| true)
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "program" {
-        return;
-    }
-
+crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
     let src = ctx.source;
     if VALIDATOR_CALLS.iter().any(|c| src.contains(c)) {
         return;

@@ -6,12 +6,8 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["class_declaration", "class"] => |node, source, ctx, diagnostics|
     // Match both `class Foo { ... }` declarations and `const x = class { ... }` expressions.
-    if node.kind() != "class_declaration" && node.kind() != "class" {
-        return;
-    }
-
     // Skip classes that extend a superclass — the inheritance might
     // require instance semantics even if local members are all static.
     let mut cursor = node.walk();

@@ -36,11 +36,7 @@ fn is_in_unbound_arrow(node: tree_sitter::Node) -> bool {
     saw_arrow
 }
 
-crate::ast_check! { |node, _source, ctx, diagnostics|
-    if node.kind() != "this" {
-        return;
-    }
-
+crate::ast_check! { on ["this"] => |node, _source, ctx, diagnostics|
     if !is_in_unbound_arrow(node) {
         return;
     }

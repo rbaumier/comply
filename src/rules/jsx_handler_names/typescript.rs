@@ -41,10 +41,7 @@ fn jsx_expression_inner(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
     None
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "jsx_attribute" {
-        return;
-    }
+crate::ast_check! { on ["jsx_attribute"] => |node, source, ctx, diagnostics|
     let Some(attr_name) = crate::rules::jsx::jsx_attribute_name(node, source) else { return };
     if !is_event_handler_prop(attr_name) {
         return;

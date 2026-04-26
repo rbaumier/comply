@@ -36,11 +36,7 @@ const CHECKS: &[GlobalCheck] = &[
     },
 ];
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "identifier" {
-        return;
-    }
-
+crate::ast_check! { on ["identifier"] => |node, source, ctx, diagnostics|
     let name = node.utf8_text(source).unwrap_or("");
 
     let Some(chk) = CHECKS.iter().find(|c| c.name == name) else { return };

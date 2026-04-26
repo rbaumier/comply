@@ -3,36 +3,41 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::sql_helpers::RUST_STRING_KINDS;
-use crate::rules::walker::collect_nodes_of_kinds;
 
 #[derive(Debug)]
 pub struct Check;
 
 impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        Some(RUST_STRING_KINDS)
+    }
+
+    fn visit_node(
+        &self,
+        node: tree_sitter::Node,
+        ctx: &CheckCtx,
+        _state: Option<&mut dyn std::any::Any>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
         let source_bytes = ctx.source.as_bytes();
-        let mut diagnostics = Vec::new();
-        for node in collect_nodes_of_kinds(tree, RUST_STRING_KINDS) {
-            let Ok(text) = node.utf8_text(source_bytes) else {
-                continue;
-            };
-            for line in text.lines() {
-                if let Some(ft) = super::float_type_for_money_line(line) {
-                    diagnostics.push(Diagnostic::at_node(
-                        ctx.path,
-                        &node,
-                        super::META.id,
-                        format!(
-                            "`{ft}` near a monetary column — use `NUMERIC(precision, scale)` \
-                             to avoid floating-point rounding errors."
-                        ),
-                        Severity::Error,
-                    ));
-                    break;
-                }
+        let Ok(text) = node.utf8_text(source_bytes) else {
+            return;
+        };
+        for line in text.lines() {
+            if let Some(ft) = super::float_type_for_money_line(line) {
+                diagnostics.push(Diagnostic::at_node(
+                    ctx.path,
+                    &node,
+                    super::META.id,
+                    format!(
+                        "`{ft}` near a monetary column — use `NUMERIC(precision, scale)` \
+                         to avoid floating-point rounding errors."
+                    ),
+                    Severity::Error,
+                ));
+                break;
             }
         }
-        diagnostics
     }
 }
 

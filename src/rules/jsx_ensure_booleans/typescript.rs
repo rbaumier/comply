@@ -76,11 +76,7 @@ fn right_is_jsx(node: Node) -> bool {
     )
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "jsx_expression" {
-        return;
-    }
-
+crate::ast_check! { on ["jsx_expression"] => |node, source, ctx, diagnostics|
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         if child.kind() != "binary_expression" {

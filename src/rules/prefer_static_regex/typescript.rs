@@ -1,9 +1,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["regex"] => |node, source, ctx, diagnostics|
     // Look for regex literals
-    if node.kind() != "regex" { return; }
-
     // Check if inside a function
     let mut current = node.parent();
     let mut inside_function = false;

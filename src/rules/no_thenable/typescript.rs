@@ -11,8 +11,8 @@ fn is_then_name(node: tree_sitter::Node, source: &[u8]) -> bool {
     node.utf8_text(source).unwrap_or("") == "then"
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    match node.kind() {
+crate::ast_check! { on ["pair", "method_definition", "public_field_definition", "export_statement", "function_declaration", "class_declaration", "export_specifier"] => |node, source, ctx, diagnostics|
+match node.kind() {
         // Object literal property: `{ then() {} }` or `{ then: ... }`
         "pair" => {
             // Only match when inside an object (not destructuring).

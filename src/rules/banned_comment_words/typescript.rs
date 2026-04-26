@@ -5,8 +5,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "comment" { return; }
+crate::ast_check! { on ["comment"] => |node, source, ctx, diagnostics|
     let Ok(text) = node.utf8_text(source) else { return; };
     let Some(word) = super::find_banned_word(text) else { return; };
     diagnostics.push(Diagnostic::at_node(

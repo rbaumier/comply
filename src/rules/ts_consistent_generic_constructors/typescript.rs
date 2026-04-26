@@ -11,11 +11,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "variable_declarator" {
-        return;
-    }
-
+crate::ast_check! { on ["variable_declarator"] => |node, source, ctx, diagnostics|
     // Must have a `new` expression as value.
     let Some(value) = node.child_by_field_name("value") else {
         return;

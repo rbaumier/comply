@@ -8,10 +8,7 @@ fn is_exported(node: tree_sitter::Node) -> bool {
     parent.kind() == "export_statement"
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "interface_declaration" {
-        return;
-    }
+crate::ast_check! { on ["interface_declaration"] => |node, source, ctx, diagnostics|
     if !is_exported(node) {
         return;
     }

@@ -3,8 +3,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "declaration" { return; }
+crate::ast_check! { on ["declaration"] => |node, source, ctx, diagnostics|
     let Some((offender, label)) = find_pure_black(node, source) else { return };
     let pos = offender.start_position();
     diagnostics.push(Diagnostic {

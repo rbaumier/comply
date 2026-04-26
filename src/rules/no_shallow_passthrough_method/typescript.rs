@@ -33,8 +33,7 @@ fn argument_names<'a>(args: &tree_sitter::Node<'a>, source: &'a [u8]) -> Option<
     Some(out)
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "method_definition" { return; }
+crate::ast_check! { on ["method_definition"] => |node, source, ctx, diagnostics|
     let Some(params) = node.child_by_field_name("parameters") else { return };
     let Some(body) = node.child_by_field_name("body") else { return };
     if body.kind() != "statement_block" { return; }

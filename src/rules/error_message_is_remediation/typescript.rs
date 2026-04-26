@@ -17,11 +17,7 @@ const VERBS: &[&str] = &[
     "unable", "exceeded", "denied", "rejected", "not",
 ];
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "new_expression" {
-        return;
-    }
-
+crate::ast_check! { on ["new_expression"] => |node, source, ctx, diagnostics|
     // Check constructor name is "Error".
     let Some(ctor) = node.child_by_field_name("constructor") else { return };
     if ctor.utf8_text(source).unwrap_or("") != "Error" {

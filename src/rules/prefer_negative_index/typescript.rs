@@ -5,11 +5,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 /// Methods where `.length - N` can be replaced with a negative index.
 const METHODS: &[&str] = &["slice", "splice", "toSpliced", "at", "with", "subarray"];
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "call_expression" {
-        return;
-    }
-
+crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     let Some(func) = node.child_by_field_name("function") else { return };
     if func.kind() != "member_expression" { return; }
 

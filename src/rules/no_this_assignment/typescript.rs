@@ -6,8 +6,8 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    match node.kind() {
+crate::ast_check! { on ["variable_declarator", "assignment_expression"] => |node, source, ctx, diagnostics|
+match node.kind() {
         // `const self = this;` / `let that = this;`
         "variable_declarator" => {
             let Some(name_node) = node.child_by_field_name("name") else { return };

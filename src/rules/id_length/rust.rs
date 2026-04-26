@@ -8,49 +8,52 @@ use regex::Regex;
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::walker::walk_tree;
 
 #[derive(Debug)]
 pub struct Check;
 
 impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        Some(&["identifier", "type_identifier", "field_identifier"])
+    }
+
+    fn visit_node(
+        &self,
+        node: tree_sitter::Node,
+        ctx: &CheckCtx,
+        _state: Option<&mut dyn std::any::Any>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
         let min = ctx.config.threshold("id-length", "min");
         let exceptions = ctx.config.string_list("id-length", "exceptions");
         let patterns = compile_patterns(&ctx.config.string_list("id-length", "exception_patterns"));
 
         let source_bytes = ctx.source.as_bytes();
-        let mut diagnostics = Vec::new();
-
-        walk_tree(tree, |node| {
-            if !is_rust_binding_name(node) {
-                return;
-            }
-            let Ok(name) = node.utf8_text(source_bytes) else {
-                return;
-            };
-            if name.chars().count() >= min {
-                return;
-            }
-            if exceptions.iter().any(|e| e == name) {
-                return;
-            }
-            if patterns.iter().any(|p| p.is_match(name)) {
-                return;
-            }
-            let pos = node.start_position();
-            diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
-                line: pos.row + 1,
-                column: pos.column + 1,
-                rule_id: "id-length".into(),
-                message: format!("Identifier `{name}` is too short (< {min})."),
-                severity: Severity::Error,
-                span: None,
-            });
+        if !is_rust_binding_name(node) {
+            return;
+        }
+        let Ok(name) = node.utf8_text(source_bytes) else {
+            return;
+        };
+        if name.chars().count() >= min {
+            return;
+        }
+        if exceptions.iter().any(|e| e == name) {
+            return;
+        }
+        if patterns.iter().any(|p| p.is_match(name)) {
+            return;
+        }
+        let pos = node.start_position();
+        diagnostics.push(Diagnostic {
+            path: ctx.path.to_path_buf(),
+            line: pos.row + 1,
+            column: pos.column + 1,
+            rule_id: "id-length".into(),
+            message: format!("Identifier `{name}` is too short (< {min})."),
+            severity: Severity::Error,
+            span: None,
         });
-
-        diagnostics
     }
 }
 

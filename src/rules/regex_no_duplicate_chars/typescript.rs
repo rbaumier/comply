@@ -87,10 +87,7 @@ fn regex_pattern<'a>(node: &tree_sitter::Node<'_>, source: &'a [u8]) -> Option<&
     Some(&inner[..last_slash])
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "regex" {
-        return;
-    }
+crate::ast_check! { on ["regex"] => |node, source, ctx, diagnostics|
     let Some(pattern) = regex_pattern(&node, source) else { return };
     if !has_duplicate_in_char_class(pattern) {
         return;

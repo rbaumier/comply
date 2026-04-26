@@ -88,11 +88,7 @@ fn classify_usages(
     (is_written, is_read)
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "variable_declarator" {
-        return;
-    }
-
+crate::ast_check! { on ["variable_declarator"] => |node, source, ctx, diagnostics|
     // Only `const x = ...` declarations.
     let Some(decl) = node.parent() else { return };
     if decl.kind() != "lexical_declaration" {

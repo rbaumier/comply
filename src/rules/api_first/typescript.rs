@@ -68,11 +68,8 @@ fn has_schema_indicator(root: tree_sitter::Node<'_>, source: &[u8]) -> bool {
     false
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
     // Fire once per file.
-    if node.kind() != "program" {
-        return;
-    }
     let Some(route) = find_route_call(node, source) else { return };
     if has_schema_indicator(node, source) {
         return;

@@ -7,11 +7,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "macro_invocation" {
-        return;
-    }
-
+crate::ast_check! { on ["macro_invocation"] => |node, source, ctx, diagnostics|
     let Some(mac) = node.child_by_field_name("macro") else { return };
     let Ok(mac_name) = mac.utf8_text(source) else { return };
 

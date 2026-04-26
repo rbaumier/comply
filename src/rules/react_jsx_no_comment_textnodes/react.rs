@@ -2,12 +2,8 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["jsx_text"] => |node, source, ctx, diagnostics|
     // jsx_text nodes are text content inside JSX elements
-    if node.kind() != "jsx_text" {
-        return;
-    }
-
     let Ok(text) = node.utf8_text(source) else { return };
     let trimmed = text.trim();
 

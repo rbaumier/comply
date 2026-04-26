@@ -9,10 +9,7 @@ const FN_KINDS: &[&str] = &[
     "generator_function_expression",
 ];
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if !FN_KINDS.contains(&node.kind()) {
-        return;
-    }
+crate::ast_check! { on ["function_declaration", "function_expression", "generator_function_declaration", "generator_function_expression"] => |node, source, ctx, diagnostics|
     // Walk ancestors to count function nesting depth
     let mut depth = 0usize;
     let mut parent = node.parent();

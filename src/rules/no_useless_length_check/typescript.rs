@@ -72,13 +72,9 @@ fn is_some_or_every_call(node: tree_sitter::Node, source: &[u8]) -> Option<(Stri
     Some((text(obj, source).to_owned(), method.to_owned()))
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["binary_expression"] => |node, source, ctx, diagnostics|
     // We look for `&&` or `||` binary expressions (logical expressions
     // are represented as binary_expression in tree-sitter-typescript).
-    if node.kind() != "binary_expression" {
-        return;
-    }
-
     let Some(op_node) = node.child_by_field_name("operator") else { return };
     let op = text(op_node, source);
     if op != "&&" && op != "||" {

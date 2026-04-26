@@ -4,11 +4,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "switch_statement" {
-        return;
-    }
-
+crate::ast_check! { on ["switch_statement"] => |node, source, ctx, diagnostics|
     let Some(body) = node.child_by_field_name("body") else { return };
 
     // Collect all switch_case and switch_default children.

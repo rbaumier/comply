@@ -15,11 +15,7 @@ fn is_parenthesized_body(body: tree_sitter::Node) -> bool {
     body.kind() == "parenthesized_expression"
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "call_expression" {
-        return;
-    }
-
+crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     // The callee of the call expression must be an arrow function.
     let Some(callee) = node.child_by_field_name("function") else { return };
 

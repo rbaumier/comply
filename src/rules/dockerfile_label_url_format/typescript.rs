@@ -34,8 +34,7 @@ fn unquote(text: &str) -> &str {
     t
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "label_pair" { return; }
+crate::ast_check! { on ["label_pair"] => |node, source, ctx, diagnostics|
     let key_node = match node.child_by_field_name("key") {
         Some(k) => k,
         None => return,

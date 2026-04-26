@@ -2,8 +2,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 
 const SIDES: &[&str] = &["top", "bottom", "left", "right"];
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "call_expression" { return; }
+crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     let mut c = node.walk();
     let Some(name_node) = node.children(&mut c).find(|n| n.kind() == "function_name") else { return; };
     let name = name_node.utf8_text(source).unwrap_or_default().to_ascii_lowercase();

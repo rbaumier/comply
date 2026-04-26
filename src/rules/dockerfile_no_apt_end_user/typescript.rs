@@ -33,8 +33,7 @@ fn uses_apt_end_user(text: &str) -> bool {
     false
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "run_instruction" { return; }
+crate::ast_check! { on ["run_instruction"] => |node, source, ctx, diagnostics|
     let mut shell_text: Option<&str> = None;
     for i in 0..node.child_count() {
         let child = node.child(i).unwrap();

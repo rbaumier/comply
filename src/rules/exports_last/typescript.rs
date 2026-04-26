@@ -9,10 +9,8 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
     let _ = source;
-    if node.kind() != "program" { return; }
-
     // Collect named top-level children, dropping `comment` nodes — they
     // are statement-shaped in tree-sitter (named children of `program`)
     // but conceptually trailing/leading commentary should not break the

@@ -36,8 +36,8 @@ fn is_inside_class(node: tree_sitter::Node) -> bool {
     false
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    match node.kind() {
+crate::ast_check! { on ["member_expression", "method_definition"] => |node, source, ctx, diagnostics|
+match node.kind() {
         "member_expression" => {
             let Some(object) = node.child_by_field_name("object") else { return };
             let Some(property) = node.child_by_field_name("property") else { return };

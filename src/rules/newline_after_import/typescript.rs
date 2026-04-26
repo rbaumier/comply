@@ -8,12 +8,8 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
     let _ = source;
-    if node.kind() != "program" {
-        return;
-    }
-
     let mut cursor = node.walk();
     let children: Vec<_> = node.named_children(&mut cursor).collect();
 

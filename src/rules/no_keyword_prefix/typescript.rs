@@ -5,11 +5,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 
 const DISALLOWED_PREFIXES: &[&str] = &["new", "class"];
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "identifier" {
-        return;
-    }
-
+crate::ast_check! { on ["identifier"] => |node, source, ctx, diagnostics|
     // Only check at declaration sites to avoid duplicate reports.
     if !is_declaration_site(node) {
         return;

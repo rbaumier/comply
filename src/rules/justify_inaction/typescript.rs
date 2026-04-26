@@ -57,8 +57,8 @@ fn flag_empty(
     });
 }
 
-crate::ast_check! { |node, _source, ctx, diagnostics|
-    match node.kind() {
+crate::ast_check! { on ["catch_clause", "finally_clause", "if_statement", "else_clause", "while_statement", "do_statement", "for_statement", "for_in_statement", "for_of_statement", "switch_default"] => |node, _source, ctx, diagnostics|
+match node.kind() {
         "catch_clause" => {
             if let Some(body) = node.child_by_field_name("body") {
                 flag_empty(node, body, "catch", ctx, diagnostics);

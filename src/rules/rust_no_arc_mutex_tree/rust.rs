@@ -13,9 +13,7 @@ use tree_sitter::Node;
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "generic_type" { return; }
-
+crate::ast_check! { on ["generic_type"] => |node, source, ctx, diagnostics|
     let Some(outer_name) = type_name(node, source) else { return; };
     let outer_is_shared_ptr = matches!(outer_name, "Arc" | "Rc")
         || outer_name.ends_with("::Arc")

@@ -11,14 +11,10 @@ fn is_middleware_file(ctx: &crate::rules::backend::CheckCtx) -> bool {
         .is_some_and(|n| n == "middleware.ts" || n == "middleware.tsx" || n == "middleware.js")
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     if !is_middleware_file(ctx) {
         return;
     }
-    if node.kind() != "call_expression" {
-        return;
-    }
-
     let Some(func) = node.child_by_field_name("function") else { return };
     if func.utf8_text(source).unwrap_or("") != "getSession" {
         return;

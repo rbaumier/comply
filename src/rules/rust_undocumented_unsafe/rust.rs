@@ -13,40 +13,41 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::walker::walk_tree;
+
+const KINDS: &[&str] = &["unsafe_block"];
 
 #[derive(Debug)]
 pub struct Check;
 
 impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
-        let source_bytes = ctx.source.as_bytes();
-        let _ = source_bytes;
-        let mut diagnostics = Vec::new();
-        walk_tree(tree, |node| {
-            // tree-sitter-rust kind for `unsafe { ... }` expressions.
-            if node.kind() != "unsafe_block" {
-                return;
-            }
-            if has_safety_comment_above(node, ctx.source) {
-                return;
-            }
-            let pos = node.start_position();
-            diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
-                line: pos.row + 1,
-                column: pos.column + 1,
-                rule_id: "rust-undocumented-unsafe".into(),
-                message: "`unsafe` block without a `// SAFETY:` comment. \
-                          Explain which invariants you're upholding — \
-                          future debuggers (including you) will need \
-                          that justification when memory corruption hits."
-                    .into(),
-                severity: Severity::Error,
-                span: None,
-            });
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        Some(KINDS)
+    }
+
+    fn visit_node(
+        &self,
+        node: tree_sitter::Node,
+        ctx: &CheckCtx,
+        _state: Option<&mut dyn std::any::Any>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
+        if has_safety_comment_above(node, ctx.source) {
+            return;
+        }
+        let pos = node.start_position();
+        diagnostics.push(Diagnostic {
+            path: ctx.path.to_path_buf(),
+            line: pos.row + 1,
+            column: pos.column + 1,
+            rule_id: "rust-undocumented-unsafe".into(),
+            message: "`unsafe` block without a `// SAFETY:` comment. \
+                      Explain which invariants you're upholding — \
+                      future debuggers (including you) will need \
+                      that justification when memory corruption hits."
+                .into(),
+            severity: Severity::Error,
+            span: None,
         });
-        diagnostics
     }
 }
 

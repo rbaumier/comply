@@ -12,7 +12,6 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::walker::walk_tree;
 
 #[derive(Debug)]
 pub struct Check;
@@ -22,22 +21,48 @@ fn node_text<'a>(source: &'a str, node: &tree_sitter::Node) -> &'a str {
     &source[node.byte_range()]
 }
 
+/// Visit-time state. Destructuring declarations and member-expression
+/// candidates are both gathered during the single walk, then matched in
+/// `finish` so we don't depend on traversal order between sibling subtrees.
+#[derive(Default)]
+struct State {
+    /// (object_text, end_byte_of_declaration)
+    destructured: Vec<(String, usize)>,
+    candidates: Vec<MemberCandidate>,
+}
+
+struct MemberCandidate {
+    obj_text: String,
+    prop_text: String,
+    start_byte: usize,
+    line: usize,
+    column: usize,
+}
+
 impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
-        let mut diagnostics = Vec::new();
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        Some(&["variable_declarator", "member_expression"])
+    }
+
+    fn create_state(&self) -> Option<Box<dyn std::any::Any>> {
+        Some(Box::new(State::default()))
+    }
+
+    fn visit_node(
+        &self,
+        node: tree_sitter::Node,
+        ctx: &CheckCtx,
+        state: Option<&mut dyn std::any::Any>,
+        _diagnostics: &mut Vec<Diagnostic>,
+    ) {
         let source = ctx.source;
+        let Some(state) = state.and_then(|s| s.downcast_mut::<State>()) else {
+            return;
+        };
 
-        // Phase 1: collect all destructuring declarations.
-        // Map: object text -> list of destructured property names.
-        let mut destructured: Vec<(String, Vec<String>, usize, usize)> = Vec::new();
-
-        walk_tree(tree, |node| {
+        if node.kind() == "variable_declarator" {
             // Match: `const { a, b } = expr;`
             // tree-sitter: variable_declarator with name=object_pattern, value=identifier/member_expression
-            if node.kind() != "variable_declarator" {
-                return;
-            }
-
             let pattern_node = match node.child_by_field_name("name") {
                 Some(n) if n.kind() == "object_pattern" => n,
                 _ => return,
@@ -81,7 +106,6 @@ impl AstCheck for Check {
                 return;
             }
 
-            let start_byte = node.start_byte();
             let end_byte = node.end_byte();
 
             // Don't flag if rest element is present — adding more destructured
@@ -90,81 +114,93 @@ impl AstCheck for Check {
                 return;
             }
 
-            destructured.push((object_text, props, start_byte, end_byte));
-        });
-
-        if destructured.is_empty() {
-            return diagnostics;
+            state.destructured.push((object_text, end_byte));
+            return;
         }
 
-        // Phase 2: walk again looking for member expressions on destructured objects.
-        walk_tree(tree, |node| {
-            if node.kind() != "member_expression" {
-                return;
-            }
-
-            if let Some(obj) = node.child_by_field_name("object")
-                && let Some(prop) = node.child_by_field_name("property") {
-                    // Skip if parent is a member_expression (nested: `user.address.city`).
-                    if let Some(parent) = node.parent() {
-                        if parent.kind() == "member_expression"
-                            && let Some(parent_obj) = parent.child_by_field_name("object")
-                                && parent_obj.id() == node.id() {
-                                    // This node is the object of a deeper access — skip.
-                                    return;
-                                }
-                        // Skip if this is the callee of a call (`user.greet()`)
-                        if parent.kind() == "call_expression"
-                            && let Some(callee) = parent.child_by_field_name("function")
-                                && callee.id() == node.id() {
-                                    return;
-                                }
-                        // Skip assignments (`user.age = 5`)
-                        if parent.kind() == "assignment_expression"
-                            && let Some(left) = parent.child_by_field_name("left")
-                                && left.id() == node.id() {
-                                    return;
-                                }
-                        // Skip augmented assignments (`user.age += 1`)
-                        if parent.kind() == "augmented_assignment_expression"
-                            && let Some(left) = parent.child_by_field_name("left")
-                                && left.id() == node.id() {
-                                    return;
-                                }
-                    }
-
-                    // Check if `[` follows object — computed access
-                    let obj_end = obj.end_byte();
-                    if obj_end < source.len() && source.as_bytes()[obj_end] == b'[' {
-                        return;
-                    }
-
-                    let obj_text = node_text(source, &obj);
-                    let prop_text = node_text(source, &prop);
-
-                    // Only flag if this member expression appears AFTER its
-                    // corresponding destructuring declaration.
-                    for (decl_obj, _props, _decl_start, decl_end) in &destructured {
-                        if obj_text == decl_obj && node.start_byte() > *decl_end {
-                            let pos = node.start_position();
-                            diagnostics.push(Diagnostic {
-                                path: ctx.path.to_path_buf(),
-                                line: pos.row + 1,
-                                column: pos.column + 1,
-                                rule_id: "consistent-destructuring".into(),
-                                message: format!(
-                                    "Use destructured variable for `{prop_text}` instead of `{obj_text}.{prop_text}`."
-                                ),
-                                severity: Severity::Warning,
-                                span: None,
-                            });
-                            break;
-                        }
-                    }
+        // member_expression
+        if let Some(obj) = node.child_by_field_name("object")
+            && let Some(prop) = node.child_by_field_name("property") {
+                // Skip if parent is a member_expression (nested: `user.address.city`).
+                if let Some(parent) = node.parent() {
+                    if parent.kind() == "member_expression"
+                        && let Some(parent_obj) = parent.child_by_field_name("object")
+                            && parent_obj.id() == node.id() {
+                                // This node is the object of a deeper access — skip.
+                                return;
+                            }
+                    // Skip if this is the callee of a call (`user.greet()`)
+                    if parent.kind() == "call_expression"
+                        && let Some(callee) = parent.child_by_field_name("function")
+                            && callee.id() == node.id() {
+                                return;
+                            }
+                    // Skip assignments (`user.age = 5`)
+                    if parent.kind() == "assignment_expression"
+                        && let Some(left) = parent.child_by_field_name("left")
+                            && left.id() == node.id() {
+                                return;
+                            }
+                    // Skip augmented assignments (`user.age += 1`)
+                    if parent.kind() == "augmented_assignment_expression"
+                        && let Some(left) = parent.child_by_field_name("left")
+                            && left.id() == node.id() {
+                                return;
+                            }
                 }
-        });
 
-        diagnostics
+                // Check if `[` follows object — computed access
+                let obj_end = obj.end_byte();
+                if obj_end < source.len() && source.as_bytes()[obj_end] == b'[' {
+                    return;
+                }
+
+                let obj_text = node_text(source, &obj);
+                let prop_text = node_text(source, &prop);
+                let pos = node.start_position();
+
+                state.candidates.push(MemberCandidate {
+                    obj_text: obj_text.to_string(),
+                    prop_text: prop_text.to_string(),
+                    start_byte: node.start_byte(),
+                    line: pos.row + 1,
+                    column: pos.column + 1,
+                });
+            }
+    }
+
+    fn finish(
+        &self,
+        ctx: &CheckCtx,
+        state: Option<Box<dyn std::any::Any>>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
+        let Some(state) = state.and_then(|s| s.downcast::<State>().ok()) else {
+            return;
+        };
+        if state.destructured.is_empty() {
+            return;
+        }
+        for c in &state.candidates {
+            for (decl_obj, decl_end) in &state.destructured {
+                if &c.obj_text == decl_obj && c.start_byte > *decl_end {
+                    let prop_text = &c.prop_text;
+                    let obj_text = &c.obj_text;
+                    diagnostics.push(Diagnostic {
+                        path: ctx.path.to_path_buf(),
+                        line: c.line,
+                        column: c.column,
+                        rule_id: "consistent-destructuring".into(),
+                        message: format!(
+                            "Use destructured variable for `{prop_text}` instead of `{obj_text}.{prop_text}`."
+                        ),
+                        severity: Severity::Warning,
+                        span: None,
+                    });
+                    break;
+                }
+            }
+        }
     }
 }
 

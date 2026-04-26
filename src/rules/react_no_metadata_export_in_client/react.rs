@@ -32,14 +32,11 @@ fn extracted_name<'a>(export: tree_sitter::Node, source: &'a [u8]) -> Option<&'a
     None
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["export_statement"] => |node, source, ctx, diagnostics|
     if ctx.project.framework != Framework::NextJs {
         return;
     }
     if ctx.file.rsc_context != RscContext::ClientComponent {
-        return;
-    }
-    if node.kind() != "export_statement" {
         return;
     }
     let Some(name) = extracted_name(node, source) else { return };

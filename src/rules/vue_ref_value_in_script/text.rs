@@ -34,8 +34,7 @@ fn collect_refs(script: &str) -> Vec<String> {
     names
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "component" { return; }
+crate::ast_check! { on ["component"] => |node, source, ctx, diagnostics|
     let _ = source;
     let Some((start, end)) = script_range(ctx.source) else {
         return;

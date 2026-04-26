@@ -14,8 +14,7 @@ fn alias_of<'a>(from_node: tree_sitter::Node<'a>, source: &'a [u8]) -> Option<&'
     None
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "from_instruction" { return; }
+crate::ast_check! { on ["from_instruction"] => |node, source, ctx, diagnostics|
     let Some(alias) = alias_of(node, source) else { return; };
     let mut prev = node.prev_sibling();
     while let Some(sibling) = prev {

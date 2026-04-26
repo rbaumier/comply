@@ -7,11 +7,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "member_expression" {
-        return;
-    }
-
+crate::ast_check! { on ["member_expression"] => |node, source, ctx, diagnostics|
     let Some(object) = node.child_by_field_name("object") else { return };
     if object.kind() != "identifier" {
         return;

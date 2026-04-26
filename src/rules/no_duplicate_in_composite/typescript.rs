@@ -7,8 +7,8 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use std::collections::HashSet;
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    match node.kind() {
+crate::ast_check! { on ["union_type", "intersection_type"] => |node, source, ctx, diagnostics|
+match node.kind() {
         "union_type" | "intersection_type" => {}
         _ => return,
     }

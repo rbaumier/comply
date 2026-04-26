@@ -16,8 +16,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::rust_helpers::is_in_test_context;
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "function_item" { return; }
+crate::ast_check! { on ["function_item"] => |node, source, ctx, diagnostics|
     if is_in_test_context(node, source) { return; }
     if !is_pub(node, source) { return; }
 

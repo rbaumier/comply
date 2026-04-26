@@ -12,61 +12,65 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::walker::walk_tree;
+
+const KINDS: &[&str] = &["struct_item"];
 
 #[derive(Debug)]
 pub struct Check;
 
 impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        Some(KINDS)
+    }
+
+    fn visit_node(
+        &self,
+        node: tree_sitter::Node,
+        ctx: &CheckCtx,
+        _state: Option<&mut dyn std::any::Any>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
         let source_bytes = ctx.source.as_bytes();
-        let mut diagnostics = Vec::new();
-        walk_tree(tree, |node| {
-            if node.kind() != "struct_item" {
-                return;
-            }
-            let attrs = collect_preceding_attrs(node, source_bytes);
-            if !attrs.iter().any(|a| derives_deserialize(a)) {
-                return;
-            }
-            if attrs.iter().any(|a| has_deny_unknown_fields(a)) {
-                return;
-            }
-            // Structs with a `#[serde(flatten)]` field cannot have
-            // `deny_unknown_fields` — the two are mutually exclusive.
-            if has_flatten_field(node, source_bytes) {
-                return;
-            }
-            // Structs marked with a `external wire format mirror` doc
-            // comment are mirrors of an external JSON contract we don't
-            // own. Adding `deny_unknown_fields` would crash on every
-            // upstream tool upgrade that adds a field. The marker is the
-            // explicit opt-out — visible at the source, not hidden in
-            // comply.toml.
-            if has_external_mirror_marker(node, source_bytes) {
-                return;
-            }
-            let name = node
-                .child_by_field_name("name")
-                .and_then(|n| n.utf8_text(source_bytes).ok())
-                .unwrap_or("Struct");
-            let pos = node.start_position();
-            diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
-                line: pos.row + 1,
-                column: pos.column + 1,
-                rule_id: "rust-serde-deny-unknown-fields".into(),
-                message: format!(
-                    "`{name}` derives `Deserialize` but is missing \
-                     `#[serde(deny_unknown_fields)]` — typos in input \
-                     fields will be silently dropped. Add the attribute \
-                     to catch unknown keys at parse time."
-                ),
-                severity: Severity::Warning,
-                span: None,
-            });
+        let attrs = collect_preceding_attrs(node, source_bytes);
+        if !attrs.iter().any(|a| derives_deserialize(a)) {
+            return;
+        }
+        if attrs.iter().any(|a| has_deny_unknown_fields(a)) {
+            return;
+        }
+        // Structs with a `#[serde(flatten)]` field cannot have
+        // `deny_unknown_fields` — the two are mutually exclusive.
+        if has_flatten_field(node, source_bytes) {
+            return;
+        }
+        // Structs marked with a `external wire format mirror` doc
+        // comment are mirrors of an external JSON contract we don't
+        // own. Adding `deny_unknown_fields` would crash on every
+        // upstream tool upgrade that adds a field. The marker is the
+        // explicit opt-out — visible at the source, not hidden in
+        // comply.toml.
+        if has_external_mirror_marker(node, source_bytes) {
+            return;
+        }
+        let name = node
+            .child_by_field_name("name")
+            .and_then(|n| n.utf8_text(source_bytes).ok())
+            .unwrap_or("Struct");
+        let pos = node.start_position();
+        diagnostics.push(Diagnostic {
+            path: ctx.path.to_path_buf(),
+            line: pos.row + 1,
+            column: pos.column + 1,
+            rule_id: "rust-serde-deny-unknown-fields".into(),
+            message: format!(
+                "`{name}` derives `Deserialize` but is missing \
+                 `#[serde(deny_unknown_fields)]` — typos in input \
+                 fields will be silently dropped. Add the attribute \
+                 to catch unknown keys at parse time."
+            ),
+            severity: Severity::Warning,
+            span: None,
         });
-        diagnostics
     }
 }
 

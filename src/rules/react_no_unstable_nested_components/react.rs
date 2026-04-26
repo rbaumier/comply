@@ -36,14 +36,9 @@ fn is_component_name(node: tree_sitter::Node, source: &[u8]) -> bool {
     }
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["function_declaration", "arrow_function"] => |node, source, ctx, diagnostics|
     // Match function_declaration or arrow_function that looks like a component.
-    let is_fn = node.kind() == "function_declaration";
     let is_arrow = node.kind() == "arrow_function";
-
-    if !is_fn && !is_arrow {
-        return;
-    }
 
     if !is_component_name(node, source) {
         return;

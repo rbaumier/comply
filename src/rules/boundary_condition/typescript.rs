@@ -135,11 +135,7 @@ fn has_length_guard_ancestor(node: tree_sitter::Node, source: &[u8]) -> bool {
     false
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "subscript_expression" {
-        return;
-    }
-
+crate::ast_check! { on ["subscript_expression"] => |node, source, ctx, diagnostics|
     let Some(object) = node.child_by_field_name("object") else { return };
     let Some(index) = node.child_by_field_name("index") else { return };
 

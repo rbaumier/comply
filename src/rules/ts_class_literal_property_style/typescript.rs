@@ -7,11 +7,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "method_definition" {
-        return;
-    }
-
+crate::ast_check! { on ["method_definition"] => |node, source, ctx, diagnostics|
     // Check it's a getter: `get name() { return <literal>; }`
     // In tree-sitter, the first child is the "get" keyword for getters.
     let mut is_getter = false;

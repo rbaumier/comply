@@ -2,8 +2,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "at_rule" { return; }
+crate::ast_check! { on ["at_rule"] => |node, source, ctx, diagnostics|
     let mut c = node.walk();
     let kids: Vec<_> = node.children(&mut c).collect();
     let Some(kw) = kids.iter().find(|n| n.kind() == "at_keyword") else { return };

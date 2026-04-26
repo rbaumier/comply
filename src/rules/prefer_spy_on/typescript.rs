@@ -3,10 +3,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "assignment_expression" {
-        return;
-    }
+crate::ast_check! { on ["assignment_expression"] => |node, source, ctx, diagnostics|
     let Some(left) = node.child_by_field_name("left") else {
         return;
     };

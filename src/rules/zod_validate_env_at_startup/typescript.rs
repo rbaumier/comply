@@ -27,11 +27,7 @@ fn file_validates_env(source: &str) -> bool {
         || source.contains(".safeParse(process.env)")
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "member_expression" {
-        return;
-    }
-
+crate::ast_check! { on ["member_expression"] => |node, source, ctx, diagnostics|
     // Short-circuit: if the file doesn't use Zod or already validates env,
     // skip every node. Cheap substring checks on the full source.
     if !file_uses_zod(ctx.source) || file_validates_env(ctx.source) {

@@ -75,10 +75,9 @@ fn push_diag(
     });
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["ternary_expression", "binary_expression", "if_statement"] => |node, source, ctx, diagnostics|
     let _ = source;
-
-    match node.kind() {
+match node.kind() {
         // Pattern 1: ternary with boolean literal branches.
         "ternary_expression" => {
             let consequence = node.child_by_field_name("consequence");

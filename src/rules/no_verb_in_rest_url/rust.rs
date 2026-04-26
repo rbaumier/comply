@@ -6,10 +6,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "string_literal" && node.kind() != "raw_string_literal" {
-        return;
-    }
+crate::ast_check! { on ["string_literal", "raw_string_literal"] => |node, source, ctx, diagnostics|
     let Ok(text) = node.utf8_text(source) else {
         return;
     };

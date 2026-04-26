@@ -1,11 +1,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["while_statement", "do_statement"] => |node, source, ctx, diagnostics|
     let kind = node.kind();
-    if kind != "while_statement" && kind != "do_statement" {
-        return;
-    }
-
     let pos = node.start_position();
     let loop_type = if kind == "while_statement" { "while" } else { "do-while" };
 

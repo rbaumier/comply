@@ -46,7 +46,7 @@ fn has_bitwise_op(node: tree_sitter::Node, source: &[u8]) -> bool {
     }
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["if_statement", "while_statement"] => |node, source, ctx, diagnostics|
     // Match if_statement, while_statement — check the condition child.
     let condition_field = match node.kind() {
         "if_statement" | "while_statement" => "condition",

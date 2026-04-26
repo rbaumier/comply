@@ -115,10 +115,7 @@ fn is_under_typeof(node: tree_sitter::Node, source: &[u8]) -> bool {
     false
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "member_expression" {
-        return;
-    }
+crate::ast_check! { on ["member_expression"] => |node, source, ctx, diagnostics|
     // Project allowlist — browser-like targets keep `window` as the real
     // DOM Window object.
     if project_allows_window(ctx.project, ctx.path) {

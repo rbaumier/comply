@@ -17,7 +17,7 @@ const BANNED: &[(&str, &str)] = &[
     ("is-array", "Use Array.isArray"),
 ];
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["import_statement", "call_expression"] => |node, source, ctx, diagnostics|
     let specifier = match node.kind() {
         "import_statement" => {
             node.child_by_field_name("source")

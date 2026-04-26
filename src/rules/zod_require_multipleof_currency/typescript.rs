@@ -12,8 +12,7 @@ fn is_currency_key(key: &str) -> bool {
     NEEDLES.iter().any(|n| k.contains(n))
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "pair" { return; }
+crate::ast_check! { on ["pair"] => |node, source, ctx, diagnostics|
     let Some(key_node) = node.child_by_field_name("key") else { return };
     let Some(value_node) = node.child_by_field_name("value") else { return };
 

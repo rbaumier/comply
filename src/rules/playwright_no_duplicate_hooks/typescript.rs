@@ -91,16 +91,12 @@ fn get_hook_name(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
     }
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
     if !is_test_file(ctx.path) {
         return;
     }
 
     // Only trigger on root program to do a single traversal.
-    if node.kind() != "program" {
-        return;
-    }
-
     check_block(node, source, ctx, diagnostics);
 }
 

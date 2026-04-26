@@ -47,11 +47,7 @@ fn is_outermost_call(node: tree_sitter::Node) -> bool {
     true
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "call_expression" {
-        return;
-    }
-
+crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     if !is_outermost_call(node) {
         return;
     }

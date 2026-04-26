@@ -27,8 +27,7 @@ fn collect_reactives(source: &str) -> Vec<String> {
     names
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "component" { return; }
+crate::ast_check! { on ["component"] => |node, source, ctx, diagnostics|
     let _ = source;
     let names = collect_reactives(ctx.source);
     if names.is_empty() {

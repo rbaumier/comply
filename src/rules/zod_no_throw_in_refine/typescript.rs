@@ -40,11 +40,7 @@ fn callback_is_refine_arg(func_node: tree_sitter::Node<'_>, source: &[u8]) -> bo
     name == "refine" || name == "superRefine"
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "throw_statement" {
-        return;
-    }
-
+crate::ast_check! { on ["throw_statement"] => |node, source, ctx, diagnostics|
     // Walk up to the nearest enclosing function. If we leave the
     // function (e.g. into a class body or module) without finding a
     // refine callback, bail.

@@ -13,10 +13,7 @@ fn extends_tagged_error(class_node: &tree_sitter::Node<'_>, source: &[u8]) -> bo
     false
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "class_declaration" {
-        return;
-    }
+crate::ast_check! { on ["class_declaration"] => |node, source, ctx, diagnostics|
     if !extends_tagged_error(&node, source) {
         return;
     }

@@ -8,53 +8,55 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::walker::walk_tree;
 
 #[derive(Debug)]
 pub struct Check;
 
 impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        Some(&["function_item"])
+    }
+
+    fn visit_node(
+        &self,
+        node: tree_sitter::Node,
+        ctx: &CheckCtx,
+        _state: Option<&mut dyn std::any::Any>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
         let source_bytes = ctx.source.as_bytes();
         let max_elements = ctx
             .config
             .threshold("rust-no-large-tuple-return", "max_elements");
-        let mut diagnostics = Vec::new();
-        walk_tree(tree, |node| {
-            if node.kind() != "function_item" {
-                return;
-            }
-            let Some(ret_type) = node.child_by_field_name("return_type") else {
-                return;
-            };
-            if ret_type.kind() != "tuple_type" {
-                return;
-            }
-            let mut cursor = ret_type.walk();
-            let count = ret_type.named_children(&mut cursor).count();
-            if count < max_elements {
-                return;
-            }
-            let name = node
-                .child_by_field_name("name")
-                .and_then(|n| n.utf8_text(source_bytes).ok())
-                .unwrap_or("f");
-            let pos = node.start_position();
-            diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
-                line: pos.row + 1,
-                column: pos.column + 1,
-                rule_id: "rust-no-large-tuple-return".into(),
-                message: format!(
-                    "`fn {name}` returns a {count}-element tuple — wrap \
-                     the result in a named struct so each field has a \
-                     name and refactors don't break every caller."
-                ),
-                severity: Severity::Warning,
-                span: None,
-            });
+        let Some(ret_type) = node.child_by_field_name("return_type") else {
+            return;
+        };
+        if ret_type.kind() != "tuple_type" {
+            return;
+        }
+        let mut cursor = ret_type.walk();
+        let count = ret_type.named_children(&mut cursor).count();
+        if count < max_elements {
+            return;
+        }
+        let name = node
+            .child_by_field_name("name")
+            .and_then(|n| n.utf8_text(source_bytes).ok())
+            .unwrap_or("f");
+        let pos = node.start_position();
+        diagnostics.push(Diagnostic {
+            path: ctx.path.to_path_buf(),
+            line: pos.row + 1,
+            column: pos.column + 1,
+            rule_id: "rust-no-large-tuple-return".into(),
+            message: format!(
+                "`fn {name}` returns a {count}-element tuple — wrap \
+                 the result in a named struct so each field has a \
+                 name and refactors don't break every caller."
+            ),
+            severity: Severity::Warning,
+            span: None,
         });
-        diagnostics
     }
 }
 

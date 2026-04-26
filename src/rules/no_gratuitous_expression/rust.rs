@@ -4,8 +4,8 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    match node.kind() {
+crate::ast_check! { on ["if_expression", "binary_expression"] => |node, source, ctx, diagnostics|
+match node.kind() {
         "if_expression" => {
             let Some(condition) = node.child_by_field_name("condition") else { return };
             let Ok(cond_text) = condition.utf8_text(source) else { return };

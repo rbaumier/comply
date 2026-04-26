@@ -10,12 +10,8 @@ fn is_literal(node: tree_sitter::Node) -> bool {
     )
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["assignment_expression"] => |node, source, ctx, diagnostics|
     // Look for assignment expressions: `x = x || 'default'` or `x = x ?? 'default'`
-    if node.kind() != "assignment_expression" {
-        return;
-    }
-
     let Some(left) = node.child_by_field_name("left") else { return };
     let Some(right) = node.child_by_field_name("right") else { return };
 

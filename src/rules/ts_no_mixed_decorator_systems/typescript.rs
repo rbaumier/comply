@@ -43,10 +43,7 @@ fn first_decorator_node(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
     None
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "program" {
-        return;
-    }
+crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
     if !has_decorator(node) {
         return;
     }

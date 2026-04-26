@@ -7,7 +7,6 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::walker::walk_tree;
 
 const BUILTIN_ERRORS: &[&str] = &[
     "Error",
@@ -25,15 +24,19 @@ const BUILTIN_ERRORS: &[&str] = &[
 pub struct Check;
 
 impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
-        let source = ctx.source.as_bytes();
-        let mut diagnostics = Vec::new();
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        Some(&["class_declaration", "class"])
+    }
 
-        walk_tree(tree, |node| {
-            // We look for class declarations/expressions that extend a builtin Error.
-            if node.kind() != "class_declaration" && node.kind() != "class" {
-                return;
-            }
+    fn visit_node(
+        &self,
+        node: tree_sitter::Node,
+        ctx: &CheckCtx,
+        _state: Option<&mut dyn std::any::Any>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
+        let source = ctx.source.as_bytes();
+        // We look for class declarations/expressions that extend a builtin Error.
 
             // Check superclass is a builtin Error.
             let super_name = {
@@ -169,9 +172,6 @@ impl AstCheck for Check {
                     });
                 }
             }
-        });
-
-        diagnostics
     }
 }
 

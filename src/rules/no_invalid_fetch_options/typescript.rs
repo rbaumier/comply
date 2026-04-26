@@ -149,7 +149,7 @@ fn is_request_constructor(ctor: tree_sitter::Node, source: &[u8]) -> bool {
     ctor.kind() == "identifier" && ctor.utf8_text(source).unwrap_or("") == "Request"
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["call_expression", "new_expression"] => |node, source, ctx, diagnostics|
     let kind = node.kind();
     let (relevant, args_field) = match kind {
         "call_expression" => {

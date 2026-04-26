@@ -26,11 +26,7 @@ const ITERATOR_METHODS: &[&str] = &[
 /// Built-in constructors that are safe to pass directly (e.g. `Boolean`).
 const IGNORED_IDENTIFIERS: &[&str] = &["Boolean", "String", "Number", "BigInt", "Symbol"];
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "call_expression" {
-        return;
-    }
-
+crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     // Must be a member expression call: `something.method(callback)`
     let Some(function) = node.child_by_field_name("function") else {
         return;

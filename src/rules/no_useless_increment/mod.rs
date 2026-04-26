@@ -17,5 +17,5 @@ pub const META: RuleMeta = RuleMeta {
 };
 
 pub fn register() -> RuleDef {
-    crate::register_ts_family_with_rust!(META, typescript, rust)
+    crate::register_ts_family!(META, typescript)
 }

@@ -12,57 +12,95 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::walker::walk_tree;
 use std::collections::HashSet;
 
 #[derive(Debug)]
 pub struct Check;
 
-impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
-        let source_bytes = ctx.source.as_bytes();
+/// Visit-time state. `implemented` may not be complete when an
+/// `interface_declaration` is visited (a class declaring `implements I` may
+/// appear after the interface), so candidates are buffered and resolved in
+/// `finish` once the entire AST has been walked.
+#[derive(Default)]
+struct State {
+    implemented: HashSet<String>,
+    candidates: Vec<Candidate>,
+}
 
-        // First pass: collect all interface names used in `implements` clauses.
-        let mut implemented: HashSet<String> = HashSet::new();
-        walk_tree(tree, |node| {
-            if node.kind() == "implements_clause" {
-                let mut cursor = node.walk();
-                for child in node.children(&mut cursor) {
-                    if let Ok(name) = child.utf8_text(source_bytes) {
-                        // Handle both simple identifiers and generic types
-                        let base_name = name.split('<').next().unwrap_or(name).trim();
-                        if !base_name.is_empty() && base_name != "implements" {
-                            implemented.insert(base_name.to_string());
-                        }
+struct Candidate {
+    name: String,
+    line: usize,
+    column: usize,
+}
+
+impl AstCheck for Check {
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        Some(&["implements_clause", "interface_declaration"])
+    }
+
+    fn create_state(&self) -> Option<Box<dyn std::any::Any>> {
+        Some(Box::new(State::default()))
+    }
+
+    fn visit_node(
+        &self,
+        node: tree_sitter::Node,
+        ctx: &CheckCtx,
+        state: Option<&mut dyn std::any::Any>,
+        _diagnostics: &mut Vec<Diagnostic>,
+    ) {
+        let source_bytes = ctx.source.as_bytes();
+        let Some(state) = state.and_then(|s| s.downcast_mut::<State>()) else {
+            return;
+        };
+        if node.kind() == "implements_clause" {
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                if let Ok(name) = child.utf8_text(source_bytes) {
+                    // Handle both simple identifiers and generic types
+                    let base_name = name.split('<').next().unwrap_or(name).trim();
+                    if !base_name.is_empty() && base_name != "implements" {
+                        state.implemented.insert(base_name.to_string());
                     }
                 }
             }
+            return;
+        }
+        // interface_declaration
+        if has_extends_clause(node) {
+            return;
+        }
+        let name = node
+            .child_by_field_name("name")
+            .and_then(|n| n.utf8_text(source_bytes).ok())
+            .unwrap_or("<interface>");
+
+        let pos = node.start_position();
+        state.candidates.push(Candidate {
+            name: name.to_string(),
+            line: pos.row + 1,
+            column: pos.column + 1,
         });
+    }
 
-        // Second pass: flag interfaces that don't extend and aren't implemented.
-        let mut diagnostics = Vec::new();
-        walk_tree(tree, |node| {
-            if node.kind() != "interface_declaration" {
-                return;
+    fn finish(
+        &self,
+        ctx: &CheckCtx,
+        state: Option<Box<dyn std::any::Any>>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
+        let Some(state) = state.and_then(|s| s.downcast::<State>().ok()) else {
+            return;
+        };
+        for c in &state.candidates {
+            if state.implemented.contains(&c.name) {
+                continue;
             }
-            if has_extends_clause(node) {
-                return;
-            }
-            let name = node
-                .child_by_field_name("name")
-                .and_then(|n| n.utf8_text(source_bytes).ok())
-                .unwrap_or("<interface>");
-
-            // Allow if interface is implemented by a class
-            if implemented.contains(name) {
-                return;
-            }
-
-            let pos = node.start_position();
+            let name = &c.name;
             diagnostics.push(Diagnostic {
                 path: ctx.path.to_path_buf(),
-                line: pos.row + 1,
-                column: pos.column + 1,
+                line: c.line,
+                column: c.column,
                 rule_id: "prefer-type-over-interface".into(),
                 message: format!(
                     "Interface '{name}' has no extends clause and is not implemented — use \
@@ -74,8 +112,7 @@ impl AstCheck for Check {
                 severity: Severity::Warning,
                 span: None,
             });
-        });
-        diagnostics
+        }
     }
 }
 

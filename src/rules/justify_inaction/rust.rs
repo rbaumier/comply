@@ -59,8 +59,8 @@ fn flag_empty(
     });
 }
 
-crate::ast_check! { |node, _source, ctx, diagnostics|
-    match node.kind() {
+crate::ast_check! { on ["if_expression", "else_clause", "match_arm", "for_expression", "while_expression", "loop_expression"] => |node, _source, ctx, diagnostics|
+match node.kind() {
         "if_expression" => {
             if let Some(cons) = node.child_by_field_name("consequence") {
                 flag_empty(node, cons, "if", ctx, diagnostics);

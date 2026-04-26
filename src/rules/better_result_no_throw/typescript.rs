@@ -24,11 +24,8 @@ fn inside_result_try_callback(node: Node<'_>, source: &[u8]) -> bool {
     false
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["throw_statement"] => |node, source, ctx, diagnostics|
     if !imports_better_result(ctx.source) {
-        return;
-    }
-    if node.kind() != "throw_statement" {
         return;
     }
     if inside_result_try_callback(node, source) {

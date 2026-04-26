@@ -11,8 +11,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "template_string" { return; }
+crate::ast_check! { on ["template_string"] => |node, source, ctx, diagnostics|
     let Ok(raw) = node.utf8_text(source) else { return; };
     // Strip the leading and trailing backtick to get the literal body.
     let body = raw.strip_prefix('`').and_then(|s| s.strip_suffix('`'));

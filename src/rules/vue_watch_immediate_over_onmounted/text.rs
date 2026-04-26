@@ -5,8 +5,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "component" { return; }
+crate::ast_check! { on ["component"] => |node, source, ctx, diagnostics|
     let _ = source;
     let src = ctx.source;
     if !src.contains("onMounted(") || !src.contains("watch(") {

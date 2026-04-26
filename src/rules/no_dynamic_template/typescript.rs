@@ -12,8 +12,8 @@ const CALL_METHODS: &[&str] = &[
     "setHTMLUnsafe",
 ];
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    match node.kind() {
+crate::ast_check! { on ["assignment_expression", "call_expression", "jsx_attribute", "property_identifier"] => |node, source, ctx, diagnostics|
+match node.kind() {
         // el.innerHTML = ... / el.outerHTML = ...
         "assignment_expression" => {
             let Some(lhs) = node.child_by_field_name("left") else { return };

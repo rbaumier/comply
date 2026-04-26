@@ -34,10 +34,7 @@ fn is_literal(node: tree_sitter::Node) -> bool {
     }
 }
 
-crate::ast_check! { |node, _source, ctx, diagnostics|
-    if node.kind() != "enum_assignment" {
-        return;
-    }
+crate::ast_check! { on ["enum_assignment"] => |node, _source, ctx, diagnostics|
     let Some(value_node) = node.child_by_field_name("value") else {
         // No initializer — that's fine (auto-increment).
         return;

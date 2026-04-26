@@ -104,10 +104,7 @@ fn is_infinite(
     }
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "pair" {
-        return;
-    }
+crate::ast_check! { on ["pair"] => |node, source, ctx, diagnostics|
     if pair_key(node, source) != "always" {
         return;
     }

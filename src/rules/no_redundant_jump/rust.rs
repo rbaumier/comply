@@ -21,7 +21,7 @@ enum JumpKind {
     Continue,
 }
 
-crate::ast_check! { |node, _source, ctx, diagnostics|
+crate::ast_check! { on ["return_expression", "continue_expression"] => |node, _source, ctx, diagnostics|
     let kind = match node.kind() {
         "return_expression" => {
             if node.named_child_count() != 0 {

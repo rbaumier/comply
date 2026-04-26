@@ -13,12 +13,9 @@ fn is_require_init(declarator: tree_sitter::Node, source: &[u8]) -> bool {
     false
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    // Match `const`/`let`/`var` declarations with multiple declarators.
-    if node.kind() != "lexical_declaration" && node.kind() != "variable_declaration" {
-        return;
-    }
+crate::ast_check! { on ["lexical_declaration", "variable_declaration"] => |node, source, ctx, diagnostics|
 
+    // Match `const`/`let`/`var` declarations with multiple declarators.
     let mut cursor = node.walk();
     let declarators: Vec<_> = node.children(&mut cursor)
         .filter(|c| c.kind() == "variable_declarator")

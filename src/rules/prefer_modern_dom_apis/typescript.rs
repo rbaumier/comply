@@ -19,10 +19,7 @@ const PATTERNS: &[(&str, &str)] = &[
     ),
 ];
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "call_expression" {
-        return;
-    }
+crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     let Some(callee) = node.child_by_field_name("function") else { return };
     if callee.kind() != "member_expression" {
         return;

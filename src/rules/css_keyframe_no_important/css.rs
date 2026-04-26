@@ -11,8 +11,7 @@ fn inside_keyframes(node: tree_sitter::Node) -> bool {
     false
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "important" { return; }
+crate::ast_check! { on ["important"] => |node, source, ctx, diagnostics|
     let _ = source;
     if !inside_keyframes(node) { return; }
     diagnostics.push(Diagnostic::at_node(

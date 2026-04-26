@@ -43,8 +43,7 @@ fn has_unspaced_operator(text: &str) -> bool {
     false
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "call_expression" { return; }
+crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     let mut c = node.walk();
     let kids: Vec<_> = node.children(&mut c).collect();
     let Some(name_node) = kids.iter().find(|n| n.kind() == "function_name") else { return; };

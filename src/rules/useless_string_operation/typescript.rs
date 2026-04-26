@@ -20,12 +20,8 @@ const STRING_METHODS: &[&str] = &[
     "repeat",
 ];
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["expression_statement"] => |node, source, ctx, diagnostics|
     // A standalone call is: expression_statement > call_expression
-    if node.kind() != "expression_statement" {
-        return;
-    }
-
     let Some(expr) = node.named_child(0) else { return };
     if expr.kind() != "call_expression" {
         return;

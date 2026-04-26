@@ -34,12 +34,9 @@ fn is_inline_jsx(kind: &str, source: &[u8], node: &tree_sitter::Node) -> bool {
     INLINE_ELEMENTS.contains(&name)
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    // We look at jsx_element parents and check consecutive children.
-    if node.kind() != "jsx_element" && node.kind() != "jsx_fragment" {
-        return;
-    }
+crate::ast_check! { on ["jsx_element", "jsx_fragment"] => |node, source, ctx, diagnostics|
 
+    // We look at jsx_element parents and check consecutive children.
     let child_count = node.child_count();
     let mut i = 0;
 

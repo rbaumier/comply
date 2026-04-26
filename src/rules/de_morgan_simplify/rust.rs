@@ -2,11 +2,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "unary_expression" {
-        return;
-    }
-
+crate::ast_check! { on ["unary_expression"] => |node, source, ctx, diagnostics|
     // In tree-sitter-rust, unary_expression has no fields:
     // child(0) = operator ("!"), named_child(0) = operand.
     let Some(op_node) = node.child(0) else { return };

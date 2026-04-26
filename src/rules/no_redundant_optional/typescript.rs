@@ -39,7 +39,7 @@ fn has_question_mark(node: Node) -> bool {
     node.children(&mut cursor).any(|c| c.kind() == "?")
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["property_signature", "public_field_definition", "optional_parameter"] => |node, source, ctx, diagnostics|
     let kind = node.kind();
     let is_optional_holder = match kind {
         "property_signature" | "public_field_definition" => has_question_mark(node),

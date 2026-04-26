@@ -8,7 +8,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::rust_helpers::result_error_type;
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["generic_type"] => |node, source, ctx, diagnostics|
     let Some(err_type) = result_error_type(node, source) else {
         return;
     };

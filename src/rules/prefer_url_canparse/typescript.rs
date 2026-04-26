@@ -1,9 +1,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["try_statement"] => |node, source, ctx, diagnostics|
     // Look for try statements
-    if node.kind() != "try_statement" { return; }
-
     let Some(body) = node.child_by_field_name("body") else { return; };
 
     // Check if the try block contains only `new URL(...)` or a variable assignment with `new URL(...)`

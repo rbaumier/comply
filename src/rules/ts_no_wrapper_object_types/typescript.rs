@@ -32,11 +32,7 @@ fn in_type_context(node: tree_sitter::Node) -> bool {
     false
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "type_identifier" {
-        return;
-    }
-
+crate::ast_check! { on ["type_identifier"] => |node, source, ctx, diagnostics|
     let name = match node.utf8_text(source) {
         Ok(t) => t,
         Err(_) => return,

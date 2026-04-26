@@ -28,8 +28,7 @@ fn find_any_types_in_line(line: &str) -> Vec<usize> {
     hits
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "comment" { return; }
+crate::ast_check! { on ["comment"] => |node, source, ctx, diagnostics|
     let Ok(raw) = node.utf8_text(source) else { return };
     if !raw.starts_with("/**") { return; }
 

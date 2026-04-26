@@ -12,8 +12,7 @@ const DATA_HINTS: &[&str] = &[
     "counter", "count", "price", "amount", "metric", "stat", "number", "value-display",
 ];
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "rule_set" { return; }
+crate::ast_check! { on ["rule_set"] => |node, source, ctx, diagnostics|
     let Some(selectors) = node.child_by_field_name("selectors")
         .or_else(|| node.named_child(0))
     else { return };

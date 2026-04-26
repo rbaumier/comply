@@ -20,8 +20,8 @@ fn is_return_type_position(node: tree_sitter::Node) -> bool {
     parent.kind() == "type_annotation" || parent.kind() == "return_type"
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    match node.kind() {
+crate::ast_check! { on ["union_type", "function_declaration", "function_expression", "arrow_function", "method_definition"] => |node, source, ctx, diagnostics|
+match node.kind() {
         "union_type" => check_annotated_union(node, source, ctx, diagnostics),
         "function_declaration" | "function_expression" | "arrow_function" | "method_definition" => {
             check_function_body(node, source, ctx, diagnostics);

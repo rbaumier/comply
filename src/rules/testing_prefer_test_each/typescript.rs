@@ -79,10 +79,9 @@ fn push(diagnostics: &mut Vec<Diagnostic>, ctx: &crate::rules::backend::CheckCtx
     });
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["for_statement", "for_in_statement", "while_statement", "call_expression"] => |node, source, ctx, diagnostics|
     if !is_test_file(ctx.path) { return; }
-
-    match node.kind() {
+match node.kind() {
         "for_statement" | "for_in_statement" | "while_statement" => {
             let Some(body) = node.child_by_field_name("body") else { return };
             if contains_test_call(body, source) {

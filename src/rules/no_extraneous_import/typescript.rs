@@ -49,9 +49,7 @@ fn is_bare_specifier(spec: &str) -> bool {
         && !spec.starts_with("node:")
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "program" { return; }
-
+crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
     let Some(pkg) = ctx.project.nearest_package_json(ctx.path) else { return; };
     if is_test_file(ctx.path) { return; }
 

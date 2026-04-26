@@ -31,11 +31,7 @@ fn canonical(raw: &str) -> Option<String> {
     }
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "integer_literal" {
-        return;
-    }
-
+crate::ast_check! { on ["integer_literal"] => |node, source, ctx, diagnostics|
     let raw = node.utf8_text(source).unwrap_or("");
     if let Some(fixed) = canonical(raw) {
         let pos = node.start_position();

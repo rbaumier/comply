@@ -1,8 +1,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["entrypoint_instruction"] => |node, source, ctx, diagnostics|
     let _ = source;
-    if node.kind() != "entrypoint_instruction" { return; }
     let mut prev = node.prev_sibling();
     while let Some(p) = prev {
         match p.kind() {

@@ -40,11 +40,7 @@ fn classify_macro(name: &str) -> Option<String> {
     Some(format!("{ns}::{level}!"))
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "macro_invocation" {
-        return;
-    }
-
+crate::ast_check! { on ["macro_invocation"] => |node, source, ctx, diagnostics|
     if !is_business_logic_path(ctx.path) {
         return;
     }

@@ -24,8 +24,7 @@ fn is_primitive_arg(arg: &str) -> bool {
     matches!(arg, "true" | "false" | "null" | "undefined")
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "component" { return; }
+crate::ast_check! { on ["component"] => |node, source, ctx, diagnostics|
     let _ = source;
     for (idx, line) in ctx.source.lines().enumerate() {
         let mut search_from = 0;

@@ -7,10 +7,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "assignment_expression" {
-        return;
-    }
+crate::ast_check! { on ["assignment_expression"] => |node, source, ctx, diagnostics|
     // assignment_expression is always `=`. Compound operators like `+=`
     // use `augmented_assignment_expression` in tree-sitter-typescript.
     // Left side must be `this.something`

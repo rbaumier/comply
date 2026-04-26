@@ -2,11 +2,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "switch_body" {
-        return;
-    }
-
+crate::ast_check! { on ["switch_body"] => |node, source, ctx, diagnostics|
     let child_count = node.named_child_count();
     let mut default_idx: Option<usize> = None;
     let mut last_case_idx: Option<usize> = None;

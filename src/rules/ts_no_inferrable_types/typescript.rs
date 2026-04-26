@@ -20,10 +20,7 @@ fn is_inferrable(annotation: &str, value_kind: &str) -> Option<&'static str> {
     }
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "variable_declarator" {
-        return;
-    }
+crate::ast_check! { on ["variable_declarator"] => |node, source, ctx, diagnostics|
     // Must have both type annotation and value
     let Some(type_ann) = node.child_by_field_name("type") else {
         return;

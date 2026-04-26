@@ -39,10 +39,7 @@ fn has_key_attribute(opening: tree_sitter::Node, source: &[u8]) -> bool {
     false
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "jsx_opening_element" {
-        return;
-    }
+crate::ast_check! { on ["jsx_opening_element"] => |node, source, ctx, diagnostics|
     let Some(name_node) = node.child_by_field_name("name") else { return };
     if !is_fragment_tag(name_node, source) {
         return;

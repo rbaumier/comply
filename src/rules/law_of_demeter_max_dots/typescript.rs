@@ -25,9 +25,8 @@ fn depth<'a>(node: tree_sitter::Node<'a>) -> usize {
     count
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["member_expression"] => |node, source, ctx, diagnostics|
     let _ = source;
-    if node.kind() != "member_expression" { return; }
     // Only evaluate the outermost member_expression in a chain to avoid
     // reporting every intermediate node.
     if let Some(parent) = node.parent() {

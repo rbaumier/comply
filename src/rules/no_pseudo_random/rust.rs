@@ -7,11 +7,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 
 const INSECURE_FUNCTIONS: &[&str] = &["thread_rng", "random"];
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "call_expression" {
-        return;
-    }
-
+crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     let Some(callee) = node.child_by_field_name("function") else { return };
     let callee_text = callee.utf8_text(source).unwrap_or("");
 

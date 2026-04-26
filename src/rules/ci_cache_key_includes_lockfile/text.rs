@@ -9,8 +9,7 @@ fn step_mapping<'a>(uses_pair: tree_sitter::Node<'a>) -> Option<tree_sitter::Nod
     uses_pair.parent()
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "block_mapping_pair" { return; }
+crate::ast_check! { on ["block_mapping_pair"] => |node, source, ctx, diagnostics|
     if pair_key_text(node, source).as_deref() != Some("uses") { return; }
     let Some(value) = pair_scalar_value(node, source) else { return; };
     let action = value.split('@').next().unwrap_or("").trim();

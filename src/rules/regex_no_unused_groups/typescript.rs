@@ -60,10 +60,7 @@ fn is_group_referenced(name: &str, source: &str) -> bool {
         || source.contains(&replacement_ref)
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "regex" {
-        return;
-    }
+crate::ast_check! { on ["regex"] => |node, source, ctx, diagnostics|
     let Some((pattern, _flags)) = pattern_and_flags(&node, source) else { return };
     let groups = extract_named_groups(pattern);
     if groups.is_empty() {

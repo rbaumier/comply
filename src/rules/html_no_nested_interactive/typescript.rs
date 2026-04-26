@@ -108,11 +108,7 @@ fn find_nested_interactive<'a>(node: tree_sitter::Node<'a>, source: &'a [u8]) ->
     None
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "jsx_element" {
-        return;
-    }
-
+crate::ast_check! { on ["jsx_element"] => |node, source, ctx, diagnostics|
     if !is_interactive_element(node, source) {
         return;
     }

@@ -36,8 +36,7 @@ fn collect_chain<'a>(node: tree_sitter::Node<'a>, source: &'a [u8]) -> Option<Ve
     }
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "call_expression" { return; }
+crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     // Only fire on the `.min(...)` call itself.
     let Some(function) = node.child_by_field_name("function") else { return };
     if function.kind() != "member_expression" { return; }

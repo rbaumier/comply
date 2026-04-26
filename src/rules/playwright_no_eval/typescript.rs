@@ -9,15 +9,10 @@ fn is_test_file(path: &std::path::Path) -> bool {
     TEST_MARKERS.iter().any(|m| s.contains(m))
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     if !is_test_file(ctx.path) {
         return;
     }
-
-    if node.kind() != "call_expression" {
-        return;
-    }
-
     let Some(callee) = node.child_by_field_name("function") else { return };
     if callee.kind() != "member_expression" {
         return;

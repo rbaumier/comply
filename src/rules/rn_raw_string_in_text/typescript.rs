@@ -27,8 +27,7 @@ fn is_rn_container(tag: &str) -> bool {
     )
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "jsx_element" { return; }
+crate::ast_check! { on ["jsx_element"] => |node, source, ctx, diagnostics|
     let Some(opening) = node.child(0) else { return };
     if opening.kind() != "jsx_opening_element" { return; }
     let Some(tag_node) = opening.child_by_field_name("name") else { return };

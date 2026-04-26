@@ -30,11 +30,7 @@ fn program_has_module_marker(program: tree_sitter::Node, source: &[u8]) -> bool 
     false
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "program" {
-        return;
-    }
-
+crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
     let mut cursor = node.walk();
     let declare_global_node: Option<tree_sitter::Node> = node
         .named_children(&mut cursor)

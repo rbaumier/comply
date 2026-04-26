@@ -2,10 +2,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, _source, ctx, diagnostics|
-    if node.kind() != "function_item" {
-        return;
-    }
+crate::ast_check! { on ["function_item"] => |node, _source, ctx, diagnostics|
     // Walk ancestors to count function nesting depth.
     let mut depth = 0usize;
     let mut parent = node.parent();

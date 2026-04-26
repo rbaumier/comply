@@ -3,11 +3,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "binary_expression" {
-        return;
-    }
-
+crate::ast_check! { on ["binary_expression"] => |node, source, ctx, diagnostics|
     let Some(op_node) = node.child_by_field_name("operator") else { return };
     let op = op_node.utf8_text(source).unwrap_or("");
 

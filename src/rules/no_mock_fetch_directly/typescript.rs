@@ -9,7 +9,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 const MOCKED_MODULES: &[&str] = &["axios", "node-fetch"];
 const FETCH_GLOBALS: &[&str] = &["global.fetch", "globalThis.fetch"];
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["call_expression", "assignment_expression"] => |node, source, ctx, diagnostics|
     if !is_test_file(ctx.path) {
         return;
     }

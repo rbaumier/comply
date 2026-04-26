@@ -27,11 +27,7 @@ fn is_async_function(node: tree_sitter::Node, source: &[u8]) -> bool {
         .unwrap_or(false)
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "pair" {
-        return;
-    }
-
+crate::ast_check! { on ["pair"] => |node, source, ctx, diagnostics|
     let Some(key_node) = node.child_by_field_name("key") else { return };
     let key_text = key_node.utf8_text(source).unwrap_or("");
     let key_text = key_text.trim_matches(|c| c == '"' || c == '\'' || c == '`');

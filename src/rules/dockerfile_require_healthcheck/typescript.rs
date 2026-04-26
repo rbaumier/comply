@@ -6,11 +6,8 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["source_file"] => |node, source, ctx, diagnostics|
     let _ = source;
-    if node.kind() != "source_file" {
-        return;
-    }
     let mut saw_from = false;
     let mut saw_healthcheck = false;
     let mut cursor = node.walk();

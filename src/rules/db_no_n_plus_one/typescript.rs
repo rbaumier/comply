@@ -24,12 +24,8 @@ const LOOP_KINDS: &[&str] = &[
     "do_statement",
 ];
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["await_expression"] => |node, source, ctx, diagnostics|
     // Look for await_expression nodes.
-    if node.kind() != "await_expression" {
-        return;
-    }
-
     // Check if the awaited expression is a DB call.
     let Some(arg) = node.named_child(0) else { return };
     if !is_db_call(&arg, source) {

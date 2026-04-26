@@ -2,13 +2,9 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     // Match `import(...)` expressions — tree-sitter parses these as `call_expression`
     // with callee kind `import`.
-    if node.kind() != "call_expression" {
-        return;
-    }
-
     let Some(callee) = node.child_by_field_name("function") else { return };
     if callee.kind() != "import" {
         return;

@@ -16,12 +16,8 @@ fn is_bad_key_call(text: &str) -> bool {
     BAD_KEY_CALLS.iter().any(|pat| text.contains(pat))
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["jsx_attribute"] => |node, source, ctx, diagnostics|
     // Look for jsx_attribute nodes with name "key".
-    if node.kind() != "jsx_attribute" {
-        return;
-    }
-
     // Check the attribute name is "key".
     let mut cursor = node.walk();
     let name_match = node.children(&mut cursor).any(|c| {

@@ -4,7 +4,6 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::walker::walk_tree;
 
 const STOP_WORDS: &[&str] = &[
     "a", "an", "the", "to", "of", "in", "on", "for", "with", "and", "or", "but", "is", "it",
@@ -15,7 +14,17 @@ const STOP_WORDS: &[&str] = &[
 pub struct Check;
 
 impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        Some(&["function_item", "function_signature_item"])
+    }
+
+    fn visit_node(
+        &self,
+        node: tree_sitter::Node,
+        ctx: &CheckCtx,
+        _state: Option<&mut dyn std::any::Any>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
         let max_comment_tokens = ctx
             .config
             .threshold("comment-paraphrases-code", "max_comment_tokens");
@@ -23,46 +32,36 @@ impl AstCheck for Check {
             .config
             .float("comment-paraphrases-code", "overlap_threshold") as f32;
         let source = ctx.source.as_bytes();
-        let mut diagnostics = Vec::new();
-        walk_tree(tree, |node| {
-            let name_node = match node.kind() {
-                "function_item" | "function_signature_item" => {
-                    node.child_by_field_name("name")
-                }
-                _ => return,
-            };
-            let Some(name_node) = name_node else { return };
-            let Ok(name) = name_node.utf8_text(source) else { return };
+        let Some(name_node) = node.child_by_field_name("name") else { return };
+        let Ok(name) = name_node.utf8_text(source) else { return };
 
-            // Find preceding comment sibling.
-            let Some(prev) = node.prev_named_sibling() else { return };
-            if prev.kind() != "line_comment" && prev.kind() != "block_comment" {
-                return;
-            }
-            let Ok(comment_text) = prev.utf8_text(source) else { return };
-            // Skip doc comments (/// or //!).
-            if comment_text.starts_with("///") || comment_text.starts_with("//!") {
-                return;
-            }
-            let body = strip_comment_markers(comment_text);
-            if !looks_like_paraphrase(name, &body, max_comment_tokens, overlap_threshold) {
-                return;
-            }
-            let pos = prev.start_position();
-            diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
-                line: pos.row + 1,
-                column: pos.column + 1,
-                rule_id: "comment-paraphrases-code".into(),
-                message: format!(
-                    "Comment above `{name}` paraphrases the function name. Rewrite to \
-                     explain WHY, not WHAT — or delete the comment."
-                ),
-                severity: Severity::Warning,
-                span: None,
-            });
+        // Find preceding comment sibling.
+        let Some(prev) = node.prev_named_sibling() else { return };
+        if prev.kind() != "line_comment" && prev.kind() != "block_comment" {
+            return;
+        }
+        let Ok(comment_text) = prev.utf8_text(source) else { return };
+        // Skip doc comments (/// or //!).
+        if comment_text.starts_with("///") || comment_text.starts_with("//!") {
+            return;
+        }
+        let body = strip_comment_markers(comment_text);
+        if !looks_like_paraphrase(name, &body, max_comment_tokens, overlap_threshold) {
+            return;
+        }
+        let pos = prev.start_position();
+        diagnostics.push(Diagnostic {
+            path: ctx.path.to_path_buf(),
+            line: pos.row + 1,
+            column: pos.column + 1,
+            rule_id: "comment-paraphrases-code".into(),
+            message: format!(
+                "Comment above `{name}` paraphrases the function name. Rewrite to \
+                 explain WHY, not WHAT — or delete the comment."
+            ),
+            severity: Severity::Warning,
+            span: None,
         });
-        diagnostics
     }
 }
 

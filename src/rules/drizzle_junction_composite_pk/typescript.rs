@@ -30,10 +30,7 @@ fn columns_object<'a>(
     objects.into_iter().next()
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "call_expression" {
-        return;
-    }
+crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     let Some(name) = callee_name(&node, source) else { return };
     if !TABLE_CTORS.contains(&name) {
         return;

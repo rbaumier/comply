@@ -54,11 +54,7 @@ fn find_accessor_ancestor<'a>(
     None
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "this" {
-        return;
-    }
-
+crate::ast_check! { on ["this"] => |node, source, ctx, diagnostics|
     let Some(parent) = node.parent() else { return };
 
     // We need `this` to be part of a member_expression: `this.foo`

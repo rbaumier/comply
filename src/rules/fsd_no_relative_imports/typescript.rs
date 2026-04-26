@@ -24,11 +24,7 @@ const FSD_LAYERS: &[&str] = &[
     "shared",
 ];
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "import_statement" {
-        return;
-    }
-
+crate::ast_check! { on ["import_statement"] => |node, source, ctx, diagnostics|
     let Some(source_node) = node.child_by_field_name("source") else { return };
     let import_path = source_node
         .utf8_text(source)

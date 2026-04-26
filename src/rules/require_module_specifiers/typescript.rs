@@ -4,12 +4,8 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["import_statement", "export_statement"] => |node, source, ctx, diagnostics|
     let kind = node.kind();
-    if kind != "import_statement" && kind != "export_statement" {
-        return;
-    }
-
     let stmt_type = if kind == "import_statement" { "import" } else { "export" };
 
     // For import statements: look for an import clause with an empty named_imports

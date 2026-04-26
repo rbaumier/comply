@@ -6,12 +6,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::jsx::jsx_attribute_name;
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    let kind = node.kind();
-    if kind != "jsx_opening_element" && kind != "jsx_self_closing_element" {
-        return;
-    }
-
+crate::ast_check! { on ["jsx_opening_element", "jsx_self_closing_element"] => |node, source, ctx, diagnostics|
     let mut has_handler = false;
     let mut has_role = false;
     let mut has_tabindex = false;

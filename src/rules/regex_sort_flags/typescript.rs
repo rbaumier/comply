@@ -28,10 +28,7 @@ fn regex_flags<'a>(node: &tree_sitter::Node<'_>, source: &'a [u8]) -> Option<&'a
     Some(&inner[last_slash + 1..])
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "regex" {
-        return;
-    }
+crate::ast_check! { on ["regex"] => |node, source, ctx, diagnostics|
     let Some(flags) = regex_flags(&node, source) else { return };
     if flags.len() < 2 {
         return;

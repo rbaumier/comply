@@ -3,34 +3,39 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::sql_helpers::RUST_STRING_KINDS;
-use crate::rules::walker::collect_nodes_of_kinds;
 
 #[derive(Debug)]
 pub struct Check;
 
 impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        Some(RUST_STRING_KINDS)
+    }
+
+    fn visit_node(
+        &self,
+        node: tree_sitter::Node,
+        ctx: &CheckCtx,
+        _state: Option<&mut dyn std::any::Any>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
         let source_bytes = ctx.source.as_bytes();
-        let mut diagnostics = Vec::new();
-        for node in collect_nodes_of_kinds(tree, RUST_STRING_KINDS) {
-            let Ok(text) = node.utf8_text(source_bytes) else {
-                continue;
-            };
-            if !super::declares_pg_enum(text) {
-                continue;
-            }
-            diagnostics.push(Diagnostic::at_node(
-                ctx.path,
-                &node,
-                super::META.id,
-                "PostgreSQL `CREATE TYPE ... AS ENUM` is append-only — \
-                 you can't remove values. Use `TEXT CHECK(col IN (...))` \
-                 or a lookup table instead."
-                    .into(),
-                Severity::Error,
-            ));
+        let Ok(text) = node.utf8_text(source_bytes) else {
+            return;
+        };
+        if !super::declares_pg_enum(text) {
+            return;
         }
-        diagnostics
+        diagnostics.push(Diagnostic::at_node(
+            ctx.path,
+            &node,
+            super::META.id,
+            "PostgreSQL `CREATE TYPE ... AS ENUM` is append-only — \
+             you can't remove values. Use `TEXT CHECK(col IN (...))` \
+             or a lookup table instead."
+                .into(),
+            Severity::Error,
+        ));
     }
 }
 

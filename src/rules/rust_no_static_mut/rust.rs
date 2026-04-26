@@ -8,50 +8,54 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::walker::walk_tree;
+
+const KINDS: &[&str] = &["static_item"];
 
 #[derive(Debug)]
 pub struct Check;
 
 impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        Some(KINDS)
+    }
+
+    fn visit_node(
+        &self,
+        node: tree_sitter::Node,
+        ctx: &CheckCtx,
+        _state: Option<&mut dyn std::any::Any>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
         let source_bytes = ctx.source.as_bytes();
-        let mut diagnostics = Vec::new();
-        walk_tree(tree, |node| {
-            if node.kind() != "static_item" {
-                return;
-            }
-            // tree-sitter-rust represents `static mut FOO` by including
-            // a `mutable_specifier` child holding the `mut` keyword.
-            let mut cursor = node.walk();
-            let has_mut = node
-                .children(&mut cursor)
-                .any(|c| c.kind() == "mutable_specifier");
-            if !has_mut {
-                return;
-            }
-            // Surface the static's name in the message if we can read it.
-            let name = node
-                .child_by_field_name("name")
-                .and_then(|n| n.utf8_text(source_bytes).ok())
-                .unwrap_or("FOO");
-            let pos = node.start_position();
-            diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
-                line: pos.row + 1,
-                column: pos.column + 1,
-                rule_id: "rust-no-static-mut".into(),
-                message: format!(
-                    "`static mut {name}` — deprecated in Rust 2024 and \
-                     impossible to use race-free. Use `OnceLock`/`LazyLock` \
-                     for init-once, `Mutex`/`RwLock` for shared state, or \
-                     `Atomic*` for primitive counters."
-                ),
-                severity: Severity::Error,
-                span: None,
-            });
+        // tree-sitter-rust represents `static mut FOO` by including
+        // a `mutable_specifier` child holding the `mut` keyword.
+        let mut cursor = node.walk();
+        let has_mut = node
+            .children(&mut cursor)
+            .any(|c| c.kind() == "mutable_specifier");
+        if !has_mut {
+            return;
+        }
+        // Surface the static's name in the message if we can read it.
+        let name = node
+            .child_by_field_name("name")
+            .and_then(|n| n.utf8_text(source_bytes).ok())
+            .unwrap_or("FOO");
+        let pos = node.start_position();
+        diagnostics.push(Diagnostic {
+            path: ctx.path.to_path_buf(),
+            line: pos.row + 1,
+            column: pos.column + 1,
+            rule_id: "rust-no-static-mut".into(),
+            message: format!(
+                "`static mut {name}` — deprecated in Rust 2024 and \
+                 impossible to use race-free. Use `OnceLock`/`LazyLock` \
+                 for init-once, `Mutex`/`RwLock` for shared state, or \
+                 `Atomic*` for primitive counters."
+            ),
+            severity: Severity::Error,
+            span: None,
         });
-        diagnostics
     }
 }
 

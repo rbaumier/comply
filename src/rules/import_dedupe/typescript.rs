@@ -8,10 +8,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use std::collections::HashSet;
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "import_statement" {
-        return;
-    }
+crate::ast_check! { on ["import_statement"] => |node, source, ctx, diagnostics|
     // Find the named_imports block inside the import_clause.
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {

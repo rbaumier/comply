@@ -9,11 +9,7 @@ use std::collections::HashMap;
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "program" {
-        return;
-    }
-
+crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
     // scope node id → list of `test.slow()` call_expression nodes inside it
     let mut by_scope: HashMap<usize, Vec<tree_sitter::Node>> = HashMap::new();
 

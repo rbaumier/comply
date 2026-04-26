@@ -50,10 +50,7 @@ fn is_tagged_error(expr: Node<'_>, source: &[u8]) -> bool {
     name != "Error" && name.ends_with("Error")
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "call_expression" {
-        return;
-    }
+crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     let Some(callee) = node.child_by_field_name("function") else { return; };
     let callee_text = callee.utf8_text(source).unwrap_or("");
     if callee_text != "Result.try" && callee_text != "Result.tryPromise" {

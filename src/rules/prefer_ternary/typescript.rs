@@ -6,11 +6,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "if_statement" {
-        return;
-    }
-
+crate::ast_check! { on ["if_statement"] => |node, source, ctx, diagnostics|
     // Skip if this is an `else if` (this if_statement is the alternate of a parent if).
     if let Some(parent) = node.parent()
         && parent.kind() == "else_clause" {

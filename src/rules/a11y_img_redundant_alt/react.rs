@@ -16,12 +16,7 @@ fn jsx_attr_string_value<'a>(attr: tree_sitter::Node, source: &'a [u8]) -> Optio
     crate::rules::jsx::jsx_attribute_string_value(attr, source)
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    let kind = node.kind();
-    if kind != "jsx_self_closing_element" && kind != "jsx_opening_element" {
-        return;
-    }
-
+crate::ast_check! { on ["jsx_self_closing_element", "jsx_opening_element"] => |node, source, ctx, diagnostics|
     let Some(name_node) = node.child_by_field_name("name") else {
         return;
     };

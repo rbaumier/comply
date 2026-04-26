@@ -1,10 +1,6 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "unary_expression" {
-        return;
-    }
-
+crate::ast_check! { on ["unary_expression"] => |node, source, ctx, diagnostics|
     let Some(op_node) = node.child_by_field_name("operator") else {
         return;
     };

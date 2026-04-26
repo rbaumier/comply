@@ -4,11 +4,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "jsx_self_closing_element" && node.kind() != "jsx_opening_element" {
-        return;
-    }
-
+crate::ast_check! { on ["jsx_self_closing_element", "jsx_opening_element"] => |node, source, ctx, diagnostics|
     // Check element name for namespace.
     if let Some(name_node) = node.child_by_field_name("name")
         && name_node.kind() == "jsx_namespace_name" {

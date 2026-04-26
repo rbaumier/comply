@@ -2,11 +2,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "number" {
-        return;
-    }
-
+crate::ast_check! { on ["number"] => |node, source, ctx, diagnostics|
     let text = node.utf8_text(source).unwrap_or("");
 
     // Must contain a dot to be a decimal literal.

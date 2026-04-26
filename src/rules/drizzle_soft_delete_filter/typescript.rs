@@ -85,7 +85,7 @@ fn file_has_deleted_at_column(program: tree_sitter::Node<'_>, source: &[u8]) -> 
     }
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     // Cheap pre-filter: if the file doesn't even mention deletedAt, skip
     // the AST walk entirely.
     if !ctx.source.contains("deletedAt") {
@@ -98,9 +98,6 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         root = p;
     }
     if !file_has_deleted_at_column(root, source) {
-        return;
-    }
-    if node.kind() != "call_expression" {
         return;
     }
     let Some(func) = node.child_by_field_name("function") else { return };

@@ -13,67 +13,71 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::walker::walk_tree;
+
+const KINDS: &[&str] = &["call_expression"];
 
 #[derive(Debug)]
 pub struct Check;
 
 impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        Some(KINDS)
+    }
+
+    fn visit_node(
+        &self,
+        node: tree_sitter::Node,
+        ctx: &CheckCtx,
+        _state: Option<&mut dyn std::any::Any>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
         let source_bytes = ctx.source.as_bytes();
-        let mut diagnostics = Vec::new();
-        walk_tree(tree, |node| {
-            if node.kind() != "call_expression" {
+        let Some(function) = node.child_by_field_name("function") else {
+            return;
+        };
+        let Ok(text) = function.utf8_text(source_bytes) else {
+            return;
+        };
+        // Match by suffix on the dotted/scoped path.
+        let is_unbounded = text.ends_with("unbounded_channel")
+            || text.ends_with("unbounded")
+            || text.ends_with("mpsc::channel")
+            || text == "channel"
+            && is_inside_mpsc_use(node, source_bytes);
+        if !is_unbounded {
+            return;
+        }
+        // mpsc::channel — only flag if it's `std::sync::mpsc` (which is
+        // always unbounded). Tokio's `mpsc::channel(N)` takes a capacity
+        // and is the right call. We distinguish by argument count:
+        // unbounded variants take zero args, tokio's bounded variant
+        // takes one.
+        if text.ends_with("mpsc::channel") || text == "channel" {
+            let arg_count = node
+                .child_by_field_name("arguments")
+                .map(|args| {
+                    let mut cur = args.walk();
+                    args.named_children(&mut cur).count()
+                })
+                .unwrap_or(0);
+            if arg_count > 0 {
                 return;
             }
-            let Some(function) = node.child_by_field_name("function") else {
-                return;
-            };
-            let Ok(text) = function.utf8_text(source_bytes) else {
-                return;
-            };
-            // Match by suffix on the dotted/scoped path.
-            let is_unbounded = text.ends_with("unbounded_channel")
-                || text.ends_with("unbounded")
-                || text.ends_with("mpsc::channel")
-                || text == "channel"
-                && is_inside_mpsc_use(node, source_bytes);
-            if !is_unbounded {
-                return;
-            }
-            // mpsc::channel — only flag if it's `std::sync::mpsc` (which is
-            // always unbounded). Tokio's `mpsc::channel(N)` takes a capacity
-            // and is the right call. We distinguish by argument count:
-            // unbounded variants take zero args, tokio's bounded variant
-            // takes one.
-            if text.ends_with("mpsc::channel") || text == "channel" {
-                let arg_count = node
-                    .child_by_field_name("arguments")
-                    .map(|args| {
-                        let mut cur = args.walk();
-                        args.named_children(&mut cur).count()
-                    })
-                    .unwrap_or(0);
-                if arg_count > 0 {
-                    return;
-                }
-            }
-            let pos = node.start_position();
-            diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
-                line: pos.row + 1,
-                column: pos.column + 1,
-                rule_id: "rust-unbounded-channel".into(),
-                message: format!(
-                    "`{text}(...)` returns an unbounded queue — a slow \
-                     consumer will OOM the process. Use `mpsc::channel(N)` \
-                     or `crossbeam::channel::bounded(N)` to get backpressure."
-                ),
-                severity: Severity::Error,
-                span: None,
-            });
+        }
+        let pos = node.start_position();
+        diagnostics.push(Diagnostic {
+            path: ctx.path.to_path_buf(),
+            line: pos.row + 1,
+            column: pos.column + 1,
+            rule_id: "rust-unbounded-channel".into(),
+            message: format!(
+                "`{text}(...)` returns an unbounded queue — a slow \
+                 consumer will OOM the process. Use `mpsc::channel(N)` \
+                 or `crossbeam::channel::bounded(N)` to get backpressure."
+            ),
+            severity: Severity::Error,
+            span: None,
         });
-        diagnostics
     }
 }
 

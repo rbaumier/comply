@@ -61,11 +61,8 @@ fn is_outermost_chain_call(call: tree_sitter::Node<'_>, source: &[u8]) -> bool {
     !matches!(method_name(outer_call, source), Some(name) if CHAIN_METHODS.contains(&name))
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     let _ = ctx;
-    if node.kind() != "call_expression" {
-        return;
-    }
     // Only consider calls whose method is a qualifying one — otherwise
     // any random outer call walking 0 depth would hit.
     let Some(name) = method_name(node, source) else { return };

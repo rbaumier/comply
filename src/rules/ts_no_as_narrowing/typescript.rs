@@ -7,11 +7,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "as_expression" {
-        return;
-    }
-
+crate::ast_check! { on ["as_expression"] => |node, source, ctx, diagnostics|
     // Skip `as const` — that's a widening-to-literal assertion pattern.
     let text = std::str::from_utf8(&source[node.byte_range()]).unwrap_or("");
     if text.trim_end().ends_with("as const") {

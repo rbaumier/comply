@@ -1,9 +1,6 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "class_declaration" {
-        return;
-    }
+crate::ast_check! { on ["class_declaration"] => |node, source, ctx, diagnostics|
     let Some(name_node) = node.child_by_field_name("name") else { return; };
     let class_name = name_node.utf8_text(source).unwrap_or("");
 

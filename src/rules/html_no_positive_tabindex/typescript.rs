@@ -29,10 +29,7 @@ fn is_positive(attr: tree_sitter::Node, source: &[u8]) -> bool {
     false
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "jsx_attribute" {
-        return;
-    }
+crate::ast_check! { on ["jsx_attribute"] => |node, source, ctx, diagnostics|
     if crate::rules::jsx::jsx_attribute_name(node, source) != Some("tabindex") {
         return;
     }

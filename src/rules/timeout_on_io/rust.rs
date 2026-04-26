@@ -6,7 +6,6 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::walker::walk_tree;
 
 /// Method-name suffixes that indicate I/O.
 const IO_METHODS: &[&str] = &[
@@ -17,43 +16,48 @@ const IO_METHODS: &[&str] = &[
 /// Callee bases that indicate I/O clients.
 const IO_BASES: &[&str] = &["reqwest", "sqlx", "hyper", "http", "client"];
 
+const KINDS: &[&str] = &["await_expression"];
+
 #[derive(Debug)]
 pub struct Check;
 
 impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        Some(KINDS)
+    }
+
+    fn visit_node(
+        &self,
+        node: tree_sitter::Node,
+        ctx: &CheckCtx,
+        _state: Option<&mut dyn std::any::Any>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
         let source_bytes = ctx.source.as_bytes();
-        let mut diagnostics = Vec::new();
-        walk_tree(tree, |node| {
-            // In tree-sitter-rust, `await` is a postfix unary: the AST node
-            // kind is `await_expression` wrapping an inner expression.
-            if node.kind() != "await_expression" {
-                return;
-            }
-            let Some(inner) = node.named_child(0) else {
-                return;
-            };
-            if !is_io_call(inner, source_bytes) {
-                return;
-            }
-            if is_wrapped_in_timeout(node, source_bytes) {
-                return;
-            }
-            let pos = node.start_position();
-            diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
-                line: pos.row + 1,
-                column: pos.column + 1,
-                rule_id: "timeout-on-io".into(),
-                message: "I/O call without a timeout — can hang the runtime \
-                          forever on a slow peer. Wrap with \
-                          `tokio::time::timeout(Duration::from_secs(5), ...)`."
-                    .into(),
-                severity: Severity::Warning,
-                span: None,
-            });
+        // In tree-sitter-rust, `await` is a postfix unary: the AST node
+        // kind is `await_expression` wrapping an inner expression.
+        let Some(inner) = node.named_child(0) else {
+            return;
+        };
+        if !is_io_call(inner, source_bytes) {
+            return;
+        }
+        if is_wrapped_in_timeout(node, source_bytes) {
+            return;
+        }
+        let pos = node.start_position();
+        diagnostics.push(Diagnostic {
+            path: ctx.path.to_path_buf(),
+            line: pos.row + 1,
+            column: pos.column + 1,
+            rule_id: "timeout-on-io".into(),
+            message: "I/O call without a timeout — can hang the runtime \
+                      forever on a slow peer. Wrap with \
+                      `tokio::time::timeout(Duration::from_secs(5), ...)`."
+                .into(),
+            severity: Severity::Warning,
+            span: None,
         });
-        diagnostics
     }
 }
 

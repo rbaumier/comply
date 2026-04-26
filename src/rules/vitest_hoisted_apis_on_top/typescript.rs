@@ -44,16 +44,12 @@ fn is_vi_hoisted_call(node: tree_sitter::Node, source: &[u8]) -> bool {
     false
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
     if !is_test_file(ctx.path) {
         return;
     }
 
     // Only inspect program root once.
-    if node.kind() != "program" {
-        return;
-    }
-
     let mut seen_import = false;
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {

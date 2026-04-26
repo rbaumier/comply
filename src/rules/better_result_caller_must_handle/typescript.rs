@@ -39,11 +39,8 @@ fn starts_with_camel_prefix(name: &str, prefix: &str) -> bool {
             .is_some_and(|b| b.is_ascii_uppercase())
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["expression_statement"] => |node, source, ctx, diagnostics|
     if !imports_better_result(ctx.source) {
-        return;
-    }
-    if node.kind() != "expression_statement" {
         return;
     }
     let mut cursor = node.walk();

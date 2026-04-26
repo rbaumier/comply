@@ -10,18 +10,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    let kind = node.kind();
-    if kind != "function_declaration"
-        && kind != "function"
-        && kind != "arrow_function"
-        && kind != "method_definition"
-        && kind != "function_signature"
-        && kind != "method_signature"
-    {
-        return;
-    }
-
+crate::ast_check! { on ["function_declaration", "function", "arrow_function", "method_definition", "function_signature", "method_signature"] => |node, source, ctx, diagnostics|
     let Some(params) = node.child_by_field_name("parameters") else {
         return;
     };

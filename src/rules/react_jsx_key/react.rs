@@ -60,13 +60,7 @@ fn is_in_iterator(node: tree_sitter::Node, source: &[u8]) -> bool {
     false
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    let is_jsx = node.kind() == "jsx_self_closing_element" || node.kind() == "jsx_element";
-
-    if !is_jsx {
-        return;
-    }
-
+crate::ast_check! { on ["jsx_self_closing_element", "jsx_element"] => |node, source, ctx, diagnostics|
     if has_key_prop(node, source) {
         return;
     }

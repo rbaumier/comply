@@ -5,11 +5,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::jsx::jsx_attribute_name;
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "jsx_attribute" {
-        return;
-    }
-
+crate::ast_check! { on ["jsx_attribute"] => |node, source, ctx, diagnostics|
     if jsx_attribute_name(node, source) != Some("accessKey") {
         return;
     }

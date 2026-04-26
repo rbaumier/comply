@@ -5,29 +5,32 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::walker::walk_tree;
 
 #[derive(Debug)]
 pub struct Check;
 
 impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        Some(&["if_expression", "binary_expression"])
+    }
+
+    fn visit_node(
+        &self,
+        node: tree_sitter::Node,
+        ctx: &CheckCtx,
+        _state: Option<&mut dyn std::any::Any>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
         let source = ctx.source.as_bytes();
-        let mut diagnostics = Vec::new();
-
-        walk_tree(tree, |node| {
-            match node.kind() {
-                "if_expression" => {
-                    check_if_returning_bool(node, source, ctx, &mut diagnostics);
-                }
-                "binary_expression" => {
-                    check_bool_comparison(node, source, ctx, &mut diagnostics);
-                }
-                _ => {}
+        match node.kind() {
+            "if_expression" => {
+                check_if_returning_bool(node, source, ctx, diagnostics);
             }
-        });
-
-        diagnostics
+            "binary_expression" => {
+                check_bool_comparison(node, source, ctx, diagnostics);
+            }
+            _ => {}
+        }
     }
 }
 

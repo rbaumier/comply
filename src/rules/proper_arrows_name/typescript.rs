@@ -12,11 +12,8 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["arrow_function"] => |node, source, ctx, diagnostics|
     let _ = source;
-    if node.kind() != "arrow_function" {
-        return;
-    }
     let Some(parent) = node.parent() else {
         return;
     };

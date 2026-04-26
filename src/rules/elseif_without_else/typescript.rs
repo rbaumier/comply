@@ -5,11 +5,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "if_statement" {
-        return;
-    }
-
+crate::ast_check! { on ["if_statement"] => |node, source, ctx, diagnostics|
     // Only process top-level if statements (not those inside else clauses).
     // If this if_statement's parent is an else_clause, skip it — we'll
     // process the chain from its root.

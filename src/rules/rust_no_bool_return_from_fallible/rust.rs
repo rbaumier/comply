@@ -7,7 +7,8 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::walker::walk_tree;
+
+const KINDS: &[&str] = &["function_item"];
 
 const ACTION_PREFIXES: &[&str] = &[
     "save_", "delete_", "remove_", "create_", "update_", "insert_",
@@ -25,53 +26,56 @@ const EXEMPT_PREFIXES: &[&str] = &[
 pub struct Check;
 
 impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        Some(KINDS)
+    }
+
+    fn visit_node(
+        &self,
+        node: tree_sitter::Node,
+        ctx: &CheckCtx,
+        _state: Option<&mut dyn std::any::Any>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
         let source_bytes = ctx.source.as_bytes();
-        let mut diagnostics = Vec::new();
-        walk_tree(tree, |node| {
-            if node.kind() != "function_item" {
-                return;
-            }
-            let Some(name_node) = node.child_by_field_name("name") else {
-                return;
-            };
-            let Ok(name) = name_node.utf8_text(source_bytes) else {
-                return;
-            };
-            if !looks_like_action(name) {
-                return;
-            }
-            // Predicate-style names take precedence: an `is_valid()` that
-            // returns bool is correct, even if it's also "save_valid".
-            if looks_like_predicate(name) {
-                return;
-            }
-            let Some(ret_type) = node.child_by_field_name("return_type") else {
-                return;
-            };
-            let Ok(ret_text) = ret_type.utf8_text(source_bytes) else {
-                return;
-            };
-            if ret_text.trim() != "bool" {
-                return;
-            }
-            let pos = node.start_position();
-            diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
-                line: pos.row + 1,
-                column: pos.column + 1,
-                rule_id: "rust-no-bool-return-from-fallible".into(),
-                message: format!(
-                    "`fn {name}(..) -> bool` — action functions must \
-                     return `Result<T, E>` so the caller can see why \
-                     the operation failed. Use `Result<(), MyError>` \
-                     if there's no success payload."
-                ),
-                severity: Severity::Warning,
-                span: None,
-            });
+        let Some(name_node) = node.child_by_field_name("name") else {
+            return;
+        };
+        let Ok(name) = name_node.utf8_text(source_bytes) else {
+            return;
+        };
+        if !looks_like_action(name) {
+            return;
+        }
+        // Predicate-style names take precedence: an `is_valid()` that
+        // returns bool is correct, even if it's also "save_valid".
+        if looks_like_predicate(name) {
+            return;
+        }
+        let Some(ret_type) = node.child_by_field_name("return_type") else {
+            return;
+        };
+        let Ok(ret_text) = ret_type.utf8_text(source_bytes) else {
+            return;
+        };
+        if ret_text.trim() != "bool" {
+            return;
+        }
+        let pos = node.start_position();
+        diagnostics.push(Diagnostic {
+            path: ctx.path.to_path_buf(),
+            line: pos.row + 1,
+            column: pos.column + 1,
+            rule_id: "rust-no-bool-return-from-fallible".into(),
+            message: format!(
+                "`fn {name}(..) -> bool` — action functions must \
+                 return `Result<T, E>` so the caller can see why \
+                 the operation failed. Use `Result<(), MyError>` \
+                 if there's no success payload."
+            ),
+            severity: Severity::Warning,
+            span: None,
         });
-        diagnostics
     }
 }
 

@@ -26,10 +26,8 @@ use crate::diagnostic::{Diagnostic, Severity};
 
 const PENDING_FLAGS: &[&str] = &["isPending", "isLoading"];
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["variable_declarator"] => |node, source, ctx, diagnostics|
     // Anchor on the variable_declarator `<pattern> = useQuery(…)`.
-    if node.kind() != "variable_declarator" { return; }
-
     let Some(value) = node.child_by_field_name("value") else { return; };
     if value.kind() != "call_expression" { return; }
     let Some(callee) = value.child_by_field_name("function") else { return; };

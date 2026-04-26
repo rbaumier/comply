@@ -12,7 +12,8 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::walker::walk_tree;
+
+const KINDS: &[&str] = &["field_declaration", "parameter"];
 
 const MONEY_NAMES: &[&str] = &[
     "price", "amount", "cost", "balance", "fee", "total", "subtotal",
@@ -23,35 +24,41 @@ const MONEY_NAMES: &[&str] = &[
 pub struct Check;
 
 impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        Some(KINDS)
+    }
+
+    fn visit_node(
+        &self,
+        node: tree_sitter::Node,
+        ctx: &CheckCtx,
+        _state: Option<&mut dyn std::any::Any>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
         let source_bytes = ctx.source.as_bytes();
-        let mut diagnostics = Vec::new();
-        walk_tree(tree, |node| {
-            // Struct field: `price: f64`.
-            if node.kind() == "field_declaration"
-                && let Some(name_node) = node.child_by_field_name("name")
-                && let Some(type_node) = node.child_by_field_name("type")
-                && let Ok(name) = name_node.utf8_text(source_bytes)
-                && let Ok(type_text) = type_node.utf8_text(source_bytes)
-                && is_money_name(name)
-                && is_float_type(type_text)
-            {
-                diagnostics.push(make_diagnostic(ctx, node, name, type_text));
-                return;
-            }
-            // Function parameter: `fn pay(amount: f64)`.
-            if node.kind() == "parameter"
-                && let Some(pattern) = node.child_by_field_name("pattern")
-                && let Some(type_node) = node.child_by_field_name("type")
-                && let Ok(name) = pattern.utf8_text(source_bytes)
-                && let Ok(type_text) = type_node.utf8_text(source_bytes)
-                && is_money_name(name)
-                && is_float_type(type_text)
-            {
-                diagnostics.push(make_diagnostic(ctx, node, name, type_text));
-            }
-        });
-        diagnostics
+        // Struct field: `price: f64`.
+        if node.kind() == "field_declaration"
+            && let Some(name_node) = node.child_by_field_name("name")
+            && let Some(type_node) = node.child_by_field_name("type")
+            && let Ok(name) = name_node.utf8_text(source_bytes)
+            && let Ok(type_text) = type_node.utf8_text(source_bytes)
+            && is_money_name(name)
+            && is_float_type(type_text)
+        {
+            diagnostics.push(make_diagnostic(ctx, node, name, type_text));
+            return;
+        }
+        // Function parameter: `fn pay(amount: f64)`.
+        if node.kind() == "parameter"
+            && let Some(pattern) = node.child_by_field_name("pattern")
+            && let Some(type_node) = node.child_by_field_name("type")
+            && let Ok(name) = pattern.utf8_text(source_bytes)
+            && let Ok(type_text) = type_node.utf8_text(source_bytes)
+            && is_money_name(name)
+            && is_float_type(type_text)
+        {
+            diagnostics.push(make_diagnostic(ctx, node, name, type_text));
+        }
     }
 }
 

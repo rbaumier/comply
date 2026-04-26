@@ -7,34 +7,38 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::walker::walk_tree;
+
+const KINDS: &[&str] = &["impl_item"];
 
 #[derive(Debug)]
 pub struct Check;
 
 impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        Some(KINDS)
+    }
+
+    fn visit_node(
+        &self,
+        node: tree_sitter::Node,
+        ctx: &CheckCtx,
+        _state: Option<&mut dyn std::any::Any>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
         let source_bytes = ctx.source.as_bytes();
-        let mut diagnostics = Vec::new();
-        walk_tree(tree, |node| {
-            if node.kind() != "impl_item" {
-                return;
-            }
-            let Some(trait_node) = node.child_by_field_name("trait") else {
-                return;
-            };
-            let Ok(trait_text) = trait_node.utf8_text(source_bytes) else {
-                return;
-            };
-            if !is_debug_trait(trait_text) {
-                return;
-            }
-            let Some(body) = node.child_by_field_name("body") else {
-                return;
-            };
-            collect_format_macros_in(body, source_bytes, ctx, &mut diagnostics);
-        });
-        diagnostics
+        let Some(trait_node) = node.child_by_field_name("trait") else {
+            return;
+        };
+        let Ok(trait_text) = trait_node.utf8_text(source_bytes) else {
+            return;
+        };
+        if !is_debug_trait(trait_text) {
+            return;
+        }
+        let Some(body) = node.child_by_field_name("body") else {
+            return;
+        };
+        collect_format_macros_in(body, source_bytes, ctx, diagnostics);
     }
 }
 

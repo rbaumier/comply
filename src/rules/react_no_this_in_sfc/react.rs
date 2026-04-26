@@ -32,14 +32,10 @@ fn find_this_usages(node: tree_sitter::Node, _source: &[u8], positions: &mut Vec
     }
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["function_declaration", "arrow_function"] => |node, source, ctx, diagnostics|
     // Match function declarations with PascalCase names (functional components).
     let is_fn_decl = node.kind() == "function_declaration";
     let is_arrow = node.kind() == "arrow_function";
-
-    if !is_fn_decl && !is_arrow {
-        return;
-    }
 
     // Check if it's a component (PascalCase name).
     if is_fn_decl {

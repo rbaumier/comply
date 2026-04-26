@@ -18,8 +18,7 @@ fn is_npm_install(cmd: &str) -> bool {
     false
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "block_mapping_pair" { return; }
+crate::ast_check! { on ["block_mapping_pair"] => |node, source, ctx, diagnostics|
     if pair_key_text(node, source).as_deref() != Some("run") { return; }
     let Some(cmd) = pair_scalar_value(node, source) else { return; };
     if !is_npm_install(&cmd) { return; }

@@ -53,10 +53,7 @@ fn is_return_in_test_callback(node: tree_sitter::Node, source: &[u8]) -> bool {
     false
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "return_statement" {
-        return;
-    }
+crate::ast_check! { on ["return_statement"] => |node, source, ctx, diagnostics|
     if !is_return_in_test_callback(node, source) {
         return;
     }

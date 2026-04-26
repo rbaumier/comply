@@ -10,11 +10,7 @@ use std::collections::HashMap;
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "program" {
-        return;
-    }
-
+crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
     let mut seen: HashMap<String, usize> = HashMap::new();
     let mut cursor = node.walk();
 

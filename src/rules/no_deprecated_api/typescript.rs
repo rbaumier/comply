@@ -23,8 +23,8 @@ const DEPRECATED_MEMBER_ACCESS: &[(&str, &str, &str)] = &[
     ("process.env", "NODE_DEBUG", "Use the `util.debuglog()` API instead of reading `process.env.NODE_DEBUG` directly."),
 ];
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    match node.kind() {
+crate::ast_check! { on ["new_expression", "call_expression", "member_expression"] => |node, source, ctx, diagnostics|
+match node.kind() {
         "new_expression" => {
             let Some(constructor) = node.child_by_field_name("constructor") else { return };
             let Ok(name) = constructor.utf8_text(source) else { return };

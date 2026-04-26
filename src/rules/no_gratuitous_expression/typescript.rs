@@ -24,8 +24,8 @@ fn detect_self_comparison(text: &str) -> Option<&'static str> {
     None
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    match node.kind() {
+crate::ast_check! { on ["if_statement", "binary_expression"] => |node, source, ctx, diagnostics|
+match node.kind() {
         "if_statement" => {
             let Some(condition) = node.child_by_field_name("condition") else { return };
             let Ok(cond_text) = condition.utf8_text(source) else { return };

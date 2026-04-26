@@ -7,10 +7,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "for_statement" {
-        return;
-    }
+crate::ast_check! { on ["for_statement"] => |node, source, ctx, diagnostics|
     // 1. Init: `let i = 0` or `var i = 0`
     let Some(init) = node.child_by_field_name("initializer") else {
         return;

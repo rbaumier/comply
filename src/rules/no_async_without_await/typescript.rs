@@ -9,7 +9,6 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::walker::walk_tree;
 
 const FUNCTION_KINDS: &[&str] = &[
     "function_declaration",
@@ -76,36 +75,39 @@ fn body_has_await(body: tree_sitter::Node, source: &[u8]) -> bool {
 pub struct Check;
 
 impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        Some(FUNCTION_KINDS)
+    }
+
+    fn visit_node(
+        &self,
+        node: tree_sitter::Node,
+        ctx: &CheckCtx,
+        _state: Option<&mut dyn std::any::Any>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
         let source = ctx.source.as_bytes();
-        let mut diagnostics = Vec::new();
-        walk_tree(tree, |node| {
-            if !FUNCTION_KINDS.contains(&node.kind()) {
-                return;
-            }
-            if !is_async_function(node, source) {
-                return;
-            }
-            let Some(body) = node.child_by_field_name("body") else {
-                return;
-            };
-            if body_has_await(body, source) {
-                return;
-            }
-            let pos = node.start_position();
-            diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
-                line: pos.row + 1,
-                column: pos.column + 1,
-                rule_id: "no-async-without-await".into(),
-                message: "`async` function never awaits — drop the `async` keyword \
-                          or add the `await` that justifies it."
-                    .into(),
-                severity: Severity::Warning,
-                span: None,
-            });
+        if !is_async_function(node, source) {
+            return;
+        }
+        let Some(body) = node.child_by_field_name("body") else {
+            return;
+        };
+        if body_has_await(body, source) {
+            return;
+        }
+        let pos = node.start_position();
+        diagnostics.push(Diagnostic {
+            path: ctx.path.to_path_buf(),
+            line: pos.row + 1,
+            column: pos.column + 1,
+            rule_id: "no-async-without-await".into(),
+            message: "`async` function never awaits — drop the `async` keyword \
+                      or add the `await` that justifies it."
+                .into(),
+            severity: Severity::Warning,
+            span: None,
         });
-        diagnostics
     }
 }
 

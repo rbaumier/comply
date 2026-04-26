@@ -3,37 +3,42 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::sql_helpers::TS_STRING_KINDS;
-use crate::rules::walker::collect_nodes_of_kinds;
 
 #[derive(Debug)]
 pub struct Check;
 
 impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        Some(TS_STRING_KINDS)
+    }
+
+    fn visit_node(
+        &self,
+        node: tree_sitter::Node,
+        ctx: &CheckCtx,
+        _state: Option<&mut dyn std::any::Any>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
         let source_bytes = ctx.source.as_bytes();
-        let mut diagnostics = Vec::new();
-        for node in collect_nodes_of_kinds(tree, TS_STRING_KINDS) {
-            let Ok(text) = node.utf8_text(source_bytes) else {
-                continue;
-            };
-            if !super::sql_uses_truncate(text) {
-                continue;
-            }
-            // Require also TABLE or some additional context so we don't fire
-            // on prose strings containing the word "truncate" alone.
-            let upper = text.to_ascii_uppercase();
-            if !(upper.contains("TRUNCATE TABLE") || upper.contains("TRUNCATE ")) {
-                continue;
-            }
-            diagnostics.push(Diagnostic::at_node(
-                ctx.path,
-                &node,
-                super::META.id,
-                "`TRUNCATE` bypasses triggers and audit — use `DELETE FROM` instead.".into(),
-                Severity::Warning,
-            ));
+        let Ok(text) = node.utf8_text(source_bytes) else {
+            return;
+        };
+        if !super::sql_uses_truncate(text) {
+            return;
         }
-        diagnostics
+        // Require also TABLE or some additional context so we don't fire
+        // on prose strings containing the word "truncate" alone.
+        let upper = text.to_ascii_uppercase();
+        if !(upper.contains("TRUNCATE TABLE") || upper.contains("TRUNCATE ")) {
+            return;
+        }
+        diagnostics.push(Diagnostic::at_node(
+            ctx.path,
+            &node,
+            super::META.id,
+            "`TRUNCATE` bypasses triggers and audit — use `DELETE FROM` instead.".into(),
+            Severity::Warning,
+        ));
     }
 }
 

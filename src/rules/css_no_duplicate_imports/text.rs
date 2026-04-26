@@ -1,7 +1,6 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "stylesheet" { return; }
+crate::ast_check! { on ["stylesheet"] => |node, source, ctx, diagnostics|
     let mut c = node.walk();
     let mut seen: Vec<String> = Vec::new();
     for kid in node.children(&mut c) {

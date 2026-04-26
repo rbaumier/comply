@@ -53,11 +53,7 @@ fn is_transition_object(obj: tree_sitter::Node, source: &[u8]) -> bool {
     unquote(key_text) == "on"
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "pair" {
-        return;
-    }
-
+crate::ast_check! { on ["pair"] => |node, source, ctx, diagnostics|
     // The pair must live directly inside a transition object.
     let Some(parent_object) = node.parent() else { return };
     if !is_transition_object(parent_object, source) {

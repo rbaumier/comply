@@ -105,10 +105,7 @@ fn is_json_parse<'a>(call: tree_sitter::Node<'a>, source: &[u8]) -> Option<tree_
     single
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "call_expression" {
-        return;
-    }
+crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     let Some(arg) = is_json_parse(node, source) else {
         return;
     };

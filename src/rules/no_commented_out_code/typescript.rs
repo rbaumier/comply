@@ -13,16 +13,69 @@ use crate::rules::walker::walk_tree;
 #[derive(Debug)]
 pub struct Check;
 
-impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
-        let source_bytes = ctx.source.as_bytes();
-        let mut comments = crate::rules::walker::collect_nodes_of_kinds(tree, &["comment"]);
-        comments.sort_by_key(|n| (n.start_position().row, n.start_position().column));
+/// State accumulated across visits: positions (row, col, byte_start, byte_end)
+/// of every `comment` node in document order. We store byte ranges (not Node)
+/// because state must be `'static`-friendly owned data.
+#[derive(Default)]
+struct State {
+    comments: Vec<CommentSpan>,
+}
 
-        let groups = super::group_adjacent(&comments);
-        let mut diagnostics = Vec::new();
+struct CommentSpan {
+    row: usize,
+    col: usize,
+    end_row: usize,
+    text: String,
+}
+
+impl AstCheck for Check {
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        Some(&["comment"])
+    }
+
+    fn create_state(&self) -> Option<Box<dyn std::any::Any>> {
+        Some(Box::new(State::default()))
+    }
+
+    fn visit_node(
+        &self,
+        node: tree_sitter::Node,
+        ctx: &CheckCtx,
+        state: Option<&mut dyn std::any::Any>,
+        _diagnostics: &mut Vec<Diagnostic>,
+    ) {
+        let Some(state) = state.and_then(|s| s.downcast_mut::<State>()) else {
+            return;
+        };
+        let source_bytes = ctx.source.as_bytes();
+        let Ok(text) = node.utf8_text(source_bytes) else {
+            return;
+        };
+        let pos = node.start_position();
+        let end = node.end_position();
+        state.comments.push(CommentSpan {
+            row: pos.row,
+            col: pos.column,
+            end_row: end.row,
+            text: text.to_string(),
+        });
+    }
+
+    fn finish(
+        &self,
+        ctx: &CheckCtx,
+        state: Option<Box<dyn std::any::Any>>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
+        let Some(state) = state.and_then(|s| s.downcast::<State>().ok()) else {
+            return;
+        };
+        let mut comments = state.comments;
+        comments.sort_by_key(|c| (c.row, c.col));
+
+        let groups = group_adjacent_spans(&comments);
         for group in groups {
-            let Some(body) = build_group_body(&group, source_bytes) else {
+            let Some(body) = build_group_body(&group) else {
                 continue;
             };
             if !super::has_code_shape(&body) {
@@ -31,12 +84,11 @@ impl AstCheck for Check {
             if !parses_as_typescript_code(&body) {
                 continue;
             }
-            let first = group.first().copied().expect("group is non-empty");
-            let pos = first.start_position();
+            let first = group.first().expect("group is non-empty");
             diagnostics.push(Diagnostic {
                 path: ctx.path.to_path_buf(),
-                line: pos.row + 1,
-                column: pos.column + 1,
+                line: first.row + 1,
+                column: first.col + 1,
                 rule_id: "no-commented-out-code".into(),
                 message: "This comment looks like commented-out code — \
                           delete it. Git history preserves the original."
@@ -45,17 +97,35 @@ impl AstCheck for Check {
                 span: None,
             });
         }
-        diagnostics
     }
+}
+
+/// Group adjacent comment spans. Mirrors `super::group_adjacent` but
+/// for `CommentSpan` rather than `tree_sitter::Node`. Two comments are
+/// considered adjacent if the second one starts on the same line as,
+/// or the line immediately after, the first one ends.
+fn group_adjacent_spans(comments: &[CommentSpan]) -> Vec<Vec<&CommentSpan>> {
+    let mut groups: Vec<Vec<&CommentSpan>> = Vec::new();
+    for c in comments {
+        let extend = groups
+            .last()
+            .and_then(|g| g.last())
+            .is_some_and(|last: &&CommentSpan| c.row <= last.end_row + 1);
+        if extend {
+            groups.last_mut().expect("last group exists").push(c);
+        } else {
+            groups.push(vec![c]);
+        }
+    }
+    groups
 }
 
 /// Build a single text block from a group of adjacent comments.
 /// Returns None if the group only contained doc comments.
-fn build_group_body(group: &[tree_sitter::Node], source: &[u8]) -> Option<String> {
+fn build_group_body(group: &[&CommentSpan]) -> Option<String> {
     let mut lines: Vec<String> = Vec::new();
-    for node in group {
-        let raw = node.utf8_text(source).ok()?;
-        let Some(stripped) = super::strip_comment_syntax(raw) else {
+    for c in group {
+        let Some(stripped) = super::strip_comment_syntax(&c.text) else {
             continue;
         };
         if !stripped.trim().is_empty() {

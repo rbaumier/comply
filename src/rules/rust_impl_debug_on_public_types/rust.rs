@@ -11,58 +11,60 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::walker::walk_tree;
 
 #[derive(Debug)]
 pub struct Check;
 
 impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        Some(&["struct_item", "enum_item"])
+    }
+
+    fn visit_node(
+        &self,
+        node: tree_sitter::Node,
+        ctx: &CheckCtx,
+        _state: Option<&mut dyn std::any::Any>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
         let source_bytes = ctx.source.as_bytes();
         let source_str = ctx.source;
-        let mut diagnostics = Vec::new();
-        walk_tree(tree, |node| {
-            let kind = node.kind();
-            if kind != "struct_item" && kind != "enum_item" {
-                return;
-            }
-            if !is_pub(node, source_bytes) {
-                return;
-            }
-            let Some(name_node) = node.child_by_field_name("name") else {
-                return;
-            };
-            let Ok(name) = name_node.utf8_text(source_bytes) else {
-                return;
-            };
-            if has_debug_derive(node, source_bytes) {
-                return;
-            }
-            // Manual `impl Debug for Name` anywhere in the file.
-            if source_str.contains(&format!("impl Debug for {name}"))
-                || source_str.contains(&format!("impl std::fmt::Debug for {name}"))
-                || source_str.contains(&format!("impl fmt::Debug for {name}"))
-            {
-                return;
-            }
-            let pos = node.start_position();
-            let kind_label = if kind == "struct_item" { "struct" } else { "enum" };
-            diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
-                line: pos.row + 1,
-                column: pos.column + 1,
-                rule_id: "rust-impl-debug-on-public-types".into(),
-                message: format!(
-                    "`pub {kind_label} {name}` has no `Debug` impl — \
-                     consumers can't log it, can't use it in assert \
-                     failure messages, can't see it in `{{:?}}` output. \
-                     Add `#[derive(Debug)]` or implement `Debug` by hand."
-                ),
-                severity: Severity::Warning,
-                span: None,
-            });
+        let kind = node.kind();
+        if !is_pub(node, source_bytes) {
+            return;
+        }
+        let Some(name_node) = node.child_by_field_name("name") else {
+            return;
+        };
+        let Ok(name) = name_node.utf8_text(source_bytes) else {
+            return;
+        };
+        if has_debug_derive(node, source_bytes) {
+            return;
+        }
+        // Manual `impl Debug for Name` anywhere in the file.
+        if source_str.contains(&format!("impl Debug for {name}"))
+            || source_str.contains(&format!("impl std::fmt::Debug for {name}"))
+            || source_str.contains(&format!("impl fmt::Debug for {name}"))
+        {
+            return;
+        }
+        let pos = node.start_position();
+        let kind_label = if kind == "struct_item" { "struct" } else { "enum" };
+        diagnostics.push(Diagnostic {
+            path: ctx.path.to_path_buf(),
+            line: pos.row + 1,
+            column: pos.column + 1,
+            rule_id: "rust-impl-debug-on-public-types".into(),
+            message: format!(
+                "`pub {kind_label} {name}` has no `Debug` impl — \
+                 consumers can't log it, can't use it in assert \
+                 failure messages, can't see it in `{{:?}}` output. \
+                 Add `#[derive(Debug)]` or implement `Debug` by hand."
+            ),
+            severity: Severity::Warning,
+            span: None,
         });
-        diagnostics
     }
 }
 

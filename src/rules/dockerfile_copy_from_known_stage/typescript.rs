@@ -27,8 +27,7 @@ fn collect_stage_aliases<'a>(root: tree_sitter::Node<'a>, source: &'a [u8]) -> V
     out
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "copy_instruction" { return; }
+crate::ast_check! { on ["copy_instruction"] => |node, source, ctx, diagnostics|
     // Find --from= param.
     let mut from_target: Option<&str> = None;
     let mut param_node: Option<tree_sitter::Node> = None;

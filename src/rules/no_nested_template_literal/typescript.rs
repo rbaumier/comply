@@ -11,14 +11,11 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["template_string"] => |node, source, ctx, diagnostics|
     // Only inspect outer template literals — but run on every one so
     // we catch nesting however deep it goes. `_source` stays unused
     // because the AST check is purely structural.
     let _ = source;
-    if node.kind() != "template_string" {
-        return;
-    }
     if !has_template_descendant(node) {
         return;
     }

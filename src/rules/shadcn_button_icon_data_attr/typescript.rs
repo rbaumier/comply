@@ -87,10 +87,7 @@ fn has_data_icon_attr(child: tree_sitter::Node, source: &[u8]) -> bool {
     false
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "jsx_element" {
-        return;
-    }
+crate::ast_check! { on ["jsx_element"] => |node, source, ctx, diagnostics|
     let Some(tag) = opening_tag_name(node, source) else {
         return;
     };

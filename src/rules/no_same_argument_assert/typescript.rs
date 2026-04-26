@@ -26,14 +26,10 @@ fn single_arg_text<'a>(args: Node, source: &'a [u8]) -> Option<&'a str> {
     std::str::from_utf8(&source[r.start..r.end]).ok().map(str::trim)
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     if !is_test_file(ctx.path) {
         return;
     }
-    if node.kind() != "call_expression" {
-        return;
-    }
-
     // Outer call shape: <member_expression>(<arguments>) where the member
     // property is `toBe` or `toEqual` and the object is `expect(<actual>)`.
     let Some(func) = node.child_by_field_name("function") else { return };

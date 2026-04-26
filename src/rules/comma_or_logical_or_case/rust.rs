@@ -7,11 +7,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "match_arm" {
-        return;
-    }
-
+crate::ast_check! { on ["match_arm"] => |node, source, ctx, diagnostics|
     // Get the pattern of the match arm.
     let Some(pattern) = node.child_by_field_name("pattern") else { return };
 

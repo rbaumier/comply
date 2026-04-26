@@ -32,11 +32,7 @@ fn enclosing_pair_key<'a>(object: tree_sitter::Node<'a>, source: &'a [u8]) -> Op
     Some(clean_key(text))
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "pair" {
-        return;
-    }
-
+crate::ast_check! { on ["pair"] => |node, source, ctx, diagnostics|
     let Some(key_node) = node.child_by_field_name("key") else { return };
     let key_text = key_node.utf8_text(source).unwrap_or("");
     if clean_key(key_text) != "on" {

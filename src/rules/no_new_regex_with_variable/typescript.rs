@@ -12,54 +12,56 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::walker::walk_tree;
 
 #[derive(Debug)]
 pub struct Check;
 
 impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        Some(&["new_expression"])
+    }
+
+    fn visit_node(
+        &self,
+        node: tree_sitter::Node,
+        ctx: &CheckCtx,
+        _state: Option<&mut dyn std::any::Any>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
         let source_bytes = ctx.source.as_bytes();
-        let mut diagnostics = Vec::new();
-        walk_tree(tree, |node| {
-            if node.kind() != "new_expression" {
-                return;
-            }
-            let Some(constructor) = node.child_by_field_name("constructor") else {
-                return;
-            };
-            let Ok(name) = constructor.utf8_text(source_bytes) else {
-                return;
-            };
-            if name != "RegExp" {
-                return;
-            }
-            let Some(args) = node.child_by_field_name("arguments") else {
-                return;
-            };
-            let Some(first_arg) = args.named_child(0) else {
-                return;
-            };
-            // String literal is safe — flag everything else.
-            if matches!(first_arg.kind(), "string" | "template_string") {
-                return;
-            }
-            let pos = node.start_position();
-            diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
-                line: pos.row + 1,
-                column: pos.column + 1,
-                rule_id: "no-new-regex-with-variable".into(),
-                message: "`new RegExp(variable)` — ReDoS risk. A crafted \
-                          pattern can freeze the event loop via exponential \
-                          backtracking. Use a literal regex or a vetted \
-                          safe-regex library."
-                    .into(),
-                severity: Severity::Error,
-                span: None,
-            });
+        let Some(constructor) = node.child_by_field_name("constructor") else {
+            return;
+        };
+        let Ok(name) = constructor.utf8_text(source_bytes) else {
+            return;
+        };
+        if name != "RegExp" {
+            return;
+        }
+        let Some(args) = node.child_by_field_name("arguments") else {
+            return;
+        };
+        let Some(first_arg) = args.named_child(0) else {
+            return;
+        };
+        // String literal is safe — flag everything else.
+        if matches!(first_arg.kind(), "string" | "template_string") {
+            return;
+        }
+        let pos = node.start_position();
+        diagnostics.push(Diagnostic {
+            path: ctx.path.to_path_buf(),
+            line: pos.row + 1,
+            column: pos.column + 1,
+            rule_id: "no-new-regex-with-variable".into(),
+            message: "`new RegExp(variable)` — ReDoS risk. A crafted \
+                      pattern can freeze the event loop via exponential \
+                      backtracking. Use a literal regex or a vetted \
+                      safe-regex library."
+                .into(),
+            severity: Severity::Error,
+            span: None,
         });
-        diagnostics
     }
 }
 

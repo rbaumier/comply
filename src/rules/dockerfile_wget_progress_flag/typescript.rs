@@ -28,8 +28,7 @@ fn has_word(text: &str, word: &str) -> bool {
     false
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "run_instruction" { return; }
+crate::ast_check! { on ["run_instruction"] => |node, source, ctx, diagnostics|
     let text = match std::str::from_utf8(&source[node.byte_range()]) {
         Ok(t) => t,
         Err(_) => return,

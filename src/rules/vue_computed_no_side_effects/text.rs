@@ -24,9 +24,8 @@ const SIDE_EFFECT_MARKERS: &[&str] = &[
     "$emit(",
 ];
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["component"] => |node, source, ctx, diagnostics|
     // Gate: run once per file, when we first see the root `component` node.
-    if node.kind() != "component" { return; }
     let _ = source;
     let src = ctx.source;
     let bytes = src.as_bytes();

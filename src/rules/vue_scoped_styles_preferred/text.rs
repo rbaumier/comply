@@ -25,8 +25,7 @@ fn start_tag_has_attr(start_tag: tree_sitter::Node, source: &[u8], target: &str)
     false
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "style_element" { return; }
+crate::ast_check! { on ["style_element"] => |node, source, ctx, diagnostics|
     let mut cursor = node.walk();
     let Some(start_tag) = node.children(&mut cursor).find(|c| c.kind() == "start_tag") else {
         return;

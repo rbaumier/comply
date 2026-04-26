@@ -51,12 +51,8 @@ impl<'a> HeadingCollector<'a> {
     }
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
     // Only process at the program/module level to collect all headings once
-    if node.kind() != "program" {
-        return;
-    }
-
     let mut collector = HeadingCollector::new();
     collector.collect(node, source);
 

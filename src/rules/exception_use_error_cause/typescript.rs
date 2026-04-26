@@ -9,7 +9,6 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::walker::walk_tree;
 
 const ERROR_CTORS: &[&str] = &[
     "Error",
@@ -53,51 +52,54 @@ fn is_inside_catch(node: tree_sitter::Node) -> bool {
 pub struct Check;
 
 impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
-        let source = ctx.source.as_bytes();
-        let mut diagnostics = Vec::new();
-        walk_tree(tree, |node| {
-            if node.kind() != "throw_statement" {
-                return;
-            }
-            let Some(arg) = node.named_child(0) else { return };
-            if arg.kind() != "new_expression" {
-                return;
-            }
-            let Some(ctor) = arg.child_by_field_name("constructor") else { return };
-            let Ok(ctor_name) = ctor.utf8_text(source) else { return };
-            if !ERROR_CTORS.contains(&ctor_name) {
-                return;
-            }
-            if !is_inside_catch(node) {
-                return;
-            }
-            // Must have at least one argument — a bare `new Error()` is a
-            // placeholder, skip.
-            let Some(args) = arg.child_by_field_name("arguments") else { return };
-            if args.named_child_count() == 0 {
-                return;
-            }
-            let args_text = args.utf8_text(source).unwrap_or("");
-            if args_text.contains("cause:") || args_text.contains("cause :") {
-                return;
-            }
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        Some(&["throw_statement"])
+    }
 
-            let pos = arg.start_position();
-            diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
-                line: pos.row + 1,
-                column: pos.column + 1,
-                rule_id: "exception-use-error-cause".into(),
-                message: format!(
-                    "`throw new {ctor_name}(...)` inside catch drops the original \
-                     stack trace — pass `{{ cause: e }}` as the second argument."
-                ),
-                severity: Severity::Warning,
-                span: None,
-            });
+    fn visit_node(
+        &self,
+        node: tree_sitter::Node,
+        ctx: &CheckCtx,
+        _state: Option<&mut dyn std::any::Any>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
+        let source = ctx.source.as_bytes();
+        let Some(arg) = node.named_child(0) else { return };
+        if arg.kind() != "new_expression" {
+            return;
+        }
+        let Some(ctor) = arg.child_by_field_name("constructor") else { return };
+        let Ok(ctor_name) = ctor.utf8_text(source) else { return };
+        if !ERROR_CTORS.contains(&ctor_name) {
+            return;
+        }
+        if !is_inside_catch(node) {
+            return;
+        }
+        // Must have at least one argument — a bare `new Error()` is a
+        // placeholder, skip.
+        let Some(args) = arg.child_by_field_name("arguments") else { return };
+        if args.named_child_count() == 0 {
+            return;
+        }
+        let args_text = args.utf8_text(source).unwrap_or("");
+        if args_text.contains("cause:") || args_text.contains("cause :") {
+            return;
+        }
+
+        let pos = arg.start_position();
+        diagnostics.push(Diagnostic {
+            path: ctx.path.to_path_buf(),
+            line: pos.row + 1,
+            column: pos.column + 1,
+            rule_id: "exception-use-error-cause".into(),
+            message: format!(
+                "`throw new {ctor_name}(...)` inside catch drops the original \
+                 stack trace — pass `{{ cause: e }}` as the second argument."
+            ),
+            severity: Severity::Warning,
+            span: None,
         });
-        diagnostics
     }
 }
 

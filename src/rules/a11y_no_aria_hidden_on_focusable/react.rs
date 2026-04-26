@@ -35,12 +35,7 @@ fn is_aria_hidden_true(attr: tree_sitter::Node, source: &[u8]) -> bool {
     }
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    let kind = node.kind();
-    if kind != "jsx_opening_element" && kind != "jsx_self_closing_element" {
-        return;
-    }
-
+crate::ast_check! { on ["jsx_opening_element", "jsx_self_closing_element"] => |node, source, ctx, diagnostics|
     let Some(name_node) = node.child_by_field_name("name") else {
         return;
     };

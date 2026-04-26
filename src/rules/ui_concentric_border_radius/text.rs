@@ -4,9 +4,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "rule_set" { return; }
-
+crate::ast_check! { on ["rule_set"] => |node, source, ctx, diagnostics|
     // Does this rule_set have a non-calc `border-radius` declaration?
     let Some((radius_node, radius_is_calc)) = find_declaration(node, source, "border-radius") else { return };
     if radius_is_calc { return; }

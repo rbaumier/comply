@@ -12,13 +12,8 @@ fn keyword_label(kind: &str) -> &'static str {
     }
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["if_statement", "for_statement", "for_in_statement", "while_statement"] => |node, source, ctx, diagnostics|
     let kind = node.kind();
-
-    // Match control-flow statements.
-    if !matches!(kind, "if_statement" | "for_statement" | "for_in_statement" | "while_statement") {
-        return;
-    }
 
     // For if_statement: check "consequence" field. For for/while: check "body" field.
     let body_field = match kind {

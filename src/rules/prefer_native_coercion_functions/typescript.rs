@@ -5,12 +5,8 @@ use crate::diagnostic::{Diagnostic, Severity};
 /// Coercion functions that can be passed directly.
 const COERCION_FUNCTIONS: &[&str] = &["String", "Number", "BigInt", "Boolean", "Symbol"];
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["arrow_function"] => |node, source, ctx, diagnostics|
     // Look for arrow functions: `x => Number(x)`
-    if node.kind() != "arrow_function" {
-        return;
-    }
-
     // Must have exactly one parameter (simple identifier).
     // tree-sitter uses field "parameter" (singular) for bare arrow params `x => ...`
     // and "parameters" (plural) for parenthesized `(x) => ...`.

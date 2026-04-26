@@ -79,15 +79,10 @@ fn check_block(
     }
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
     if !is_test_file(ctx.path) {
         return;
     }
-
-    if node.kind() != "program" {
-        return;
-    }
-
     check_block(node, source, ctx, diagnostics);
 }
 

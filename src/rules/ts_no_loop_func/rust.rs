@@ -21,12 +21,8 @@ fn is_function_rust(kind: &str) -> bool {
     )
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["closure_expression", "function_item"] => |node, source, ctx, diagnostics|
     let _ = source;
-    if !is_function_rust(node.kind()) {
-        return;
-    }
-
     let mut cur = node.parent();
     while let Some(parent) = cur {
         let k = parent.kind();

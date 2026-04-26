@@ -4,13 +4,9 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["spread_element"] => |node, source, ctx, diagnostics|
     // We look for spread_element nodes whose argument is a literal of
     // the same collection type as the parent.
-    if node.kind() != "spread_element" {
-        return;
-    }
-
     let Some(argument) = node.named_child(0) else { return };
     let Some(parent) = node.parent() else { return };
 

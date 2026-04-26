@@ -7,10 +7,8 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["cmd_instruction", "entrypoint_instruction"] => |node, source, ctx, diagnostics|
     let _ = source;
-    let kind = node.kind();
-    if kind != "cmd_instruction" && kind != "entrypoint_instruction" { return; }
     // Skip the cmd_instruction nested inside a healthcheck_instruction —
     // HEALTHCHECK's CMD argument is conventionally written in shell form.
     if let Some(parent) = node.parent()

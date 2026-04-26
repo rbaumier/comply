@@ -3,7 +3,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["call_expression", "subscript_expression"] => |node, source, ctx, diagnostics|
     // Pattern 1: `.filter(…)[0]` — subscript_expression whose object is
     // a call_expression with method `filter` and index is `0`.
     if node.kind() == "subscript_expression" {
@@ -40,10 +40,6 @@ crate::ast_check! { |node, source, ctx, diagnostics|
     }
 
     // Pattern 2: `.filter(…).at(0)` or `.filter(…).shift()`
-    if node.kind() != "call_expression" {
-        return;
-    }
-
     let Some(callee) = node.child_by_field_name("function") else { return };
     if callee.kind() != "member_expression" {
         return;

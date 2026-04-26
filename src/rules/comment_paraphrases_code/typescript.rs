@@ -19,7 +19,6 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::walker::walk_tree;
 
 const STOP_WORDS: &[&str] = &[
     "a", "an", "the", "to", "of", "in", "on", "for", "with", "and", "or", "but", "is", "it",
@@ -30,7 +29,17 @@ const STOP_WORDS: &[&str] = &[
 pub struct Check;
 
 impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        Some(&["function_declaration", "method_definition", "variable_declarator"])
+    }
+
+    fn visit_node(
+        &self,
+        node: tree_sitter::Node,
+        ctx: &CheckCtx,
+        _state: Option<&mut dyn std::any::Any>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
         let max_comment_tokens = ctx
             .config
             .threshold("comment-paraphrases-code", "max_comment_tokens");
@@ -38,65 +47,61 @@ impl AstCheck for Check {
             .config
             .float("comment-paraphrases-code", "overlap_threshold") as f32;
         let source = ctx.source.as_bytes();
-        let mut diagnostics = Vec::new();
-        walk_tree(tree, |node| {
-            let name_node = match node.kind() {
-                "function_declaration" | "method_definition" => {
-                    node.child_by_field_name("name")
+        let name_node = match node.kind() {
+            "function_declaration" | "method_definition" => {
+                node.child_by_field_name("name")
+            }
+            "variable_declarator" => {
+                let value = node.child_by_field_name("value");
+                if !matches!(
+                    value.map(|v| v.kind()),
+                    Some("arrow_function") | Some("function_expression")
+                ) {
+                    return;
                 }
-                "variable_declarator" => {
-                    let value = node.child_by_field_name("value");
-                    if !matches!(
-                        value.map(|v| v.kind()),
-                        Some("arrow_function") | Some("function_expression")
-                    ) {
-                        return;
-                    }
-                    node.child_by_field_name("name")
-                }
-                _ => return,
-            };
-            let Some(name_node) = name_node else { return };
-            let Ok(name) = name_node.utf8_text(source) else { return };
-            // The comment must precede the documented item. For function
-            // declarations the relevant sibling is the function itself; for
-            // arrow-function variable_declarators the comment lives above
-            // the wrapping `lexical_declaration`, so walk up until we find
-            // a node that has a sibling.
-            let anchor = if node.kind() == "variable_declarator" {
-                node.parent().unwrap_or(node)
-            } else {
-                node
-            };
-            let Some(prev) = anchor.prev_named_sibling() else { return };
-            if prev.kind() != "comment" {
-                return;
+                node.child_by_field_name("name")
             }
-            let Ok(comment_text) = prev.utf8_text(source) else { return };
-            // Skip JSDoc — that's a different rule's responsibility.
-            if comment_text.starts_with("/**") {
-                return;
-            }
-            let body = strip_comment_markers(comment_text);
-            if !looks_like_paraphrase(name, &body, max_comment_tokens, overlap_threshold) {
-                return;
-            }
-            let pos = prev.start_position();
-            diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
-                line: pos.row + 1,
-                column: pos.column + 1,
-                rule_id: "comment-paraphrases-code".into(),
-                message: format!(
-                    "Comment above `{name}` paraphrases the function name. Rewrite to \
-                     explain WHY (what breaks if this is deleted?), not WHAT — or delete \
-                     the comment if no consequence comes to mind."
-                ),
-                severity: Severity::Warning,
-                span: None,
-            });
+            _ => return,
+        };
+        let Some(name_node) = name_node else { return };
+        let Ok(name) = name_node.utf8_text(source) else { return };
+        // The comment must precede the documented item. For function
+        // declarations the relevant sibling is the function itself; for
+        // arrow-function variable_declarators the comment lives above
+        // the wrapping `lexical_declaration`, so walk up until we find
+        // a node that has a sibling.
+        let anchor = if node.kind() == "variable_declarator" {
+            node.parent().unwrap_or(node)
+        } else {
+            node
+        };
+        let Some(prev) = anchor.prev_named_sibling() else { return };
+        if prev.kind() != "comment" {
+            return;
+        }
+        let Ok(comment_text) = prev.utf8_text(source) else { return };
+        // Skip JSDoc — that's a different rule's responsibility.
+        if comment_text.starts_with("/**") {
+            return;
+        }
+        let body = strip_comment_markers(comment_text);
+        if !looks_like_paraphrase(name, &body, max_comment_tokens, overlap_threshold) {
+            return;
+        }
+        let pos = prev.start_position();
+        diagnostics.push(Diagnostic {
+            path: ctx.path.to_path_buf(),
+            line: pos.row + 1,
+            column: pos.column + 1,
+            rule_id: "comment-paraphrases-code".into(),
+            message: format!(
+                "Comment above `{name}` paraphrases the function name. Rewrite to \
+                 explain WHY (what breaks if this is deleted?), not WHAT — or delete \
+                 the comment if no consequence comes to mind."
+            ),
+            severity: Severity::Warning,
+            span: None,
         });
-        diagnostics
     }
 }
 

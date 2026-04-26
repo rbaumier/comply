@@ -74,10 +74,7 @@ fn find_close_paren(bytes: &[u8], start: usize) -> Option<usize> {
     None
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "regex" {
-        return;
-    }
+crate::ast_check! { on ["regex"] => |node, source, ctx, diagnostics|
     let Some((pattern, _flags)) = pattern_and_flags(&node, source) else { return };
     if !has_suboptimal_lookaround_quantifier(pattern) {
         return;

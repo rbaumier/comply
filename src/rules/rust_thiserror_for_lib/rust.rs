@@ -8,9 +8,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "enum_item" { return; }
-
+crate::ast_check! { on ["enum_item"] => |node, source, ctx, diagnostics|
     let path_str = ctx.path.to_string_lossy();
     if path_str.contains("main.rs") || path_str.contains("src/bin/") { return; }
     if ctx.source.contains("thiserror") { return; }

@@ -2,8 +2,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if !matches!(node.kind(), "line_comment" | "block_comment") { return; }
+crate::ast_check! { on ["line_comment", "block_comment"] => |node, source, ctx, diagnostics|
     let Ok(text) = node.utf8_text(source) else { return; };
     let today = super::today_u32();
     if let Some(diag_msg) = super::check_comment_text(text, today) {

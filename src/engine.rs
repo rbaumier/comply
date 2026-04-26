@@ -14,6 +14,7 @@
 
 use anyhow::{Context, Result};
 use rayon::prelude::*;
+use std::collections::HashMap;
 use std::fs;
 use std::sync::Arc;
 use tree_sitter::Parser;
@@ -22,7 +23,9 @@ use crate::config::Config;
 use crate::diagnostic::Diagnostic;
 use crate::files::{Language, SourceFile};
 use crate::project::ProjectCtx;
+use crate::rules::backend::AstCheck;
 use crate::rules::file_ctx::FileCtx;
+use crate::rules::walker::walk_tree;
 use crate::rules::{self, backend::Backend, backend::CheckCtx, meta::RuleMeta, RuleDef};
 
 /// Apply every registered rule to the given files.
@@ -175,32 +178,90 @@ fn dispatch_backends(
         file: &file_ctx,
     };
     let mut diagnostics = Vec::new();
+
     for (meta, backend) in &active {
         let mut produced = match backend {
-            Backend::TreeSitter(check) => {
-                if let Some(ref t) = tree {
-                    check.check(&ctx, t)
-                } else {
-                    Vec::new()
-                }
-            }
             Backend::Text(check) => check.check(&ctx),
-            // Oxlint / Clippy / Tsc backends don't produce diagnostics here —
-            // they contribute their rule-id to the external tool's config
-            // and their diagnostics are remapped in the oxlint/clippy/tsc modules.
             Backend::Oxlint { .. }
             | Backend::Clippy { .. }
             | Backend::Tsc { .. }
             | Backend::Tsgolint { .. } => Vec::new(),
+            Backend::TreeSitter(_) => continue,
         };
-        // Apply severity override if the user set one for this rule.
-        if let Some(override_sev) = config.severity_for(meta.id) {
+        if let Some(sev) = config.severity_for(meta.id) {
             for d in &mut produced {
-                d.severity = override_sev;
+                d.severity = sev;
             }
         }
         diagnostics.extend(produced);
     }
+
+    if let Some(ref t) = tree {
+        let mut multiplexed: Vec<(&RuleMeta, &dyn AstCheck)> = Vec::new();
+        let mut legacy: Vec<(&RuleMeta, &dyn AstCheck)> = Vec::new();
+        for elem in &active {
+            let (meta, backend) = **elem;
+            if let Backend::TreeSitter(check) = backend {
+                let check: &dyn AstCheck = &**check;
+                if check.interested_kinds().is_some() {
+                    multiplexed.push((meta, check));
+                } else {
+                    legacy.push((meta, check));
+                }
+            }
+        }
+
+        if !multiplexed.is_empty() {
+            let mut dispatch: HashMap<&str, Vec<usize>> = HashMap::new();
+            for (i, (_, check)) in multiplexed.iter().enumerate() {
+                for kind in check.interested_kinds().unwrap() {
+                    dispatch.entry(kind).or_default().push(i);
+                }
+            }
+
+            let mut states: Vec<Option<Box<dyn std::any::Any>>> = multiplexed
+                .iter()
+                .map(|(_, check)| check.create_state())
+                .collect();
+            let mut per_rule_diags: Vec<Vec<Diagnostic>> =
+                (0..multiplexed.len()).map(|_| Vec::new()).collect();
+
+            walk_tree(t, |node| {
+                if let Some(indices) = dispatch.get(node.kind()) {
+                    for &i in indices {
+                        let (_, check) = &multiplexed[i];
+                        check.visit_node(
+                            node,
+                            &ctx,
+                            states[i].as_deref_mut(),
+                            &mut per_rule_diags[i],
+                        );
+                    }
+                }
+            });
+
+            for (i, (meta, check)) in multiplexed.iter().enumerate() {
+                check.finish(&ctx, states[i].take(), &mut per_rule_diags[i]);
+                if let Some(sev) = config.severity_for(meta.id) {
+                    for d in &mut per_rule_diags[i] {
+                        d.severity = sev;
+                    }
+                }
+                diagnostics.extend(per_rule_diags[i].drain(..));
+            }
+        }
+
+        for (meta, check) in &legacy {
+            let mut produced = check.check(&ctx, t);
+            if let Some(sev) = config.severity_for(meta.id) {
+                for d in &mut produced {
+                    d.severity = sev;
+                }
+            }
+            diagnostics.extend(produced);
+        }
+    }
+
     diagnostics
 }
 

@@ -6,13 +6,9 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["internal_module"] => |node, source, ctx, diagnostics|
     // tree-sitter-typescript parses `namespace Foo {}` as an
     // `internal_module` node (not `module`).
-    if node.kind() != "internal_module" {
-        return;
-    }
-
     // Check if this is a `declare namespace` — allowed.
     // Walk up to see if parent is `ambient_declaration`.
     if let Some(parent) = node.parent()

@@ -3,49 +3,97 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::sql_helpers::RUST_STRING_KINDS;
-use crate::rules::walker::collect_nodes_of_kinds;
+
+/// Owned snapshot of one SQL-bearing string literal. Stores the text plus the
+/// byte range so we can later emit a diagnostic anchored at the same span as
+/// `Diagnostic::at_node` would have produced.
+struct Collected {
+    text: String,
+    line: usize,
+    column: usize,
+    byte_start: usize,
+    byte_len: usize,
+}
+
+#[derive(Default)]
+struct State {
+    nodes: Vec<Collected>,
+}
 
 #[derive(Debug)]
 pub struct Check;
 
 impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
-        let source_bytes = ctx.source.as_bytes();
-        let nodes = collect_nodes_of_kinds(tree, RUST_STRING_KINDS);
-        let mut diagnostics = Vec::new();
-        for (i, sel_node) in nodes.iter().enumerate() {
-            let Ok(sel_text) = sel_node.utf8_text(source_bytes) else {
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        Some(RUST_STRING_KINDS)
+    }
+
+    fn create_state(&self) -> Option<Box<dyn std::any::Any>> {
+        Some(Box::<State>::default())
+    }
+
+    fn visit_node(
+        &self,
+        node: tree_sitter::Node,
+        ctx: &CheckCtx,
+        state: Option<&mut dyn std::any::Any>,
+        _diagnostics: &mut Vec<Diagnostic>,
+    ) {
+        let Ok(text) = node.utf8_text(ctx.source.as_bytes()) else {
+            return;
+        };
+        let Some(state) = state.and_then(|s| s.downcast_mut::<State>()) else {
+            return;
+        };
+        let pos = node.start_position();
+        let range = node.byte_range();
+        state.nodes.push(Collected {
+            text: text.to_string(),
+            line: pos.row + 1,
+            column: pos.column + 1,
+            byte_start: range.start,
+            byte_len: range.len(),
+        });
+    }
+
+    fn finish(
+        &self,
+        ctx: &CheckCtx,
+        state: Option<Box<dyn std::any::Any>>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
+        let Some(state) = state.and_then(|s| s.downcast::<State>().ok()) else {
+            return;
+        };
+        let nodes = &state.nodes;
+        for (i, sel) in nodes.iter().enumerate() {
+            let Some(sel_table) = super::extract_select_from_table(&sel.text) else {
                 continue;
             };
-            let Some(sel_table) = super::extract_select_from_table(sel_text) else {
-                continue;
-            };
-            for ins_node in &nodes[i + 1..] {
-                let Ok(ins_text) = ins_node.utf8_text(source_bytes) else {
-                    continue;
-                };
-                let Some(ins_table) = super::extract_insert_into_table(ins_text) else {
+            for ins in &nodes[i + 1..] {
+                let Some(ins_table) = super::extract_insert_into_table(&ins.text) else {
                     continue;
                 };
                 if ins_table != sel_table {
                     continue;
                 }
-                if super::has_on_conflict(ins_text) {
+                if super::has_on_conflict(&ins.text) {
                     break;
                 }
-                diagnostics.push(Diagnostic::at_node(
-                    ctx.path,
-                    ins_node,
-                    super::META.id,
-                    format!(
+                diagnostics.push(Diagnostic {
+                    path: ctx.path.to_path_buf(),
+                    line: ins.line,
+                    column: ins.column,
+                    rule_id: super::META.id.into(),
+                    message: format!(
                         "SELECT then INSERT on `{sel_table}` is a TOCTOU race — use `INSERT ... ON CONFLICT`."
                     ),
-                    Severity::Warning,
-                ));
+                    severity: Severity::Warning,
+                    span: Some((ins.byte_start, ins.byte_len)),
+                });
                 break;
             }
         }
-        diagnostics
     }
 }
 

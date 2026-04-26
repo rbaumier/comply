@@ -43,8 +43,7 @@ fn find_withdefaults_block(src: &str) -> Option<(usize, usize, usize)> {
     Some((obj_start, k.saturating_sub(1), base_line))
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "component" { return; }
+crate::ast_check! { on ["component"] => |node, source, ctx, diagnostics|
     let _ = source;
     let Some((start, end, base_line)) = find_withdefaults_block(ctx.source) else {
         return;

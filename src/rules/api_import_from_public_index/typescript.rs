@@ -5,8 +5,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "import_statement" { return; }
+crate::ast_check! { on ["import_statement"] => |node, source, ctx, diagnostics|
     let source_node = match node.child_by_field_name("source") {
         Some(s) => s,
         None => return,

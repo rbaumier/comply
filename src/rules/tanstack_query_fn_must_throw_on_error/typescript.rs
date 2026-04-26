@@ -7,8 +7,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "pair" { return; }
+crate::ast_check! { on ["pair"] => |node, source, ctx, diagnostics|
     let Some(key) = node.child_by_field_name("key") else { return; };
     let Ok(key_text) = key.utf8_text(source) else { return; };
     let key_name = key_text.trim_matches(|c| c == '"' || c == '\'');

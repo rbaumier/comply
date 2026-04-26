@@ -4,11 +4,8 @@ fn imports_better_result(source: &str) -> bool {
     source.contains("better-result") || source.contains("@better-result")
 }
 
-crate::ast_check! { |node, _source, ctx, diagnostics|
+crate::ast_check! { on ["try_statement"] => |node, _source, ctx, diagnostics|
     if !imports_better_result(ctx.source) {
-        return;
-    }
-    if node.kind() != "try_statement" {
         return;
     }
     diagnostics.push(Diagnostic::at_node(

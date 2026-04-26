@@ -68,11 +68,7 @@ fn has_local_const_with_name(block: tree_sitter::Node, source: &[u8], name: &str
     false
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "if_statement" {
-        return;
-    }
-
+crate::ast_check! { on ["if_statement"] => |node, source, ctx, diagnostics|
     let Some(cond) = node.child_by_field_name("condition") else { return };
     // Unwrap parenthesized_expression
     let inner_cond = cond.named_child(0).unwrap_or(cond);

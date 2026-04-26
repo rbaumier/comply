@@ -118,10 +118,7 @@ fn callee_is_map(call: tree_sitter::Node, source: &[u8]) -> bool {
     prop.utf8_text(source).ok() == Some("map")
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "call_expression" {
-        return;
-    }
+crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     if !callee_is_map(node, source) {
         return;
     }

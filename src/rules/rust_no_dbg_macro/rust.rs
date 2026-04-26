@@ -6,43 +6,47 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::walker::walk_tree;
+
+const KINDS: &[&str] = &["macro_invocation"];
 
 #[derive(Debug)]
 pub struct Check;
 
 impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        Some(KINDS)
+    }
+
+    fn visit_node(
+        &self,
+        node: tree_sitter::Node,
+        ctx: &CheckCtx,
+        _state: Option<&mut dyn std::any::Any>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
         let source_bytes = ctx.source.as_bytes();
-        let mut diagnostics = Vec::new();
-        walk_tree(tree, |node| {
-            if node.kind() != "macro_invocation" {
-                return;
-            }
-            let Some(macro_node) = node.child_by_field_name("macro") else {
-                return;
-            };
-            let Ok(name) = macro_node.utf8_text(source_bytes) else {
-                return;
-            };
-            if name != "dbg" {
-                return;
-            }
-            let pos = node.start_position();
-            diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
-                line: pos.row + 1,
-                column: pos.column + 1,
-                rule_id: "rust-no-dbg-macro".into(),
-                message: "`dbg!()` is a debugging aid — remove before \
-                          committing. For permanent observability use \
-                          `tracing::debug!` with structured fields."
-                    .into(),
-                severity: Severity::Error,
-                span: None,
-            });
+        let Some(macro_node) = node.child_by_field_name("macro") else {
+            return;
+        };
+        let Ok(name) = macro_node.utf8_text(source_bytes) else {
+            return;
+        };
+        if name != "dbg" {
+            return;
+        }
+        let pos = node.start_position();
+        diagnostics.push(Diagnostic {
+            path: ctx.path.to_path_buf(),
+            line: pos.row + 1,
+            column: pos.column + 1,
+            rule_id: "rust-no-dbg-macro".into(),
+            message: "`dbg!()` is a debugging aid — remove before \
+                      committing. For permanent observability use \
+                      `tracing::debug!` with structured fields."
+                .into(),
+            severity: Severity::Error,
+            span: None,
         });
-        diagnostics
     }
 }
 

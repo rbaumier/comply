@@ -12,8 +12,7 @@ fn is_animation_base(base: &str) -> bool {
         || (base.starts_with("animate-") && base != "animate-none")
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "jsx_attribute" { return; }
+crate::ast_check! { on ["jsx_attribute"] => |node, source, ctx, diagnostics|
     let name = jsx_attribute_name(node, source).unwrap_or("");
     if name != "className" && name != "class" { return; }
     let Some(value) = jsx_attribute_string_value(node, source) else { return };

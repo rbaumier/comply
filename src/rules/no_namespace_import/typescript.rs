@@ -2,10 +2,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "import_statement" {
-        return;
-    }
+crate::ast_check! { on ["import_statement"] => |node, source, ctx, diagnostics|
     let text = match node.utf8_text(source) {
         Ok(t) => t,
         Err(_) => return,

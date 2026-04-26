@@ -2,11 +2,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "catch_clause" {
-        return;
-    }
-
+crate::ast_check! { on ["catch_clause"] => |node, source, ctx, diagnostics|
     let Some(body) = node.child_by_field_name("body") else { return };
 
     // Check if the body is empty (only whitespace/comments).

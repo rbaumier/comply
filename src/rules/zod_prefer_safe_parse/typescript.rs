@@ -26,8 +26,7 @@ fn is_route_file(ctx: &crate::rules::backend::CheckCtx) -> bool {
         || src.contains("export async function DELETE")
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "call_expression" { return; }
+crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     if !is_route_file(ctx) { return; }
 
     let Some(function) = node.child_by_field_name("function") else { return };

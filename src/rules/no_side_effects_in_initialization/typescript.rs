@@ -48,11 +48,7 @@ fn effectful_expression_kind(expr: tree_sitter::Node) -> Option<&'static str> {
     }
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "expression_statement" {
-        return;
-    }
-
+crate::ast_check! { on ["expression_statement"] => |node, source, ctx, diagnostics|
     // Only top-level: parent must be the program root.
     let Some(parent) = node.parent() else { return };
     if parent.kind() != "program" {

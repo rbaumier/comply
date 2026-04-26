@@ -9,10 +9,7 @@ const LARGE_SIZES: &[&str] = &[
 ];
 const BREAKPOINTS: &[&str] = &["sm:", "md:", "lg:", "xl:", "2xl:"];
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    let kind = node.kind();
-    if kind != "jsx_opening_element" && kind != "jsx_self_closing_element" { return; }
-
+crate::ast_check! { on ["jsx_opening_element", "jsx_self_closing_element"] => |node, source, ctx, diagnostics|
     let Some(tag) = jsx_element_tag_name(node, source) else { return };
     let lower = tag.to_ascii_lowercase();
     if !HEADING_TAGS.contains(&lower.as_str()) { return; }

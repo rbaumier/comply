@@ -5,11 +5,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "comment" {
-        return;
-    }
-
+crate::ast_check! { on ["comment"] => |node, source, ctx, diagnostics|
     let text = match std::str::from_utf8(&source[node.byte_range()]) {
         Ok(t) => t,
         Err(_) => return,

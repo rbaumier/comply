@@ -14,12 +14,8 @@ fn likely_boolean(name: &str) -> bool {
     PREFIXES.iter().any(|p| lower.starts_with(p))
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["jsx_expression"] => |node, source, ctx, diagnostics|
     // Look for `&&` binary expressions inside JSX expression containers.
-    if node.kind() != "jsx_expression" {
-        return;
-    }
-
     // Find a binary_expression child with `&&`.
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {

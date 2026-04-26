@@ -2,11 +2,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "for_statement" {
-        return;
-    }
-
+crate::ast_check! { on ["for_statement"] => |node, source, ctx, diagnostics|
     // A for_statement has fields: initializer, condition, increment, body.
     // tree-sitter always provides `initializer` (as empty_statement when omitted).
     // `increment` is None when omitted.

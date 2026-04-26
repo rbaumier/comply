@@ -31,10 +31,7 @@ fn has_multiple_spaces(pattern: &str) -> bool {
     false
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "regex" {
-        return;
-    }
+crate::ast_check! { on ["regex"] => |node, source, ctx, diagnostics|
     let Some((pattern, _flags)) = regex_ast::pattern_and_flags(&node, source) else {
         return;
     };

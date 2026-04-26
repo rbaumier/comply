@@ -22,10 +22,7 @@ fn base_call_name<'a>(node: &tree_sitter::Node<'a>, src: &'a [u8]) -> Option<&'a
     }
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "pair" {
-        return;
-    }
+crate::ast_check! { on ["pair"] => |node, source, ctx, diagnostics|
     let Some(key) = node.child_by_field_name("key") else { return };
     let key_name = match key.kind() {
         "property_identifier" | "identifier" | "string" => {

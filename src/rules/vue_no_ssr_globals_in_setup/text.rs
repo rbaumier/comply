@@ -17,8 +17,7 @@ fn script_setup_range(source: &str) -> Option<(usize, usize)> {
     None
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "component" { return; }
+crate::ast_check! { on ["component"] => |node, source, ctx, diagnostics|
     let _ = source;
     let Some((start, end)) = script_setup_range(ctx.source) else {
         return;

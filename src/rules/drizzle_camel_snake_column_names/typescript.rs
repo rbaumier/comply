@@ -100,10 +100,7 @@ fn first_string_arg<'a>(node: &tree_sitter::Node<'a>, src: &'a [u8]) -> Option<S
     None
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "pair" {
-        return;
-    }
+crate::ast_check! { on ["pair"] => |node, source, ctx, diagnostics|
     let Some(key) = node.child_by_field_name("key") else { return };
     let Some(value) = node.child_by_field_name("value") else { return };
     if value.kind() != "call_expression" {

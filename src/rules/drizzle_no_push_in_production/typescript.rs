@@ -15,11 +15,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 
 const NEEDLE: &str = "drizzle-kit push";
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if !matches!(node.kind(), "string" | "template_string") {
-        return;
-    }
-
+crate::ast_check! { on ["string", "template_string"] => |node, source, ctx, diagnostics|
     let text = node.utf8_text(source).unwrap_or("");
     let Some(pos) = find_push(text) else { return };
 

@@ -2,11 +2,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "member_expression" {
-        return;
-    }
-
+crate::ast_check! { on ["member_expression"] => |node, source, ctx, diagnostics|
     let Some(prop) = node.child_by_field_name("property") else { return };
     if prop.utf8_text(source).unwrap_or("") != "innerText" {
         return;

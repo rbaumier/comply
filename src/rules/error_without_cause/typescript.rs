@@ -9,7 +9,6 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::walker::walk_tree;
 
 const ERROR_CTORS: &[&str] = &[
     "Error",
@@ -25,52 +24,55 @@ const ERROR_CTORS: &[&str] = &[
 pub struct Check;
 
 impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        Some(&["new_expression"])
+    }
+
+    fn visit_node(
+        &self,
+        node: tree_sitter::Node,
+        ctx: &CheckCtx,
+        _state: Option<&mut dyn std::any::Any>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
         let source = ctx.source.as_bytes();
-        let mut diagnostics = Vec::new();
-        walk_tree(tree, |node| {
-            if node.kind() != "new_expression" {
-                return;
-            }
-            // Constructor must be one of the built-in Error types.
-            let Some(ctor) = node.child_by_field_name("constructor") else {
-                return;
-            };
-            let Ok(ctor_name) = ctor.utf8_text(source) else {
-                return;
-            };
-            if !ERROR_CTORS.contains(&ctor_name) {
-                return;
-            }
-            // Arguments must contain a `.message` member access (the wrap signal)
-            // and must NOT contain a `cause` field anywhere in args.
-            let Some(args) = node.child_by_field_name("arguments") else {
-                return;
-            };
-            let args_text = args.utf8_text(source).unwrap_or("");
-            let wraps_existing = args_text.contains(".message");
-            if !wraps_existing {
-                return;
-            }
-            if args_text.contains("cause:") || args_text.contains("cause :") {
-                return;
-            }
-            let pos = node.start_position();
-            diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
-                line: pos.row + 1,
-                column: pos.column + 1,
-                rule_id: "error-without-cause".into(),
-                message: format!(
-                    "`new {ctor_name}(...)` wraps an existing error but drops `cause`. \
-                     Add `{{ cause: original }}` as the 2nd argument to preserve the \
-                     stack trace and cause chain — debuggers and `error.cause` rely on it."
-                ),
-                severity: Severity::Error,
-                span: None,
-            });
+        // Constructor must be one of the built-in Error types.
+        let Some(ctor) = node.child_by_field_name("constructor") else {
+            return;
+        };
+        let Ok(ctor_name) = ctor.utf8_text(source) else {
+            return;
+        };
+        if !ERROR_CTORS.contains(&ctor_name) {
+            return;
+        }
+        // Arguments must contain a `.message` member access (the wrap signal)
+        // and must NOT contain a `cause` field anywhere in args.
+        let Some(args) = node.child_by_field_name("arguments") else {
+            return;
+        };
+        let args_text = args.utf8_text(source).unwrap_or("");
+        let wraps_existing = args_text.contains(".message");
+        if !wraps_existing {
+            return;
+        }
+        if args_text.contains("cause:") || args_text.contains("cause :") {
+            return;
+        }
+        let pos = node.start_position();
+        diagnostics.push(Diagnostic {
+            path: ctx.path.to_path_buf(),
+            line: pos.row + 1,
+            column: pos.column + 1,
+            rule_id: "error-without-cause".into(),
+            message: format!(
+                "`new {ctor_name}(...)` wraps an existing error but drops `cause`. \
+                 Add `{{ cause: original }}` as the 2nd argument to preserve the \
+                 stack trace and cause chain — debuggers and `error.cause` rely on it."
+            ),
+            severity: Severity::Error,
+            span: None,
         });
-        diagnostics
     }
 }
 

@@ -5,11 +5,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "call_expression" {
-        return;
-    }
-
+crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     // Check if it's forwardRef or React.forwardRef.
     let Some(callee) = node.child(0) else { return };
     let Ok(callee_text) = callee.utf8_text(source) else { return };

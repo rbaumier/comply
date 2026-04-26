@@ -6,10 +6,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "copy_instruction" {
-        return;
-    }
+crate::ast_check! { on ["copy_instruction"] => |node, source, ctx, diagnostics|
     if !copy_is_dot(node, source) {
         return;
     }

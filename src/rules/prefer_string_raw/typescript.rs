@@ -18,13 +18,9 @@ fn count_escaped_backslashes(s: &str) -> usize {
     count
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["string"] => |node, source, ctx, diagnostics|
     // Only inspect string nodes (single/double quoted string literals).
     // Skip template_string since those already support String.raw.
-    if node.kind() != "string" {
-        return;
-    }
-
     let text = node.utf8_text(source).unwrap_or("");
 
     // Already using String.raw — check parent

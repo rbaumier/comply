@@ -1,7 +1,6 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "line_comment" && node.kind() != "block_comment" { return; }
+crate::ast_check! { on ["line_comment", "block_comment"] => |node, source, ctx, diagnostics|
     let Ok(raw) = node.utf8_text(source) else { return };
     if !super::mentions_history(raw) { return; }
     diagnostics.push(Diagnostic::at_node(

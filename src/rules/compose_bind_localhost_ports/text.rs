@@ -48,8 +48,7 @@ fn looks_like_compose(path: &std::path::Path, source: &str) -> bool {
     source.lines().any(|l| l == "services:" || l.starts_with("services:"))
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "block_mapping_pair" { return; }
+crate::ast_check! { on ["block_mapping_pair"] => |node, source, ctx, diagnostics|
     if pair_key_text(node, source).as_deref() != Some("ports") { return; }
     if !looks_like_compose(ctx.path, ctx.source) { return; }
 

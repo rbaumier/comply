@@ -38,11 +38,7 @@ fn has_depth_parameter(type_params: tree_sitter::Node, source: &[u8]) -> bool {
     false
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "type_alias_declaration" {
-        return;
-    }
-
+crate::ast_check! { on ["type_alias_declaration"] => |node, source, ctx, diagnostics|
     let Some(name_node) = node.child_by_field_name("name") else { return };
     let name = std::str::from_utf8(&source[name_node.byte_range()]).unwrap_or("").to_string();
     if name.is_empty() {

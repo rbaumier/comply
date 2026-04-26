@@ -38,10 +38,7 @@ fn has_standalone_backslash(pattern: &str) -> bool {
     false
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "regex" {
-        return;
-    }
+crate::ast_check! { on ["regex"] => |node, source, ctx, diagnostics|
     let Some((pattern, _flags)) = crate::rules::regex_ast::pattern_and_flags(&node, source) else {
         return;
     };

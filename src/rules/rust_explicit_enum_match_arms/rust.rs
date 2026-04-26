@@ -22,67 +22,69 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::rust_helpers::is_in_test_context;
-use crate::rules::walker::walk_tree;
 
 #[derive(Debug)]
 pub struct Check;
 
 impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        Some(&["match_expression"])
+    }
+
+    fn visit_node(
+        &self,
+        node: tree_sitter::Node,
+        ctx: &CheckCtx,
+        _state: Option<&mut dyn std::any::Any>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
         let source_bytes = ctx.source.as_bytes();
-        let mut diagnostics = Vec::new();
-        walk_tree(tree, |node| {
-            if node.kind() != "match_expression" {
-                return;
+        if is_in_test_context(node, source_bytes) {
+            return;
+        }
+        let Some(match_block) = node.child_by_field_name("body") else {
+            return;
+        };
+
+        // Walk the match_arm children, collecting wildcard arms and
+        // noting whether any arm looks enum-like.
+        let mut wildcard_arms: Vec<tree_sitter::Node> = Vec::new();
+        let mut has_enum_like_arm = false;
+        let mut cursor = match_block.walk();
+        for child in match_block.named_children(&mut cursor) {
+            if child.kind() != "match_arm" {
+                continue;
             }
-            if is_in_test_context(node, source_bytes) {
-                return;
-            }
-            let Some(match_block) = node.child_by_field_name("body") else {
-                return;
+            let Some(pattern) = child.child_by_field_name("pattern") else {
+                continue;
             };
+            if pattern_is_wildcard(pattern, source_bytes) {
+                wildcard_arms.push(child);
+            } else if pattern_is_enum_like(pattern, source_bytes) {
+                has_enum_like_arm = true;
+            }
+        }
 
-            // Walk the match_arm children, collecting wildcard arms and
-            // noting whether any arm looks enum-like.
-            let mut wildcard_arms: Vec<tree_sitter::Node> = Vec::new();
-            let mut has_enum_like_arm = false;
-            let mut cursor = match_block.walk();
-            for child in match_block.named_children(&mut cursor) {
-                if child.kind() != "match_arm" {
-                    continue;
-                }
-                let Some(pattern) = child.child_by_field_name("pattern") else {
-                    continue;
-                };
-                if pattern_is_wildcard(pattern, source_bytes) {
-                    wildcard_arms.push(child);
-                } else if pattern_is_enum_like(pattern, source_bytes) {
-                    has_enum_like_arm = true;
-                }
-            }
-
-            if !has_enum_like_arm {
-                return;
-            }
-            // Emit on each wildcard arm found (usually just one).
-            for arm in wildcard_arms {
-                let pos = arm.start_position();
-                diagnostics.push(Diagnostic {
-                    path: ctx.path.to_path_buf(),
-                    line: pos.row + 1,
-                    column: pos.column + 1,
-                    rule_id: "rust-explicit-enum-match-arms".into(),
-                    message: "Wildcard `_` arm in a `match` that appears to cover an enum. \
-                              List each variant explicitly so adding a new variant produces \
-                              a compile error at this `match`, forcing a decision instead of \
-                              silently falling through."
-                        .into(),
-                    severity: Severity::Warning,
-                    span: Some((arm.start_byte(), arm.end_byte() - arm.start_byte())),
-                });
-            }
-        });
-        diagnostics
+        if !has_enum_like_arm {
+            return;
+        }
+        // Emit on each wildcard arm found (usually just one).
+        for arm in wildcard_arms {
+            let pos = arm.start_position();
+            diagnostics.push(Diagnostic {
+                path: ctx.path.to_path_buf(),
+                line: pos.row + 1,
+                column: pos.column + 1,
+                rule_id: "rust-explicit-enum-match-arms".into(),
+                message: "Wildcard `_` arm in a `match` that appears to cover an enum. \
+                          List each variant explicitly so adding a new variant produces \
+                          a compile error at this `match`, forcing a decision instead of \
+                          silently falling through."
+                    .into(),
+                severity: Severity::Warning,
+                span: Some((arm.start_byte(), arm.end_byte() - arm.start_byte())),
+            });
+        }
     }
 }
 

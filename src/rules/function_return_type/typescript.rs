@@ -1,7 +1,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use std::collections::HashSet;
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["function_declaration", "function_expression", "method_definition", "arrow_function"] => |node, source, ctx, diagnostics|
     let body = match node.kind() {
         "function_declaration" | "function_expression" | "method_definition" => {
             node.child_by_field_name("body")

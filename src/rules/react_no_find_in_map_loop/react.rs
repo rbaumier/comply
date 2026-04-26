@@ -112,11 +112,8 @@ fn map_callback_param_name(map_call: tree_sitter::Node<'_>, source: &[u8]) -> Op
     }
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     let _ = ctx;
-    if node.kind() != "call_expression" {
-        return;
-    }
     if !is_member_call(node, "find", source) && !is_member_call(node, "filter", source) {
         return;
     }

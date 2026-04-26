@@ -5,12 +5,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    let kind = node.kind();
-    if kind != "string_literal" && kind != "raw_string_literal" {
-        return;
-    }
-
+crate::ast_check! { on ["string_literal", "raw_string_literal"] => |node, source, ctx, diagnostics|
     let text = node.utf8_text(source).unwrap_or("");
     let lower = text.to_ascii_lowercase();
 

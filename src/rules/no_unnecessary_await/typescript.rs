@@ -33,11 +33,7 @@ fn is_not_promise(kind: &str) -> bool {
     )
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "await_expression" {
-        return;
-    }
-
+crate::ast_check! { on ["await_expression"] => |node, source, ctx, diagnostics|
     // The awaited value is the first named child of await_expression.
     let Some(argument) = node.named_child(0) else { return };
 

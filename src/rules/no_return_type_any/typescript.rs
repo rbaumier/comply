@@ -38,21 +38,7 @@ fn return_type_annotation<'a>(node: Node<'a>) -> Option<Node<'a>> {
         .find(|c| c.kind() == "type_annotation")
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    let kind = node.kind();
-    let is_fn_like = matches!(
-        kind,
-        "function_declaration"
-            | "function_expression"
-            | "arrow_function"
-            | "method_definition"
-            | "method_signature"
-            | "abstract_method_signature"
-    );
-    if !is_fn_like {
-        return;
-    }
-
+crate::ast_check! { on ["function_declaration", "function_expression", "arrow_function", "method_definition", "method_signature", "abstract_method_signature"] => |node, source, ctx, diagnostics|
     let Some(type_ann) = return_type_annotation(node) else { return };
     let mut cursor = type_ann.walk();
     let Some(inner) = type_ann.named_children(&mut cursor).next() else { return };

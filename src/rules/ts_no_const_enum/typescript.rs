@@ -7,11 +7,8 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["enum_declaration"] => |node, source, ctx, diagnostics|
     let _ = source;
-    if node.kind() != "enum_declaration" {
-        return;
-    }
     let mut cursor = node.walk();
     let has_const = node
         .children(&mut cursor)

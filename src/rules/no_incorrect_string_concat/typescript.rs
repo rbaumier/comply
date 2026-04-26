@@ -37,10 +37,7 @@ fn is_string_literal(node: tree_sitter::Node) -> bool {
     matches!(node.kind(), "string")
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "binary_expression" {
-        return;
-    }
+crate::ast_check! { on ["binary_expression"] => |node, source, ctx, diagnostics|
     let op = node
         .child_by_field_name("operator")
         .and_then(|n| n.utf8_text(source).ok());

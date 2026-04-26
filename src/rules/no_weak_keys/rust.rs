@@ -8,11 +8,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 /// RSA key lengths considered weak.
 const WEAK_RSA_LENGTHS: &[&str] = &["256", "384", "512", "768", "1024"];
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "integer_literal" {
-        return;
-    }
-
+crate::ast_check! { on ["integer_literal"] => |node, source, ctx, diagnostics|
     let text = node.utf8_text(source).unwrap_or("");
     if !WEAK_RSA_LENGTHS.contains(&text) {
         return;

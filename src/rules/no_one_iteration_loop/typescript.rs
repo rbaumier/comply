@@ -20,11 +20,8 @@ const LOOP_KINDS: &[&str] = &[
     "do_statement",
 ];
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["for_statement", "for_in_statement", "while_statement", "do_statement"] => |node, source, ctx, diagnostics|
     let _ = source;
-    if !LOOP_KINDS.contains(&node.kind()) {
-        return;
-    }
     let Some(body) = node.child_by_field_name("body") else { return };
     if body.kind() != "statement_block" {
         return;

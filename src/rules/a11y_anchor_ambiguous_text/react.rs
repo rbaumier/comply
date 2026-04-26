@@ -10,12 +10,8 @@ const AMBIGUOUS_TEXTS: &[&str] = &[
     "learn more",
 ];
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["jsx_element"] => |node, source, ctx, diagnostics|
     // We need a full jsx_element (opening + children + closing) to inspect text content.
-    if node.kind() != "jsx_element" {
-        return;
-    }
-
     // Check the opening tag is an <a>
     let Some(opening) = node.child(0) else { return };
     if opening.kind() != "jsx_opening_element" { return; }

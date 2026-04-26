@@ -35,10 +35,7 @@ fn find_single_char_classes(pattern: &str) -> Vec<String> {
     hits
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "regex" {
-        return;
-    }
+crate::ast_check! { on ["regex"] => |node, source, ctx, diagnostics|
     let Some((pattern, _flags)) = pattern_and_flags(&node, source) else { return };
     for snippet in find_single_char_classes(pattern) {
         diagnostics.push(Diagnostic::at_node(

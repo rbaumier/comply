@@ -21,11 +21,7 @@ const METHODS_WITH_THIS_ARG: &[&str] = &[
     "some",
 ];
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "call_expression" {
-        return;
-    }
-
+crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     // Must be a member expression call: `something.method(callback, thisArg)`
     let Some(function) = node.child_by_field_name("function") else {
         return;

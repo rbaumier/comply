@@ -27,10 +27,7 @@ fn has_unicode_property_escape(pattern: &str) -> bool {
     false
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "regex" {
-        return;
-    }
+crate::ast_check! { on ["regex"] => |node, source, ctx, diagnostics|
     let Some((pattern, flags)) = pattern_and_flags(&node, source) else { return };
     if !has_unicode_property_escape(pattern) {
         return;

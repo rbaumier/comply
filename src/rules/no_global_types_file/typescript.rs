@@ -1,9 +1,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
     // Only check once per file (at program node)
-    if node.kind() != "program" { return; }
-
     let path_str = ctx.path.to_string_lossy();
 
     // Only flag exact global patterns

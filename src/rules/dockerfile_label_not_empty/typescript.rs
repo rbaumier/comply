@@ -19,8 +19,7 @@ fn pair_value_is_empty(pair: tree_sitter::Node, source: &[u8]) -> bool {
     matches!(trimmed, "\"\"" | "''" | "")
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "label_pair" { return; }
+crate::ast_check! { on ["label_pair"] => |node, source, ctx, diagnostics|
     if !pair_value_is_empty(node, source) { return; }
     let pos = node.start_position();
     diagnostics.push(Diagnostic {

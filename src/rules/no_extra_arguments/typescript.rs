@@ -175,11 +175,7 @@ fn check_calls<'a>(
     }
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "program" {
-        return;
-    }
-
+crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
     let mut functions = HashMap::new();
     collect_functions(node, source, &mut functions);
     check_calls(node, source, &functions, diagnostics, ctx.path);

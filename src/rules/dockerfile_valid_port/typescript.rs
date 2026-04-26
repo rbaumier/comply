@@ -2,8 +2,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "expose_instruction" { return; }
+crate::ast_check! { on ["expose_instruction"] => |node, source, ctx, diagnostics|
     for i in 0..node.child_count() {
         let child = node.child(i).unwrap();
         if child.kind() != "expose_port" { continue; }

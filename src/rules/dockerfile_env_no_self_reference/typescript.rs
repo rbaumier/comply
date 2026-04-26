@@ -1,7 +1,6 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "env_instruction" { return; }
+crate::ast_check! { on ["env_instruction"] => |node, source, ctx, diagnostics|
     let mut prior_keys: Vec<String> = Vec::new();
     let mut cursor = node.walk();
     for pair in node.children(&mut cursor) {

@@ -2,11 +2,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "try_statement" {
-        return;
-    }
-
+crate::ast_check! { on ["try_statement"] => |node, source, ctx, diagnostics|
     let pos = node.start_position();
     diagnostics.push(Diagnostic {
         path: ctx.path.to_path_buf(),

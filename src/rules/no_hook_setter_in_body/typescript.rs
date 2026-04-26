@@ -3,12 +3,8 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     // Match call expressions like `setFoo(...)`.
-    if node.kind() != "call_expression" {
-        return;
-    }
-
     let Some(func) = node.child_by_field_name("function") else { return };
     if func.kind() != "identifier" {
         return;

@@ -48,11 +48,7 @@ fn is_validator_name(name: &str) -> bool {
         || lower.contains("validate")
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "as_expression" {
-        return;
-    }
-
+crate::ast_check! { on ["as_expression"] => |node, source, ctx, diagnostics|
     let Some(target) = node.named_child(1) else { return };
     let target_text = std::str::from_utf8(&source[target.byte_range()]).unwrap_or("");
     // Strip generic arguments: Foo<Bar> -> Foo

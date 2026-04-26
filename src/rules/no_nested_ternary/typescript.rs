@@ -6,37 +6,39 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::walker::walk_tree;
 
 #[derive(Debug)]
 pub struct Check;
 
 impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
-        let mut diagnostics = Vec::new();
-        walk_tree(tree, |node| {
-            if node.kind() != "ternary_expression" {
-                return;
-            }
-            let parent_is_ternary = node
-                .parent()
-                .is_some_and(|p| p.kind() == "ternary_expression");
-            if !parent_is_ternary {
-                return;
-            }
-            let pos = node.start_position();
-            diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
-                line: pos.row + 1,
-                column: pos.column + 1,
-                rule_id: "no-nested-ternary".into(),
-                message: "Nested ternary — extract to if/else or a named variable for each branch."
-                    .into(),
-                severity: Severity::Error,
-                span: None,
-            });
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        Some(&["ternary_expression"])
+    }
+
+    fn visit_node(
+        &self,
+        node: tree_sitter::Node,
+        ctx: &CheckCtx,
+        _state: Option<&mut dyn std::any::Any>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
+        let parent_is_ternary = node
+            .parent()
+            .is_some_and(|p| p.kind() == "ternary_expression");
+        if !parent_is_ternary {
+            return;
+        }
+        let pos = node.start_position();
+        diagnostics.push(Diagnostic {
+            path: ctx.path.to_path_buf(),
+            line: pos.row + 1,
+            column: pos.column + 1,
+            rule_id: "no-nested-ternary".into(),
+            message: "Nested ternary — extract to if/else or a named variable for each branch."
+                .into(),
+            severity: Severity::Error,
+            span: None,
         });
-        diagnostics
     }
 }
 

@@ -9,7 +9,6 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::walker::walk_tree;
 
 const TOKEN_KEYS: &[&str] = &[
     "token",
@@ -30,54 +29,57 @@ const TOKEN_KEYS: &[&str] = &[
 pub struct Check;
 
 impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        Some(&["call_expression"])
+    }
+
+    fn visit_node(
+        &self,
+        node: tree_sitter::Node,
+        ctx: &CheckCtx,
+        _state: Option<&mut dyn std::any::Any>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
         let source_bytes = ctx.source.as_bytes();
-        let mut diagnostics = Vec::new();
-        walk_tree(tree, |node| {
-            if node.kind() != "call_expression" {
-                return;
-            }
-            let Some(function) = node.child_by_field_name("function") else {
-                return;
-            };
-            let Ok(fn_text) = function.utf8_text(source_bytes) else {
-                return;
-            };
-            if fn_text != "localStorage.setItem" && fn_text != "sessionStorage.setItem" {
-                return;
-            }
-            let Some(args) = node.child_by_field_name("arguments") else {
-                return;
-            };
-            let Some(key_arg) = args.named_child(0) else {
-                return;
-            };
-            let Ok(key_text) = key_arg.utf8_text(source_bytes) else {
-                return;
-            };
-            let normalized = key_text
-                .trim_matches(|c| c == '"' || c == '\'' || c == '`')
-                .to_ascii_lowercase()
-                .replace('-', "");
-            if !TOKEN_KEYS.iter().any(|t| normalized.contains(t)) {
-                return;
-            }
-            let pos = node.start_position();
-            diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
-                line: pos.row + 1,
-                column: pos.column + 1,
-                rule_id: "no-auth-token-in-localstorage".into(),
-                message: format!(
-                    "Storing '{key_text}' in {fn_text} — XSS exfiltrates it. \
-                     Use an httpOnly cookie instead: the browser attaches it \
-                     automatically, JavaScript can't read it, XSS can't steal it."
-                ),
-                severity: Severity::Error,
-                span: None,
-            });
+        let Some(function) = node.child_by_field_name("function") else {
+            return;
+        };
+        let Ok(fn_text) = function.utf8_text(source_bytes) else {
+            return;
+        };
+        if fn_text != "localStorage.setItem" && fn_text != "sessionStorage.setItem" {
+            return;
+        }
+        let Some(args) = node.child_by_field_name("arguments") else {
+            return;
+        };
+        let Some(key_arg) = args.named_child(0) else {
+            return;
+        };
+        let Ok(key_text) = key_arg.utf8_text(source_bytes) else {
+            return;
+        };
+        let normalized = key_text
+            .trim_matches(|c| c == '"' || c == '\'' || c == '`')
+            .to_ascii_lowercase()
+            .replace('-', "");
+        if !TOKEN_KEYS.iter().any(|t| normalized.contains(t)) {
+            return;
+        }
+        let pos = node.start_position();
+        diagnostics.push(Diagnostic {
+            path: ctx.path.to_path_buf(),
+            line: pos.row + 1,
+            column: pos.column + 1,
+            rule_id: "no-auth-token-in-localstorage".into(),
+            message: format!(
+                "Storing '{key_text}' in {fn_text} — XSS exfiltrates it. \
+                 Use an httpOnly cookie instead: the browser attaches it \
+                 automatically, JavaScript can't read it, XSS can't steal it."
+            ),
+            severity: Severity::Error,
+            span: None,
         });
-        diagnostics
     }
 }
 

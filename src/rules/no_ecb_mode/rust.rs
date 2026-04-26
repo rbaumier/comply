@@ -21,11 +21,7 @@ fn contains_ecb(text: &str) -> bool {
     inner.eq_ignore_ascii_case("ecb")
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    let kind = node.kind();
-    if kind != "string_literal" && kind != "raw_string_literal" {
-        return;
-    }
+crate::ast_check! { on ["string_literal", "raw_string_literal"] => |node, source, ctx, diagnostics|
     let Ok(text) = node.utf8_text(source) else { return };
     if !contains_ecb(text) {
         return;

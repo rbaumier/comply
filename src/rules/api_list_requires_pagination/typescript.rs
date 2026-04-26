@@ -41,11 +41,7 @@ fn declaration_named_get<'a>(
     None
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "program" {
-        return;
-    }
-
+crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
     let src = ctx.source;
     if PAGINATION_TERMS.iter().any(|p| src.contains(p)) {
         return;

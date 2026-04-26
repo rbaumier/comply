@@ -11,8 +11,7 @@ const NEEDLES: &[&str] = &[
     ":-o-",
 ];
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if !matches!(node.kind(), "pseudo_class_selector" | "pseudo_element_selector") { return; }
+crate::ast_check! { on ["pseudo_class_selector", "pseudo_element_selector"] => |node, source, ctx, diagnostics|
     let text = node.utf8_text(source).unwrap_or_default();
     if !NEEDLES.iter().any(|n| text.contains(n)) { return; }
     diagnostics.push(Diagnostic::at_node(

@@ -5,10 +5,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "import_statement" {
-        return;
-    }
+crate::ast_check! { on ["import_statement"] => |node, source, ctx, diagnostics|
     // Walk named import specifiers inside the import_clause
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {

@@ -39,7 +39,7 @@ const TAIL_WRAPPERS: &[&str] = &[
     "expression_statement",
 ];
 
-crate::ast_check! { |node, _source, ctx, diagnostics|
+crate::ast_check! { on ["return_statement", "continue_statement"] => |node, _source, ctx, diagnostics|
     let kind = match node.kind() {
         "return_statement" => {
             // `return;` has no argument child. `return x;` has one.

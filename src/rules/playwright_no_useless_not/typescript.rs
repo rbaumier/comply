@@ -22,15 +22,10 @@ fn inverse_of(matcher: &str) -> Option<&'static str> {
 }
 
 // Check: expect(…).not.toBeVisible() etc.
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     if !is_test_file(ctx.path) {
         return;
     }
-
-    if node.kind() != "call_expression" {
-        return;
-    }
-
     // Pattern: expect(x).not.toBeVisible()
     // AST: call_expression { function: member_expression { object: member_expression { object: call_expression(expect), property: "not" }, property: "toBeVisible" } }
     let Some(callee) = node.child_by_field_name("function") else { return };

@@ -16,8 +16,7 @@ const SAFE_CALLBACK_HOOKS: &[&str] = &[
     "useImperativeHandle",
 ];
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "program" { return; }
+crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
     let mut stack: Vec<tree_sitter::Node> = vec![node];
     while let Some(n) = stack.pop() {
         if is_component_function(n, source) {

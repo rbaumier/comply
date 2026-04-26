@@ -12,42 +12,40 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::walker::walk_tree;
 
 #[derive(Debug)]
 pub struct Check;
 
 impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
-        let source_bytes = ctx.source.as_bytes();
-        let mut diagnostics = Vec::new();
-        walk_tree(tree, |node| {
-            if !is_regex(node) {
-                return;
-            }
-            if !inside_component_body(node, source_bytes) {
-                return;
-            }
-            let pos = node.start_position();
-            diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
-                line: pos.row + 1,
-                column: pos.column + 1,
-                rule_id: "react-hoist-regex-outside-component".into(),
-                message: "Regex literal inside a component body is \
-                          recompiled every render. Hoist to a module-level \
-                          `const` so it compiles once."
-                    .into(),
-                severity: Severity::Warning,
-                span: None,
-            });
-        });
-        diagnostics
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        Some(&["regex"])
     }
-}
 
-fn is_regex(node: tree_sitter::Node) -> bool {
-    node.kind() == "regex"
+    fn visit_node(
+        &self,
+        node: tree_sitter::Node,
+        ctx: &CheckCtx,
+        _state: Option<&mut dyn std::any::Any>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
+        let source_bytes = ctx.source.as_bytes();
+        if !inside_component_body(node, source_bytes) {
+            return;
+        }
+        let pos = node.start_position();
+        diagnostics.push(Diagnostic {
+            path: ctx.path.to_path_buf(),
+            line: pos.row + 1,
+            column: pos.column + 1,
+            rule_id: "react-hoist-regex-outside-component".into(),
+            message: "Regex literal inside a component body is \
+                      recompiled every render. Hoist to a module-level \
+                      `const` so it compiles once."
+                .into(),
+            severity: Severity::Warning,
+            span: None,
+        });
+    }
 }
 
 /// True when the regex is nested inside a function whose name is PascalCase

@@ -28,12 +28,8 @@ fn is_weak_protocol(inner: &str) -> bool {
     false
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["string"] => |node, source, ctx, diagnostics|
     // Match string literals that contain weak protocol names.
-    if node.kind() != "string" {
-        return;
-    }
-
     let inner = string_inner(node, source);
     if !is_weak_protocol(inner) {
         return;

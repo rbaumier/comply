@@ -57,10 +57,7 @@ fn is_react_wrapper_call(call: tree_sitter::Node, source: &[u8]) -> bool {
     }
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "export_statement" {
-        return;
-    }
+crate::ast_check! { on ["export_statement"] => |node, source, ctx, diagnostics|
     // Only default exports: `export default <value>`.
     let mut cursor = node.walk();
     let mut has_default = false;

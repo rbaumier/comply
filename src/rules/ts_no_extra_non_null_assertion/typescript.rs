@@ -6,10 +6,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, _source, ctx, diagnostics|
-    if node.kind() != "non_null_expression" {
-        return;
-    }
+crate::ast_check! { on ["non_null_expression"] => |node, _source, ctx, diagnostics|
     let Some(inner) = node.named_child(0) else {
         return;
     };

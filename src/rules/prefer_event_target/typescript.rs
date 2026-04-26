@@ -76,12 +76,9 @@ fn imports_event_emitter_from_ignored(
     false
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
     // Emit only from the `program` node so the per-file import-context check
     // runs once, then walk the subtree to collect violations.
-    if node.kind() != "program" {
-        return;
-    }
     if imports_event_emitter_from_ignored(node, source) {
         return;
     }

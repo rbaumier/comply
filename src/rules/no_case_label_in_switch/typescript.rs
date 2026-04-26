@@ -14,11 +14,7 @@ fn inside_switch(node: tree_sitter::Node) -> bool {
     false
 }
 
-crate::ast_check! { |node, _source, ctx, diagnostics|
-    if node.kind() != "labeled_statement" {
-        return;
-    }
-
+crate::ast_check! { on ["labeled_statement"] => |node, _source, ctx, diagnostics|
     if !inside_switch(node) {
         return;
     }

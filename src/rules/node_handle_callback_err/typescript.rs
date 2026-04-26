@@ -32,16 +32,8 @@ fn body_uses_param(body_text: &str, param_name: &str) -> bool {
     false
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["function_declaration", "function", "arrow_function"] => |node, source, ctx, diagnostics|
     // Match function declarations, function expressions, and arrow functions.
-    let kind = node.kind();
-    if kind != "function_declaration"
-        && kind != "function"
-        && kind != "arrow_function"
-    {
-        return;
-    }
-
     // Get the formal parameters node.
     let Some(params_node) = node.child_by_field_name("parameters") else {
         return;

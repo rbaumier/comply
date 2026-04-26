@@ -7,11 +7,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "program" {
-        return;
-    }
-
+crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
     let mut empty_export_positions: Vec<(usize, usize)> = Vec::new();
     let mut has_real_export = false;
     let mut cursor = node.walk();

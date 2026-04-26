@@ -2,9 +2,8 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["healthcheck_instruction"] => |node, source, ctx, diagnostics|
     let _ = source;
-    if node.kind() != "healthcheck_instruction" { return; }
     let mut prev = node.prev_sibling();
     while let Some(sibling) = prev {
         if sibling.kind() == "healthcheck_instruction" {

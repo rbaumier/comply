@@ -8,7 +8,8 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::rust_helpers::is_inside_async_fn;
-use crate::rules::walker::walk_tree;
+
+const KINDS: &[&str] = &["call_expression"];
 
 /// Function suffixes that indicate a blocking std::fs / std::net call.
 /// We match by `ends_with` so any qualified path (`std::fs::read_to_string`,
@@ -38,42 +39,45 @@ const SYNC_IO_SUFFIXES: &[&str] = &[
 pub struct Check;
 
 impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        Some(KINDS)
+    }
+
+    fn visit_node(
+        &self,
+        node: tree_sitter::Node,
+        ctx: &CheckCtx,
+        _state: Option<&mut dyn std::any::Any>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
         let source_bytes = ctx.source.as_bytes();
-        let mut diagnostics = Vec::new();
-        walk_tree(tree, |node| {
-            if node.kind() != "call_expression" {
-                return;
-            }
-            let Some(function) = node.child_by_field_name("function") else {
-                return;
-            };
-            let Ok(text) = function.utf8_text(source_bytes) else {
-                return;
-            };
-            let Some(matched) = matched_sync_api(text) else {
-                return;
-            };
-            if !is_inside_async_fn(node, source_bytes) {
-                return;
-            }
-            let pos = node.start_position();
-            diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
-                line: pos.row + 1,
-                column: pos.column + 1,
-                rule_id: "rust-sync-io-in-async".into(),
-                message: format!(
-                    "`{matched}(..)` is a blocking syscall inside an `async fn` — \
-                     it parks the worker thread for the whole I/O. Use the \
-                     `tokio::fs`/`tokio::net` equivalent, or wrap in \
-                     `tokio::task::spawn_blocking`."
-                ),
-                severity: Severity::Error,
-                span: None,
-            });
+        let Some(function) = node.child_by_field_name("function") else {
+            return;
+        };
+        let Ok(text) = function.utf8_text(source_bytes) else {
+            return;
+        };
+        let Some(matched) = matched_sync_api(text) else {
+            return;
+        };
+        if !is_inside_async_fn(node, source_bytes) {
+            return;
+        }
+        let pos = node.start_position();
+        diagnostics.push(Diagnostic {
+            path: ctx.path.to_path_buf(),
+            line: pos.row + 1,
+            column: pos.column + 1,
+            rule_id: "rust-sync-io-in-async".into(),
+            message: format!(
+                "`{matched}(..)` is a blocking syscall inside an `async fn` — \
+                 it parks the worker thread for the whole I/O. Use the \
+                 `tokio::fs`/`tokio::net` equivalent, or wrap in \
+                 `tokio::task::spawn_blocking`."
+            ),
+            severity: Severity::Error,
+            span: None,
         });
-        diagnostics
     }
 }
 

@@ -7,7 +7,8 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::walker::walk_tree;
+
+const KINDS: &[&str] = &["call_expression"];
 
 const STRING_CHAIN_METHODS: &[(&str, &str)] = &[
     ("email", "z.email()"),
@@ -25,65 +26,68 @@ const STRING_CHAIN_METHODS: &[(&str, &str)] = &[
 pub struct Check;
 
 impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
-        let source_bytes = ctx.source.as_bytes();
-        let mut diagnostics = Vec::new();
-        walk_tree(tree, |node| {
-            if node.kind() != "call_expression" {
-                return;
-            }
-            let Some(function) = node.child_by_field_name("function") else {
-                return;
-            };
-            if function.kind() != "member_expression" {
-                return;
-            }
-            let Some(property) = function.child_by_field_name("property") else {
-                return;
-            };
-            let Some(object) = function.child_by_field_name("object") else {
-                return;
-            };
-            let Ok(method_name) = property.utf8_text(source_bytes) else {
-                return;
-            };
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        Some(KINDS)
+    }
 
-            // Check z.string().<method>()
-            if let Some((_, replacement)) =
-                STRING_CHAIN_METHODS.iter().find(|(m, _)| *m == method_name)
-                && is_z_string_call(object, source_bytes)
-            {
-                let pos = node.start_position();
-                diagnostics.push(Diagnostic {
-                    path: ctx.path.to_path_buf(),
-                    line: pos.row + 1,
-                    column: pos.column + 1,
-                    rule_id: "zod-prefer-top-level-format".into(),
-                    message: format!(
-                        "`z.string().{method_name}()` — use `{replacement}` \
-                         directly. Top-level format helpers are shorter, \
-                         faster, and tree-shakeable."
-                    ),
-                    severity: Severity::Warning,
-                    span: None,
-                });
-            }
-            // Check z.number().int()
-            if method_name == "int" && is_z_number_call(object, source_bytes) {
-                let pos = node.start_position();
-                diagnostics.push(Diagnostic {
-                    path: ctx.path.to_path_buf(),
-                    line: pos.row + 1,
-                    column: pos.column + 1,
-                    rule_id: "zod-prefer-top-level-format".into(),
-                    message: "`z.number().int()` — use `z.int()` directly."
-                        .into(),
-                    severity: Severity::Warning,
-                    span: None,
-                });
-            }
-        });
-        diagnostics
+    fn visit_node(
+        &self,
+        node: tree_sitter::Node,
+        ctx: &CheckCtx,
+        _state: Option<&mut dyn std::any::Any>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
+        let source_bytes = ctx.source.as_bytes();
+        let Some(function) = node.child_by_field_name("function") else {
+            return;
+        };
+        if function.kind() != "member_expression" {
+            return;
+        }
+        let Some(property) = function.child_by_field_name("property") else {
+            return;
+        };
+        let Some(object) = function.child_by_field_name("object") else {
+            return;
+        };
+        let Ok(method_name) = property.utf8_text(source_bytes) else {
+            return;
+        };
+
+        // Check z.string().<method>()
+        if let Some((_, replacement)) =
+            STRING_CHAIN_METHODS.iter().find(|(m, _)| *m == method_name)
+            && is_z_string_call(object, source_bytes)
+        {
+            let pos = node.start_position();
+            diagnostics.push(Diagnostic {
+                path: ctx.path.to_path_buf(),
+                line: pos.row + 1,
+                column: pos.column + 1,
+                rule_id: "zod-prefer-top-level-format".into(),
+                message: format!(
+                    "`z.string().{method_name}()` — use `{replacement}` \
+                     directly. Top-level format helpers are shorter, \
+                     faster, and tree-shakeable."
+                ),
+                severity: Severity::Warning,
+                span: None,
+            });
+        }
+        // Check z.number().int()
+        if method_name == "int" && is_z_number_call(object, source_bytes) {
+            let pos = node.start_position();
+            diagnostics.push(Diagnostic {
+                path: ctx.path.to_path_buf(),
+                line: pos.row + 1,
+                column: pos.column + 1,
+                rule_id: "zod-prefer-top-level-format".into(),
+                message: "`z.number().int()` — use `z.int()` directly."
+                    .into(),
+                severity: Severity::Warning,
+                span: None,
+            });
+        }
     }
 }
 

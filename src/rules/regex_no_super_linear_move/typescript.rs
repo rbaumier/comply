@@ -37,10 +37,7 @@ fn has_super_linear_move(pattern: &str) -> bool {
     false
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "regex" {
-        return;
-    }
+crate::ast_check! { on ["regex"] => |node, source, ctx, diagnostics|
     let Some((pattern, _flags)) = pattern_and_flags(&node, source) else { return };
     if !has_super_linear_move(pattern) {
         return;

@@ -10,11 +10,7 @@ fn is_unnecessary_end(text: &str) -> bool {
         || trimmed.ends_with(".length")
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "call_expression" {
-        return;
-    }
-
+crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     // Check that the callee is a member expression with property "slice".
     let Some(callee) = node.child_by_field_name("function") else { return };
     if callee.kind() != "member_expression" {

@@ -16,8 +16,7 @@ fn has_ts_script(source: &str) -> bool {
     false
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "component" { return; }
+crate::ast_check! { on ["component"] => |node, source, ctx, diagnostics|
     let _ = source;
     if !has_ts_script(ctx.source) {
         return;

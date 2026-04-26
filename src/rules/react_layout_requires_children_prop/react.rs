@@ -47,7 +47,7 @@ fn exported_function<'a>(
     None
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["export_statement"] => |node, source, ctx, diagnostics|
     if ctx.project.framework != Framework::NextJs {
         return;
     }
@@ -57,10 +57,6 @@ crate::ast_check! { |node, source, ctx, diagnostics|
     if !is_layout_file(ctx.path) {
         return;
     }
-    if node.kind() != "export_statement" {
-        return;
-    }
-
     let Some(fn_node) = exported_function(node, source) else { return };
     let param_text = first_parameter_text(fn_node, source).unwrap_or("");
     if param_text.contains("children") {

@@ -35,8 +35,8 @@ struct Branch {
     is_let_condition: bool,
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    match node.kind() {
+crate::ast_check! { on ["if_expression", "match_expression"] => |node, source, ctx, diagnostics|
+match node.kind() {
         "if_expression" => check_if_branches(node, source, ctx, diagnostics),
         "match_expression" => check_match_arms(node, source, ctx, diagnostics),
         _ => {}

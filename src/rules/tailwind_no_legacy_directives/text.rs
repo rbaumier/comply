@@ -2,8 +2,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "at_rule" { return; }
+crate::ast_check! { on ["at_rule"] => |node, source, ctx, diagnostics|
     let mut c = node.walk();
     let Some(kw) = node.children(&mut c).find(|n| n.kind() == "at_keyword") else { return };
     if !kw.utf8_text(source).is_ok_and(|t| t.eq_ignore_ascii_case("@tailwind")) { return; }

@@ -4,9 +4,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "rule_set" { return; }
-
+crate::ast_check! { on ["rule_set"] => |node, source, ctx, diagnostics|
     // Selector must start with `.` (class-driven state).
     let mut c = node.walk();
     let Some(selectors) = node.children(&mut c).find(|n| n.kind() == "selectors") else { return };

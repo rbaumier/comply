@@ -13,8 +13,7 @@ const INFINITE_CALLS: &[&str] = &[
     "infiniteQueryOptions",
 ];
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "call_expression" { return; }
+crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     let Some(func) = node.child_by_field_name("function") else { return; };
     let Ok(func_text) = func.utf8_text(source) else { return; };
     if !INFINITE_CALLS.contains(&func_text) { return; }

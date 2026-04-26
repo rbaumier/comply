@@ -20,12 +20,7 @@ fn is_weak_protocol(inner: &str) -> bool {
     false
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    let kind = node.kind();
-    if kind != "string_literal" && kind != "raw_string_literal" {
-        return;
-    }
-
+crate::ast_check! { on ["string_literal", "raw_string_literal"] => |node, source, ctx, diagnostics|
     let text = node.utf8_text(source).unwrap_or("");
     // Strip surrounding quotes
     let inner = if text.len() >= 2 { &text[1..text.len() - 1] } else { text };

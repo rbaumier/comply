@@ -5,8 +5,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "new_expression" { return; }
+crate::ast_check! { on ["new_expression"] => |node, source, ctx, diagnostics|
     let Some(constructor) = node.child_by_field_name("constructor") else { return; };
     let Ok(name) = constructor.utf8_text(source) else { return; };
     if name != "QueryClient" { return; }

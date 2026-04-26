@@ -5,13 +5,8 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["jsx_self_closing_element", "jsx_element"] => |node, source, ctx, diagnostics|
     let is_self_closing = node.kind() == "jsx_self_closing_element";
-    let is_element = node.kind() == "jsx_element";
-
-    if !is_self_closing && !is_element {
-        return;
-    }
 
     // For jsx_element, inspect the opening tag; for self-closing, the node itself.
     let tag_node = if is_self_closing {

@@ -4,12 +4,8 @@ use crate::diagnostic::{Diagnostic, Severity};
 
 const THRESHOLD: usize = 50;
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["union_type"] => |node, source, ctx, diagnostics|
     let _ = source;
-    if node.kind() != "union_type" {
-        return;
-    }
-
     // Avoid double-flagging nested unions — only emit on the outermost.
     if let Some(parent) = node.parent()
         && parent.kind() == "union_type"

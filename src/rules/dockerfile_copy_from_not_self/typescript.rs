@@ -26,8 +26,7 @@ fn current_stage_alias<'a>(node: tree_sitter::Node<'a>, source: &'a [u8]) -> Opt
     None
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "copy_instruction" { return; }
+crate::ast_check! { on ["copy_instruction"] => |node, source, ctx, diagnostics|
     let mut target: Option<&str> = None;
     let mut param_node: Option<tree_sitter::Node> = None;
     for i in 0..node.child_count() {

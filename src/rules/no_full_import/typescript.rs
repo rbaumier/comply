@@ -15,10 +15,7 @@ fn strip_quotes(s: &str) -> &str {
     s.trim_matches(|c| c == '\'' || c == '"' || c == '`')
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "import_statement" {
-        return;
-    }
+crate::ast_check! { on ["import_statement"] => |node, source, ctx, diagnostics|
     let Some(src_node) = node.child_by_field_name("source") else { return };
     let raw = src_node.utf8_text(source).unwrap_or("");
     let module = strip_quotes(raw);

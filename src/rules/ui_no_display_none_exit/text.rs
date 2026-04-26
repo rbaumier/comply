@@ -4,9 +4,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "rule_set" { return; }
-
+crate::ast_check! { on ["rule_set"] => |node, source, ctx, diagnostics|
     // Cheap prerequisite: file must declare some kind of motion.
     if !ctx.source.contains("transition")
         && !ctx.source.contains("animation")

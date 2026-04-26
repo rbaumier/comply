@@ -60,11 +60,7 @@ fn is_allowed_context(node: tree_sitter::Node) -> bool {
     false
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "number" {
-        return;
-    }
-
+crate::ast_check! { on ["number"] => |node, source, ctx, diagnostics|
     let text = match std::str::from_utf8(&source[node.byte_range()]) {
         Ok(t) => t,
         Err(_) => return,

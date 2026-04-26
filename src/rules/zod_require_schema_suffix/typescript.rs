@@ -60,10 +60,7 @@ fn starts_with_z(node: tree_sitter::Node, source: &[u8]) -> bool {
     object.utf8_text(source).is_ok_and(|t| t == "z")
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "variable_declarator" {
-        return;
-    }
+crate::ast_check! { on ["variable_declarator"] => |node, source, ctx, diagnostics|
     if !is_exported(node) {
         return;
     }

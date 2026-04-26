@@ -6,10 +6,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "enum_declaration" {
-        return;
-    }
+crate::ast_check! { on ["enum_declaration"] => |node, source, ctx, diagnostics|
     let Some(body) = node.child_by_field_name("body") else {
         return;
     };

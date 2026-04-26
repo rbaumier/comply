@@ -31,7 +31,7 @@ fn is_ts_or_tsx(ctx: &crate::rules::backend::CheckCtx) -> bool {
     ext == "ts" || ext == "tsx"
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["type_annotation", "call_expression"] => |node, source, ctx, diagnostics|
     if !is_ts_or_tsx(ctx) {
         return;
     }

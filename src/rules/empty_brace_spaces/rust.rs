@@ -3,17 +3,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    // Match Rust node kinds that use braces.
-    let is_brace_node = matches!(
-        node.kind(),
-        "block" | "field_declaration_list" | "declaration_list"
-            | "enum_variant_list" | "use_list" | "match_block"
-    );
-    if !is_brace_node {
-        return;
-    }
-
+crate::ast_check! { on ["block", "field_declaration_list", "declaration_list", "enum_variant_list", "use_list", "match_block"] => |node, source, ctx, diagnostics|
     // Only flag empty nodes (no named children).
     if node.named_child_count() != 0 {
         return;

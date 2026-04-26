@@ -24,11 +24,7 @@ fn is_relative(spec: &str) -> bool {
     spec.starts_with("./") || spec.starts_with("../")
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "program" {
-        return;
-    }
-
+crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         let kind = child.kind();

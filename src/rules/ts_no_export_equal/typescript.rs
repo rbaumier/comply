@@ -2,10 +2,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, _source, ctx, diagnostics|
-    if node.kind() != "export_statement" {
-        return;
-    }
+crate::ast_check! { on ["export_statement"] => |node, _source, ctx, diagnostics|
     // `export = X;` has a direct `=` child. `export default X` has `default`.
     // Regular ES exports (`export const`, `export { a }`, `export * from …`) have
     // neither.

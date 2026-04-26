@@ -10,7 +10,6 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::walker::walk_tree;
 
 // Keep this list short and focused on GENUINELY obscure abbreviations
 // that no reader recognizes without guessing. Common ecosystem idioms
@@ -35,35 +34,38 @@ const BANNED_ABBREVIATIONS: &[(&str, &str)] = &[
 pub struct Check;
 
 impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        Some(&["identifier", "property_identifier"])
+    }
+
+    fn visit_node(
+        &self,
+        node: tree_sitter::Node,
+        ctx: &CheckCtx,
+        _state: Option<&mut dyn std::any::Any>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
         let source_bytes = ctx.source.as_bytes();
-        let mut diagnostics = Vec::new();
-        walk_tree(tree, |node| {
-            if node.kind() != "identifier" && node.kind() != "property_identifier" {
-                return;
-            }
-            let Ok(name) = node.utf8_text(source_bytes) else {
-                return;
-            };
-            let Some((abbr, full)) = matches_banned(name) else {
-                return;
-            };
-            let pos = node.start_position();
-            diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
-                line: pos.row + 1,
-                column: pos.column + 1,
-                rule_id: "no-abbreviated-names".into(),
-                message: format!(
-                    "Identifier '{name}' contains abbreviation '{abbr}' — \
-                     use the full word '{full}'. Editors auto-complete; \
-                     readers don't."
-                ),
-                severity: Severity::Warning,
-                span: None,
-            });
+        let Ok(name) = node.utf8_text(source_bytes) else {
+            return;
+        };
+        let Some((abbr, full)) = matches_banned(name) else {
+            return;
+        };
+        let pos = node.start_position();
+        diagnostics.push(Diagnostic {
+            path: ctx.path.to_path_buf(),
+            line: pos.row + 1,
+            column: pos.column + 1,
+            rule_id: "no-abbreviated-names".into(),
+            message: format!(
+                "Identifier '{name}' contains abbreviation '{abbr}' — \
+                 use the full word '{full}'. Editors auto-complete; \
+                 readers don't."
+            ),
+            severity: Severity::Warning,
+            span: None,
         });
-        diagnostics
     }
 }
 

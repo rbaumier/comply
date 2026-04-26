@@ -6,10 +6,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, _source, ctx, diagnostics|
-    if node.kind() != "object_type" {
-        return;
-    }
+crate::ast_check! { on ["object_type"] => |node, _source, ctx, diagnostics|
     // Check if the object type has any named children (property signatures, etc.)
     let mut cursor = node.walk();
     let member_count = node.named_children(&mut cursor).count();

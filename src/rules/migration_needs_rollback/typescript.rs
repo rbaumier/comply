@@ -13,7 +13,6 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::walker::collect_nodes_of_kinds;
 
 #[derive(Debug)]
 pub struct Check;
@@ -29,26 +28,50 @@ const FN_NODE_KINDS: &[&str] = &[
     "public_field_definition",
 ];
 
+/// `(has_up, has_down)` accumulated across the visit.
+type State = (bool, bool);
+
 impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
-        if !crate::rules::sql_helpers::is_migration_path(ctx.path) {
-            return vec![];
-        }
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        Some(FN_NODE_KINDS)
+    }
+
+    fn create_state(&self) -> Option<Box<dyn std::any::Any>> {
+        Some(Box::new((false, false)))
+    }
+
+    fn visit_node(
+        &self,
+        node: tree_sitter::Node,
+        ctx: &CheckCtx,
+        state: Option<&mut dyn std::any::Any>,
+        _diagnostics: &mut Vec<Diagnostic>,
+    ) {
+        let st = state.unwrap().downcast_mut::<State>().unwrap();
         let source = ctx.source.as_bytes();
-        let mut has_up = false;
-        let mut has_down = false;
-        for node in collect_nodes_of_kinds(tree, FN_NODE_KINDS) {
-            let Some(name) = function_like_name(&node, source) else {
-                continue;
-            };
-            if name == "up" {
-                has_up = true;
-            } else if name == "down" || name == "rollback" {
-                has_down = true;
-            }
+        let Some(name) = function_like_name(&node, source) else {
+            return;
+        };
+        if name == "up" {
+            st.0 = true;
+        } else if name == "down" || name == "rollback" {
+            st.1 = true;
         }
+    }
+
+    fn finish(
+        &self,
+        ctx: &CheckCtx,
+        state: Option<Box<dyn std::any::Any>>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
+        if !crate::rules::sql_helpers::is_migration_path(ctx.path) {
+            return;
+        }
+        let st = state.unwrap().downcast::<State>().unwrap();
+        let (has_up, has_down) = *st;
         if has_up && !has_down {
-            return vec![Diagnostic {
+            diagnostics.push(Diagnostic {
                 path: ctx.path.to_path_buf(),
                 line: 1,
                 column: 1,
@@ -56,9 +79,8 @@ impl AstCheck for Check {
                 message: "Migration has `up()` but no `down()` / rollback — every migration must be reversible for quick recovery from bad deploys.".into(),
                 severity: Severity::Warning,
                 span: None,
-            }];
+            });
         }
-        Vec::new()
     }
 }
 

@@ -12,40 +12,44 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::walker::walk_tree;
+
+const KINDS: &[&str] = &["as_expression"];
 
 #[derive(Debug)]
 pub struct Check;
 
 impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
-        let mut diagnostics = Vec::new();
-        walk_tree(tree, |node| {
-            if node.kind() != "as_expression" {
-                return;
-            }
-            let Some(value) = node.named_child(0) else {
-                return;
-            };
-            if value.kind() != "object" && value.kind() != "array" {
-                return;
-            }
-            let node_text = node.utf8_text(ctx.source.as_bytes()).unwrap_or("");
-            if node_text.trim_end().ends_with("as const") {
-                return;
-            }
-            let pos = node.start_position();
-            diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
-                line: pos.row + 1,
-                column: pos.column + 1,
-                rule_id: super::META.id.into(),
-                message: "`as Type` on a literal widens the inferred type — use `satisfies Type` to validate without widening.".into(),
-                severity: Severity::Warning,
-                span: None,
-            });
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        Some(KINDS)
+    }
+
+    fn visit_node(
+        &self,
+        node: tree_sitter::Node,
+        ctx: &CheckCtx,
+        _state: Option<&mut dyn std::any::Any>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
+        let Some(value) = node.named_child(0) else {
+            return;
+        };
+        if value.kind() != "object" && value.kind() != "array" {
+            return;
+        }
+        let node_text = node.utf8_text(ctx.source.as_bytes()).unwrap_or("");
+        if node_text.trim_end().ends_with("as const") {
+            return;
+        }
+        let pos = node.start_position();
+        diagnostics.push(Diagnostic {
+            path: ctx.path.to_path_buf(),
+            line: pos.row + 1,
+            column: pos.column + 1,
+            rule_id: super::META.id.into(),
+            message: "`as Type` on a literal widens the inferred type — use `satisfies Type` to validate without widening.".into(),
+            severity: Severity::Warning,
+            span: None,
         });
-        diagnostics
     }
 }
 

@@ -17,10 +17,7 @@ fn looks_like_iterable(rhs: &str) -> bool {
     ITERABLE_HINTS.iter().any(|hint| rhs_lower.contains(hint))
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "for_in_statement" {
-        return;
-    }
+crate::ast_check! { on ["for_in_statement"] => |node, source, ctx, diagnostics|
     // tree-sitter parses both `for..in` and `for..of` as `for_in_statement`.
     // Distinguish by looking for the `of` keyword child.
     let mut cursor = node.walk();

@@ -8,53 +8,58 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::walker::collect_nodes_of_kinds;
 
 #[derive(Debug)]
 pub struct Check;
 
 impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        Some(&["statement_block"])
+    }
+
+    fn visit_node(
+        &self,
+        block: tree_sitter::Node,
+        ctx: &CheckCtx,
+        _state: Option<&mut dyn std::any::Any>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
         let source_bytes = ctx.source.as_bytes();
-        let mut diagnostics = Vec::new();
-        for block in collect_nodes_of_kinds(tree, &["statement_block"]) {
-            let mut cursor = block.walk();
-            let children: Vec<_> = block.named_children(&mut cursor).collect();
-            for i in 0..children.len().saturating_sub(1) {
-                let decl_node = children[i];
-                let next_node = children[i + 1];
-                if !matches!(
-                    decl_node.kind(),
-                    "lexical_declaration" | "variable_declaration"
-                ) {
-                    continue;
-                }
-                let Some(var_name) = extract_single_declarator_name(decl_node, source_bytes)
-                else {
-                    continue;
-                };
-                if next_node.kind() != "return_statement" {
-                    continue;
-                }
-                if !return_value_is_identifier(next_node, source_bytes, var_name) {
-                    continue;
-                }
-                let pos = decl_node.start_position();
-                diagnostics.push(Diagnostic {
-                    path: ctx.path.to_path_buf(),
-                    line: pos.row + 1,
-                    column: pos.column + 1,
-                    rule_id: "prefer-immediate-return".into(),
-                    message: format!(
-                        "Variable `{var_name}` is assigned and immediately \
-                         returned — return the expression directly."
-                    ),
-                    severity: Severity::Warning,
-                    span: None,
-                });
+        let mut cursor = block.walk();
+        let children: Vec<_> = block.named_children(&mut cursor).collect();
+        for i in 0..children.len().saturating_sub(1) {
+            let decl_node = children[i];
+            let next_node = children[i + 1];
+            if !matches!(
+                decl_node.kind(),
+                "lexical_declaration" | "variable_declaration"
+            ) {
+                continue;
             }
+            let Some(var_name) = extract_single_declarator_name(decl_node, source_bytes)
+            else {
+                continue;
+            };
+            if next_node.kind() != "return_statement" {
+                continue;
+            }
+            if !return_value_is_identifier(next_node, source_bytes, var_name) {
+                continue;
+            }
+            let pos = decl_node.start_position();
+            diagnostics.push(Diagnostic {
+                path: ctx.path.to_path_buf(),
+                line: pos.row + 1,
+                column: pos.column + 1,
+                rule_id: "prefer-immediate-return".into(),
+                message: format!(
+                    "Variable `{var_name}` is assigned and immediately \
+                     returned — return the expression directly."
+                ),
+                severity: Severity::Warning,
+                span: None,
+            });
         }
-        diagnostics
     }
 }
 

@@ -1,7 +1,6 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "run_instruction" { return; }
+crate::ast_check! { on ["run_instruction"] => |node, source, ctx, diagnostics|
     let shell_text = shell_command_text(node, source);
     let mentions_pip = shell_text.contains("pip install") || shell_text.contains("pip3 install");
     if !mentions_pip { return; }

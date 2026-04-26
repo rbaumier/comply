@@ -55,12 +55,8 @@ fn extract_export_name(node: tree_sitter::Node, source: &[u8]) -> Option<String>
     None
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
     // Only check the program (top-level) node once.
-    if node.kind() != "program" {
-        return;
-    }
-
     // Only fire on .tsx/.jsx files.
     let path_str = ctx.path.to_string_lossy();
     if !path_str.ends_with(".tsx") && !path_str.ends_with(".jsx") {

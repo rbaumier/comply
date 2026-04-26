@@ -4,8 +4,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 
 const SECRET_SUBSTRINGS: &[&str] = &["SECRET", "TOKEN", "PASSWORD", "PASSWD", "APIKEY"];
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "arg_instruction" { return; }
+crate::ast_check! { on ["arg_instruction"] => |node, source, ctx, diagnostics|
     // arg_instruction children: ARG, unquoted_string (name), optional `=`, optional unquoted_string (value).
     let mut name: Option<&str> = None;
     let mut saw_eq = false;

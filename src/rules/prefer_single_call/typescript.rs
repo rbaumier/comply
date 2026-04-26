@@ -31,13 +31,9 @@ fn extract_call_key<'a>(node: tree_sitter::Node<'a>, source: &'a [u8]) -> Option
     None
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
     // We only run at the program level to do a sequential scan of
     // expression_statement siblings.
-    if node.kind() != "program" {
-        return;
-    }
-
     scan_siblings(node, source, ctx, diagnostics);
 }
 

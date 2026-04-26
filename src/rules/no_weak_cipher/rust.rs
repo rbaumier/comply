@@ -27,10 +27,7 @@ fn is_weak_cipher_method(name: &str) -> bool {
     })
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "call_expression" {
-        return;
-    }
+crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     let Some(function) = node.child_by_field_name("function") else { return };
     if function.kind() != "scoped_identifier" {
         return;

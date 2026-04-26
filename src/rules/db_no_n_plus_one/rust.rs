@@ -28,11 +28,7 @@ fn is_inside_loop(node: tree_sitter::Node) -> bool {
     false
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "await_expression" {
-        return;
-    }
-
+crate::ast_check! { on ["await_expression"] => |node, source, ctx, diagnostics|
     if !is_inside_loop(node) {
         return;
     }

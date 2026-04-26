@@ -1,7 +1,6 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "color_value" { return; }
+crate::ast_check! { on ["color_value"] => |node, source, ctx, diagnostics|
     let text = node.utf8_text(source).unwrap_or_default();
     let Some(hex) = text.strip_prefix('#') else { return; };
     let valid_len = matches!(hex.len(), 3 | 4 | 6 | 8);

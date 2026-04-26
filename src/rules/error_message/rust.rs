@@ -16,11 +16,7 @@ const ERROR_MACROS: &[&str] = &[
     "unimplemented",
 ];
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "macro_invocation" {
-        return;
-    }
-
+crate::ast_check! { on ["macro_invocation"] => |node, source, ctx, diagnostics|
     let Some(macro_node) = node.child_by_field_name("macro") else { return };
     let Ok(macro_name) = macro_node.utf8_text(source) else { return };
 

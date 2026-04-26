@@ -3,13 +3,11 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["rule_set"] => |node, source, ctx, diagnostics|
     // Only fire once per file; skip after the first root block is classified.
     // We can't carry state across nodes, so emit deterministically on every
     // matching root rule that lacks the declaration — then dedupe to one.
     if !diagnostics.is_empty() { return; }
-    if node.kind() != "rule_set" { return; }
-
     // Skip nested rule_sets (those inside @media) — we only care about the
     // top-level root-element selectors so the diagnostic matches the original
     // "first offender wins" behaviour.

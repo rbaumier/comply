@@ -3,7 +3,6 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::walker::walk_tree;
 
 #[derive(Debug)]
 pub struct Check;
@@ -81,46 +80,46 @@ fn collect_branches(
 }
 
 impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
-        let source_bytes = ctx.source.as_bytes();
-        let mut diagnostics = Vec::new();
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        Some(&["if_statement"])
+    }
 
-        walk_tree(tree, |node| {
-            if node.kind() != "if_statement" {
+    fn visit_node(
+        &self,
+        node: tree_sitter::Node,
+        ctx: &CheckCtx,
+        _state: Option<&mut dyn std::any::Any>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
+        let source_bytes = ctx.source.as_bytes();
+        // Only flag top-level if (not else-if chains — they'll be caught
+        // from the parent if_statement).
+        if let Some(parent) = node.parent()
+            && parent.kind() == "else_clause" {
                 return;
             }
 
-            // Only flag top-level if (not else-if chains — they'll be caught
-            // from the parent if_statement).
-            if let Some(parent) = node.parent()
-                && parent.kind() == "else_clause" {
-                    return;
-                }
+        let branches = collect_branches(node, source_bytes);
 
-            let branches = collect_branches(node, source_bytes);
-
-            // Need at least 2 branches (if + else) and non-empty bodies.
-            if branches.len() >= 2
-                && !branches[0].is_empty()
-                && branches.iter().all(|b| *b == branches[0])
-            {
-                let pos = node.start_position();
-                diagnostics.push(Diagnostic {
-                    path: ctx.path.to_path_buf(),
-                    line: pos.row + 1,
-                    column: pos.column + 1,
-                    rule_id: "no-all-duplicated-branches".into(),
-                    message: format!(
-                        "All {} branches have identical code — the conditional is pointless.",
-                        branches.len()
-                    ),
-                    severity: Severity::Error,
-                    span: None,
-                });
-            }
-        });
-
-        diagnostics
+        // Need at least 2 branches (if + else) and non-empty bodies.
+        if branches.len() >= 2
+            && !branches[0].is_empty()
+            && branches.iter().all(|b| *b == branches[0])
+        {
+            let pos = node.start_position();
+            diagnostics.push(Diagnostic {
+                path: ctx.path.to_path_buf(),
+                line: pos.row + 1,
+                column: pos.column + 1,
+                rule_id: "no-all-duplicated-branches".into(),
+                message: format!(
+                    "All {} branches have identical code — the conditional is pointless.",
+                    branches.len()
+                ),
+                severity: Severity::Error,
+                span: None,
+            });
+        }
     }
 }
 

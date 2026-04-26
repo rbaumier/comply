@@ -23,12 +23,8 @@ fn contains_this_state(node: tree_sitter::Node, source: &[u8]) -> bool {
     false
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     // Look for call_expression: `this.setState(...)`
-    if node.kind() != "call_expression" {
-        return;
-    }
-
     let Some(callee) = node.child_by_field_name("function") else { return };
     let Ok(callee_text) = callee.utf8_text(source) else { return };
     if callee_text != "this.setState" {

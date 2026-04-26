@@ -230,11 +230,7 @@ fn check_node(
     }
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "program" {
-        return;
-    }
-
+crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
     let Some(min_version) = min_node_major(ctx) else {
         return;
     };

@@ -10,8 +10,7 @@ const FORBIDDEN: &[&str] = &[
     "padding", "padding-top", "padding-bottom", "padding-left", "padding-right",
 ];
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "declaration" { return; }
+crate::ast_check! { on ["declaration"] => |node, source, ctx, diagnostics|
     // Only fire inside a `@keyframes { ... }`.
     let mut p = node.parent();
     let mut inside_keyframes = false;

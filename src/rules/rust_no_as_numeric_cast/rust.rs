@@ -17,54 +17,58 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::rust_helpers::is_in_test_context;
-use crate::rules::walker::walk_tree;
 
 const NUMERIC_TARGETS: &[&str] = &[
     "u8", "u16", "u32", "u64", "u128", "i8", "i16", "i32", "i64", "i128", "usize", "isize", "f32",
     "f64",
 ];
 
+const KINDS: &[&str] = &["type_cast_expression"];
+
 #[derive(Debug)]
 pub struct Check;
 
 impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        Some(KINDS)
+    }
+
+    fn visit_node(
+        &self,
+        node: tree_sitter::Node,
+        ctx: &CheckCtx,
+        _state: Option<&mut dyn std::any::Any>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
         let source_bytes = ctx.source.as_bytes();
-        let mut diagnostics = Vec::new();
-        walk_tree(tree, |node| {
-            if node.kind() != "type_cast_expression" {
-                return;
-            }
-            let Some(type_node) = node.child_by_field_name("type") else {
-                return;
-            };
-            let Ok(target_raw) = type_node.utf8_text(source_bytes) else {
-                return;
-            };
-            let target = target_raw.trim();
-            if !NUMERIC_TARGETS.contains(&target) {
-                return;
-            }
-            if is_in_test_context(node, source_bytes) {
-                return;
-            }
-            let pos = node.start_position();
-            diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
-                line: pos.row + 1,
-                column: pos.column + 1,
-                rule_id: "rust-no-as-numeric-cast".into(),
-                message: format!(
-                    "`as {target}` masks overflow + precision semantics. Use \
-                     `{target}::from(x)` for widening-safe casts or \
-                     `{target}::try_from(x)?` for narrowing. Even on widening, \
-                     `From` makes the conversion explicit and greppable."
-                ),
-                severity: Severity::Warning,
-                span: None,
-            });
+        let Some(type_node) = node.child_by_field_name("type") else {
+            return;
+        };
+        let Ok(target_raw) = type_node.utf8_text(source_bytes) else {
+            return;
+        };
+        let target = target_raw.trim();
+        if !NUMERIC_TARGETS.contains(&target) {
+            return;
+        }
+        if is_in_test_context(node, source_bytes) {
+            return;
+        }
+        let pos = node.start_position();
+        diagnostics.push(Diagnostic {
+            path: ctx.path.to_path_buf(),
+            line: pos.row + 1,
+            column: pos.column + 1,
+            rule_id: "rust-no-as-numeric-cast".into(),
+            message: format!(
+                "`as {target}` masks overflow + precision semantics. Use \
+                 `{target}::from(x)` for widening-safe casts or \
+                 `{target}::try_from(x)?` for narrowing. Even on widening, \
+                 `From` makes the conversion explicit and greppable."
+            ),
+            severity: Severity::Warning,
+            span: None,
         });
-        diagnostics
     }
 }
 

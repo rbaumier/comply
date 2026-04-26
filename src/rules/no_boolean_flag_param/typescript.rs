@@ -13,43 +13,45 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::walker::walk_tree;
 
 #[derive(Debug)]
 pub struct Check;
 
 impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        Some(&["required_parameter", "optional_parameter"])
+    }
+
+    fn visit_node(
+        &self,
+        node: tree_sitter::Node,
+        ctx: &CheckCtx,
+        _state: Option<&mut dyn std::any::Any>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
         let source_bytes = ctx.source.as_bytes();
-        let mut diagnostics = Vec::new();
-        walk_tree(tree, |node| {
-            if node.kind() != "required_parameter" && node.kind() != "optional_parameter" {
-                return;
-            }
-            if !inside_formal_parameters(node) {
-                return;
-            }
-            if !has_boolean_annotation(node, source_bytes) {
-                return;
-            }
-            let name = param_name(node, source_bytes).unwrap_or("<flag>");
-            let pos = node.start_position();
-            diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
-                line: pos.row + 1,
-                column: pos.column + 1,
-                rule_id: "no-boolean-flag-param".into(),
-                message: format!(
-                    "Boolean parameter '{name}' controls a branch — split \
-                     into two named functions instead. A ternary or options \
-                     object is not a fix; the boolean must disappear from \
-                     the signature entirely."
-                ),
-                severity: Severity::Error,
-                span: None,
-            });
+        if !inside_formal_parameters(node) {
+            return;
+        }
+        if !has_boolean_annotation(node, source_bytes) {
+            return;
+        }
+        let name = param_name(node, source_bytes).unwrap_or("<flag>");
+        let pos = node.start_position();
+        diagnostics.push(Diagnostic {
+            path: ctx.path.to_path_buf(),
+            line: pos.row + 1,
+            column: pos.column + 1,
+            rule_id: "no-boolean-flag-param".into(),
+            message: format!(
+                "Boolean parameter '{name}' controls a branch — split \
+                 into two named functions instead. A ternary or options \
+                 object is not a fix; the boolean must disappear from \
+                 the signature entirely."
+            ),
+            severity: Severity::Error,
+            span: None,
         });
-        diagnostics
     }
 }
 

@@ -22,7 +22,6 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::walker::walk_tree;
 
 /// Standalone identifiers with zero semantic content. Flagged only at
 /// declaration sites so the rule fires once per variable, not once per
@@ -57,19 +56,25 @@ const GLOBAL_IDENTIFIER_ALLOWLIST: &[&str] = &[
 pub struct Check;
 
 impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        Some(&["identifier", "property_identifier"])
+    }
+
+    fn visit_node(
+        &self,
+        node: tree_sitter::Node,
+        ctx: &CheckCtx,
+        _state: Option<&mut dyn std::any::Any>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
         let source_bytes = ctx.source.as_bytes();
-        let mut diagnostics = Vec::new();
-        walk_tree(tree, |node| {
-            if let Some(d) = check_banned_word(node, source_bytes, ctx.path) {
-                diagnostics.push(d);
-                return;
-            }
-            if let Some(d) = check_banned_prefix(node, source_bytes, ctx.path) {
-                diagnostics.push(d);
-            }
-        });
-        diagnostics
+        if let Some(d) = check_banned_word(node, source_bytes, ctx.path) {
+            diagnostics.push(d);
+            return;
+        }
+        if let Some(d) = check_banned_prefix(node, source_bytes, ctx.path) {
+            diagnostics.push(d);
+        }
     }
 }
 

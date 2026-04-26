@@ -3,11 +3,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "switch_case" {
-        return;
-    }
-
+crate::ast_check! { on ["switch_case"] => |node, source, ctx, diagnostics|
     // Get the value field of the case clause.
     let Some(value) = node.child_by_field_name("value") else { return };
     let _value_text = value.utf8_text(source).unwrap_or("");

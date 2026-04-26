@@ -32,10 +32,7 @@ fn walk_skip_nested_loops(node: tree_sitter::Node, count: &mut usize) {
     }
 }
 
-crate::ast_check! { |node, _source, ctx, diagnostics|
-    if !LOOP_KINDS.contains(&node.kind()) {
-        return;
-    }
+crate::ast_check! { on ["for_expression", "while_expression", "loop_expression"] => |node, _source, ctx, diagnostics|
     let bc_count = count_break_continue(node);
     if bc_count >= 2 {
         let pos = node.start_position();

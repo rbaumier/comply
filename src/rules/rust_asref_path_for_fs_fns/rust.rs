@@ -10,9 +10,7 @@ use tree_sitter::Node;
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "function_item" { return; }
-
+crate::ast_check! { on ["function_item"] => |node, source, ctx, diagnostics|
     let Some(body) = node.child_by_field_name("body") else { return; };
     let Ok(body_text) = body.utf8_text(source) else { return; };
     if !body_uses_fs(body_text) { return; }

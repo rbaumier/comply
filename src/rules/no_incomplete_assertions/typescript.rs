@@ -18,16 +18,12 @@ fn is_test_file(path: &std::path::Path) -> bool {
     s.contains(".test.") || s.contains(".spec.") || s.contains("__tests__") || s.contains("_test.")
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["expression_statement"] => |node, source, ctx, diagnostics|
     if !is_test_file(ctx.path) {
         return;
     }
 
     // Match expression_statement -> call_expression where the callee is `expect`.
-    if node.kind() != "expression_statement" {
-        return;
-    }
-
     let Some(expr) = node.named_child(0) else { return };
 
     // Case 1: bare `expect(x);`

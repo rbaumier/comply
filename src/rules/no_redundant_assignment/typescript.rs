@@ -74,12 +74,7 @@ impl<'tree> ByteRangeText for Node<'tree> {
     }
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    let kind = node.kind();
-    if kind != "program" && kind != "statement_block" {
-        return;
-    }
-
+crate::ast_check! { on ["program", "statement_block"] => |node, source, ctx, diagnostics|
     let mut cursor = node.walk();
     let stmts: Vec<Node> = node.named_children(&mut cursor).collect();
 

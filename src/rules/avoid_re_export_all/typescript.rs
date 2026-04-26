@@ -1,6 +1,5 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::walker::walk_tree;
 
 /// Flags `export * from '...'` re-exports.
 ///
@@ -14,40 +13,43 @@ use crate::rules::walker::walk_tree;
 pub struct Check;
 
 impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        Some(&["export_statement"])
+    }
+
+    fn visit_node(
+        &self,
+        node: tree_sitter::Node,
+        ctx: &CheckCtx,
+        _state: Option<&mut dyn std::any::Any>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
         let source = ctx.source.as_bytes();
-        let mut diagnostics = Vec::new();
-        walk_tree(tree, |node| {
-            if node.kind() != "export_statement" {
-                return;
-            }
-            let text = node.utf8_text(source).unwrap_or("");
-            // Must be a re-export (has `from` clause) and a star export.
-            if !text.contains(" from ") {
-                return;
-            }
-            // Strip leading `export` keyword and whitespace.
-            let rest = text.trim_start_matches("export").trim_start();
-            if !rest.starts_with('*') {
-                return;
-            }
-            // Allow namespace re-exports: `export * as ns from '...'`.
-            let after_star = rest[1..].trim_start();
-            if after_star.starts_with("as ") {
-                return;
-            }
-            let pos = node.start_position();
-            diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
-                line: pos.row + 1,
-                column: pos.column + 1,
-                rule_id: super::META.id.into(),
-                message: "Avoid `export * from '...'` — use named re-exports instead.".into(),
-                severity: Severity::Warning,
-                span: None,
-            });
+        let text = node.utf8_text(source).unwrap_or("");
+        // Must be a re-export (has `from` clause) and a star export.
+        if !text.contains(" from ") {
+            return;
+        }
+        // Strip leading `export` keyword and whitespace.
+        let rest = text.trim_start_matches("export").trim_start();
+        if !rest.starts_with('*') {
+            return;
+        }
+        // Allow namespace re-exports: `export * as ns from '...'`.
+        let after_star = rest[1..].trim_start();
+        if after_star.starts_with("as ") {
+            return;
+        }
+        let pos = node.start_position();
+        diagnostics.push(Diagnostic {
+            path: ctx.path.to_path_buf(),
+            line: pos.row + 1,
+            column: pos.column + 1,
+            rule_id: super::META.id.into(),
+            message: "Avoid `export * from '...'` — use named re-exports instead.".into(),
+            severity: Severity::Warning,
+            span: None,
         });
-        diagnostics
     }
 }
 

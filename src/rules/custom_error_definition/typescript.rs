@@ -6,7 +6,6 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::walker::walk_tree;
 
 /// Matches PascalCase names ending in "Error".
 fn is_error_name(name: &str) -> bool {
@@ -17,15 +16,19 @@ fn is_error_name(name: &str) -> bool {
 pub struct Check;
 
 impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        Some(&["class_declaration", "class"])
+    }
+
+    fn visit_node(
+        &self,
+        node: tree_sitter::Node,
+        ctx: &CheckCtx,
+        _state: Option<&mut dyn std::any::Any>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
         let source = ctx.source.as_bytes();
-        let mut diagnostics = Vec::new();
-
-        walk_tree(tree, |node| {
-            if node.kind() != "class_declaration" && node.kind() != "class" {
-                return;
-            }
-
+        {
             // Must extend something that looks like an Error.
             let has_error_super = {
                 let mut found = false;
@@ -142,9 +145,7 @@ impl AstCheck for Check {
                     }
                 }
             }
-        });
-
-        diagnostics
+        }
     }
 }
 

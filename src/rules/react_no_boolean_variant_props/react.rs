@@ -77,15 +77,9 @@ fn count_boolean_variants(pattern: tree_sitter::Node<'_>, source: &[u8]) -> usiz
     count
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["function_declaration", "arrow_function", "function_expression"] => |node, source, ctx, diagnostics|
     let _ = ctx;
-    if !matches!(
-        node.kind(),
-        "function_declaration" | "arrow_function" | "function_expression"
-    ) {
-        return;
-    }
-    if !is_function_component(node, source) {
+        if !is_function_component(node, source) {
         return;
     }
     let Some(param) = first_param(node) else { return };

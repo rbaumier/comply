@@ -18,7 +18,6 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::walker::walk_tree;
 use std::path::Path;
 use std::sync::Mutex;
 
@@ -26,45 +25,48 @@ use std::sync::Mutex;
 pub struct Check;
 
 impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        Some(&["macro_invocation"])
+    }
+
+    fn visit_node(
+        &self,
+        node: tree_sitter::Node,
+        ctx: &CheckCtx,
+        _state: Option<&mut dyn std::any::Any>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
         // Short-circuit: if the file lives in a pure bin crate, `println!`
         // is legitimate and we have nothing to say.
         if is_bin_only_crate(ctx.path) {
-            return Vec::new();
+            return;
         }
         let source_bytes = ctx.source.as_bytes();
-        let mut diagnostics = Vec::new();
-        walk_tree(tree, |node| {
-            if node.kind() != "macro_invocation" {
-                return;
-            }
-            let Some(macro_name_node) = node.child_by_field_name("macro") else {
-                return;
-            };
-            let Ok(name) = macro_name_node.utf8_text(source_bytes) else {
-                return;
-            };
-            let bare = name.rsplit("::").next().unwrap_or(name);
-            if !matches!(bare, "print" | "println" | "eprint" | "eprintln") {
-                return;
-            }
-            let pos = node.start_position();
-            diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
-                line: pos.row + 1,
-                column: pos.column + 1,
-                rule_id: "rust-no-println-in-library".into(),
-                message: format!(
-                    "`{bare}!` writes to stdout/stderr directly — library consumers \
-                     can't redirect it, configure verbosity, or capture it in tests. \
-                     Use `tracing::info!` / `tracing::debug!` with structured fields \
-                     instead; the subscriber is the consumer's responsibility."
-                ),
-                severity: Severity::Error,
-                span: None,
-            });
+        let Some(macro_name_node) = node.child_by_field_name("macro") else {
+            return;
+        };
+        let Ok(name) = macro_name_node.utf8_text(source_bytes) else {
+            return;
+        };
+        let bare = name.rsplit("::").next().unwrap_or(name);
+        if !matches!(bare, "print" | "println" | "eprint" | "eprintln") {
+            return;
+        }
+        let pos = node.start_position();
+        diagnostics.push(Diagnostic {
+            path: ctx.path.to_path_buf(),
+            line: pos.row + 1,
+            column: pos.column + 1,
+            rule_id: "rust-no-println-in-library".into(),
+            message: format!(
+                "`{bare}!` writes to stdout/stderr directly — library consumers \
+                 can't redirect it, configure verbosity, or capture it in tests. \
+                 Use `tracing::info!` / `tracing::debug!` with structured fields \
+                 instead; the subscriber is the consumer's responsibility."
+            ),
+            severity: Severity::Error,
+            span: None,
         });
-        diagnostics
     }
 }
 
@@ -105,10 +107,7 @@ mod tests {
     use super::*;
 
     fn run_on(source: &str, path: &str) -> Vec<Diagnostic> {
-        let mut parser = tree_sitter::Parser::new();
-        parser.set_language(&tree_sitter_rust::LANGUAGE.into()).unwrap();
-        let tree = parser.parse(source, None).unwrap();
-        Check.check(&CheckCtx::for_test(Path::new(path), source), &tree)
+        crate::rules::test_helpers::run_rust_with_path(source, &Check, path)
     }
 
     #[test]

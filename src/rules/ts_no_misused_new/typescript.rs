@@ -3,74 +3,80 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::walker::walk_tree;
+
+const KINDS: &[&str] = &["method_definition", "method_signature"];
 
 #[derive(Debug)]
 pub struct Check;
 
 impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
-        let mut diagnostics = Vec::new();
-        let source = ctx.source.as_bytes();
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        Some(KINDS)
+    }
 
-        walk_tree(tree, |node| {
-            match node.kind() {
-                // Flag `new()` in class body
-                "method_definition" => {
-                    let Some(name_node) = node.child_by_field_name("name") else {
-                        return;
-                    };
-                    let name = &source[name_node.byte_range()];
-                    if name != b"new" {
-                        return;
-                    }
-                    // Check parent is class_body
-                    let Some(parent) = node.parent() else { return };
-                    if parent.kind() != "class_body" {
-                        return;
-                    }
-                    let pos = node.start_position();
-                    diagnostics.push(Diagnostic {
-                        path: ctx.path.to_path_buf(),
-                        line: pos.row + 1,
-                        column: pos.column + 1,
-                        rule_id: "ts-no-misused-new".into(),
-                        message: "Class cannot have method named `new` — use `constructor` instead."
-                            .into(),
-                        severity: Severity::Warning,
-                        span: None,
-                    });
+    fn visit_node(
+        &self,
+        node: tree_sitter::Node,
+        ctx: &CheckCtx,
+        _state: Option<&mut dyn std::any::Any>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
+        let source = ctx.source.as_bytes();
+        match node.kind() {
+            // Flag `new()` in class body
+            "method_definition" => {
+                let Some(name_node) = node.child_by_field_name("name") else {
+                    return;
+                };
+                let name = &source[name_node.byte_range()];
+                if name != b"new" {
+                    return;
                 }
-                // Flag `constructor()` in interface body (TSMethodSignature or construct_signature)
-                "method_signature" => {
-                    let Some(name_node) = node.child_by_field_name("name") else {
-                        return;
-                    };
-                    let name = &source[name_node.byte_range()];
-                    if name != b"constructor" {
-                        return;
-                    }
-                    // Check parent is interface body (object_type inside interface_declaration)
-                    let Some(parent) = node.parent() else { return };
-                    if parent.kind() != "object_type" && parent.kind() != "interface_body" {
-                        return;
-                    }
-                    let pos = node.start_position();
-                    diagnostics.push(Diagnostic {
-                        path: ctx.path.to_path_buf(),
-                        line: pos.row + 1,
-                        column: pos.column + 1,
-                        rule_id: "ts-no-misused-new".into(),
-                        message: "Interfaces cannot be constructed — use `new(): Type` instead of `constructor()`."
-                            .into(),
-                        severity: Severity::Warning,
-                        span: None,
-                    });
+                // Check parent is class_body
+                let Some(parent) = node.parent() else { return };
+                if parent.kind() != "class_body" {
+                    return;
                 }
-                _ => {}
+                let pos = node.start_position();
+                diagnostics.push(Diagnostic {
+                    path: ctx.path.to_path_buf(),
+                    line: pos.row + 1,
+                    column: pos.column + 1,
+                    rule_id: "ts-no-misused-new".into(),
+                    message: "Class cannot have method named `new` — use `constructor` instead."
+                        .into(),
+                    severity: Severity::Warning,
+                    span: None,
+                });
             }
-        });
-        diagnostics
+            // Flag `constructor()` in interface body (TSMethodSignature or construct_signature)
+            "method_signature" => {
+                let Some(name_node) = node.child_by_field_name("name") else {
+                    return;
+                };
+                let name = &source[name_node.byte_range()];
+                if name != b"constructor" {
+                    return;
+                }
+                // Check parent is interface body (object_type inside interface_declaration)
+                let Some(parent) = node.parent() else { return };
+                if parent.kind() != "object_type" && parent.kind() != "interface_body" {
+                    return;
+                }
+                let pos = node.start_position();
+                diagnostics.push(Diagnostic {
+                    path: ctx.path.to_path_buf(),
+                    line: pos.row + 1,
+                    column: pos.column + 1,
+                    rule_id: "ts-no-misused-new".into(),
+                    message: "Interfaces cannot be constructed — use `new(): Type` instead of `constructor()`."
+                        .into(),
+                    severity: Severity::Warning,
+                    span: None,
+                });
+            }
+            _ => {}
+        }
     }
 }
 

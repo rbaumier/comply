@@ -6,7 +6,6 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::walker::walk_tree;
 
 /// Names of functions commonly used for type checking (on member expressions).
 const TYPE_CHECK_IDENTIFIERS: &[&str] = &[
@@ -189,92 +188,93 @@ fn get_single_throw(body: tree_sitter::Node) -> Option<tree_sitter::Node> {
 pub struct Check;
 
 impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        Some(&["throw_statement"])
+    }
+
+    fn visit_node(
+        &self,
+        node: tree_sitter::Node,
+        ctx: &CheckCtx,
+        _state: Option<&mut dyn std::any::Any>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
         let source = ctx.source.as_bytes();
-        let mut diagnostics = Vec::new();
 
-        walk_tree(tree, |node| {
-            if node.kind() != "throw_statement" {
-                return;
-            }
+        // The thrown value must be `new Error(...)`.
+        let thrown = match node.named_child(0) {
+            Some(c) => c,
+            None => return,
+        };
+        if thrown.kind() != "new_expression" {
+            return;
+        }
+        let Some(ctor) = thrown.child_by_field_name("constructor") else {
+            return;
+        };
+        let ctor_name = ctor.utf8_text(source).unwrap_or("");
+        // Only flag `new Error(...)`, not `new TypeError(...)` etc.
+        if ctor_name != "Error" {
+            return;
+        }
 
-            // The thrown value must be `new Error(...)`.
-            let thrown = match node.named_child(0) {
-                Some(c) => c,
-                None => return,
-            };
-            if thrown.kind() != "new_expression" {
-                return;
-            }
-            let Some(ctor) = thrown.child_by_field_name("constructor") else {
-                return;
-            };
-            let ctor_name = ctor.utf8_text(source).unwrap_or("");
-            // Only flag `new Error(...)`, not `new TypeError(...)` etc.
-            if ctor_name != "Error" {
-                return;
-            }
+        // The throw must be the lone statement in its parent block.
+        let parent = match node.parent() {
+            Some(p) => p,
+            None => return,
+        };
+        if !body_has_single_statement(parent, source) {
+            return;
+        }
 
-            // The throw must be the lone statement in its parent block.
-            let parent = match node.parent() {
-                Some(p) => p,
-                None => return,
-            };
-            if !body_has_single_statement(parent, source) {
-                return;
-            }
-
-            // The parent block must be the consequence of an if_statement.
-            let if_node = match parent.parent() {
-                Some(p) if p.kind() == "if_statement" => p,
-                _ => {
-                    // Also handle: throw is directly the consequence (no braces).
-                    if let Some(gp) = parent.parent()
-                        && gp.kind() == "if_statement" {
-                            // parent is the throw itself, and gp is if_statement.
-                            // But we're already at the throw level, so check
-                            // if throw's parent is if_statement.
-                        }
-                    // Check if the throw is directly under if_statement consequence.
-                    if parent.kind() == "if_statement" {
-                        parent
-                    } else {
-                        return;
+        // The parent block must be the consequence of an if_statement.
+        let if_node = match parent.parent() {
+            Some(p) if p.kind() == "if_statement" => p,
+            _ => {
+                // Also handle: throw is directly the consequence (no braces).
+                if let Some(gp) = parent.parent()
+                    && gp.kind() == "if_statement" {
+                        // parent is the throw itself, and gp is if_statement.
+                        // But we're already at the throw level, so check
+                        // if throw's parent is if_statement.
                     }
+                // Check if the throw is directly under if_statement consequence.
+                if parent.kind() == "if_statement" {
+                    parent
+                } else {
+                    return;
                 }
-            };
-
-            // Check that the if condition is a type-checking expression.
-            let Some(condition) = if_node.child_by_field_name("condition") else {
-                return;
-            };
-
-            // The condition node in tree-sitter is a parenthesized_expression.
-            let cond_inner = if condition.kind() == "parenthesized_expression" {
-                condition.named_child(0).unwrap_or(condition)
-            } else {
-                condition
-            };
-
-            if !is_typechecking_expression(cond_inner, source) {
-                return;
             }
+        };
 
-            let pos = ctor.start_position();
-            diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
-                line: pos.row + 1,
-                column: pos.column + 1,
-                rule_id: "prefer-type-error".into(),
-                message: "`new Error()` is too unspecific for a type check. \
-                          Use `new TypeError()` instead."
-                    .into(),
-                severity: Severity::Warning,
-                span: None,
-            });
+        // Check that the if condition is a type-checking expression.
+        let Some(condition) = if_node.child_by_field_name("condition") else {
+            return;
+        };
+
+        // The condition node in tree-sitter is a parenthesized_expression.
+        let cond_inner = if condition.kind() == "parenthesized_expression" {
+            condition.named_child(0).unwrap_or(condition)
+        } else {
+            condition
+        };
+
+        if !is_typechecking_expression(cond_inner, source) {
+            return;
+        }
+
+        let pos = ctor.start_position();
+        diagnostics.push(Diagnostic {
+            path: ctx.path.to_path_buf(),
+            line: pos.row + 1,
+            column: pos.column + 1,
+            rule_id: "prefer-type-error".into(),
+            message: "`new Error()` is too unspecific for a type check. \
+                      Use `new TypeError()` instead."
+                .into(),
+            severity: Severity::Warning,
+            span: None,
         });
-
-        diagnostics
     }
 }
 

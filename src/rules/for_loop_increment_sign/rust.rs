@@ -8,6 +8,7 @@ use crate::diagnostic::Diagnostic;
 use crate::rules::backend::{AstCheck, CheckCtx};
 
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct Check;
 
 impl AstCheck for Check {

@@ -26,11 +26,7 @@ enum FnLocation {
     External(PathBuf, String, usize),
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "program" {
-        return;
-    }
-
+crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
     let mut fn_params: Vec<(FnLocation, Vec<String>)> = Vec::new();
     collect_functions(node, source, &mut fn_params);
 

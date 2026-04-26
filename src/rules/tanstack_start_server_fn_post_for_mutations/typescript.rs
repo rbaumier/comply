@@ -6,8 +6,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 
 const MUTATION_PREFIXES: &[&str] = &["create", "update", "delete", "login", "logout"];
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "variable_declarator" { return; }
+crate::ast_check! { on ["variable_declarator"] => |node, source, ctx, diagnostics|
     let Some(name_node) = node.child_by_field_name("name") else { return; };
     let Ok(name) = name_node.utf8_text(source) else { return; };
     let lower = name.to_ascii_lowercase();

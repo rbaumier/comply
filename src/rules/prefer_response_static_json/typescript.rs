@@ -2,12 +2,8 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["new_expression"] => |node, source, ctx, diagnostics|
     // Look for `new Response(JSON.stringify(...))`
-    if node.kind() != "new_expression" {
-        return;
-    }
-
     let Some(constructor) = node.child_by_field_name("constructor") else { return };
     if constructor.utf8_text(source).unwrap_or("") != "Response" {
         return;

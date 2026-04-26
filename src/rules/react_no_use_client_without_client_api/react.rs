@@ -86,11 +86,8 @@ fn scan_client_apis(node: tree_sitter::Node<'_>, source: &[u8], found: &mut bool
     }
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
     let _ = ctx;
-    if node.kind() != "program" {
-        return;
-    }
     if !has_use_client_directive(node, source) {
         return;
     }

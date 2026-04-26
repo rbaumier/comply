@@ -15,11 +15,7 @@ fn is_variable_node(node: tree_sitter::Node) -> bool {
     node.kind() == "identifier"
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "call_expression" {
-        return;
-    }
-
+crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     // Only check test files.
     let path_str = ctx.path.to_string_lossy();
     if !path_str.contains(".test.") && !path_str.contains(".spec.") && !path_str.contains("__tests__") && !path_str.contains("_test.") {

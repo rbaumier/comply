@@ -5,11 +5,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "program" && node.kind() != "source_file" {
-        return;
-    }
-
+crate::ast_check! { on ["source_file"] => |node, source, ctx, diagnostics|
     // 1. Collect `static mut` variable names.
     let mut mutable_statics: Vec<String> = Vec::new();
     let mut cursor = node.walk();

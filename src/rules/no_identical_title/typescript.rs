@@ -141,12 +141,9 @@ fn check_scope(
     }
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
     // Single traversal from the program root — check_scope recurses
     // itself into describe bodies.
-    if node.kind() != "program" {
-        return;
-    }
     check_scope(node, source, ctx, diagnostics);
 }
 

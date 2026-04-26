@@ -20,11 +20,8 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["catch_clause"] => |node, source, ctx, diagnostics|
     let _ = source;
-    if node.kind() != "catch_clause" {
-        return;
-    }
     let mut cursor = node.walk();
     let mut binding: Option<tree_sitter::Node> = None;
     let mut has_annotation = false;

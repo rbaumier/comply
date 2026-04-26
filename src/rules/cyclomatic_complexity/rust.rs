@@ -17,11 +17,7 @@ const BRANCHING_KINDS: &[&str] = &[
 
 const LOGICAL_OPS: &[&str] = &["&&", "||"];
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if !FUNCTION_KINDS.contains(&node.kind()) {
-        return;
-    }
-
+crate::ast_check! { on ["function_item"] => |node, source, ctx, diagnostics|
     let name = node
         .child_by_field_name("name")
         .and_then(|n| n.utf8_text(source).ok())

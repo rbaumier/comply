@@ -199,12 +199,9 @@ fn collect_type_names(
     }
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
     // We fire once at the program root: collect input/output usage of
     // every type identifier, then iterate declarations.
-    if node.kind() != "program" {
-        return;
-    }
     let (inputs, outputs) = collect_type_positions(node, source);
 
     let mut cursor = node.walk();

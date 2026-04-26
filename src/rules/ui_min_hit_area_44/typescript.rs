@@ -19,12 +19,7 @@ const TINY_SIZE_TOKENS: &[&str] = &[
 
 const INTERACTIVE_TAGS: &[&str] = &["button", "a", "input"];
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    let kind = node.kind();
-    if kind != "jsx_opening_element" && kind != "jsx_self_closing_element" {
-        return;
-    }
-
+crate::ast_check! { on ["jsx_opening_element", "jsx_self_closing_element"] => |node, source, ctx, diagnostics|
     let Some(tag) = crate::rules::jsx::jsx_element_tag_name(node, source) else { return };
     if !INTERACTIVE_TAGS.contains(&tag) {
         return;

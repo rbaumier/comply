@@ -17,7 +17,8 @@ use regex::Regex;
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::walker::walk_tree;
+
+const KINDS: &[&str] = &["string_literal", "raw_string_literal"];
 
 fn create_index_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
@@ -30,7 +31,17 @@ fn create_index_re() -> &'static Regex {
 pub struct Check;
 
 impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        Some(KINDS)
+    }
+
+    fn visit_node(
+        &self,
+        node: tree_sitter::Node,
+        ctx: &CheckCtx,
+        _state: Option<&mut dyn std::any::Any>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
         let min_rationale_words = ctx
             .config
             .threshold("sql-index-needs-rationale-comment", "min_rationale_words");
@@ -38,33 +49,26 @@ impl AstCheck for Check {
             .config
             .threshold("sql-index-needs-rationale-comment", "lookback_lines");
         let source_bytes = ctx.source.as_bytes();
-        let mut diagnostics = Vec::new();
-        walk_tree(tree, |node| {
-            if !matches!(node.kind(), "string_literal" | "raw_string_literal") {
-                return;
-            }
-            let Ok(raw) = node.utf8_text(source_bytes) else {
-                return;
-            };
-            let content = strip_rust_string_delimiters(raw);
-            let start = node.start_position();
-            // Content offset inside the literal: advance past the opening
-            // delimiter so diagnostic columns land inside the SQL, not on
-            // the leading quote.
-            let delimiter_len = raw.len().saturating_sub(content.len()).saturating_sub(
-                // trailing quote length matches leading quote length
-                raw.len().saturating_sub(content.len()) / 2,
-            );
-            diagnostics.extend(check_string_content(
-                content,
-                start.row,
-                start.column + delimiter_len,
-                ctx.path,
-                min_rationale_words,
-                lookback_lines,
-            ));
-        });
-        diagnostics
+        let Ok(raw) = node.utf8_text(source_bytes) else {
+            return;
+        };
+        let content = strip_rust_string_delimiters(raw);
+        let start = node.start_position();
+        // Content offset inside the literal: advance past the opening
+        // delimiter so diagnostic columns land inside the SQL, not on
+        // the leading quote.
+        let delimiter_len = raw.len().saturating_sub(content.len()).saturating_sub(
+            // trailing quote length matches leading quote length
+            raw.len().saturating_sub(content.len()) / 2,
+        );
+        diagnostics.extend(check_string_content(
+            content,
+            start.row,
+            start.column + delimiter_len,
+            ctx.path,
+            min_rationale_words,
+            lookback_lines,
+        ));
     }
 }
 

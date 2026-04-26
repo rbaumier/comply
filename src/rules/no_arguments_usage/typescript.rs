@@ -2,11 +2,8 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["identifier"] => |node, source, ctx, diagnostics|
     // Match `arguments` used as an identifier in member expressions or subscripts.
-    if node.kind() != "identifier" {
-        return;
-    }
     let Ok(text) = node.utf8_text(source) else { return };
     if text != "arguments" {
         return;

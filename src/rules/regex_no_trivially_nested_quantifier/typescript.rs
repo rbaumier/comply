@@ -121,10 +121,7 @@ fn find_char_class_close(bytes: &[u8], start: usize) -> Option<usize> {
     None
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "regex" {
-        return;
-    }
+crate::ast_check! { on ["regex"] => |node, source, ctx, diagnostics|
     let Some((pattern, _flags)) = pattern_and_flags(&node, source) else { return };
     if find_trivially_nested_quantifiers(pattern).is_empty() {
         return;

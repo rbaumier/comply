@@ -28,10 +28,7 @@ fn map_set_target(text: &str) -> Option<String> {
     Some(format!("{}.set({})", receiver, key))
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "expression_statement" {
-        return;
-    }
+crate::ast_check! { on ["expression_statement"] => |node, source, ctx, diagnostics|
     let Some(next_sibling) = node.next_named_sibling() else { return };
     if next_sibling.kind() != "expression_statement" {
         return;

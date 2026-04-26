@@ -66,10 +66,7 @@ fn get_lookaround_kind(bytes: &[u8], pos: usize) -> Option<&'static str> {
     }
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "regex" {
-        return;
-    }
+crate::ast_check! { on ["regex"] => |node, source, ctx, diagnostics|
     let Some((pattern, _flags)) = pattern_and_flags(&node, source) else { return };
     if find_trivially_nested(pattern).is_empty() {
         return;

@@ -30,8 +30,7 @@ fn inside_test_callback(mut node: tree_sitter::Node, source: &[u8]) -> bool {
     false
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "try_statement" { return; }
+crate::ast_check! { on ["try_statement"] => |node, source, ctx, diagnostics|
     // Find the catch_clause child.
     let mut catch_clause: Option<tree_sitter::Node> = None;
     let mut cursor = node.walk();

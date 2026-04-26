@@ -7,10 +7,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "identifier" {
-        return;
-    }
+crate::ast_check! { on ["identifier"] => |node, source, ctx, diagnostics|
     if !is_declaration_site(node) {
         return;
     }

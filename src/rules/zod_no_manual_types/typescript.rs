@@ -64,10 +64,8 @@ fn alias_keys<'a>(type_obj: Node<'a>, source: &'a [u8]) -> Option<BTreeSet<Strin
     if keys.is_empty() { None } else { Some(keys) }
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
     // Only run once per file: fire on program / module root.
-    if node.kind() != "program" { return; }
-
     let schemas = collect_schema_key_sets(node, source);
     if schemas.is_empty() { return; }
 

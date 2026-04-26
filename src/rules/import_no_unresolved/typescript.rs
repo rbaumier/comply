@@ -4,11 +4,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use std::collections::HashSet;
 
-crate::ast_check! { |node, _source, ctx, diagnostics|
-    if node.kind() != "program" {
-        return;
-    }
-
+crate::ast_check! { on ["program"] => |node, _source, ctx, diagnostics|
     let index = ctx.project.import_index();
     if index.is_empty() {
         return;

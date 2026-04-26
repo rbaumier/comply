@@ -49,8 +49,7 @@ fn is_hot_scope<'a>(func: Node<'a>, source: &'a [u8]) -> bool {
     looks_like_handler(func, source)
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "call_expression" { return; }
+crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     let Some(func) = node.child_by_field_name("function") else { return };
     if func.kind() != "member_expression" { return; }
     let Some(obj) = func.child_by_field_name("object") else { return };

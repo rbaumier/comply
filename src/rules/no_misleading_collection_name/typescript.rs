@@ -11,57 +11,59 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::walker::walk_tree;
 
 #[derive(Debug)]
 pub struct Check;
 
 impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        Some(&["variable_declarator"])
+    }
+
+    fn visit_node(
+        &self,
+        node: tree_sitter::Node,
+        ctx: &CheckCtx,
+        _state: Option<&mut dyn std::any::Any>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
         let source = ctx.source.as_bytes();
-        let mut diagnostics = Vec::new();
-        walk_tree(tree, |node| {
-            if node.kind() != "variable_declarator" {
-                return;
-            }
-            let Some(name_node) = node.child_by_field_name("name") else {
-                return;
-            };
-            let Ok(name) = name_node.utf8_text(source) else {
-                return;
-            };
-            let Some(claimed) = name_suffix_shape(name) else {
-                return;
-            };
-            let Some(value) = node.child_by_field_name("value") else {
-                return;
-            };
-            let Some(actual) = initializer_shape(value, source) else {
-                return;
-            };
-            if claimed == actual {
-                return;
-            }
-            let pos = name_node.start_position();
-            diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
-                line: pos.row + 1,
-                column: pos.column + 1,
-                rule_id: "no-misleading-collection-name".into(),
-                message: format!(
-                    "`{name}` is named like {claimed_article} {claimed_label} but holds \
-                     {actual_article} {actual_label}. Rename to match the actual type — \
-                     the suffix is part of the contract.",
-                    claimed_article = article(claimed.label()),
-                    claimed_label = claimed.label(),
-                    actual_article = article(actual.label()),
-                    actual_label = actual.label()
-                ),
-                severity: Severity::Error,
-                span: None,
-            });
+        let Some(name_node) = node.child_by_field_name("name") else {
+            return;
+        };
+        let Ok(name) = name_node.utf8_text(source) else {
+            return;
+        };
+        let Some(claimed) = name_suffix_shape(name) else {
+            return;
+        };
+        let Some(value) = node.child_by_field_name("value") else {
+            return;
+        };
+        let Some(actual) = initializer_shape(value, source) else {
+            return;
+        };
+        if claimed == actual {
+            return;
+        }
+        let pos = name_node.start_position();
+        diagnostics.push(Diagnostic {
+            path: ctx.path.to_path_buf(),
+            line: pos.row + 1,
+            column: pos.column + 1,
+            rule_id: "no-misleading-collection-name".into(),
+            message: format!(
+                "`{name}` is named like {claimed_article} {claimed_label} but holds \
+                 {actual_article} {actual_label}. Rename to match the actual type — \
+                 the suffix is part of the contract.",
+                claimed_article = article(claimed.label()),
+                claimed_label = claimed.label(),
+                actual_article = article(actual.label()),
+                actual_label = actual.label()
+            ),
+            severity: Severity::Error,
+            span: None,
         });
-        diagnostics
     }
 }
 

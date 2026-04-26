@@ -19,10 +19,8 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
     let _ = source;
-    if node.kind() != "program" { return; }
-
     let mut saw_non_import = false;
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {

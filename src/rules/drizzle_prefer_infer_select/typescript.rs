@@ -2,11 +2,8 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["generic_type"] => |node, source, ctx, diagnostics|
     // A `generic_type` in tree-sitter-typescript represents `Foo<T>`.
-    if node.kind() != "generic_type" {
-        return;
-    }
     let Some(name_node) = node.child_by_field_name("name") else {
         // Fall back to scanning children for type_identifier.
         let mut cursor = node.walk();

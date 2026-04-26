@@ -57,8 +57,7 @@ fn signature_has_non_void_return(sig: &str) -> bool {
         || ret.starts_with("Promise<void>"))
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "comment" { return; }
+crate::ast_check! { on ["comment"] => |node, source, ctx, diagnostics|
     let Ok(text) = node.utf8_text(source) else { return; };
     if !text.starts_with("/**") { return; }
     let line_offset = node.start_position().row;

@@ -8,15 +8,26 @@
 
 use crate::diagnostic::Diagnostic;
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::walker::walk_tree;
 
 use super::rust::check_string_content;
+
+const KINDS: &[&str] = &["string", "template_string"];
 
 #[derive(Debug)]
 pub struct Check;
 
 impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        Some(KINDS)
+    }
+
+    fn visit_node(
+        &self,
+        node: tree_sitter::Node,
+        ctx: &CheckCtx,
+        _state: Option<&mut dyn std::any::Any>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
         let min_rationale_words = ctx
             .config
             .threshold("sql-index-needs-rationale-comment", "min_rationale_words");
@@ -24,28 +35,21 @@ impl AstCheck for Check {
             .config
             .threshold("sql-index-needs-rationale-comment", "lookback_lines");
         let source_bytes = ctx.source.as_bytes();
-        let mut diagnostics = Vec::new();
-        walk_tree(tree, |node| {
-            if !matches!(node.kind(), "string" | "template_string") {
-                return;
-            }
-            let Ok(raw) = node.utf8_text(source_bytes) else {
-                return;
-            };
-            let content = strip_ts_string_delimiters(raw);
-            let start = node.start_position();
-            // Skip the opening `"` / `'` / `` ` `` — 1 byte in every case.
-            let delimiter_len = raw.len().saturating_sub(content.len()) / 2;
-            diagnostics.extend(check_string_content(
-                content,
-                start.row,
-                start.column + delimiter_len,
-                ctx.path,
-                min_rationale_words,
-                lookback_lines,
-            ));
-        });
-        diagnostics
+        let Ok(raw) = node.utf8_text(source_bytes) else {
+            return;
+        };
+        let content = strip_ts_string_delimiters(raw);
+        let start = node.start_position();
+        // Skip the opening `"` / `'` / `` ` `` — 1 byte in every case.
+        let delimiter_len = raw.len().saturating_sub(content.len()) / 2;
+        diagnostics.extend(check_string_content(
+            content,
+            start.row,
+            start.column + delimiter_len,
+            ctx.path,
+            min_rationale_words,
+            lookback_lines,
+        ));
     }
 }
 

@@ -43,8 +43,7 @@ fn flagged_call(expr: &str) -> Option<&'static str> {
     None
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "component" { return; }
+crate::ast_check! { on ["component"] => |node, source, ctx, diagnostics|
     let _ = source;
     for (idx, line) in ctx.source.lines().enumerate() {
         let Some(expr) = extract_vfor_expr(line) else {

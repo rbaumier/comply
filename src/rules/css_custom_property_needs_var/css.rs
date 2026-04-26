@@ -1,7 +1,6 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "declaration" { return; }
+crate::ast_check! { on ["declaration"] => |node, source, ctx, diagnostics|
     let mut c = node.walk();
     let kids: Vec<_> = node.children(&mut c).collect();
     // Skip the property name (first child); only inspect value-side children.

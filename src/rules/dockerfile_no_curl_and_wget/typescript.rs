@@ -35,8 +35,7 @@ fn contains_tool(text: &str, tool: &str) -> bool {
     false
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "source_file" { return; }
+crate::ast_check! { on ["source_file"] => |node, source, ctx, diagnostics|
     let mut has_curl = false;
     let mut has_wget = false;
     let mut second_node: Option<tree_sitter::Node> = None;

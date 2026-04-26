@@ -5,11 +5,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "type_alias_declaration" {
-        return;
-    }
-
+crate::ast_check! { on ["type_alias_declaration"] => |node, source, ctx, diagnostics|
     // The RHS type. tree-sitter may not expose a "value" field on type_alias_declaration.
     // Try "value" first, then fall back to walking children for the type after '='.
     let value = node.child_by_field_name("value").or_else(|| {

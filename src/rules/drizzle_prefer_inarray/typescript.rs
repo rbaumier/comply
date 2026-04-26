@@ -3,16 +3,13 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["template_string"] => |node, source, ctx, diagnostics|
     // tree-sitter-typescript exposes tagged templates either as
     // `template_string` children of `template_literal_type` or as
     // `call_expression`-like `template_substitution`. A simpler signal:
     // look for `template_string` whose parent is either a
     // `call_expression` with function `sql`, or just a standalone
     // `sql`-tagged template node.
-    if node.kind() != "template_string" {
-        return;
-    }
     let Some(parent) = node.parent() else { return };
     // Tagged template: tree-sitter encodes `sql\`...\`` as
     // `call_expression` where function = "sql" and arguments = the template.

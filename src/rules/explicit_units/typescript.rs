@@ -13,7 +13,6 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::walker::walk_tree;
 
 /// Identifier bases that demand an explicit unit. Lowercase compared.
 const AMBIGUOUS_BASES: &[&str] = &[
@@ -36,41 +35,44 @@ const KNOWN_SUFFIXES: &[&str] = &[
 pub struct Check;
 
 impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        Some(&["variable_declarator", "required_parameter"])
+    }
+
+    fn visit_node(
+        &self,
+        node: tree_sitter::Node,
+        ctx: &CheckCtx,
+        _state: Option<&mut dyn std::any::Any>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
         let source_bytes = ctx.source.as_bytes();
-        let mut diagnostics = Vec::new();
-        walk_tree(tree, |node| {
-            if node.kind() != "variable_declarator" && node.kind() != "required_parameter" {
-                return;
-            }
-            if !is_numeric(node, source_bytes) {
-                return;
-            }
-            let Some(name) = identifier_of(node, source_bytes) else {
-                return;
-            };
-            let Some(base) = matches_ambiguous_base(name) else {
-                return;
-            };
-            if has_known_suffix(name) {
-                return;
-            }
-            let pos = node.start_position();
-            diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
-                line: pos.row + 1,
-                column: pos.column + 1,
-                rule_id: "explicit-units".into(),
-                message: format!(
-                    "Numeric '{name}' has an ambiguous base '{base}' — \
-                     add an explicit unit suffix. Try `{name}Ms`, \
-                     `{name}Bytes`, `{name}Count`, or similar."
-                ),
-                severity: Severity::Warning,
-                span: None,
-            });
+        if !is_numeric(node, source_bytes) {
+            return;
+        }
+        let Some(name) = identifier_of(node, source_bytes) else {
+            return;
+        };
+        let Some(base) = matches_ambiguous_base(name) else {
+            return;
+        };
+        if has_known_suffix(name) {
+            return;
+        }
+        let pos = node.start_position();
+        diagnostics.push(Diagnostic {
+            path: ctx.path.to_path_buf(),
+            line: pos.row + 1,
+            column: pos.column + 1,
+            rule_id: "explicit-units".into(),
+            message: format!(
+                "Numeric '{name}' has an ambiguous base '{base}' — \
+                 add an explicit unit suffix. Try `{name}Ms`, \
+                 `{name}Bytes`, `{name}Count`, or similar."
+            ),
+            severity: Severity::Warning,
+            span: None,
         });
-        diagnostics
     }
 }
 

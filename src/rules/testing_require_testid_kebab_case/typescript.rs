@@ -21,9 +21,7 @@ fn is_kebab_case(s: &str) -> bool {
     s.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "jsx_attribute" { return; }
-
+crate::ast_check! { on ["jsx_attribute"] => |node, source, ctx, diagnostics|
     // Attribute name is the first child.
     let Some(name_node) = node.named_child(0) else { return; };
     let name = name_node.utf8_text(source).unwrap_or("");

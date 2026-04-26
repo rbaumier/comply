@@ -1,10 +1,6 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "as_expression" {
-        return;
-    }
-
+crate::ast_check! { on ["as_expression"] => |node, source, ctx, diagnostics|
     // Allow `as const` — it's a type refinement, not a cast
     let node_text = node.utf8_text(source).unwrap_or("");
     if node_text.trim_end().ends_with("as const") {

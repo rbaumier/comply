@@ -6,45 +6,49 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::walker::walk_tree;
+
+const KINDS: &[&str] = &["enum_item"];
 
 #[derive(Debug)]
 pub struct Check;
 
 impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        Some(KINDS)
+    }
+
+    fn visit_node(
+        &self,
+        node: tree_sitter::Node,
+        ctx: &CheckCtx,
+        _state: Option<&mut dyn std::any::Any>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
         let source_bytes = ctx.source.as_bytes();
-        let mut diagnostics = Vec::new();
-        walk_tree(tree, |node| {
-            if node.kind() != "enum_item" {
-                return;
-            }
-            if !is_pub(node, source_bytes) {
-                return;
-            }
-            if has_non_exhaustive(node, source_bytes) {
-                return;
-            }
-            let name = node
-                .child_by_field_name("name")
-                .and_then(|n| n.utf8_text(source_bytes).ok())
-                .unwrap_or("Enum");
-            let pos = node.start_position();
-            diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
-                line: pos.row + 1,
-                column: pos.column + 1,
-                rule_id: "rust-pub-enum-without-non-exhaustive".into(),
-                message: format!(
-                    "`pub enum {name}` lacks `#[non_exhaustive]` — adding \
-                     a new variant later becomes a SemVer-breaking change. \
-                     Add the attribute to keep the API future-proof."
-                ),
-                severity: Severity::Warning,
-                span: None,
-            });
+        if !is_pub(node, source_bytes) {
+            return;
+        }
+        if has_non_exhaustive(node, source_bytes) {
+            return;
+        }
+        let name = node
+            .child_by_field_name("name")
+            .and_then(|n| n.utf8_text(source_bytes).ok())
+            .unwrap_or("Enum");
+        let pos = node.start_position();
+        diagnostics.push(Diagnostic {
+            path: ctx.path.to_path_buf(),
+            line: pos.row + 1,
+            column: pos.column + 1,
+            rule_id: "rust-pub-enum-without-non-exhaustive".into(),
+            message: format!(
+                "`pub enum {name}` lacks `#[non_exhaustive]` — adding \
+                 a new variant later becomes a SemVer-breaking change. \
+                 Add the attribute to keep the API future-proof."
+            ),
+            severity: Severity::Warning,
+            span: None,
         });
-        diagnostics
     }
 }
 

@@ -11,12 +11,8 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["switch_case", "switch_default"] => |node, source, ctx, diagnostics|
     let _ = source;
-    if node.kind() != "switch_case" && node.kind() != "switch_default" {
-        return;
-    }
-
     // Iterate direct named children; skip the `value` (for switch_case).
     // Any direct `lexical_declaration` / `class_declaration` is a leak.
     let mut cursor = node.walk();

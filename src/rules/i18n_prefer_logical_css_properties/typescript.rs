@@ -53,11 +53,7 @@ const PATTERNS: &[(&str, &str)] = &[
     ),
 ];
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    let kind = node.kind();
-    if kind != "string" && kind != "template_string" {
-        return;
-    }
+crate::ast_check! { on ["string", "template_string"] => |node, source, ctx, diagnostics|
     let Ok(text) = node.utf8_text(source) else { return };
     let start = node.start_position();
     // The node spans multiple lines for template literals; iterate line-by-line

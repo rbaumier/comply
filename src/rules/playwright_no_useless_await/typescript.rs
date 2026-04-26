@@ -79,15 +79,10 @@ fn contains_expect_root(node: tree_sitter::Node, source: &[u8]) -> bool {
     }
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["await_expression"] => |node, source, ctx, diagnostics|
     if !is_test_file(ctx.path) {
         return;
     }
-
-    if node.kind() != "await_expression" {
-        return;
-    }
-
     let Some(child) = node.named_child(0) else { return };
     if child.kind() != "call_expression" {
         return;

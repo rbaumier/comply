@@ -5,11 +5,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "if_statement" {
-        return;
-    }
-
+crate::ast_check! { on ["if_statement"] => |node, source, ctx, diagnostics|
     // Only process the outermost if in a chain (skip if parent is else_clause)
     if let Some(parent) = node.parent()
         && parent.kind() == "else_clause" {

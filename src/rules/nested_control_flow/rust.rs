@@ -5,7 +5,6 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::walker::walk_tree;
 
 const CONTROL_FLOW_KINDS: &[&str] = &[
     "if_expression",
@@ -46,42 +45,51 @@ fn control_flow_depth(node: tree_sitter::Node) -> usize {
 }
 
 impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        Some(CONTROL_FLOW_KINDS)
+    }
+
+    fn create_state(&self) -> Option<Box<dyn std::any::Any>> {
+        Some(Box::new(std::collections::HashSet::<usize>::new()))
+    }
+
+    fn visit_node(
+        &self,
+        node: tree_sitter::Node,
+        ctx: &CheckCtx,
+        state: Option<&mut dyn std::any::Any>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
         let max_depth = ctx.config.threshold("nested-control-flow", "max");
-        let mut diagnostics = Vec::new();
-        let mut flagged_lines = std::collections::HashSet::new();
+        let flagged_lines = state
+            .unwrap()
+            .downcast_mut::<std::collections::HashSet<usize>>()
+            .unwrap();
 
-        walk_tree(tree, |node| {
-            if !CONTROL_FLOW_KINDS.contains(&node.kind()) {
-                return;
-            }
-            // Skip the inner `if_expression` of an `else if` cascade — it is
-            // the same cognitive level as the outer `if`, counted once.
-            if node.kind() == "if_expression"
-                && let Some(parent) = node.parent()
-                    && parent.kind() == "else_clause" {
-                        return;
-                    }
-            let depth = control_flow_depth(node) + 1;
-            if depth > max_depth {
-                let line = node.start_position().row + 1;
-                if flagged_lines.insert(line) {
-                    diagnostics.push(Diagnostic {
-                        path: ctx.path.to_path_buf(),
-                        line,
-                        column: node.start_position().column + 1,
-                        rule_id: "nested-control-flow".into(),
-                        message: format!(
-                            "Control-flow nesting depth is {depth} (max: {max_depth})."
-                        ),
-                        severity: Severity::Error,
-                        span: None,
-                    });
+        // Skip the inner `if_expression` of an `else if` cascade — it is
+        // the same cognitive level as the outer `if`, counted once.
+        if node.kind() == "if_expression"
+            && let Some(parent) = node.parent()
+                && parent.kind() == "else_clause" {
+                    return;
                 }
+        let depth = control_flow_depth(node) + 1;
+        if depth > max_depth {
+            let line = node.start_position().row + 1;
+            if flagged_lines.insert(line) {
+                diagnostics.push(Diagnostic {
+                    path: ctx.path.to_path_buf(),
+                    line,
+                    column: node.start_position().column + 1,
+                    rule_id: "nested-control-flow".into(),
+                    message: format!(
+                        "Control-flow nesting depth is {depth} (max: {max_depth})."
+                    ),
+                    severity: Severity::Error,
+                    span: None,
+                });
             }
-        });
-
-        diagnostics
+        }
     }
 }
 

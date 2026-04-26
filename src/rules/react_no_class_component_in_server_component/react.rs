@@ -26,11 +26,8 @@ fn extends_react_component(node: tree_sitter::Node, source: &[u8]) -> bool {
     false
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["class_declaration"] => |node, source, ctx, diagnostics|
     if ctx.file.rsc_context != RscContext::ServerComponent {
-        return;
-    }
-    if node.kind() != "class_declaration" {
         return;
     }
     if !extends_react_component(node, source) {

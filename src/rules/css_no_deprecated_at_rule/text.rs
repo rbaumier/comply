@@ -15,8 +15,7 @@ const DEPRECATED: &[(&str, &str)] = &[
     ),
 ];
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if !matches!(node.kind(), "at_rule" | "keyframes_statement" | "media_statement") { return; }
+crate::ast_check! { on ["at_rule", "keyframes_statement", "media_statement"] => |node, source, ctx, diagnostics|
     let mut c = node.walk();
     let Some(kw) = node.children(&mut c).find(|n| n.kind() == "at_keyword") else { return; };
     let text = kw.utf8_text(source).unwrap_or_default();

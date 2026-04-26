@@ -76,8 +76,7 @@ fn subtree_has_partial(root: tree_sitter::Node, source: &[u8]) -> bool {
     false
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "call_expression" { return; }
+crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     let Some(callee) = node.child_by_field_name("function") else { return };
     if !is_put_member(callee, source) { return }
     let Some(args) = node.child_by_field_name("arguments") else { return };

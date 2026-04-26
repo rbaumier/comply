@@ -7,10 +7,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::yaml_k8s_helpers as y;
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "stream" {
-        return;
-    }
+crate::ast_check! { on ["stream"] => |node, source, ctx, diagnostics|
     let tree_docs = document_manifests(node, source);
     if tree_docs.is_empty() {
         return;

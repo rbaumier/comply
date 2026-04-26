@@ -65,8 +65,8 @@ fn push_mixed(
     });
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    match node.kind() {
+crate::ast_check! { on ["interface_declaration", "type_alias_declaration"] => |node, source, ctx, diagnostics|
+match node.kind() {
         "interface_declaration" => {
             let Some(body) = node.child_by_field_name("body") else { return };
             let (has_prop, has_method) = scan_members(body);

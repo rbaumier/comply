@@ -34,8 +34,7 @@ fn is_short_form(value: tree_sitter::Node<'_>) -> bool {
     false
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "block_mapping_pair" { return; }
+crate::ast_check! { on ["block_mapping_pair"] => |node, source, ctx, diagnostics|
     if pair_key_text(node, source).as_deref() != Some("depends_on") { return; }
     if !looks_like_compose(ctx.path, ctx.source) { return; }
 

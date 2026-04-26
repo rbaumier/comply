@@ -228,11 +228,7 @@ fn format_group_message(group: &[FunctionLocation], current_file: &Path, current
     msg
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "program" {
-        return;
-    }
-
+crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
     let import_index = ctx.project.import_index();
 
     // Collect this file's functions once — both paths reuse the same list.

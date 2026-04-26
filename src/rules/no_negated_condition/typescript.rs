@@ -9,8 +9,8 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    match node.kind() {
+crate::ast_check! { on ["if_statement", "ternary_expression"] => |node, source, ctx, diagnostics|
+match node.kind() {
         "if_statement" => {
             // Must have an `alternative` (else branch).
             let alt = match node.child_by_field_name("alternative") {

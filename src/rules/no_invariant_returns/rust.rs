@@ -71,11 +71,7 @@ fn block_tail_expression<'t>(block: tree_sitter::Node<'t>) -> Option<tree_sitter
     Some(last)
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "function_item" {
-        return;
-    }
-
+crate::ast_check! { on ["function_item"] => |node, source, ctx, diagnostics|
     let Some(body) = node.child_by_field_name("body") else { return };
 
     let mut returns: Vec<tree_sitter::Node> = Vec::new();

@@ -5,12 +5,8 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["type_assertion"] => |node, source, ctx, diagnostics|
     // `type_assertion` is the angle-bracket form: <Type>expression
-    if node.kind() != "type_assertion" {
-        return;
-    }
-
     // Ignore `<const>` assertions — they are idiomatic.
     if let Some(type_node) = node.named_child(0) {
         let text = std::str::from_utf8(&source[type_node.byte_range()]).unwrap_or("");

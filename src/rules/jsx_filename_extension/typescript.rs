@@ -7,12 +7,8 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
     let _ = source;
-    if node.kind() != "program" {
-        return;
-    }
-
     let ext = ctx
         .path
         .extension()

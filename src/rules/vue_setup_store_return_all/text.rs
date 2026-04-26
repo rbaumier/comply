@@ -26,8 +26,7 @@ fn find_define_store_body(src: &str) -> Option<(usize, usize, usize)> {
     Some((abs_open + 1, j.saturating_sub(1), line))
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "component" { return; }
+crate::ast_check! { on ["component"] => |node, source, ctx, diagnostics|
     let _ = source;
     let src = ctx.source;
     let Some((start, end, base_line)) = find_define_store_body(src) else {

@@ -73,11 +73,7 @@ fn compute(node: tree_sitter::Node, source: &[u8], nesting: u32) -> u32 {
     score
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "function_item" {
-        return;
-    }
-
+crate::ast_check! { on ["function_item"] => |node, source, ctx, diagnostics|
     let Some(body) = node.child_by_field_name("body") else { return };
     if body.kind() != "block" {
         return;

@@ -49,8 +49,7 @@ fn first_param_destructures_expect(fn_node: tree_sitter::Node, source: &[u8]) ->
     false
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "call_expression" { return; }
+crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     let Some(func) = node.child_by_field_name("function") else { return; };
     if !is_concurrent_callee(func, source) { return; }
 

@@ -33,11 +33,7 @@ fn contains_this(node: tree_sitter::Node) -> bool {
     false
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "method_definition" {
-        return;
-    }
-
+crate::ast_check! { on ["method_definition"] => |node, source, ctx, diagnostics|
     // Must be inside a class body.
     let Some(parent) = node.parent() else { return };
     if parent.kind() != "class_body" {

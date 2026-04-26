@@ -21,50 +21,53 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::sql_helpers::{contains_word, is_sql_string};
-use crate::rules::walker::collect_nodes_of_kinds;
 
 #[derive(Debug)]
 pub struct Check;
 
 impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        Some(&["string", "template_string"])
+    }
+
+    fn visit_node(
+        &self,
+        node: tree_sitter::Node,
+        ctx: &CheckCtx,
+        _state: Option<&mut dyn std::any::Any>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
         let source_bytes = ctx.source.as_bytes();
-        let mut diagnostics = Vec::new();
-
-        for node in collect_nodes_of_kinds(tree, &["string", "template_string"]) {
-            let text = extract_string_text(node, source_bytes);
-            if text.is_empty() {
-                continue;
-            }
-            if !is_sql_string(&text) {
-                continue;
-            }
-            if !starts_with_select(&text) {
-                continue;
-            }
-            let lower = text.to_ascii_lowercase();
-            if contains_word(&lower, "limit") {
-                continue;
-            }
-            if is_implicitly_bounded(&lower) {
-                continue;
-            }
-
-            let pos = node.start_position();
-            diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
-                line: pos.row + 1,
-                column: pos.column + 1,
-                rule_id: "pg-require-limit".into(),
-                message: "SQL `SELECT` without `LIMIT` can return an unbounded number of rows — \
-                          add `LIMIT n` or a unique-row predicate (`WHERE id = ...`, `COUNT(..)`)."
-                    .into(),
-                severity: Severity::Error,
-                span: Some((node.byte_range().start, node.byte_range().len())),
-            });
+        let text = extract_string_text(node, source_bytes);
+        if text.is_empty() {
+            return;
+        }
+        if !is_sql_string(&text) {
+            return;
+        }
+        if !starts_with_select(&text) {
+            return;
+        }
+        let lower = text.to_ascii_lowercase();
+        if contains_word(&lower, "limit") {
+            return;
+        }
+        if is_implicitly_bounded(&lower) {
+            return;
         }
 
-        diagnostics
+        let pos = node.start_position();
+        diagnostics.push(Diagnostic {
+            path: ctx.path.to_path_buf(),
+            line: pos.row + 1,
+            column: pos.column + 1,
+            rule_id: "pg-require-limit".into(),
+            message: "SQL `SELECT` without `LIMIT` can return an unbounded number of rows — \
+                      add `LIMIT n` or a unique-row predicate (`WHERE id = ...`, `COUNT(..)`)."
+                .into(),
+            severity: Severity::Error,
+            span: Some((node.byte_range().start, node.byte_range().len())),
+        });
     }
 }
 

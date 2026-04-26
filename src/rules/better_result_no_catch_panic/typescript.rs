@@ -4,11 +4,8 @@ fn imports_better_result(source: &str) -> bool {
     source.contains("better-result") || source.contains("@better-result")
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["catch_clause"] => |node, source, ctx, diagnostics|
     if !imports_better_result(ctx.source) {
-        return;
-    }
-    if node.kind() != "catch_clause" {
         return;
     }
     let text = node.utf8_text(source).unwrap_or("");

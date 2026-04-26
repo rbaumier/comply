@@ -70,8 +70,7 @@ fn longhand_of(prop: &str) -> Option<&'static str> {
     None
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "block" { return; }
+crate::ast_check! { on ["block"] => |node, source, ctx, diagnostics|
     let mut c = node.walk();
     let decls: Vec<_> = node
         .children(&mut c)

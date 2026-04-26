@@ -7,10 +7,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "required_parameter" {
-        return;
-    }
+crate::ast_check! { on ["required_parameter"] => |node, source, ctx, diagnostics|
     // Must be inside a constructor's formal_parameters
     let Some(parent) = node.parent() else {
         return;

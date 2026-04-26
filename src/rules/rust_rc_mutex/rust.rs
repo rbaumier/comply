@@ -16,45 +16,49 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::walker::walk_tree;
+
+const KINDS: &[&str] = &["generic_type"];
 
 #[derive(Debug)]
 pub struct Check;
 
 impl AstCheck for Check {
-    fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        Some(KINDS)
+    }
+
+    fn visit_node(
+        &self,
+        node: tree_sitter::Node,
+        ctx: &CheckCtx,
+        _state: Option<&mut dyn std::any::Any>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
         let source_bytes = ctx.source.as_bytes();
-        let mut diagnostics = Vec::new();
-        walk_tree(tree, |node| {
-            if node.kind() != "generic_type" {
-                return;
-            }
-            if !type_name_is(&node, "Rc", source_bytes) {
-                return;
-            }
-            let Some(args) = node.child_by_field_name("type_arguments") else {
-                return;
-            };
-            if !first_type_arg_is(&args, "Mutex", source_bytes) {
-                return;
-            }
-            let pos = node.start_position();
-            diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
-                line: pos.row + 1,
-                column: pos.column + 1,
-                rule_id: "rust-rc-mutex".into(),
-                message: "`Rc<Mutex<T>>` — `Rc` is `!Send`, so the value can \
-                          never cross threads and the `Mutex` protects against \
-                          nothing. Use `Rc<RefCell<T>>` for single-threaded \
-                          interior mutability, or `Arc<Mutex<T>>` if you \
-                          actually share across threads."
-                    .into(),
-                severity: Severity::Error,
-                span: None,
-            });
+        if !type_name_is(&node, "Rc", source_bytes) {
+            return;
+        }
+        let Some(args) = node.child_by_field_name("type_arguments") else {
+            return;
+        };
+        if !first_type_arg_is(&args, "Mutex", source_bytes) {
+            return;
+        }
+        let pos = node.start_position();
+        diagnostics.push(Diagnostic {
+            path: ctx.path.to_path_buf(),
+            line: pos.row + 1,
+            column: pos.column + 1,
+            rule_id: "rust-rc-mutex".into(),
+            message: "`Rc<Mutex<T>>` — `Rc` is `!Send`, so the value can \
+                      never cross threads and the `Mutex` protects against \
+                      nothing. Use `Rc<RefCell<T>>` for single-threaded \
+                      interior mutability, or `Arc<Mutex<T>>` if you \
+                      actually share across threads."
+                .into(),
+            severity: Severity::Error,
+            span: None,
         });
-        diagnostics
     }
 }
 

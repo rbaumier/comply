@@ -14,10 +14,9 @@ const SAFE_CALLBACK_HOOKS: &[&str] = &[
     "useImperativeHandle",
 ];
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
     // Only enter function bodies that look like React components: PascalCase
     // name and defined at module scope. We run once per program.
-    if node.kind() != "program" { return; }
     let mut stack: Vec<tree_sitter::Node> = vec![node];
     while let Some(n) = stack.pop() {
         if is_component_function(n, source) {

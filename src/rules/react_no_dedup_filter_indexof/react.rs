@@ -22,11 +22,8 @@ fn body_contains_indexof(node: tree_sitter::Node<'_>, source: &[u8]) -> bool {
     false
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     let _ = ctx;
-    if node.kind() != "call_expression" {
-        return;
-    }
     let Some(callee) = node.child_by_field_name("function") else { return };
     if callee.kind() != "member_expression" {
         return;

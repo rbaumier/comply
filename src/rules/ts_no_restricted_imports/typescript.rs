@@ -35,11 +35,7 @@ fn specifier_matches(specifier: &str, pattern: &str) -> bool {
     }
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "import_statement" {
-        return;
-    }
-
+crate::ast_check! { on ["import_statement"] => |node, source, ctx, diagnostics|
     let patterns = ctx
         .config
         .string_list("ts-no-restricted-imports", "patterns");

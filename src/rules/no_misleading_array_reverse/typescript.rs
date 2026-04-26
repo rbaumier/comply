@@ -5,9 +5,9 @@ use crate::diagnostic::{Diagnostic, Severity};
 
 const MUTATING_METHODS: &[&str] = &["reverse", "sort", "fill", "splice"];
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { on ["lexical_declaration", "variable_declaration", "return_statement"] => |node, source, ctx, diagnostics|
     // Match: `const x = expr.reverse()` or `return expr.sort()`
-    match node.kind() {
+match node.kind() {
         "lexical_declaration" | "variable_declaration" => {
             check_declaration(node, source, ctx, diagnostics);
         }

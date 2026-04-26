@@ -24,10 +24,7 @@ fn first_arg_is_array(call: tree_sitter::Node) -> bool {
         .is_some_and(|n| n.kind() == "array")
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "call_expression" {
-        return;
-    }
+crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     let callee = callee_text(node, source);
     let is_method_call =
         callee == "Response.json" || callee == "res.json" || callee == "c.json";

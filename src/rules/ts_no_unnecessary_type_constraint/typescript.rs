@@ -6,10 +6,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
-    if node.kind() != "type_parameter" {
-        return;
-    }
+crate::ast_check! { on ["type_parameter"] => |node, source, ctx, diagnostics|
     // Find the `constraint` child node (not a field — tree-sitter uses it as a node kind).
     let constraint = {
         let mut cursor = node.walk();
