@@ -2,7 +2,7 @@
 //! component bundle throws at module evaluation. If the file is marked
 //! `"use client"`, any `server-only` import is a contradiction.
 
-mod typescript;
+mod react;
 
 use crate::diagnostic::Severity;
 use crate::rules::RuleDef;
@@ -20,5 +20,5 @@ pub const META: RuleMeta = RuleMeta {
 };
 
 pub fn register() -> RuleDef {
-    crate::register_ts_family!(META, typescript)
+    crate::register_ts_family!(META, react)
 }

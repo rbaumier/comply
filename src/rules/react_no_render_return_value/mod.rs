@@ -6,7 +6,7 @@
 //! root component instance) breaks under concurrent rendering and
 //! silently returns `null` in many cases.
 
-mod typescript;
+mod react;
 
 use crate::diagnostic::Severity;
 use crate::rules::meta::RuleMeta;
@@ -24,5 +24,5 @@ pub const META: RuleMeta = RuleMeta {
 };
 
 pub fn register() -> RuleDef {
-    crate::register_ts_family!(META, typescript)
+    crate::register_ts_family!(META, react)
 }

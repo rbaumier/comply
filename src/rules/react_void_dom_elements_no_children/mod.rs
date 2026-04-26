@@ -1,7 +1,7 @@
 //! react-void-dom-elements-no-children — void elements cannot have children.
 
-mod text;
-mod typescript;
+mod vue;
+mod react;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
@@ -26,9 +26,9 @@ pub fn register() -> RuleDef {
         backends: {
             let mut b: Vec<_> = TS_FAMILY
                 .iter()
-                .map(|&lang| (lang, Backend::TreeSitter(Box::new(typescript::Check))))
+                .map(|&lang| (lang, Backend::TreeSitter(Box::new(react::Check))))
                 .collect();
-            b.push((Language::Vue, Backend::Text(Box::new(text::Check))));
+            b.push((Language::Vue, Backend::Text(Box::new(vue::Check))));
             b
         },
     }

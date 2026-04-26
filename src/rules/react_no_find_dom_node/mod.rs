@@ -4,7 +4,7 @@
 //! breaks encapsulation, forces synchronous DOM access, and is incompatible
 //! with future React rendering modes. Refs are the supported alternative.
 
-mod typescript;
+mod react;
 
 use crate::diagnostic::Severity;
 use crate::rules::RuleDef;
@@ -20,5 +20,5 @@ pub const META: RuleMeta = RuleMeta {
 };
 
 pub fn register() -> RuleDef {
-    crate::register_ts_family!(META, typescript)
+    crate::register_ts_family!(META, react)
 }

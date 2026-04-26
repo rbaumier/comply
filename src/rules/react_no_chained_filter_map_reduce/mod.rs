@@ -1,6 +1,6 @@
 //! react-no-chained-filter-map-reduce — 3+ chained `.filter/.map/.reduce` calls.
 
-mod typescript;
+mod react;
 
 use crate::diagnostic::Severity;
 use crate::rules::meta::RuleMeta;
@@ -17,5 +17,5 @@ pub const META: RuleMeta = RuleMeta {
 };
 
 pub fn register() -> RuleDef {
-    crate::register_ts_family!(META, typescript)
+    crate::register_ts_family!(META, react)
 }

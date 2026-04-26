@@ -2,7 +2,7 @@
 //! throws at render time: "async/await is not yet supported in Client
 //! Components." Only server components may be async.
 
-mod typescript;
+mod react;
 
 use crate::diagnostic::Severity;
 use crate::rules::RuleDef;
@@ -20,5 +20,5 @@ pub const META: RuleMeta = RuleMeta {
 };
 
 pub fn register() -> RuleDef {
-    crate::register_ts_family!(META, typescript)
+    crate::register_ts_family!(META, react)
 }

@@ -1,6 +1,6 @@
 //! react-hoist-static-jsx — hoist static JSX above the component body.
 
-mod typescript;
+mod react;
 
 use crate::diagnostic::Severity;
 use crate::rules::meta::RuleMeta;
@@ -21,5 +21,5 @@ pub const META: RuleMeta = RuleMeta {
 };
 
 pub fn register() -> RuleDef {
-    crate::register_ts_family!(META, typescript)
+    crate::register_ts_family!(META, react)
 }

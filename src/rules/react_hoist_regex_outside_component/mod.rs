@@ -1,6 +1,6 @@
 //! react-hoist-regex-outside-component — compile regex once.
 
-mod typescript;
+mod react;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
@@ -23,6 +23,6 @@ pub const META: RuleMeta = RuleMeta {
 pub fn register() -> RuleDef {
     RuleDef {
         meta: META,
-        backends: vec![(Language::Tsx, Backend::TreeSitter(Box::new(typescript::Check)))],
+        backends: vec![(Language::Tsx, Backend::TreeSitter(Box::new(react::Check)))],
     }
 }

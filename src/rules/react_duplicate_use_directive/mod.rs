@@ -3,7 +3,7 @@
 //! silently ignored. The resulting behaviour depends on source ordering, not
 //! intent.
 
-mod typescript;
+mod react;
 
 use crate::diagnostic::Severity;
 use crate::rules::RuleDef;
@@ -20,5 +20,5 @@ pub const META: RuleMeta = RuleMeta {
 };
 
 pub fn register() -> RuleDef {
-    crate::register_ts_family!(META, typescript)
+    crate::register_ts_family!(META, react)
 }

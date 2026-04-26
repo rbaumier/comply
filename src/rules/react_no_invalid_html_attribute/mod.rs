@@ -1,7 +1,7 @@
 //! react-no-invalid-html-attribute — invalid `rel` attribute values.
 
-mod text;
-mod typescript;
+mod vue;
+mod react;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
@@ -21,7 +21,7 @@ pub const META: RuleMeta = RuleMeta {
 };
 
 pub fn register() -> RuleDef {
-    let mut backends = crate::register_ts_family!(META, typescript).backends;
-    backends.push((Language::Vue, Backend::Text(Box::new(text::Check))));
+    let mut backends = crate::register_ts_family!(META, react).backends;
+    backends.push((Language::Vue, Backend::Text(Box::new(vue::Check))));
     RuleDef { meta: META, backends }
 }

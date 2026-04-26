@@ -2,7 +2,7 @@
 //! server. Importing them into a `"use client"` file throws at module
 //! evaluation. Catch the misuse at authoring time.
 
-mod typescript;
+mod react;
 
 use crate::diagnostic::Severity;
 use crate::rules::RuleDef;
@@ -19,5 +19,5 @@ pub const META: RuleMeta = RuleMeta {
 };
 
 pub fn register() -> RuleDef {
-    crate::register_ts_family!(META, typescript)
+    crate::register_ts_family!(META, react)
 }

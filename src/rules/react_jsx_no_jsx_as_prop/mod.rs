@@ -4,7 +4,7 @@
 //! creates a fresh element object on every render, breaking referential equality
 //! and forcing memoized children to re-render. Extract to a variable or `useMemo`.
 
-mod typescript;
+mod react;
 
 use crate::diagnostic::Severity;
 use crate::rules::RuleDef;
@@ -20,5 +20,5 @@ pub const META: RuleMeta = RuleMeta {
 };
 
 pub fn register() -> RuleDef {
-    crate::register_ts_family!(META, typescript)
+    crate::register_ts_family!(META, react)
 }

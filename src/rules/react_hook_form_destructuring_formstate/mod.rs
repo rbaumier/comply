@@ -7,7 +7,7 @@
 //! only to `isValid`, while `formState.isValid` forces a subscription to the
 //! whole object and re-renders on every field change.
 
-mod typescript;
+mod react;
 
 use crate::diagnostic::Severity;
 use crate::rules::RuleDef;
@@ -23,5 +23,5 @@ pub const META: RuleMeta = RuleMeta {
 };
 
 pub fn register() -> RuleDef {
-    crate::register_ts_family!(META, typescript)
+    crate::register_ts_family!(META, react)
 }

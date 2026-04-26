@@ -1,6 +1,6 @@
 //! react-no-sort-for-extrema — `.sort(...)[0]` / `sorted[length - 1]` for min/max.
 
-mod typescript;
+mod react;
 
 use crate::diagnostic::Severity;
 use crate::rules::meta::RuleMeta;
@@ -17,5 +17,5 @@ pub const META: RuleMeta = RuleMeta {
 };
 
 pub fn register() -> RuleDef {
-    crate::register_ts_family!(META, typescript)
+    crate::register_ts_family!(META, react)
 }

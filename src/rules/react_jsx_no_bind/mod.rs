@@ -4,7 +4,7 @@
 //! `onClick={() => ...}`) breaks referential equality, defeats `React.memo`
 //! / `PureComponent` optimizations, and forces child components to re-render.
 
-mod typescript;
+mod react;
 
 use crate::diagnostic::Severity;
 use crate::rules::RuleDef;
@@ -23,5 +23,5 @@ pub const META: RuleMeta = RuleMeta {
 };
 
 pub fn register() -> RuleDef {
-    crate::register_ts_family!(META, typescript)
+    crate::register_ts_family!(META, react)
 }

@@ -2,7 +2,7 @@
 //! components only. In a `"use client"` file they're ignored and the page
 //! falls back to defaults, usually silently — flag the mismatch early.
 
-mod typescript;
+mod react;
 
 use crate::diagnostic::Severity;
 use crate::rules::RuleDef;
@@ -20,5 +20,5 @@ pub const META: RuleMeta = RuleMeta {
 };
 
 pub fn register() -> RuleDef {
-    crate::register_ts_family!(META, typescript)
+    crate::register_ts_family!(META, react)
 }

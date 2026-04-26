@@ -1,6 +1,6 @@
 //! react-refresh-only-export-components
 
-mod typescript;
+mod react;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
@@ -21,7 +21,7 @@ pub fn register() -> RuleDef {
     RuleDef {
         meta: META,
         backends: vec![
-            (Language::Tsx, Backend::TreeSitter(Box::new(typescript::Check))),
+            (Language::Tsx, Backend::TreeSitter(Box::new(react::Check))),
         ],
     }
 }
