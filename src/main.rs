@@ -39,6 +39,7 @@ mod oxlint;
 mod oxlint_config;
 mod project;
 mod rules;
+mod tui;
 
 use std::io::IsTerminal;
 use std::process::ExitCode;
@@ -68,6 +69,9 @@ fn main() -> ExitCode {
 /// Dispatch on the top-level subcommand. Default = lint.
 fn run() -> Result<bool> {
     let cli = Cli::parse();
+    if cli.tui && cli.command.is_some() {
+        eprintln!("warning: --tui is ignored when a subcommand is specified");
+    }
     match cli.command {
         Some(Command::Explain { ref rule_id }) => {
             explain::run(rule_id)?;
@@ -237,7 +241,28 @@ fn lint_project(cli: &Cli) -> Result<bool> {
     }
     timings.post = t_post.elapsed();
 
-    if cli.should_emit_json {
+    let has_violations = !after_suppressions.is_empty();
+
+    if cli.tui {
+        if !std::io::stdout().is_terminal() {
+            eprintln!("comply: --tui requires an interactive terminal");
+            std::process::exit(2);
+        }
+        if has_violations {
+            let paths: std::collections::HashSet<_> =
+                after_suppressions.iter().map(|d| &d.path).collect();
+            let sources: std::collections::HashMap<std::path::PathBuf, String> = paths
+                .into_iter()
+                .map(|p| {
+                    let content = std::fs::read_to_string(p).unwrap_or_default();
+                    (p.clone(), content)
+                })
+                .collect();
+            tui::run(after_suppressions, sources)?;
+        } else {
+            println!("comply: all clear");
+        }
+    } else if cli.should_emit_json {
         report_diagnostics_json(&after_suppressions)?;
     } else {
         report_diagnostics(&after_suppressions);
@@ -246,7 +271,7 @@ fn lint_project(cli: &Cli) -> Result<bool> {
     if cli.timings {
         print_timings(&timings);
     }
-    Ok(!after_suppressions.is_empty())
+    Ok(has_violations)
 }
 
 /// Apply every linter (oxlint + custom rules) and collect diagnostics.
