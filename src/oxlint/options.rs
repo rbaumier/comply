@@ -15,8 +15,13 @@ use crate::config::Config;
 /// Return the options object to pass to oxlint for `rule_id`, or
 /// `None` if this rule is severity-only.
 #[must_use]
-pub fn for_rule(_rule_id: &str, _config: &Config) -> Option<Value> {
-    None
+pub fn for_rule(rule_id: &str, _config: &Config) -> Option<Value> {
+    match rule_id {
+        "typescript/no-confusing-void-expression" => Some(serde_json::json!({
+            "ignoreArrowShorthand": true
+        })),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -25,7 +30,15 @@ mod tests {
     use crate::config::default_static_config;
 
     #[test]
-    fn no_rules_are_option_bearing_yet() {
+    fn no_confusing_void_expression_has_options() {
+        let opts = for_rule("typescript/no-confusing-void-expression", default_static_config());
+        assert!(opts.is_some());
+        let v = opts.unwrap();
+        assert_eq!(v["ignoreArrowShorthand"], true);
+    }
+
+    #[test]
+    fn unknown_rules_have_no_options() {
         assert!(for_rule("id-length", default_static_config()).is_none());
         assert!(for_rule("no-await-in-loop", default_static_config()).is_none());
     }

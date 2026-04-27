@@ -1,5 +1,18 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
+fn root_object_name<'a>(node: tree_sitter::Node<'a>, source: &'a [u8]) -> Option<&'a str> {
+    let mut cur = node;
+    loop {
+        match cur.kind() {
+            "member_expression" | "subscript_expression" => {
+                cur = cur.child_by_field_name("object")?;
+            }
+            "identifier" => return cur.utf8_text(source).ok(),
+            _ => return None,
+        }
+    }
+}
+
 crate::ast_check! { on ["assignment_expression", "augmented_assignment_expression", "update_expression", "unary_expression"] => |node, source, ctx, diagnostics|
 match node.kind() {
         // obj.prop = value or obj['prop'] = value
@@ -19,20 +32,11 @@ match node.kind() {
                 .unwrap_or("");
             if prop_text == "current" { return; }
 
-            // Allow: set.headers["x"] = ... (Elysia response context)
-            if left.kind() == "subscript_expression" {
-                if let Some(sub_obj) = left.child_by_field_name("object") {
-                    if sub_obj.kind() == "member_expression" {
-                        let sub_obj_text = sub_obj.child_by_field_name("object")
-                            .and_then(|o| o.utf8_text(source).ok())
-                            .unwrap_or("");
-                        let sub_prop_text = sub_obj.child_by_field_name("property")
-                            .and_then(|p| p.utf8_text(source).ok())
-                            .unwrap_or("");
-                        if sub_obj_text == "set" && sub_prop_text == "headers" { return; }
-                    }
-                }
-            }
+            // Allow: document.cookie = ... (only Web API for client-side cookies)
+            if obj_text == "document" && prop_text == "cookie" { return; }
+
+            // Allow: set.* = ... (Elysia response context)
+            if root_object_name(left, source) == Some("set") { return; }
 
             let pos = node.start_position();
             diagnostics.push(Diagnostic {
@@ -133,18 +137,32 @@ mod tests {
     }
 
     #[test]
+    fn allows_elysia_set_status() {
+        assert!(run("set.status = 404").is_empty());
+    }
+
+    #[test]
     fn allows_elysia_set_headers() {
         assert!(run(r#"set.headers["cache-control"] = "no-store""#).is_empty());
+    }
+
+    #[test]
+    fn allows_elysia_set_nested() {
         assert!(run(r#"set.headers["x-content-type-options"] = "nosniff""#).is_empty());
     }
 
     #[test]
-    fn still_flags_other_set_mutations() {
-        assert_eq!(run("set.status = 404").len(), 1);
+    fn allows_document_cookie() {
+        assert!(run(r#"document.cookie = "name=value""#).is_empty());
     }
 
     #[test]
     fn still_flags_other_subscript_mutations() {
         assert_eq!(run(r#"obj.headers["key"] = "val""#).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_non_set_mutations() {
+        assert_eq!(run("response.statusText = 'OK'").len(), 1);
     }
 }

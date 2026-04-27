@@ -3,7 +3,7 @@
 //! Detects:
 //! - Property assignments: `obj.prop = value`, `obj[key] = value`
 //! - Compound assignments: `obj.prop += 1`
-//! - Mutating method calls: `arr.push(x)`, `map.set(k, v)`, `set.add(x)`
+//! - Mutating array method calls: `arr.push(x)`, `arr.sort()`
 //! - Update expressions: `obj.count++`, `--obj.count`
 //! - Delete operator: `delete obj.prop`
 //! - Object mutators: `Object.assign(obj, ...)`, `Object.defineProperty(obj, ...)`
@@ -15,10 +15,6 @@ use crate::diagnostic::{Diagnostic, Severity};
 const MUTATING_ARRAY_METHODS: &[&str] = &[
     "push", "pop", "shift", "unshift", "splice", "sort", "reverse", "fill", "copyWithin",
 ];
-
-const MUTATING_MAP_METHODS: &[&str] = &["set", "delete", "clear"];
-
-const MUTATING_SET_METHODS: &[&str] = &["add", "delete", "clear"];
 
 const OBJECT_MUTATOR_FUNCTIONS: &[&str] = &["assign", "defineProperty", "defineProperties", "setPrototypeOf"];
 
@@ -136,6 +132,13 @@ match node.kind() {
         // obj.prop = x, obj.prop += x
         "assignment_expression" | "augmented_assignment_expression" => {
             let Some(left) = node.child_by_field_name("left") else { return };
+            // ref.current = ... (React useRef pattern)
+            if left.kind() == "member_expression" {
+                let prop = left.child_by_field_name("property")
+                    .and_then(|p| p.utf8_text(source).ok())
+                    .unwrap_or("");
+                if prop == "current" { return; }
+            }
             let Some(root) = root_identifier_of_member_chain(left, source) else { return };
             if declared_as_const(node, source, root) {
                 report(diagnostics, ctx.path, &node, root, "Mutating property of");
@@ -183,10 +186,7 @@ match node.kind() {
                 return;
             }
 
-            // arr.push(), map.set(), set.add()
-            let is_mutating = MUTATING_ARRAY_METHODS.contains(&method)
-                || MUTATING_MAP_METHODS.contains(&method)
-                || MUTATING_SET_METHODS.contains(&method);
+            let is_mutating = MUTATING_ARRAY_METHODS.contains(&method);
             if !is_mutating { return }
 
             let Some(obj) = callee.child_by_field_name("object") else { return };
@@ -268,23 +268,23 @@ mod tests {
     }
 
     #[test]
-    fn flags_map_set_on_const() {
-        assert_eq!(run_on("const map = new Map(); map.set('a', 1);").len(), 1);
+    fn allows_map_set_on_const() {
+        assert!(run_on("const map = new Map(); map.set('a', 1);").is_empty());
     }
 
     #[test]
-    fn flags_map_delete_on_const() {
-        assert_eq!(run_on("const map = new Map(); map.delete('a');").len(), 1);
+    fn allows_map_delete_on_const() {
+        assert!(run_on("const map = new Map(); map.delete('a');").is_empty());
     }
 
     #[test]
-    fn flags_set_add_on_const() {
-        assert_eq!(run_on("const set = new Set(); set.add(1);").len(), 1);
+    fn allows_set_add_on_const() {
+        assert!(run_on("const set = new Set(); set.add(1);").is_empty());
     }
 
     #[test]
-    fn flags_set_clear_on_const() {
-        assert_eq!(run_on("const set = new Set([1]); set.clear();").len(), 1);
+    fn allows_set_clear_on_const() {
+        assert!(run_on("const set = new Set([1]); set.clear();").is_empty());
     }
 
     #[test]
@@ -324,6 +324,12 @@ mod tests {
     }
 
     // === Allowed patterns ===
+
+    #[test]
+    fn allows_ref_current_assignment() {
+        assert!(run_on("const timerRef = useRef(null); timerRef.current = setTimeout(() => {}, 100);").is_empty());
+        assert!(run_on("const newKeyRef = useRef(null); newKeyRef.current = data?.key;").is_empty());
+    }
 
     #[test]
     fn allows_mutation_on_let_binding() {

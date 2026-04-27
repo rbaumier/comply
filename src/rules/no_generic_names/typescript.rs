@@ -127,6 +127,12 @@ fn check_banned_prefix(
     if is_destructuring_property(node) {
         return None;
     }
+    if is_object_literal_key(node) {
+        return None;
+    }
+    if is_method_call_name(node) {
+        return None;
+    }
     let name = node.utf8_text(source).ok()?;
     if GLOBAL_IDENTIFIER_ALLOWLIST.contains(&name) {
         return None;
@@ -206,6 +212,40 @@ fn is_destructuring_property(node: tree_sitter::Node) -> bool {
     if node.kind() == "identifier" {
         if let Some(gp) = parent.parent() {
             if gp.kind() == "object_pattern" {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// True when the identifier is a method name being called (`obj.execute()`).
+/// API method names are chosen by the library, not the developer.
+fn is_method_call_name(node: tree_sitter::Node) -> bool {
+    let Some(parent) = node.parent() else { return false };
+    if parent.kind() != "member_expression" { return false; }
+    if parent.child_by_field_name("property").map(|p| p.id()) != Some(node.id()) {
+        return false;
+    }
+    let Some(gp) = parent.parent() else { return false };
+    gp.kind() == "call_expression"
+}
+
+/// True when the identifier is a property key in an object literal
+/// (`{ data: session }` or shorthand `{ data }`). These names are part
+/// of a return contract / API shape, not the author's naming choice.
+fn is_object_literal_key(node: tree_sitter::Node) -> bool {
+    let Some(parent) = node.parent() else { return false };
+    // Shorthand property: `{ data }` in an object literal
+    if parent.kind() == "shorthand_property_identifier" {
+        if let Some(gp) = parent.parent() {
+            return gp.kind() == "object";
+        }
+    }
+    // Full property: `{ data: value }` — the key side
+    if parent.kind() == "pair" {
+        if let Some(key) = parent.child_by_field_name("key") {
+            if key.id() == node.id() {
                 return true;
             }
         }
@@ -447,5 +487,29 @@ mod tests {
     fn still_flags_screaming_snake_with_real_boundary() {
         assert!(!run_on("const DATA_SOURCE = 1;").is_empty(),
             "DATA_SOURCE should flag — DATA + _ is a word boundary");
+    }
+
+    #[test]
+    fn allows_data_as_object_literal_key() {
+        assert!(run_on("return { data: session };").is_empty());
+        assert!(run_on("const x = { data: 1 };").is_empty());
+    }
+
+    #[test]
+    fn allows_method_call_with_banned_prefix() {
+        assert!(run_on("db.execute(sql)").is_empty());
+        assert!(run_on("runner.performTask()").is_empty());
+        assert!(run_on("queue.processMessage(msg)").is_empty());
+    }
+
+    #[test]
+    fn allows_property_definition_in_object_literal() {
+        // Object literal keys often conform to an interface — skip them.
+        assert!(run_on("const x = { processOrder: fn };").is_empty());
+    }
+
+    #[test]
+    fn still_flags_variable_with_banned_prefix() {
+        assert!(!run_on("const processOrder = 1;").is_empty());
     }
 }

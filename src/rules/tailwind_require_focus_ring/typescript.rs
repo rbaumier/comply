@@ -27,6 +27,10 @@ fn has_focus_ring(classes: &str) -> bool {
 }
 
 crate::ast_check! { on ["jsx_opening_element", "jsx_self_closing_element"] => |node, source, ctx, diagnostics|
+    // shadcn/ui primitives handle focus indicators internally.
+    let path_str = ctx.path.to_str().unwrap_or("");
+    if path_str.contains("/components/ui/") || path_str.contains("/lib/ui/") { return; }
+
     let Some(tag) = jsx_element_tag_name(node, source) else { return };
     // PascalCase = React component — focus ring may be baked into the component.
     if tag.as_bytes().first().is_some_and(|b| b.is_ascii_uppercase()) { return; }
@@ -140,5 +144,13 @@ mod tests {
     #[test]
     fn skips_pascal_case_components() {
         assert!(run(r#"export const A = () => <Button className="px-4" />;"#).is_empty());
+    }
+
+    #[test]
+    fn skips_shadcn_ui_components() {
+        use crate::rules::test_helpers::run_ts_with_path;
+        let src = r#"export const A = <button className="px-4" />;"#;
+        let d = run_ts_with_path(src, &Check, "src/components/ui/sidebar.tsx");
+        assert!(d.is_empty());
     }
 }

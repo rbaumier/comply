@@ -42,26 +42,36 @@ const LIFECYCLE_METHODS: &[&str] = &[
     "state", "decorate", "macro",
 ];
 
+fn callee_method_name<'a>(call: tree_sitter::Node<'a>, source: &'a [u8]) -> Option<&'a str> {
+    let callee = call.child_by_field_name("function")?;
+    match callee.kind() {
+        "member_expression" => callee.child_by_field_name("property")?.utf8_text(source).ok(),
+        "identifier" => callee.utf8_text(source).ok(),
+        _ => None,
+    }
+}
+
 fn is_inside_lifecycle_hook(node: tree_sitter::Node, source: &[u8]) -> bool {
     let mut current = node;
     while let Some(parent) = current.parent() {
         if parent.kind() == "arrow_function" || parent.kind() == "function_expression" {
-            if let Some(args) = parent.parent() {
+            let mut wrapper = parent;
+            // Skip through type wrappers: `(handler) as Type`, `handler satisfies T`
+            while let Some(gp) = wrapper.parent() {
+                match gp.kind() {
+                    "parenthesized_expression" | "as_expression"
+                    | "satisfies_expression" | "type_assertion"
+                    | "non_null_expression" => { wrapper = gp; }
+                    _ => break,
+                }
+            }
+            if let Some(args) = wrapper.parent() {
                 if args.kind() == "arguments" {
                     if let Some(call) = args.parent() {
                         if call.kind() == "call_expression" {
-                            if let Some(callee) = call.child_by_field_name("function") {
-                                let prop_node = if callee.kind() == "member_expression" {
-                                    callee.child_by_field_name("property")
-                                } else {
-                                    None
-                                };
-                                if let Some(prop) = prop_node {
-                                    if let Ok(method) = prop.utf8_text(source) {
-                                        if LIFECYCLE_METHODS.contains(&method) {
-                                            return true;
-                                        }
-                                    }
+                            if let Some(method) = callee_method_name(call, source) {
+                                if LIFECYCLE_METHODS.contains(&method) {
+                                    return true;
                                 }
                             }
                         }
