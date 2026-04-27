@@ -18,8 +18,9 @@ fn tokenize(pattern: &str) -> Vec<&str> {
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == b'\\' && i + 1 < bytes.len() {
-            tokens.push(&pattern[i..i + 2]);
-            i += 2;
+            let next_len = pattern[i + 1..].chars().next().map_or(1, |c| c.len_utf8());
+            tokens.push(&pattern[i..i + 1 + next_len]);
+            i += 1 + next_len;
         } else if bytes[i] == b'[' {
             // Skip character class entirely.
             let start = i;
@@ -48,8 +49,9 @@ fn tokenize(pattern: &str) -> Vec<&str> {
             }
             tokens.push(&pattern[start..i]);
         } else {
-            tokens.push(&pattern[i..i + 1]);
-            i += 1;
+            let ch_len = pattern[i..].chars().next().map_or(1, |c| c.len_utf8());
+            tokens.push(&pattern[i..i + ch_len]);
+            i += ch_len;
         }
     }
     tokens
@@ -133,6 +135,12 @@ mod tests {
     #[test]
     fn ignores_url_in_string() {
         let src = r#"const u = "http://a/aaa/b";"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_panic_on_multibyte_chars() {
+        let src = r#"const re = /cabinets vétérinaires/;"#;
         assert!(run_on(src).is_empty());
     }
 
