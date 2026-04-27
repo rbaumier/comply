@@ -49,6 +49,9 @@ impl AstCheck for Check {
                 if content.chars().count() < min_length {
                     continue;
                 }
+                if super::should_ignore_string_node(node, source_bytes) {
+                    continue;
+                }
                 occurrences
                     .entry(content.to_string())
                     .or_default()

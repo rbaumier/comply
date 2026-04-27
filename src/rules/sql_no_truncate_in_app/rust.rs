@@ -26,8 +26,7 @@ impl AstCheck for Check {
         if !super::sql_uses_truncate(text) {
             return;
         }
-        let upper = text.to_ascii_uppercase();
-        if !(upper.contains("TRUNCATE TABLE") || upper.contains("TRUNCATE ")) {
+        if !super::looks_like_sql_truncate(text) {
             return;
         }
         diagnostics.push(Diagnostic::at_node(

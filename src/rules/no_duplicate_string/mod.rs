@@ -87,6 +87,9 @@ pub(super) fn collect_diagnostics(
         if content.chars().count() < min_length {
             continue;
         }
+        if should_ignore_string_node(node, source_bytes) {
+            continue;
+        }
         occurrences.entry(content.to_string()).or_default().push(node);
     }
 
@@ -113,6 +116,84 @@ pub(super) fn collect_diagnostics(
     }
     diagnostics.sort_by_key(|d| (d.line, d.column));
     diagnostics
+}
+
+/// Identifiers of helpers that compose Tailwind class strings — calls
+/// to these mean their string arguments are class lists, not data
+/// constants worth extracting.
+const TAILWIND_HELPERS: &[&str] = &[
+    "cn", "clsx", "classnames", "cva", "tw", "twMerge", "twJoin", "clx",
+];
+
+/// Decide whether a string-literal node sits in a context where
+/// extracting it to a constant doesn't make sense:
+///
+/// - JSX `className` / `class` attribute values (Tailwind class lists
+///   in React/JSX are repeated by design).
+/// - The source specifier of an `import` / `export … from` statement
+///   (cannot be replaced by a runtime constant).
+/// - String arguments to Tailwind class-composition helpers like
+///   `cn(...)` / `clsx(...)` (same rationale as `className`).
+///
+/// Walks ancestors so a string nested inside a template literal,
+/// conditional expression, or array passed to one of these helpers
+/// is still recognized.
+pub(super) fn should_ignore_string_node(
+    node: tree_sitter::Node<'_>,
+    source: &[u8],
+) -> bool {
+    let mut current = node;
+    while let Some(parent) = current.parent() {
+        match parent.kind() {
+            // `import "x"` / `import x from "y"` / `export … from "z"`.
+            // The `source` field points at the specifier string — any
+            // string literal nested inside it (including the literal
+            // itself) is the import path.
+            "import_statement" | "export_statement" => {
+                if let Some(src) = parent.child_by_field_name("source") {
+                    if src.id() == node.id() || node_is_descendant(node, src) {
+                        return true;
+                    }
+                }
+            }
+            // `jsx_attribute` whose name is `className` or `class`.
+            "jsx_attribute" => {
+                if let Some(name_node) = parent.child(0) {
+                    if let Ok(name) = name_node.utf8_text(source) {
+                        if name == "className" || name == "class" {
+                            return true;
+                        }
+                    }
+                }
+            }
+            // `cn(...)` / `clsx(...)` / `cva(...)` etc. — match either
+            // a bare callee identifier or a member expression whose
+            // last segment is a known helper.
+            "call_expression" => {
+                if let Some(func) = parent.child_by_field_name("function") {
+                    let text = func.utf8_text(source).unwrap_or("");
+                    let last_segment = text.rsplit('.').next().unwrap_or(text);
+                    if TAILWIND_HELPERS.contains(&last_segment) {
+                        return true;
+                    }
+                }
+            }
+            _ => {}
+        }
+        current = parent;
+    }
+    false
+}
+
+fn node_is_descendant(node: tree_sitter::Node<'_>, ancestor: tree_sitter::Node<'_>) -> bool {
+    let mut current = node;
+    while let Some(parent) = current.parent() {
+        if parent.id() == ancestor.id() {
+            return true;
+        }
+        current = parent;
+    }
+    false
 }
 
 /// Strip the surrounding quote / delimiter characters from a string

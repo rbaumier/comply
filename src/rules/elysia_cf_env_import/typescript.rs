@@ -1,9 +1,32 @@
 //! elysia-cf-env-import backend — flag `process.env` under `CloudflareAdapter`.
+//!
+//! Only fires on files that are clearly Cloudflare Workers code: they import
+//! from `cloudflare:workers`, `@cloudflare/...`, or `elysia/adapter/cloudflare`,
+//! or live under a `workers/` directory. On Bun/Node-only Elysia projects,
+//! `process.env` is the correct API and must not be flagged.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
+fn is_cloudflare_context(source: &str, path: &std::path::Path) -> bool {
+    if source.contains("'cloudflare:workers'")
+        || source.contains("\"cloudflare:workers\"")
+        || source.contains("'@cloudflare/")
+        || source.contains("\"@cloudflare/")
+        || source.contains("'elysia/adapter/cloudflare'")
+        || source.contains("\"elysia/adapter/cloudflare\"")
+        || source.contains("CloudflareAdapter")
+    {
+        return true;
+    }
+    path.components()
+        .any(|c| matches!(c.as_os_str().to_str(), Some("workers")))
+}
+
 crate::ast_check! { on ["member_expression"] => |node, source, ctx, diagnostics|
     if !ctx.project.has_framework("elysia") {
+        return;
+    }
+    if !is_cloudflare_context(ctx.source, ctx.path) {
         return;
     }
 
@@ -48,5 +71,28 @@ mod tests {
     fn ignores_non_cf_files() {
         let src = "const secret = process.env.SECRET;";
         assert!(crate::rules::test_helpers::run_ts(src, &Check).is_empty());
+    }
+
+    #[test]
+    fn ignores_bun_elysia_without_cf_import() {
+        // Regression: Elysia on Bun has access to `process.env`. The rule
+        // must not fire just because the project uses Elysia — only when the
+        // file actually targets Cloudflare Workers.
+        let src = "import { Elysia } from 'elysia';\nconst secret = process.env.SECRET;";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_vite_config_in_elysia_project() {
+        // Regression: Elysia projects often ship a Vite-bundled frontend whose
+        // `vite.config.ts` legitimately reads `process.env`.
+        let src = "import { defineConfig } from 'vite';\nexport default defineConfig({ define: { 'process.env.X': process.env.X } });";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_cloudflare_workers_import() {
+        let src = "import { env } from 'cloudflare:workers';\nconst leak = process.env.SECRET;";
+        assert!(!run_on(src).is_empty());
     }
 }

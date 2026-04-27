@@ -5,6 +5,33 @@ use crate::diagnostic::{Diagnostic, Severity};
 
 const TABLE_CTORS: &[&str] = &["pgTable", "mysqlTable", "sqliteTable"];
 
+/// Names that downstream frameworks pin by convention — the application
+/// has no freedom to rename these without forking the framework, so the
+/// pluralization rule does not apply.
+///
+/// - better-auth creates and queries `user`, `session`, `account`,
+///   `verification`, plus `organization` / `member` / `invitation`
+///   from its multi-tenant plugin. Renaming any of them breaks the
+///   library's queries.
+/// - `migration` / `migrations` / `schema_migrations` are migration
+///   tracking tables produced by various tools (drizzle-kit, knex,
+///   sqlx, …) and are referenced by exact name.
+const FRAMEWORK_TABLE_NAMES: &[&str] = &[
+    // better-auth core
+    "user",
+    "session",
+    "account",
+    "verification",
+    // better-auth organization plugin
+    "organization",
+    "member",
+    "invitation",
+    // migration tracking tables
+    "migration",
+    "migrations",
+    "schema_migrations",
+];
+
 fn is_snake_lower(s: &str) -> bool {
     !s.is_empty()
         && s.chars()
@@ -41,6 +68,9 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     let Some(s_node) = first_str else { return };
     let raw = s_node.utf8_text(source).unwrap_or("");
     let table_name = raw.trim_matches(['"', '\'']);
+    if FRAMEWORK_TABLE_NAMES.contains(&table_name) {
+        return;
+    }
     if is_snake_lower(table_name) && looks_plural(table_name) {
         return;
     }
@@ -71,7 +101,10 @@ mod tests {
 
     #[test]
     fn flags_singular_table_name() {
-        let src = "const t = pgTable('user', { id: serial('id') })";
+        // Use `profile` rather than `user` — `user` is now part of
+        // the framework allowlist (better-auth) and is intentionally
+        // accepted in singular form.
+        let src = "const t = pgTable('profile', { id: serial('id') })";
         assert_eq!(run(src).len(), 1);
     }
 
@@ -85,5 +118,56 @@ mod tests {
     fn allows_simple_plural() {
         let src = "const t = pgTable('users', { id: serial('id') })";
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_better_auth_user_table() {
+        // better-auth creates and queries the table named exactly
+        // `user` — the singular form is imposed by the library, not
+        // a styling choice the developer can change.
+        let src = "const user = pgTable('user', { id: text('id').primaryKey() })";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_better_auth_session_table() {
+        let src = "const session = pgTable('session', { id: text('id').primaryKey() })";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_better_auth_account_table() {
+        let src = "const account = pgTable('account', { id: text('id').primaryKey() })";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_better_auth_verification_table() {
+        let src = "const verification = pgTable('verification', { id: text('id').primaryKey() })";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_better_auth_organization_plugin_tables() {
+        for name in ["organization", "member", "invitation"] {
+            let src = format!("const t = pgTable('{name}', {{ id: text('id').primaryKey() }})");
+            assert!(run(&src).is_empty(), "expected `{name}` to be allowed");
+        }
+    }
+
+    #[test]
+    fn allows_migration_tracking_tables() {
+        for name in ["migration", "migrations", "schema_migrations"] {
+            let src = format!("const t = pgTable('{name}', {{ id: serial('id') }})");
+            assert!(run(&src).is_empty(), "expected `{name}` to be allowed");
+        }
+    }
+
+    #[test]
+    fn still_flags_non_allowlisted_singular_tables() {
+        // Sanity: the allowlist is targeted — `profile`, `comment`,
+        // etc. still get flagged for not being plural.
+        let src = "const t = pgTable('profile', { id: serial('id') })";
+        assert_eq!(run(src).len(), 1);
     }
 }

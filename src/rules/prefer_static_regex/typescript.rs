@@ -1,6 +1,22 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
+const TEST_MARKERS: &[&str] = &[".test.", ".spec.", "__tests__", "_test.", ".e2e."];
+
+/// Test file: regex compilation cost in tests is irrelevant, and Playwright
+/// locators (`page.getByRole('heading', { name: /Page introuvable/i })`)
+/// would otherwise be flagged.
+fn is_test_file(path: &std::path::Path) -> bool {
+    let s = path.to_string_lossy();
+    if TEST_MARKERS.iter().any(|m| s.contains(m)) {
+        return true;
+    }
+    path.components()
+        .any(|c| c.as_os_str() == "tests" || c.as_os_str() == "e2e")
+}
+
 crate::ast_check! { on ["regex"] => |node, source, ctx, diagnostics|
+    let _ = source;
+    if is_test_file(ctx.path) { return; }
     // Look for regex literals
     // Check if inside a function
     let mut current = node.parent();
@@ -40,6 +56,9 @@ crate::ast_check! { on ["regex"] => |node, source, ctx, diagnostics|
 mod tests {
     use super::*;
     fn run(code: &str) -> Vec<Diagnostic> { crate::rules::test_helpers::run_ts(code, &Check) }
+    fn run_at(code: &str, path: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_ts_with_path(code, &Check, path)
+    }
 
     #[test]
     fn flags_regex_in_function() {
@@ -62,5 +81,25 @@ mod tests {
     #[test]
     fn allows_class_property_regex() {
         assert!(run("class C { re = /abc/; }").is_empty());
+    }
+
+    #[test]
+    fn allows_regex_in_test_file() {
+        let code = "function f() { return /abc/.test(s); }";
+        assert!(run_at(code, "src/foo.test.ts").is_empty());
+        assert!(run_at(code, "src/foo.spec.ts").is_empty());
+        assert!(run_at(code, "src/__tests__/foo.ts").is_empty());
+        assert!(run_at(code, "e2e/foo.ts").is_empty());
+        assert!(run_at(code, "tests/foo.ts").is_empty());
+    }
+
+    #[test]
+    fn allows_playwright_locator_regex_in_test() {
+        let code = r#"
+test('shows 404', async ({ page }) => {
+    await expect(page.getByRole('heading', { name: /Page introuvable/i })).toBeVisible();
+});
+"#;
+        assert!(run_at(code, "e2e/not-found.spec.ts").is_empty());
     }
 }

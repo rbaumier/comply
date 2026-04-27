@@ -1,14 +1,33 @@
-//! elysia-scope-missing backend — flag plugin lifecycle hooks without a scope.
+//! elysia-scope-missing backend — flag **plugin** lifecycle hooks without a scope.
+//!
+//! Hooks on the root app are global by construction — only plugins need an
+//! explicit `as: 'global' | 'scoped'`. Skip files that look like the root
+//! app (call `.listen(...)`, or named `app` / `index` / `server` / `main` /
+//! `create-app` / `bootstrap` / `entry`).
 
 use crate::diagnostic::{Diagnostic, Severity};
 
 const HOOK_METHODS: &[&str] = &["onBeforeHandle", "onAfterHandle", "onError", "onRequest", "onTransform"];
+
+fn is_root_app_file(source: &str, path: &std::path::Path) -> bool {
+    if source.contains(".listen(") {
+        return true;
+    }
+    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+    matches!(
+        stem,
+        "app" | "index" | "server" | "main" | "create-app" | "createApp" | "bootstrap" | "entry"
+    )
+}
 
 crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     if !ctx.project.has_framework("elysia") {
         return;
     }
     if !ctx.source.contains("export") {
+        return;
+    }
+    if is_root_app_file(ctx.source, ctx.path) {
         return;
     }
 
@@ -91,5 +110,33 @@ mod tests {
     fn ignores_non_exported_app() {
         let src = "import { Elysia } from 'elysia';\nconst app = new Elysia().onBeforeHandle(() => {});";
         assert!(crate::rules::test_helpers::run_ts(src, &Check).is_empty());
+    }
+
+    #[test]
+    fn ignores_root_app_with_listen() {
+        // Regression: root app's hooks are global by construction; flagging
+        // them is a false positive.
+        let src = "import { Elysia } from 'elysia';\nexport const app = new Elysia().onError(() => {}).listen(3000);";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_root_app_in_create_app_file() {
+        use crate::project::ProjectCtx;
+        use crate::rules::test_helpers::run_ts_with_project_and_path;
+        use std::path::Path;
+        let project = ProjectCtx::for_test_with_framework("elysia");
+        // Regression: `createApp()` returns the root app instance — calls to
+        // `onError` / `onRequest` here aren't plugin hooks.
+        let src = "import { Elysia } from 'elysia';\nexport const createApp = () => new Elysia().onError(() => {}).onRequest(() => {});";
+        assert!(
+            run_ts_with_project_and_path(src, &Check, &project, Path::new("src/create-app.ts")).is_empty()
+        );
+        assert!(
+            run_ts_with_project_and_path(src, &Check, &project, Path::new("src/app.ts")).is_empty()
+        );
+        assert!(
+            run_ts_with_project_and_path(src, &Check, &project, Path::new("src/server.ts")).is_empty()
+        );
     }
 }

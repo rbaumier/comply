@@ -8,6 +8,19 @@ const AUTH_KEYWORDS: &[&str] = &[
     "auth", "token", "session", "middleware", "guard", "protect", "verify",
 ];
 
+const TEST_MARKERS: &[&str] = &[".test.", ".spec.", "__tests__", "_test.", ".e2e."];
+
+/// Path is a test file (unit, integration, e2e). Test code does not need
+/// real auth checks — guarding mutations there is the test author's call.
+fn is_test_file(path: &std::path::Path) -> bool {
+    let s = path.to_string_lossy();
+    if TEST_MARKERS.iter().any(|m| s.contains(m)) {
+        return true;
+    }
+    path.components()
+        .any(|c| c.as_os_str() == "tests" || c.as_os_str() == "e2e")
+}
+
 /// Check whether a subtree contains any auth-related identifier (case-insensitive).
 fn has_auth_reference(node: tree_sitter::Node, source: &[u8]) -> bool {
     let text = node.utf8_text(source).unwrap_or("");
@@ -16,6 +29,9 @@ fn has_auth_reference(node: tree_sitter::Node, source: &[u8]) -> bool {
 }
 
 crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
+    if is_test_file(ctx.path) {
+        return;
+    }
     // Match `app.post(`, `app.put(`, `app.delete(`, `app.patch(`
     let Some(func) = node.child_by_field_name("function") else { return };
     if func.kind() != "member_expression" {
@@ -50,6 +66,10 @@ mod tests {
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_ts(source, &Check)
+    }
+
+    fn run_at(source: &str, path: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_ts_with_path(source, &Check, path)
     }
 
     #[test]
@@ -104,5 +124,20 @@ app.get("/users", async (c) => {
 });
 "#;
         assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_post_in_test_file() {
+        let src = r#"
+app.post("/users", async (c) => {
+    const body = await c.req.json();
+    return c.json({ ok: true });
+});
+"#;
+        assert!(run_at(src, "src/users.test.ts").is_empty());
+        assert!(run_at(src, "src/users.spec.ts").is_empty());
+        assert!(run_at(src, "src/__tests__/users.ts").is_empty());
+        assert!(run_at(src, "tests/users.ts").is_empty());
+        assert!(run_at(src, "e2e/users.ts").is_empty());
     }
 }

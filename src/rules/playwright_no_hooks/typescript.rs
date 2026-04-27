@@ -9,11 +9,23 @@ fn is_test_file(path: &std::path::Path) -> bool {
     TEST_MARKERS.iter().any(|m| s.contains(m))
 }
 
+/// Only Playwright specs are subject to this rule. A file qualifies if it
+/// imports/requires from `@playwright/test`. Vitest / Jest / Mocha specs
+/// rely on `beforeEach`/`afterEach` hooks legitimately, so we must not
+/// flag them even when the project as a whole declares Playwright as a
+/// framework.
+fn imports_playwright(source: &str) -> bool {
+    source.contains("@playwright/test")
+}
+
 const HOOKS: &[&str] = &["beforeAll", "beforeEach", "afterAll", "afterEach"];
 
 crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     if !ctx.project.has_framework("playwright") { return; }
     if !is_test_file(ctx.path) {
+        return;
+    }
+    if !imports_playwright(ctx.source) {
         return;
     }
     let Some(callee) = node.child_by_field_name("function") else { return };
@@ -63,14 +75,20 @@ mod tests {
 
     #[test]
     fn flags_before_each() {
-        let d = run_ts("beforeEach(() => { setup(); });");
+        let d = run_ts(
+            r#"import { test } from "@playwright/test";
+beforeEach(() => { setup(); });"#,
+        );
         assert_eq!(d.len(), 1);
         assert_eq!(d[0].rule_id, "playwright-no-hooks");
     }
 
     #[test]
     fn flags_after_all() {
-        let d = run_ts("afterAll(() => { cleanup(); });");
+        let d = run_ts(
+            r#"import { test } from "@playwright/test";
+afterAll(() => { cleanup(); });"#,
+        );
         assert_eq!(d.len(), 1);
     }
 
@@ -78,5 +96,49 @@ mod tests {
     fn allows_non_hook() {
         let d = run_ts("test('works', () => { expect(1).toBe(1); });");
         assert!(d.is_empty());
+    }
+
+    #[test]
+    fn flags_when_file_imports_playwright() {
+        let src = r#"
+import { test, expect } from "@playwright/test";
+test.beforeEach(async ({ page }) => { await page.goto("/"); });
+"#;
+        let d = run_ts(src);
+        assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn ignores_vitest_test_file_with_before_each() {
+        let src = r#"
+import { describe, it, beforeEach, afterEach, expect } from "vitest";
+beforeEach(() => { reset(); });
+afterEach(() => { cleanup(); });
+describe("x", () => { it("works", () => { expect(1).toBe(1); }); });
+"#;
+        let d = run_ts(src);
+        assert!(d.is_empty(), "vitest hooks must not be flagged: {d:?}");
+    }
+
+    #[test]
+    fn ignores_jest_test_file_with_before_each() {
+        let src = r#"
+import { describe, it, beforeEach, expect } from "@jest/globals";
+beforeEach(() => { reset(); });
+"#;
+        let d = run_ts(src);
+        assert!(d.is_empty(), "jest hooks must not be flagged: {d:?}");
+    }
+
+    #[test]
+    fn ignores_test_file_with_no_test_framework_import() {
+        let src = r#"
+beforeEach(() => { reset(); });
+"#;
+        let d = run_ts(src);
+        assert!(
+            d.is_empty(),
+            "must not flag when file does not import @playwright/test: {d:?}"
+        );
     }
 }

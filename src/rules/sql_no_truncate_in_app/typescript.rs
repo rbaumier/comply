@@ -26,10 +26,9 @@ impl AstCheck for Check {
         if !super::sql_uses_truncate(text) {
             return;
         }
-        // Require also TABLE or some additional context so we don't fire
-        // on prose strings containing the word "truncate" alone.
-        let upper = text.to_ascii_uppercase();
-        if !(upper.contains("TRUNCATE TABLE") || upper.contains("TRUNCATE ")) {
+        // Discriminate real SQL `TRUNCATE` statements from Tailwind's
+        // `truncate` utility class, which appears in JSX className strings.
+        if !super::looks_like_sql_truncate(text) {
             return;
         }
         diagnostics.push(Diagnostic::at_node(
@@ -57,14 +56,49 @@ mod tests {
     }
 
     #[test]
-    fn flags_truncate_bare() {
-        let src = r#"const q = "TRUNCATE users";"#;
+    fn flags_truncate_bare_with_sql_signal() {
+        // `TRUNCATE <ident>` alone is ambiguous with Tailwind's
+        // `truncate <class>` strings. We require an extra SQL signal
+        // (here, the trailing `;`) to confirm intent.
+        let src = r#"const q = "TRUNCATE users;";"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_truncate_with_cascade() {
+        let src = r#"const q = "TRUNCATE users CASCADE";"#;
         assert_eq!(run(src).len(), 1);
     }
 
     #[test]
     fn allows_delete_from() {
         let src = r#"const q = "DELETE FROM users";"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_tailwind_truncate_class() {
+        // `truncate` is a Tailwind CSS utility (overflow + ellipsis),
+        // not the SQL keyword. Must not flag.
+        let src = r#"const cls = "truncate flex items-center";"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_tailwind_truncate_in_jsx_classname() {
+        let src = r#"const el = <span className="truncate">hello</span>;"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_tailwind_arbitrary_variant_truncate() {
+        let src = r#"const cls = "[&>span:last-child]:truncate";"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_tailwind_truncate_in_template_literal() {
+        let src = r#"const cls = `truncate text-sm text-gray-500`;"#;
         assert!(run(src).is_empty());
     }
 }
