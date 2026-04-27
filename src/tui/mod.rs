@@ -4,7 +4,8 @@ mod ui;
 
 use std::collections::HashMap;
 use std::io;
-use std::path::PathBuf;
+use std::path::Path;
+use std::sync::Arc;
 
 use anyhow::Result;
 use crossterm::execute;
@@ -22,7 +23,7 @@ fn restore_terminal() {
     let _ = execute!(io::stdout(), LeaveAlternateScreen);
 }
 
-pub fn run(diagnostics: Vec<Diagnostic>, sources: HashMap<PathBuf, String>) -> Result<()> {
+pub fn run(diagnostics: Vec<Diagnostic>, sources: HashMap<Arc<Path>, String>) -> Result<()> {
     let mut app = App::new(diagnostics, sources);
 
     let original_hook = std::panic::take_hook();

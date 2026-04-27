@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command as ProcessCommand;
+use std::sync::Arc;
 
 use anyhow::Result;
 use ratatui::prelude::*;
@@ -37,13 +38,12 @@ pub struct GroupSummary {
 
 pub struct App {
     pub diagnostics: Vec<Diagnostic>,
-    pub sources: HashMap<PathBuf, String>,
-    /// Pre-indexed line offsets: (start_byte, end_byte) per line, per file.
-    line_offsets: HashMap<PathBuf, Vec<(usize, usize)>>,
+    pub sources: HashMap<Arc<Path>, String>,
+    line_offsets: HashMap<Arc<Path>, Vec<(usize, usize)>>,
     haystacks: Vec<String>,
 
     pub view_mode: ViewMode,
-    by_file: BTreeMap<PathBuf, Vec<usize>>,
+    by_file: BTreeMap<Arc<Path>, Vec<usize>>,
     by_rule: BTreeMap<String, Vec<usize>>,
 
     pub cursor: usize,
@@ -135,19 +135,19 @@ fn build_editor_args(
 }
 
 impl App {
-    pub fn new(diagnostics: Vec<Diagnostic>, sources: HashMap<PathBuf, String>) -> Self {
-        let line_offsets: HashMap<PathBuf, Vec<(usize, usize)>> = sources
+    pub fn new(diagnostics: Vec<Diagnostic>, sources: HashMap<Arc<Path>, String>) -> Self {
+        let line_offsets: HashMap<Arc<Path>, Vec<(usize, usize)>> = sources
             .iter()
             .map(|(p, s)| (p.clone(), build_line_offsets(s)))
             .collect();
 
-        let mut by_file: BTreeMap<PathBuf, Vec<usize>> = BTreeMap::new();
+        let mut by_file: BTreeMap<Arc<Path>, Vec<usize>> = BTreeMap::new();
         let mut by_rule: BTreeMap<String, Vec<usize>> = BTreeMap::new();
         let mut haystacks: Vec<String> = Vec::with_capacity(diagnostics.len());
 
         for (idx, diag) in diagnostics.iter().enumerate() {
             by_file.entry(diag.path.clone()).or_default().push(idx);
-            by_rule.entry(diag.rule_id.clone()).or_default().push(idx);
+            by_rule.entry(diag.rule_id.to_string()).or_default().push(idx);
             let src_line = sources
                 .get(&diag.path)
                 .and_then(|s| {
@@ -200,7 +200,7 @@ impl App {
         app
     }
 
-    pub fn source_lines(&self, path: &PathBuf, center: usize, context: usize) -> Vec<(usize, &str)> {
+    pub fn source_lines(&self, path: &Arc<Path>, center: usize, context: usize) -> Vec<(usize, &str)> {
         let source = match self.sources.get(path) {
             Some(s) if !s.is_empty() => s,
             _ => return Vec::new(),
@@ -270,7 +270,7 @@ impl App {
 
             let mut errors = 0usize;
             let mut warnings = 0usize;
-            let mut files: HashSet<&PathBuf> = HashSet::new();
+            let mut files: HashSet<&Arc<Path>> = HashSet::new();
             for &i in &kept {
                 let d = &self.diagnostics[i];
                 match d.severity {
@@ -396,7 +396,7 @@ impl App {
         let diag = &self.diagnostics[diag_index];
         match self.view_mode {
             ViewMode::ByFile => Some(diag.path.display().to_string()),
-            ViewMode::ByRule => Some(diag.rule_id.clone()),
+            ViewMode::ByRule => Some(diag.rule_id.to_string()),
         }
     }
 

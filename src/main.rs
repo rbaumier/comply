@@ -255,11 +255,11 @@ fn lint_project(cli: &Cli) -> Result<bool> {
                 .iter()
                 .map(|d| d.path.as_ref())
                 .collect();
-            let sources: std::collections::HashMap<std::path::PathBuf, String> = paths
+            let sources: std::collections::HashMap<std::sync::Arc<std::path::Path>, String> = paths
                 .into_iter()
                 .map(|p| {
                     let content = std::fs::read_to_string(p).unwrap_or_default();
-                    (p.to_path_buf(), content)
+                    (std::sync::Arc::from(p), content)
                 })
                 .collect();
             tui::run(after_suppressions, sources)?;
