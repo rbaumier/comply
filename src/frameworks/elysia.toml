@@ -1,0 +1,18 @@
+[detection]
+dependencies = ["elysia"]
+
+[entry_points]
+dirs = ["/routes/", "/controllers/", "/api/"]
+files = ["server.ts", "server.js", "app.ts", "app.js", "index.ts", "index.js"]
+
+[magic_exports]
+names = []
+
+[tooling_deps]
+names = [
+    "@elysiajs/cors", "@elysiajs/jwt", "@elysiajs/bearer",
+    "@elysiajs/static", "@elysiajs/html", "@elysiajs/openapi",
+    "@elysiajs/swagger", "@elysiajs/eden", "@elysiajs/cron",
+    "@elysiajs/opentelemetry", "@elysiajs/server-timing",
+    "@elysiajs/apollo", "@elysiajs/graphql-yoga", "@elysiajs/node",
+]

@@ -193,6 +193,115 @@ pub mod drizzle_timestamp_with_timezone;
 pub mod drizzle_updated_at_on_update;
 pub mod drizzle_zod_omit_generated;
 pub mod drizzle_zod_prefer_generated_schema;
+pub mod elysia_after_response_mutation;
+pub mod elysia_apollo_no_req_res;
+pub mod elysia_apollo_playground_prod;
+pub mod elysia_array_no_bounds;
+pub mod elysia_bearer_missing_www_auth;
+pub mod elysia_bearer_not_validated;
+pub mod elysia_bearer_strip_typo;
+pub mod elysia_better_auth_basepath;
+pub mod elysia_better_auth_mount;
+pub mod elysia_better_auth_null_session;
+pub mod elysia_booleanstring_for_body;
+pub mod elysia_cf_compile_required;
+pub mod elysia_cf_env_import;
+pub mod elysia_cf_no_inline_values;
+pub mod elysia_cf_no_static_plugin;
+pub mod elysia_cookie_getter_setter;
+pub mod elysia_cookie_no_httponly;
+pub mod elysia_cookie_no_samesite;
+pub mod elysia_cookie_no_secure;
+pub mod elysia_cookie_removal_api;
+pub mod elysia_cookie_signed_no_secrets;
+pub mod elysia_cors_allowed_headers_wildcard;
+pub mod elysia_cors_credentials_wildcard;
+pub mod elysia_cors_methods_wildcard;
+pub mod elysia_cors_regex_unanchored;
+pub mod elysia_cors_wildcard;
+pub mod elysia_cron_name_required;
+pub mod elysia_cron_timezone;
+pub mod elysia_custom_errors_in_model;
+pub mod elysia_deno_serve_fetch;
+pub mod elysia_deploy_no_graceful_shutdown;
+pub mod elysia_deploy_no_health;
+pub mod elysia_deploy_port_hardcoded;
+pub mod elysia_deploy_prod_no_aot;
+pub mod elysia_derive_validated_data;
+pub mod elysia_drizzle_intermediate_var;
+pub mod elysia_eden_error_unchecked;
+pub mod elysia_eden_null_body;
+pub mod elysia_eden_server_export_type;
+pub mod elysia_file_magic_number;
+pub mod elysia_file_upload_no_maxsize;
+pub mod elysia_file_upload_no_type;
+pub mod elysia_global_with_types;
+pub mod elysia_graphql_yoga_context;
+pub mod elysia_group_deep_paths;
+pub mod elysia_guard_derive_no_headers;
+pub mod elysia_headers_lowercase;
+pub mod elysia_heavy_onrequest;
+pub mod elysia_hooks_before_routes;
+pub mod elysia_html_import_uppercase;
+pub mod elysia_html_xss_no_safe;
+pub mod elysia_import_t_not_typebox;
+pub mod elysia_inline_handlers;
+pub mod elysia_jwt_cookie_no_httponly;
+pub mod elysia_jwt_missing_exp;
+pub mod elysia_jwt_name_multiple;
+pub mod elysia_jwt_secret_hardcoded;
+pub mod elysia_jwt_verify_unchecked;
+pub mod elysia_listen_callback_info;
+pub mod elysia_listen_port_type;
+pub mod elysia_macro_named_inference;
+pub mod elysia_macro_throw_status;
+pub mod elysia_mapresponse_sync_compression;
+pub mod elysia_model_export_types;
+pub mod elysia_named_plugin;
+pub mod elysia_nextjs_typeof_process;
+pub mod elysia_no_body_on_get;
+pub mod elysia_no_context_type;
+pub mod elysia_no_mix_zod_typebox;
+pub mod elysia_no_server_assertion;
+pub mod elysia_nodejs_adapter_required;
+pub mod elysia_numeric_body_no_coerce;
+pub mod elysia_numeric_no_bounds;
+pub mod elysia_objectstring_for_query;
+pub mod elysia_onerror_missing_validation;
+pub mod elysia_onparse_no_content_type;
+pub mod elysia_openapi_from_types_prod;
+pub mod elysia_openapi_security_scheme;
+pub mod elysia_otel_named_functions;
+pub mod elysia_plugin_functional_callback;
+pub mod elysia_prefer_instance_plugin;
+pub mod elysia_prefer_redirect;
+pub mod elysia_prefer_status_over_set;
+pub mod elysia_require_method_chaining;
+pub mod elysia_resolve_outside_guard;
+pub mod elysia_response_keyed_by_status;
+pub mod elysia_response_status_mismatch;
+pub mod elysia_route_all_method;
+pub mod elysia_route_missing_auth;
+pub mod elysia_route_missing_body_schema;
+pub mod elysia_route_missing_params_schema;
+pub mod elysia_route_missing_response_schema;
+pub mod elysia_scope_missing;
+pub mod elysia_server_timing_prod;
+pub mod elysia_service_coupled;
+pub mod elysia_service_return_not_throw;
+pub mod elysia_static_await_hmr;
+pub mod elysia_static_inline_value;
+pub mod elysia_streaming_headers_after_yield;
+pub mod elysia_string_format_email;
+pub mod elysia_test_listen_not_handle;
+pub mod elysia_test_missing_401;
+pub mod elysia_test_missing_validation;
+pub mod elysia_transform_no_schema;
+pub mod elysia_ws_connection_leak;
+pub mod elysia_ws_headers_unvalidated;
+pub mod elysia_ws_missing_auth;
+pub mod elysia_ws_subscribe_before_publish;
+pub mod elysia_zod_coerce_params;
 pub mod enforce_delete_with_where;
 pub mod enforce_update_with_where;
 pub mod error_without_cause;
@@ -2689,6 +2798,115 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         drizzle_no_sql_raw_with_variable::register(),
         drizzle_returning_on_insert_update::register(),
         drizzle_zod_prefer_generated_schema::register(),
+        elysia_after_response_mutation::register(),
+        elysia_apollo_no_req_res::register(),
+        elysia_apollo_playground_prod::register(),
+        elysia_array_no_bounds::register(),
+        elysia_bearer_missing_www_auth::register(),
+        elysia_bearer_not_validated::register(),
+        elysia_bearer_strip_typo::register(),
+        elysia_better_auth_basepath::register(),
+        elysia_better_auth_mount::register(),
+        elysia_better_auth_null_session::register(),
+        elysia_booleanstring_for_body::register(),
+        elysia_cf_compile_required::register(),
+        elysia_cf_env_import::register(),
+        elysia_cf_no_inline_values::register(),
+        elysia_cf_no_static_plugin::register(),
+        elysia_cookie_getter_setter::register(),
+        elysia_cookie_no_httponly::register(),
+        elysia_cookie_no_samesite::register(),
+        elysia_cookie_no_secure::register(),
+        elysia_cookie_removal_api::register(),
+        elysia_cookie_signed_no_secrets::register(),
+        elysia_cors_allowed_headers_wildcard::register(),
+        elysia_cors_credentials_wildcard::register(),
+        elysia_cors_methods_wildcard::register(),
+        elysia_cors_regex_unanchored::register(),
+        elysia_cors_wildcard::register(),
+        elysia_cron_name_required::register(),
+        elysia_cron_timezone::register(),
+        elysia_custom_errors_in_model::register(),
+        elysia_deno_serve_fetch::register(),
+        elysia_deploy_no_graceful_shutdown::register(),
+        elysia_deploy_no_health::register(),
+        elysia_deploy_port_hardcoded::register(),
+        elysia_deploy_prod_no_aot::register(),
+        elysia_derive_validated_data::register(),
+        elysia_drizzle_intermediate_var::register(),
+        elysia_eden_error_unchecked::register(),
+        elysia_eden_null_body::register(),
+        elysia_eden_server_export_type::register(),
+        elysia_file_magic_number::register(),
+        elysia_file_upload_no_maxsize::register(),
+        elysia_file_upload_no_type::register(),
+        elysia_global_with_types::register(),
+        elysia_graphql_yoga_context::register(),
+        elysia_group_deep_paths::register(),
+        elysia_guard_derive_no_headers::register(),
+        elysia_headers_lowercase::register(),
+        elysia_heavy_onrequest::register(),
+        elysia_hooks_before_routes::register(),
+        elysia_html_import_uppercase::register(),
+        elysia_html_xss_no_safe::register(),
+        elysia_import_t_not_typebox::register(),
+        elysia_inline_handlers::register(),
+        elysia_jwt_cookie_no_httponly::register(),
+        elysia_jwt_missing_exp::register(),
+        elysia_jwt_name_multiple::register(),
+        elysia_jwt_secret_hardcoded::register(),
+        elysia_jwt_verify_unchecked::register(),
+        elysia_listen_callback_info::register(),
+        elysia_listen_port_type::register(),
+        elysia_macro_named_inference::register(),
+        elysia_macro_throw_status::register(),
+        elysia_mapresponse_sync_compression::register(),
+        elysia_model_export_types::register(),
+        elysia_named_plugin::register(),
+        elysia_nextjs_typeof_process::register(),
+        elysia_no_body_on_get::register(),
+        elysia_no_context_type::register(),
+        elysia_no_mix_zod_typebox::register(),
+        elysia_no_server_assertion::register(),
+        elysia_nodejs_adapter_required::register(),
+        elysia_numeric_body_no_coerce::register(),
+        elysia_numeric_no_bounds::register(),
+        elysia_objectstring_for_query::register(),
+        elysia_onerror_missing_validation::register(),
+        elysia_onparse_no_content_type::register(),
+        elysia_openapi_from_types_prod::register(),
+        elysia_openapi_security_scheme::register(),
+        elysia_otel_named_functions::register(),
+        elysia_plugin_functional_callback::register(),
+        elysia_prefer_instance_plugin::register(),
+        elysia_prefer_redirect::register(),
+        elysia_prefer_status_over_set::register(),
+        elysia_require_method_chaining::register(),
+        elysia_resolve_outside_guard::register(),
+        elysia_response_keyed_by_status::register(),
+        elysia_response_status_mismatch::register(),
+        elysia_route_all_method::register(),
+        elysia_route_missing_auth::register(),
+        elysia_route_missing_body_schema::register(),
+        elysia_route_missing_params_schema::register(),
+        elysia_route_missing_response_schema::register(),
+        elysia_scope_missing::register(),
+        elysia_server_timing_prod::register(),
+        elysia_service_coupled::register(),
+        elysia_service_return_not_throw::register(),
+        elysia_static_await_hmr::register(),
+        elysia_static_inline_value::register(),
+        elysia_streaming_headers_after_yield::register(),
+        elysia_string_format_email::register(),
+        elysia_test_listen_not_handle::register(),
+        elysia_test_missing_401::register(),
+        elysia_test_missing_validation::register(),
+        elysia_transform_no_schema::register(),
+        elysia_ws_connection_leak::register(),
+        elysia_ws_headers_unvalidated::register(),
+        elysia_ws_missing_auth::register(),
+        elysia_ws_subscribe_before_publish::register(),
+        elysia_zod_coerce_params::register(),
         enforce_delete_with_where::register(),
         enforce_update_with_where::register(),
         pg_require_limit::register(),
