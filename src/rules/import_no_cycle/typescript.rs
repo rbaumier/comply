@@ -1,44 +1,9 @@
 //! import-no-cycle backend — detect circular import dependencies.
+//! Uses Tarjan SCC computed once in `ImportIndex::build()`; this rule just
+//! looks up the precomputed cycle (if any) for the current file.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-
-fn find_cycle(
-    index: &crate::project::ImportIndex,
-    start: &Path,
-    current: &Path,
-    visited: &mut HashSet<PathBuf>,
-    path: &mut Vec<PathBuf>,
-) -> Option<Vec<PathBuf>> {
-    if visited.contains(current) {
-        if current == start && !path.is_empty() {
-            let mut cycle = path.clone();
-            cycle.push(current.to_path_buf());
-            return Some(cycle);
-        }
-        return None;
-    }
-
-    visited.insert(current.to_path_buf());
-    path.push(current.to_path_buf());
-
-    for imp in index.get_imports(current) {
-        if let Some(source) = &imp.source_path {
-            if source == start && !path.is_empty() {
-                let mut cycle = path.clone();
-                cycle.push(source.clone());
-                return Some(cycle);
-            }
-            if let Some(cycle) = find_cycle(index, start, source, visited, path) {
-                return Some(cycle);
-            }
-        }
-    }
-
-    path.pop();
-    None
-}
 
 fn format_cycle(cycle: &[PathBuf], root: Option<&Path>) -> String {
     let names: Vec<&str> = cycle
@@ -65,11 +30,8 @@ crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
 
     let canon = std::fs::canonicalize(ctx.path).unwrap_or_else(|_| ctx.path.to_path_buf());
 
-    let mut visited = HashSet::new();
-    let mut path = Vec::new();
-
-    if let Some(cycle) = find_cycle(index, &canon, &canon, &mut visited, &mut path) {
-        let formatted = format_cycle(&cycle, ctx.project.project_root.as_deref());
+    if let Some(cycle) = index.cycle_for(&canon) {
+        let formatted = format_cycle(cycle, ctx.project.project_root.as_deref());
         diagnostics.push(Diagnostic {
             path: std::sync::Arc::clone(&ctx.path_arc),
             line: 1,

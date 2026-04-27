@@ -851,6 +851,7 @@ pub mod comma_or_logical_or_case;
 pub mod cyclomatic_complexity;
 pub mod data_clumps;
 pub mod dead_export;
+pub mod duplicate_export;
 pub mod elseif_without_else;
 pub mod error_message_is_remediation;
 pub mod factory_di_shape;
@@ -1883,6 +1884,7 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         comma_or_logical_or_case::register(),
         cyclomatic_complexity::register(),
         dead_export::register(),
+        duplicate_export::register(),
         god_module::register(),
         elseif_without_else::register(),
         for_loop_increment_sign::register(),

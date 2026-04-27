@@ -45,7 +45,7 @@
 //! - Rust `mod foo { … }` inline modules are not tracked; only file-backed
 //!   modules (`mod foo;`) participate in the module graph.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use oxc_resolver::{
@@ -193,6 +193,8 @@ pub struct ImportIndex {
     /// Bare specifiers (npm package names) seen across all files, mapped to
     /// whether ALL imports from that package are type-only.
     bare_specifiers: HashMap<String, BareSpecifierInfo>,
+    /// Strongly connected components with >1 member (import cycles).
+    cycles: Vec<Vec<PathBuf>>,
 }
 
 impl ImportIndex {
@@ -318,12 +320,16 @@ impl ImportIndex {
         // Fifth pass: collect bare specifiers (npm packages).
         let bare_specifiers = collect_bare_specifiers(&imports);
 
+        // Sixth pass: Tarjan SCC for cycle detection.
+        let cycles = compute_cycles(&imports);
+
         Self {
             exports,
             imports,
             symbol_usages,
             call_sites,
             bare_specifiers,
+            cycles,
         }
     }
 
@@ -432,6 +438,21 @@ impl ImportIndex {
             }
         }
         visited
+    }
+
+    /// All import cycles (SCCs with 2+ members), computed once via Tarjan.
+    #[must_use]
+    pub fn cycles(&self) -> &[Vec<PathBuf>] {
+        &self.cycles
+    }
+
+    /// Cycle containing `path`, if any.
+    #[must_use]
+    pub fn cycle_for(&self, path: &Path) -> Option<&[PathBuf]> {
+        self.cycles
+            .iter()
+            .find(|scc| scc.iter().any(|p| p == path))
+            .map(|v| v.as_slice())
     }
 
     /// True when no TS/JS/TSX file was indexed. Cross-file rules use this
@@ -599,6 +620,89 @@ fn is_indexable(lang: Language) -> bool {
     )
 }
 
+/// Iterative Tarjan SCC — returns only components with 2+ members (cycles).
+/// Type-only edges are excluded so `import type` doesn't create false cycles.
+fn compute_cycles(imports: &HashMap<PathBuf, Vec<ImportedSymbol>>) -> Vec<Vec<PathBuf>> {
+    let mut adj: HashMap<&Path, Vec<&Path>> = HashMap::new();
+    let mut all_nodes: HashSet<&Path> = HashSet::new();
+    for (file, imps) in imports {
+        all_nodes.insert(file.as_path());
+        for imp in imps {
+            if imp.is_type_only {
+                continue;
+            }
+            if let Some(src) = &imp.source_path {
+                adj.entry(file.as_path()).or_default().push(src.as_path());
+                all_nodes.insert(src.as_path());
+            }
+        }
+    }
+
+    let mut index_counter: u32 = 0;
+    let mut indices: HashMap<&Path, u32> = HashMap::new();
+    let mut lowlinks: HashMap<&Path, u32> = HashMap::new();
+    let mut on_stack: HashSet<&Path> = HashSet::new();
+    let mut stack: Vec<&Path> = Vec::new();
+    let mut result: Vec<Vec<PathBuf>> = Vec::new();
+
+    for &root in &all_nodes {
+        if indices.contains_key(root) {
+            continue;
+        }
+
+        indices.insert(root, index_counter);
+        lowlinks.insert(root, index_counter);
+        index_counter += 1;
+        on_stack.insert(root);
+        stack.push(root);
+
+        let mut dfs: Vec<(&Path, usize)> = vec![(root, 0)];
+
+        while let Some(&(v, i)) = dfs.last() {
+            let neighbors = adj.get(v).map_or(&[][..], Vec::as_slice);
+            if i < neighbors.len() {
+                let w = neighbors[i];
+                dfs.last_mut().unwrap().1 = i + 1;
+                if !indices.contains_key(w) {
+                    indices.insert(w, index_counter);
+                    lowlinks.insert(w, index_counter);
+                    index_counter += 1;
+                    on_stack.insert(w);
+                    stack.push(w);
+                    dfs.push((w, 0));
+                } else if on_stack.contains(w) {
+                    let cur = lowlinks[v];
+                    let w_idx = indices[w];
+                    lowlinks.insert(v, cur.min(w_idx));
+                }
+            } else {
+                if lowlinks[v] == indices[v] {
+                    let mut scc = Vec::new();
+                    loop {
+                        let w = stack.pop().expect("tarjan stack non-empty at scc root");
+                        on_stack.remove(w);
+                        scc.push(w.to_path_buf());
+                        if w == v {
+                            break;
+                        }
+                    }
+                    if scc.len() > 1 {
+                        result.push(scc);
+                    }
+                }
+                let v_low = lowlinks[v];
+                dfs.pop();
+                if let Some(&(parent, _)) = dfs.last() {
+                    let p_low = lowlinks[parent];
+                    lowlinks.insert(parent, p_low.min(v_low));
+                }
+            }
+        }
+    }
+
+    result
+}
+
 /// Raw per-file extract before cross-file resolution.
 struct FileExtract {
     exports: Vec<ExportedSymbol>,
@@ -658,7 +762,16 @@ fn extract_for(parser: &mut Parser, file: &SourceFile) -> Option<(PathBuf, FileE
         "import_statement" => extract_import(node, source.as_bytes(), &mut imports),
         "export_statement" => extract_export(node, source.as_bytes(), &mut exports),
         "new_expression" => extract_call(node, source.as_bytes(), CallKind::New, &mut calls),
-        "call_expression" => extract_call(node, source.as_bytes(), CallKind::Call, &mut calls),
+        "call_expression" => {
+            if node.child_by_field_name("function")
+                .is_some_and(|c| c.kind() == "import")
+            {
+                extract_dynamic_import(node, source.as_bytes(), &mut imports);
+            } else {
+                extract_require(node, source.as_bytes(), &mut imports);
+                extract_call(node, source.as_bytes(), CallKind::Call, &mut calls);
+            }
+        }
         _ => {}
     });
 
@@ -801,6 +914,68 @@ fn extract_import(node: Node, source: &[u8], out: &mut Vec<ImportedSymbol>) {
             _ => {}
         }
     }
+}
+
+/// Capture `import('./foo')` as a namespace-style import edge.
+fn extract_dynamic_import(node: Node, source: &[u8], out: &mut Vec<ImportedSymbol>) {
+    let Some(args) = node.child_by_field_name("arguments") else {
+        return;
+    };
+    let mut cursor = args.walk();
+    let Some(first_arg) = args.named_children(&mut cursor).next() else {
+        return;
+    };
+    if first_arg.kind() != "string" {
+        return;
+    }
+    let raw = text_of(first_arg, source);
+    let specifier = raw.trim_matches(|c| c == '\'' || c == '"' || c == '`');
+    if specifier.is_empty() {
+        return;
+    }
+    out.push(ImportedSymbol {
+        local_name: String::new(),
+        imported_name: "*".into(),
+        kind: ImportKind::Namespace,
+        specifier: specifier.to_string(),
+        source_path: None,
+        line: node.start_position().row + 1,
+        is_type_only: false,
+    });
+}
+
+/// Capture `require('./foo')` as a namespace-style import edge.
+fn extract_require(node: Node, source: &[u8], out: &mut Vec<ImportedSymbol>) {
+    let Some(callee) = node.child_by_field_name("function") else {
+        return;
+    };
+    if callee.kind() != "identifier" || text_of(callee, source) != "require" {
+        return;
+    }
+    let Some(args) = node.child_by_field_name("arguments") else {
+        return;
+    };
+    let mut cursor = args.walk();
+    let Some(first_arg) = args.named_children(&mut cursor).next() else {
+        return;
+    };
+    if first_arg.kind() != "string" {
+        return;
+    }
+    let raw = text_of(first_arg, source);
+    let specifier = raw.trim_matches(|c| c == '\'' || c == '"' || c == '`');
+    if specifier.is_empty() {
+        return;
+    }
+    out.push(ImportedSymbol {
+        local_name: String::new(),
+        imported_name: "*".into(),
+        kind: ImportKind::Namespace,
+        specifier: specifier.to_string(),
+        source_path: None,
+        line: node.start_position().row + 1,
+        is_type_only: false,
+    });
 }
 
 /// Extract (imported_name, local_name) from an `import_specifier`. Handles
