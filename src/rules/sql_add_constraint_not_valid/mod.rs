@@ -1,6 +1,7 @@
 //! sql-add-constraint-not-valid
 
 mod rust;
+mod sql;
 mod typescript;
 
 use crate::diagnostic::Severity;
@@ -26,6 +27,7 @@ pub fn register() -> RuleDef {
             (Language::JavaScript, Backend::TreeSitter(Box::new(typescript::Check))),
             (Language::Tsx, Backend::TreeSitter(Box::new(typescript::Check))),
             (Language::Rust, Backend::TreeSitter(Box::new(rust::Check))),
+            (Language::Sql, Backend::Text(Box::new(sql::Check))),
         ],
     }
 }

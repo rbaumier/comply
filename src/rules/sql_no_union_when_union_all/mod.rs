@@ -1,5 +1,6 @@
 //! sql-no-union-when-union-all
 
+mod drizzle;
 mod rust;
 mod typescript;
 
@@ -23,6 +24,7 @@ pub fn register() -> RuleDef {
         meta: META,
         backends: vec![
             (Language::TypeScript, Backend::TreeSitter(Box::new(typescript::Check))),
+            (Language::TypeScript, Backend::TreeSitter(Box::new(drizzle::Check))),
             (Language::JavaScript, Backend::TreeSitter(Box::new(typescript::Check))),
             (Language::Tsx, Backend::TreeSitter(Box::new(typescript::Check))),
             (Language::Rust, Backend::TreeSitter(Box::new(rust::Check))),

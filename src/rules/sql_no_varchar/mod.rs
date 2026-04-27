@@ -40,6 +40,7 @@
 //!
 //! - **TS / JS / TSX**, **Rust**, **Vue** (via `vue_sfc::extract_scripts`).
 
+mod drizzle;
 mod rust;
 mod sql_text;
 mod typescript;
@@ -71,6 +72,7 @@ pub fn register() -> RuleDef {
         meta: META,
         backends: vec![
             (Language::TypeScript, Backend::TreeSitter(Box::new(typescript::Check))),
+            (Language::TypeScript, Backend::TreeSitter(Box::new(drizzle::Check))),
             (Language::JavaScript, Backend::TreeSitter(Box::new(typescript::Check))),
             (Language::Tsx, Backend::TreeSitter(Box::new(typescript::Check))),
             (Language::Rust, Backend::TreeSitter(Box::new(rust::Check))),

@@ -38,6 +38,7 @@
 //!   reuses the same string-walk logic. Diagnostic line/column are
 //!   translated back to Vue file coordinates.
 
+mod drizzle;
 mod rust;
 mod sql_text;
 mod typescript;
@@ -69,6 +70,7 @@ pub fn register() -> RuleDef {
         meta: META,
         backends: vec![
             (Language::TypeScript, Backend::TreeSitter(Box::new(typescript::Check))),
+            (Language::TypeScript, Backend::TreeSitter(Box::new(drizzle::Check))),
             (Language::JavaScript, Backend::TreeSitter(Box::new(typescript::Check))),
             (Language::Tsx, Backend::TreeSitter(Box::new(typescript::Check))),
             (Language::Rust, Backend::TreeSitter(Box::new(rust::Check))),

@@ -1,6 +1,8 @@
 //! sql-no-uuidv4-primary-key
 
+mod drizzle;
 mod rust;
+mod sql;
 mod typescript;
 
 use crate::diagnostic::Severity;
@@ -23,9 +25,11 @@ pub fn register() -> RuleDef {
         meta: META,
         backends: vec![
             (Language::TypeScript, Backend::TreeSitter(Box::new(typescript::Check))),
+            (Language::TypeScript, Backend::TreeSitter(Box::new(drizzle::Check))),
             (Language::JavaScript, Backend::TreeSitter(Box::new(typescript::Check))),
             (Language::Tsx, Backend::TreeSitter(Box::new(typescript::Check))),
             (Language::Rust, Backend::TreeSitter(Box::new(rust::Check))),
+            (Language::Sql, Backend::Text(Box::new(sql::Check))),
         ],
     }
 }
