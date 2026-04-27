@@ -1,0 +1,9 @@
+[detection]
+dependencies = ["react-native", "react-native-web", "expo"]
+
+[entry_points]
+files = ["app.json", "app.config.js", "app.config.ts"]
+root_files = ["metro.config", "babel.config"]
+
+[tooling_deps]
+names = ["@react-native-community/cli", "metro", "react-native-codegen"]

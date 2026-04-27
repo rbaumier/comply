@@ -1,0 +1,8 @@
+[detection]
+dependencies = ["webpack", "webpack-cli", "webpack-dev-server"]
+
+[entry_points]
+root_files = ["webpack.config"]
+
+[tooling_deps]
+names = ["webpack", "webpack-cli", "webpack-dev-server", "webpack-bundle-analyzer"]

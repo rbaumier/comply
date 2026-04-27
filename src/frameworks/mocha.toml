@@ -1,0 +1,5 @@
+[detection]
+dependencies = ["mocha"]
+
+[tooling_deps]
+names = ["mocha", "@types/mocha"]

@@ -12,6 +12,7 @@ fn is_test_file(path: &std::path::Path) -> bool {
 const HOOKS: &[&str] = &["beforeAll", "beforeEach", "afterAll", "afterEach"];
 
 crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
+    if !ctx.project.has_framework("playwright") { return; }
     if !is_test_file(ctx.path) {
         return;
     }
@@ -47,10 +48,17 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rules::test_helpers::run_ts_with_path;
+    use crate::project::ProjectCtx;
+    use std::path::Path;
 
     fn run_ts(source: &str) -> Vec<Diagnostic> {
-        run_ts_with_path(source, &Check, "app.test.ts")
+        let project = ProjectCtx::for_test_with_framework("playwright");
+        crate::rules::test_helpers::run_ts_with_project_and_path(
+            source,
+            &Check,
+            &project,
+            Path::new("app.test.ts"),
+        )
     }
 
     #[test]

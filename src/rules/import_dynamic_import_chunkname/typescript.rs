@@ -3,6 +3,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
 crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
+    if !ctx.project.has_framework("webpack") { return; }
     // Match `import(...)` expressions — tree-sitter parses these as `call_expression`
     // with callee kind `import`.
     let Some(callee) = node.child_by_field_name("function") else { return };
@@ -34,7 +35,7 @@ mod tests {
     use super::*;
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_ts(source, &Check)
+        crate::rules::test_helpers::run_ts_with_framework(source, &Check, "webpack")
     }
 
     #[test]

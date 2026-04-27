@@ -3,6 +3,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
 crate::ast_check! { on ["jsx_attribute"] => |node, source, ctx, diagnostics|
+    if !ctx.project.has_framework("react-native") { return; }
     let Some(name) = crate::rules::jsx::jsx_attribute_name(node, source) else { return };
     if name != "style" { return; }
     let Some(value) = crate::rules::jsx::jsx_attribute_value(node) else { return };
@@ -30,7 +31,7 @@ crate::ast_check! { on ["jsx_attribute"] => |node, source, ctx, diagnostics|
 mod tests {
     use super::*;
     fn run(s: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_tsx(s, &Check)
+        crate::rules::test_helpers::run_tsx_with_framework(s, &Check, "react-native")
     }
 
     #[test]

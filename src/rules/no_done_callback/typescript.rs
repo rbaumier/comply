@@ -53,6 +53,7 @@ fn has_any_parameter(func: tree_sitter::Node) -> bool {
 }
 
 crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
+    if !ctx.project.has_framework("jest") && !ctx.project.has_framework("mocha") { return; }
     let Some(callee) = node.child_by_field_name("function") else {
         return;
     };
@@ -95,7 +96,7 @@ mod tests {
     use super::*;
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_ts(source, &Check)
+        crate::rules::test_helpers::run_ts_with_framework(source, &Check, "jest")
     }
 
     #[test]

@@ -65,6 +65,9 @@ const RAW: &[(&str, &str)] = &[
     ("tanstack-router", include_str!("tanstack-router.toml")),
     ("shadcn", include_str!("shadcn.toml")),
     ("react-email", include_str!("react-email.toml")),
+    ("react-native", include_str!("react-native.toml")),
+    ("webpack", include_str!("webpack.toml")),
+    ("mocha", include_str!("mocha.toml")),
 ];
 
 fn registry() -> &'static [FrameworkDef] {
