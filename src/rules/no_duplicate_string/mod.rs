@@ -87,6 +87,9 @@ pub(super) fn collect_diagnostics(
         if content.chars().count() < min_length {
             continue;
         }
+        if is_spec_literal(content) {
+            continue;
+        }
         if should_ignore_string_node(node, source_bytes) {
             continue;
         }
@@ -116,6 +119,19 @@ pub(super) fn collect_diagnostics(
     }
     diagnostics.sort_by_key(|d| (d.line, d.column));
     diagnostics
+}
+
+/// URI-scheme and MIME-type strings are spec-mandated literals (RFC 9457,
+/// HTTP headers, etc.) — repeating them is intentional, not accidental.
+fn is_spec_literal(s: &str) -> bool {
+    const URI_SCHEMES: &[&str] = &[
+        "about:", "http:", "https:", "data:", "blob:", "file:", "mailto:", "tel:", "urn:",
+    ];
+    const MIME_PREFIXES: &[&str] = &[
+        "application/", "text/", "image/", "audio/", "video/", "multipart/", "font/",
+    ];
+    URI_SCHEMES.iter().any(|scheme| s.starts_with(scheme))
+        || MIME_PREFIXES.iter().any(|prefix| s.starts_with(prefix))
 }
 
 /// Identifiers of helpers that compose Tailwind class strings — calls
@@ -259,5 +275,25 @@ mod helper_tests {
     #[test]
     fn leaves_unknown_forms_alone() {
         assert_eq!(strip_string_delimiters("hello"), "hello");
+    }
+
+    #[test]
+    fn spec_literal_uri_schemes() {
+        assert!(is_spec_literal("about:blank"));
+        assert!(is_spec_literal("https://example.com"));
+        assert!(is_spec_literal("mailto:a@b.com"));
+    }
+
+    #[test]
+    fn spec_literal_mime_types() {
+        assert!(is_spec_literal("application/json"));
+        assert!(is_spec_literal("text/plain"));
+        assert!(is_spec_literal("multipart/form-data"));
+    }
+
+    #[test]
+    fn non_spec_literal() {
+        assert!(!is_spec_literal("hello world"));
+        assert!(!is_spec_literal("some repeated string"));
     }
 }

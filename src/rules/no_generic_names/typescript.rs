@@ -124,6 +124,9 @@ fn check_banned_prefix(
     if node.kind() != "identifier" && node.kind() != "property_identifier" {
         return None;
     }
+    if is_destructuring_property(node) {
+        return None;
+    }
     let name = node.utf8_text(source).ok()?;
     if GLOBAL_IDENTIFIER_ALLOWLIST.contains(&name) {
         return None;
@@ -157,9 +160,15 @@ fn matched_banned_prefix(name: &str) -> Option<&'static str> {
         if !bytes[..plen].eq_ignore_ascii_case(prefix.as_bytes()) {
             continue;
         }
-        let on_boundary = bytes.len() == plen
-            || bytes[plen].is_ascii_uppercase()
-            || bytes[plen] == b'_';
+        let on_boundary = if bytes.len() == plen {
+            true
+        } else if bytes[..plen].iter().all(|b| b.is_ascii_uppercase()) {
+            // SCREAMING_SNAKE_CASE: only `_` is a word boundary.
+            // Prevents DATABASE_ERROR matching prefix "data".
+            bytes[plen] == b'_'
+        } else {
+            bytes[plen].is_ascii_uppercase() || bytes[plen] == b'_'
+        };
         if on_boundary {
             return Some(prefix);
         }
@@ -420,5 +429,23 @@ mod tests {
                 "'{name}' must NOT be flagged — no word boundary"
             );
         }
+    }
+
+    #[test]
+    fn allows_destructured_data_from_api() {
+        assert!(run_on("const { data } = useQuery();").is_empty());
+        assert!(run_on("const { data, error } = await authClient.signIn();").is_empty());
+    }
+
+    #[test]
+    fn does_not_flag_screaming_snake_with_prefix_substring() {
+        assert!(run_on("const DATABASE_ERROR = 1;").is_empty(),
+            "DATABASE_ERROR must not match prefix 'data'");
+    }
+
+    #[test]
+    fn still_flags_screaming_snake_with_real_boundary() {
+        assert!(!run_on("const DATA_SOURCE = 1;").is_empty(),
+            "DATA_SOURCE should flag — DATA + _ is a word boundary");
     }
 }

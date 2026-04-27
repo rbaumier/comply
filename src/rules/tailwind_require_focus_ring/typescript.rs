@@ -19,13 +19,17 @@ fn has_focus_ring(classes: &str) -> bool {
         if OUTLINE_REMOVERS.contains(&tok) { return false; }
         tok.starts_with("focus:ring")
             || tok.starts_with("focus-visible:ring")
-            || tok.starts_with("focus:outline-")
-            || tok.starts_with("focus-visible:outline-")
+            || tok.starts_with("focus:outline")
+            || tok.starts_with("focus-visible:outline")
+            || tok.starts_with("focus:border-")
+            || tok.starts_with("focus-visible:border-")
     })
 }
 
 crate::ast_check! { on ["jsx_opening_element", "jsx_self_closing_element"] => |node, source, ctx, diagnostics|
     let Some(tag) = jsx_element_tag_name(node, source) else { return };
+    // PascalCase = React component — focus ring may be baked into the component.
+    if tag.as_bytes().first().is_some_and(|b| b.is_ascii_uppercase()) { return; }
     let lower = tag.to_ascii_lowercase();
 
     // Collect className + role from attributes in one pass.
@@ -121,5 +125,20 @@ mod tests {
             run(r#"export const A = () => <button className="focus:outline-none focus:ring-2" />;"#)
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn allows_focus_visible_border_ring() {
+        assert!(run(r#"export const A = () => <button className="focus-visible:border-ring" />;"#).is_empty());
+    }
+
+    #[test]
+    fn allows_bare_focus_visible_outline() {
+        assert!(run(r#"export const A = () => <button className="focus-visible:outline" />;"#).is_empty());
+    }
+
+    #[test]
+    fn skips_pascal_case_components() {
+        assert!(run(r#"export const A = () => <Button className="px-4" />;"#).is_empty());
     }
 }

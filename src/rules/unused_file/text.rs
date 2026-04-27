@@ -45,7 +45,9 @@ impl TextCheck for Check {
             if is_entry_point(path, ctx.project) {
                 continue;
             }
-            if is_declaration_file(path) || is_config_file(path) || is_test_file(path) {
+            if is_declaration_file(path) || is_config_file(path) || is_test_file(path)
+                || is_in_ui_library(path)
+            {
                 continue;
             }
             diagnostics.push(Diagnostic {
@@ -134,6 +136,11 @@ fn is_test_file(path: &Path) -> bool {
     let path_str = path.to_str().unwrap_or("");
     name.contains(".test.") || name.contains(".spec.")
         || path_str.contains("/__tests__/") || path_str.contains("/tests/")
+}
+
+fn is_in_ui_library(path: &Path) -> bool {
+    let path_str = path.to_str().unwrap_or("");
+    path_str.contains("/components/ui/") || path_str.contains("/lib/ui/")
 }
 
 #[cfg(test)]

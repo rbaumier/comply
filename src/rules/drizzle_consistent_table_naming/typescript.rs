@@ -26,6 +26,8 @@ const FRAMEWORK_TABLE_NAMES: &[&str] = &[
     "organization",
     "member",
     "invitation",
+    // better-auth API key plugin
+    "apikey",
     // migration tracking tables
     "migration",
     "migrations",
@@ -161,6 +163,12 @@ mod tests {
             let src = format!("const t = pgTable('{name}', {{ id: serial('id') }})");
             assert!(run(&src).is_empty(), "expected `{name}` to be allowed");
         }
+    }
+
+    #[test]
+    fn allows_better_auth_apikey_table() {
+        let src = "const t = pgTable('apikey', { id: text('id').primaryKey() })";
+        assert!(run(src).is_empty());
     }
 
     #[test]

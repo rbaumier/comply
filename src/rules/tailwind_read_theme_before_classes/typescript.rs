@@ -53,7 +53,13 @@ fn class_contains_arbitrary(text: &str) -> Option<usize> {
                 continue;
             }
             // Must close with `]` to be a full arbitrary-value token.
-            if text[start + prefix.len()..].contains(']') {
+            if let Some(close) = text[start + prefix.len()..].find(']') {
+                let value = &text[start + prefix.len()..start + prefix.len() + close];
+                // var(--*) or bare --custom-prop (Tailwind v4) reference design tokens.
+                if value.contains("var(--") || value.starts_with("--") {
+                    search_from = start + prefix.len() + close + 1;
+                    continue;
+                }
                 return Some(start);
             }
             search_from = start + prefix.len();
@@ -67,8 +73,12 @@ fn file_reads_theme(source: &str) -> bool {
 }
 
 crate::ast_check! { on ["string"] => |node, source, ctx, diagnostics|
-    // Only look at full string literals that can carry class tokens.
-    // `string` wraps a `string_fragment`; firing on both would double-report.
+    // shadcn/ui primitives use arbitrary values by design.
+    let path_str = ctx.path.to_str().unwrap_or("");
+    if path_str.contains("/components/ui/") || path_str.contains("/lib/ui/") {
+        return;
+    }
+
     let Ok(text) = node.utf8_text(source) else { return; };
     let Some(_) = class_contains_arbitrary(text) else { return; };
 
@@ -175,5 +185,25 @@ mod tests {
         // The arbitrary-looking text sits in a SQL string, not a className.
         let src = r#"export const q = "SELECT * FROM t WHERE p = 'p-[13px]'";"#;
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_css_variable_in_arbitrary_value() {
+        let src = r#"export const A = () => <div className="w-[var(--sidebar-width)]" />;"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_bare_custom_property_tailwind_v4() {
+        let src = r#"export const A = () => <div className="w-[--sidebar-width]" />;"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_shadcn_ui_components() {
+        use crate::rules::test_helpers::run_ts_with_path;
+        let src = r#"export const A = <div className="ring-[3px]" />;"#;
+        let d = run_ts_with_path(src, &Check, "src/components/ui/checkbox.tsx");
+        assert!(d.is_empty());
     }
 }

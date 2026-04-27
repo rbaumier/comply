@@ -13,6 +13,27 @@ match node.kind() {
                 .unwrap_or("");
             if obj_text == "module" || obj_text == "exports" { return; }
 
+            // Allow: ref.current = ... (React useRef pattern)
+            let prop_text = left.child_by_field_name("property")
+                .and_then(|p| p.utf8_text(source).ok())
+                .unwrap_or("");
+            if prop_text == "current" { return; }
+
+            // Allow: set.headers["x"] = ... (Elysia response context)
+            if left.kind() == "subscript_expression" {
+                if let Some(sub_obj) = left.child_by_field_name("object") {
+                    if sub_obj.kind() == "member_expression" {
+                        let sub_obj_text = sub_obj.child_by_field_name("object")
+                            .and_then(|o| o.utf8_text(source).ok())
+                            .unwrap_or("");
+                        let sub_prop_text = sub_obj.child_by_field_name("property")
+                            .and_then(|p| p.utf8_text(source).ok())
+                            .unwrap_or("");
+                        if sub_obj_text == "set" && sub_prop_text == "headers" { return; }
+                    }
+                }
+            }
+
             let pos = node.start_position();
             diagnostics.push(Diagnostic {
                 path: std::sync::Arc::clone(&ctx.path_arc),
@@ -103,5 +124,27 @@ mod tests {
     fn allows_module_exports() {
         assert!(run("module.exports = {}").is_empty());
         assert!(run("exports.foo = bar").is_empty());
+    }
+
+    #[test]
+    fn allows_ref_current() {
+        assert!(run("timerRef.current = setTimeout(() => {}, 100)").is_empty());
+        assert!(run("newKeyRef.current = null").is_empty());
+    }
+
+    #[test]
+    fn allows_elysia_set_headers() {
+        assert!(run(r#"set.headers["cache-control"] = "no-store""#).is_empty());
+        assert!(run(r#"set.headers["x-content-type-options"] = "nosniff""#).is_empty());
+    }
+
+    #[test]
+    fn still_flags_other_set_mutations() {
+        assert_eq!(run("set.status = 404").len(), 1);
+    }
+
+    #[test]
+    fn still_flags_other_subscript_mutations() {
+        assert_eq!(run(r#"obj.headers["key"] = "val""#).len(), 1);
     }
 }

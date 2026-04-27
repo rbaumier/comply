@@ -21,6 +21,7 @@ pub mod api_branded_id_types;
 pub mod api_no_internal_ids_in_response;
 pub mod api_no_nullable_variant_fields;
 pub mod api_put_vs_patch;
+pub mod api_route_version_prefix;
 pub mod api_separate_input_output_types;
 pub mod api_validate_at_boundaries;
 pub mod arrow_this_in_function;
@@ -520,7 +521,6 @@ pub mod tanstack_query_invalidate_after_mutation;
 pub mod tanstack_query_max_pages_requires_both;
 pub mod tanstack_query_no_enabled_on_suspense;
 pub mod tanstack_query_no_global_onerror_v5;
-pub mod tanstack_query_no_mutation_for_client_state;
 pub mod tanstack_query_no_v4_import_path;
 pub mod tanstack_query_object_syntax;
 pub mod tanstack_query_pass_signal_to_fetch;
@@ -1225,7 +1225,6 @@ pub mod no_import_node_modules_by_path;
 pub mod no_import_node_test;
 pub mod no_mocks_import;
 pub mod no_mutable_exports;
-pub mod no_namespace_import;
 pub mod no_self_import;
 pub mod no_unassigned_import;
 pub mod no_useless_path_segments;
@@ -2439,7 +2438,6 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         no_mocks_import::register(),
         no_mutable_exports::register(),
         no_useless_path_segments::register(),
-        no_namespace_import::register(),
         no_self_import::register(),
         no_unassigned_import::register(),
         import_no_commonjs::register(),
@@ -3104,6 +3102,7 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         api_no_internal_ids_in_response::register(),
         api_no_nullable_variant_fields::register(),
         api_put_vs_patch::register(),
+        api_route_version_prefix::register(),
         api_separate_input_output_types::register(),
         api_validate_at_boundaries::register(),
         better_auth_client_framework_import::register(),
@@ -3429,7 +3428,6 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         tanstack_query_max_pages_requires_both::register(),
         tanstack_query_no_enabled_on_suspense::register(),
         tanstack_query_no_global_onerror_v5::register(),
-        tanstack_query_no_mutation_for_client_state::register(),
         tanstack_query_no_v4_import_path::register(),
         tanstack_query_object_syntax::register(),
         tanstack_query_pass_signal_to_fetch::register(),

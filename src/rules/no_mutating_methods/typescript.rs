@@ -29,6 +29,15 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     if !MUTATING.contains(&name) {
         return;
     }
+    // .fill() on a chained call (e.g. page.getByLabel(...).fill()) is almost
+    // certainly Playwright/Locator.fill, not Array.fill.
+    if name == "fill" {
+        if let Some(object) = callee.child_by_field_name("object") {
+            if object.kind() == "call_expression" {
+                return;
+            }
+        }
+    }
     diagnostics.push(Diagnostic::at_node(
         ctx.path,
         &node,
@@ -80,5 +89,15 @@ mod tests {
     #[test]
     fn ignores_plain_function_call() {
         assert!(run_on("push(arr, 1);").is_empty());
+    }
+
+    #[test]
+    fn allows_chained_fill_playwright() {
+        assert!(run_on(r#"page.getByLabel("Email").fill(user.email);"#).is_empty());
+    }
+
+    #[test]
+    fn still_flags_direct_fill() {
+        assert_eq!(run_on("arr.fill(0);").len(), 1);
     }
 }

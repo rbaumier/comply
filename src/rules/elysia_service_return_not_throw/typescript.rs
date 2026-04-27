@@ -35,6 +35,46 @@ fn imports_frontend(source: &str) -> bool {
         || source.contains("from \"solid-js")
 }
 
+const LIFECYCLE_METHODS: &[&str] = &[
+    "guard", "onError", "onRequest", "onTransform", "onParse",
+    "onBeforeHandle", "beforeHandle", "onAfterHandle", "afterHandle",
+    "derive", "resolve", "mapResponse", "onResponse", "trace",
+    "state", "decorate", "macro",
+];
+
+fn is_inside_lifecycle_hook(node: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut current = node;
+    while let Some(parent) = current.parent() {
+        if parent.kind() == "arrow_function" || parent.kind() == "function_expression" {
+            if let Some(args) = parent.parent() {
+                if args.kind() == "arguments" {
+                    if let Some(call) = args.parent() {
+                        if call.kind() == "call_expression" {
+                            if let Some(callee) = call.child_by_field_name("function") {
+                                let prop_node = if callee.kind() == "member_expression" {
+                                    callee.child_by_field_name("property")
+                                } else {
+                                    None
+                                };
+                                if let Some(prop) = prop_node {
+                                    if let Ok(method) = prop.utf8_text(source) {
+                                        if LIFECYCLE_METHODS.contains(&method) {
+                                            return true;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            return false;
+        }
+        current = parent;
+    }
+    false
+}
+
 crate::ast_check! { on ["throw_statement"] => |node, source, ctx, diagnostics|
     if !ctx.project.has_framework("elysia") {
         return;
@@ -45,8 +85,9 @@ crate::ast_check! { on ["throw_statement"] => |node, source, ctx, diagnostics|
     if imports_frontend(ctx.source) {
         return;
     }
-
-    let _ = source;
+    if is_inside_lifecycle_hook(node, source) {
+        return;
+    }
     let pos = node.start_position();
     diagnostics.push(Diagnostic {
         path: std::sync::Arc::clone(&ctx.path_arc),
@@ -111,6 +152,24 @@ mod tests {
     fn ignores_file_without_elysia_import() {
         // Plain backend util that doesn't import Elysia — leave it alone.
         let src = "export function parse(x: string) { if (!x) throw new Error('empty'); return JSON.parse(x); }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_throw_in_guard() {
+        let src = "import { Elysia } from 'elysia';\nconst app = new Elysia().guard({}, (app) => app.onBeforeHandle(() => { throw new Error('forbidden'); }));";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_throw_in_on_error() {
+        let src = "import { Elysia } from 'elysia';\nconst app = new Elysia().onError(({ error }) => { throw error; });";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_throw_in_derive() {
+        let src = "import { Elysia } from 'elysia';\nconst app = new Elysia().derive(() => { throw new Error('no'); });";
         assert!(run_on(src).is_empty());
     }
 }

@@ -62,6 +62,11 @@ crate::ast_check! { on ["new_expression"] => |node, source, ctx, diagnostics|
     if norm.contains("aot:true") || norm.contains("aot:false") {
         return;
     }
+    // Only flag server entry points that bind to a port. Sub-apps and
+    // factory modules (create-app.ts) don't need aot.
+    if !ctx.source.contains(".listen(") {
+        return;
+    }
 
     let pos = node.start_position();
     diagnostics.push(Diagnostic {
@@ -99,9 +104,9 @@ mod tests {
     }
 
     #[test]
-    fn flags_config_without_aot_in_index_file() {
+    fn allows_config_without_aot_when_no_listen() {
         let src = "import { Elysia } from 'elysia';\nexport const app = new Elysia({ name: 'root' });";
-        assert_eq!(run_on_at(src, "src/index.ts").len(), 1);
+        assert!(run_on_at(src, "src/index.ts").is_empty());
     }
 
     #[test]
