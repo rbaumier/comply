@@ -56,6 +56,7 @@ const RAW: &[(&str, &str)] = &[
     ("express", include_str!("express.toml")),
     ("jest", include_str!("jest.toml")),
     ("playwright", include_str!("playwright.toml")),
+    ("elysia", include_str!("elysia.toml")),
 ];
 
 fn registry() -> &'static [FrameworkDef] {
@@ -70,6 +71,10 @@ fn registry() -> &'static [FrameworkDef] {
             })
             .collect()
     })
+}
+
+pub fn get_framework(name: &str) -> Option<&'static FrameworkDef> {
+    registry().iter().find(|def| def.name == name)
 }
 
 pub fn detect_frameworks(pkg: &PackageJson) -> Vec<&'static FrameworkDef> {

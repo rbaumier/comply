@@ -451,6 +451,10 @@ impl ProjectCtx {
         self.k8s_index.get_or_init(K8sIndex::default)
     }
 
+    pub fn has_framework(&self, name: &str) -> bool {
+        self.detected_frameworks.iter().any(|f| f.name == name)
+    }
+
     pub fn framework_entry_dirs(&self) -> impl Iterator<Item = &str> {
         self.detected_frameworks
             .iter()
@@ -479,6 +483,16 @@ impl ProjectCtx {
         self.detected_frameworks
             .iter()
             .flat_map(|f| f.tooling_deps.names.iter().map(String::as_str))
+    }
+
+    #[cfg(test)]
+    #[must_use]
+    pub fn for_test_with_framework(name: &str) -> Self {
+        let mut ctx = ProjectCtx::default();
+        if let Some(fw) = crate::frameworks::get_framework(name) {
+            ctx.detected_frameworks = vec![fw];
+        }
+        ctx
     }
 
     /// Test-only constructor that seeds `import_index` from an arbitrary set

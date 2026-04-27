@@ -146,6 +146,37 @@ pub fn run_tsx_with_project_file_and_path(
     )
 }
 
+/// TS variant with a caller-supplied framework name. Seeds a `ProjectCtx`
+/// whose `has_framework(name)` returns true. Use for framework-scoped rules.
+#[must_use]
+pub fn run_ts_with_framework(
+    source: &str,
+    check: &dyn AstCheck,
+    framework: &str,
+) -> Vec<Diagnostic> {
+    let project = ProjectCtx::for_test_with_framework(framework);
+    run_ts_with_project_and_path(source, check, &project, Path::new("t.ts"))
+}
+
+/// TSX variant with a caller-supplied framework name.
+#[must_use]
+pub fn run_tsx_with_framework(
+    source: &str,
+    check: &dyn AstCheck,
+    framework: &str,
+) -> Vec<Diagnostic> {
+    let project = ProjectCtx::for_test_with_framework(framework);
+    let mut parser = tree_sitter::Parser::new();
+    parser
+        .set_language(&tree_sitter_typescript::LANGUAGE_TSX.into())
+        .expect("grammar should load");
+    let tree = parser.parse(source, None).expect("parser should produce a tree");
+    check.check(
+        &CheckCtx::for_test_with_project(Path::new("t.tsx"), source, &project),
+        &tree,
+    )
+}
+
 /// Run a tree-sitter `Check` against `source` parsed with the YAML
 /// grammar. Used by Kubernetes manifest rules.
 #[must_use]
