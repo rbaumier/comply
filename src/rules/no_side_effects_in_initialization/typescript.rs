@@ -48,7 +48,15 @@ fn effectful_expression_kind(expr: tree_sitter::Node) -> Option<&'static str> {
     }
 }
 
+fn is_test_file(path: &std::path::Path) -> bool {
+    let s = path.to_string_lossy();
+    [".test.", ".spec.", "__tests__", "_test.", ".e2e."]
+        .iter()
+        .any(|m| s.contains(m))
+}
+
 crate::ast_check! { on ["expression_statement"] => |node, source, ctx, diagnostics|
+    if ctx.file.path_segments.in_test_dir || is_test_file(ctx.path) { return; }
     // Only top-level: parent must be the program root.
     let Some(parent) = node.parent() else { return };
     if parent.kind() != "program" {

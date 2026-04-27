@@ -52,6 +52,7 @@ fn is_bare_specifier(spec: &str) -> bool {
 crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
     let Some(pkg) = ctx.project.nearest_package_json(ctx.path) else { return; };
     if is_test_file(ctx.path) { return; }
+    if crate::rules::path_utils::is_config_file(ctx.path) { return; }
 
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {

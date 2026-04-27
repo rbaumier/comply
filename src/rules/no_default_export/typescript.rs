@@ -16,6 +16,13 @@ impl AstCheck for Check {
         _state: Option<&mut dyn std::any::Any>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
+        if crate::rules::path_utils::is_config_file(ctx.path) {
+            return;
+        }
+        let path_str = ctx.path.to_string_lossy();
+        if ctx.project.framework_entry_dirs().any(|dir| path_str.contains(dir)) {
+            return;
+        }
         let source = ctx.source.as_bytes();
         let text = node.utf8_text(source).unwrap_or("");
         if !text.starts_with("export default ") && !text.starts_with("export default\n") {
