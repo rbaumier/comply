@@ -50,5 +50,7 @@ fn run_inner(app: &mut App) -> Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    app.run(&mut terminal)
+    let result = app.run(&mut terminal);
+    terminal.show_cursor()?;
+    result
 }

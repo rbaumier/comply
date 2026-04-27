@@ -56,13 +56,11 @@ impl TextCheck for Check {
         // per file in the project.
         let canon =
             std::fs::canonicalize(ctx.path).unwrap_or_else(|_| ctx.path.to_path_buf());
-        let anchor = index
-            .iter_exports()
-            .map(|(p, _)| p.to_path_buf())
-            .min();
-        match anchor {
-            Some(a) if a == canon => {}
-            _ => return Vec::new(),
+        let Some(anchor) = index.indexed_paths().min() else {
+            return Vec::new();
+        };
+        if anchor != canon.as_path() {
+            return Vec::new();
         }
 
         let bare = index.bare_specifiers();
