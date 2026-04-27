@@ -89,6 +89,12 @@ fn check_banned_word(
     if !is_declaration_site(node) {
         return None;
     }
+    if is_destructuring_property(node) {
+        return None;
+    }
+    if is_iterator_callback_param(node, source) {
+        return None;
+    }
     let name = node.utf8_text(source).ok()?;
     let lower = name.to_ascii_lowercase();
     if !BANNED_WORDS.contains(&lower.as_str()) {
@@ -172,6 +178,81 @@ fn is_declaration_site(node: tree_sitter::Node) -> bool {
         parent.kind(),
         "variable_declarator" | "required_parameter" | "catch_clause"
     )
+}
+
+/// True when the name comes from destructuring (`const { data } = ...`) —
+/// the user doesn't choose these names, the API imposes them.
+fn is_destructuring_property(node: tree_sitter::Node) -> bool {
+    let Some(parent) = node.parent() else {
+        return false;
+    };
+    if parent.kind() == "shorthand_property_identifier_pattern" {
+        return true;
+    }
+    if parent.kind() == "pair_pattern" {
+        if let Some(grandparent) = parent.parent() {
+            return grandparent.kind() == "object_pattern";
+        }
+    }
+    if node.kind() == "identifier" {
+        if let Some(gp) = parent.parent() {
+            if gp.kind() == "object_pattern" {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+const ITERATOR_METHODS: &[&str] = &[
+    "map", "filter", "find", "findIndex", "forEach", "some", "every",
+    "flatMap", "reduce", "sort",
+];
+
+/// True when the identifier is a parameter of an inline arrow/function
+/// passed directly to an array iterator method (.map(), .filter(), etc.).
+fn is_iterator_callback_param(node: tree_sitter::Node, source: &[u8]) -> bool {
+    let Some(parent) = node.parent() else { return false };
+    if parent.kind() != "required_parameter"
+        && parent.kind() != "formal_parameters"
+        && parent.kind() != "arrow_function"
+    {
+        return false;
+    }
+    let func = if parent.kind() == "required_parameter" || parent.kind() == "formal_parameters" {
+        parent.parent()
+    } else {
+        Some(parent)
+    };
+    let Some(func_node) = func else { return false };
+    if func_node.kind() != "arrow_function" && func_node.kind() != "function_expression" {
+        if let Some(pp) = func_node.parent() {
+            if pp.kind() != "arrow_function" && pp.kind() != "function_expression" {
+                return false;
+            }
+            return is_arg_of_iterator_call(pp, source);
+        }
+        return false;
+    }
+    is_arg_of_iterator_call(func_node, source)
+}
+
+fn is_arg_of_iterator_call(func_node: tree_sitter::Node, source: &[u8]) -> bool {
+    let Some(args) = func_node.parent() else { return false };
+    if args.kind() != "arguments" {
+        return false;
+    }
+    let Some(call) = args.parent() else { return false };
+    if call.kind() != "call_expression" {
+        return false;
+    }
+    let Some(callee) = call.child_by_field_name("function") else { return false };
+    if callee.kind() != "member_expression" {
+        return false;
+    }
+    let Some(prop) = callee.child_by_field_name("property") else { return false };
+    let method = prop.utf8_text(source).unwrap_or("");
+    ITERATOR_METHODS.contains(&method)
 }
 
 #[cfg(test)]

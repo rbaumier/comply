@@ -27,6 +27,32 @@ crate::ast_check! { on ["binary_expression"] => |node, source, ctx, diagnostics|
         return;
     }
 
+    // Skip confirmation-style comparisons where both operands come from
+    // the same object (e.g. `data.password === data.confirmPassword`).
+    // These are form validation, not auth checks.
+    if both_from_same_object(left, right, source) {
+        return;
+    }
+    // Skip confirmation-pattern comparisons: both operands are sensitive
+    // identifiers and one contains a confirmation prefix/suffix (e.g.
+    // `password === confirmPassword`, `token === retypeToken`).
+    if left_hit && right_hit
+        && left.kind() == "identifier"
+        && right.kind() == "identifier"
+    {
+        let l = left.utf8_text(source).unwrap_or("");
+        let r = right.utf8_text(source).unwrap_or("");
+        let combined = format!("{l}{r}");
+        let lower = combined.to_ascii_lowercase();
+        if lower.contains("confirm")
+            || lower.contains("repeat")
+            || lower.contains("retype")
+            || lower.contains("verify")
+        {
+            return;
+        }
+    }
+
     let pos = node.start_position();
     diagnostics.push(Diagnostic {
         path: std::sync::Arc::clone(&ctx.path_arc),
@@ -48,6 +74,27 @@ fn operand_name<'a>(node: tree_sitter::Node<'a>, source: &'a [u8]) -> Option<&'a
         _ => None,
     }
 }
+
+fn member_object_text<'a>(node: tree_sitter::Node<'a>, source: &'a [u8]) -> Option<&'a str> {
+    if node.kind() != "member_expression" {
+        return None;
+    }
+    node.child_by_field_name("object")
+        .and_then(|o| o.utf8_text(source).ok())
+}
+
+fn both_from_same_object(
+    left: tree_sitter::Node,
+    right: tree_sitter::Node,
+    source: &[u8],
+) -> bool {
+    let left_obj = member_object_text(left, source);
+    let right_obj = member_object_text(right, source);
+    matches!((left_obj, right_obj), (Some(a), Some(b)) if a == b)
+}
+
+
+
 
 #[cfg(test)]
 mod tests {

@@ -74,7 +74,7 @@ exceptions = ["t", "T"]
 max = 10
 
 [rules.cognitive-complexity]
-max = 5
+max = 10
 
 [rules.halstead-complexity]
 max_volume = 1500
@@ -156,5 +156,62 @@ disabled = true
 [rules.ts-explicit-function-return-type]
 disabled = true
 
+[rules.ts-explicit-module-boundary-types]
+disabled = true
+
 [rules.no-throw]
 disabled = true
+
+# ---------------------------------------------------------------
+# Rust correctness / observability — no thresholds, listed here
+# so `comply config print` surfaces them and users can flip
+# `disabled = true` to opt out per-project.
+# ---------------------------------------------------------------
+
+[rules.rust-no-todo-macro]
+
+[rules.rust-no-sleep-in-test]
+
+[rules.rust-prefer-tracing-over-log]
+
+# ---------------------------------------------------------------
+# Docker Compose — no thresholds, same rationale as above.
+# ---------------------------------------------------------------
+
+[rules.compose-no-network-host]
+
+[rules.compose-healthcheck-required]
+
+# ---------------------------------------------------------------
+# NestJS — no thresholds, surfaced for `comply config print`.
+# ---------------------------------------------------------------
+
+[rules.nestjs-controller-return-type]
+
+[rules.nestjs-no-entity-in-controller]
+
+[rules.nestjs-no-forwardref-abuse]
+
+# ---------------------------------------------------------------
+# Next.js — no thresholds, same rationale.
+# ---------------------------------------------------------------
+
+[rules.next-no-redirect-in-try-catch]
+
+# ---------------------------------------------------------------
+# Node.js — no thresholds, same rationale.
+# ---------------------------------------------------------------
+
+[rules.node-no-unhandled-rejection]
+
+[rules.node-prefer-stream-pipeline]
+
+# ---------------------------------------------------------------
+# Security — no thresholds, same rationale.
+# ---------------------------------------------------------------
+
+[rules.security-cookie-no-samesite-none]
+
+[rules.security-no-cors-reflect-origin]
+
+[rules.security-no-password-in-log]
