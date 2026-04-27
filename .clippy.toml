@@ -1,0 +1,4 @@
+disallowed-types = [
+    { path = "std::collections::HashMap", reason = "Use rustc_hash::FxHashMap — faster for non-DoS-resistant keys (ADR: fallow-inspired)" },
+    { path = "std::collections::HashSet", reason = "Use rustc_hash::FxHashSet — faster for non-DoS-resistant keys (ADR: fallow-inspired)" },
+]

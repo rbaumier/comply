@@ -46,5 +46,6 @@ tempfile = "3"
 
 [profile.release]
 opt-level = 3
-lto = true
+lto = "thin"
+codegen-units = 16
 strip = true

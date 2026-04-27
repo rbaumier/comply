@@ -1,0 +1,31 @@
+//! zod-no-passthrough-on-api-input — `.passthrough()` lets unknown
+//! keys through. On API input schemas this is a footgun: clients can
+//! smuggle fields that downstream code may persist.
+
+mod typescript;
+
+use crate::diagnostic::Severity;
+use crate::files::Language;
+use crate::rules::backend::Backend;
+use crate::rules::meta::RuleMeta;
+use crate::rules::RuleDef;
+
+pub const META: RuleMeta = RuleMeta {
+    id: "zod-no-passthrough-on-api-input",
+    description: "`.passthrough()` on API input schemas lets unknown keys through.",
+    remediation: "Use `.strict()` to reject unknown keys, or remove `.passthrough()` and let zod strip them.",
+    severity: Severity::Warning,
+    doc_url: None,
+    categories: &["zod", "security"],
+};
+
+pub fn register() -> RuleDef {
+    RuleDef {
+        meta: META,
+        backends: vec![
+            (Language::TypeScript, Backend::Text(Box::new(typescript::Check))),
+            (Language::JavaScript, Backend::Text(Box::new(typescript::Check))),
+            (Language::Tsx, Backend::Text(Box::new(typescript::Check))),
+        ],
+    }
+}

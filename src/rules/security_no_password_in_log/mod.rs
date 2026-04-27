@@ -1,0 +1,30 @@
+//! security-no-password-in-log — never log credentials.
+
+mod typescript;
+
+use crate::diagnostic::Severity;
+use crate::files::Language;
+use crate::rules::backend::Backend;
+use crate::rules::meta::RuleMeta;
+use crate::rules::RuleDef;
+
+pub const META: RuleMeta = RuleMeta {
+    id: "security-no-password-in-log",
+    description: "Logging variables named `password` / `secret` / `token` leaks credentials to log sinks.",
+    remediation: "Redact the field before logging (`{ ...user, password: '[REDACTED]' }`) or \
+                  switch to a logger with field allowlists.",
+    severity: Severity::Error,
+    doc_url: None,
+    categories: &["security"],
+};
+
+pub fn register() -> RuleDef {
+    RuleDef {
+        meta: META,
+        backends: vec![
+            (Language::TypeScript, Backend::Text(Box::new(typescript::Check))),
+            (Language::JavaScript, Backend::Text(Box::new(typescript::Check))),
+            (Language::Tsx, Backend::Text(Box::new(typescript::Check))),
+        ],
+    }
+}

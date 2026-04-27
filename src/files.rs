@@ -25,6 +25,7 @@ const CSS_EXTENSIONS: &[&str] = &["css"];
 const YAML_EXTENSIONS: &[&str] = &["yml", "yaml"];
 const DOCKERFILE_EXTENSIONS: &[&str] = &["dockerfile"];
 const SQL_EXTENSIONS: &[&str] = &["sql"];
+const GRAPHQL_EXTENSIONS: &[&str] = &["graphql", "gql"];
 
 /// A discovered file tagged with its detected language.
 #[derive(Debug)]
@@ -69,6 +70,9 @@ pub enum Language {
     Dockerfile,
     /// SQL file `.sql` — text-based rules only.
     Sql,
+    /// GraphQL schema or operation file `.graphql` / `.gql` — text-based
+    /// rules only.
+    GraphQl,
 }
 
 impl Language {
@@ -107,6 +111,8 @@ impl Language {
             Some(Language::Yaml)
         } else if SQL_EXTENSIONS.contains(&ext) {
             Some(Language::Sql)
+        } else if GRAPHQL_EXTENSIONS.contains(&ext) {
+            Some(Language::GraphQl)
         } else if DOCKERFILE_EXTENSIONS.contains(&ext)
             || path.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
                 n == "Dockerfile" || n.starts_with("Dockerfile.")
@@ -221,6 +227,8 @@ fn classify(path: &Path) -> Option<SourceFile> {
             Language::Yaml
         } else if SQL_EXTENSIONS.contains(&ext) {
             Language::Sql
+        } else if GRAPHQL_EXTENSIONS.contains(&ext) {
+            Language::GraphQl
         } else if DOCKERFILE_EXTENSIONS.contains(&ext) {
             Language::Dockerfile
         } else {

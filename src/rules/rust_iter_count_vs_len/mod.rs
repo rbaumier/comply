@@ -1,0 +1,22 @@
+//! rust-iter-count-vs-len — `.iter().count()` walks the whole collection.
+
+mod rust;
+
+use crate::diagnostic::Severity;
+use crate::rules::meta::RuleMeta;
+use crate::rules::RuleDef;
+
+pub const META: RuleMeta = RuleMeta {
+    id: "rust-iter-count-vs-len",
+    description: "`.iter().count()` walks the whole collection to compute its length.",
+    remediation: "Use `.len()` directly on the collection — `Vec`, slices, \
+                  `VecDeque`, `String`, `HashMap`, and `HashSet` all expose \
+                  it in O(1). `.count()` consumes an iterator linearly.",
+    severity: Severity::Warning,
+    doc_url: None,
+    categories: &["rust"],
+};
+
+pub fn register() -> RuleDef {
+    crate::register_rust_only!(META, rust)
+}

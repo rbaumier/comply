@@ -1616,6 +1616,101 @@ mod registry;
 pub use registry::{RustBinding, build_rust_only_rule, build_ts_family_rule};
 
 pub mod meta_registry;
+pub mod a11y_button_without_accessible_name;
+pub mod a11y_dialog_missing_aria_labelledby;
+pub mod api_no_status_in_body;
+pub mod api_no_unbounded_input_field;
+pub mod api_response_envelope_consistency;
+pub mod drizzle_decimal_for_money;
+pub mod drizzle_dollar_type_widens_unknown;
+pub mod drizzle_findfirst_without_where;
+pub mod drizzle_leftjoin_nullable_handling;
+pub mod drizzle_migrations_no_data_in_schema_migration;
+pub mod drizzle_no_db_query_in_loop;
+pub mod drizzle_no_drizzle_kit_in_runtime;
+pub mod drizzle_prefer_select_columns;
+pub mod drizzle_relations_missing_inverse;
+pub mod elysia_aot_dynamic_route;
+pub mod elysia_decorate_uses_request_data;
+pub mod elysia_derive_async_no_await;
+pub mod elysia_guard_overrides_route_schema;
+pub mod elysia_model_reference_by_string;
+pub mod elysia_onerror_before_plugin;
+pub mod elysia_response_t_unknown;
+pub mod elysia_set_status_after_return;
+pub mod elysia_t_unknown_format_string;
+pub mod elysia_ws_message_no_schema;
+pub mod next_no_server_action_without_use_server;
+pub mod react_no_async_useeffect_callback;
+pub mod react_no_form_action_async_no_pending;
+pub mod react_no_ref_read_during_render;
+pub mod react_no_router_push_in_effect_no_dep;
+pub mod react_no_setstate_no_cancel_flag;
+pub mod react_no_state_setter_in_render;
+pub mod react_no_sync_layout_effect_in_ssr;
+pub mod react_no_useeffect_event_in_deps;
+pub mod react_prefer_use_action_state;
+pub mod react_prefer_use_optimistic;
+pub mod react_use_no_conditional;
+pub mod rust_assert_eq_with_bool_literal;
+pub mod rust_box_dyn_error_without_send_sync;
+pub mod rust_clone_in_iter_chain;
+pub mod rust_collect_then_into_iter;
+pub mod rust_const_for_static_no_interior_mut;
+pub mod rust_drop_calls_self_lock;
+pub mod rust_env_var_unwrap_at_runtime;
+pub mod rust_eprintln_in_library;
+pub mod rust_float_eq_partial_cmp;
+pub mod rust_format_args_in_log_macro;
+pub mod rust_hash_partial_eq_mismatch;
+pub mod rust_if_let_mutex_lock;
+pub mod rust_iter_count_vs_len;
+pub mod rust_loop_collect_into_existing_vec;
+pub mod rust_match_lock_guard_scrutinee;
+pub mod rust_ord_partial_ord_inconsistent;
+pub mod rust_panic_in_drop;
+pub mod rust_partial_eq_without_eq;
+pub mod rust_repeated_string_concat_in_loop;
+pub mod rust_select_without_biased;
+pub mod rust_send_sync_unsafe_impl_on_pointer_field;
+pub mod rust_serde_untagged_without_explicit_default;
+pub mod rust_string_push_str_format;
+pub mod rust_thread_spawn_in_async;
+pub mod rust_to_string_in_format_arg;
+pub mod sql_add_not_null_without_default;
+pub mod sql_alter_column_type_unsafe;
+pub mod sql_check_constraint_no_volatile_function;
+pub mod sql_create_index_in_transaction;
+pub mod sql_drop_table_no_cascade_warning;
+pub mod sql_index_on_low_cardinality_boolean;
+pub mod sql_jsonb_not_json;
+pub mod sql_no_for_update_without_skip_locked;
+pub mod sql_no_serial_use_identity;
+pub mod sql_pg_enum_with_alter_type_add_value;
+pub mod sql_recursive_cte_no_termination;
+pub mod sql_text_search_missing_language;
+pub mod tailwind_no_negative_z_index_on_interactive;
+pub mod tailwind_no_overflow_hidden_on_focus_container;
+pub mod tailwind_no_text_size_below_12px;
+pub mod tailwind_no_w_screen_h_screen_on_mobile;
+pub mod tailwind_require_aspect_ratio_on_media;
+pub mod tanstack_query_dehydrate_no_pending_in_ssr;
+pub mod tanstack_query_no_async_query_fn_without_await;
+pub mod tanstack_query_no_query_in_render_loop;
+pub mod tanstack_query_no_set_query_data_without_key_factory;
+pub mod tanstack_query_select_must_be_stable;
+pub mod tanstack_router_search_no_use_state_for_url_state;
+pub mod ts_no_assert_never_in_default;
+pub mod ts_no_enum_object_literal_pattern;
+pub mod ts_no_floating_promise_in_array_method;
+pub mod ts_no_object_keys_typed_loop;
+pub mod ts_no_promise_void_function_misuse;
+pub mod ts_no_redundant_async;
+pub mod ts_no_void_returning_assigned;
+pub mod ts_prefer_promise_with_resolvers;
+pub mod zod_no_parse_in_render;
+pub mod zod_no_passthrough_on_api_input;
+pub mod zod_no_safeparse_without_check;
 
 /// Language slice for the TS-family. Used by rules that apply to all three
 /// variants identically (either via the TS grammar or oxlint delegation).
@@ -3420,6 +3515,103 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         zod_record_two_args::register(),
         zod_require_input_for_transforms::register(),
         zod_require_multipleof_currency::register(),
+
+        // --- batch-2 new rules ---
+        a11y_button_without_accessible_name::register(),
+        a11y_dialog_missing_aria_labelledby::register(),
+        api_no_status_in_body::register(),
+        api_no_unbounded_input_field::register(),
+        api_response_envelope_consistency::register(),
+        drizzle_decimal_for_money::register(),
+        drizzle_dollar_type_widens_unknown::register(),
+        drizzle_findfirst_without_where::register(),
+        drizzle_leftjoin_nullable_handling::register(),
+        drizzle_migrations_no_data_in_schema_migration::register(),
+        drizzle_no_db_query_in_loop::register(),
+        drizzle_no_drizzle_kit_in_runtime::register(),
+        drizzle_prefer_select_columns::register(),
+        drizzle_relations_missing_inverse::register(),
+        elysia_aot_dynamic_route::register(),
+        elysia_decorate_uses_request_data::register(),
+        elysia_derive_async_no_await::register(),
+        elysia_guard_overrides_route_schema::register(),
+        elysia_model_reference_by_string::register(),
+        elysia_onerror_before_plugin::register(),
+        elysia_response_t_unknown::register(),
+        elysia_set_status_after_return::register(),
+        elysia_t_unknown_format_string::register(),
+        elysia_ws_message_no_schema::register(),
+        next_no_server_action_without_use_server::register(),
+        react_no_async_useeffect_callback::register(),
+        react_no_form_action_async_no_pending::register(),
+        react_no_ref_read_during_render::register(),
+        react_no_router_push_in_effect_no_dep::register(),
+        react_no_setstate_no_cancel_flag::register(),
+        react_no_state_setter_in_render::register(),
+        react_no_sync_layout_effect_in_ssr::register(),
+        react_no_useeffect_event_in_deps::register(),
+        react_prefer_use_action_state::register(),
+        react_prefer_use_optimistic::register(),
+        react_use_no_conditional::register(),
+        rust_assert_eq_with_bool_literal::register(),
+        rust_box_dyn_error_without_send_sync::register(),
+        rust_clone_in_iter_chain::register(),
+        rust_collect_then_into_iter::register(),
+        rust_const_for_static_no_interior_mut::register(),
+        rust_drop_calls_self_lock::register(),
+        rust_env_var_unwrap_at_runtime::register(),
+        rust_eprintln_in_library::register(),
+        rust_float_eq_partial_cmp::register(),
+        rust_format_args_in_log_macro::register(),
+        rust_hash_partial_eq_mismatch::register(),
+        rust_if_let_mutex_lock::register(),
+        rust_iter_count_vs_len::register(),
+        rust_loop_collect_into_existing_vec::register(),
+        rust_match_lock_guard_scrutinee::register(),
+        rust_ord_partial_ord_inconsistent::register(),
+        rust_panic_in_drop::register(),
+        rust_partial_eq_without_eq::register(),
+        rust_repeated_string_concat_in_loop::register(),
+        rust_select_without_biased::register(),
+        rust_send_sync_unsafe_impl_on_pointer_field::register(),
+        rust_serde_untagged_without_explicit_default::register(),
+        rust_string_push_str_format::register(),
+        rust_thread_spawn_in_async::register(),
+        rust_to_string_in_format_arg::register(),
+        sql_add_not_null_without_default::register(),
+        sql_alter_column_type_unsafe::register(),
+        sql_check_constraint_no_volatile_function::register(),
+        sql_create_index_in_transaction::register(),
+        sql_drop_table_no_cascade_warning::register(),
+        sql_index_on_low_cardinality_boolean::register(),
+        sql_jsonb_not_json::register(),
+        sql_no_for_update_without_skip_locked::register(),
+        sql_no_serial_use_identity::register(),
+        sql_pg_enum_with_alter_type_add_value::register(),
+        sql_recursive_cte_no_termination::register(),
+        sql_text_search_missing_language::register(),
+        tailwind_no_negative_z_index_on_interactive::register(),
+        tailwind_no_overflow_hidden_on_focus_container::register(),
+        tailwind_no_text_size_below_12px::register(),
+        tailwind_no_w_screen_h_screen_on_mobile::register(),
+        tailwind_require_aspect_ratio_on_media::register(),
+        tanstack_query_dehydrate_no_pending_in_ssr::register(),
+        tanstack_query_no_async_query_fn_without_await::register(),
+        tanstack_query_no_query_in_render_loop::register(),
+        tanstack_query_no_set_query_data_without_key_factory::register(),
+        tanstack_query_select_must_be_stable::register(),
+        tanstack_router_search_no_use_state_for_url_state::register(),
+        ts_no_assert_never_in_default::register(),
+        ts_no_enum_object_literal_pattern::register(),
+        ts_no_floating_promise_in_array_method::register(),
+        ts_no_object_keys_typed_loop::register(),
+        ts_no_promise_void_function_misuse::register(),
+        ts_no_redundant_async::register(),
+        ts_no_void_returning_assigned::register(),
+        ts_prefer_promise_with_resolvers::register(),
+        zod_no_parse_in_render::register(),
+        zod_no_passthrough_on_api_input::register(),
+        zod_no_safeparse_without_check::register(),
     ];
     rules.extend(delegated::register_all());
     rules.extend(delegated::register_tsgolint());

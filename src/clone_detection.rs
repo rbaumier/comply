@@ -288,7 +288,8 @@ fn grammar_family(lang: Language) -> Option<u8> {
         Language::Vue
         | Language::Toml
         | Language::Json
-        | Language::Sql => None,
+        | Language::Sql
+        | Language::GraphQl => None,
     }
 }
 
