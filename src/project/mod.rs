@@ -198,6 +198,114 @@ impl Tsconfig {
             .map(|k| k.strip_suffix("/*").unwrap_or(k.as_str()).to_string())
             .collect()
     }
+
+    /// Load `root/tsconfig.json` and recursively resolve any `extends` chain.
+    /// Child `compilerOptions` win, but `paths` entries from parent tsconfigs
+    /// are preserved when the child does not redeclare the same alias key —
+    /// matches TypeScript's own merge semantics. Recursion is capped at 10
+    /// levels to defend against pathological cycles.
+    pub fn load(root: &Path) -> Option<Self> {
+        load_tsconfig_file(&root.join("tsconfig.json"), 0)
+    }
+}
+
+/// Read a tsconfig.json at `path`, follow its `extends` chain, and return the
+/// merged result. Depth-tracked to bound recursion at 10 levels.
+fn load_tsconfig_file(path: &Path, depth: u8) -> Option<Tsconfig> {
+    if depth >= 10 {
+        return None;
+    }
+    let raw = std::fs::read_to_string(path).ok()?;
+    let stripped = strip_line_comments(&raw);
+    let json: Value = serde_json::from_str(&stripped).ok()?;
+
+    let mut merged = parse_tsconfig_value(&json);
+
+    if let Some(extends) = json.get("extends").and_then(|v| v.as_str()) {
+        let parent_path = resolve_extends(path, extends);
+        if let Some(parent) = load_tsconfig_file(&parent_path, depth + 1) {
+            merged = merge_tsconfig(parent, merged);
+        }
+    }
+
+    Some(merged)
+}
+
+/// Resolve an `extends` reference relative to the directory containing the
+/// referring tsconfig. Only relative-path strings are handled here; package
+/// references (e.g. `"@tsconfig/node20/tsconfig.json"`) require node_modules
+/// resolution which isn't wired up yet.
+fn resolve_extends(referrer: &Path, extends: &str) -> PathBuf {
+    let dir = referrer.parent().unwrap_or_else(|| Path::new("."));
+    let mut candidate = dir.join(extends);
+    if candidate.extension().is_none() && !candidate.is_file() {
+        candidate.set_extension("json");
+    }
+    candidate
+}
+
+/// Parse a single tsconfig JSON value into a `Tsconfig`. Splitting this out
+/// from `Tsconfig::parse` lets `load_tsconfig_file` reuse the field-extraction
+/// logic without re-running `strip_line_comments`/`from_str`.
+fn parse_tsconfig_value(json: &Value) -> Tsconfig {
+    let co = json.get("compilerOptions");
+    let paths = co
+        .and_then(|x| x.get("paths"))
+        .and_then(|x| x.as_object())
+        .map(|o| {
+            o.iter()
+                .map(|(k, val)| {
+                    let list: Vec<String> = val
+                        .as_array()
+                        .map(|arr| {
+                            arr.iter()
+                                .filter_map(|v| v.as_str().map(String::from))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    (k.clone(), list)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Tsconfig {
+        paths,
+        base_url: co
+            .and_then(|x| x.get("baseUrl"))
+            .and_then(|s| s.as_str())
+            .map(PathBuf::from),
+        module: co
+            .and_then(|x| x.get("module"))
+            .and_then(|s| s.as_str())
+            .map(String::from),
+        strict: co
+            .and_then(|x| x.get("strict"))
+            .and_then(|b| b.as_bool())
+            .unwrap_or(false),
+        jsx: co
+            .and_then(|x| x.get("jsx"))
+            .and_then(|s| s.as_str())
+            .map(String::from),
+    }
+}
+
+/// Overlay `child` onto `parent`. Scalars (`base_url`, `module`, `jsx`) are
+/// taken from the child when present; `paths` are merged key-by-key so
+/// parent-only aliases survive. `strict` defaults to false in
+/// `parse_tsconfig_value`, which means a child that omits the flag inherits
+/// the parent's value here.
+fn merge_tsconfig(parent: Tsconfig, child: Tsconfig) -> Tsconfig {
+    let mut paths = parent.paths;
+    for (k, v) in child.paths {
+        paths.insert(k, v);
+    }
+    Tsconfig {
+        paths,
+        base_url: child.base_url.or(parent.base_url),
+        module: child.module.or(parent.module),
+        strict: child.strict || parent.strict,
+        jsx: child.jsx.or(parent.jsx),
+    }
 }
 
 /// Parsed Tailwind theme. Populated statically from `@theme` CSS blocks (v4)
@@ -269,19 +377,20 @@ impl ProjectCtx {
             .as_ref()
             .and_then(|r| load_manifest_at(r, "package.json", PackageJson::parse))
             .map(Arc::new);
-        let tsc = root
-            .as_ref()
-            .and_then(|r| load_manifest_at(r, "tsconfig.json", Tsconfig::parse))
-            .map(Arc::new);
+        let tsc = root.as_ref().and_then(|r| Tsconfig::load(r)).map(Arc::new);
         let framework = pkg.as_deref().map(detect_framework).unwrap_or_default();
         let detected_frameworks = pkg
             .as_deref()
             .map(crate::frameworks::detect_frameworks)
             .unwrap_or_default();
+        let workspace_roots = pkg
+            .as_deref()
+            .map(|p| resolve_workspace_roots(root.as_deref(), p))
+            .unwrap_or_default();
 
         let mut ctx = ProjectCtx {
             project_root: root.clone(),
-            workspace_roots: Vec::new(),
+            workspace_roots,
             package_json: pkg.clone(),
             tsconfig: tsc.clone(),
             framework,
@@ -409,6 +518,50 @@ impl ProjectCtx {
     pub fn drizzle_config(&self) -> Option<&DrizzleConfig> {
         self.drizzle_config.get_or_init(|| None).as_ref()
     }
+
+    /// Package names from all workspace members. Used by `unlisted-dependency`
+    /// to recognize cross-workspace imports as valid.
+    pub fn workspace_package_names(&self) -> Vec<String> {
+        self.workspace_roots
+            .iter()
+            .filter_map(|root| {
+                let raw = std::fs::read_to_string(root.join("package.json")).ok()?;
+                let pkg = PackageJson::parse(&raw)?;
+                pkg.name
+            })
+            .collect()
+    }
+}
+
+/// Resolve workspace glob patterns to actual package directories.
+/// Returns the list of workspace root directories found on disk.
+fn resolve_workspace_roots(project_root: Option<&Path>, pkg: &PackageJson) -> Vec<PathBuf> {
+    let Some(root) = project_root else { return Vec::new() };
+    if pkg.workspaces.is_empty() {
+        return Vec::new();
+    }
+
+    let mut roots = Vec::new();
+    for pattern in &pkg.workspaces {
+        // Simple glob: "packages/*" -> list directories matching the pattern
+        let base = root.join(pattern.trim_end_matches('*').trim_end_matches('/'));
+        if let Ok(entries) = std::fs::read_dir(&base) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() && path.join("package.json").exists() {
+                    roots.push(path);
+                }
+            }
+        }
+        // Also handle exact paths (no glob)
+        if !pattern.contains('*') {
+            let exact = root.join(pattern);
+            if exact.is_dir() && exact.join("package.json").exists() {
+                roots.push(exact);
+            }
+        }
+    }
+    roots
 }
 
 /// Walk up from `path` to the nearest `filename`, returning a cached parse.
@@ -674,5 +827,116 @@ mod tests {
         std::fs::write(dir.path().join("package.json"), "{ not json").unwrap();
         let ctx = ProjectCtx::empty();
         assert!(ctx.nearest_package_json(&dir.path().join("t.ts")).is_none());
+    }
+
+    #[test]
+    fn resolves_workspace_packages() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"root","workspaces":["packages/*"]}"#,
+        )
+        .unwrap();
+        let foo = dir.path().join("packages").join("foo");
+        let bar = dir.path().join("packages").join("bar");
+        std::fs::create_dir_all(&foo).unwrap();
+        std::fs::create_dir_all(&bar).unwrap();
+        std::fs::write(foo.join("package.json"), r#"{"name":"@scope/foo"}"#).unwrap();
+        std::fs::write(bar.join("package.json"), r#"{"name":"@scope/bar"}"#).unwrap();
+
+        let pkg = PackageJson::parse(
+            r#"{"name":"root","workspaces":["packages/*"]}"#,
+        )
+        .unwrap();
+        let roots = resolve_workspace_roots(Some(dir.path()), &pkg);
+        assert_eq!(roots.len(), 2);
+
+        let ctx = ProjectCtx {
+            workspace_roots: roots,
+            ..ProjectCtx::default()
+        };
+        let mut names = ctx.workspace_package_names();
+        names.sort();
+        assert_eq!(names, vec!["@scope/bar".to_string(), "@scope/foo".to_string()]);
+    }
+
+    #[test]
+    fn empty_workspaces_returns_empty() {
+        let dir = TempDir::new().unwrap();
+        let pkg = PackageJson::parse(r#"{"name":"root"}"#).unwrap();
+        let roots = resolve_workspace_roots(Some(dir.path()), &pkg);
+        assert!(roots.is_empty());
+
+        let ctx = ProjectCtx::default();
+        assert!(ctx.workspace_package_names().is_empty());
+    }
+
+    #[test]
+    fn extends_merges_paths() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("tsconfig.base.json"),
+            r#"{"compilerOptions":{"paths":{"@base/*":["./base/*"]}}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("tsconfig.json"),
+            r#"{"extends":"./tsconfig.base.json","compilerOptions":{"paths":{"@app/*":["./app/*"]}}}"#,
+        )
+        .unwrap();
+        let ts = Tsconfig::load(dir.path()).unwrap();
+        assert!(ts.paths.contains_key("@base/*"));
+        assert!(ts.paths.contains_key("@app/*"));
+    }
+
+    #[test]
+    fn child_overrides_parent_path() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("tsconfig.base.json"),
+            r#"{"compilerOptions":{"paths":{"@/*":["./parent/*"]}}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("tsconfig.json"),
+            r#"{"extends":"./tsconfig.base.json","compilerOptions":{"paths":{"@/*":["./child/*"]}}}"#,
+        )
+        .unwrap();
+        let ts = Tsconfig::load(dir.path()).unwrap();
+        assert_eq!(ts.paths.get("@/*").unwrap(), &vec!["./child/*".to_string()]);
+    }
+
+    #[test]
+    fn extends_resolves_relative() {
+        let dir = TempDir::new().unwrap();
+        let sub = dir.path().join("configs");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(
+            sub.join("base.json"),
+            r#"{"compilerOptions":{"paths":{"@base/*":["./base/*"]},"strict":true}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("tsconfig.json"),
+            r#"{"extends":"./configs/base.json","compilerOptions":{"paths":{"@app/*":["./app/*"]}}}"#,
+        )
+        .unwrap();
+        let ts = Tsconfig::load(dir.path()).unwrap();
+        assert!(ts.paths.contains_key("@base/*"));
+        assert!(ts.paths.contains_key("@app/*"));
+        assert!(ts.strict);
+    }
+
+    #[test]
+    fn no_extends_works_as_before() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("tsconfig.json"),
+            r#"{"compilerOptions":{"paths":{"~/*":["./src/*"]},"jsx":"preserve"}}"#,
+        )
+        .unwrap();
+        let ts = Tsconfig::load(dir.path()).unwrap();
+        assert!(ts.paths.contains_key("~/*"));
+        assert_eq!(ts.jsx.as_deref(), Some("preserve"));
     }
 }

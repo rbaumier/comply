@@ -46,12 +46,18 @@ impl TextCheck for Check {
             .map(|t| t.alias_prefixes())
             .unwrap_or_default();
 
+        let workspace_names: rustc_hash::FxHashSet<String> =
+            ctx.project.workspace_package_names().into_iter().collect();
+
         let mut diagnostics = Vec::new();
         for (spec, info) in index.bare_specifiers() {
             if matches_alias(spec, &alias_prefixes) {
                 continue;
             }
             if pkg.has_dep_or_engine(spec) {
+                continue;
+            }
+            if workspace_names.contains(spec) {
                 continue;
             }
             // Anchor the diagnostic on the first importer when available;
@@ -215,6 +221,61 @@ mod tests {
         assert!(
             diags.is_empty(),
             "tsconfig alias `@/*` should suppress the diagnostic: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn allows_workspace_package() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"root","workspaces":["packages/*"]}"#,
+        )
+        .unwrap();
+        let foo = dir.path().join("packages").join("foo");
+        fs::create_dir_all(&foo).unwrap();
+        fs::write(foo.join("package.json"), r#"{"name":"@scope/foo"}"#).unwrap();
+
+        // Create source file at the project root that imports the workspace package.
+        let a_path = dir.path().join("a.ts");
+        fs::write(&a_path, "import { greet } from '@scope/foo';").unwrap();
+        let b_path = dir.path().join("b.ts");
+        fs::write(&b_path, "export const x = 1;").unwrap();
+
+        let source_files = [
+            SourceFile {
+                path: a_path.clone(),
+                language: Language::TypeScript,
+            },
+            SourceFile {
+                path: b_path,
+                language: Language::TypeScript,
+            },
+        ];
+        let refs: Vec<&SourceFile> = source_files.iter().collect();
+        let config = Config::default();
+        let project = ProjectCtx::load(&refs, &config);
+
+        let target_path: PathBuf = project
+            .import_index()
+            .indexed_paths()
+            .min()
+            .expect("at least one indexed file")
+            .to_path_buf();
+        let source = fs::read_to_string(&target_path).unwrap();
+        let file_ctx = FileCtx::build(&target_path, &source, Language::TypeScript, &project);
+        let ctx = CheckCtx {
+            path: &target_path,
+            path_arc: std::sync::Arc::from(target_path.as_path()),
+            source: &source,
+            config: &config,
+            project: &project,
+            file: &file_ctx,
+        };
+        let diags = Check.check(&ctx);
+        assert!(
+            diags.is_empty(),
+            "workspace package `@scope/foo` should be recognized: {diags:?}"
         );
     }
 }

@@ -1064,6 +1064,7 @@ pub mod testing_prefer_msw;
 pub mod testing_prefer_test_each;
 pub mod too_many_break_or_continue;
 pub mod unused_component_prop;
+pub mod unused_enum_member;
 pub mod use_type_alias;
 pub mod useless_string_operation;
 pub mod valid_expect;
@@ -1594,6 +1595,7 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         no_redundant_state::register(),
         no_unused_locators::register(),
         unused_component_prop::register(),
+        unused_enum_member::register(),
         hook_use_state::register(),
         valid_expect::register(),
         valid_expect_in_promise::register(),
