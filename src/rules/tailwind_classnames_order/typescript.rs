@@ -261,6 +261,9 @@ fn vue_class_value<'a>(node: tree_sitter::Node, source: &'a [u8]) -> Option<&'a 
 }
 
 crate::ast_check! { |node, source, ctx, diagnostics|
+    if ctx.project.nearest_package_json(ctx.path)
+        .is_some_and(|pkg| pkg.has_dep_or_engine("prettier-plugin-tailwindcss"))
+    { return; }
     let class_str = jsx_class_value(node, source)
         .or_else(|| vue_class_value(node, source));
     let Some(class_str) = class_str else { return; };

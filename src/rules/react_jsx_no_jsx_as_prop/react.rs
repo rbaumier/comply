@@ -6,7 +6,15 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
+const ALLOWED_PROPS: &[&str] = &[
+    "trigger", "content", "icon", "overlay", "asChild", "fallback",
+    "label", "description", "title", "action", "prefix", "suffix",
+    "left", "right", "header", "footer",
+];
+
 crate::ast_check! { on ["jsx_attribute"] => |node, source, ctx, diagnostics|
+    let Some(attr_name_early) = crate::rules::jsx::jsx_attribute_name(node, source) else { return };
+    if ALLOWED_PROPS.contains(&attr_name_early) { return; }
     let Some(value_node) = crate::rules::jsx::jsx_attribute_value(node) else { return };
     if value_node.kind() != "jsx_expression" {
         return;
@@ -29,7 +37,7 @@ crate::ast_check! { on ["jsx_attribute"] => |node, source, ctx, diagnostics|
         _ => return,
     };
 
-    let Some(attr_name) = crate::rules::jsx::jsx_attribute_name(node, source) else { return };
+    let attr_name = attr_name_early;
     let pos = expr.start_position();
     diagnostics.push(Diagnostic {
         path: std::sync::Arc::clone(&ctx.path_arc),
@@ -54,20 +62,28 @@ mod tests {
 
     #[test]
     fn flags_jsx_element_as_prop() {
-        let src = "const x = <Comp icon={<Icon />} />;";
+        let src = "const x = <Comp sidebar={<Icon />} />;";
         assert_eq!(run_on(src).len(), 1);
     }
 
     #[test]
     fn flags_jsx_element_with_children_as_prop() {
-        let src = "const x = <Comp header={<h1>Title</h1>} />;";
+        let src = "const x = <Comp banner={<h1>Title</h1>} />;";
         assert_eq!(run_on(src).len(), 1);
     }
 
     #[test]
     fn flags_jsx_fragment_as_prop() {
-        let src = "const x = <Comp header={<><h1>Title</h1></>} />;";
+        let src = "const x = <Comp banner={<><h1>Title</h1></>} />;";
         assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_whitelisted_prop_names() {
+        for prop in ["trigger", "content", "icon", "overlay", "header", "footer"] {
+            let src = format!("const x = <Comp {prop}={{<Icon />}} />;");
+            assert!(run_on(&src).is_empty(), "prop '{prop}' should be allowed");
+        }
     }
 
     #[test]
