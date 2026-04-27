@@ -53,9 +53,15 @@ impl TextCheck for Check {
             return Vec::new();
         }
 
+        let magic: std::collections::HashSet<&str> =
+            ctx.project.framework_magic_exports().collect();
+
         let mut diagnostics = Vec::new();
         for export in exports {
             if matches!(export.kind, ExportKind::StarReExport) {
+                continue;
+            }
+            if magic.contains(export.name.as_str()) {
                 continue;
             }
             if !index.get_usages(&canon, &export.name).is_empty() {

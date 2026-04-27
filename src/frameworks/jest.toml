@@ -1,0 +1,15 @@
+[detection]
+dependencies = ["jest"]
+
+[entry_points]
+files = ["jest.setup.ts", "jest.setup.js", "jest.config.ts", "jest.config.js"]
+root_files = ["jest.config"]
+
+[magic_exports]
+names = []
+
+[tooling_deps]
+names = [
+    "jest", "ts-jest", "babel-jest", "jest-environment-jsdom",
+    "jest-environment-node", "@types/jest", "@swc/jest",
+]

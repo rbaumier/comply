@@ -1,0 +1,12 @@
+[detection]
+dependencies = ["vite"]
+
+[entry_points]
+files = ["index.html"]
+root_files = ["vite.config"]
+
+[magic_exports]
+names = []
+
+[tooling_deps]
+names = ["vite", "@vitejs/plugin-react", "@vitejs/plugin-vue", "@vitejs/plugin-react-swc"]

@@ -28,6 +28,7 @@ mod engine;
 mod explain;
 mod files;
 mod fix;
+mod frameworks;
 mod icu;
 mod ignore_comments;
 mod list;

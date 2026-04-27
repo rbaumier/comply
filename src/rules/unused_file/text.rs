@@ -4,7 +4,7 @@
 //! path). Emits one diagnostic per unreachable file in a single pass.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::project::ImportIndex;
+use crate::project::{ImportIndex, ProjectCtx};
 use crate::rules::backend::{CheckCtx, TextCheck};
 use std::path::Path;
 
@@ -29,8 +29,7 @@ impl TextCheck for Check {
             return Vec::new();
         }
 
-        let project_root = ctx.project.project_root.as_deref();
-        let entry_points = detect_entry_points(index, project_root);
+        let entry_points = detect_entry_points(index, ctx.project);
         if entry_points.is_empty() {
             return Vec::new();
         }
@@ -42,14 +41,14 @@ impl TextCheck for Check {
             if reachable.contains(path) {
                 continue;
             }
-            if is_entry_point(path, project_root) {
+            if is_entry_point(path, ctx.project) {
                 continue;
             }
             if is_declaration_file(path) || is_config_file(path) || is_test_file(path) {
                 continue;
             }
             diagnostics.push(Diagnostic {
-                path: path.to_path_buf(),
+                path: path.to_path_buf().into(),
                 line: 1,
                 column: 1,
                 rule_id: RULE_ID.into(),
@@ -65,43 +64,49 @@ impl TextCheck for Check {
 
 fn detect_entry_points<'a>(
     index: &'a ImportIndex,
-    project_root: Option<&Path>,
+    project: &ProjectCtx,
 ) -> Vec<&'a Path> {
     index
         .indexed_paths()
-        .filter(|p| is_entry_point(p, project_root))
+        .filter(|p| is_entry_point(p, project))
         .collect()
 }
 
-fn is_entry_point(path: &Path, project_root: Option<&Path>) -> bool {
+fn is_entry_point(path: &Path, project: &ProjectCtx) -> bool {
     let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
 
     if is_config_file(path) {
         return true;
     }
 
-    // Framework directories: boundary-checked with `/dir/` to avoid
-    // substring false positives like `package_pages_helper.ts`.
     let path_str = path.to_str().unwrap_or("");
-    let framework_dirs = [
-        "/pages/", "/app/", "/routes/", "/middleware/", "/api/", "/server/",
-    ];
-    for dir in framework_dirs {
-        if path_str.contains(dir) {
-            return true;
-        }
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+
+    // Framework-declared directory fragments (e.g. "/pages/", "/routes/").
+    if project.framework_entry_dirs().any(|dir| path_str.contains(dir)) {
+        return true;
     }
 
-    // Root-level `main` / `index` files.
-    if let Some(root) = project_root
+    // Framework-declared entry file names (e.g. "middleware.ts").
+    if project.framework_entry_files().any(|f| f == name) {
+        return true;
+    }
+
+    if let Some(root) = project.project_root.as_deref()
         && let Some(parent) = path.parent()
     {
         let canon_parent =
             std::fs::canonicalize(parent).unwrap_or_else(|_| parent.to_path_buf());
         let canon_root =
             std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
-        if canon_parent == canon_root && (stem == "main" || stem == "index") {
-            return true;
+        if canon_parent == canon_root {
+            if stem == "main" || stem == "index" {
+                return true;
+            }
+            // Framework root file stems (e.g. "next.config" matches next.config.ts).
+            if project.framework_root_files().any(|s| s == stem) {
+                return true;
+            }
         }
     }
 
@@ -144,6 +149,7 @@ mod tests {
     use crate::rules::file_ctx::FileCtx;
     use std::fs;
     use std::path::PathBuf;
+    use std::sync::Arc;
     use tempfile::TempDir;
 
     fn run_on_project(files: &[(&str, &str)]) -> (TempDir, Vec<Diagnostic>) {
@@ -176,6 +182,7 @@ mod tests {
         let file_ctx = FileCtx::build(&target_path, &source, language, &project);
         let ctx = CheckCtx {
             path: &target_path,
+            path_arc: Arc::from(target_path.as_path()),
             source: &source,
             config: &config,
             project: &project,

@@ -1,0 +1,12 @@
+[detection]
+dependencies = ["express"]
+
+[entry_points]
+dirs = ["/routes/", "/controllers/", "/middleware/", "/api/"]
+files = ["server.ts", "server.js", "app.ts", "app.js"]
+
+[magic_exports]
+names = []
+
+[tooling_deps]
+names = []

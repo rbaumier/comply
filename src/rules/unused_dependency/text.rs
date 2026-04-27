@@ -67,15 +67,17 @@ impl TextCheck for Check {
 
         let bare = index.bare_specifiers();
         let mut diagnostics = Vec::new();
+        let extra_tooling: std::collections::HashSet<&str> =
+            ctx.project.framework_tooling_deps().collect();
         for dep in pkg.dependencies.keys() {
-            if is_skipped(dep) {
+            if is_skipped(dep, &extra_tooling) {
                 continue;
             }
             if bare.contains_key(dep) {
                 continue;
             }
             diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf(),
+                path: ctx.path.to_path_buf().into(),
                 line: 1,
                 column: 1,
                 rule_id: RULE_ID.into(),
@@ -91,11 +93,14 @@ impl TextCheck for Check {
     }
 }
 
-fn is_skipped(dep: &str) -> bool {
+fn is_skipped(dep: &str, extra_tooling: &std::collections::HashSet<&str>) -> bool {
     if dep.starts_with("@types/") {
         return true;
     }
-    TOOLING_ALLOWLIST.contains(&dep)
+    if TOOLING_ALLOWLIST.contains(&dep) {
+        return true;
+    }
+    extra_tooling.contains(dep)
 }
 
 #[cfg(test)]
@@ -107,6 +112,7 @@ mod tests {
     use crate::rules::file_ctx::FileCtx;
     use std::fs;
     use std::path::PathBuf;
+    use std::sync::Arc;
     use tempfile::TempDir;
 
     fn run_on_project(
@@ -139,6 +145,7 @@ mod tests {
         let file_ctx = FileCtx::build(&target_path, &source, Language::TypeScript, &project);
         let ctx = CheckCtx {
             path: &target_path,
+            path_arc: Arc::from(target_path.as_path()),
             source: &source,
             config: &config,
             project: &project,

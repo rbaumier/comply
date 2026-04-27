@@ -1,0 +1,13 @@
+[detection]
+dependencies = ["@playwright/test", "playwright"]
+
+[entry_points]
+dirs = ["/e2e/", "/tests-e2e/"]
+files = ["playwright.config.ts", "playwright.config.js"]
+root_files = ["playwright.config"]
+
+[magic_exports]
+names = []
+
+[tooling_deps]
+names = ["@playwright/test", "playwright", "playwright-core"]

@@ -62,7 +62,7 @@ impl TextCheck for Check {
                 .cloned()
                 .unwrap_or_else(|| ctx.path.to_path_buf());
             diagnostics.push(Diagnostic {
-                path: anchor,
+                path: anchor.into(),
                 line: 1,
                 column: 1,
                 rule_id: RULE_ID.into(),
@@ -146,6 +146,7 @@ mod tests {
         let file_ctx = FileCtx::build(&target_path, &source, Language::TypeScript, &project);
         let ctx = CheckCtx {
             path: &target_path,
+            path_arc: std::sync::Arc::from(target_path.as_path()),
             source: &source,
             config: &config,
             project: &project,

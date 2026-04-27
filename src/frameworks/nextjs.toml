@@ -1,0 +1,18 @@
+[detection]
+dependencies = ["next"]
+
+[entry_points]
+dirs = ["/pages/", "/app/"]
+files = ["middleware.ts", "middleware.js", "instrumentation.ts", "instrumentation.js"]
+root_files = ["next.config"]
+
+[magic_exports]
+names = [
+    "default", "getServerSideProps", "getStaticProps", "getStaticPaths",
+    "generateStaticParams", "generateMetadata", "metadata", "viewport",
+    "revalidate", "dynamic", "dynamicParams", "fetchCache", "runtime",
+    "preferredRegion", "config",
+]
+
+[tooling_deps]
+names = ["@next/font", "@next/mdx", "@next/bundle-analyzer", "@next/eslint-plugin-next"]

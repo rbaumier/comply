@@ -28,6 +28,7 @@ use serde_json::Value;
 
 use crate::config::Config;
 use crate::files::SourceFile;
+use crate::frameworks::FrameworkDef;
 
 pub mod import_index;
 pub mod k8s_index;
@@ -222,6 +223,7 @@ pub struct ProjectCtx {
     pub package_json: Option<Arc<PackageJson>>,
     pub tsconfig: Option<Arc<Tsconfig>>,
     pub framework: Framework,
+    pub detected_frameworks: Vec<&'static FrameworkDef>,
 
     // Per-manifest caches, keyed by the *directory* that contains the
     // manifest. Mutex over HashMap is sufficient: contention is low (same
@@ -272,6 +274,10 @@ impl ProjectCtx {
             .and_then(|r| load_manifest_at(r, "tsconfig.json", Tsconfig::parse))
             .map(Arc::new);
         let framework = pkg.as_deref().map(detect_framework).unwrap_or_default();
+        let detected_frameworks = pkg
+            .as_deref()
+            .map(crate::frameworks::detect_frameworks)
+            .unwrap_or_default();
 
         let mut ctx = ProjectCtx {
             project_root: root.clone(),
@@ -279,6 +285,7 @@ impl ProjectCtx {
             package_json: pkg.clone(),
             tsconfig: tsc.clone(),
             framework,
+            detected_frameworks,
             ..Self::default()
         };
 
@@ -333,6 +340,36 @@ impl ProjectCtx {
     /// need to branch on availability.
     pub fn k8s_index(&self) -> &K8sIndex {
         self.k8s_index.get_or_init(K8sIndex::default)
+    }
+
+    pub fn framework_entry_dirs(&self) -> impl Iterator<Item = &str> {
+        self.detected_frameworks
+            .iter()
+            .flat_map(|f| f.entry_points.dirs.iter().map(String::as_str))
+    }
+
+    pub fn framework_entry_files(&self) -> impl Iterator<Item = &str> {
+        self.detected_frameworks
+            .iter()
+            .flat_map(|f| f.entry_points.files.iter().map(String::as_str))
+    }
+
+    pub fn framework_root_files(&self) -> impl Iterator<Item = &str> {
+        self.detected_frameworks
+            .iter()
+            .flat_map(|f| f.entry_points.root_files.iter().map(String::as_str))
+    }
+
+    pub fn framework_magic_exports(&self) -> impl Iterator<Item = &str> {
+        self.detected_frameworks
+            .iter()
+            .flat_map(|f| f.magic_exports.names.iter().map(String::as_str))
+    }
+
+    pub fn framework_tooling_deps(&self) -> impl Iterator<Item = &str> {
+        self.detected_frameworks
+            .iter()
+            .flat_map(|f| f.tooling_deps.names.iter().map(String::as_str))
     }
 
     /// Test-only constructor that seeds `import_index` from an arbitrary set

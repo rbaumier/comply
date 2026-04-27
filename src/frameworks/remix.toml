@@ -1,0 +1,17 @@
+[detection]
+dependencies = ["@remix-run/react", "@remix-run/node", "@remix-run/server-runtime"]
+
+[entry_points]
+dirs = ["/routes/", "/app/routes/"]
+files = ["entry.client.tsx", "entry.server.tsx", "root.tsx"]
+root_files = ["remix.config"]
+
+[magic_exports]
+names = [
+    "default", "loader", "action", "meta", "links", "headers",
+    "ErrorBoundary", "CatchBoundary", "handle", "shouldRevalidate",
+    "clientLoader", "clientAction", "HydrateFallback",
+]
+
+[tooling_deps]
+names = ["@remix-run/dev", "@remix-run/eslint-config", "@remix-run/serve"]
