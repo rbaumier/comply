@@ -381,7 +381,7 @@ impl ProjectCtx {
         let framework = pkg.as_deref().map(detect_framework).unwrap_or_default();
         let detected_frameworks = pkg
             .as_deref()
-            .map(crate::frameworks::detect_frameworks)
+            .map(|p| crate::frameworks::detect_frameworks(p, root.as_deref()))
             .unwrap_or_default();
         let workspace_roots = pkg
             .as_deref()
@@ -465,6 +465,13 @@ impl ProjectCtx {
         self.detected_frameworks
             .iter()
             .flat_map(|f| f.entry_points.files.iter().map(String::as_str))
+    }
+
+    pub fn framework_entry_file_suffixes(&self) -> impl Iterator<Item = &str> {
+        self.detected_frameworks
+            .iter()
+            .flat_map(|fw| fw.entry_points.file_suffixes.iter())
+            .map(|s| s.as_str())
     }
 
     pub fn framework_root_files(&self) -> impl Iterator<Item = &str> {

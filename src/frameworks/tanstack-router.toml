@@ -1,0 +1,36 @@
+[detection]
+dependencies = [
+    "@tanstack/react-router",
+    "@tanstack/router",
+    "@tanstack/start",
+    "@tanstack/react-start",
+]
+
+[entry_points]
+dirs = ["/routes/"]
+files = ["__root.tsx", "__root.ts", "routeTree.gen.ts", "routeTree.gen.tsx"]
+file_suffixes = [".lazy.tsx", ".lazy.ts", ".route.tsx", ".route.ts"]
+
+[magic_exports]
+names = [
+    "Route",
+    "default",
+    "loader",
+    "beforeLoad",
+    "component",
+    "pendingComponent",
+    "errorComponent",
+    "notFoundComponent",
+    "validateSearch",
+    "loaderDeps",
+    "shouldReload",
+    "staleTime",
+    "gcTime",
+    "head",
+    "meta",
+    "links",
+    "scripts",
+]
+
+[tooling_deps]
+names = ["@tanstack/router-cli", "@tanstack/router-vite-plugin", "@tanstack/router-plugin"]

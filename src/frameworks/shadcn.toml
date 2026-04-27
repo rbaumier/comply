@@ -1,0 +1,5 @@
+[detection]
+files = ["components.json"]
+
+[entry_points]
+dirs = ["/components/ui/"]

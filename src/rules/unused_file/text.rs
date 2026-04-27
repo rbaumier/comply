@@ -6,6 +6,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::project::{ImportIndex, ProjectCtx};
 use crate::rules::backend::{CheckCtx, TextCheck};
+use crate::rules::path_utils::is_config_file;
 use std::path::Path;
 
 const RULE_ID: &str = "unused-file";
@@ -92,6 +93,15 @@ fn is_entry_point(path: &Path, project: &ProjectCtx) -> bool {
         return true;
     }
 
+    // Framework-declared entry-file suffixes (e.g. ".lazy.tsx", ".route.ts").
+    let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    if project
+        .framework_entry_file_suffixes()
+        .any(|suf| file_name.ends_with(suf))
+    {
+        return true;
+    }
+
     if let Some(root) = project.project_root.as_deref()
         && let Some(parent) = path.parent()
     {
@@ -117,20 +127,6 @@ fn is_declaration_file(path: &Path) -> bool {
     path.file_name()
         .and_then(|n| n.to_str())
         .is_some_and(|n| n.ends_with(".d.ts"))
-}
-
-fn is_config_file(path: &Path) -> bool {
-    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-    // `foo.config.ts`, `jest.config.js`
-    if stem.ends_with(".config") {
-        return true;
-    }
-    // `.eslintrc.js`, `.babelrc.ts` — dotfile ending in `rc`
-    if name.starts_with('.') && stem.ends_with("rc") {
-        return true;
-    }
-    false
 }
 
 fn is_test_file(path: &Path) -> bool {

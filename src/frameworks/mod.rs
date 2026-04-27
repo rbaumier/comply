@@ -6,6 +6,7 @@
 
 use crate::project::PackageJson;
 use serde::Deserialize;
+use std::path::Path;
 use std::sync::OnceLock;
 
 #[derive(Debug, Deserialize)]
@@ -25,6 +26,8 @@ pub struct FrameworkDef {
 pub struct Detection {
     #[serde(default)]
     pub dependencies: Vec<String>,
+    #[serde(default)]
+    pub files: Vec<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -35,6 +38,8 @@ pub struct EntryPoints {
     pub files: Vec<String>,
     #[serde(default)]
     pub root_files: Vec<String>,
+    #[serde(default)]
+    pub file_suffixes: Vec<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -57,6 +62,9 @@ const RAW: &[(&str, &str)] = &[
     ("jest", include_str!("jest.toml")),
     ("playwright", include_str!("playwright.toml")),
     ("elysia", include_str!("elysia.toml")),
+    ("tanstack-router", include_str!("tanstack-router.toml")),
+    ("shadcn", include_str!("shadcn.toml")),
+    ("react-email", include_str!("react-email.toml")),
 ];
 
 fn registry() -> &'static [FrameworkDef] {
@@ -77,14 +85,29 @@ pub fn get_framework(name: &str) -> Option<&'static FrameworkDef> {
     registry().iter().find(|def| def.name == name)
 }
 
-pub fn detect_frameworks(pkg: &PackageJson) -> Vec<&'static FrameworkDef> {
+pub fn detect_frameworks(
+    pkg: &PackageJson,
+    project_root: Option<&Path>,
+) -> Vec<&'static FrameworkDef> {
     registry()
         .iter()
         .filter(|def| {
-            def.detection
+            let by_dep = def
+                .detection
                 .dependencies
                 .iter()
-                .any(|d| pkg.has_dep_or_engine(d))
+                .any(|d| pkg.has_dep_or_engine(d));
+            if by_dep {
+                return true;
+            }
+            if let Some(root) = project_root {
+                return def
+                    .detection
+                    .files
+                    .iter()
+                    .any(|file| root.join(file).metadata().is_ok());
+            }
+            false
         })
         .collect()
 }
@@ -99,7 +122,11 @@ mod tests {
         assert!(r.len() >= 6, "expected at least 6 frameworks, got {}", r.len());
         for def in r {
             assert!(!def.name.is_empty());
-            assert!(!def.detection.dependencies.is_empty());
+            assert!(
+                !def.detection.dependencies.is_empty() || !def.detection.files.is_empty(),
+                "framework {} must declare at least one dependency or detection file",
+                def.name
+            );
         }
     }
 
@@ -107,7 +134,7 @@ mod tests {
     fn detects_nextjs() {
         let mut pkg = PackageJson::default();
         pkg.dependencies.insert("next".into(), "14.0.0".into());
-        let matched = detect_frameworks(&pkg);
+        let matched = detect_frameworks(&pkg, None);
         assert!(matched.iter().any(|f| f.name == "nextjs"));
     }
 
@@ -115,14 +142,14 @@ mod tests {
     fn detects_jest_in_dev_deps() {
         let mut pkg = PackageJson::default();
         pkg.dev_dependencies.insert("jest".into(), "29.0.0".into());
-        let matched = detect_frameworks(&pkg);
+        let matched = detect_frameworks(&pkg, None);
         assert!(matched.iter().any(|f| f.name == "jest"));
     }
 
     #[test]
     fn no_match_with_empty_pkg() {
         let pkg = PackageJson::default();
-        assert!(detect_frameworks(&pkg).is_empty());
+        assert!(detect_frameworks(&pkg, None).is_empty());
     }
 
     #[test]
@@ -132,7 +159,7 @@ mod tests {
         pkg.dev_dependencies.insert("jest".into(), "29.0.0".into());
         pkg.dev_dependencies
             .insert("@playwright/test".into(), "1.40.0".into());
-        let matched = detect_frameworks(&pkg);
+        let matched = detect_frameworks(&pkg, None);
         assert!(matched.len() >= 3);
     }
 }

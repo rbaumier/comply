@@ -20,6 +20,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::project::import_index::{ExportKind, ImportKind};
 use crate::rules::backend::{CheckCtx, TextCheck};
+use crate::rules::path_utils::is_config_file;
 use std::path::Path;
 
 const RULE_ID: &str = "dead-export";
@@ -32,12 +33,27 @@ impl TextCheck for Check {
         if ctx.file.path_segments.in_test_dir {
             return Vec::new();
         }
+        if is_config_file(ctx.path) {
+            return Vec::new();
+        }
         if is_entry_point(ctx.path, ctx.project.project_root.as_deref()) {
             return Vec::new();
         }
 
         let index = ctx.project.import_index();
         let canon = std::fs::canonicalize(ctx.path).unwrap_or_else(|_| ctx.path.to_path_buf());
+
+        // Files inside framework entry dirs are consumed by the framework itself
+        // (e.g. TanStack Router routes, shadcn ui components) — their exports
+        // are read by tooling, not by other application files in the index.
+        let canon_str = canon.to_string_lossy();
+        if ctx
+            .project
+            .framework_entry_dirs()
+            .any(|dir| canon_str.contains(dir))
+        {
+            return Vec::new();
+        }
         let exports = index.get_exports(&canon);
         if exports.is_empty() {
             return Vec::new();

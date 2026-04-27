@@ -14,6 +14,9 @@
 //!
 //! See TODO.md "Architecture" for the full rationale. // comply-ignore: todo-needs-issue-link — file reference, not marker.
 
+pub mod angular_no_topromise;
+pub mod angular_prefer_signals;
+pub mod angular_require_onpush;
 pub mod api_branded_id_types;
 pub mod api_no_internal_ids_in_response;
 pub mod api_no_nullable_variant_fields;
@@ -77,8 +80,10 @@ pub mod comment_paraphrases_code;
 pub mod compose_bind_localhost_ports;
 pub mod compose_cap_drop_all;
 pub mod compose_depends_on_condition;
+pub mod compose_healthcheck_required;
 pub mod compose_no_inline_secrets;
 pub mod compose_no_latest_tag;
+pub mod compose_no_network_host;
 pub mod compose_no_privileged;
 pub mod compose_require_resource_limits;
 pub mod css_calc_needs_spaces;
@@ -308,6 +313,7 @@ pub mod error_without_cause;
 pub mod exception_use_error_cause;
 pub mod explicit_units;
 pub mod file_ctx;
+pub mod path_utils;
 pub mod function_doc_banned_verbs;
 pub mod i18n_key_exists;
 pub mod i18n_key_requires_domain_prefix;
@@ -400,7 +406,6 @@ pub mod k8s_require_run_as_non_root;
 pub mod k8s_require_standard_labels;
 pub mod k8s_restart_policy_required;
 pub mod k8s_rolling_update_zero_unavailable;
-pub mod law_of_demeter_max_dots;
 pub mod meta;
 pub mod migration_needs_lock_timeout;
 pub mod migration_needs_rollback;
@@ -416,6 +421,9 @@ pub mod perf_prefers_reduced_motion;
 pub mod perf_route_level_code_split;
 pub mod pg_require_limit;
 pub mod post_message_origin;
+pub mod prisma_no_findmany_without_take;
+pub mod prisma_no_nested_include_depth;
+pub mod prisma_require_transaction_for_multi_write;
 pub mod react_no_barrel_import_known_libs;
 pub mod react_no_blocking_log_after_mutation;
 pub mod react_no_boolean_variant_props;
@@ -453,7 +461,10 @@ pub mod rust_no_println_in_async;
 pub mod rust_workspace_deps_centralized;
 pub mod rust_workspace_lints_shared;
 pub mod security_bcrypt_min_rounds;
+pub mod security_cookie_no_samesite_none;
+pub mod security_no_cors_reflect_origin;
 pub mod security_no_deserialize_untrusted;
+pub mod security_no_password_in_log;
 pub mod security_no_query_without_ownership;
 pub mod security_no_sri_missing;
 pub mod security_require_helmet;
@@ -769,12 +780,15 @@ pub mod rust_no_lossy_as_cast;
 pub mod rust_no_panic_macros;
 pub mod rust_no_println_in_library;
 pub mod rust_no_pub_use_glob;
+pub mod rust_no_sleep_in_test;
 pub mod rust_no_static_mut;
+pub mod rust_no_todo_macro;
 pub mod rust_no_unwrap;
 pub mod rust_no_unwrap_in_from_impl;
 pub mod rust_prefer_channel_over_arc_mutex_vec;
 pub mod rust_prefer_once_lock;
 pub mod rust_prefer_strum;
+pub mod rust_prefer_tracing_over_log;
 pub mod rust_prefer_unwrap_or_explicit;
 pub mod rust_ptr_arg;
 pub mod rust_pub_enum_without_non_exhaustive;
@@ -967,10 +981,6 @@ pub mod factory_di_shape;
 pub mod file_extension_in_import;
 pub mod filename_naming_convention;
 pub mod for_loop_increment_sign;
-pub mod fsd_no_cross_slice_dependency;
-pub mod fsd_no_global_store_imports;
-pub mod fsd_no_relative_imports;
-pub mod fsd_no_ui_in_business_logic;
 pub mod function_component_definition;
 pub mod function_inside_loop;
 pub mod function_return_type;
@@ -980,7 +990,10 @@ pub mod hono_cookie_no_secure;
 pub mod hono_cors_permissive;
 pub mod hono_csp_unsafe;
 pub mod hono_csrf_missing;
+pub mod hono_jwt_secret_hardcoded;
 pub mod hono_missing_secure_headers;
+pub mod hono_no_get_with_body;
+pub mod hono_no_hardcoded_cors_origin;
 pub mod hono_secure_headers_disabled;
 pub mod hook_use_state;
 pub mod html_no_abstract_roles;
@@ -1181,7 +1194,6 @@ pub mod valid_expect_in_promise;
 
 // eslint-plugin-import rules (native implementations).
 pub mod exports_last;
-pub mod file_name_differ_from_class;
 pub mod id_length;
 pub mod import_consistent_type_specifier_style;
 pub mod import_default;
@@ -1235,7 +1247,11 @@ pub mod error_message;
 pub mod escape_case;
 pub mod expiring_todo_comments;
 pub mod explicit_length_check;
+pub mod nestjs_controller_return_type;
+pub mod nestjs_no_entity_in_controller;
+pub mod nestjs_no_forwardref_abuse;
 pub mod new_for_builtins;
+pub mod next_no_redirect_in_try_catch;
 pub mod no_abusive_eslint_disable;
 pub mod no_accessor_recursion;
 pub mod no_anonymous_default_export;
@@ -1313,8 +1329,10 @@ pub mod node_no_path_concat;
 pub mod node_no_process_env;
 pub mod node_no_sync;
 pub mod node_no_top_level_await;
+pub mod node_no_unhandled_rejection;
 pub mod node_prefer_promises_dns;
 pub mod node_prefer_promises_fs;
+pub mod node_prefer_stream_pipeline;
 pub mod number_literal_case;
 pub mod numeric_separators_style;
 pub mod prefer_add_event_listener;
@@ -1514,7 +1532,6 @@ pub mod package_json_sorted_deps;
 pub mod package_json_unique_deps;
 pub mod playwright_missing_await;
 pub mod playwright_no_eval;
-pub mod proper_arrows_name;
 pub mod top_level_function;
 pub mod vitest_hoisted_apis_on_top;
 pub mod vitest_no_disabled_tests;
@@ -1813,6 +1830,9 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         // for the corresponding clippy lint name + setup.
         rust_no_unwrap::register(),
         rust_no_panic_macros::register(),
+        rust_no_todo_macro::register(),
+        rust_no_sleep_in_test::register(),
+        rust_prefer_tracing_over_log::register(),
         // rust_must_use_on_result removed: std::result::Result is already
         // `#[must_use]` and type aliases (`io::Result`, `anyhow::Result`)
         // inherit it. Explicitly annotating Result-returning pub fns is
@@ -2231,8 +2251,19 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         hono_cors_permissive::register(),
         hono_csp_unsafe::register(),
         hono_csrf_missing::register(),
+        hono_jwt_secret_hardcoded::register(),
         hono_missing_secure_headers::register(),
+        hono_no_get_with_body::register(),
+        hono_no_hardcoded_cors_origin::register(),
         hono_secure_headers_disabled::register(),
+        // Angular rules.
+        angular_no_topromise::register(),
+        angular_prefer_signals::register(),
+        angular_require_onpush::register(),
+        // Prisma rules.
+        prisma_no_findmany_without_take::register(),
+        prisma_no_nested_include_depth::register(),
+        prisma_require_transaction_for_multi_write::register(),
         html_no_abstract_roles::register(),
         html_no_aria_hidden_body::register(),
         html_no_duplicate_attrs::register(),
@@ -2258,10 +2289,6 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         error_message_is_remediation::register(),
         factory_di_shape::register(),
         filename_naming_convention::register(),
-        fsd_no_cross_slice_dependency::register(),
-        fsd_no_global_store_imports::register(),
-        fsd_no_relative_imports::register(),
-        fsd_no_ui_in_business_logic::register(),
         intermediate_variables::register(),
         justify_inaction::register(),
         no_inferred_any::register(),
@@ -2341,7 +2368,6 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         import_dynamic_import_chunkname::register(),
         import_consistent_type_specifier_style::register(),
         exports_last::register(),
-        file_name_differ_from_class::register(),
         // eslint-plugin-unicorn rules (native implementations).
         catch_error_name::register(),
         consistent_date_clone::register(),
@@ -2512,6 +2538,14 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         node_hashbang::register(),
         node_no_exports_assign::register(),
         node_no_top_level_await::register(),
+        node_no_unhandled_rejection::register(),
+        node_prefer_stream_pipeline::register(),
+        // NestJS rules (native implementations).
+        nestjs_controller_return_type::register(),
+        nestjs_no_entity_in_controller::register(),
+        nestjs_no_forwardref_abuse::register(),
+        // Next.js rules (native implementations).
+        next_no_redirect_in_try_catch::register(),
         // eslint-plugin-react rules (native implementations).
         react_no_unstable_nested_components::register(),
         react_no_constructed_context_values::register(),
@@ -2677,7 +2711,6 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         package_json_unique_deps::register(),
         no_index_file::register(),
         top_level_function::register(),
-        proper_arrows_name::register(),
         comment_prose_quality::register(),
         // architecture: hexagonal layer boundaries.
         layer_import_boundary::register(),
@@ -3051,8 +3084,10 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         compose_bind_localhost_ports::register(),
         compose_cap_drop_all::register(),
         compose_depends_on_condition::register(),
+        compose_healthcheck_required::register(),
         compose_no_inline_secrets::register(),
         compose_no_latest_tag::register(),
+        compose_no_network_host::register(),
         compose_no_privileged::register(),
         compose_require_resource_limits::register(),
         dockerfile_absolute_workdir::register(),
@@ -3194,7 +3229,6 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         k8s_dangling_service_monitor::register(),
         k8s_non_existent_service_account::register(),
         k8s_env_value_from_resolves::register(),
-        law_of_demeter_max_dots::register(),
         no_history_in_comments::register(),
         no_shallow_passthrough_method::register(),
         perf_font_face_display_swap::register(),
@@ -3242,7 +3276,10 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         rust_workspace_deps_centralized::register(),
         rust_workspace_lints_shared::register(),
         security_bcrypt_min_rounds::register(),
+        security_cookie_no_samesite_none::register(),
+        security_no_cors_reflect_origin::register(),
         security_no_deserialize_untrusted::register(),
+        security_no_password_in_log::register(),
         security_no_query_without_ownership::register(),
         security_no_sri_missing::register(),
         security_require_helmet::register(),

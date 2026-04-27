@@ -1,0 +1,8 @@
+[detection]
+dependencies = ["react-email", "@react-email/components", "@react-email/render", "resend"]
+
+[entry_points]
+dirs = ["/emails/", "/templates/email/", "/email-templates/"]
+
+[magic_exports]
+names = ["default", "PreviewProps"]
