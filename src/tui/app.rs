@@ -146,12 +146,12 @@ impl App {
         let mut haystacks: Vec<String> = Vec::with_capacity(diagnostics.len());
 
         for (idx, diag) in diagnostics.iter().enumerate() {
-            by_file.entry(diag.path.to_path_buf()).or_default().push(idx);
-            by_rule.entry(diag.rule_id.as_ref().to_string()).or_default().push(idx);
+            by_file.entry(diag.path.clone()).or_default().push(idx);
+            by_rule.entry(diag.rule_id.clone()).or_default().push(idx);
             let src_line = sources
-                .get(diag.path.as_ref() as &std::path::Path)
+                .get(&diag.path)
                 .and_then(|s| {
-                    let offs = line_offsets.get(diag.path.as_ref() as &std::path::Path)?;
+                    let offs = line_offsets.get(&diag.path)?;
                     get_line(s, offs, diag.line)
                 })
                 .unwrap_or("");
@@ -200,13 +200,23 @@ impl App {
         app
     }
 
-    pub fn source_line(&self, path: &std::path::Path, line: usize) -> Option<&str> {
-        let source = self.sources.get(path)?;
-        if source.is_empty() {
-            return None;
-        }
-        let offsets = self.line_offsets.get(path)?;
-        get_line(source, offsets, line)
+    pub fn source_lines(&self, path: &PathBuf, center: usize, context: usize) -> Vec<(usize, &str)> {
+        let source = match self.sources.get(path) {
+            Some(s) if !s.is_empty() => s,
+            _ => return Vec::new(),
+        };
+        let offsets = match self.line_offsets.get(path) {
+            Some(o) => o,
+            None => return Vec::new(),
+        };
+        let start = center.saturating_sub(context);
+        let end = (center + context).min(offsets.len());
+        (start..=end)
+            .filter_map(|ln| {
+                let line_1based = ln.max(1);
+                get_line(source, offsets, line_1based).map(|s| (line_1based, s))
+            })
+            .collect()
     }
 
     pub fn run<B: Backend>(&mut self, terminal: &mut Terminal<B>) -> Result<()> {
@@ -260,14 +270,14 @@ impl App {
 
             let mut errors = 0usize;
             let mut warnings = 0usize;
-            let mut files: HashSet<&std::path::Path> = HashSet::new();
+            let mut files: HashSet<&PathBuf> = HashSet::new();
             for &i in &kept {
                 let d = &self.diagnostics[i];
                 match d.severity {
                     Severity::Error => errors += 1,
                     Severity::Warning => warnings += 1,
                 }
-                files.insert(d.path.as_ref());
+                files.insert(&d.path);
             }
             summaries.insert(
                 key.clone(),
@@ -386,7 +396,7 @@ impl App {
         let diag = &self.diagnostics[diag_index];
         match self.view_mode {
             ViewMode::ByFile => Some(diag.path.display().to_string()),
-            ViewMode::ByRule => Some(diag.rule_id.as_ref().to_string()),
+            ViewMode::ByRule => Some(diag.rule_id.clone()),
         }
     }
 
