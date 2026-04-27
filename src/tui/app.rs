@@ -200,13 +200,23 @@ impl App {
         app
     }
 
-    pub fn source_line(&self, path: &PathBuf, line: usize) -> Option<&str> {
-        let source = self.sources.get(path)?;
-        if source.is_empty() {
-            return None;
-        }
-        let offsets = self.line_offsets.get(path)?;
-        get_line(source, offsets, line)
+    pub fn source_lines(&self, path: &PathBuf, center: usize, context: usize) -> Vec<(usize, &str)> {
+        let source = match self.sources.get(path) {
+            Some(s) if !s.is_empty() => s,
+            _ => return Vec::new(),
+        };
+        let offsets = match self.line_offsets.get(path) {
+            Some(o) => o,
+            None => return Vec::new(),
+        };
+        let start = center.saturating_sub(context);
+        let end = (center + context).min(offsets.len());
+        (start..=end)
+            .filter_map(|ln| {
+                let line_1based = ln.max(1);
+                get_line(source, offsets, line_1based).map(|s| (line_1based, s))
+            })
+            .collect()
     }
 
     pub fn run<B: Backend>(&mut self, terminal: &mut Terminal<B>) -> Result<()> {

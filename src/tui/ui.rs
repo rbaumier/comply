@@ -194,10 +194,18 @@ fn build_blocks<'a>(app: &'a App, width: u16) -> Vec<VisualBlock<'a>> {
                     Severity::Error => ("✖", Style::default().fg(Color::Red)),
                     Severity::Warning => ("⚠", Style::default().fg(Color::Yellow)),
                 };
-                let header = Line::from(vec![
+                let mut header_spans = vec![
                     Span::raw("  "),
                     Span::styled(icon, sev_style),
                     Span::raw(" "),
+                ];
+                if app.view_mode == ViewMode::ByRule {
+                    header_spans.push(Span::styled(
+                        format!("{}:", diag.path.display()),
+                        Style::default().fg(Color::Cyan),
+                    ));
+                }
+                header_spans.extend([
                     Span::styled(
                         format!("{}:{}", diag.line, diag.column),
                         Style::default().fg(Color::DarkGray),
@@ -210,34 +218,50 @@ fn build_blocks<'a>(app: &'a App, width: u16) -> Vec<VisualBlock<'a>> {
                         Style::default().fg(Color::DarkGray),
                     ),
                 ]);
+                let header = Line::from(header_spans);
 
                 let mut lines = vec![truncate_line(header, width)];
 
                 if *detail_expanded {
-                    let source_line = get_source_line(app, diag);
-                    match source_line {
-                        Some(src) => {
-                            lines.push(Line::from(vec![
-                                Span::raw("    "),
-                                Span::styled("│ ", Style::default().fg(Color::DarkGray)),
-                                Span::styled(src.to_string(), Style::default().fg(Color::Gray).add_modifier(Modifier::DIM)),
-                            ]));
-                            let (padding, carets) = build_caret_line(diag, src);
-                            lines.push(Line::from(vec![
-                                Span::raw("    "),
-                                Span::styled("│ ", Style::default().fg(Color::DarkGray)),
-                                Span::raw(padding),
-                                Span::styled(carets, sev_style),
-                            ]));
-                        }
-                        None => {
+                    let context_lines = app.source_lines(&diag.path, diag.line, 5);
+                    if context_lines.is_empty() {
+                        lines.push(Line::from(vec![
+                            Span::raw("    "),
+                            Span::styled(
+                                "<source unavailable>",
+                                Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM),
+                            ),
+                        ]));
+                    } else {
+                        let gutter_width = context_lines.last().map_or(1, |(ln, _)| digit_count(*ln));
+                        for &(ln, src) in &context_lines {
+                            let is_target = ln == diag.line;
+                            let line_style = if is_target {
+                                Style::default().fg(Color::White)
+                            } else {
+                                Style::default().fg(Color::Gray).add_modifier(Modifier::DIM)
+                            };
+                            let gutter_style = if is_target { sev_style } else { Style::default().fg(Color::DarkGray) };
+                            let marker = if is_target { "▶" } else { "│" };
                             lines.push(Line::from(vec![
                                 Span::raw("    "),
                                 Span::styled(
-                                    "<source unavailable>",
-                                    Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM),
+                                    format!("{:>w$} ", ln, w = gutter_width),
+                                    gutter_style,
                                 ),
+                                Span::styled(format!("{} ", marker), gutter_style),
+                                Span::styled(src.to_string(), line_style),
                             ]));
+                            if is_target {
+                                let (padding, carets) = build_caret_line(diag, src);
+                                lines.push(Line::from(vec![
+                                    Span::raw("    "),
+                                    Span::raw(" ".repeat(gutter_width + 1)),
+                                    Span::styled("  ", Style::default().fg(Color::DarkGray)),
+                                    Span::raw(padding),
+                                    Span::styled(carets, sev_style),
+                                ]));
+                            }
                         }
                     }
 
@@ -271,9 +295,6 @@ fn build_blocks<'a>(app: &'a App, width: u16) -> Vec<VisualBlock<'a>> {
     blocks
 }
 
-fn get_source_line<'a>(app: &'a App, diag: &Diagnostic) -> Option<&'a str> {
-    app.source_line(&diag.path, diag.line)
-}
 
 fn build_caret_line(diag: &Diagnostic, source_line: &str) -> (String, String) {
     let byte_col = diag.column.saturating_sub(1).min(source_line.len());
@@ -301,6 +322,14 @@ fn build_caret_line(diag: &Diagnostic, source_line: &str) -> (String, String) {
     let caret_width = UnicodeWidthStr::width(spanned).max(1);
     let carets = "^".repeat(caret_width);
     (padding, carets)
+}
+
+fn digit_count(n: usize) -> usize {
+    if n == 0 { return 1; }
+    let mut count = 0;
+    let mut v = n;
+    while v > 0 { count += 1; v /= 10; }
+    count
 }
 
 fn floor_char_boundary(s: &str, byte_idx: usize) -> usize {
