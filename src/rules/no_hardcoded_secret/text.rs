@@ -214,14 +214,17 @@ fn contains_gcp_service_account(line: &str) -> bool {
 /// Detect `CONST_NAME = "long-literal"` where CONST_NAME contains a secret-ish word.
 fn contains_keyed_literal(line: &str) -> bool {
     const KEYS: &[&str] = &["SECRET", "PASSWORD", "API_KEY", "APIKEY", "ACCESS_TOKEN"];
-    let upper = line.to_ascii_uppercase();
-    if !KEYS.iter().any(|k| upper.contains(k)) {
-        return false;
-    }
     // Require an `=` followed by a quoted string at least 16 chars long.
     let Some(eq_pos) = line.find('=') else {
         return false;
     };
+    // The sensitive keyword must appear in the LEFT side (the variable/key name),
+    // not in the value. This avoids FPs on `autoComplete="current-password"` or
+    // `to="/forgot-password"` where the keyword is in the assigned value.
+    let left = &line[..eq_pos].to_ascii_uppercase();
+    if !KEYS.iter().any(|k| left.contains(k)) {
+        return false;
+    }
     let after = line[eq_pos..].trim_start_matches('=').trim_start();
     let Some(quote) = after.chars().next() else {
         return false;
@@ -326,5 +329,20 @@ mod tests {
     fn flags_gcp_service_account() {
         assert_eq!(run(r#""type": "service_account""#).len(), 1);
         assert_eq!(run(r#""type":"service_account""#).len(), 1);
+    }
+
+    #[test]
+    fn allows_html_attribute_with_password_in_value() {
+        assert!(run(r#"autoComplete="current-password""#).is_empty());
+    }
+
+    #[test]
+    fn allows_route_path_with_password_in_value() {
+        assert!(run(r#"to="/forgot-password""#).is_empty());
+    }
+
+    #[test]
+    fn allows_i18n_key_with_key_in_namespace() {
+        assert!(run(r#"t("apiKeys.title")"#).is_empty());
     }
 }
