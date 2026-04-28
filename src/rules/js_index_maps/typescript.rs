@@ -11,7 +11,7 @@ const LOOP_KINDS: &[&str] = &[
 
 const ITERATOR_METHODS: &[&str] = &["forEach", "map", "flatMap", "reduce", "some", "every"];
 
-const LOOKUP_METHODS: &[&str] = &["find", "findIndex", "filter"];
+const LOOKUP_METHODS: &[&str] = &["find", "findIndex", "filter", "includes", "indexOf"];
 
 fn is_inside_loop(node: tree_sitter::Node, source: &[u8]) -> bool {
     let mut ancestor = node.parent();
@@ -70,7 +70,7 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
         column: node.start_position().column + 1,
         rule_id: super::META.id.into(),
         message: format!(
-            "`.{method}()` inside a loop is O(n*m) — build a `Map` for O(1) lookups."
+            "`.{method}()` inside a loop is O(n*m) — build a `Map` or `Set` for O(1) lookups."
         ),
         severity: Severity::Warning,
         span: None,

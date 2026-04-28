@@ -874,6 +874,22 @@ pub mod react_no_derived_use_state;
 pub mod react_no_effect_event_handler;
 pub mod react_no_giant_component;
 pub mod react_no_hydration_flicker;
+pub mod react_no_prevent_default;
+pub mod ui_no_side_tab_border;
+pub mod js_cache_repeated_storage;
+pub mod ui_no_global_css_variable_animation;
+pub mod html_no_script_without_defer;
+pub mod html_no_undeferred_third_party;
+pub mod next_no_client_side_redirect;
+pub mod next_no_css_link;
+pub mod next_no_font_link;
+pub mod next_image_missing_sizes;
+pub mod ui_no_disabled_zoom;
+pub mod ui_no_gray_on_colored_background;
+pub mod ui_no_large_animated_blur;
+pub mod ui_no_layout_property_animation;
+pub mod ui_no_permanent_will_change;
+pub mod ui_no_scale_from_zero;
 pub mod react_no_render_in_render;
 pub mod react_no_usememo_simple_expression;
 pub mod react_self_closing_comp;
@@ -3670,6 +3686,29 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         zod_no_parse_in_render::register(),
         zod_no_passthrough_on_api_input::register(),
         zod_no_safeparse_without_check::register(),
+        // react-doctor rules — batch 2.
+        react_no_fetch_in_effect::register(),
+        react_prefer_use_reducer::register(),
+        react_no_memo_default_value::register(),
+        react_no_prevent_default::register(),
+        tanstack_query_stable_client::register(),
+        tanstack_query_no_rest_destructuring::register(),
+        tanstack_query_no_query_in_effect::register(),
+        ui_no_layout_property_animation::register(),
+        ui_no_permanent_will_change::register(),
+        ui_no_large_animated_blur::register(),
+        ui_no_scale_from_zero::register(),
+        ui_no_gray_on_colored_background::register(),
+        ui_no_disabled_zoom::register(),
+        ui_no_side_tab_border::register(),
+        ui_no_global_css_variable_animation::register(),
+        js_cache_repeated_storage::register(),
+        next_no_client_side_redirect::register(),
+        next_image_missing_sizes::register(),
+        next_no_font_link::register(),
+        next_no_css_link::register(),
+        html_no_script_without_defer::register(),
+        html_no_undeferred_third_party::register(),
     ];
     rules.extend(delegated::register_all());
     rules.extend(delegated::register_tsgolint());
