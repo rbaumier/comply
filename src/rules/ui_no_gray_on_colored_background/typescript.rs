@@ -99,7 +99,7 @@ fn is_in_style_jsx_attribute(node: tree_sitter::Node, source: &[u8]) -> bool {
     if jsx_attr.kind() != "jsx_attribute" {
         return false;
     }
-    crate::rules::jsx::jsx_attribute_name(jsx_attr, source) == Some("style".into())
+    crate::rules::jsx::jsx_attribute_name(jsx_attr, source) == Some("style")
 }
 
 crate::ast_check! { on ["pair"] => |node, source, ctx, diagnostics|
