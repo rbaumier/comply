@@ -145,9 +145,7 @@ pub struct Tsconfig {
 
 impl Tsconfig {
     pub fn parse(raw: &str) -> Option<Self> {
-        // tsconfig.json tolerates `//` comments — strip before serde_json.
-        let stripped = strip_line_comments(raw);
-        let json: Value = serde_json::from_str(&stripped).ok()?;
+        let json: Value = parse_jsonc(raw)?;
         let co = json.get("compilerOptions");
         let paths = co
             .and_then(|x| x.get("paths"))
@@ -216,8 +214,7 @@ fn load_tsconfig_file(path: &Path, depth: u8) -> Option<Tsconfig> {
         return None;
     }
     let raw = std::fs::read_to_string(path).ok()?;
-    let stripped = strip_line_comments(&raw);
-    let json: Value = serde_json::from_str(&stripped).ok()?;
+    let json: Value = parse_jsonc(&raw)?;
 
     let mut merged = parse_tsconfig_value(&json);
 
@@ -246,7 +243,7 @@ fn resolve_extends(referrer: &Path, extends: &str) -> PathBuf {
 
 /// Parse a single tsconfig JSON value into a `Tsconfig`. Splitting this out
 /// from `Tsconfig::parse` lets `load_tsconfig_file` reuse the field-extraction
-/// logic without re-running `strip_line_comments`/`from_str`.
+/// logic without re-running `parse_jsonc`.
 fn parse_tsconfig_value(json: &Value) -> Tsconfig {
     let co = json.get("compilerOptions");
     let paths = co
@@ -711,37 +708,9 @@ fn detect_framework(pkg: &PackageJson) -> Framework {
 /// Strip `//`-to-end-of-line comments, leaving `//` inside string literals
 /// alone. tsconfig.json is jsonc-ish; serde_json rejects line comments so we
 /// normalise first.
-fn strip_line_comments(source: &str) -> String {
-    let mut out = String::with_capacity(source.len());
-    for line in source.lines() {
-        let mut in_string = false;
-        let mut escape = false;
-        let mut comment_start: Option<usize> = None;
-        let bytes = line.as_bytes();
-        let mut idx = 0;
-        while idx < bytes.len() {
-            let ch = bytes[idx] as char;
-            if escape {
-                escape = false;
-            } else if ch == '\\' && in_string {
-                escape = true;
-            } else if ch == '"' {
-                in_string = !in_string;
-            } else if !in_string
-                && ch == '/'
-                && idx + 1 < bytes.len()
-                && bytes[idx + 1] as char == '/'
-            {
-                comment_start = Some(idx);
-                break;
-            }
-            idx += 1;
-        }
-        let keep = comment_start.map_or(line, |start| &line[..start]);
-        out.push_str(keep);
-        out.push('\n');
-    }
-    out
+fn parse_jsonc(raw: &str) -> Option<Value> {
+    let stripped = json_comments::StripComments::new(raw.as_bytes());
+    serde_json::from_reader(stripped).ok()
 }
 
 /// Process-wide default `ProjectCtx` used by `CheckCtx::for_test`. Production

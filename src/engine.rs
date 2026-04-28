@@ -128,9 +128,19 @@ impl WorkerState {
 ///   - rewrite each diagnostic's severity if the user set one
 #[must_use = "diagnostics from custom rules must be reported"]
 pub fn lint_files(files: &[&SourceFile], config: &Config) -> Result<Vec<Diagnostic>> {
-    let rule_defs = rules::all_rule_defs();
-
     let project = Arc::new(ProjectCtx::load(files, config));
+    lint_files_with_project(files, config, &project)
+}
+
+/// Same as `lint_files` but with a pre-built `ProjectCtx` so the import
+/// index covers all languages, not just the slice being linted.
+#[must_use = "diagnostics from custom rules must be reported"]
+pub fn lint_files_with_project(
+    files: &[&SourceFile],
+    config: &Config,
+    project: &Arc<ProjectCtx>,
+) -> Result<Vec<Diagnostic>> {
+    let rule_defs = rules::all_rule_defs();
 
     // Pre-compute dispatch tables once per language instead of per-file.
     let languages: Vec<Language> = files.iter().map(|f| f.language).collect::<std::collections::HashSet<_>>().into_iter().collect();

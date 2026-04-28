@@ -287,20 +287,25 @@ fn collect_all_diagnostics(
     let by_lang = partition_by_language(discovered);
     let mut diagnostics = Vec::with_capacity(discovered.len());
 
+    // Build a single ProjectCtx from ALL files so the ImportIndex covers
+    // every language — Vue imports from TS (and vice-versa) are resolved.
+    let all_refs: Vec<&SourceFile> = discovered.iter().collect();
+    let project = std::sync::Arc::new(crate::project::ProjectCtx::load(&all_refs, config));
+
     if !by_lang.ts.is_empty() {
-        diagnostics.extend(lint_typescript(&by_lang.ts, config, timings)?);
+        diagnostics.extend(lint_typescript(&by_lang.ts, config, &project, timings)?);
     }
     if !by_lang.rs.is_empty() {
         diagnostics.extend(lint_rust(&by_lang.rs, config, timings)?);
     }
     if !by_lang.vue.is_empty() {
         let t = Instant::now();
-        let vue_diags = engine::lint_files(&by_lang.vue, config)?;
+        let vue_diags = engine::lint_files_with_project(&by_lang.vue, config, &project)?;
         timings.engine_vue = t.elapsed();
         diagnostics.extend(vue_diags);
     }
     if !by_lang.json.is_empty() {
-        diagnostics.extend(engine::lint_files(&by_lang.json, config)?);
+        diagnostics.extend(engine::lint_files_with_project(&by_lang.json, config, &project)?);
     }
 
     if discovered.len() >= 2 {
@@ -459,6 +464,7 @@ fn partition_by_language(discovered: &[SourceFile]) -> FilesByLanguage<'_> {
 fn lint_typescript(
     ts_files: &[&SourceFile],
     config: &Config,
+    project: &std::sync::Arc<crate::project::ProjectCtx>,
     timings: &mut Timings,
 ) -> Result<Vec<Diagnostic>> {
     let oxlint_avail = oxlint::is_available();
@@ -472,6 +478,7 @@ fn lint_typescript(
 
     type PhaseOut = (Result<Vec<Diagnostic>>, Duration);
 
+    let project2 = std::sync::Arc::clone(project);
     let oxlint_phase = || -> PhaseOut {
         if !oxlint_avail {
             return (Ok(Vec::new()), Duration::ZERO);
@@ -481,7 +488,7 @@ fn lint_typescript(
     };
     let engine_phase = || -> PhaseOut {
         let t = Instant::now();
-        (engine::lint_files(ts_files, config), t.elapsed())
+        (engine::lint_files_with_project(ts_files, config, &project2), t.elapsed())
     };
 
     let (oxlint_out, engine_out) = rayon::join(oxlint_phase, engine_phase);

@@ -37,7 +37,6 @@
 //!   is the symbol name in the resolved file.
 //!
 //! Limitations (deliberate):
-//! - No tsconfig `paths` resolution yet.
 //! - No node_modules resolution — bare specifiers are not cross-file indexed.
 //! - `export * from './m'` records a re-export marker but does NOT transitively
 //!   flatten symbols; consumers that need transitive export sets must handle
@@ -223,7 +222,9 @@ impl ImportIndex {
         // built from `mod foo;` declarations. Build it once here.
         let rust_graph = RustModuleGraph::build(&per_file, &known_paths);
 
-        // Load module resolver (tsconfig paths + node_modules) for TS resolution
+        // Load module resolver (tsconfig paths + node_modules) for TS resolution.
+        // Discovers all tsconfigs reachable from the indexed files so each
+        // sub-project gets its own path aliases.
         let path_resolver = OxcPathResolver::discover(&known_paths);
 
         // First pass: stash exports, and partially-populate imports with their
@@ -616,7 +617,7 @@ fn is_builtin_module(name: &str) -> bool {
 fn is_indexable(lang: Language) -> bool {
     matches!(
         lang,
-        Language::TypeScript | Language::Tsx | Language::JavaScript | Language::Rust
+        Language::TypeScript | Language::Tsx | Language::JavaScript | Language::Rust | Language::Vue
     )
 }
 
@@ -745,6 +746,9 @@ fn extract_for(parser: &mut Parser, file: &SourceFile) -> Option<(PathBuf, FileE
             },
         ));
     }
+    if matches!(file.language, Language::Vue) {
+        return extract_vue(parser, &source, &file.path);
+    }
     let grammar: tree_sitter::Language = match file.language {
         Language::Tsx => tree_sitter_typescript::LANGUAGE_TSX.into(),
         Language::TypeScript | Language::JavaScript => {
@@ -779,6 +783,80 @@ fn extract_for(parser: &mut Parser, file: &SourceFile) -> Option<(PathBuf, FileE
     // different spellings of the same file (relative vs absolute) would miss
     // each other. Fall back to the given path if canonicalize fails.
     let canon = std::fs::canonicalize(&file.path).unwrap_or_else(|_| file.path.clone());
+    Some((canon, FileExtract { exports, imports, calls }))
+}
+
+fn extract_vue(
+    parser: &mut Parser,
+    source: &str,
+    path: &Path,
+) -> Option<(PathBuf, FileExtract)> {
+    let vue_lang = tree_sitter_vue_updated::language();
+    parser.set_language(&vue_lang).ok()?;
+    let vue_tree = parser.parse(source.as_bytes(), None)?;
+    let blocks = crate::rules::vue_sfc::extract_scripts(&vue_tree, source);
+
+    let ts_grammar: tree_sitter::Language = tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into();
+    let mut exports = Vec::new();
+    let mut imports = Vec::new();
+    let mut calls = Vec::new();
+    let mut has_setup = false;
+
+    for block in &blocks {
+        if block.is_setup {
+            has_setup = true;
+        }
+        parser.set_language(&ts_grammar).ok()?;
+        let Some(tree) = parser.parse(block.text.as_bytes(), None) else {
+            continue;
+        };
+        let row_offset = block.start_row;
+        let source_bytes = block.text.as_bytes();
+        let imp_start = imports.len();
+        let exp_start = exports.len();
+        let call_start = calls.len();
+        walk_tree(&tree, |node| match node.kind() {
+            "import_statement" => extract_import(node, source_bytes, &mut imports),
+            "export_statement" => extract_export(node, source_bytes, &mut exports),
+            "new_expression" => {
+                extract_call(node, source_bytes, CallKind::New, &mut calls);
+            }
+            "call_expression" => {
+                if node
+                    .child_by_field_name("function")
+                    .is_some_and(|c| c.kind() == "import")
+                {
+                    extract_dynamic_import(node, source_bytes, &mut imports);
+                } else {
+                    extract_require(node, source_bytes, &mut imports);
+                    extract_call(node, source_bytes, CallKind::Call, &mut calls);
+                }
+            }
+            _ => {}
+        });
+        for imp in &mut imports[imp_start..] {
+            imp.line += row_offset;
+        }
+        for exp in &mut exports[exp_start..] {
+            exp.line += row_offset;
+        }
+        for call in &mut calls[call_start..] {
+            call.line += row_offset;
+        }
+    }
+
+    // Every Vue SFC implicitly has a default export (the component).
+    if has_setup || !exports.iter().any(|e| e.kind == ExportKind::Default) {
+        exports.push(ExportedSymbol {
+            name: "default".to_string(),
+            kind: ExportKind::Default,
+            line: 1,
+            reexport_source: None,
+            params: Vec::new(),
+        });
+    }
+
+    let canon = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     Some((canon, FileExtract { exports, imports, calls }))
 }
 
@@ -1215,15 +1293,17 @@ fn resolve_relative(
         return None;
     }
     let base_dir = importer.parent()?;
-    let raw = base_dir.join(specifier);
+    probe_path(&base_dir.join(specifier), known)
+}
 
-    const EXTS: &[&str] = &["ts", "tsx", "js", "jsx", "mts", "mjs", "cts", "cjs"];
+/// Probe an absolute path (without or with extension) against the known set,
+/// trying bare, each TS/JS extension, and `index.*` variants.
+fn probe_path(raw: &Path, known: &std::collections::HashSet<PathBuf>) -> Option<PathBuf> {
+    const EXTS: &[&str] = &["ts", "tsx", "js", "jsx", "mts", "mjs", "cts", "cjs", "vue"];
 
-    // Already has an extension? Try it as-is (after canonicalize), then fall
-    // through to implicit-extension probing if that fails.
     if let Some(ext) = raw.extension().and_then(|e| e.to_str())
         && EXTS.contains(&ext)
-        && let Ok(c) = std::fs::canonicalize(&raw)
+        && let Ok(c) = std::fs::canonicalize(raw)
         && known.contains(&c)
     {
         return Some(c);
@@ -1237,7 +1317,6 @@ fn resolve_relative(
             return Some(c);
         }
     }
-    // `./foo/` or `./foo` → `./foo/index.{ts,…}`
     for ext in EXTS {
         let candidate = raw.join(format!("index.{ext}"));
         if let Ok(c) = std::fs::canonicalize(&candidate)
@@ -1266,32 +1345,88 @@ fn resolve_specifier(
     resolver.resolve(importer, specifier, known)
 }
 
-/// Wrapper around [`oxc_resolver::Resolver`] configured for TS/JS module
-/// resolution. Discovers a `tsconfig.json` near the indexed files and uses
-/// it for `paths` / `baseUrl`. Without a tsconfig the resolver still works
-/// and handles bare specifiers via `node_modules`.
+/// Resolver for TS/JS module specifiers. Discovers every `tsconfig.json`
+/// reachable from the indexed files, reads its `paths` mappings, and
+/// resolves path aliases (`@/*`, `~/*`, …) in-process. Non-alias bare
+/// specifiers fall through to `oxc_resolver` for `node_modules` lookup.
 #[derive(Debug, Default)]
 struct OxcPathResolver {
-    resolver: Option<Resolver>,
+    /// (tsconfig_dir, path_aliases, oxc_resolver) sorted longest-path-first.
+    resolvers: Vec<TsconfigResolver>,
+    fallback: Option<Resolver>,
+}
+
+#[derive(Debug)]
+struct TsconfigResolver {
+    dir: PathBuf,
+    aliases: Vec<(String, Vec<PathBuf>)>,
+    oxc: Resolver,
 }
 
 impl OxcPathResolver {
     fn discover(known_paths: &std::collections::HashSet<PathBuf>) -> Self {
-        let Some(first_path) = known_paths.iter().next() else {
-            return Self::default();
-        };
+        let mut seen_dirs: HashSet<PathBuf> = HashSet::new();
+        let mut tsconfig_dirs: HashMap<PathBuf, PathBuf> = HashMap::new();
 
-        let mut tsconfig_path: Option<PathBuf> = None;
-        let mut dir = first_path.parent();
-        while let Some(d) = dir {
-            let candidate = d.join("tsconfig.json");
-            if candidate.exists() {
-                tsconfig_path = Some(candidate);
-                break;
+        for path in known_paths {
+            let Some(mut dir) = path.parent() else { continue };
+            loop {
+                if !seen_dirs.insert(dir.to_path_buf()) {
+                    break;
+                }
+                let candidate = dir.join("tsconfig.json");
+                if candidate.exists() {
+                    tsconfig_dirs.entry(dir.to_path_buf()).or_insert(candidate);
+                }
+                let Some(parent) = dir.parent() else { break };
+                dir = parent;
             }
-            dir = d.parent();
         }
 
+        let mut resolvers: Vec<TsconfigResolver> = tsconfig_dirs
+            .into_iter()
+            .map(|(dir, tsconfig_path)| {
+                let aliases = Self::read_path_aliases(&dir, &tsconfig_path);
+                let oxc = Self::make_oxc(Some(tsconfig_path));
+                TsconfigResolver { dir, aliases, oxc }
+            })
+            .collect();
+
+        resolvers.sort_by(|a, b| b.dir.as_os_str().len().cmp(&a.dir.as_os_str().len()));
+
+        let fallback = Some(Self::make_oxc(None));
+
+        Self { resolvers, fallback }
+    }
+
+    fn read_path_aliases(tsconfig_dir: &Path, tsconfig_path: &Path) -> Vec<(String, Vec<PathBuf>)> {
+        let raw = match std::fs::read_to_string(tsconfig_path) {
+            Ok(s) => s,
+            Err(_) => return Vec::new(),
+        };
+        let tsconfig = match crate::project::Tsconfig::parse(&raw) {
+            Some(t) => t,
+            None => return Vec::new(),
+        };
+        let base = tsconfig.base_url
+            .as_ref()
+            .map(|b| tsconfig_dir.join(b))
+            .unwrap_or_else(|| tsconfig_dir.to_path_buf());
+
+        tsconfig
+            .paths
+            .into_iter()
+            .map(|(pattern, targets)| {
+                let resolved_targets: Vec<PathBuf> = targets
+                    .into_iter()
+                    .map(|t| base.join(t))
+                    .collect();
+                (pattern, resolved_targets)
+            })
+            .collect()
+    }
+
+    fn make_oxc(tsconfig_path: Option<PathBuf>) -> Resolver {
         let options = ResolveOptions {
             extensions: vec![
                 ".ts".into(),
@@ -1302,6 +1437,7 @@ impl OxcPathResolver {
                 ".mjs".into(),
                 ".cts".into(),
                 ".cjs".into(),
+                ".vue".into(),
             ],
             condition_names: vec![
                 "import".into(),
@@ -1317,10 +1453,7 @@ impl OxcPathResolver {
             }),
             ..Default::default()
         };
-
-        Self {
-            resolver: Some(Resolver::new(options)),
-        }
+        Resolver::new(options)
     }
 
     fn resolve(
@@ -1329,11 +1462,50 @@ impl OxcPathResolver {
         specifier: &str,
         known: &std::collections::HashSet<PathBuf>,
     ) -> Option<PathBuf> {
-        let resolver = self.resolver.as_ref()?;
+        let entry = self.resolvers.iter().find(|e| importer.starts_with(&e.dir));
+
+        // Try tsconfig path aliases first.
+        if let Some(e) = entry {
+            if let Some(resolved) = Self::resolve_alias(specifier, &e.aliases, known) {
+                return Some(resolved);
+            }
+        }
+
+        // Fall through to oxc_resolver for node_modules / other resolution.
+        let oxc = entry.map(|e| &e.oxc).or(self.fallback.as_ref())?;
         let importer_dir = importer.parent()?;
-        let resolved = resolver.resolve(importer_dir, specifier).ok()?;
+        let resolved = oxc.resolve(importer_dir, specifier).ok()?;
         let canonical = std::fs::canonicalize(resolved.path()).ok()?;
         known.contains(&canonical).then_some(canonical)
+    }
+
+    fn resolve_alias(
+        specifier: &str,
+        aliases: &[(String, Vec<PathBuf>)],
+        known: &std::collections::HashSet<PathBuf>,
+    ) -> Option<PathBuf> {
+        for (pattern, targets) in aliases {
+            let matched_suffix = if let Some(prefix) = pattern.strip_suffix('*') {
+                specifier.strip_prefix(prefix)
+            } else if pattern == specifier {
+                Some("")
+            } else {
+                None
+            };
+            let Some(suffix) = matched_suffix else { continue };
+            for target in targets {
+                let target_str = target.to_string_lossy();
+                let expanded = if let Some(base) = target_str.strip_suffix('*') {
+                    PathBuf::from(format!("{base}{suffix}"))
+                } else {
+                    target.clone()
+                };
+                        if let Some(resolved) = probe_path(&expanded, known) {
+                    return Some(resolved);
+                }
+            }
+        }
+        None
     }
 }
 
@@ -2077,18 +2249,61 @@ mod tests {
     }
 
     #[test]
-    fn vue_files_are_still_skipped() {
-        // Vue extraction isn't implemented yet; a .vue file in the input set
-        // should not crash the builder and should yield no exports.
+    fn vue_sfc_imports_and_exports_indexed() {
         let dir = TempDir::new().unwrap();
-        let vue_path = dir.path().join("c.vue");
-        fs::write(&vue_path, "<template><div/></template>").unwrap();
+        let vue_path = dir.path().join("App.vue");
+        fs::write(
+            &vue_path,
+            "<script setup>\nimport { ref } from 'vue';\nconst x = ref(0);\n</script>\n<template><div/></template>",
+        )
+        .unwrap();
         let source_file = SourceFile {
             path: vue_path.clone(),
             language: Language::Vue,
         };
         let index = ImportIndex::build(&[&source_file]);
-        assert!(index.get_exports(&vue_path).is_empty());
+        let canon = std::fs::canonicalize(&vue_path).unwrap();
+        let exports = index.get_exports(&canon);
+        assert!(
+            exports.iter().any(|e| e.name == "default"),
+            "Vue SFC should have implicit default export, got: {exports:?}"
+        );
+        let imports = index.get_imports(&canon);
+        assert!(
+            imports.iter().any(|i| i.specifier == "vue"),
+            "Vue SFC should index imports from <script setup>, got: {imports:?}"
+        );
+    }
+
+    #[test]
+    fn vue_sfc_ts_file_can_import_vue() {
+        let dir = TempDir::new().unwrap();
+        let vue_path = dir.path().join("Comp.vue");
+        fs::write(
+            &vue_path,
+            "<script setup>\nconst x = 1;\n</script>\n<template><div/></template>",
+        )
+        .unwrap();
+        let ts_path = dir.path().join("main.ts");
+        fs::write(&ts_path, "import Comp from './Comp.vue';").unwrap();
+        let vue_file = SourceFile {
+            path: vue_path.clone(),
+            language: Language::Vue,
+        };
+        let ts_file = SourceFile {
+            path: ts_path.clone(),
+            language: Language::TypeScript,
+        };
+        let index = ImportIndex::build(&[&vue_file, &ts_file]);
+        let canon_vue = std::fs::canonicalize(&vue_path).unwrap();
+        let canon_ts = std::fs::canonicalize(&ts_path).unwrap();
+        let imports = index.get_imports(&canon_ts);
+        assert!(
+            imports
+                .iter()
+                .any(|i| i.source_path.as_deref() == Some(canon_vue.as_path())),
+            "TS file should resolve import of .vue file, got: {imports:?}"
+        );
     }
 
     // ----------------------------- Rust tests -----------------------------
