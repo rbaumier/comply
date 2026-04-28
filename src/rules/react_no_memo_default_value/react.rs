@@ -24,8 +24,7 @@ fn is_memo_callee(callee: tree_sitter::Node, source: &[u8]) -> bool {
 /// if any, found inside the destructuring patterns of `fn_node`'s parameters.
 fn find_unstable_default<'a>(
     fn_node: tree_sitter::Node<'a>,
-    source: &'a [u8],
-) -> Option<(tree_sitter::Node<'a>, &'a str)> {
+) -> Option<(tree_sitter::Node<'a>, &'static str)> {
     let params = fn_node.child_by_field_name("parameters")?;
     let mut stack: Vec<tree_sitter::Node> = vec![params];
     while let Some(current) = stack.pop() {
@@ -67,7 +66,7 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
         return;
     };
 
-    let Some((default_node, kind)) = find_unstable_default(component, source) else {
+    let Some((default_node, kind)) = find_unstable_default(component) else {
         return;
     };
 
