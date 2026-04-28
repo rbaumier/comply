@@ -205,10 +205,6 @@ impl Tsconfig {
     pub fn load(root: &Path) -> Option<Self> {
         load_tsconfig_file(&root.join("tsconfig.json"), 0)
     }
-
-    pub fn load_file(path: &Path) -> Option<Self> {
-        load_tsconfig_file(path, 0)
-    }
 }
 
 /// Read a tsconfig.json at `path`, follow its `extends` chain, and return the

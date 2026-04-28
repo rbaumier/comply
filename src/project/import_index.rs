@@ -1407,7 +1407,15 @@ impl OxcPathResolver {
     }
 
     fn read_path_aliases(tsconfig_dir: &Path, tsconfig_path: &Path) -> Vec<(String, Vec<PathBuf>)> {
-        let tsconfig = match crate::project::Tsconfig::load_file(tsconfig_path) {
+        let raw = match std::fs::read_to_string(tsconfig_path) {
+            Ok(s) => s,
+            Err(_) => return Vec::new(),
+        };
+        // parse (not load_file) intentionally: extends-inherited paths
+        // would be resolved relative to the child dir, not the parent's.
+        // Each tsconfig in the tree gets its own resolver entry, so
+        // parent-defined aliases are handled by the parent's entry.
+        let tsconfig = match crate::project::Tsconfig::parse(&raw) {
             Some(t) => t,
             None => return Vec::new(),
         };
