@@ -860,7 +860,13 @@ pub mod react_no_this_in_sfc;
 pub mod react_no_typos;
 pub mod react_no_unescaped_entities;
 pub mod react_no_unstable_nested_components;
+pub mod js_cache_repeated_storage;
 pub mod js_index_maps;
+pub mod js_no_flatmap_filter;
+pub mod js_no_full_lodash_import;
+pub mod js_no_math_spread_array;
+pub mod js_no_moment;
+pub mod react_use_lazy_motion;
 pub mod ui_no_dark_mode_glow;
 pub mod ui_no_gradient_text;
 pub mod ui_no_inline_bounce_easing;
@@ -872,11 +878,11 @@ pub mod ui_no_wide_letter_spacing;
 pub mod ui_no_z_index_9999;
 pub mod react_no_derived_use_state;
 pub mod react_no_effect_event_handler;
+pub mod react_no_fetch_in_effect;
 pub mod react_no_giant_component;
 pub mod react_no_hydration_flicker;
 pub mod react_no_prevent_default;
 pub mod ui_no_side_tab_border;
-pub mod js_cache_repeated_storage;
 pub mod ui_no_global_css_variable_animation;
 pub mod html_no_script_without_defer;
 pub mod html_no_undeferred_third_party;
@@ -890,6 +896,11 @@ pub mod ui_no_large_animated_blur;
 pub mod ui_no_layout_property_animation;
 pub mod ui_no_permanent_will_change;
 pub mod ui_no_scale_from_zero;
+pub mod react_no_memo_default_value;
+pub mod react_prefer_use_reducer;
+pub mod tanstack_query_no_query_in_effect;
+pub mod tanstack_query_no_rest_destructuring;
+pub mod tanstack_query_stable_client;
 pub mod react_no_render_in_render;
 pub mod react_no_usememo_simple_expression;
 pub mod react_self_closing_comp;
@@ -3687,6 +3698,11 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         zod_no_passthrough_on_api_input::register(),
         zod_no_safeparse_without_check::register(),
         // react-doctor rules — batch 2.
+        js_no_full_lodash_import::register(),
+        js_no_moment::register(),
+        js_no_flatmap_filter::register(),
+        js_no_math_spread_array::register(),
+        react_use_lazy_motion::register(),
         react_no_fetch_in_effect::register(),
         react_prefer_use_reducer::register(),
         react_no_memo_default_value::register(),

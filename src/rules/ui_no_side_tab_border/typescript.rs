@@ -47,6 +47,17 @@ crate::ast_check! { on ["pair"] => |node, source, ctx, diagnostics|
         return;
     }
 
+    // borderLeftWidth: 0 / '0' / '0px' explicitly removes the border.
+    if key_name.ends_with("Width") {
+        if let Some(val) = node.child_by_field_name("value") {
+            let text = val.utf8_text(source).ok().unwrap_or("");
+            let trimmed = text.trim_matches(|c| c == '\'' || c == '"');
+            if trimmed == "0" || trimmed == "0px" {
+                return;
+            }
+        }
+    }
+
     let Some(object) = node.parent() else { return };
     if !object_has_bottom_border(object, source) {
         return;
@@ -107,6 +118,16 @@ mod tests {
     #[test]
     fn allows_border_bottom_alone() {
         assert!(run(r#"<div style={{ borderBottom: '2px solid blue' }} />"#).is_empty());
+    }
+
+    #[test]
+    fn allows_zero_width_side_border() {
+        assert!(run(r#"<div style={{ borderLeftWidth: 0, borderBottom: '2px solid blue' }} />"#).is_empty());
+    }
+
+    #[test]
+    fn allows_zero_px_width_side_border() {
+        assert!(run(r#"<div style={{ borderRightWidth: '0px', borderBottom: '2px solid blue' }} />"#).is_empty());
     }
 
     #[test]
