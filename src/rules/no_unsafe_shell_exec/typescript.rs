@@ -36,7 +36,8 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
         return;
     }
     if let Some(prefix) = name.rsplit('.').nth(1) {
-        if SAFE_RECEIVERS.iter().any(|r| prefix == *r || prefix.ends_with(r)) {
+        let prefix_lower = prefix.to_ascii_lowercase();
+        if SAFE_RECEIVERS.iter().any(|r| prefix_lower == *r || prefix_lower.ends_with(r)) {
             return;
         }
     }

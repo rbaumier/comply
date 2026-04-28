@@ -14,7 +14,8 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
             if !DANGEROUS_FUNCTIONS.contains(&prop_text) { return; }
             if let Some(obj) = func.child_by_field_name("object") {
                 let obj_text = obj.utf8_text(source).unwrap_or("");
-                if SAFE_RECEIVERS.iter().any(|r| obj_text == *r || obj_text.ends_with(r)) {
+                let obj_lower = obj_text.to_ascii_lowercase();
+                if SAFE_RECEIVERS.iter().any(|r| obj_lower == *r || obj_lower.ends_with(r)) {
                     return;
                 }
             }
@@ -110,5 +111,10 @@ mod tests {
     #[test]
     fn allows_re_exec() {
         assert!(run("re.exec(input)").is_empty());
+    }
+
+    #[test]
+    fn allows_uppercase_pattern_exec() {
+        assert!(run("LINK_PATTERN.exec(content)").is_empty());
     }
 }
