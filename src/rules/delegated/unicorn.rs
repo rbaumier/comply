@@ -27,7 +27,7 @@ pub fn register_all() -> Vec<RuleDef> {
 
 // Entry-builder helpers used by `register_all` above.
 
-/// Same shape as the old `entry()` but also binds the rule to a clippy lint on Rust.
+/// Binds a rule to both an oxlint key and a clippy lint.
 fn entry_with_clippy(
     id: &'static str,
     oxlint_key: &'static str,

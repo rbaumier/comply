@@ -69,8 +69,7 @@ fn has_sensitive_identifier(node: tree_sitter::Node, source: &[u8]) -> bool {
             return false;
         }
         if let Some(next) = node.next_sibling() {
-            let Ok(next_text) = next.utf8_text(source) else { return false };
-            if next_text == "." {
+            if next.utf8_text(source).is_ok_and(|t| t == ".") {
                 return false;
             }
         }

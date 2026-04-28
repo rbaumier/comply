@@ -233,6 +233,11 @@ fn dispatch_with_lang(
 ) -> Vec<Diagnostic> {
     let path = &file.path;
 
+    let file_ctx = FileCtx::build(path, source, file.language, project);
+    if file_ctx.is_generated {
+        return Vec::new();
+    }
+
     let needs_ast = ld.applicable.iter().any(|(meta, b)| {
         matches!(b, Backend::TreeSitter(_)) && config.is_rule_enabled(meta.id, path)
     });
@@ -241,11 +246,6 @@ fn dispatch_with_lang(
     } else {
         None
     };
-
-    let file_ctx = FileCtx::build(path, source, file.language, project);
-    if file_ctx.is_generated {
-        return Vec::new();
-    }
     let path_arc: std::sync::Arc<std::path::Path> = std::sync::Arc::from(path.as_path());
     let ctx = CheckCtx {
         path,

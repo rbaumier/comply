@@ -1,8 +1,7 @@
 //! no-duplicated-branches Rust backend.
 //!
-//! Flag branches with identical bodies in:
-//! - an `if / else if / else` chain (outermost `if_expression` only), and
-//! - a `match_expression` (across all arms).
+//! Flag branches with identical bodies in `if / else if / else` chains
+//! (outermost `if_expression` only).
 //!
 //! ## `if let` chains (pattern-binding mode)
 //!
@@ -153,56 +152,6 @@ fn collect_if_branches(
     }
 }
 
-fn check_match_arms(
-    node: tree_sitter::Node,
-    source: &[u8],
-    ctx: &crate::rules::backend::CheckCtx,
-    diagnostics: &mut Vec<Diagnostic>,
-) {
-    // `match_expression.body` is a `match_block` — `match_arm`s are its
-    // direct children, not children of `match_expression`.
-    let Some(match_block) = node.child_by_field_name("body") else {
-        return;
-    };
-    let mut arm_bodies: Vec<(usize, String)> = Vec::new();
-    let mut cursor = match_block.walk();
-    for child in match_block.named_children(&mut cursor) {
-        if child.kind() == "match_arm"
-            && let Some(body) = child.child_by_field_name("value")
-        {
-            let line = body.start_position().row + 1;
-            if let Ok(text) = body.utf8_text(source) {
-                let normalized = text.trim().to_string();
-                if !normalized.is_empty() {
-                    arm_bodies.push((line, normalized));
-                }
-            }
-        }
-    }
-
-    if arm_bodies.len() < 2 {
-        return;
-    }
-
-    let mut reported: std::collections::HashSet<usize> = std::collections::HashSet::new();
-    for j in 1..arm_bodies.len() {
-        for i in 0..j {
-            if arm_bodies[i].1 == arm_bodies[j].1 && reported.insert(arm_bodies[j].0) {
-                diagnostics.push(Diagnostic {
-                    path: std::sync::Arc::clone(&ctx.path_arc),
-                    line: arm_bodies[j].0,
-                    column: 1,
-                    rule_id: "no-duplicated-branches".into(),
-                    message: "This match arm has the same body as another arm \u{2014} merge patterns or remove the duplicate.".into(),
-                    severity: Severity::Warning,
-                    span: None,
-                });
-                break;
-            }
-        }
-    }
-}
-
 fn body_text(node: &tree_sitter::Node, source: &[u8]) -> String {
     let mut parts = Vec::new();
     for i in 0..node.named_child_count() {
@@ -314,7 +263,7 @@ mod tests {
     }
 
     #[test]
-    fn allows_duplicate_match_arms() {
+    fn does_not_check_match_arms() {
         let src = r#"fn f(x: u8) -> u8 {
     match x {
         0 => foo(),
