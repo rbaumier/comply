@@ -84,14 +84,20 @@ const DEV_PREFIXES: &[&str] = &[
 /// local URL. Used by every backend so the heuristic stays in one
 /// place.
 pub(super) fn is_clear_text_url(content: &str) -> Option<&'static str> {
-    // Strip surrounding quote characters that the AST node text
-    // includes — both `"…"` / `'…'` / `` `…` `` for TS and `"…"` /
-    // `r#"…"#` for Rust. Cheap heuristic: trim the well-known
-    // wrappers from both ends.
     let trimmed = trim_string_quotes(content);
     for &prefix in CLEAR_TEXT_PREFIXES {
         if trimmed.starts_with(prefix) && trimmed.len() > prefix.len() {
             if DEV_PREFIXES.iter().any(|d| trimmed.starts_with(d)) {
+                return None;
+            }
+            let host = &trimmed[prefix.len()..];
+            let host_end = host.find(|c: char| c == '/' || c == ':' || c == '?' || c == '#')
+                .unwrap_or(host.len());
+            let hostname = &host[..host_end];
+            if hostname.len() <= 1 {
+                return None;
+            }
+            if DUMMY_HOSTS.iter().any(|h| hostname == *h) {
                 return None;
             }
             return Some(prefix);
@@ -99,6 +105,8 @@ pub(super) fn is_clear_text_url(content: &str) -> Option<&'static str> {
     }
     None
 }
+
+const DUMMY_HOSTS: &[&str] = &["example.com", "example.org", "example.net", "test.local"];
 
 fn trim_string_quotes(s: &str) -> &str {
     // TS strings: leading `"`, `'`, or backtick.
@@ -129,7 +137,7 @@ mod helper_tests {
 
     #[test]
     fn flags_real_http_url() {
-        assert_eq!(is_clear_text_url("\"http://example.com\""), Some("http://"));
+        assert_eq!(is_clear_text_url("\"http://api.acme.io\""), Some("http://"));
     }
 
     #[test]
@@ -151,7 +159,7 @@ mod helper_tests {
     #[test]
     fn flags_ftp_url() {
         assert_eq!(
-            is_clear_text_url("\"ftp://files.example.com\""),
+            is_clear_text_url("\"ftp://files.acme.io\""),
             Some("ftp://")
         );
     }
@@ -164,8 +172,23 @@ mod helper_tests {
     #[test]
     fn handles_rust_raw_string() {
         assert_eq!(
-            is_clear_text_url("r#\"http://example.com\"#"),
+            is_clear_text_url("r#\"http://real-api.io\"#"),
             Some("http://")
         );
+    }
+
+    #[test]
+    fn does_not_flag_single_char_dummy_host() {
+        assert!(is_clear_text_url("\"http://x\"").is_none());
+    }
+
+    #[test]
+    fn does_not_flag_example_com() {
+        assert!(is_clear_text_url("\"http://example.com\"").is_none());
+    }
+
+    #[test]
+    fn does_not_flag_example_org() {
+        assert!(is_clear_text_url("\"http://example.org/path\"").is_none());
     }
 }

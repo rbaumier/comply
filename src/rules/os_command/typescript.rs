@@ -1,6 +1,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
 const DANGEROUS_FUNCTIONS: &[&str] = &["exec", "execSync", "spawn", "spawnSync"];
+const SAFE_RECEIVERS: &[&str] = &["Regex", "RegExp", "regex", "re", "pattern", "matcher"];
 
 crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     let Some(func) = node.child_by_field_name("function") else { return; };
@@ -8,9 +9,16 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     let func_name = match func.kind() {
         "identifier" => func.utf8_text(source).unwrap_or(""),
         "member_expression" => {
-            if let Some(prop) = func.child_by_field_name("property") {
-                prop.utf8_text(source).unwrap_or("")
-            } else { return; }
+            let Some(prop) = func.child_by_field_name("property") else { return; };
+            let prop_text = prop.utf8_text(source).unwrap_or("");
+            if !DANGEROUS_FUNCTIONS.contains(&prop_text) { return; }
+            if let Some(obj) = func.child_by_field_name("object") {
+                let obj_text = obj.utf8_text(source).unwrap_or("");
+                if SAFE_RECEIVERS.iter().any(|r| obj_text == *r || obj_text.ends_with(r)) {
+                    return;
+                }
+            }
+            prop_text
         }
         _ => return,
     };
@@ -87,5 +95,20 @@ mod tests {
     #[test]
     fn allows_exec_file() {
         assert!(run("execFile('rm', ['-rf', path])").is_empty());
+    }
+
+    #[test]
+    fn allows_regexp_exec() {
+        assert!(run("pattern.exec(content)").is_empty());
+    }
+
+    #[test]
+    fn allows_regex_exec() {
+        assert!(run("regex.exec(line)").is_empty());
+    }
+
+    #[test]
+    fn allows_re_exec() {
+        assert!(run("re.exec(input)").is_empty());
     }
 }

@@ -19,6 +19,10 @@ crate::ast_check! { on ["binary_expression"] => |node, source, ctx, diagnostics|
     let Some(left) = node.child_by_field_name("left") else { return };
     let Some(right) = node.child_by_field_name("right") else { return };
 
+    if is_literal_node(left) || is_literal_node(right) {
+        return;
+    }
+
     let left_name = operand_name(left, source);
     let right_name = operand_name(right, source);
     let left_hit = left_name.is_some_and(is_sensitive_identifier);
@@ -63,6 +67,13 @@ crate::ast_check! { on ["binary_expression"] => |node, source, ctx, diagnostics|
         severity: Severity::Error,
         span: None,
     });
+}
+
+fn is_literal_node(node: tree_sitter::Node) -> bool {
+    matches!(
+        node.kind(),
+        "null" | "undefined" | "true" | "false" | "number" | "string"
+    )
 }
 
 fn operand_name<'a>(node: tree_sitter::Node<'a>, source: &'a [u8]) -> Option<&'a str> {
@@ -162,5 +173,25 @@ mod tests {
     #[test]
     fn allows_no_comparison() {
         assert!(run_on("const password = getPassword();").is_empty());
+    }
+
+    #[test]
+    fn allows_null_check() {
+        assert!(run_on("if (token === null) {}").is_empty());
+    }
+
+    #[test]
+    fn allows_undefined_check() {
+        assert!(run_on("if (password !== undefined) {}").is_empty());
+    }
+
+    #[test]
+    fn allows_empty_string_check() {
+        assert!(run_on(r#"if (secret === "") {}"#).is_empty());
+    }
+
+    #[test]
+    fn allows_boolean_check() {
+        assert!(run_on("if (token === false) {}").is_empty());
     }
 }

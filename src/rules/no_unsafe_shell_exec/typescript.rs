@@ -9,6 +9,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
 const UNSAFE_FNS: &[&str] = &["exec", "execSync", "spawn", "spawnSync"];
+const SAFE_RECEIVERS: &[&str] = &["Regex", "RegExp", "regex", "re", "pattern", "matcher"];
 
 /// Unsafe if the argument isn't a plain string literal. Template strings
 /// with substitutions (`${x}`) are unsafe; template strings without
@@ -33,6 +34,11 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     let last = name.rsplit('.').next().unwrap_or(name);
     if !UNSAFE_FNS.contains(&last) {
         return;
+    }
+    if let Some(prefix) = name.rsplit('.').nth(1) {
+        if SAFE_RECEIVERS.iter().any(|r| prefix == *r || prefix.ends_with(r)) {
+            return;
+        }
     }
     let Some(args) = node.child_by_field_name("arguments") else { return };
     let Some(first) = args.named_child(0) else { return };
@@ -92,5 +98,15 @@ mod tests {
     #[test]
     fn allows_unrelated_call() {
         assert!(run_on("runSomething(cmd);").is_empty());
+    }
+
+    #[test]
+    fn allows_regexp_exec() {
+        assert!(run_on("pattern.exec(content);").is_empty());
+    }
+
+    #[test]
+    fn allows_regex_exec() {
+        assert!(run_on("regex.exec(line);").is_empty());
     }
 }

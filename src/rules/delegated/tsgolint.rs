@@ -6,7 +6,7 @@
 use crate::diagnostic::Severity;
 use crate::rules::backend::Backend;
 use crate::rules::meta::RuleMeta;
-use crate::rules::{Language, RuleDef, TS_FAMILY};
+use crate::rules::{Language, RuleDef};
 
 pub fn register_all() -> Vec<RuleDef> {
     vec![
@@ -587,7 +587,7 @@ fn entry(
     // This is intentional — rule definitions live for the entire process.
     let oxlint_key: &'static str = Box::leak(format!("typescript/{rule_name}").into_boxed_str());
 
-    let backends: Vec<(Language, Backend)> = TS_FAMILY
+    let backends: Vec<(Language, Backend)> = [Language::TypeScript, Language::Tsx]
         .iter()
         .map(|&lang| (lang, Backend::Tsgolint { rule: oxlint_key }))
         .collect();

@@ -29,12 +29,8 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
         return;
     }
 
-    // Check all arguments for sensitive words
     let Some(args) = node.child_by_field_name("arguments") else { return };
-    let Ok(args_text) = args.utf8_text(source) else { return };
-    let lower = args_text.to_ascii_lowercase();
-
-    if !SENSITIVE_WORDS.iter().any(|w| lower.contains(w)) {
+    if !has_sensitive_identifier(&args, source) {
         return;
     }
 
@@ -48,6 +44,35 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
         severity: Severity::Error,
         span: None,
     });
+}
+
+fn has_sensitive_identifier(args: &tree_sitter::Node, source: &[u8]) -> bool {
+    let mut cursor = args.walk();
+    for child in args.children(&mut cursor) {
+        match child.kind() {
+            "string" => continue,
+            "template_string" => {
+                let mut tc = child.walk();
+                for part in child.children(&mut tc) {
+                    if part.kind() == "template_substitution" {
+                        let Ok(text) = part.utf8_text(source) else { continue };
+                        let lower = text.to_ascii_lowercase();
+                        if SENSITIVE_WORDS.iter().any(|w| lower.contains(w)) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            _ => {
+                let Ok(text) = child.utf8_text(source) else { continue };
+                let lower = text.to_ascii_lowercase();
+                if SENSITIVE_WORDS.iter().any(|w| lower.contains(w)) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
 }
 
 fn is_logging_callee(node: &tree_sitter::Node, source: &[u8]) -> bool {
@@ -92,7 +117,7 @@ mod tests {
 
     #[test]
     fn flags_logger_with_api_key() {
-        assert_eq!(run_on("logger.info('apiKey:', key);").len(), 1);
+        assert_eq!(run_on("logger.info('label:', apiKey);").len(), 1);
     }
 
     #[test]
@@ -103,5 +128,20 @@ mod tests {
     #[test]
     fn allows_non_logging_with_sensitive_word() {
         assert!(run_on("const password = getPassword();").is_empty());
+    }
+
+    #[test]
+    fn allows_string_literal_mentioning_token() {
+        assert!(run_on(r#"console.log("Token refresh succeeded");"#).is_empty());
+    }
+
+    #[test]
+    fn allows_descriptive_message_about_tokens() {
+        assert!(run_on(r#"logger.info("Start cleaning up expired tokens...");"#).is_empty());
+    }
+
+    #[test]
+    fn flags_identifier_token_variable() {
+        assert_eq!(run_on("console.log(userToken);").len(), 1);
     }
 }

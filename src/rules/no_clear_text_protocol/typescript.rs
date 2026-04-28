@@ -19,6 +19,9 @@ impl AstCheck for Check {
         _state: Option<&mut dyn std::any::Any>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
+        if ctx.file.path_segments.in_test_dir {
+            return;
+        }
         let source_bytes = ctx.source.as_bytes();
         let Ok(text) = node.utf8_text(source_bytes) else {
             return;
@@ -51,23 +54,23 @@ mod tests {
 
     #[test]
     fn flags_http_url() {
-        assert_eq!(run(r#"const url = "http://example.com";"#).len(), 1);
+        assert_eq!(run(r#"const url = "http://api.acme.io";"#).len(), 1);
     }
 
     #[test]
     fn flags_ftp_url() {
-        assert_eq!(run(r#"const url = "ftp://files.example.com";"#).len(), 1);
+        assert_eq!(run(r#"const url = "ftp://files.acme.io";"#).len(), 1);
     }
 
     #[test]
     fn flags_template_literal_with_host() {
-        let src = r"const u = `http://api.example.com/${path}`;";
+        let src = r"const u = `http://api.acme-prod.io/${path}`;";
         assert_eq!(run(src).len(), 1);
     }
 
     #[test]
     fn does_not_flag_https() {
-        assert!(run(r#"const url = "https://example.com";"#).is_empty());
+        assert!(run(r#"const url = "https://acme.io";"#).is_empty());
     }
 
     #[test]
@@ -97,7 +100,7 @@ mod tests {
     #[test]
     fn does_not_flag_url_in_comment() {
         // Comments are never visited by the AstCheck walk.
-        let src = "// see http://example.com for details\nconst x = 1;";
+        let src = "// see http://api.acme.io for details\nconst x = 1;";
         assert!(run(src).is_empty());
     }
 }

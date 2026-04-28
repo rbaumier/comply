@@ -1,0 +1,27 @@
+//! vue-button-has-type
+
+mod text;
+
+use crate::diagnostic::Severity;
+use crate::files::Language;
+use crate::rules::backend::Backend;
+use crate::rules::meta::RuleMeta;
+use crate::rules::RuleDef;
+
+pub const META: RuleMeta = RuleMeta {
+    id: "vue-button-has-type",
+    description: "`<button>` without an explicit `type` attribute defaults to `submit`, which may cause unexpected form submissions.",
+    remediation: "Add an explicit `type` attribute (`button`, `submit`, or `reset`) to every `<button>` element.",
+    severity: Severity::Warning,
+    doc_url: None,
+    categories: &["vue", "html"],
+};
+
+pub fn register() -> RuleDef {
+    RuleDef {
+        meta: META,
+        backends: vec![
+            (Language::Vue, Backend::Text(Box::new(text::Check))),
+        ],
+    }
+}

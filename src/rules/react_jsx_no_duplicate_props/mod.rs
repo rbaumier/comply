@@ -1,6 +1,5 @@
 //! react-jsx-no-duplicate-props — duplicate props in JSX.
 
-mod vue;
 mod react;
 
 use crate::diagnostic::Severity;
@@ -25,7 +24,6 @@ pub fn register() -> RuleDef {
         meta: META,
         backends: vec![
             (Language::Tsx, Backend::TreeSitter(Box::new(react::Check))),
-            (Language::Vue, Backend::Text(Box::new(vue::Check))),
         ],
     }
 }

@@ -2,6 +2,7 @@
 
 mod rust;
 mod text;
+mod vue;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
@@ -12,7 +13,7 @@ use crate::rules::RuleDef;
 pub const META: RuleMeta = RuleMeta {
     id: "filename-naming-convention",
     description: "Filename does not match the expected naming convention for its language.",
-    remediation: "Use kebab-case for JS/TS/Vue filenames (e.g. `user-profile.ts`) and snake_case for Rust filenames (e.g. `user_profile.rs`).",
+    remediation: "Use kebab-case for JS/TS filenames (e.g. `user-profile.ts`), PascalCase for Vue SFC filenames (e.g. `UserProfile.vue`), and snake_case for Rust filenames (e.g. `user_profile.rs`).",
     severity: Severity::Warning,
     doc_url: None,
     categories: &["code-quality"],
@@ -26,7 +27,7 @@ pub fn register() -> RuleDef {
             (Language::JavaScript, Backend::Text(Box::new(text::Check))),
             (Language::Tsx, Backend::Text(Box::new(text::Check))),
             (Language::Rust, Backend::Text(Box::new(rust::Check))),
-            (Language::Vue, Backend::Text(Box::new(text::Check))),
+            (Language::Vue, Backend::Text(Box::new(vue::Check))),
         ],
     }
 }

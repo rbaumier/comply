@@ -13,14 +13,14 @@ const SCENARIOS: &[Scenario] = &[
     Scenario {
         name: "real http URL — flagged",
         expected_flagged: true,
-        ts: r#"const u = "http://example.com";"#,
-        rust: r#"fn f() { let u = "http://example.com"; }"#,
+        ts: r#"const u = "http://api.acme.io";"#,
+        rust: r#"fn f() { let u = "http://api.acme.io"; }"#,
     },
     Scenario {
         name: "real ftp URL — flagged",
         expected_flagged: true,
-        ts: r#"const u = "ftp://files.example.com";"#,
-        rust: r#"fn f() { let u = "ftp://files.example.com"; }"#,
+        ts: r#"const u = "ftp://files.acme.io";"#,
+        rust: r#"fn f() { let u = "ftp://files.acme.io"; }"#,
     },
     Scenario {
         name: "https URL — not flagged",

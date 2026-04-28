@@ -19,6 +19,9 @@ impl AstCheck for Check {
         _state: Option<&mut dyn std::any::Any>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
+        if ctx.file.path_segments.in_test_dir {
+            return;
+        }
         let source_bytes = ctx.source.as_bytes();
         let Ok(text) = node.utf8_text(source_bytes) else {
             return;
@@ -51,13 +54,13 @@ mod tests {
 
     #[test]
     fn flags_http_url_in_string_literal() {
-        let src = r#"fn f() { let u = "http://example.com"; }"#;
+        let src = r#"fn f() { let u = "http://api.acme.io"; }"#;
         assert_eq!(run(src).len(), 1);
     }
 
     #[test]
     fn flags_http_url_in_raw_string_literal() {
-        let src = r###"fn f() { let u = r#"http://api.example.com/path"#; }"###;
+        let src = r###"fn f() { let u = r#"http://api.acme-prod.io/path"#; }"###;
         assert_eq!(run(src).len(), 1);
     }
 
@@ -86,7 +89,7 @@ mod tests {
 
     #[test]
     fn does_not_flag_url_in_comment() {
-        let src = "// see http://example.com\nfn f() {}";
+        let src = "// see http://api.acme.io\nfn f() {}";
         assert!(run(src).is_empty());
     }
 }

@@ -88,8 +88,18 @@ fn mentions_sensitive(args: &str) -> bool {
     false
 }
 
+fn is_ci_setup_script(path: &std::path::Path) -> bool {
+    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+    let lower = stem.to_ascii_lowercase();
+    lower.starts_with("ci-") || lower.starts_with("ci_")
+        || lower.ends_with("-setup") || lower.ends_with("_setup")
+}
+
 impl TextCheck for Check {
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
+        if is_ci_setup_script(ctx.path) {
+            return Vec::new();
+        }
         let mut diagnostics = Vec::new();
         for (idx, raw_line) in ctx.source.lines().enumerate() {
             // Strip line comments.
@@ -163,5 +173,12 @@ mod tests {
     fn ignores_non_log_call() {
         let src = "const password = 'x';";
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_ci_setup_script() {
+        let src = "console.log(`export HOOK0_SECRET=\"${token}\"`);";
+        let diags = Check.check(&CheckCtx::for_test(Path::new("ci-setup.mjs"), src));
+        assert!(diags.is_empty());
     }
 }

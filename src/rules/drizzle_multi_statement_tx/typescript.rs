@@ -23,6 +23,8 @@ fn is_in_transaction_callback(node: tree_sitter::Node<'_>, src: &[u8]) -> bool {
     false
 }
 
+const DB_RECEIVERS: &[&str] = &["db", "tx", "drizzle", "orm", "conn", "connection", "client"];
+
 fn is_db_mutation_call<'a>(node: &tree_sitter::Node<'a>, src: &'a [u8]) -> bool {
     if node.kind() != "call_expression" {
         return false;
@@ -37,7 +39,14 @@ fn is_db_mutation_call<'a>(node: &tree_sitter::Node<'a>, src: &'a [u8]) -> bool 
         return false;
     };
     let name = prop.utf8_text(src).unwrap_or("");
-    matches!(name, "insert" | "update" | "delete")
+    if !matches!(name, "insert" | "update" | "delete") {
+        return false;
+    }
+    let Some(obj) = func.child_by_field_name("object") else {
+        return false;
+    };
+    let obj_text = obj.utf8_text(src).unwrap_or("");
+    DB_RECEIVERS.iter().any(|r| obj_text == *r)
 }
 
 /// Walk down a chained call expression to find any inner `db.insert/update/delete`
@@ -232,5 +241,17 @@ mod tests {
                    await db.insert(users).values({ id: 1 });\n  \
                    if (c) { await db.update(posts).set({ x: 1 }); }\n}";
         assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_hmac_update() {
+        let src = "function sign() {\n  hmac.update(Buffer.from(ts));\n  hmac.update(sep);\n}";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_cache_update() {
+        let src = "function f() {\n  cache.update(k, v);\n  cache.delete(old);\n}";
+        assert!(run(src).is_empty());
     }
 }

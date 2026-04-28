@@ -22,6 +22,9 @@ impl TextCheck for Check {
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
         for (idx, line) in ctx.source.lines().enumerate() {
+            if is_doc_or_comment_line(line) {
+                continue;
+            }
             if let Some(kind) = scan_line(line) {
                 diagnostics.push(Diagnostic {
                     path: std::sync::Arc::clone(&ctx.path_arc),
@@ -186,24 +189,39 @@ fn contains_twilio_key(line: &str) -> bool {
     false
 }
 
+const WELL_KNOWN_TEST_CREDENTIALS: &[&str] = &[
+    "postgres:postgres@localhost",
+    "root:root@localhost",
+    "admin:admin@localhost",
+    "user:password@localhost",
+    "sa:sa@localhost",
+];
+
 fn contains_password_in_url(line: &str) -> bool {
-    // Match ://...:.+@ — a password embedded in a URL.
     let Some(proto_end) = line.find("://") else {
         return false;
     };
     let after = &line[proto_end + 3..];
-    // Find a colon that's part of user:password@host.
     if let Some(colon) = after.find(':') {
         let rest = &after[colon + 1..];
         if let Some(at) = rest.find('@') {
-            // Password must be non-empty (at > 0) and the part before colon
-            // (the username) must not contain '/' (which would mean a path).
             if at > 0 && !after[..colon].contains('/') {
+                let credentials_and_host = &after[..colon + 1 + at + 1 + rest[at + 1..].find(|c: char| c == ':' || c == '/').unwrap_or(rest.len() - at - 1)];
+                if WELL_KNOWN_TEST_CREDENTIALS.iter().any(|c| credentials_and_host.contains(c)) {
+                    return false;
+                }
                 return true;
             }
         }
     }
     false
+}
+
+fn is_doc_or_comment_line(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    trimmed.starts_with("///") || trimmed.starts_with("//!")
+        || trimmed.starts_with("* ") || trimmed.starts_with("*\t")
+        || trimmed.starts_with("/**")
 }
 
 fn contains_gcp_service_account(line: &str) -> bool {
@@ -344,5 +362,23 @@ mod tests {
     #[test]
     fn allows_i18n_key_with_key_in_namespace() {
         assert!(run(r#"t("apiKeys.title")"#).is_empty());
+    }
+
+    #[test]
+    fn allows_doc_comment_with_url_example() {
+        assert!(run(r#"/// `smtps://user:password@provider.com:465`"#).is_empty());
+    }
+
+    #[test]
+    fn allows_postgres_test_default() {
+        assert!(run(r#"const db = "postgres://postgres:postgres@localhost:5432/test";"#).is_empty());
+    }
+
+    #[test]
+    fn still_flags_real_password_in_url() {
+        assert_eq!(
+            run(r#"const db = "postgres://admin:s3cretProd@db.example.com:5432/prod";"#).len(),
+            1
+        );
     }
 }

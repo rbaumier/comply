@@ -597,6 +597,22 @@ pub mod vue_use_template_ref;
 pub mod vue_v_memo_requires_v_for;
 pub mod vue_watch_immediate_over_onmounted;
 pub mod vue_withdefaults_factory;
+pub mod vue_button_has_type;
+pub mod vue_checked_requires_onchange;
+pub mod vue_component_pascal_case;
+pub mod vue_iframe_missing_sandbox;
+pub mod vue_no_adjacent_inline_elements;
+pub mod vue_no_array_index_key;
+pub mod vue_no_comment_textnodes;
+pub mod vue_no_duplicate_props;
+pub mod vue_no_invalid_html_attribute;
+pub mod vue_no_namespace;
+pub mod vue_no_script_url;
+pub mod vue_no_target_blank;
+pub mod vue_no_unescaped_entities;
+pub mod vue_props_no_spread_multi;
+pub mod vue_self_closing_comp;
+pub mod vue_void_elements_no_children;
 pub mod yaml_k8s_helpers;
 pub mod zod_no_coerce_on_financial;
 pub mod zod_no_manual_types;
@@ -778,7 +794,6 @@ pub mod rust_no_large_tuple_return;
 pub mod rust_no_linkedlist;
 pub mod rust_no_lossy_as_cast;
 pub mod rust_no_panic_macros;
-pub mod rust_no_println_in_library;
 pub mod rust_no_pub_use_glob;
 pub mod rust_no_sleep_in_test;
 pub mod rust_no_static_mut;
@@ -1083,7 +1098,6 @@ pub mod no_nested_incdec;
 pub mod no_post_message_star;
 pub mod no_primitive_wrappers;
 pub mod no_promise_reject;
-pub mod no_pseudo_random;
 pub mod no_raw_db_entity_in_handler;
 pub mod no_redundant_await;
 pub mod no_redundant_clsx;
@@ -1934,7 +1948,6 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         // collapsed down to hypothetical new types named Result that
         // don't alias std — we've never seen one in the wild.
         rust_undocumented_unsafe::register(),
-        rust_no_println_in_library::register(),
         rust_await_holding_lock::register(),
         rust_large_enum_variant::register(),
         rust_ptr_arg::register(),
@@ -2194,7 +2207,6 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         no_nested_functions::register(),
         no_post_message_star::register(),
         no_primitive_wrappers::register(),
-        no_pseudo_random::register(),
         no_redundant_clsx::register(),
         no_redundant_jump::register(),
         no_redundant_optional::register(),
@@ -3502,6 +3514,22 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         vue_v_memo_requires_v_for::register(),
         vue_watch_immediate_over_onmounted::register(),
         vue_withdefaults_factory::register(),
+        vue_button_has_type::register(),
+        vue_checked_requires_onchange::register(),
+        vue_component_pascal_case::register(),
+        vue_iframe_missing_sandbox::register(),
+        vue_no_adjacent_inline_elements::register(),
+        vue_no_array_index_key::register(),
+        vue_no_comment_textnodes::register(),
+        vue_no_duplicate_props::register(),
+        vue_no_invalid_html_attribute::register(),
+        vue_no_namespace::register(),
+        vue_no_script_url::register(),
+        vue_no_target_blank::register(),
+        vue_no_unescaped_entities::register(),
+        vue_props_no_spread_multi::register(),
+        vue_self_closing_comp::register(),
+        vue_void_elements_no_children::register(),
         zod_no_coerce_on_financial::register(),
         zod_no_manual_types::register(),
         zod_no_schema_in_hot_path::register(),

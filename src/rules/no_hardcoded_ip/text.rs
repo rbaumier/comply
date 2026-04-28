@@ -50,7 +50,26 @@ fn find_ipv4(s: &str, start: usize) -> Option<(usize, String)> {
     }
 }
 
-const ALLOWED: &[&str] = &["127.0.0.1", "0.0.0.0"];
+const ALLOWED: &[&str] = &["127.0.0.1", "0.0.0.0", "255.255.255.255"];
+
+fn is_cidr_notation(line: &str, ip_end: usize) -> bool {
+    let bytes = line.as_bytes();
+    ip_end < bytes.len() && bytes[ip_end] == b'/'
+        && bytes.get(ip_end + 1).is_some_and(|b| b.is_ascii_digit())
+}
+
+fn is_svg_path_data(line: &str) -> bool {
+    let trimmed = line.trim();
+    trimmed.starts_with("d=\"") || trimmed.starts_with("d='")
+        || trimmed.contains(" d=\"") || trimmed.contains(" d='")
+}
+
+fn is_in_comment(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    trimmed.starts_with("//") || trimmed.starts_with("///")
+        || trimmed.starts_with("* ") || trimmed.starts_with("*\t")
+        || trimmed.starts_with("/**")
+}
 
 impl TextCheck for Check {
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
@@ -59,10 +78,19 @@ impl TextCheck for Check {
             if !(line.contains('"') || line.contains('\'') || line.contains('`')) {
                 continue;
             }
+            if is_svg_path_data(line) {
+                continue;
+            }
             let mut pos = 0;
             while let Some((next, ip)) = find_ipv4(line, pos) {
                 pos = next;
                 if ALLOWED.contains(&ip.as_str()) {
+                    continue;
+                }
+                if is_cidr_notation(line, next) {
+                    continue;
+                }
+                if is_in_comment(line) {
                     continue;
                 }
                 diagnostics.push(Diagnostic {
@@ -106,5 +134,25 @@ mod tests {
     #[test]
     fn ignores_non_string() {
         assert!(run("// 10.0.0.1 in a comment without quotes").is_empty());
+    }
+
+    #[test]
+    fn allows_cidr_notation() {
+        assert!(run(r#"const range = "173.245.48.0/20";"#).is_empty());
+    }
+
+    #[test]
+    fn allows_svg_path_data() {
+        assert!(run(r#"d="M54.25 50.974 192.168.1.1""#).is_empty());
+    }
+
+    #[test]
+    fn allows_doc_comment_example() {
+        assert!(run(r#"/// e.g. "192.168.1.1" is a local IP"#).is_empty());
+    }
+
+    #[test]
+    fn allows_broadcast() {
+        assert!(run(r#"const mask = "255.255.255.255";"#).is_empty());
     }
 }
