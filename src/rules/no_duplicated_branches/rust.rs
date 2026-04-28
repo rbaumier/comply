@@ -15,15 +15,9 @@
 //! still fire, which is the genuine case (two literally-equal `if let`
 //! branches).
 //!
-//! Match arms stay on body-only comparison: OR-patterns (`A(n) | B(n)`)
-//! allow two arms with different patterns but identical bodies to be
-//! merged, which is the refactoring the rule is meant to suggest.
-//!
 //! ## Dedup
 //!
-//! A single duplicate line is reported at most once per chain — the
-//! previous O(n²) pairwise loop reported `j` once per earlier match,
-//! producing duplicate diagnostics for three-branch repeats.
+//! A single duplicate line is reported at most once per chain.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
