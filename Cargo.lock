@@ -305,6 +305,7 @@ dependencies = [
  "crossterm",
  "globset",
  "ignore",
+ "json_comments",
  "miette",
  "oxc_allocator",
  "oxc_ast",
@@ -908,6 +909,12 @@ checksum = "9301b34ecbe81051a62001a2dfa56d906628efdfbc68153e0a4d5eba58181ece"
 dependencies = [
  "memchr",
 ]
+
+[[package]]
+name = "json_comments"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9dbbfed4e59ba9750e15ba154fdfd9329cee16ff3df539c2666b70f58cc32105"
 
 [[package]]
 name = "leb128fmt"

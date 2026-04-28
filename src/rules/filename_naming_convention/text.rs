@@ -31,6 +31,10 @@ fn is_kebab_case(stem: &str) -> bool {
     true
 }
 
+fn is_composable_name(stem: &str) -> bool {
+    stem.starts_with("use") && stem.len() > 3 && stem.as_bytes()[3].is_ascii_uppercase()
+}
+
 impl TextCheck for Check {
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
         let Some(file_name) = ctx.path.file_name().and_then(|s| s.to_str()) else {
@@ -44,6 +48,9 @@ impl TextCheck for Check {
             return Vec::new();
         }
         if is_kebab_case(stem) {
+            return Vec::new();
+        }
+        if is_composable_name(stem) {
             return Vec::new();
         }
         vec![Diagnostic {
@@ -107,5 +114,20 @@ mod tests {
     #[test]
     fn flags_double_dash() {
         assert_eq!(run("src/user--profile.ts").len(), 1);
+    }
+
+    #[test]
+    fn allows_composable_camel_case() {
+        assert!(run("src/composables/useColorMode.ts").is_empty());
+    }
+
+    #[test]
+    fn allows_composable_with_queries() {
+        assert!(run("src/composables/useServiceTokenQueries.ts").is_empty());
+    }
+
+    #[test]
+    fn flags_non_composable_camel_case() {
+        assert_eq!(run("src/externalLinks.ts").len(), 1);
     }
 }

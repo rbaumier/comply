@@ -67,16 +67,21 @@ const NODE_BUILTINS: &[&str] = &[
     "zlib",
 ];
 
+const RUNTIME_BUILTINS: &[&str] = &["k6", "bun", "deno"];
+
 fn is_node_builtin(specifier: &str) -> bool {
     if let Some(rest) = specifier.strip_prefix("node:") {
         return !rest.is_empty();
     }
     let root = specifier.split('/').next().unwrap_or(specifier);
-    NODE_BUILTINS.contains(&root)
+    NODE_BUILTINS.contains(&root) || RUNTIME_BUILTINS.contains(&root)
 }
 
 fn is_bare_specifier(spec: &str) -> bool {
-    !spec.starts_with('.') && !spec.starts_with('/')
+    !spec.starts_with('.')
+        && !spec.starts_with('/')
+        && !spec.starts_with("http://")
+        && !spec.starts_with("https://")
 }
 
 /// Collapse a bare specifier to the name that would appear in `package.json`.
@@ -108,7 +113,7 @@ fn matches_alias(spec: &str, alias_prefixes: &[String]) -> bool {
             return true;
         }
         if let Some(rest) = spec.strip_prefix(p.as_str()) {
-            return rest.starts_with('/');
+            return rest.is_empty() || rest.starts_with('/') || p.ends_with('/');
         }
         false
     })
@@ -288,6 +293,36 @@ mod tests {
             Some(r#"{ "dependencies": {} }"#),
             Some(r#"{ "compilerOptions": { "paths": { "~/*": ["./src/*"] } } }"#),
             "import x from '~/components/ui/alert';",
+        );
+        assert!(diags.is_empty(), "expected no diagnostics, got {diags:?}");
+    }
+
+    #[test]
+    fn ignores_at_slash_path_alias() {
+        let (_d, diags) = run_in_project(
+            Some(r#"{ "dependencies": {} }"#),
+            Some(r#"{ "compilerOptions": { "paths": { "@/*": ["./src/*"] } } }"#),
+            "import { http } from '@/http';",
+        );
+        assert!(diags.is_empty(), "expected no diagnostics, got {diags:?}");
+    }
+
+    #[test]
+    fn ignores_k6_builtin() {
+        let (_d, diags) = run_in_project(
+            Some(r#"{ "dependencies": {} }"#),
+            None,
+            "import http from 'k6/http';",
+        );
+        assert!(diags.is_empty(), "expected no diagnostics, got {diags:?}");
+    }
+
+    #[test]
+    fn ignores_url_import() {
+        let (_d, diags) = run_in_project(
+            Some(r#"{ "dependencies": {} }"#),
+            None,
+            "import { check } from 'https://jslib.k6.io/k6-utils/1.4.0/index.js';",
         );
         assert!(diags.is_empty(), "expected no diagnostics, got {diags:?}");
     }

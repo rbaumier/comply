@@ -25,6 +25,7 @@ pub struct ScriptBlock<'src> {
     pub text: &'src str,
     pub start_row: usize,
     pub start_column: usize,
+    pub is_setup: bool,
 }
 
 /// Walk a Vue tree and return every `<script>` block's raw text plus
@@ -66,24 +67,22 @@ fn script_block_from_element<'src>(
     _source: &'src str,
     source_bytes: &[u8],
 ) -> Option<ScriptBlock<'src>> {
-    // The `script_element` has children: start_tag, raw_text, end_tag.
-    // Find the raw_text node.
     let mut cursor = node.walk();
-    let raw = node
-        .children(&mut cursor)
-        .find(|c| c.kind() == "raw_text")?;
+    let children: Vec<_> = node.children(&mut cursor).collect();
+    let is_setup = children.iter().any(|c| {
+        c.kind() == "start_tag"
+            && c.utf8_text(source_bytes)
+                .is_ok_and(|t| t.contains("setup"))
+    });
+    let raw = children.into_iter().find(|c| c.kind() == "raw_text")?;
     let text = raw.utf8_text(source_bytes).ok()?;
-    // `text` borrows from the source via utf8_text; rebind its
-    // lifetime to `'src` so the returned ScriptBlock is tied to the
-    // original source string, not the transient `source_bytes` slice.
-    // This only works because `source.as_bytes()` and `source` share
-    // the same underlying buffer.
     let text: &'src str = unsafe { std::mem::transmute::<&str, &'src str>(text) };
     let pos = raw.start_position();
     Some(ScriptBlock {
         text,
         start_row: pos.row,
         start_column: pos.column,
+        is_setup,
     })
 }
 

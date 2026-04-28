@@ -1,6 +1,6 @@
 //! vue-no-unescaped-entities
 
-mod text;
+mod vue;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
@@ -21,7 +21,7 @@ pub fn register() -> RuleDef {
     RuleDef {
         meta: META,
         backends: vec![
-            (Language::Vue, Backend::Text(Box::new(text::Check))),
+            (Language::Vue, Backend::TreeSitter(Box::new(vue::Check))),
         ],
     }
 }

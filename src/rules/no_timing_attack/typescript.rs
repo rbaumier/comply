@@ -11,6 +11,9 @@ use crate::diagnostic::{Diagnostic, Severity};
 use super::helpers::is_sensitive_identifier;
 
 crate::ast_check! { on ["binary_expression"] => |node, source, ctx, diagnostics|
+    if ctx.file.path_segments.in_test_dir {
+        return;
+    }
     let Some(op) = node.child_by_field_name("operator") else { return };
     let op_text = op.utf8_text(source).unwrap_or("");
     if op_text != "==" && op_text != "!=" && op_text != "===" && op_text != "!==" {
