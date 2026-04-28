@@ -72,6 +72,9 @@ pub(super) fn collect_diagnostics(
     use crate::diagnostic::{Diagnostic, Severity};
     use std::collections::HashMap;
 
+    if ctx.file.path_segments.in_test_dir {
+        return Vec::new();
+    }
     let min_length = ctx.config.threshold("no-duplicate-string", "min_length");
     let min_occurrences = ctx
         .config

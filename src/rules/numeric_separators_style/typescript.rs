@@ -84,6 +84,7 @@ fn expected_format(raw: &str) -> Option<String> {
 }
 
 crate::ast_check! { on ["number"] => |node, source, ctx, diagnostics|
+    if ctx.file.path_segments.in_test_dir { return; }
     let raw = node.utf8_text(source).unwrap_or("");
     if let Some(formatted) = expected_format(raw) {
         let pos = node.start_position();

@@ -458,12 +458,6 @@ pub fn register_all() -> Vec<RuleDef> {
             "Move type arguments to constructor call.",
         ),
         entry(
-            "consistent-indexed-object-style",
-            "consistent-indexed-object-style",
-            "Use `Record<K, V>` instead of `{ [key: K]: V }`.",
-            "Replace index signature with `Record<K, V>`.",
-        ),
-        entry(
             "prefer-as-const",
             "prefer-as-const",
             "`\"foo\" as const` is cleaner than `\"foo\" as \"foo\"`.",

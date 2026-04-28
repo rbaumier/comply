@@ -2,17 +2,10 @@
 
 use crate::diagnostic::Severity;
 use crate::rules::meta::RuleMeta;
-use crate::rules::{oxlint_and_clippy, oxlint_delegate, RuleDef, TS_FAMILY};
+use crate::rules::{oxlint_and_clippy, RuleDef};
 
 pub fn register_all() -> Vec<RuleDef> {
     vec![
-        entry(
-            "unicorn/filename-case",
-            "unicorn/filename-case",
-            "Filenames should be kebab-case.",
-            "Rename the file to kebab-case (`user-service.ts`, not \
-             `userService.ts` or `user_service.ts`).",
-        ),
         entry_with_clippy(
             "unicorn/no-array-for-each",
             "unicorn/no-array-for-each",
@@ -34,26 +27,7 @@ pub fn register_all() -> Vec<RuleDef> {
 
 // Entry-builder helpers used by `register_all` above.
 
-fn entry(
-    id: &'static str,
-    oxlint_key: &'static str,
-    description: &'static str,
-    remediation: &'static str,
-) -> RuleDef {
-    oxlint_delegate(
-        RuleMeta {
-            id,
-            description,
-            remediation,
-            severity: Severity::Error,
-            doc_url: None, categories: &["typescript"],
-        },
-        oxlint_key,
-        TS_FAMILY,
-    )
-}
-
-/// Same shape as `entry()` but also binds the rule to a clippy lint on Rust.
+/// Same shape as the old `entry()` but also binds the rule to a clippy lint on Rust.
 fn entry_with_clippy(
     id: &'static str,
     oxlint_key: &'static str,

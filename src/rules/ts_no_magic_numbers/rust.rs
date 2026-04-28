@@ -40,6 +40,8 @@ fn is_in_skip_context(node: tree_sitter::Node) -> bool {
 }
 
 crate::ast_check! { on ["integer_literal", "float_literal"] => |node, source, ctx, diagnostics|
+    if ctx.file.path_segments.in_test_dir { return; }
+    if crate::rules::rust_helpers::is_in_test_context(node, source) { return; }
     let text = std::str::from_utf8(&source[node.byte_range()]).unwrap_or("");
     if is_allowed(text) {
         return;

@@ -35,12 +35,8 @@ struct Branch {
     is_let_condition: bool,
 }
 
-crate::ast_check! { on ["if_expression", "match_expression"] => |node, source, ctx, diagnostics|
-match node.kind() {
-        "if_expression" => check_if_branches(node, source, ctx, diagnostics),
-        "match_expression" => check_match_arms(node, source, ctx, diagnostics),
-        _ => {}
-    }
+crate::ast_check! { on ["if_expression"] => |node, source, ctx, diagnostics|
+    check_if_branches(node, source, ctx, diagnostics);
 }
 
 fn check_if_branches(
@@ -318,7 +314,7 @@ mod tests {
     }
 
     #[test]
-    fn dedups_three_identical_match_arms() {
+    fn allows_duplicate_match_arms() {
         let src = r#"fn f(x: u8) -> u8 {
     match x {
         0 => foo(),
@@ -327,19 +323,6 @@ mod tests {
         _ => 0,
     }
 }"#;
-        assert_eq!(run_on(src).len(), 2);
-    }
-
-    #[test]
-    fn flags_duplicate_match_arms_with_different_patterns() {
-        let src = r#"fn f(x: u8) -> u8 {
-    match x {
-        0 => foo_bar(),
-        1 => baz(),
-        2 => foo_bar(),
-        _ => 0,
-    }
-}"#;
-        assert_eq!(run_on(src).len(), 1);
+        assert!(run_on(src).is_empty());
     }
 }

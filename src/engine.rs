@@ -243,6 +243,9 @@ fn dispatch_with_lang(
     };
 
     let file_ctx = FileCtx::build(path, source, file.language, project);
+    if file_ctx.is_generated {
+        return Vec::new();
+    }
     let path_arc: std::sync::Arc<std::path::Path> = std::sync::Arc::from(path.as_path());
     let ctx = CheckCtx {
         path,
