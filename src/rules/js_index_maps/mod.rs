@@ -1,0 +1,23 @@
+//! js-index-maps — `array.find()` / `findIndex()` inside a loop is O(n*m);
+//! build a `Map` for O(1) lookups.
+
+mod typescript;
+
+use crate::diagnostic::Severity;
+use crate::rules::meta::RuleMeta;
+use crate::rules::RuleDef;
+
+pub const META: RuleMeta = RuleMeta {
+    id: "js-index-maps",
+    description: "`array.find()`/`findIndex()` inside a loop — build a `Map` for O(1) lookups.",
+    remediation: "Build a `Map` (or object index) from the array before the loop: \
+                  `const map = new Map(items.map(i => [i.id, i]))`, \
+                  then use `map.get(key)` inside the loop.",
+    severity: Severity::Warning,
+    doc_url: None,
+    categories: &["performance"],
+};
+
+pub fn register() -> RuleDef {
+    crate::register_ts_family!(META, typescript)
+}

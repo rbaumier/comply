@@ -860,6 +860,22 @@ pub mod react_no_this_in_sfc;
 pub mod react_no_typos;
 pub mod react_no_unescaped_entities;
 pub mod react_no_unstable_nested_components;
+pub mod js_index_maps;
+pub mod ui_no_dark_mode_glow;
+pub mod ui_no_gradient_text;
+pub mod ui_no_inline_bounce_easing;
+pub mod ui_no_inline_exhaustive_style;
+pub mod ui_no_justified_text;
+pub mod ui_no_long_transition_duration;
+pub mod ui_no_tiny_text;
+pub mod ui_no_wide_letter_spacing;
+pub mod ui_no_z_index_9999;
+pub mod react_no_derived_use_state;
+pub mod react_no_effect_event_handler;
+pub mod react_no_giant_component;
+pub mod react_no_hydration_flicker;
+pub mod react_no_render_in_render;
+pub mod react_no_usememo_simple_expression;
 pub mod react_self_closing_comp;
 pub mod react_style_prop_object;
 pub mod react_void_dom_elements_no_children;
@@ -2597,6 +2613,7 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         prefer_reflect_apply::register(),
         prefer_regexp_test::register(),
         prefer_response_static_json::register(),
+        js_index_maps::register(),
         prefer_set_has::register(),
         prefer_set_size::register(),
         prefer_single_call::register(),
@@ -2653,6 +2670,12 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         next_no_redirect_in_try_catch::register(),
         // eslint-plugin-react rules (native implementations).
         react_no_unstable_nested_components::register(),
+        react_no_derived_use_state::register(),
+        react_no_effect_event_handler::register(),
+        react_no_giant_component::register(),
+        react_no_hydration_flicker::register(),
+        react_no_render_in_render::register(),
+        react_no_usememo_simple_expression::register(),
         react_no_constructed_context_values::register(),
         react_no_object_type_as_default_prop::register(),
         react_no_danger_with_children::register(),
@@ -3489,7 +3512,16 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         ui_no_keyframes_for_interruptible::register(),
         ui_no_pure_black::register(),
         ui_no_scroll_trigger_markers_prod::register(),
+        ui_no_dark_mode_glow::register(),
+        ui_no_gradient_text::register(),
+        ui_no_inline_bounce_easing::register(),
+        ui_no_inline_exhaustive_style::register(),
+        ui_no_justified_text::register(),
+        ui_no_long_transition_duration::register(),
+        ui_no_tiny_text::register(),
         ui_no_transition_all::register(),
+        ui_no_wide_letter_spacing::register(),
+        ui_no_z_index_9999::register(),
         ui_prefers_reduced_motion::register(),
         ui_stagger_children_cap::register(),
         ui_symmetric_initial_exit::register(),
