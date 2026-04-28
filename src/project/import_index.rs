@@ -1301,12 +1301,18 @@ fn resolve_relative(
 fn probe_path(raw: &Path, known: &std::collections::HashSet<PathBuf>) -> Option<PathBuf> {
     const EXTS: &[&str] = &["ts", "tsx", "js", "jsx", "mts", "mjs", "cts", "cjs", "vue"];
 
-    if let Some(ext) = raw.extension().and_then(|e| e.to_str())
-        && EXTS.contains(&ext)
-        && let Ok(c) = std::fs::canonicalize(raw)
-        && known.contains(&c)
-    {
-        return Some(c);
+    let has_known_ext = raw
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|ext| EXTS.contains(&ext));
+
+    if has_known_ext {
+        if let Ok(c) = std::fs::canonicalize(raw)
+            && known.contains(&c)
+        {
+            return Some(c);
+        }
+        return None;
     }
 
     for ext in EXTS {
@@ -1371,9 +1377,10 @@ impl OxcPathResolver {
         for path in known_paths {
             let Some(mut dir) = path.parent() else { continue };
             loop {
-                if !seen_dirs.insert(dir.to_path_buf()) {
+                if seen_dirs.contains(dir) {
                     break;
                 }
+                seen_dirs.insert(dir.to_path_buf());
                 let candidate = dir.join("tsconfig.json");
                 if candidate.exists() {
                     tsconfig_dirs.entry(dir.to_path_buf()).or_insert(candidate);
@@ -1400,11 +1407,7 @@ impl OxcPathResolver {
     }
 
     fn read_path_aliases(tsconfig_dir: &Path, tsconfig_path: &Path) -> Vec<(String, Vec<PathBuf>)> {
-        let raw = match std::fs::read_to_string(tsconfig_path) {
-            Ok(s) => s,
-            Err(_) => return Vec::new(),
-        };
-        let tsconfig = match crate::project::Tsconfig::parse(&raw) {
+        let tsconfig = match crate::project::Tsconfig::load_file(tsconfig_path) {
             Some(t) => t,
             None => return Vec::new(),
         };

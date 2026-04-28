@@ -296,7 +296,7 @@ fn collect_all_diagnostics(
         diagnostics.extend(lint_typescript(&by_lang.ts, config, &project, timings)?);
     }
     if !by_lang.rs.is_empty() {
-        diagnostics.extend(lint_rust(&by_lang.rs, config, timings)?);
+        diagnostics.extend(lint_rust(&by_lang.rs, config, &project, timings)?);
     }
     if !by_lang.vue.is_empty() {
         let t = Instant::now();
@@ -345,6 +345,7 @@ fn apply_config_filters(
 fn lint_rust(
     rs_files: &[&SourceFile],
     config: &Config,
+    project: &std::sync::Arc<crate::project::ProjectCtx>,
     timings: &mut Timings,
 ) -> Result<Vec<Diagnostic>> {
     // Phase availability is cached in OnceLock inside each module, so
@@ -409,9 +410,10 @@ fn lint_rust(
         let t = Instant::now();
         (cargo_modules::lint_files(rs_files), t.elapsed())
     };
+    let project2 = std::sync::Arc::clone(project);
     let engine_phase = || -> PhaseOut {
         let t = Instant::now();
-        (engine::lint_files(rs_files, config), t.elapsed())
+        (engine::lint_files_with_project(rs_files, config, &project2), t.elapsed())
     };
 
     // rayon::join(|| join(a, b), || join(c, d)) fans out into a
