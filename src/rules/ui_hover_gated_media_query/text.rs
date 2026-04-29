@@ -4,7 +4,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { on ["rule_set"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["rule_set"] prefilter = [":hover"] => |node, source, ctx, diagnostics|
     let mut c = node.walk();
     let Some(selectors) = node.children(&mut c).find(|n| n.kind() == "selectors") else { return };
     let Ok(sel_text) = selectors.utf8_text(source) else { return };

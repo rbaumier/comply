@@ -19,7 +19,7 @@ fn module_is_drizzle_kit(spec: &str) -> bool {
     trimmed == "drizzle-kit" || trimmed.starts_with("drizzle-kit/")
 }
 
-crate::ast_check! { on ["import_statement", "call_expression"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["import_statement", "call_expression"] prefilter = ["drizzle-kit"] => |node, source, ctx, diagnostics|
     if is_config_or_migration_file(ctx.path) {
         return;
     }

@@ -1,6 +1,6 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { on ["run_instruction"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["run_instruction"] prefilter = ["yarn install"] => |node, source, ctx, diagnostics|
     let shell_text = shell_command_text(node, source);
     if !shell_text.contains("yarn install") { return; }
     if shell_text.contains("yarn cache clean") { return; }

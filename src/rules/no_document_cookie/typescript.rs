@@ -5,7 +5,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { on ["member_expression"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["member_expression"] prefilter = ["document"] => |node, source, ctx, diagnostics|
     let Some(obj) = node.child_by_field_name("object") else { return };
     let Some(prop) = node.child_by_field_name("property") else { return };
 

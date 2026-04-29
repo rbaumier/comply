@@ -22,7 +22,7 @@ fn is_cloudflare_context(source: &str, path: &std::path::Path) -> bool {
         .any(|c| matches!(c.as_os_str().to_str(), Some("workers")))
 }
 
-crate::ast_check! { on ["member_expression"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["member_expression"] prefilter = ["@cloudflare/", "cloudflare:workers", "elysia/adapter/cloudflare"] => |node, source, ctx, diagnostics|
     if !ctx.project.has_framework("elysia") {
         return;
     }

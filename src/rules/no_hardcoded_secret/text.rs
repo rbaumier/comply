@@ -19,6 +19,10 @@ use crate::rules::backend::{CheckCtx, TextCheck};
 pub struct Check;
 
 impl TextCheck for Check {
+    fn prefilter(&self) -> Option<&'static [&'static str]> {
+        Some(&["ACCESS_TOKEN", "AKIA", "API_KEY", "APIKEY", "gho_", "ghp_", "ghr_", "ghs_", "ghu_", "github_pat_", "PASSWORD", "rk_live_", "rk_test_", "SECRET", "service_account", "sk_live_", "sk_test_"])
+    }
+
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
         for (idx, line) in ctx.source.lines().enumerate() {

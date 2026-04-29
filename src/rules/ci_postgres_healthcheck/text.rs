@@ -21,7 +21,7 @@ fn pair_value_text<'a>(
     pair.named_child(1)?.utf8_text(source).ok()
 }
 
-crate::ast_check! { on ["block_mapping_pair"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["block_mapping_pair"] prefilter = ["pg_isready"] => |node, source, ctx, diagnostics|
     if pair_key_text(node, source).as_deref() != Some("image") { return; }
     let Some(value) = pair_scalar_value(node, source) else { return; };
     if !is_postgres_image(&value) { return; }

@@ -15,7 +15,7 @@ fn is_generator(code: &str) -> bool {
         || code.contains("async function *")
 }
 
-crate::ast_check! { on ["comment"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["comment"] prefilter = ["/**"] => |node, source, ctx, diagnostics|
     let Ok(text) = node.utf8_text(source) else { return; };
     if !text.starts_with("/**") { return; }
     let line_offset = node.start_position().row;

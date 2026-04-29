@@ -14,7 +14,7 @@ fn is_test_file(path: &std::path::Path) -> bool {
         || s.contains(".e2e.")
 }
 
-crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["call_expression"] prefilter = ["waitForTimeout"] => |node, source, ctx, diagnostics|
     if !is_test_file(ctx.path) {
         return;
     }

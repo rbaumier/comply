@@ -15,7 +15,7 @@ fn is_inside_result_try(mut node: tree_sitter::Node<'_>, source: &[u8]) -> bool 
     false
 }
 
-crate::ast_check! { on ["function_declaration", "method_definition", "arrow_function", "function_expression"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["function_declaration", "method_definition", "arrow_function", "function_expression"] prefilter = ["Result.try", "Result.tryPromise"] => |node, source, ctx, diagnostics|
     let Some(ret) = node.child_by_field_name("return_type") else { return; };
     let ret_text = ret.utf8_text(source).unwrap_or("");
     if !ret_text.contains("Result<") && !ret_text.contains("Result <") {

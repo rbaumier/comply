@@ -6,7 +6,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["call_expression"] prefilter = ["createCipher"] => |node, source, ctx, diagnostics|
     let Some(callee) = node.child_by_field_name("function") else { return };
 
     let method_name = match callee.kind() {

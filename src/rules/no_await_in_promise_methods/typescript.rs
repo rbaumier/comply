@@ -11,7 +11,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 
 const PROMISE_METHODS: &[&str] = &["all", "allSettled", "any", "race"];
 
-crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["call_expression"] prefilter = ["Promise"] => |node, source, ctx, diagnostics|
     // callee must be `Promise.method`
     let Some(callee) = node.child_by_field_name("function") else { return };
     if callee.kind() != "member_expression" {

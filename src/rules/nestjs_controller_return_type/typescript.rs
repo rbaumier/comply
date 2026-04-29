@@ -115,6 +115,10 @@ fn line_col_for_offset(source: &str, offset: usize) -> (usize, usize) {
 }
 
 impl TextCheck for Check {
+    fn prefilter(&self) -> Option<&'static [&'static str]> {
+        Some(&["@Controller"])
+    }
+
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
         if !is_nestjs_controller_file(ctx.source) {
             return Vec::new();

@@ -67,7 +67,7 @@ fn check_probe(
     }
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { prefilter = ["apiVersion"] => |node, source, ctx, diagnostics|
     if !y::is_k8s_manifest_mapping(node, source) { return; }
     let Some(kind) = y::manifest_kind(node, source) else { return; };
     let Some(pod_spec) = y::pod_spec_mapping(node, source, &kind) else { return; };

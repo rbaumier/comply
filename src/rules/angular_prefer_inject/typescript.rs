@@ -46,7 +46,7 @@ fn class_has_angular_decorator(class: tree_sitter::Node, source: &[u8]) -> bool 
     false
 }
 
-crate::ast_check! { on ["required_parameter", "optional_parameter"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["required_parameter", "optional_parameter"] prefilter = ["@Component", "@Directive", "@Injectable", "@Pipe"] => |node, source, ctx, diagnostics|
     if !is_angular_file(ctx.source) { return; }
     // Ensure parameter is inside a constructor.
     let Some(parent) = node.parent() else { return; };

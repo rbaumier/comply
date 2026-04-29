@@ -29,7 +29,7 @@ fn is_static_string(node: tree_sitter::Node) -> bool {
     node.kind() == "string" || is_static_template(node)
 }
 
-crate::ast_check! { on ["assignment_expression"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["assignment_expression"] prefilter = ["innerHTML", "outerHTML", "srcdoc"] => |node, source, ctx, diagnostics|
     let _ = source;
     let Some(left) = node.child_by_field_name("left") else { return };
     if left.kind() != "member_expression" {

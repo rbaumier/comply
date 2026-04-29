@@ -8,7 +8,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { prefilter = [".only"] => |node, source, ctx, diagnostics|
     let Some(m) = crate::rules::test_methods::match_test_member_call(node, source) else {
         return;
     };

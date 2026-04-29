@@ -114,7 +114,7 @@ fn is_insecure_alg(s: &str) -> bool {
     s.eq_ignore_ascii_case("none") || s.eq_ignore_ascii_case("HS256")
 }
 
-crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["call_expression"] prefilter = ["jwt", "JWT", "Jwt"] => |node, source, ctx, diagnostics|
     if !is_jwt_call(node, source) {
         return;
     }

@@ -18,7 +18,7 @@ fn is_zero_literal(node: tree_sitter::Node, source: &[u8]) -> bool {
     node.kind() == "number" && node.utf8_text(source).unwrap_or("") == "0"
 }
 
-crate::ast_check! { on ["unary_expression", "binary_expression", "augmented_assignment_expression"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["unary_expression", "binary_expression", "augmented_assignment_expression"] prefilter = ["~~"] => |node, source, ctx, diagnostics|
 match node.kind() {
         "unary_expression" => {
             // ~~x — outer unary is `~`, argument is another `~expr`.

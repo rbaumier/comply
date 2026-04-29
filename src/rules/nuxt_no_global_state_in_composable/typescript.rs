@@ -20,7 +20,7 @@ fn is_composable_file(src: &str) -> bool {
     src.contains("export function use") || src.contains("export const use")
 }
 
-crate::ast_check! { on ["lexical_declaration", "variable_declaration"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["lexical_declaration", "variable_declaration"] prefilter = ["useState"] => |node, source, ctx, diagnostics|
     if !is_composable_file(ctx.source) {
         return;
     }

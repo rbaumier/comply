@@ -74,7 +74,7 @@ fn has_deprecation_header(node: tree_sitter::Node, source: &[u8]) -> bool {
     text.contains("Deprecation") || text.contains("Sunset")
 }
 
-crate::ast_check! { on ["export_statement"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["export_statement"] prefilter = ["@deprecated", "Deprecation", "Sunset"] => |node, source, ctx, diagnostics|
     let Some(name) = handler_name(node, source) else { return };
     if !is_deprecated(node, source) { return }
     if has_deprecation_header(node, source) { return }

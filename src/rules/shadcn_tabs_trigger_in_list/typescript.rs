@@ -26,7 +26,7 @@ fn jsx_element_tag<'a>(elem: tree_sitter::Node<'a>, source: &'a [u8]) -> Option<
     crate::rules::jsx::jsx_element_tag_name(open, source)
 }
 
-crate::ast_check! { on ["jsx_opening_element", "jsx_self_closing_element"] => |node, source, ctx, diagnostics|    let Some(tag) = crate::rules::jsx::jsx_element_tag_name(node, source) else {
+crate::ast_check! { on ["jsx_opening_element", "jsx_self_closing_element"] prefilter = ["TabsTrigger", "Tabs.Trigger"] => |node, source, ctx, diagnostics|    let Some(tag) = crate::rules::jsx::jsx_element_tag_name(node, source) else {
         return;
     };
     if !is_trigger_tag(tag) {

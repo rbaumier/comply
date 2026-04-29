@@ -9,6 +9,8 @@ pub struct Check;
 const NEEDLE: &str = ".toPromise(";
 
 impl TextCheck for Check {
+    fn prefilter(&self) -> Option<&'static [&'static str]> { Some(&[".toPromise("]) }
+
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
         for (idx, line) in ctx.source.lines().enumerate() {

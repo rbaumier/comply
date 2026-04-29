@@ -39,7 +39,7 @@ fn scan_block<'a>(
     }
 }
 
-crate::ast_check! { on ["statement_block"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["statement_block"] prefilter = ["\"set.status\""] => |node, source, ctx, diagnostics|
     if !ctx.project.has_framework("elysia") {
         return;
     }

@@ -17,7 +17,7 @@ fn first_arg_is_data_attr(node: tree_sitter::Node, source: &[u8]) -> bool {
     inner.starts_with("data-")
 }
 
-crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["call_expression"] prefilter = ["setAttribute", "getAttribute", "removeAttribute", "hasAttribute"] => |node, source, ctx, diagnostics|
     let Some(func) = node.child_by_field_name("function") else { return };
     if func.kind() != "member_expression" {
         return;

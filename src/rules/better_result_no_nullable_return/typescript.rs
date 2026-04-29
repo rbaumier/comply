@@ -4,7 +4,7 @@ fn imports_better_result(source: &str) -> bool {
     source.contains("better-result") || source.contains("@better-result")
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { prefilter = ["better-result"] => |node, source, ctx, diagnostics|
     if !imports_better_result(ctx.source) {
         return;
     }

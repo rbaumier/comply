@@ -9,7 +9,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 
 const FLAGGED: &[&str] = &["ftest", "fdescribe", "fit", "xtest", "xdescribe", "xit"];
 
-crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["call_expression"] prefilter = ["fdescribe", "fit", "ftest", "xdescribe", "xit", "xtest"] => |node, source, ctx, diagnostics|
     let Some(name) = crate::rules::call_expression::call_function_name(node, source) else {
         return;
     };

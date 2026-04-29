@@ -18,7 +18,7 @@ fn is_document_file(path: &std::path::Path) -> bool {
     s.contains("_document.")
 }
 
-crate::ast_check! { on ["import_statement"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["import_statement"] prefilter = ["next/head"] => |node, source, ctx, diagnostics|
     if ctx.project.framework != Framework::NextJs {
         return;
     }

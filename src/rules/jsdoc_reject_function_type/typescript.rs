@@ -28,7 +28,7 @@ fn find_bare_function_types_in_line(line: &str) -> Vec<usize> {
     hits
 }
 
-crate::ast_check! { on ["comment"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["comment"] prefilter = ["/**"] => |node, source, ctx, diagnostics|
     let Ok(raw) = node.utf8_text(source) else { return };
     if !raw.starts_with("/**") { return; }
 

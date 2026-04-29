@@ -14,7 +14,7 @@ const HOOKS: &[&str] = &[
     "useQueries",
 ];
 
-crate::ast_check! { on ["identifier", "property_identifier", "shorthand_property_identifier_pattern", "shorthand_property_identifier"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["identifier", "property_identifier", "shorthand_property_identifier_pattern", "shorthand_property_identifier"] prefilter = ["isLoading"] => |node, source, ctx, diagnostics|
     // Match identifier-like nodes whose text is `isLoading`. We accept
     // `identifier`, `property_identifier`, and the shorthand pattern node
     // emitted by destructuring (`{ isLoading }`).

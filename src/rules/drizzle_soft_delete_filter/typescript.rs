@@ -85,7 +85,7 @@ fn file_has_deleted_at_column(program: tree_sitter::Node<'_>, source: &[u8]) -> 
     }
 }
 
-crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["call_expression"] prefilter = ["deletedAt"] => |node, source, ctx, diagnostics|
     // Cheap pre-filter: if the file doesn't even mention deletedAt, skip
     // the AST walk entirely.
     if !ctx.source.contains("deletedAt") {

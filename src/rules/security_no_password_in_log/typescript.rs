@@ -96,6 +96,8 @@ fn is_ci_setup_script(path: &std::path::Path) -> bool {
 }
 
 impl TextCheck for Check {
+    fn prefilter(&self) -> Option<&'static [&'static str]> { Some(&["password", "secret", "token", "apiKey", "api_key"]) }
+
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
         if is_ci_setup_script(ctx.path) {
             return Vec::new();

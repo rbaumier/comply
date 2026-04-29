@@ -16,7 +16,7 @@ fn is_nav_call(text: &str) -> bool {
         || t.starts_with("await abortNavigation(")
 }
 
-crate::ast_check! { on ["return_statement"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["return_statement"] prefilter = ["defineNuxtRouteMiddleware"] => |node, source, ctx, diagnostics|
     let mut p = node.parent();
     let mut in_middleware = false;
     let mut depth = 0;

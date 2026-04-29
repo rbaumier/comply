@@ -24,7 +24,7 @@ fn message_arg_index(ctor_name: &str) -> usize {
     }
 }
 
-crate::ast_check! { on ["new_expression", "call_expression"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["new_expression", "call_expression"] prefilter = ["Error", "EvalError", "RangeError", "ReferenceError", "SyntaxError", "TypeError", "URIError", "AggregateError", "SuppressedError"] => |node, source, ctx, diagnostics|
     // Match both `new Error()` and `Error()` call forms.
     let (ctor_node, args_node) = match node.kind() {
         "new_expression" => {

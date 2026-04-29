@@ -22,6 +22,13 @@ fn has_bidi_char(line: &str) -> bool {
 }
 
 impl TextCheck for Check {
+    fn prefilter(&self) -> Option<&'static [&'static str]> {
+        Some(&[
+            "\u{202E}", "\u{202D}", "\u{202A}", "\u{202B}", "\u{202C}",
+            "\u{2066}", "\u{2067}", "\u{2068}", "\u{2069}",
+        ])
+    }
+
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
         for (idx, line) in ctx.source.lines().enumerate() {

@@ -2,7 +2,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["call_expression"] prefilter = [".match"] => |node, source, ctx, diagnostics|
     // Look for call_expression nodes like `str.match(/regex/)`
     let Some(func) = node.child_by_field_name("function") else { return };
     if func.kind() != "member_expression" {

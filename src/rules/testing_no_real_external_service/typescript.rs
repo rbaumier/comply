@@ -67,7 +67,7 @@ fn is_axios_call(node: tree_sitter::Node, source: &[u8]) -> bool {
     }
 }
 
-crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["call_expression"] prefilter = ["api.stripe.com", "api.openai.com", "api.anthropic.com", "api.github.com", "api.sendgrid.com", "api.mailgun.net", "api.twilio.com"] => |node, source, ctx, diagnostics|
     if !is_test_file(ctx.path) { return; }
     if !(is_fetch_call(node, source) || is_axios_call(node, source)) {
         return;

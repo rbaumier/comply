@@ -2,7 +2,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["program"] prefilter = ["createAuthClient"] => |node, source, ctx, diagnostics|
     let text = std::str::from_utf8(source).unwrap_or("");
 
     let is_native = text.contains("from \"react-native\"")

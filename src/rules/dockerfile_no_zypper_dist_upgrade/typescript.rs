@@ -1,6 +1,6 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { on ["run_instruction"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["run_instruction"] prefilter = ["zypper dist-upgrade", "zypper dup"] => |node, source, ctx, diagnostics|
     let shell_text = shell_command_text(node, source);
     if !(shell_text.contains("zypper dist-upgrade") || shell_text.contains("zypper dup")) {
         return;

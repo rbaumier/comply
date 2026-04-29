@@ -9,7 +9,7 @@ fn is_test_file(path: &std::path::Path) -> bool {
     TEST_MARKERS.iter().any(|m| s.contains(m))
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { prefilter = ["networkidle"] => |node, source, ctx, diagnostics|
     if !is_test_file(ctx.path) {
         return;
     }

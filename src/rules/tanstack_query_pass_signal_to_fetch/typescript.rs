@@ -7,7 +7,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { prefilter = ["queryFn"] => |node, source, ctx, diagnostics|
     // Anchor on the `queryFn: <arrow>` pair.
     let Some((key, _)) = crate::rules::object_literal::object_pair(node, source) else {
         return;

@@ -2,7 +2,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { on ["arguments"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["arguments"] prefilter = ["undefined"] => |node, source, ctx, diagnostics|
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         if child.kind() == "undefined" {

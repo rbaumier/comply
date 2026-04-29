@@ -44,7 +44,7 @@ fn is_inside_raf(node: tree_sitter::Node, source: &[u8]) -> bool {
     false
 }
 
-crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["call_expression"] prefilter = ["setProperty"] => |node, source, ctx, diagnostics|
     if !is_document_element_set_property(node, source) {
         return;
     }

@@ -21,7 +21,7 @@ const BUILTINS: &[&str] = &[
     "WeakSet",
 ];
 
-crate::ast_check! { on ["binary_expression"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["binary_expression"] prefilter = ["instanceof"] => |node, source, ctx, diagnostics|
     // Check for `instanceof` operator.
     let Some(op_node) = node.child_by_field_name("operator") else { return };
     let op = op_node.utf8_text(source).unwrap_or("");

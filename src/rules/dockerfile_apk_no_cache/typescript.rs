@@ -2,7 +2,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { on ["run_instruction"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["run_instruction"] prefilter = ["apk add"] => |node, source, ctx, diagnostics|
     let mut shell_text: Option<&str> = None;
     for i in 0..node.child_count() {
         let child = node.child(i).unwrap();

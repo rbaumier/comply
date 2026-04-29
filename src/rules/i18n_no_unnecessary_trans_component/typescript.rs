@@ -10,7 +10,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { on ["jsx_element"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["jsx_element"] prefilter = ["Trans"] => |node, source, ctx, diagnostics|
     let Some(opening) = node.child(0) else { return };
     if opening.kind() != "jsx_opening_element" {
         return;

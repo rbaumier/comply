@@ -5,6 +5,10 @@ use crate::rules::backend::{CheckCtx, TextCheck};
 pub struct Check;
 
 impl TextCheck for Check {
+    fn prefilter(&self) -> Option<&'static [&'static str]> {
+        Some(&["defineEmits"])
+    }
+
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
         let mut diags = Vec::new();
         for (i, line) in ctx.source.lines().enumerate() {

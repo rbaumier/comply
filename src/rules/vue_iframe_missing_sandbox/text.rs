@@ -8,6 +8,10 @@ use crate::rules::vue_template_helpers::{extract_elements, has_attr, is_vue_file
 pub struct Check;
 
 impl TextCheck for Check {
+    fn prefilter(&self) -> Option<&'static [&'static str]> {
+        Some(&["iframe"])
+    }
+
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
         if !is_vue_file(ctx.path) {
             return Vec::new();

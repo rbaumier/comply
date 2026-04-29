@@ -15,7 +15,7 @@ fn string_inner<'a>(node: tree_sitter::Node, source: &'a [u8]) -> &'a str {
     }
 }
 
-crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["call_expression"] prefilter = ["md5", "MD5", "sha1", "SHA1"] => |node, source, ctx, diagnostics|
     let Some(callee) = node.child_by_field_name("function") else { return };
     let Some(args) = node.child_by_field_name("arguments") else { return };
 

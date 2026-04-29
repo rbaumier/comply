@@ -88,6 +88,8 @@ fn find_offenses(source: &str) -> Vec<usize> {
 }
 
 impl TextCheck for Check {
+    fn prefilter(&self) -> Option<&'static [&'static str]> { Some(&["status:"]) }
+
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
         if !looks_like_api_path(ctx.path) {
             return Vec::new();

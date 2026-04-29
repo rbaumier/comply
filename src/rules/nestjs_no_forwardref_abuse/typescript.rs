@@ -13,6 +13,10 @@ fn is_nestjs_file(source: &str) -> bool {
 }
 
 impl TextCheck for Check {
+    fn prefilter(&self) -> Option<&'static [&'static str]> {
+        Some(&["@nestjs/", "@Module", "@Injectable"])
+    }
+
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
         if !is_nestjs_file(ctx.source) {
             return Vec::new();

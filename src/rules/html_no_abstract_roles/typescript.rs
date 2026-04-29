@@ -17,7 +17,7 @@ const ABSTRACT_ROLES: &[&str] = &[
     "window",
 ];
 
-crate::ast_check! { on ["jsx_attribute"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["jsx_attribute"] prefilter = ["role"] => |node, source, ctx, diagnostics|
     if crate::rules::jsx::jsx_attribute_name(node, source) != Some("role") {
         return;
     }

@@ -12,7 +12,7 @@ fn member_property_name<'a>(callee: tree_sitter::Node<'a>, source: &'a [u8]) -> 
     prop.utf8_text(source).ok()
 }
 
-crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["call_expression"] prefilter = ["flatMap"] => |node, source, ctx, diagnostics|
     let Some(callee) = node.child_by_field_name("function") else { return };
     if member_property_name(callee, source) != Some("filter") {
         return;

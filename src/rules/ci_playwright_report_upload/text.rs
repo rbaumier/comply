@@ -29,7 +29,7 @@ fn uploads_playwright_report(source: &str) -> bool {
     false
 }
 
-crate::ast_check! { on ["block_mapping_pair"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["block_mapping_pair"] prefilter = ["actions/upload-artifact"] => |node, source, ctx, diagnostics|
     if pair_key_text(node, source).as_deref() != Some("run") { return; }
     let Some(cmd) = pair_scalar_value(node, source) else { return; };
     if !is_playwright_run(&cmd) { return; }

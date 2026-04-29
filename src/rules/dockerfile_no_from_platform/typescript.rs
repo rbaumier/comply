@@ -2,7 +2,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { on ["from_instruction"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["from_instruction"] prefilter = ["--platform"] => |node, source, ctx, diagnostics|
     for i in 0..node.child_count() {
         let child = node.child(i).unwrap();
         if child.kind() != "param" { continue; }

@@ -33,7 +33,7 @@ fn find_super_call<'a>(
     None
 }
 
-crate::ast_check! { on ["class_declaration"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["class_declaration"] prefilter = ["TaggedError"] => |node, source, ctx, diagnostics|
     if !extends_tagged_error(&node, source) {
         return;
     }

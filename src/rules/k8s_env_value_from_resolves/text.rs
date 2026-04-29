@@ -14,7 +14,7 @@ const WORKLOAD_KINDS: &[&str] = &[
     "CronJob",
 ];
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { prefilter = ["apiVersion"] => |node, source, ctx, diagnostics|
     if !y::is_k8s_manifest_mapping(node, source) { return; }
     let Some(kind) = y::manifest_kind(node, source) else { return; };
     if !WORKLOAD_KINDS.contains(&kind.as_str()) { return; }

@@ -7,7 +7,7 @@ const METHODS: &[(&str, &str)] = &[
     ("readAsArrayBuffer", "arrayBuffer"),
 ];
 
-crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["call_expression"] prefilter = ["readAsText", "readAsArrayBuffer"] => |node, source, ctx, diagnostics|
     let Some(func) = node.child_by_field_name("function") else { return };
     if func.kind() != "member_expression" {
         return;

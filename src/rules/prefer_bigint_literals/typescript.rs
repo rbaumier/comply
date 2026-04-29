@@ -25,7 +25,7 @@ fn is_numeric_arg(s: &str) -> bool {
     s.chars().all(|c| c.is_ascii_digit() || c == '_')
 }
 
-crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["call_expression"] prefilter = ["BigInt"] => |node, source, ctx, diagnostics|
     let Some(callee) = node.child_by_field_name("function") else { return };
     if callee.kind() != "identifier" {
         return;

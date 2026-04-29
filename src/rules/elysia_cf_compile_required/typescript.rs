@@ -2,7 +2,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { on ["identifier"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["identifier"] prefilter = [".compile()"] => |node, source, ctx, diagnostics|
     if !ctx.project.has_framework("elysia") {
         return;
     }

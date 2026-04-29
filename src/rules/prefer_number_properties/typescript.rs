@@ -36,7 +36,7 @@ const CHECKS: &[GlobalCheck] = &[
     },
 ];
 
-crate::ast_check! { on ["identifier"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["identifier"] prefilter = ["isNaN", "isFinite", "parseInt", "parseFloat", "NaN"] => |node, source, ctx, diagnostics|
     let name = node.utf8_text(source).unwrap_or("");
 
     let Some(chk) = CHECKS.iter().find(|c| c.name == name) else { return };

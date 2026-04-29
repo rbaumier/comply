@@ -88,8 +88,7 @@ fn walk_for_current_reads(
 }
 
 crate::ast_check! {
-    on ["function_declaration", "function_expression", "arrow_function"]
-    => |node, source, ctx, diagnostics|
+    on ["function_declaration", "function_expression", "arrow_function"] prefilter = ["useRef"] => |node, source, ctx, diagnostics|
     let name: String = match node.kind() {
         "function_declaration" => {
             node.child_by_field_name("name")

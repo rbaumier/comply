@@ -6,7 +6,7 @@ fn is_angular_file(source: &str) -> bool {
     source.contains("@angular/") || source.contains("@Component")
 }
 
-crate::ast_check! { on ["pair"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["pair"] prefilter = ["@Component"] => |node, source, ctx, diagnostics|
     if !is_angular_file(ctx.source) { return; }
     let Some(key) = node.child_by_field_name("key") else { return; };
     let key_text = std::str::from_utf8(&source[key.byte_range()]).unwrap_or("");

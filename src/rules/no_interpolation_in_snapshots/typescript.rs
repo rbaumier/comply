@@ -16,7 +16,7 @@ fn template_has_interpolation(node: tree_sitter::Node) -> bool {
         .any(|c| c.kind() == "template_substitution")
 }
 
-crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["call_expression"] prefilter = ["toMatchSnapshot", "toMatchInlineSnapshot"] => |node, source, ctx, diagnostics|
     let Some(callee) = node.child_by_field_name("function") else { return };
     if callee.kind() != "member_expression" {
         return;

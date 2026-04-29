@@ -15,7 +15,7 @@ fn is_empty_object_literal(node: tree_sitter::Node) -> bool {
     node.named_child_count() == 0
 }
 
-crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["call_expression"] prefilter = ["Object.assign"] => |node, source, ctx, diagnostics|
     let Some(callee) = node.child_by_field_name("function") else { return };
     if callee.kind() != "member_expression" {
         return;

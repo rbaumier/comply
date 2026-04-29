@@ -4,7 +4,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 
 const CALLBACKS: &[&str] = &["callback", "cb", "next"];
 
-crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["call_expression"] prefilter = ["callback", "cb", "next"] => |node, source, ctx, diagnostics|
     let Some(callee) = node.child_by_field_name("function") else { return };
     let callee_text = callee.utf8_text(source).unwrap_or("");
 

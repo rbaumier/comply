@@ -33,7 +33,7 @@ fn class_has_injectable_decorator(class: tree_sitter::Node, source: &[u8]) -> bo
     false
 }
 
-crate::ast_check! { on ["class_declaration"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["class_declaration"] prefilter = ["@nestjs/"] => |node, source, ctx, diagnostics|
     if !is_nestjs_file(ctx.source) { return; }
     let Some(name_node) = node.child_by_field_name("name") else { return; };
     let name = std::str::from_utf8(&source[name_node.byte_range()]).unwrap_or("");

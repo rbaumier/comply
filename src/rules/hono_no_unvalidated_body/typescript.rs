@@ -18,7 +18,7 @@ fn has_validator(source: &str) -> bool {
         || source.contains("validator(")
 }
 
-crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["call_expression"] prefilter = ["hono", "Hono"] => |node, source, ctx, diagnostics|
     if !is_hono_file(ctx.source) { return; }
     if has_validator(ctx.source) { return; }
 

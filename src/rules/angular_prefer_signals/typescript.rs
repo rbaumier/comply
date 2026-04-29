@@ -11,6 +11,8 @@ fn is_angular_component(source: &str) -> bool {
 }
 
 impl TextCheck for Check {
+    fn prefilter(&self) -> Option<&'static [&'static str]> { Some(&["@Component"]) }
+
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
         if !is_angular_component(ctx.source) {
             return Vec::new();

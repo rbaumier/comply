@@ -17,7 +17,7 @@ fn is_nuxt_source(src: &str) -> bool {
         || src.contains("defineComponent")
 }
 
-crate::ast_check! { on ["pair", "method_definition"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["pair", "method_definition"] prefilter = ["head"] => |node, source, ctx, diagnostics|
     if !is_nuxt_source(ctx.source) {
         return;
     }

@@ -8,7 +8,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::k8s_rbac_no_wildcard_resources::list_contains_star;
 use crate::rules::yaml_k8s_helpers as y;
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { prefilter = ["apiVersion"] => |node, source, ctx, diagnostics|
     if !y::is_k8s_manifest_mapping(node, source) {
         return;
     }

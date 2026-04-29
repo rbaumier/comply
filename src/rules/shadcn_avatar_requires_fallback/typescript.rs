@@ -39,7 +39,7 @@ fn opening_tag_name<'a>(node: tree_sitter::Node<'a>, source: &'a [u8]) -> Option
     }
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { prefilter = ["Avatar"] => |node, source, ctx, diagnostics|
     let kind = node.kind();
     if kind != "jsx_element" && kind != "jsx_self_closing_element" {
         return;

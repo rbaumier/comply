@@ -43,7 +43,7 @@ fn object_has_tag_literal(obj: tree_sitter::Node<'_>, source: &[u8]) -> bool {
     false
 }
 
-crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["call_expression"] prefilter = ["z.union"] => |node, source, ctx, diagnostics|
     let Some(function) = node.child_by_field_name("function") else { return };
     if function.utf8_text(source).ok() != Some("z.union") { return; }
 

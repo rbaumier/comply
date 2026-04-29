@@ -4,7 +4,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 
 const MUTATION_METHODS: &[&str] = &["post", "put", "delete", "patch"];
 
-crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["call_expression"] prefilter = ["hono"] => |node, source, ctx, diagnostics|
     // Only check Hono files.
     if !ctx.source.contains("from 'hono'") && !ctx.source.contains("from \"hono\"") {
         return;

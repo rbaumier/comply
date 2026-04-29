@@ -9,6 +9,10 @@ use crate::rules::backend::{CheckCtx, TextCheck};
 pub struct Check;
 
 impl TextCheck for Check {
+    fn prefilter(&self) -> Option<&'static [&'static str]> {
+        Some(&["<html"])
+    }
+
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
         let src = ctx.source;
         if !src.contains("<html") {

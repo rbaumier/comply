@@ -4,7 +4,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::jsx::{jsx_attribute_name, jsx_attribute_string_value, jsx_element_tag_name};
 
-crate::ast_check! { on ["jsx_self_closing_element", "jsx_opening_element"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["jsx_self_closing_element", "jsx_opening_element"] prefilter = ["stylesheet"] => |node, source, ctx, diagnostics|
     if jsx_element_tag_name(node, source) != Some("link") {
         return;
     }

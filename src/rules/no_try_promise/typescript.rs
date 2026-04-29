@@ -22,7 +22,7 @@ fn has_unawaited_promise(text: &str) -> bool {
     PROMISE_PATTERNS.iter().any(|p| text.contains(p))
 }
 
-crate::ast_check! { on ["try_statement"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["try_statement"] prefilter = ["try"] => |node, source, ctx, diagnostics|
     // We only care about expression_statement nodes inside try blocks.
     // Get the try body block.
     let Some(body) = node.child_by_field_name("body") else { return };

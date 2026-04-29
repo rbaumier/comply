@@ -4,7 +4,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { on ["call_expression", "new_expression"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["call_expression", "new_expression"] prefilter = ["Buffer"] => |node, source, ctx, diagnostics|
 match node.kind() {
         "call_expression" => {
             let Some(name) = crate::rules::call_expression::call_function_name(node, source) else {

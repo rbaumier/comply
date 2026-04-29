@@ -2,7 +2,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["call_expression"] prefilter = ["import("] => |node, source, ctx, diagnostics|
     if !ctx.project.has_framework("webpack") { return; }
     // Match `import(...)` expressions — tree-sitter parses these as `call_expression`
     // with callee kind `import`.

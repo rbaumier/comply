@@ -3,7 +3,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use std::collections::HashSet;
 
-crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["program"] prefilter = [".includes"] => |node, source, ctx, diagnostics|
     // We only run at the program (root) level to do a two-pass scan.
     // Phase 1: collect names of `const NAME = [...]` declarations.
     let mut array_names = HashSet::new();

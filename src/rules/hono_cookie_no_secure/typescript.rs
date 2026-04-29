@@ -22,6 +22,10 @@ fn has_secure(lines: &[&str], idx: usize) -> bool {
 }
 
 impl AstCheck for Check {
+    fn prefilter(&self) -> Option<&'static [&'static str]> {
+        Some(&["hono/cookie"])
+    }
+
     fn check(&self, ctx: &CheckCtx, _tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
         if !has_hono_cookie_import(ctx.source) {
             return Vec::new();

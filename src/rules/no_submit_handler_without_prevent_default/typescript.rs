@@ -40,7 +40,7 @@ fn unwrap_jsx_expression(value: Node) -> Option<Node> {
     None
 }
 
-crate::ast_check! { on ["jsx_attribute"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["jsx_attribute"] prefilter = ["onSubmit"] => |node, source, ctx, diagnostics|
     let Some(attr_name) = crate::rules::jsx::jsx_attribute_name(node, source) else { return };
     if attr_name != "onSubmit" {
         return;

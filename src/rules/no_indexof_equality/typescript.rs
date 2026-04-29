@@ -1,6 +1,6 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { on ["binary_expression"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["binary_expression"] prefilter = ["indexOf"] => |node, source, ctx, diagnostics|
     let Some(left) = node.child_by_field_name("left") else { return; };
     let Some(right) = node.child_by_field_name("right") else { return; };
     let Some(op) = node.child_by_field_name("operator") else { return; };

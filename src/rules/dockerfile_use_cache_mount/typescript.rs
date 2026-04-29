@@ -16,7 +16,7 @@ const PACKAGE_MANAGERS: &[&str] = &[
     "apt-get install",
 ];
 
-crate::ast_check! { on ["run_instruction"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["run_instruction"] prefilter = ["npm ci", "npm install", "pnpm install", "yarn install", "pip install", "apt install", "apt-get install"] => |node, source, ctx, diagnostics|
     let full_text = node.utf8_text(source).unwrap_or("");
     let shell_text = run_shell_text(node, source);
     if !PACKAGE_MANAGERS.iter().any(|m| shell_text.contains(m)) {

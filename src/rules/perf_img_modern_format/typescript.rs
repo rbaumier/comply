@@ -25,7 +25,7 @@ fn is_inside_picture(node: tree_sitter::Node, source: &[u8]) -> bool {
     false
 }
 
-crate::ast_check! { on ["jsx_self_closing_element", "jsx_opening_element"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["jsx_self_closing_element", "jsx_opening_element"] prefilter = ["img"] => |node, source, ctx, diagnostics|
     if jsx_element_tag_name(node, source) != Some("img") {
         return;
     }

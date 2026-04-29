@@ -4,7 +4,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::project::k8s_index::K8sIndex;
 use crate::rules::yaml_k8s_helpers as y;
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { prefilter = ["apiVersion"] => |node, source, ctx, diagnostics|
     if !y::is_k8s_manifest_mapping(node, source) { return; }
     let Some(kind) = y::manifest_kind(node, source) else { return; };
     if kind != "HorizontalPodAutoscaler" { return; }

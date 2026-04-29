@@ -13,6 +13,10 @@ use crate::rules::backend::{AstCheck, CheckCtx};
 pub struct Check;
 
 impl AstCheck for Check {
+    fn prefilter(&self) -> Option<&'static [&'static str]> {
+        Some(&["toMatchSnapshot", "toMatchInlineSnapshot"])
+    }
+
     fn interested_kinds(&self) -> Option<&'static [&'static str]> {
         Some(&["call_expression"])
     }

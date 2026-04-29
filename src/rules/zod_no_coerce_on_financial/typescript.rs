@@ -12,7 +12,7 @@ fn is_financial_key(key: &str) -> bool {
     NEEDLES.iter().any(|n| k.contains(n))
 }
 
-crate::ast_check! { on ["pair"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["pair"] prefilter = ["z.coerce"] => |node, source, ctx, diagnostics|
     let Some(key_node) = node.child_by_field_name("key") else { return };
     let Some(value_node) = node.child_by_field_name("value") else { return };
 

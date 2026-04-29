@@ -2,7 +2,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 
 const PREFIXES: &[&str] = &["-webkit-", "-moz-", "-ms-", "-o-"];
 
-crate::ast_check! { on ["declaration"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["declaration"] prefilter = ["-webkit-", "-moz-", "-ms-", "-o-"] => |node, source, ctx, diagnostics|
     let mut c = node.walk();
     let Some(prop) = node.children(&mut c).find(|n| n.kind() == "property_name") else { return; };
     let name = prop.utf8_text(source).unwrap_or_default();

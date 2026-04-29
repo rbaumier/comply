@@ -3,7 +3,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { on ["import_statement"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["import_statement"] prefilter = ["@testing-library"] => |node, source, ctx, diagnostics|
     if !is_test_file(ctx.path) {
         return;
     }

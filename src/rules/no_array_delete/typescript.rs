@@ -2,7 +2,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { on ["unary_expression"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["unary_expression"] prefilter = ["delete"] => |node, source, ctx, diagnostics|
     // The operator must be `delete`.
     let op = node.child_by_field_name("operator")
         .and_then(|n| n.utf8_text(source).ok())

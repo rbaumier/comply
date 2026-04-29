@@ -24,7 +24,7 @@ fn is_weak_cipher_spec(value: &str) -> bool {
         .any(|prefix| value.starts_with(prefix))
 }
 
-crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["call_expression"] prefilter = ["des", "rc2", "rc4", "blowfish", "DES", "RC2", "RC4"] => |node, source, ctx, diagnostics|
     let Some(function) = node.child_by_field_name("function") else { return };
     let callee_name = match function.kind() {
         "identifier" => function.utf8_text(source).ok(),

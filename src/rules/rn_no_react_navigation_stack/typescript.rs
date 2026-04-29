@@ -2,7 +2,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { on ["import_statement", "call_expression"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["import_statement", "call_expression"] prefilter = ["@react-navigation/stack", "createStackNavigator"] => |node, source, ctx, diagnostics|
 match node.kind() {
         "import_statement" => {
             let Some(src_node) = node.child_by_field_name("source") else { return };

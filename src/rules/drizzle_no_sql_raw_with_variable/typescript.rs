@@ -24,7 +24,7 @@ fn is_sql_raw_callee(call: tree_sitter::Node, source: &[u8]) -> bool {
     obj.utf8_text(source).unwrap_or("") == "sql" && prop.utf8_text(source).unwrap_or("") == "raw"
 }
 
-crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["call_expression"] prefilter = ["sql.raw"] => |node, source, ctx, diagnostics|
     if !is_sql_raw_callee(node, source) {
         return;
     }

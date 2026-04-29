@@ -9,7 +9,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { on ["comment"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["comment"] prefilter = ["@ts-"] => |node, source, ctx, diagnostics|
     let text = match std::str::from_utf8(&source[node.byte_range()]) {
         Ok(t) => t,
         Err(_) => return,

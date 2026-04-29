@@ -77,7 +77,7 @@ fn is_z_object(call: tree_sitter::Node, source: &[u8]) -> bool {
     obj.utf8_text(source).unwrap_or("") == "z" && prop.utf8_text(source).unwrap_or("") == "object"
 }
 
-crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["program"] prefilter = ["drizzle-zod", "createInsertSchema", "createSelectSchema"] => |node, source, ctx, diagnostics|
     let flags = collect_file_flags(node, source);
     if !flags.has_drizzle_import || !flags.has_zod_import || !flags.has_table_call || flags.uses_generator {
         return;

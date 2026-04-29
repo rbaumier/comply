@@ -34,7 +34,7 @@ fn arguments_contain_spread(arguments: tree_sitter::Node) -> bool {
         .any(|c| c.kind() == "spread_element")
 }
 
-crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["call_expression"] prefilter = ["Math"] => |node, source, ctx, diagnostics|
     let Some(callee) = node.child_by_field_name("function") else { return };
     let Some(method) = callee_is_math_min_or_max(callee, source) else { return };
 

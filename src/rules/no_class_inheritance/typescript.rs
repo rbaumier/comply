@@ -4,7 +4,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { on ["class_declaration", "class"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["class_declaration", "class"] prefilter = ["extends"] => |node, source, ctx, diagnostics|
     // Look for a class_heritage child (the `extends` clause).
     let mut cursor = node.walk();
     let mut heritage_node = None;

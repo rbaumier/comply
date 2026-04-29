@@ -93,6 +93,10 @@ fn byte_to_line_col(source: &str, byte_offset: usize) -> (usize, usize) {
 }
 
 impl TextCheck for Check {
+    fn prefilter(&self) -> Option<&'static [&'static str]> {
+        Some(&["hono"])
+    }
+
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
         if !is_hono_cors(ctx.source) {
             return Vec::new();

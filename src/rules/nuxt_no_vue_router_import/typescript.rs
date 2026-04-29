@@ -18,7 +18,7 @@ fn module_source<'a>(node: tree_sitter::Node, source: &'a [u8]) -> Option<&'a st
     Some(raw.trim_matches(|c| c == '"' || c == '\''))
 }
 
-crate::ast_check! { on ["import_statement"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["import_statement"] prefilter = ["vue-router"] => |node, source, ctx, diagnostics|
     if !is_nuxt_source(ctx.source) {
         return;
     }

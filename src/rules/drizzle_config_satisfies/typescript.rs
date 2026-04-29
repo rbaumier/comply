@@ -8,7 +8,7 @@ fn path_is_drizzle_config(path: &std::path::Path) -> bool {
     path.to_string_lossy().contains("drizzle.config")
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { prefilter = ["drizzle.config"] => |node, source, ctx, diagnostics|
     if !path_is_drizzle_config(ctx.path) {
         return;
     }

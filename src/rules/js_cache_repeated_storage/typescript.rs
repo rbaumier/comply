@@ -50,7 +50,7 @@ fn collect_getitem_calls<'a>(
     }
 }
 
-crate::ast_check! { on ["function_declaration", "arrow_function", "function_expression", "method_definition"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["function_declaration", "arrow_function", "function_expression", "method_definition"] prefilter = ["localStorage", "sessionStorage"] => |node, source, ctx, diagnostics|
     let Some(body) = node.child_by_field_name("body") else { return };
 
     let mut calls = Vec::new();

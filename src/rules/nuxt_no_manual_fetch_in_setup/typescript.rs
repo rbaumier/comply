@@ -18,7 +18,7 @@ fn is_nuxt_source(src: &str) -> bool {
         || src.contains("useRuntimeConfig")
 }
 
-crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["call_expression"] prefilter = ["fetch"] => |node, source, ctx, diagnostics|
     if !is_nuxt_source(ctx.source) {
         return;
     }

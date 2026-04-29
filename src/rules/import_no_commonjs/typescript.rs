@@ -2,7 +2,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { prefilter = ["require", "module.exports"] => |node, source, ctx, diagnostics|
     let kind = node.kind();
 
     // Flag `require(...)` calls.
