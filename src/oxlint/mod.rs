@@ -20,7 +20,7 @@ mod schema;
 pub use options::for_rule as options_for;
 
 use anyhow::{bail, Context, Result};
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 use std::path::Path;
 use std::process::Command;
 use std::sync::OnceLock;
@@ -108,7 +108,7 @@ fn invoke_oxlint(
 fn parse_json_bytes(
     stdout: &[u8],
     stderr: &[u8],
-    remap: &HashMap<String, &'static RuleMeta>,
+    remap: &FxHashMap<String, &'static RuleMeta>,
 ) -> Result<Vec<Diagnostic>> {
     let envelope: OxlintOutput = serde_json::from_slice(stdout).with_context(|| {
         format!(
@@ -125,7 +125,7 @@ fn parse_json_bytes(
 
 /// Convert one oxlint diagnostic into our unified format, remapping the
 /// rule_id + severity through the registry when a match exists.
-fn into_diagnostic(d: OxlintDiag, remap: &HashMap<String, &'static RuleMeta>) -> Diagnostic {
+fn into_diagnostic(d: OxlintDiag, remap: &FxHashMap<String, &'static RuleMeta>) -> Diagnostic {
     let (line, column) = d
         .labels
         .first()
@@ -164,7 +164,7 @@ mod tests {
 
     #[test]
     fn fallback_position_is_one_one_not_zero_zero() {
-        let remap = HashMap::new();
+        let remap = FxHashMap::default();
         let json = br#"{ "diagnostics": [{"message": "X", "severity": "error", "filename": "/tmp/x.ts", "labels": []}] }"#;
         let result = parse_json_bytes(json, b"", &remap).expect("must parse");
         assert_eq!(result[0].line, 1);
@@ -173,7 +173,7 @@ mod tests {
 
     #[test]
     fn empty_diagnostics_array_yields_empty_vec() {
-        let remap = HashMap::new();
+        let remap = FxHashMap::default();
         let json = br#"{ "diagnostics": [] }"#;
         let result = parse_json_bytes(json, b"", &remap).expect("must parse");
         assert!(result.is_empty());

@@ -10,7 +10,7 @@
 //! code and oxlint's generic message instead of comply's stable rule id
 //! and our remediation wording.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 use crate::diagnostic::Severity;
 use crate::rules::meta::RuleMeta;
@@ -19,8 +19,8 @@ use crate::rules::meta::RuleMeta;
 /// RuleMeta that owns it.
 pub fn build_table(
     bindings: &[(&'static str, &'static RuleMeta, Severity)],
-) -> HashMap<String, &'static RuleMeta> {
-    let mut table = HashMap::with_capacity(bindings.len());
+) -> FxHashMap<String, &'static RuleMeta> {
+    let mut table = FxHashMap::with_capacity_and_hasher(bindings.len(), Default::default());
     for (key, meta, _) in bindings {
         table.insert(config_key_to_oxlint_code(key), *meta);
     }

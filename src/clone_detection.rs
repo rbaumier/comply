@@ -4,7 +4,7 @@
 //! - Hash sliding windows of MIN_TOKENS tokens
 //! - Cross-file collisions with token-by-token verification = clones
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 use rayon::prelude::*;
 use tree_sitter::Parser;
@@ -63,7 +63,7 @@ pub fn lint_files(files: &[&SourceFile]) -> Vec<Diagnostic> {
 }
 
 fn find_raw_clones(file_data: &[Option<FileTokens>]) -> Vec<RawClone> {
-    let mut index: HashMap<u64, Vec<Occurrence>> = HashMap::new();
+    let mut index: FxHashMap<u64, Vec<Occurrence>> = FxHashMap::default();
     let mut raw: Vec<RawClone> = Vec::new();
 
     for (fi, ft) in file_data.iter().enumerate() {

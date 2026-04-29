@@ -32,7 +32,6 @@ use crate::files::{Language, SourceFile};
 use crate::project::ProjectCtx;
 use crate::rules::backend::AstCheck;
 use crate::rules::file_ctx::FileCtx;
-use crate::rules::walker::walk_tree_filtered;
 use crate::rules::{self, backend::Backend, backend::CheckCtx, meta::RuleMeta, RuleDef};
 
 /// Pre-computed per-language dispatch table. Built once in `lint_files`,

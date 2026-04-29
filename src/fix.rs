@@ -160,9 +160,9 @@ fn run_clippy_fix(files: &[&SourceFile], config: &Config) -> Result<usize> {
 /// Files outside any workspace land under the `None` key.
 fn group_by_workspace<'a>(
     files: &[&'a SourceFile],
-) -> std::collections::HashMap<Option<PathBuf>, Vec<&'a SourceFile>> {
-    let mut out: std::collections::HashMap<Option<PathBuf>, Vec<&'a SourceFile>> =
-        std::collections::HashMap::new();
+) -> rustc_hash::FxHashMap<Option<PathBuf>, Vec<&'a SourceFile>> {
+    let mut out: rustc_hash::FxHashMap<Option<PathBuf>, Vec<&'a SourceFile>> =
+        rustc_hash::FxHashMap::default();
     for f in files {
         let root = find_workspace_root(&f.path);
         out.entry(root).or_default().push(*f);
