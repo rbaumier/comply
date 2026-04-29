@@ -52,6 +52,12 @@ Corrections de faux positifs identifiés en scannant des projets réels dans ~/w
 | tRPC/svelte-kit | `page.waitForSelector()` (Playwright) | Ajouté `.waitFor` à `has_assertion()` |
 | svelte-kit | Assertions déléguées dans helpers (`run_get_pathname_test(...)`) | Non corrigé — nécessiterait analyse inter-procédurale |
 
+## `unused-enum-member` — enums exportés flaguées inutilement
+
+| Règle | Projet | Hits avant | Problème | Fix | Hits après |
+|-------|--------|-----------|----------|-----|------------|
+| `unused-enum-member` | immich | 1197 | Les enums exportés (`export enum CastState { IDLE, PLAYING, ... }`) sont flaguées parce que leurs membres ne sont pas référencés dans le fichier de déclaration. Mais ils sont utilisés cross-file — c'est leur raison d'être. La règle était file-local par design, ce qui est correct pour les enums privées mais faux pour les exportées. | Skip les `enum_declaration` dont le parent est un `export_statement`. Les enums non-exportés continuent d'être vérifiés. | 10 |
+
 ## i18n — faux positifs sur syntaxe i18next
 
 | Règle | Projet | Hits | Problème | Fix |

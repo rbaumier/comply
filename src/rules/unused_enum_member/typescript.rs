@@ -32,6 +32,16 @@ fn collect_enums(
     let mut stack = vec![root];
     while let Some(current) = stack.pop() {
         if current.kind() == "enum_declaration" {
+            // Exported enums are consumed cross-file; their members
+            // aren't expected to be referenced locally.
+            if let Some(parent) = current.parent() {
+                if parent.kind() == "export_statement" {
+                    continue;
+                }
+            }
+            if text_of(current, source).starts_with("export ") {
+                continue;
+            }
             if let Some(name_node) = current.child_by_field_name("name") {
                 let enum_name = text_of(name_node, source).to_string();
                 if let Some(body) = current.child_by_field_name("body") {
@@ -192,6 +202,18 @@ enum Direction {
 "#;
         let diags = run_ts(source, &Check);
         assert_eq!(diags.len(), 4);
+    }
+
+    #[test]
+    fn skips_exported_enums() {
+        let source = r#"
+export enum CastState {
+    IDLE,
+    PLAYING,
+    PAUSED,
+}
+"#;
+        assert!(run_ts(source, &Check).is_empty());
     }
 
     #[test]
