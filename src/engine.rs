@@ -248,8 +248,14 @@ fn dispatch_with_lang(
         return Vec::new();
     }
 
-    let needs_ast = ld.applicable.iter().any(|(meta, b)| {
-        matches!(b, Backend::TreeSitter(_)) && config.is_rule_enabled(meta.id, path)
+    let needs_ast = ld.applicable.iter().any(|(meta, b)| match b {
+        Backend::TreeSitter(check) => {
+            config.is_rule_enabled(meta.id, path)
+                && check
+                    .prefilter()
+                    .is_none_or(|lits| source_matches_prefilter(source, lits))
+        }
+        _ => false,
     });
     let tree = if needs_ast {
         crate::parsing::parse_with_grammar(&mut worker.parser, file.language, source.as_bytes())
@@ -272,7 +278,14 @@ fn dispatch_with_lang(
             continue;
         }
         let mut produced = match backend {
-            Backend::Text(check) => check.check(&ctx),
+            Backend::Text(check) => {
+                if let Some(lits) = check.prefilter() {
+                    if !source_matches_prefilter(source, lits) {
+                        continue;
+                    }
+                }
+                check.check(&ctx)
+            }
             Backend::Oxlint { .. }
             | Backend::Clippy { .. }
             | Backend::Tsc { .. }
@@ -296,11 +309,12 @@ fn dispatch_with_lang(
             // of allocating fresh Vecs — `Vec::resize_with(n, default)` keeps
             // existing capacity and only re-runs the closure for new slots.
             worker.enabled.clear();
-            worker.enabled.extend(
-                ld.multiplexed
-                    .iter()
-                    .map(|(meta, _)| config.is_rule_enabled(meta.id, path)),
-            );
+            worker.enabled.extend(ld.multiplexed.iter().map(|(meta, check)| {
+                config.is_rule_enabled(meta.id, path)
+                    && check
+                        .prefilter()
+                        .is_none_or(|lits| source_matches_prefilter(source, lits))
+            }));
 
             // Old states from a previous file may linger in the Vec — drop
             // them before resizing. (resize_with would keep the old Box's.)
@@ -367,6 +381,11 @@ fn dispatch_with_lang(
             if !config.is_rule_enabled(meta.id, path) {
                 continue;
             }
+            if let Some(lits) = check.prefilter() {
+                if !source_matches_prefilter(source, lits) {
+                    continue;
+                }
+            }
             let mut produced = check.check(&ctx, t);
             if let Some(sev) = config.severity_for(meta.id) {
                 for d in &mut produced {
@@ -431,4 +450,50 @@ fn is_self_reference(d: &Diagnostic) -> bool {
     let alt_needle = format!("src\\rules\\{dir_fragment}\\");
     let path_str = d.path.to_string_lossy();
     path_str.contains(&needle) || path_str.contains(&alt_needle)
+}
+
+/// True if `source` contains at least one of the literal substrings.
+///
+/// Used as a cheap pre-pass before invoking a rule's AST/text check:
+/// when a rule declares `prefilter = ["foo", "bar"]`, the engine can
+/// skip the full traversal entirely on files where none of the literals
+/// appear. Pure substring search — no regex, no case folding.
+#[inline]
+fn source_matches_prefilter(source: &str, literals: &[&str]) -> bool {
+    literals.iter().any(|lit| source.contains(lit))
+}
+
+#[cfg(test)]
+mod prefilter_tests {
+    use super::source_matches_prefilter;
+
+    #[test]
+    fn empty_literals_returns_false() {
+        assert!(!source_matches_prefilter("anything", &[]));
+    }
+
+    #[test]
+    fn single_literal_present() {
+        assert!(source_matches_prefilter("x foo y", &["foo"]));
+    }
+
+    #[test]
+    fn single_literal_absent() {
+        assert!(!source_matches_prefilter("bar", &["foo"]));
+    }
+
+    #[test]
+    fn multiple_literals_any_match() {
+        assert!(source_matches_prefilter("...bar...", &["foo", "bar"]));
+    }
+
+    #[test]
+    fn multiple_literals_none_match() {
+        assert!(!source_matches_prefilter("baz", &["foo", "bar"]));
+    }
+
+    #[test]
+    fn case_sensitive() {
+        assert!(!source_matches_prefilter("foo", &["Foo"]));
+    }
 }
