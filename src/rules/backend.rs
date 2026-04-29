@@ -134,9 +134,8 @@ pub trait AstCheck: Send + Sync {
 
     /// Optional list of literal substrings the rule needs in the source.
     ///
-    /// When `Some(&[...])` the engine performs a cheap `str::contains`
-    /// pass before running the rule and skips it entirely if none of the
-    /// literals match. Default `None` means "always run" (legacy behavior).
+    /// When `Some(&[...])` the engine builds SIMD-accelerated searchers
+    /// at startup and skips the rule on files where none match.
     fn prefilter(&self) -> Option<&'static [&'static str]> {
         None
     }

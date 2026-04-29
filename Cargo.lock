@@ -306,6 +306,7 @@ dependencies = [
  "globset",
  "ignore",
  "json_comments",
+ "memchr",
  "miette",
  "oxc_allocator",
  "oxc_ast",

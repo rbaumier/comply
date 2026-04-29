@@ -15,7 +15,7 @@
 mod prefilter;
 mod walk;
 
-use prefilter::source_matches_prefilter;
+use prefilter::{PrefilterFinders, build_finders, source_matches_prefilter};
 use walk::{run_legacy_checks, run_multiplexed_walk};
 
 use anyhow::{Context, Result};
@@ -46,8 +46,11 @@ use crate::rules::{self, backend::Backend, backend::CheckCtx, meta::RuleMeta, Ru
 /// nodes (most nodes in any tree).
 struct LangDispatch<'a> {
     applicable: Vec<(&'a RuleMeta, &'a Backend)>,
+    applicable_prefilters: Vec<Option<PrefilterFinders>>,
     multiplexed: Vec<(&'a RuleMeta, &'a dyn AstCheck)>,
+    multiplexed_prefilters: Vec<Option<PrefilterFinders>>,
     legacy: Vec<(&'a RuleMeta, &'a dyn AstCheck)>,
+    legacy_prefilters: Vec<Option<PrefilterFinders>>,
     dispatch: FxHashMap<u16, Vec<usize>>,
     interesting: Vec<bool>,
 }
@@ -55,15 +58,28 @@ struct LangDispatch<'a> {
 impl<'a> LangDispatch<'a> {
     fn build(rule_defs: &'a [RuleDef], language: Language) -> Self {
         let applicable = collect_applicable(rule_defs, language);
+        let applicable_prefilters: Vec<Option<PrefilterFinders>> = applicable
+            .iter()
+            .map(|(_, backend)| match backend {
+                Backend::TreeSitter(c) => c.prefilter().map(build_finders),
+                Backend::Text(c) => c.prefilter().map(build_finders),
+                _ => None,
+            })
+            .collect();
         let mut multiplexed: Vec<(&'a RuleMeta, &'a dyn AstCheck)> = Vec::new();
+        let mut multiplexed_prefilters: Vec<Option<PrefilterFinders>> = Vec::new();
         let mut legacy: Vec<(&'a RuleMeta, &'a dyn AstCheck)> = Vec::new();
+        let mut legacy_prefilters: Vec<Option<PrefilterFinders>> = Vec::new();
         for &(meta, ref backend) in &applicable {
             if let Backend::TreeSitter(check) = backend {
                 let check: &dyn AstCheck = &**check;
+                let pf = check.prefilter().map(build_finders);
                 if check.interested_kinds().is_some() {
                     multiplexed.push((meta, check));
+                    multiplexed_prefilters.push(pf);
                 } else {
                     legacy.push((meta, check));
+                    legacy_prefilters.push(pf);
                 }
             }
         }
@@ -93,8 +109,11 @@ impl<'a> LangDispatch<'a> {
         }
         Self {
             applicable,
+            applicable_prefilters,
             multiplexed,
+            multiplexed_prefilters,
             legacy,
+            legacy_prefilters,
             dispatch,
             interesting,
         }
@@ -254,15 +273,19 @@ fn dispatch_with_lang(
         return Vec::new();
     }
 
-    let needs_ast = ld.applicable.iter().any(|(meta, b)| match b {
-        Backend::TreeSitter(check) => {
-            config.is_rule_enabled(meta.id, path)
-                && check
-                    .prefilter()
-                    .is_none_or(|lits| source_matches_prefilter(source, lits))
-        }
-        _ => false,
-    });
+    let needs_ast = ld
+        .applicable
+        .iter()
+        .zip(&ld.applicable_prefilters)
+        .any(|((meta, b), pf)| match b {
+            Backend::TreeSitter(_) => {
+                config.is_rule_enabled(meta.id, path)
+                    && pf
+                        .as_ref()
+                        .is_none_or(|f| source_matches_prefilter(source, f))
+            }
+            _ => false,
+        });
     let tree = if needs_ast {
         crate::parsing::parse_with_grammar(&mut worker.parser, file.language, source.as_bytes())
     } else {
@@ -279,14 +302,14 @@ fn dispatch_with_lang(
     };
     let mut diagnostics = Vec::new();
 
-    for &(meta, ref backend) in &ld.applicable {
+    for ((&(meta, ref backend), pf)) in ld.applicable.iter().zip(&ld.applicable_prefilters) {
         if !config.is_rule_enabled(meta.id, path) {
             continue;
         }
         let mut produced = match backend {
             Backend::Text(check) => {
-                if let Some(lits) = check.prefilter()
-                    && !source_matches_prefilter(source, lits)
+                if let Some(f) = pf
+                    && !source_matches_prefilter(source, f)
                 {
                     continue;
                 }

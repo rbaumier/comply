@@ -3,7 +3,7 @@
 //! Split out from `engine/mod.rs` so the dispatch entry point stays
 //! readable and the walking machinery has its own home.
 
-use super::{LangDispatch, WorkerState, source_matches_prefilter};
+use super::{LangDispatch, WorkerState};
 use crate::config::Config;
 use crate::diagnostic::Diagnostic;
 use crate::rules::backend::CheckCtx;
@@ -30,12 +30,17 @@ pub(super) fn run_multiplexed_walk(
     // of allocating fresh Vecs — `Vec::resize_with(n, default)` keeps
     // existing capacity and only re-runs the closure for new slots.
     worker.enabled.clear();
-    worker.enabled.extend(ld.multiplexed.iter().map(|(meta, check)| {
-        config.is_rule_enabled(meta.id, path)
-            && check
-                .prefilter()
-                .is_none_or(|lits| source_matches_prefilter(source, lits))
-    }));
+    worker.enabled.extend(
+        ld.multiplexed
+            .iter()
+            .zip(&ld.multiplexed_prefilters)
+            .map(|((meta, _), pf)| {
+                config.is_rule_enabled(meta.id, path)
+                    && pf
+                        .as_ref()
+                        .is_none_or(|f| super::source_matches_prefilter(source, f))
+            }),
+    );
 
     // Old states from a previous file may linger in the Vec — drop
     // them before resizing. (resize_with would keep the old Box's.)
@@ -109,12 +114,12 @@ pub(super) fn run_legacy_checks(
     config: &Config,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    for (meta, check) in &ld.legacy {
+    for ((meta, check), pf) in ld.legacy.iter().zip(&ld.legacy_prefilters) {
         if !config.is_rule_enabled(meta.id, path) {
             continue;
         }
-        if let Some(lits) = check.prefilter()
-            && !source_matches_prefilter(source, lits)
+        if let Some(f) = pf
+            && !super::source_matches_prefilter(source, f)
         {
             continue;
         }

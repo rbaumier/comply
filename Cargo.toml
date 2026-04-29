@@ -39,6 +39,7 @@ ratatui = "0.29"
 crossterm = "0.28"
 unicode-width = "0.2"
 rustc-hash = "2"
+memchr = "2"
 
 [dev-dependencies]
 assert_cmd = "2"

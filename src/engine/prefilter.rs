@@ -6,49 +6,62 @@
 //! [`source_matches_prefilter`] before invoking the rule's full traversal
 //! and skips the rule entirely on files where none of the literals appear.
 
-/// True if `source` contains at least one of the literal substrings.
-///
-/// Pure substring search — no regex, no case folding. The bar to pass this
-/// check is intentionally low: any single occurrence anywhere in the file
-/// (including comments, strings, and identifiers that merely contain the
-/// literal as a fragment) is enough to keep the rule in play.
+use memchr::memmem;
+
+/// Pre-built SIMD-accelerated searchers for a rule's prefilter literals.
+pub(super) type PrefilterFinders = Vec<memmem::Finder<'static>>;
+
+/// Build `Finder` objects once from static literal slices.
+pub(super) fn build_finders(literals: &'static [&'static str]) -> PrefilterFinders {
+    literals
+        .iter()
+        .map(|lit| memmem::Finder::new(lit.as_bytes()))
+        .collect()
+}
+
+/// True if `source` contains at least one of the pre-built patterns.
 #[inline]
-pub(super) fn source_matches_prefilter(source: &str, literals: &[&str]) -> bool {
-    literals.iter().any(|lit| source.contains(lit))
+pub(super) fn source_matches_prefilter(source: &str, finders: &[memmem::Finder]) -> bool {
+    let haystack = source.as_bytes();
+    finders.iter().any(|f| f.find(haystack).is_some())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::source_matches_prefilter;
+    use super::{build_finders, source_matches_prefilter};
+
+    fn finders(lits: &'static [&'static str]) -> Vec<memchr::memmem::Finder<'static>> {
+        build_finders(lits)
+    }
 
     #[test]
     fn empty_literals_returns_false() {
-        assert!(!source_matches_prefilter("anything", &[]));
+        assert!(!source_matches_prefilter("anything", &finders(&[])));
     }
 
     #[test]
     fn single_literal_present() {
-        assert!(source_matches_prefilter("x foo y", &["foo"]));
+        assert!(source_matches_prefilter("x foo y", &finders(&["foo"])));
     }
 
     #[test]
     fn single_literal_absent() {
-        assert!(!source_matches_prefilter("bar", &["foo"]));
+        assert!(!source_matches_prefilter("bar", &finders(&["foo"])));
     }
 
     #[test]
     fn multiple_literals_any_match() {
-        assert!(source_matches_prefilter("...bar...", &["foo", "bar"]));
+        assert!(source_matches_prefilter("...bar...", &finders(&["foo", "bar"])));
     }
 
     #[test]
     fn multiple_literals_none_match() {
-        assert!(!source_matches_prefilter("baz", &["foo", "bar"]));
+        assert!(!source_matches_prefilter("baz", &finders(&["foo", "bar"])));
     }
 
     #[test]
     fn case_sensitive() {
-        assert!(!source_matches_prefilter("foo", &["Foo"]));
+        assert!(!source_matches_prefilter("foo", &finders(&["Foo"])));
     }
 }
 
