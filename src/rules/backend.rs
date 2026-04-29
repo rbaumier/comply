@@ -132,6 +132,15 @@ pub trait AstCheck: Send + Sync {
         None
     }
 
+    /// Optional list of literal substrings the rule needs in the source.
+    ///
+    /// When `Some(&[...])` the engine performs a cheap `str::contains`
+    /// pass before running the rule and skips it entirely if none of the
+    /// literals match. Default `None` means "always run" (legacy behavior).
+    fn prefilter(&self) -> Option<&'static [&'static str]> {
+        None
+    }
+
     // State must be 'static owned data — no Node<'tree> or &str into source.
     fn create_state(&self) -> Option<Box<dyn std::any::Any>> {
         None
@@ -174,6 +183,15 @@ pub trait AstCheck: Send + Sync {
 
 /// A text-only check — no AST needed.
 pub trait TextCheck: Send + Sync {
+    /// Optional list of literal substrings the rule needs in the source.
+    ///
+    /// Same semantics as `AstCheck::prefilter`: when `Some(&[...])` the
+    /// engine skips the check on files whose source contains none of the
+    /// literals. Default `None` means "always run".
+    fn prefilter(&self) -> Option<&'static [&'static str]> {
+        None
+    }
+
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic>;
 }
 
@@ -214,5 +232,42 @@ impl std::fmt::Debug for Backend {
             Self::Tsc { codes } => write!(f, "Backend::Tsc {{ codes: {codes:?} }}"),
             Self::Tsgolint { rule } => write!(f, "Backend::Tsgolint {{ rule: {rule:?} }}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod backend_tests {
+    use super::*;
+
+    struct DefaultAst;
+    impl AstCheck for DefaultAst {}
+
+    struct DefaultText;
+    impl TextCheck for DefaultText {
+        fn check(&self, _ctx: &CheckCtx) -> Vec<Diagnostic> {
+            Vec::new()
+        }
+    }
+
+    struct AstWithPrefilter;
+    impl AstCheck for AstWithPrefilter {
+        fn prefilter(&self) -> Option<&'static [&'static str]> {
+            Some(&["foo", "bar"])
+        }
+    }
+
+    #[test]
+    fn ast_check_default_prefilter_is_none() {
+        assert!(DefaultAst.prefilter().is_none());
+    }
+
+    #[test]
+    fn text_check_default_prefilter_is_none() {
+        assert!(DefaultText.prefilter().is_none());
+    }
+
+    #[test]
+    fn ast_check_can_override_prefilter() {
+        assert_eq!(AstWithPrefilter.prefilter(), Some(&["foo", "bar"][..]));
     }
 }

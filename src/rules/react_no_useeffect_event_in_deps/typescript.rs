@@ -50,6 +50,10 @@ fn find_matching_bracket(bytes: &[u8], start: usize, open: u8, close: u8) -> Opt
 }
 
 impl TextCheck for Check {
+    fn prefilter(&self) -> Option<&'static [&'static str]> {
+        Some(&["useEffectEvent"])
+    }
+
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
         let names = collect_event_names(ctx.source);
         if names.is_empty() { return Vec::new(); }

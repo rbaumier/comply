@@ -12,6 +12,12 @@
 //!    Oxlint/Clippy/Tsc contribute their rule-id to external tools and
 //!    their diagnostics are remapped post-hoc.
 
+mod prefilter;
+mod walk;
+
+use prefilter::source_matches_prefilter;
+use walk::{run_legacy_checks, run_multiplexed_walk};
+
 use anyhow::{Context, Result};
 use rayon::prelude::*;
 use rustc_hash::FxHashMap;
@@ -279,10 +285,10 @@ fn dispatch_with_lang(
         }
         let mut produced = match backend {
             Backend::Text(check) => {
-                if let Some(lits) = check.prefilter() {
-                    if !source_matches_prefilter(source, lits) {
-                        continue;
-                    }
+                if let Some(lits) = check.prefilter()
+                    && !source_matches_prefilter(source, lits)
+                {
+                    continue;
                 }
                 check.check(&ctx)
             }
@@ -301,99 +307,10 @@ fn dispatch_with_lang(
     }
 
     if let Some(ref t) = tree {
-        // Multiplexed walk — dispatch table is shared, only states are per-file.
         if !ld.multiplexed.is_empty() {
-            let n = ld.multiplexed.len();
-
-            // Reset worker buffers for this file. We resize-then-fill instead
-            // of allocating fresh Vecs — `Vec::resize_with(n, default)` keeps
-            // existing capacity and only re-runs the closure for new slots.
-            worker.enabled.clear();
-            worker.enabled.extend(ld.multiplexed.iter().map(|(meta, check)| {
-                config.is_rule_enabled(meta.id, path)
-                    && check
-                        .prefilter()
-                        .is_none_or(|lits| source_matches_prefilter(source, lits))
-            }));
-
-            // Old states from a previous file may linger in the Vec — drop
-            // them before resizing. (resize_with would keep the old Box's.)
-            worker.states.clear();
-            worker.states.extend(
-                ld.multiplexed
-                    .iter()
-                    .enumerate()
-                    .map(|(i, (_, check))| {
-                        if worker.enabled[i] {
-                            check.create_state()
-                        } else {
-                            None
-                        }
-                    }),
-            );
-
-            // Reuse the per-rule diag Vecs — clear each but keep capacity.
-            if worker.per_rule_diags.len() < n {
-                worker.per_rule_diags.resize_with(n, Vec::new);
-            }
-            for v in worker.per_rule_diags.iter_mut().take(n) {
-                v.clear();
-            }
-
-            // Split the borrow so the walker closure can mutate states/diags
-            // without re-borrowing `worker`.
-            let enabled = &worker.enabled;
-            let states = &mut worker.states;
-            let per_rule_diags = &mut worker.per_rule_diags;
-
-            walk_tree_filtered(t, &ld.interesting, |node| {
-                if let Some(indices) = ld.dispatch.get(&node.kind_id()) {
-                    for &i in indices {
-                        if !enabled[i] {
-                            continue;
-                        }
-                        let (_, check) = &ld.multiplexed[i];
-                        check.visit_node(
-                            node,
-                            &ctx,
-                            states[i].as_deref_mut(),
-                            &mut per_rule_diags[i],
-                        );
-                    }
-                }
-            });
-
-            for (i, (meta, check)) in ld.multiplexed.iter().enumerate() {
-                if !enabled[i] {
-                    continue;
-                }
-                check.finish(&ctx, states[i].take(), &mut per_rule_diags[i]);
-                if let Some(sev) = config.severity_for(meta.id) {
-                    for d in &mut per_rule_diags[i] {
-                        d.severity = sev;
-                    }
-                }
-                diagnostics.extend(per_rule_diags[i].drain(..));
-            }
+            run_multiplexed_walk(ld, t, &ctx, source, path, config, worker, &mut diagnostics);
         }
-
-        for (meta, check) in &ld.legacy {
-            if !config.is_rule_enabled(meta.id, path) {
-                continue;
-            }
-            if let Some(lits) = check.prefilter() {
-                if !source_matches_prefilter(source, lits) {
-                    continue;
-                }
-            }
-            let mut produced = check.check(&ctx, t);
-            if let Some(sev) = config.severity_for(meta.id) {
-                for d in &mut produced {
-                    d.severity = sev;
-                }
-            }
-            diagnostics.extend(produced);
-        }
+        run_legacy_checks(ld, t, &ctx, source, path, config, &mut diagnostics);
     }
 
     diagnostics
@@ -452,94 +369,3 @@ fn is_self_reference(d: &Diagnostic) -> bool {
     path_str.contains(&needle) || path_str.contains(&alt_needle)
 }
 
-/// True if `source` contains at least one of the literal substrings.
-///
-/// Used as a cheap pre-pass before invoking a rule's AST/text check:
-/// when a rule declares `prefilter = ["foo", "bar"]`, the engine can
-/// skip the full traversal entirely on files where none of the literals
-/// appear. Pure substring search — no regex, no case folding.
-#[inline]
-fn source_matches_prefilter(source: &str, literals: &[&str]) -> bool {
-    literals.iter().any(|lit| source.contains(lit))
-}
-
-#[cfg(test)]
-mod prefilter_tests {
-    use super::source_matches_prefilter;
-
-    #[test]
-    fn empty_literals_returns_false() {
-        assert!(!source_matches_prefilter("anything", &[]));
-    }
-
-    #[test]
-    fn single_literal_present() {
-        assert!(source_matches_prefilter("x foo y", &["foo"]));
-    }
-
-    #[test]
-    fn single_literal_absent() {
-        assert!(!source_matches_prefilter("bar", &["foo"]));
-    }
-
-    #[test]
-    fn multiple_literals_any_match() {
-        assert!(source_matches_prefilter("...bar...", &["foo", "bar"]));
-    }
-
-    #[test]
-    fn multiple_literals_none_match() {
-        assert!(!source_matches_prefilter("baz", &["foo", "bar"]));
-    }
-
-    #[test]
-    fn case_sensitive() {
-        assert!(!source_matches_prefilter("foo", &["Foo"]));
-    }
-}
-
-#[cfg(test)]
-mod lint_in_memory_prefilter_tests {
-    use super::lint_in_memory;
-    use crate::config::default_static_config;
-    use crate::files::Language;
-    use std::path::Path;
-
-    /// `no-eval` declares `prefilter = ["eval"]`. A TypeScript source that
-    /// never mentions `eval` must produce zero diagnostics for that rule
-    /// even when run through the LSP path.
-    #[test]
-    fn lint_in_memory_skips_rule_when_prefilter_literal_absent() {
-        let source = "const x = 1;\nconst y = x + 2;\n";
-        let diagnostics = lint_in_memory(
-            Path::new("scratch.ts"),
-            Language::TypeScript,
-            source,
-            default_static_config(),
-            None,
-        );
-        assert!(
-            diagnostics.iter().all(|d| d.rule_id.as_ref() != "no-eval"),
-            "expected zero `no-eval` diagnostics on prefilter-miss source, got: {diagnostics:?}",
-        );
-    }
-
-    /// Sanity check: when the literal IS present and the call is real,
-    /// the rule still fires through `lint_in_memory`. Guards against the
-    /// prefilter accidentally short-circuiting valid hits.
-    #[test]
-    fn lint_in_memory_runs_rule_when_prefilter_literal_present() {
-        let source = "const r = eval(\"1 + 2\");\n";
-        let diagnostics = lint_in_memory(
-            Path::new("scratch.ts"),
-            Language::TypeScript,
-            source,
-            default_static_config(),
-            None,
-        );
-        assert!(
-            diagnostics.iter().any(|d| d.rule_id.as_ref() == "no-eval"),
-            "expected at least one `no-eval` diagnostic when source contains eval(), got: {diagnostics:?}",
-        );
-    }
-}

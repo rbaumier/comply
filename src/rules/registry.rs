@@ -183,6 +183,71 @@ macro_rules! register_ts_family_with_clippy_marker {
 /// Rule of Three duplication across ~50 files.
 #[macro_export]
 macro_rules! ast_check {
+    (on [$($kind:expr),+ $(,)?] prefilter = [$($lit:expr),+ $(,)?] => |$node:ident, $source:ident, $ctx:ident, $diagnostics:ident| $($body:tt)*) => {
+        #[derive(Debug)]
+        pub struct Check;
+
+        impl $crate::rules::backend::AstCheck for Check {
+            fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+                Some(&[$($kind),+])
+            }
+
+            fn prefilter(&self) -> Option<&'static [&'static str]> {
+                Some(&[$($lit),+])
+            }
+
+            fn visit_node(
+                &self,
+                ast_check_node: tree_sitter::Node,
+                ast_check_ctx: &$crate::rules::backend::CheckCtx,
+                _ast_check_state: Option<&mut dyn std::any::Any>,
+                ast_check_diagnostics: &mut Vec<$crate::diagnostic::Diagnostic>,
+            ) {
+                #[allow(unused_variables)]
+                let $node = ast_check_node;
+                #[allow(unused_variables)]
+                let $source: &[u8] = ast_check_ctx.source.as_bytes();
+                #[allow(unused_variables)]
+                let $ctx: &$crate::rules::backend::CheckCtx = ast_check_ctx;
+                #[allow(unused_variables)]
+                let $diagnostics: &mut Vec<$crate::diagnostic::Diagnostic> = ast_check_diagnostics;
+                $($body)*
+            }
+        }
+    };
+
+    (prefilter = [$($lit:expr),+ $(,)?] => |$node:ident, $source:ident, $ctx:ident, $diagnostics:ident| $($body:tt)*) => {
+        #[derive(Debug)]
+        pub struct Check;
+
+        impl $crate::rules::backend::AstCheck for Check {
+            fn prefilter(&self) -> Option<&'static [&'static str]> {
+                Some(&[$($lit),+])
+            }
+
+            fn check(
+                &self,
+                ast_check_ctx: &$crate::rules::backend::CheckCtx,
+                tree: &tree_sitter::Tree,
+            ) -> Vec<$crate::diagnostic::Diagnostic> {
+                let ast_check_source = ast_check_ctx.source.as_bytes();
+                let mut ast_check_diagnostics: Vec<$crate::diagnostic::Diagnostic> = Vec::new();
+                $crate::rules::walker::walk_tree(tree, |ast_check_node| {
+                    #[allow(unused_variables)]
+                    let $node = ast_check_node;
+                    #[allow(unused_variables)]
+                    let $source: &[u8] = ast_check_source;
+                    #[allow(unused_variables)]
+                    let $ctx: &$crate::rules::backend::CheckCtx = ast_check_ctx;
+                    #[allow(unused_variables)]
+                    let $diagnostics: &mut Vec<$crate::diagnostic::Diagnostic> = &mut ast_check_diagnostics;
+                    $($body)*
+                });
+                ast_check_diagnostics
+            }
+        }
+    };
+
     (on [$($kind:expr),+ $(,)?] => |$node:ident, $source:ident, $ctx:ident, $diagnostics:ident| $($body:tt)*) => {
         #[derive(Debug)]
         pub struct Check;
@@ -239,4 +304,72 @@ macro_rules! ast_check {
             }
         }
     };
+}
+
+#[cfg(test)]
+mod macro_prefilter_tests {
+    use crate::rules::backend::AstCheck;
+
+    mod with_prefilter_multiplexed {
+        crate::ast_check! {
+            on ["call_expression"] prefilter = ["foo", "bar"]
+            => |node, source, ctx, diagnostics|
+            let _ = (node, source, ctx, diagnostics);
+        }
+    }
+
+    mod with_prefilter_legacy {
+        crate::ast_check! {
+            prefilter = ["needle"] => |node, source, ctx, diagnostics|
+            let _ = (node, source, ctx, diagnostics);
+        }
+    }
+
+    mod without_prefilter_multiplexed {
+        crate::ast_check! {
+            on ["call_expression"] => |node, source, ctx, diagnostics|
+            let _ = (node, source, ctx, diagnostics);
+        }
+    }
+
+    mod without_prefilter_legacy {
+        crate::ast_check! {
+            |node, source, ctx, diagnostics|
+            let _ = (node, source, ctx, diagnostics);
+        }
+    }
+
+    #[test]
+    fn multiplexed_with_prefilter_returns_slice() {
+        assert_eq!(
+            with_prefilter_multiplexed::Check.prefilter(),
+            Some(&["foo", "bar"][..]),
+        );
+        assert_eq!(
+            with_prefilter_multiplexed::Check.interested_kinds(),
+            Some(&["call_expression"][..]),
+        );
+    }
+
+    #[test]
+    fn legacy_with_prefilter_returns_slice() {
+        assert_eq!(
+            with_prefilter_legacy::Check.prefilter(),
+            Some(&["needle"][..]),
+        );
+    }
+
+    #[test]
+    fn multiplexed_without_prefilter_returns_none() {
+        assert!(without_prefilter_multiplexed::Check.prefilter().is_none());
+        assert_eq!(
+            without_prefilter_multiplexed::Check.interested_kinds(),
+            Some(&["call_expression"][..]),
+        );
+    }
+
+    #[test]
+    fn legacy_without_prefilter_returns_none() {
+        assert!(without_prefilter_legacy::Check.prefilter().is_none());
+    }
 }

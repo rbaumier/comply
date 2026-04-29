@@ -34,7 +34,7 @@ fn collect_refs(script: &str) -> Vec<String> {
     names
 }
 
-crate::ast_check! { on ["component"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["component"] prefilter = ["ref(", "shallowRef("] => |node, source, ctx, diagnostics|
     let _ = source;
     let Some((start, end)) = script_range(ctx.source) else {
         return;
