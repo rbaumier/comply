@@ -132,6 +132,7 @@ Corrections de faux positifs identifiés en scannant des projets réels dans ~/w
 | Bug | Cause | Fix |
 |-----|-------|-----|
 | Crash sur `actix-web` | `cargo shear --format=json` retourne du texte non-JSON (stderr) quand le sous-crate n'a pas de Cargo.lock ou que la commande échoue. Le `serde_json::from_slice()?.` propageait l'erreur via `?` jusqu'au `main()`, ce qui crashait comply avec "crashed unexpectedly". | Remplacé le `?` par `let Ok(report) = ... else { return Ok(vec![]); }` — un cargo-shear qui échoue à parser ne doit pas crasher tout comply, on retourne simplement zéro diagnostics pour ce workspace. |
+| Crash sur `n8n` | `zod-no-safeparse-without-check` (`typescript.rs:79`) : `preceding.len().saturating_sub(120)` peut tomber au milieu d'un caractère multi-byte (ici `→`, bytes 8364..8367). Le `&preceding[look_start..]` panic sur "byte index is not a char boundary". | Ajouté `safe_boundary()` qui recule au `is_char_boundary` le plus proche. Même fix appliqué à 11 autres règles TextCheck qui partagent le même pattern : `angular-require-onpush`, `api-no-status-in-body`, `hono-jwt-secret-hardcoded`, `hono-no-get-with-body`, `no-side-effects-in-initialization`, `prisma-no-findmany-without-take`, `tanstack-query-dehydrate-no-pending-in-ssr`, `tanstack-query-no-async-query-fn-without-await`, `tanstack-router-search-no-use-state-for-url-state`, `ts-no-floating-promise-in-array-method`, `zod-no-parse-in-render`. |
 
 ## `no-test-return-statement` — return dans fonctions imbriquées des tests
 
