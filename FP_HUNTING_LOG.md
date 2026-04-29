@@ -109,4 +109,14 @@ Corrections de faux positifs identifiés en scannant des projets réels dans ~/w
 | Bug | Cause | Fix |
 |-----|-------|-----|
 | Stack overflow sur `image-charts` | Bundles minifiés (650KB, 1-2 lignes) dépassent la stack 8MB par défaut de rayon lors du parsing tree-sitter | 1. `ALWAYS_SKIP_DIRS` dans `files.rs` : skip `node_modules`, `target`, `dist`, `.git` même sans `.gitignore` — 2. Stack rayon 16MB dans `main.rs` via `ThreadPoolBuilder::new().stack_size(16MB)` |
+## `i18n-json-no-untranslated` — noms propres et termes techniques flaggés
+
+| Règle | Projet | Hits avant | Problème | Fix | Hits après |
+|-------|--------|-----------|----------|-----|------------|
+| `i18n-json-no-untranslated` | hoppscotch | 8964 | Des mots uniques comme "Discord", "GitHub", "macOS", "Linux", "CLI", "Spotlight" sont flaggés comme "non traduits" alors qu'ils sont identiques dans toutes les langues (noms propres, marques, termes techniques). La fonction `is_likely_untranslatable` ne détectait pas les mots sans espace. | Ajouté une heuristique : les strings sans espace (un seul mot) sont considérées comme probablement non-traduisibles (noms propres, acronymes, termes techniques). | 6288 |
+
+## Crashes corrigés
+
+| Bug | Cause | Fix |
+|-----|-------|-----|
 | Crash sur `actix-web` | `cargo shear --format=json` retourne du texte non-JSON (stderr) quand le sous-crate n'a pas de Cargo.lock ou que la commande échoue. Le `serde_json::from_slice()?.` propageait l'erreur via `?` jusqu'au `main()`, ce qui crashait comply avec "crashed unexpectedly". | Remplacé le `?` par `let Ok(report) = ... else { return Ok(vec![]); }` — un cargo-shear qui échoue à parser ne doit pas crasher tout comply, on retourne simplement zéro diagnostics pour ce workspace. |
