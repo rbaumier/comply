@@ -123,7 +123,7 @@ Corrections de faux positifs identifiés en scannant des projets réels dans ~/w
 
 | Règle | Projet | Hits avant | Problème | Fix | Hits après |
 |-------|--------|-----------|----------|-----|------------|
-| `rust-unused-dep` | zed | 34400 | `collect_unique_roots()` trouvait le `Cargo.toml` **le plus proche** de chaque fichier .rs — c'est-à-dire le `Cargo.toml` per-crate, pas le workspace root. `cargo shear` était donc invoqué une fois par crate (200× pour zed), et chaque invocation remonte au workspace root et rapporte **tous** les findings du workspace. Résultat : 200 × 172 = 34400 doublons au lieu de 172. | Ajouté `find_cargo_workspace_root()` qui remonte au `Cargo.toml` contenant `[workspace]` au lieu de s'arrêter au premier trouvé. Déduplication au niveau workspace → une seule invocation par workspace. | ~172 (attendu) |
+| `rust-unused-dep` | zed | 34400 | `collect_unique_roots()` trouvait le `Cargo.toml` **le plus proche** de chaque fichier .rs — c'est-à-dire le `Cargo.toml` per-crate, pas le workspace root. `cargo shear` était donc invoqué une fois par crate (200× pour zed), et chaque invocation remonte au workspace root et rapporte **tous** les findings du workspace. Résultat : 200 × 172 = 34400 doublons au lieu de 172. | Ajouté `find_cargo_workspace_root()` qui remonte au `Cargo.toml` contenant `[workspace]` au lieu de s'arrêter au premier trouvé. Déduplication au niveau workspace → une seule invocation par workspace. | 144 |
 | `rust-unused-dep` | nushell | 1353 | Même problème. | Même fix. | 33 |
 | `rust-unused-dep` | actix-web | 190 | Même problème. | Même fix. | 19 |
 
