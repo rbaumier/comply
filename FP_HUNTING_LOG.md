@@ -72,6 +72,38 @@ Corrections de faux positifs identifiés en scannant des projets réels dans ~/w
 | `inverted-assertion-arguments` | ripgrep | 225 | En Rust, `assert_eq!` n'a **aucune convention** expected/actual (contrairement à Jest/JUnit). Flaguer `assert_eq!(0, count(...))` est du bruit pur. | Backend Rust supprimé — la règle ne s'applique plus qu'à TS/JS où la convention `expect(actual).toBe(expected)` existe. | 0 |
 | `no-duplicate-string` | ripgrep | 217 | Les strings de test fixtures (`"homer\nlisa\nmaggie"` × 7) sont flaguées car le backend Rust ne skip pas les fichiers de test. | Ajouté garde `in_test_dir` dans le backend Rust. Note : les tests inline `#[cfg(test)]` dans le même fichier restent flaguées — limitation connue. | — |
 
+## `id-length` TS/JS — callbacks, boucles for, underscore
+
+| Règle | Projet | Hits avant | Problème | Fix | Hits après |
+|-------|--------|-----------|----------|-----|------------|
+| `id-length` | shadcn-ui | 486 | Les paramètres de callbacks comme `.map((_, i) =>`, `.sort((a, b) =>`, `.forEach((v) =>` sont flaguées. En JS/TS, les noms courts dans les callbacks sont idiomatiques, tout comme les closures Rust. De même, `for (let i = 0; ...)` flag `i` qui est universel. Enfin, `_` (underscore discard) n'était pas dans les exceptions par défaut. | 1. Ajouté `is_in_callback_or_loop()` dans le backend TS : skip les paramètres d'arrow functions passées en arguments d'un appel (= callbacks), et les variables déclarées dans un `for_statement`/`for_in_statement`. 2. Ajouté `_` aux exceptions par défaut dans `defaults.toml`. | 105 |
+| `id-length` | tauri | 424 | Même problème callbacks + fichier `bundle.global.js` minifié (40KB, 1 seule ligne) générant 344 hits à lui seul. | Même fix callbacks + détection de fichiers minifiés (voir ci-dessous). | 33 |
+
+## Fichiers minifiés lintés inutilement
+
+| Bug | Projet | Hits avant | Cause | Fix |
+|-----|--------|-----------|-------|-----|
+| Toutes les règles sur fichiers minifiés | tauri (`bundle.global.js`) | 344+ (id-length seul) | Les fichiers minifiés (`.min.js`, bundles sur une seule ligne) ne sont pas des fichiers source éditables — les linter génère du bruit pur. `bundle.global.js` = 40KB sur 1 ligne. | Ajouté `is_minified` dans `FileCtx` : détecte les `.min.{js,css,mjs,cjs}` par nom, et les fichiers >4KB avec ≤3 lignes par heuristique. Skip au même niveau que `is_generated` dans `dispatch_with_lang()`. |
+
+## Règles tsgolint dupliquées non désactivées
+
+| Règle | Projet | Hits | Problème | Fix |
+|-------|--------|------|----------|-----|
+| `explicit-function-return-type` | shadcn-ui | 9713 | La règle comply `ts-explicit-function-return-type` est bien `disabled = true` dans defaults.toml, mais une version tsgolint déléguée avec l'ID `explicit-function-return-type` (sans préfixe `ts-`) existe aussi et n'est **pas** couverte par le disabled. Les deux versions de la même règle coexistent avec des IDs différents. | Ajouté `[rules.explicit-function-return-type] disabled = true` dans defaults.toml. |
+| `explicit-module-boundary-types` | shadcn-ui | 8081 | Même problème : comply `ts-explicit-module-boundary-types` disabled mais tsgolint `explicit-module-boundary-types` actif. | Ajouté `[rules.explicit-module-boundary-types] disabled = true` dans defaults.toml. |
+
+## `no-duplicate-string` TS — fichiers de test non skippés
+
+| Règle | Problème | Fix |
+|-------|----------|-----|
+| `no-duplicate-string` (TS) | Le backend Rust skippait déjà les `in_test_dir` mais le backend TypeScript ne le faisait pas. Les test fixtures et fichiers `.test.ts` génèrent des duplications de strings légitimes (setup data, assertions). | Ajouté garde `ctx.file.path_segments.in_test_dir` dans le backend TS, identique au backend Rust. |
+
+## `in_test_dir` — patterns manquants
+
+| Problème | Fix |
+|----------|-----|
+| `scan_path()` ne détectait que `/tests/` (pluriel), `/__tests__/`, `.test.`, `.spec.`. Les projets JS/TS utilisent aussi `/test/` (singulier, ex: shadcn-ui), `/fixtures/` (templates de test), `/__mocks__/` (Jest mocks). | Ajouté `/test/`, `/fixtures/`, `/__mocks__/` à la détection `in_test_dir`. |
+
 ## Crashes corrigés
 
 | Bug | Cause | Fix |

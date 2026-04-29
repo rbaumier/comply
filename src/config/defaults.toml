@@ -63,7 +63,7 @@ min = 2
 # Uncomment to allowlist identifiers that are conventional at <2 chars:
 #   `t` for react-i18next's useTranslation()
 #   `T` for typescript generics
-exceptions = ["t", "T"]
+exceptions = ["_", "t", "T"]
 # exception_patterns = ["^[A-Z]$"]
 
 # ---------------------------------------------------------------
@@ -156,7 +156,13 @@ disabled = true
 [rules.ts-explicit-function-return-type]
 disabled = true
 
+[rules.explicit-function-return-type]
+disabled = true
+
 [rules.ts-explicit-module-boundary-types]
+disabled = true
+
+[rules.explicit-module-boundary-types]
 disabled = true
 
 [rules.no-throw]

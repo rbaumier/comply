@@ -38,6 +38,9 @@ impl AstCheck for Check {
         if !is_binding_name(node) {
             return;
         }
+        if is_in_callback_or_loop(node) {
+            return;
+        }
         let Ok(name) = node.utf8_text(source_bytes) else {
             return;
         };
@@ -110,6 +113,60 @@ fn field_matches(parent: tree_sitter::Node, field: &str, node: tree_sitter::Node
     parent
         .child_by_field_name(field)
         .is_some_and(|f| f.byte_range() == node.byte_range())
+}
+
+fn is_in_callback_or_loop(node: tree_sitter::Node) -> bool {
+    let Some(parent) = node.parent() else {
+        return false;
+    };
+    // For-loop variable: `for (let i = 0; …)` / `for (const x of …)`
+    if parent.kind() == "variable_declarator" {
+        let mut cur = parent.parent();
+        while let Some(anc) = cur {
+            match anc.kind() {
+                "for_statement" | "for_in_statement" => return true,
+                "variable_declaration" | "lexical_declaration" => {}
+                _ => break,
+            }
+            cur = anc.parent();
+        }
+    }
+    // Callback parameter: arrow/function inside call arguments
+    if parent.kind() == "required_parameter" || parent.kind() == "optional_parameter" {
+        let mut cur = parent.parent();
+        while let Some(anc) = cur {
+            match anc.kind() {
+                "arrow_function" | "function" | "function_expression" => {
+                    if let Some(gp) = anc.parent() {
+                        return gp.kind() == "arguments";
+                    }
+                    return false;
+                }
+                "formal_parameters" => {}
+                _ => break,
+            }
+            cur = anc.parent();
+        }
+    }
+    // Destructuring inside callback: `arr.map(({ x }) => …)`
+    if node.kind() == "shorthand_property_identifier_pattern" {
+        let mut cur = node.parent();
+        while let Some(anc) = cur {
+            match anc.kind() {
+                "arrow_function" | "function" | "function_expression" => {
+                    if let Some(gp) = anc.parent() {
+                        return gp.kind() == "arguments";
+                    }
+                    return false;
+                }
+                "object_pattern" | "formal_parameters" | "required_parameter"
+                | "optional_parameter" => {}
+                _ => break,
+            }
+            cur = anc.parent();
+        }
+    }
+    false
 }
 
 fn compile_patterns(patterns: &[String]) -> Vec<Regex> {
@@ -212,6 +269,37 @@ mod tests {
         let names: Vec<&str> = diags.iter().map(|d| d.message.as_str()).collect();
         assert!(names.iter().any(|m| m.contains("`D`")));
         assert!(names.iter().any(|m| m.contains("`x`")));
+    }
+
+    #[test]
+    fn allows_callback_arrow_params() {
+        assert!(run_on("arr.map((x) => x + 1);").is_empty());
+        assert!(run_on("arr.sort((a, b) => a - b);").is_empty());
+        assert!(run_on("arr.forEach((v, i) => console.log(v, i));").is_empty());
+    }
+
+    #[test]
+    fn allows_for_loop_variable() {
+        assert!(run_on("for (let i = 0; i < 10; i++) {}").is_empty());
+        assert!(run_on("for (const x of items) {}").is_empty());
+    }
+
+    #[test]
+    fn allows_underscore_discard() {
+        assert!(run_on("const _ = unused();").is_empty());
+        assert!(run_on("arr.map((_, i) => i);").is_empty());
+    }
+
+    #[test]
+    fn allows_destructuring_in_callback() {
+        assert!(run_on("items.map(({ x }) => x);").is_empty());
+    }
+
+    #[test]
+    fn still_flags_short_names_outside_callbacks() {
+        let diags = run_on("function foo(x: number) { return x; }");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("`x`"));
     }
 
     #[test]

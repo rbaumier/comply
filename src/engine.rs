@@ -244,7 +244,7 @@ fn dispatch_with_lang(
     let path = &file.path;
 
     let file_ctx = FileCtx::build(path, source, file.language, project);
-    if file_ctx.is_generated {
+    if file_ctx.is_generated || file_ctx.is_minified {
         return Vec::new();
     }
 
