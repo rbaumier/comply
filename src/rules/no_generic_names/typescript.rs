@@ -67,6 +67,9 @@ impl AstCheck for Check {
         _state: Option<&mut dyn std::any::Any>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
+        if ctx.file.path_segments.in_test_dir || ctx.file.path_segments.in_storybook {
+            return;
+        }
         let source_bytes = ctx.source.as_bytes();
         if let Some(d) = check_banned_word(node, source_bytes, ctx.path) {
             diagnostics.push(d);
@@ -155,6 +158,12 @@ fn check_banned_prefix(
     })
 }
 
+const DESCRIPTIVE_SUFFIXES: &[&str] = &[
+    "_DIR", "_PATH", "_FILE", "_URL", "_URI", "_KEY", "_ID", "_PORT",
+    "_HOST", "_ADDR", "_SIZE", "_LEN", "_COUNT", "_MAX", "_MIN",
+    "_TIMEOUT", "_INTERVAL", "_LIMIT", "_TTL", "_ROOT", "_BASE",
+];
+
 /// Return the banned prefix matching `name` on a word boundary, or None.
 fn matched_banned_prefix(name: &str) -> Option<&'static str> {
     let bytes = name.as_bytes();
@@ -171,7 +180,14 @@ fn matched_banned_prefix(name: &str) -> Option<&'static str> {
         } else if bytes[..plen].iter().all(|b| b.is_ascii_uppercase()) {
             // SCREAMING_SNAKE_CASE: only `_` is a word boundary.
             // Prevents DATABASE_ERROR matching prefix "data".
-            bytes[plen] == b'_'
+            if bytes[plen] != b'_' {
+                continue;
+            }
+            let suffix = &name[plen..];
+            if DESCRIPTIVE_SUFFIXES.iter().any(|s| suffix.eq_ignore_ascii_case(s)) {
+                continue;
+            }
+            true
         } else {
             bytes[plen].is_ascii_uppercase() || bytes[plen] == b'_'
         };
@@ -487,6 +503,14 @@ mod tests {
     fn still_flags_screaming_snake_with_real_boundary() {
         assert!(!run_on("const DATA_SOURCE = 1;").is_empty(),
             "DATA_SOURCE should flag — DATA + _ is a word boundary");
+    }
+
+    #[test]
+    fn allows_screaming_snake_with_descriptive_suffix() {
+        assert!(run_on("const DATA_DIR = '/tmp';").is_empty());
+        assert!(run_on("const DATA_PATH = '/tmp/data';").is_empty());
+        assert!(run_on("const DATA_URL = 'https://api';").is_empty());
+        assert!(run_on("const DATA_KEY = 'abc';").is_empty());
     }
 
     #[test]

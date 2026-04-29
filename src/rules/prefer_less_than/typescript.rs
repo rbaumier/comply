@@ -13,6 +13,15 @@ crate::ast_check! { on ["binary_expression"] => |node, source, ctx, diagnostics|
         _ => return,
     };
 
+    // Don't flag `x > 0`, `arr.length >= 1` etc. — variable-vs-literal
+    // comparisons are universally written subject-first.
+    if let Some(rhs) = node.child_by_field_name("right") {
+        if matches!(rhs.kind(), "number" | "string" | "true" | "false" | "null"
+                    | "undefined" | "unary_expression") {
+            return;
+        }
+    }
+
     let pos = node.start_position();
     diagnostics.push(Diagnostic {
         path: std::sync::Arc::clone(&ctx.path_arc),
@@ -50,8 +59,10 @@ mod tests {
     }
 
     #[test]
-    fn flags_inside_if() {
-        assert_eq!(run_on("if (x > 0) { f(); }").len(), 1);
+    fn allows_variable_vs_literal() {
+        assert!(run_on("if (x > 0) { f(); }").is_empty());
+        assert!(run_on("if (arr.length >= 1) { f(); }").is_empty());
+        assert!(run_on("const ok = count > 5;").is_empty());
     }
 
     #[test]

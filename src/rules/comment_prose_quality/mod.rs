@@ -93,7 +93,7 @@ pub(crate) fn lint_comment_nodes(
     nodes: &[tree_sitter::Node<'_>],
 ) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
-    let mut prev_last_word: Option<String> = None;
+    let mut prev_last_word: Option<(String, usize)> = None;
     let mut prev_line: Option<usize> = None;
 
     for node in nodes {
@@ -146,10 +146,13 @@ pub(crate) fn lint_comment_nodes(
             // word of this line. Only triggers when the previous line is
             // immediately adjacent (line_no - 1).
             let words: Vec<&str> = text.split_whitespace().collect();
-            if let Some(ref prev) = prev_last_word
+            if let Some((ref prev, prev_wc)) = prev_last_word
                 && let Some(prev_l) = prev_line
                 && prev_l + 1 == line_no
+                && words.len() > 1
+                && prev_wc > 1
                 && let Some(&first) = words.first()
+                && first.chars().any(|c| c.is_alphabetic())
                 && first.to_lowercase() == *prev
             {
                 diagnostics.push(Diagnostic {
@@ -164,7 +167,10 @@ pub(crate) fn lint_comment_nodes(
                     span: None,
                 });
             }
-            prev_last_word = words.last().map(|w| w.to_lowercase());
+            prev_last_word = words
+                .last()
+                .filter(|w| w.chars().any(|c| c.is_alphabetic()))
+                .map(|w| (w.to_lowercase(), words.len()));
             prev_line = Some(line_no);
         }
     }

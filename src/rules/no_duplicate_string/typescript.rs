@@ -9,7 +9,7 @@ pub struct Check;
 
 impl AstCheck for Check {
     fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
-        if ctx.file.path_segments.in_test_dir {
+        if ctx.file.path_segments.in_test_dir || ctx.file.path_segments.in_storybook {
             return Vec::new();
         }
         super::collect_diagnostics(tree, ctx, TS_STRING_KINDS)

@@ -45,8 +45,11 @@ fn is_in_ui_library(path: &Path) -> bool {
 /// Only scans the first 2KB to keep the cost bounded; generators always emit
 /// the marker at the top of the file.
 fn is_generated(source: &str) -> bool {
-    let head = &source[..source.len().min(2048)];
-    head.contains("@generated")
+    let mut end = source.len().min(2048);
+    while !source.is_char_boundary(end) {
+        end -= 1;
+    }
+    source[..end].contains("@generated")
 }
 
 #[derive(Debug)]
