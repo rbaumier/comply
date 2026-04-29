@@ -52,6 +52,12 @@ Corrections de faux positifs identifiés en scannant des projets réels dans ~/w
 | tRPC/svelte-kit | `page.waitForSelector()` (Playwright) | Ajouté `.waitFor` à `has_assertion()` |
 | svelte-kit | Assertions déléguées dans helpers (`run_get_pathname_test(...)`) | Non corrigé — nécessiterait analyse inter-procédurale |
 
+## i18n — faux positifs sur syntaxe i18next
+
+| Règle | Projet | Hits | Problème | Fix |
+|-------|--------|------|----------|-----|
+| `i18n-json-valid-message-syntax` | cal.com | 16096 | cal.com utilise i18next (`{{count}}`, `$t(...)`) et non ICU MessageFormat (`{count}`). Le parser ICU rejette les doubles accolades comme syntaxe invalide. | Skip les strings contenant `{{` (i18next interpolation) ou `$t(` (i18next cross-reference). |
+
 ## Règles Rust mal calibrées sur projets réels (ripgrep, ruff)
 
 | Règle | Projet | Hits avant | Problème | Fix | Hits après |

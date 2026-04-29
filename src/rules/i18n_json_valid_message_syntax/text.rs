@@ -56,14 +56,18 @@ fn validate_json_strings(
 ) {
     match value {
         Value::String(s) => {
-            // Only validate strings that look like ICU messages (contain {)
-            if s.contains('{')
-                && let Err(e) = icu::parse(s) {
-                    let key_path = path.join(".");
-                    // Find line number by searching for the string in source
-                    let line = find_line_for_key(source, path.last().map(|s| s.as_str()).unwrap_or(""));
-                    diagnostics.push((key_path, e.to_string(), line));
-                }
+            if !s.contains('{') {
+                return;
+            }
+            // i18next uses {{var}} and $t() — not ICU syntax.
+            if s.contains("{{") || s.contains("$t(") {
+                return;
+            }
+            if let Err(e) = icu::parse(s) {
+                let key_path = path.join(".");
+                let line = find_line_for_key(source, path.last().map(|s| s.as_str()).unwrap_or(""));
+                diagnostics.push((key_path, e.to_string(), line));
+            }
         }
         Value::Object(map) => {
             for (key, val) in map {
@@ -192,6 +196,17 @@ mod tests {
         assert_eq!(check_json("/app/fr.json", json).len(), 1);
         assert_eq!(check_json("/app/en-US.json", json).len(), 1);
         assert_eq!(check_json("/app/zh_CN.json", json).len(), 1);
+    }
+
+    #[test]
+    fn allows_i18next_interpolation() {
+        let json = r#"{
+            "day_one": "{{count}} day",
+            "trial": "$t(day, {\"count\": {{days}} })",
+            "mixed": "Hello {{name}}, you have {{count}} items"
+        }"#;
+        let diags = check_json("/locales/en.json", json);
+        assert!(diags.is_empty());
     }
 
     #[test]
