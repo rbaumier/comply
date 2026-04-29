@@ -3,7 +3,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { on ["assignment_expression", "augmented_assignment_expression"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["assignment_expression", "augmented_assignment_expression"] prefilter = ["innerHTML", "outerHTML"] => |node, source, ctx, diagnostics|
     let Some(left) = node.child_by_field_name("left") else { return };
     if left.kind() != "member_expression" {
         return;

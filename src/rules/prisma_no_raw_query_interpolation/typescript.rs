@@ -7,7 +7,7 @@ fn is_prisma_file(source: &str) -> bool {
     source.contains("@prisma/client") || source.contains("PrismaClient") || source.contains("$queryRaw") || source.contains("$executeRaw")
 }
 
-crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["call_expression"] prefilter = ["$queryRaw", "$executeRaw"] => |node, source, ctx, diagnostics|
     if !is_prisma_file(ctx.source) { return; }
     let Some(callee) = node.child_by_field_name("function") else { return; };
     if callee.kind() != "member_expression" { return; }
