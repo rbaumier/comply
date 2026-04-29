@@ -9,7 +9,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 
 const CONSOLE_METHODS: &[&str] = &["log", "debug", "info", "warn", "error"];
 
-crate::ast_check! { on ["call_expression"] prefilter = ["console."] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["call_expression"] prefilter = ["console"] => |node, source, ctx, diagnostics|
     let Some(callee) = node.child_by_field_name("function") else { return };
     if callee.kind() != "member_expression" {
         return;
