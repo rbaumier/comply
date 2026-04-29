@@ -49,11 +49,17 @@ fn looks_like_in_component_render(source: &str, parse_offset: usize) -> bool {
     // Walk back to find the nearest `function <Name>` or
     // `<Name> = (...) =>` where Name is uppercase-leading.
     let preceding = &source[..parse_offset];
-    let look_start = preceding.len().saturating_sub(2048);
+    let mut look_start = preceding.len().saturating_sub(2048);
+    while look_start > 0 && !preceding.is_char_boundary(look_start) {
+        look_start -= 1;
+    }
     let snippet = &preceding[look_start..];
 
     // Reject if inside a memo callback within last 500 chars.
-    let near = preceding.len().saturating_sub(500);
+    let mut near = preceding.len().saturating_sub(500);
+    while near > 0 && !preceding.is_char_boundary(near) {
+        near -= 1;
+    }
     let near_snippet = &preceding[near..];
     if near_snippet.rfind("useMemo(").map(|p| p > near_snippet.rfind("})").unwrap_or(0)).unwrap_or(false) {
         return false;
@@ -93,7 +99,10 @@ fn find_offenses(source: &str) -> Vec<usize> {
         // Word-boundary style check: prev char must not be alphanumeric
         // (so `.safeParse(` is excluded — already not matched literally).
         // Avoid `JSON.parse(` — too common, rarely a zod schema.
-        let prev_window_start = abs.saturating_sub(20);
+        let mut prev_window_start = abs.saturating_sub(20);
+        while prev_window_start > 0 && !source.is_char_boundary(prev_window_start) {
+            prev_window_start -= 1;
+        }
         let prev = &source[prev_window_start..abs];
         if prev.ends_with("JSON") {
             from = abs + 1;

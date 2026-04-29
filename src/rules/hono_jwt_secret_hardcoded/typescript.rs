@@ -37,7 +37,11 @@ fn find_hardcoded_secrets(source: &str) -> Vec<(usize, usize)> {
             }
             i += 1;
         }
-        let body = &source[after..i.saturating_sub(1)];
+        let mut body_end = i.saturating_sub(1);
+        while body_end > after && !source.is_char_boundary(body_end) {
+            body_end -= 1;
+        }
+        let body = &source[after..body_end];
         if let Some(secret_pos) = find_secret_literal(body) {
             let abs = after + secret_pos;
             let (line, col) = byte_to_line_col(source, abs);

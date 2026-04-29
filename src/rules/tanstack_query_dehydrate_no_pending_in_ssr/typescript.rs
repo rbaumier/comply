@@ -60,7 +60,10 @@ fn is_awaited_at(window: &str, abs: usize) -> bool {
 }
 
 fn has_unawaited_prefetch_before(source: &str, dehydrate_offset: usize) -> bool {
-    let start = dehydrate_offset.saturating_sub(WINDOW);
+    let mut start = dehydrate_offset.saturating_sub(WINDOW);
+    while start > 0 && !source.is_char_boundary(start) {
+        start -= 1;
+    }
     let window = &source[start..dehydrate_offset];
     let mut from = 0usize;
     while let Some(rel) = window[from..].find("prefetchQuery(") {

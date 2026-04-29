@@ -58,7 +58,10 @@ fn find_offenses(source: &str) -> Vec<usize> {
         // Look back for `const [<name>` or `let [<name>`.
         let preceding = &source[..us_abs];
         // Find the nearest preceding `[` within ~200 chars.
-        let look_start = preceding.len().saturating_sub(200);
+        let mut look_start = preceding.len().saturating_sub(200);
+        while look_start > 0 && !preceding.is_char_boundary(look_start) {
+            look_start -= 1;
+        }
         let snippet = &preceding[look_start..];
         if let Some(bracket_pos) = snippet.rfind('[') {
             let after_bracket = &snippet[bracket_pos + 1..];
