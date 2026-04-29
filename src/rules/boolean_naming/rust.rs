@@ -20,7 +20,7 @@ use crate::rules::backend::{AstCheck, CheckCtx};
 // adds syllables without information.
 const VALID_PREFIXES: &[&str] = &[
     "is_", "has_", "should_", "can_", "will_", "did_", "was_",
-    "in_", "seen_", "found_", "use_", "with_", "needs_",
+    "in_", "seen_", "found_",
 ];
 const NEGATIVE_SUBSTRINGS: &[&str] = &["_not_", "isnt_", "cannot_", "shouldnt_"];
 
@@ -102,17 +102,6 @@ fn extract_identifier<'a>(node: tree_sitter::Node, source: &'a [u8]) -> Option<&
     None
 }
 
-const BOOLEAN_SUFFIXES: &[&str] = &[
-    "ed", "able", "ible", "ive", "ous",
-];
-
-const BOOLEAN_WORDS: &[&str] = &[
-    "debug", "verbose", "empty", "ready", "dirty", "valid", "mutable",
-    "optional", "required", "public", "private", "static", "strict",
-    "raw", "lazy", "eager", "async", "active", "idle", "busy",
-    "recursive", "exclusive", "inclusive", "global", "local",
-];
-
 /// Return a short problem description if the name violates the rule.
 fn classify_name(name: &str) -> Option<&'static str> {
     if NEGATIVE_SUBSTRINGS.iter().any(|neg| name.contains(neg)) {
@@ -122,14 +111,6 @@ fn classify_name(name: &str) -> Option<&'static str> {
         if name.starts_with(prefix) {
             return None;
         }
-    }
-    // Past participles and adjectives are inherently predicate-like.
-    let tail = name.rsplit('_').next().unwrap_or(name);
-    if BOOLEAN_SUFFIXES.iter().any(|s| tail.ends_with(s)) {
-        return None;
-    }
-    if BOOLEAN_WORDS.contains(&tail) {
-        return None;
     }
     Some("is missing a predicate prefix")
 }
@@ -159,19 +140,19 @@ mod tests {
 
     #[test]
     fn flags_missing_prefix_with_annotation() {
-        let diags = run_on("fn f() { let flag: bool = true; }");
+        let diags = run_on("fn f() { let ready: bool = true; }");
         assert_eq!(diags.len(), 1);
-        assert!(diags[0].message.contains("'flag'"));
+        assert!(diags[0].message.contains("'ready'"));
     }
 
     #[test]
     fn flags_inferred_boolean() {
-        assert_eq!(run_on("fn f() { let flag = true; }").len(), 1);
+        assert_eq!(run_on("fn f() { let ready = true; }").len(), 1);
     }
 
     #[test]
     fn flags_param_without_prefix() {
-        let diags = run_on("fn f(flag: bool) {}");
+        let diags = run_on("fn f(ready: bool) {}");
         assert_eq!(diags.len(), 1);
     }
 
@@ -186,25 +167,6 @@ mod tests {
             let source = format!("fn f() {{ let {name}: bool = true; }}");
             assert!(run_on(&source).is_empty(), "'{name}' should be allowed");
         }
-    }
-
-    #[test]
-    fn allows_past_participle_suffix() {
-        assert!(run_on("fn f() { let disabled: bool = true; }").is_empty());
-        assert!(run_on("fn f() { let is_connected: bool = true; }").is_empty());
-    }
-
-    #[test]
-    fn allows_adjective_suffix() {
-        assert!(run_on("fn f() { let optional: bool = false; }").is_empty());
-        assert!(run_on("fn f() { let mutable: bool = true; }").is_empty());
-        assert!(run_on("fn f() { let recursive: bool = true; }").is_empty());
-    }
-
-    #[test]
-    fn allows_boolean_words() {
-        assert!(run_on("fn f() { let debug: bool = false; }").is_empty());
-        assert!(run_on("fn f() { let verbose: bool = true; }").is_empty());
     }
 
     #[test]

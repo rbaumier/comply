@@ -104,12 +104,6 @@ Corrections de faux positifs identifiés en scannant des projets réels dans ~/w
 |----------|-----|
 | `scan_path()` ne détectait que `/tests/` (pluriel), `/__tests__/`, `.test.`, `.spec.`. Les projets JS/TS utilisent aussi `/test/` (singulier, ex: shadcn-ui), `/fixtures/` (templates de test), `/__mocks__/` (Jest mocks). | Ajouté `/test/`, `/fixtures/`, `/__mocks__/` à la détection `in_test_dir`. |
 
-## `boolean-naming` — adjectifs et participes passés flaggés à tort
-
-| Règle | Projet | Hits avant | Problème | Fix | Hits après |
-|-------|--------|-----------|----------|-----|------------|
-| `boolean-naming` | nushell | 630 | La règle ne reconnaissait que les préfixes (`is_`, `has_`, `should_`, etc.) mais pas les suffixes adjectivaux qui sont intrinsèquement booléens. Des noms comme `disabled` (participe passé), `optional` (adjectif en `-able`), `recursive` (adjectif en `-ive`), `debug`, `verbose` étaient tous flaggés alors qu'ils lisent naturellement comme des prédicats. De même, les préfixes `use_` (`use_color`), `with_` (`with_header`), `needs_` (`needs_update`) sont courants pour les flags de config en Rust mais n'étaient pas reconnus. | 1. Ajouté `BOOLEAN_SUFFIXES` (`-ed`, `-able`, `-ible`, `-ive`, `-ous`) pour accepter les participes passés et adjectifs. 2. Ajouté `BOOLEAN_WORDS` (26 mots : `debug`, `verbose`, `empty`, `ready`, `optional`, `required`, `active`, etc.). 3. Ajouté les préfixes `use_`, `with_`, `needs_` à `VALID_PREFIXES` (Rust). 4. Même fix appliqué au backend TS (suffixes en camelCase). | 471 |
-
 ## Crashes corrigés
 
 | Bug | Cause | Fix |
