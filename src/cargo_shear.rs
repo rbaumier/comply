@@ -74,12 +74,9 @@ fn lint_workspace(workspace: &Path) -> Result<Vec<Diagnostic>> {
     if output.stdout.is_empty() {
         return Ok(vec![]);
     }
-    let report: ShearReport = serde_json::from_slice(&output.stdout).with_context(|| {
-        format!(
-            "failed to parse cargo-shear JSON output from {}",
-            workspace.display()
-        )
-    })?;
+    let Ok(report) = serde_json::from_slice::<ShearReport>(&output.stdout) else {
+        return Ok(vec![]);
+    };
     convert_findings(report.findings, workspace)
 }
 

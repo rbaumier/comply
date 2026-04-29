@@ -115,3 +115,4 @@ Corrections de faux positifs identifiés en scannant des projets réels dans ~/w
 | Bug | Cause | Fix |
 |-----|-------|-----|
 | Stack overflow sur `image-charts` | Bundles minifiés (650KB, 1-2 lignes) dépassent la stack 8MB par défaut de rayon lors du parsing tree-sitter | 1. `ALWAYS_SKIP_DIRS` dans `files.rs` : skip `node_modules`, `target`, `dist`, `.git` même sans `.gitignore` — 2. Stack rayon 16MB dans `main.rs` via `ThreadPoolBuilder::new().stack_size(16MB)` |
+| Crash sur `actix-web` | `cargo shear --format=json` retourne du texte non-JSON (stderr) quand le sous-crate n'a pas de Cargo.lock ou que la commande échoue. Le `serde_json::from_slice()?.` propageait l'erreur via `?` jusqu'au `main()`, ce qui crashait comply avec "crashed unexpectedly". | Remplacé le `?` par `let Ok(report) = ... else { return Ok(vec![]); }` — un cargo-shear qui échoue à parser ne doit pas crasher tout comply, on retourne simplement zéro diagnostics pour ce workspace. |
