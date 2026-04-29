@@ -2,7 +2,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { on ["non_null_expression"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["non_null_expression"] prefilter = ["server!"] => |node, source, ctx, diagnostics|
     if !ctx.project.has_framework("elysia") {
         return;
     }

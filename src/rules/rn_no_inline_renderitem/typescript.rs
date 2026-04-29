@@ -2,7 +2,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { on ["jsx_attribute"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["jsx_attribute"] prefilter = ["renderItem"] => |node, source, ctx, diagnostics|
     let Some(name) = crate::rules::jsx::jsx_attribute_name(node, source) else { return };
     if name != "renderItem" { return; }
     let Some(value) = crate::rules::jsx::jsx_attribute_value(node) else { return };

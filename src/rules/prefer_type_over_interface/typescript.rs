@@ -34,6 +34,8 @@ struct Candidate {
 }
 
 impl AstCheck for Check {
+    fn prefilter(&self) -> Option<&'static [&'static str]> { Some(&["interface"]) }
+
     fn interested_kinds(&self) -> Option<&'static [&'static str]> {
         Some(&["implements_clause", "interface_declaration"])
     }

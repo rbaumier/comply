@@ -2,7 +2,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 
 const PREFIXES: &[&str] = &["-webkit-", "-moz-", "-ms-", "-o-"];
 
-crate::ast_check! { on ["media_statement"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["media_statement"] prefilter = ["-webkit-", "-moz-", "-ms-", "-o-"] => |node, source, ctx, diagnostics|
     let text = node.utf8_text(source).unwrap_or_default();
     // Only consider the media query header (before the `{` block).
     let header = text.split('{').next().unwrap_or(text);

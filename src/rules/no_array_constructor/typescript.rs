@@ -2,7 +2,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { on ["new_expression"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["new_expression"] prefilter = ["Array"] => |node, source, ctx, diagnostics|
     let Some(ctor) = node.child_by_field_name("constructor") else { return };
     if ctor.kind() != "identifier" {
         return;

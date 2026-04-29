@@ -19,7 +19,7 @@ fn looks_like_route_module(spec: &str) -> bool {
         || inner.starts_with("../views/")
 }
 
-crate::ast_check! { on ["import_statement"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["import_statement"] prefilter = ["/pages/", "/routes/", "/views/"] => |node, source, ctx, diagnostics|
     // Skip type-only imports — they erase at build time and don't ship.
     let node_text = node.utf8_text(source).unwrap_or("");
     if node_text.trim_start().starts_with("import type") {

@@ -27,6 +27,10 @@ fn imports_next_redirect(source: &str) -> bool {
 }
 
 impl TextCheck for Check {
+    fn prefilter(&self) -> Option<&'static [&'static str]> {
+        Some(&["next/navigation"])
+    }
+
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
         if !imports_next_redirect(ctx.source) {
             return Vec::new();

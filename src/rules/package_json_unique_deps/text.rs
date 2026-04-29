@@ -43,6 +43,8 @@ fn collect_keys(lines: &[&str], start: usize) -> (Vec<String>, usize) {
 }
 
 impl TextCheck for Check {
+    fn prefilter(&self) -> Option<&'static [&'static str]> { Some(&["dependencies", "devDependencies"]) }
+
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
         if ctx.path.file_name().and_then(|f| f.to_str()) != Some("package.json") {
             return Vec::new();

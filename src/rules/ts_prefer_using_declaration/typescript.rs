@@ -10,6 +10,10 @@ const KINDS: &[&str] = &["try_statement"];
 pub struct Check;
 
 impl AstCheck for Check {
+    fn prefilter(&self) -> Option<&'static [&'static str]> {
+        Some(&["using"])
+    }
+
     fn interested_kinds(&self) -> Option<&'static [&'static str]> {
         Some(KINDS)
     }

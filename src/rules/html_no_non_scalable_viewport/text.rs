@@ -18,6 +18,10 @@ const NEEDLES: &[&str] = &[
 pub struct Check;
 
 impl TextCheck for Check {
+    fn prefilter(&self) -> Option<&'static [&'static str]> {
+        Some(&["user-scalable"])
+    }
+
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
         for (i, line) in ctx.source.lines().enumerate() {

@@ -11,7 +11,7 @@ fn property_name<'a>(node: tree_sitter::Node, source: &'a [u8]) -> Option<&'a st
     node.child_by_field_name("property")?.utf8_text(source).ok()
 }
 
-crate::ast_check! { on ["member_expression"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["member_expression"] prefilter = ["__NEXT_DATA__"] => |node, source, ctx, diagnostics|
     if ctx.project.framework != Framework::NextJs {
         return;
     }

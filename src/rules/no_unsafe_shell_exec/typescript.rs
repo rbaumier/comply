@@ -26,7 +26,7 @@ fn is_unsafe_arg(node: tree_sitter::Node) -> bool {
     }
 }
 
-crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["call_expression"] prefilter = ["exec", "spawn"] => |node, source, ctx, diagnostics|
     let Some(name) = crate::rules::call_expression::call_function_name(node, source) else {
         return;
     };

@@ -66,7 +66,7 @@ fn settle_kind_from_fn<'a>(func: Node<'a>, source: &'a [u8]) -> Option<&'static 
     promise_settle_kind(expr, source)
 }
 
-crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["call_expression"] prefilter = ["mockImplementation"] => |node, source, ctx, diagnostics|
     // Callee must be a member access ending in `.mockImplementation`.
     let Some(callee) = node.child_by_field_name("function") else { return; };
     if callee.kind() != "member_expression" { return; }

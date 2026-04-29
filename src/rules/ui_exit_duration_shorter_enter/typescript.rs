@@ -3,7 +3,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { on ["jsx_opening_element", "jsx_self_closing_element"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["jsx_opening_element", "jsx_self_closing_element"] prefilter = ["motion."] => |node, source, ctx, diagnostics|
     let Some(tag) = crate::rules::jsx::jsx_element_tag_name(node, source) else { return };
     if !tag.starts_with("motion.") {
         return;

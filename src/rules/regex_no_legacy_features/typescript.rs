@@ -18,7 +18,7 @@ fn is_regexp_ident(node: &tree_sitter::Node<'_>, source: &[u8]) -> bool {
         && node.utf8_text(source).map(|t| t == "RegExp").unwrap_or(false)
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { prefilter = ["RegExp"] => |node, source, ctx, diagnostics|
     // member_expression: RegExp.$1 / RegExp.lastMatch / RegExp.$_
     if node.kind() == "member_expression"
         && let Some(obj) = node.child_by_field_name("object")

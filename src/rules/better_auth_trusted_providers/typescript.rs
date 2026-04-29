@@ -3,7 +3,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { on ["pair"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["pair"] prefilter = ["trustedProviders"] => |node, source, ctx, diagnostics|
     let Some(key) = node.child_by_field_name("key") else { return };
     let key_text = key.utf8_text(source).unwrap_or("").trim_matches(|c: char| c == '\'' || c == '"');
     if key_text != "accountLinking" {

@@ -36,7 +36,7 @@ fn strip_quotes(s: &str) -> &str {
     }
 }
 
-crate::ast_check! { on ["import_statement"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["import_statement"] prefilter = ["createServerFn"] => |node, source, ctx, diagnostics|
     if !is_functions_file(ctx) { return; }
 
     // Resolve the imported module path.

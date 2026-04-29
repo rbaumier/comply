@@ -13,7 +13,7 @@ fn is_require_init(declarator: tree_sitter::Node, source: &[u8]) -> bool {
     false
 }
 
-crate::ast_check! { on ["lexical_declaration", "variable_declaration"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["lexical_declaration", "variable_declaration"] prefilter = ["require"] => |node, source, ctx, diagnostics|
 
     // Match `const`/`let`/`var` declarations with multiple declarators.
     let mut cursor = node.walk();

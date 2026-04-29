@@ -117,6 +117,8 @@ fn find_offenses(source: &str) -> Vec<(usize, &'static str)> {
 }
 
 impl TextCheck for Check {
+    fn prefilter(&self) -> Option<&'static [&'static str]> { Some(&["z.string(", "z.number(", "z.array("]) }
+
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
         if !looks_like_api_path(ctx.path) {
             return Vec::new();

@@ -24,6 +24,10 @@ const BUILTIN_ERRORS: &[&str] = &[
 pub struct Check;
 
 impl AstCheck for Check {
+    fn prefilter(&self) -> Option<&'static [&'static str]> {
+        Some(&["captureStackTrace"])
+    }
+
     fn interested_kinds(&self) -> Option<&'static [&'static str]> {
         Some(&["class_declaration", "class"])
     }

@@ -36,7 +36,7 @@ fn is_require_moment(node: tree_sitter::Node, source: &[u8]) -> bool {
     false
 }
 
-crate::ast_check! { on ["import_statement", "call_expression"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["import_statement", "call_expression"] prefilter = ["moment"] => |node, source, ctx, diagnostics|
     let is_match = match node.kind() {
         "import_statement" => import_source(node, source) == Some("moment"),
         "call_expression" => is_require_moment(node, source),

@@ -67,6 +67,8 @@ fn body_uses_set_state(body: &str) -> bool {
 }
 
 impl TextCheck for Check {
+    fn prefilter(&self) -> Option<&'static [&'static str]> { Some(&["useEffect"]) }
+
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
         let bytes = ctx.source.as_bytes();

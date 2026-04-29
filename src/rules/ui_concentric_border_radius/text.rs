@@ -4,7 +4,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { on ["rule_set"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["rule_set"] prefilter = ["border-radius"] => |node, source, ctx, diagnostics|
     // Does this rule_set have a non-calc `border-radius` declaration?
     let Some((radius_node, radius_is_calc)) = find_declaration(node, source, "border-radius") else { return };
     if radius_is_calc { return; }

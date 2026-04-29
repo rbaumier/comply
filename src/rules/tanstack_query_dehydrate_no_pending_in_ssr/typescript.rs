@@ -98,6 +98,10 @@ fn find_offenses(source: &str) -> Vec<usize> {
 }
 
 impl TextCheck for Check {
+    fn prefilter(&self) -> Option<&'static [&'static str]> {
+        Some(&["dehydrate"])
+    }
+
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
         if !ctx.source.contains("dehydrate(") || !ctx.source.contains("prefetchQuery(") {
             return Vec::new();

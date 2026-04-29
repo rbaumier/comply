@@ -12,7 +12,7 @@ fn unquote(s: &str) -> &str {
     s.trim_matches(|c| c == '"' || c == '\'' || c == '`')
 }
 
-crate::ast_check! { on ["pair"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["pair"] prefilter = ["checkServerIdentity"] => |node, source, ctx, diagnostics|
     let Some(key) = node.child_by_field_name("key") else { return };
     let Ok(key_text) = key.utf8_text(source) else { return };
     if unquote(key_text) != "checkServerIdentity" {

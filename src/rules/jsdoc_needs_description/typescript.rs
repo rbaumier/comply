@@ -2,7 +2,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { on ["comment"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["comment"] prefilter = ["/**"] => |node, source, ctx, diagnostics|
     let text = match node.utf8_text(source) {
         Ok(t) => t,
         Err(_) => return,

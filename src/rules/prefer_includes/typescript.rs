@@ -82,7 +82,7 @@ fn literal_text(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
     None
 }
 
-crate::ast_check! { on ["binary_expression"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["binary_expression"] prefilter = ["indexOf"] => |node, source, ctx, diagnostics|
     let Some(op_node) = node.child_by_field_name("operator") else { return };
     let Some(op) = op_node.utf8_text(source).ok() else { return };
     let Some(left) = node.child_by_field_name("left") else { return };

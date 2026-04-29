@@ -8,7 +8,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 
 const AUTH_PATH_MARKERS: &[&str] = &["login", "signin", "sign-in", "auth", "authenticate"];
 
-crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["call_expression"] prefilter = ["beforeLoad"] => |node, source, ctx, diagnostics|
     let Some(callee) = node.child_by_field_name("function") else { return; };
     let Ok(name) = callee.utf8_text(source) else { return; };
     if name != "useEffect" { return; }

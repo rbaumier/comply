@@ -23,7 +23,7 @@ fn find_pair_with_key<'a>(obj: Node<'a>, source: &[u8], key: &str) -> Option<Nod
     None
 }
 
-crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["call_expression"] prefilter = ["BETTER_AUTH_SECRET"] => |node, source, ctx, diagnostics|
     let Some(func) = node.child_by_field_name("function") else { return };
     if func.utf8_text(source).unwrap_or("") != "betterAuth" {
         return;

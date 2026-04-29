@@ -16,7 +16,7 @@ fn file_has_unsubscribe_pattern(source: &str) -> bool {
         || source.contains("Subscription")
 }
 
-crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["call_expression"] prefilter = [".unsubscribe("] => |node, source, ctx, diagnostics|
     if !is_angular_file(ctx.source) { return; }
     if file_has_unsubscribe_pattern(ctx.source) { return; }
     let Some(callee) = node.child_by_field_name("function") else { return; };

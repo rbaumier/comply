@@ -67,6 +67,8 @@ fn line_col_for_offset(src: &str, offset: usize) -> (usize, usize) {
 }
 
 impl TextCheck for Check {
+    fn prefilter(&self) -> Option<&'static [&'static str]> { Some(&["unhandledRejection"]) }
+
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
         if !ctx.source.contains("unhandledRejection") {
             return Vec::new();

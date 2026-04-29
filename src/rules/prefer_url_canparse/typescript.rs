@@ -1,6 +1,6 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { on ["try_statement"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["try_statement"] prefilter = ["new URL"] => |node, source, ctx, diagnostics|
     // Look for try statements
     let Some(body) = node.child_by_field_name("body") else { return; };
 

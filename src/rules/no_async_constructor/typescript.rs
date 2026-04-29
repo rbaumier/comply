@@ -2,7 +2,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { on ["method_definition"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["method_definition"] prefilter = ["constructor"] => |node, source, ctx, diagnostics|
     // The method name must be "constructor".
     let Some(name_node) = node.child_by_field_name("name") else { return };
     let name = name_node.utf8_text(source).unwrap_or("");

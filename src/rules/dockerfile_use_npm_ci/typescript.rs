@@ -2,7 +2,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { on ["run_instruction"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["run_instruction"] prefilter = ["npm install"] => |node, source, ctx, diagnostics|
     // Find the shell_command child and read its full text.
     let mut shell_text: Option<&str> = None;
     for i in 0..node.child_count() {

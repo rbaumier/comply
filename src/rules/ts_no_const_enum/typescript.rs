@@ -7,7 +7,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { on ["enum_declaration"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["enum_declaration"] prefilter = ["enum"] => |node, source, ctx, diagnostics|
     let _ = source;
     let mut cursor = node.walk();
     let has_const = node

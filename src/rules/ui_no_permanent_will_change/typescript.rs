@@ -14,7 +14,7 @@ fn is_in_style_jsx_attribute(node: tree_sitter::Node, source: &[u8]) -> bool {
     crate::rules::jsx::jsx_attribute_name(jsx_attr, source) == Some("style")
 }
 
-crate::ast_check! { on ["pair"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["pair"] prefilter = ["willChange"] => |node, source, ctx, diagnostics|
     if !is_in_style_jsx_attribute(node, source) {
         return;
     }

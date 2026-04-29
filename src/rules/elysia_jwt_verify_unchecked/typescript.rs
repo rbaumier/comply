@@ -7,6 +7,8 @@ use crate::rules::backend::{AstCheck, CheckCtx};
 pub struct Check;
 
 impl AstCheck for Check {
+    fn prefilter(&self) -> Option<&'static [&'static str]> { Some(&["jwt"]) }
+
     fn check(&self, ctx: &CheckCtx, _tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
         if !ctx.project.has_framework("elysia") || !ctx.source.contains("jwt") {
             return Vec::new();

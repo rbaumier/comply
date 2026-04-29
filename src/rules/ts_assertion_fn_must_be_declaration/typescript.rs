@@ -10,7 +10,7 @@ fn return_type_has_asserts(arrow: tree_sitter::Node, source: &[u8]) -> bool {
     text.contains("asserts ")
 }
 
-crate::ast_check! { on ["arrow_function"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["arrow_function"] prefilter = ["asserts"] => |node, source, ctx, diagnostics|
     if !return_type_has_asserts(node, source) {
         return;
     }

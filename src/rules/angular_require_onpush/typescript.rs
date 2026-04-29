@@ -10,6 +10,8 @@ pub struct Check;
 const DECORATOR: &str = "@Component(";
 
 impl TextCheck for Check {
+    fn prefilter(&self) -> Option<&'static [&'static str]> { Some(&["@Component("]) }
+
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
         if !ctx.source.contains(DECORATOR) {
             return Vec::new();

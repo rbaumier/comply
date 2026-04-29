@@ -2,7 +2,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { on ["unary_expression"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["unary_expression"] prefilter = ["@elysiajs/eden"] => |node, source, ctx, diagnostics|
     if !ctx.project.has_framework("elysia") {
         return;
     }

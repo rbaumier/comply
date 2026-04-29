@@ -62,7 +62,7 @@ fn loop_ancestor(node: tree_sitter::Node<'_>, source: &[u8]) -> bool {
     false
 }
 
-crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["call_expression"] prefilter = ["db.query", "tx.query", "trx.query"] => |node, source, ctx, diagnostics|
     if !is_db_query(node, source) {
         return;
     }

@@ -32,7 +32,7 @@ fn max_blur_px(value: &str) -> Option<f64> {
     max
 }
 
-crate::ast_check! { on ["pair"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["pair"] prefilter = ["backdropFilter"] => |node, source, ctx, diagnostics|
     if !is_in_style_jsx_attribute(node, source) {
         return;
     }

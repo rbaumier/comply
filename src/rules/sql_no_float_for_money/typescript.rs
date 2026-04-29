@@ -8,6 +8,10 @@ use crate::rules::sql_helpers::TS_STRING_KINDS;
 pub struct Check;
 
 impl AstCheck for Check {
+    fn prefilter(&self) -> Option<&'static [&'static str]> {
+        Some(&["FLOAT", "DOUBLE", "REAL"])
+    }
+
     fn interested_kinds(&self) -> Option<&'static [&'static str]> {
         Some(TS_STRING_KINDS)
     }

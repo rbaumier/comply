@@ -10,6 +10,10 @@ pub struct Check;
 type State = (bool, Option<usize>);
 
 impl AstCheck for Check {
+    fn prefilter(&self) -> Option<&'static [&'static str]> {
+        Some(&["hono"])
+    }
+
     fn interested_kinds(&self) -> Option<&'static [&'static str]> {
         Some(&["new_expression", "call_expression"])
     }

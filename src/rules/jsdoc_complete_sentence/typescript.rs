@@ -32,6 +32,10 @@ fn extract_description_lines(text: &str) -> Vec<(String, usize)> {
 }
 
 impl AstCheck for Check {
+    fn prefilter(&self) -> Option<&'static [&'static str]> {
+        Some(&["/**"])
+    }
+
     fn interested_kinds(&self) -> Option<&'static [&'static str]> {
         Some(&["comment"])
     }

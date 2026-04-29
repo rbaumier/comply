@@ -10,7 +10,7 @@ const SECURITY_HEADERS: &[&str] = &[
     "referrerPolicy",
 ];
 
-crate::ast_check! { on ["pair"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["pair"] prefilter = ["hono/secure-headers"] => |node, source, ctx, diagnostics|
     // Only check files that import from 'hono/secure-headers'.
     if !ctx.source.contains("hono/secure-headers") {
         return;

@@ -2,7 +2,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { on ["assignment_expression"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["assignment_expression"] prefilter = ["exports"] => |node, source, ctx, diagnostics|
     let Some(left) = node.child_by_field_name("left") else { return };
 
     // Only flag `exports = ...` (direct assignment to the exports variable).

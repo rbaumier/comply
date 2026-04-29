@@ -17,7 +17,7 @@ fn callee_is_findfirst(callee: tree_sitter::Node<'_>, source: &[u8]) -> bool {
     obj_text.starts_with("db.query.") || obj_text.starts_with("tx.query.") || obj_text.starts_with("trx.query.")
 }
 
-crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["call_expression"] prefilter = ["findFirst"] => |node, source, ctx, diagnostics|
     let Some(callee) = node.child_by_field_name("function") else { return };
     if !callee_is_findfirst(callee, source) {
         return;

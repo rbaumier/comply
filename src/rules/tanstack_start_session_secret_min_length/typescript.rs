@@ -6,7 +6,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 
 const MIN_LEN: usize = 32;
 
-crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["call_expression"] prefilter = ["useSession"] => |node, source, ctx, diagnostics|
     let Some(callee) = node.child_by_field_name("function") else { return; };
     let Ok(callee_text) = callee.utf8_text(source) else { return; };
     if !callee_text.ends_with("useSession") { return; }

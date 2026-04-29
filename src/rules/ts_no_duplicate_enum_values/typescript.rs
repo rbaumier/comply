@@ -6,7 +6,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { on ["enum_declaration"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["enum_declaration"] prefilter = ["enum"] => |node, source, ctx, diagnostics|
     let Some(body) = node.child_by_field_name("body") else {
         return;
     };

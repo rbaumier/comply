@@ -9,7 +9,7 @@ fn import_source<'a>(node: tree_sitter::Node<'a>, source: &'a [u8]) -> Option<&'
     Some(raw.trim_matches(|c| c == '"' || c == '\''))
 }
 
-crate::ast_check! { on ["import_statement"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["import_statement"] prefilter = ["lodash"] => |node, source, ctx, diagnostics|
     let Some(import_path) = import_source(node, source) else { return };
     if import_path != "lodash" {
         return;

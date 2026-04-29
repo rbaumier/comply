@@ -1,6 +1,6 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { on ["run_instruction"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["run_instruction"] prefilter = ["pip install", "pip3 install"] => |node, source, ctx, diagnostics|
     let shell_text = shell_command_text(node, source);
     let mentions_pip = shell_text.contains("pip install") || shell_text.contains("pip3 install");
     if !mentions_pip { return; }

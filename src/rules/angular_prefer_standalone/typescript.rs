@@ -7,7 +7,7 @@ fn is_angular_file(source: &str) -> bool {
     source.contains("@angular/") || source.contains("@Component")
 }
 
-crate::ast_check! { on ["decorator"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["decorator"] prefilter = ["@Component"] => |node, source, ctx, diagnostics|
     if !is_angular_file(ctx.source) { return; }
     let text = std::str::from_utf8(&source[node.byte_range()]).unwrap_or("");
     if !text.starts_with("@Component") { return; }

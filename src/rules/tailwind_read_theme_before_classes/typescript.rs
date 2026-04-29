@@ -72,7 +72,7 @@ fn file_reads_theme(source: &str) -> bool {
     THEME_MARKERS.iter().any(|m| source.contains(m))
 }
 
-crate::ast_check! { on ["string"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["string"] prefilter = ["resolveConfig"] => |node, source, ctx, diagnostics|
     // shadcn/ui primitives use arbitrary values by design.
     let path_str = ctx.path.to_str().unwrap_or("");
     if path_str.contains("/components/ui/") || path_str.contains("/lib/ui/") {

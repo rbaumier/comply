@@ -2,7 +2,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { on ["variable_declarator", "assignment_expression"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["variable_declarator", "assignment_expression"] prefilter = ["undefined"] => |node, source, ctx, diagnostics|
     // Match variable_declarator or assignment_expression where the value is `undefined`.
     let value_node = match node.kind() {
         "variable_declarator" => node.child_by_field_name("value"),

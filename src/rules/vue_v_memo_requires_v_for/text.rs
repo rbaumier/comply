@@ -59,7 +59,7 @@ fn scan_tag(node: tree_sitter::Node, source: &[u8]) -> MemoInfo {
     info
 }
 
-crate::ast_check! { on ["start_tag", "self_closing_tag"] => |node, source, ctx, diagnostics|    let info = scan_tag(node, source);
+crate::ast_check! { on ["start_tag", "self_closing_tag"] prefilter = ["v-memo"] => |node, source, ctx, diagnostics|    let info = scan_tag(node, source);
     if !info.has_vmemo {
         return;
     }

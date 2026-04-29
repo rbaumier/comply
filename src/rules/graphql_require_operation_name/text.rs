@@ -10,6 +10,10 @@ const KEYWORDS: &[&str] = &["query", "mutation", "subscription"];
 pub struct Check;
 
 impl TextCheck for Check {
+    fn prefilter(&self) -> Option<&'static [&'static str]> {
+        Some(&["query", "mutation", "subscription"])
+    }
+
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
         for (idx, raw) in ctx.source.lines().enumerate() {

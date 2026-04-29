@@ -4,7 +4,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { on ["throw_statement"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["throw_statement"] prefilter = ["createServerFn"] => |node, source, ctx, diagnostics|
     let Some(expr) = node.named_child(0) else { return; };
     if expr.kind() != "new_expression" { return; }
     let Some(ctor) = expr.child_by_field_name("constructor") else { return; };

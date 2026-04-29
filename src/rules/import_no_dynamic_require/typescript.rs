@@ -8,7 +8,7 @@ fn is_static_value(kind: &str) -> bool {
     kind == "string" || kind == "template_string"
 }
 
-crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["call_expression"] prefilter = ["require"] => |node, source, ctx, diagnostics|
     let Some(callee) = node.child_by_field_name("function") else { return };
     let callee_name = callee.utf8_text(source).unwrap_or("");
 

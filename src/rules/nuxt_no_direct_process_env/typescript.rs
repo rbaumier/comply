@@ -13,7 +13,7 @@ fn is_nuxt_source(src: &str) -> bool {
         || src.contains("useNuxtApp")
 }
 
-crate::ast_check! { on ["member_expression"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["member_expression"] prefilter = ["process"] => |node, source, ctx, diagnostics|
     if !is_nuxt_source(ctx.source) {
         return;
     }

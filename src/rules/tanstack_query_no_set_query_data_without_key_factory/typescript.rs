@@ -49,6 +49,10 @@ fn find_offenses(source: &str) -> Vec<usize> {
 }
 
 impl TextCheck for Check {
+    fn prefilter(&self) -> Option<&'static [&'static str]> {
+        Some(&["setQueryData"])
+    }
+
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
         if !ctx.source.contains("setQueryData(") {
             return Vec::new();

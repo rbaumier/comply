@@ -29,7 +29,7 @@ fn tag_has_both_directives(node: tree_sitter::Node, source: &[u8]) -> bool {
     has_vfor && has_vif
 }
 
-crate::ast_check! { on ["start_tag", "self_closing_tag"] => |node, source, ctx, diagnostics|    if !tag_has_both_directives(node, source) {
+crate::ast_check! { on ["start_tag", "self_closing_tag"] prefilter = ["v-for"] => |node, source, ctx, diagnostics|    if !tag_has_both_directives(node, source) {
         return;
     }
     let pos = node.start_position();

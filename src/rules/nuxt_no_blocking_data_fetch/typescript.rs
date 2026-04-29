@@ -9,7 +9,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 
 const BLOCKING_CALLS: &[&str] = &["fetch", "$fetch", "useFetch", "useAsyncData"];
 
-crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["call_expression"] prefilter = ["defineNuxtRouteMiddleware"] => |node, source, ctx, diagnostics|
     let mut p = node.parent();
     let mut in_middleware = false;
     let mut depth = 0;

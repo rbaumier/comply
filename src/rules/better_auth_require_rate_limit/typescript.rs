@@ -5,7 +5,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 
 const AUTH_FACTORIES: &[&str] = &["betterAuth", "createAuth"];
 
-crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["call_expression"] prefilter = ["rateLimit"] => |node, source, ctx, diagnostics|
     let Some(func) = node.child_by_field_name("function") else { return };
     let fn_text = func.utf8_text(source).unwrap_or("");
     if !AUTH_FACTORIES.contains(&fn_text) {

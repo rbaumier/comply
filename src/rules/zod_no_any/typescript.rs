@@ -7,7 +7,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { prefilter = ["z.any"] => |node, source, ctx, diagnostics|
     let Some(name) = crate::rules::call_expression::call_function_name(node, source) else {
         return;
     };

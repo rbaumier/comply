@@ -29,7 +29,7 @@ fn classlist_method<'a>(node: tree_sitter::Node<'a>, source: &'a [u8]) -> Option
     Some(prop_name)
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { prefilter = ["classList"] => |node, source, ctx, diagnostics|
     // Pattern 1: ternary — `cond ? el.classList.add('x') : el.classList.remove('x')`
     if node.kind() == "ternary_expression" {
         let consequence = node.child_by_field_name("consequence");

@@ -108,7 +108,7 @@ fn collect_usages(
     }
 }
 
-crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["program"] prefilter = ["enum"] => |node, source, ctx, diagnostics|
     let mut enums: HashMap<String, Vec<(String, usize)>> = HashMap::new();
     collect_enums(node, source, &mut enums);
 

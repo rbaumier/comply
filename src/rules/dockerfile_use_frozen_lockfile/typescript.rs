@@ -6,7 +6,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { on ["run_instruction"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["run_instruction"] prefilter = ["yarn install", "yarn add", "pnpm install"] => |node, source, ctx, diagnostics|
     let shell_text = run_shell_text(node, source);
     let is_pnpm = shell_text.contains("pnpm install");
     let is_yarn = shell_text.contains("yarn install") || shell_text.contains("yarn add");

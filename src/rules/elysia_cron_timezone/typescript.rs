@@ -17,7 +17,7 @@ fn extract_tz(args: &str) -> Option<&str> {
     Some(&after[..end])
 }
 
-crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["call_expression"] prefilter = ["timezone"] => |node, source, ctx, diagnostics|
     if !ctx.project.has_framework("elysia") {
         return;
     }

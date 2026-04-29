@@ -3,7 +3,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { prefilter = ["animation", "@keyframes"] => |node, source, ctx, diagnostics|
     if !diagnostics.is_empty() { return; }
     if ctx.source.contains("prefers-reduced-motion") { return; }
 

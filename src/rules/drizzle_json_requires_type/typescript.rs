@@ -43,7 +43,7 @@ fn chain_has_type_call(node: tree_sitter::Node<'_>, src: &[u8]) -> bool {
     }
 }
 
-crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["call_expression"] prefilter = ["$type"] => |node, source, ctx, diagnostics|
     let Some(name) = callee_name(&node, source) else { return };
     if name != "json" && name != "jsonb" {
         return;

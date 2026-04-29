@@ -12,6 +12,10 @@ const ALLOWED_HOSTS: &[&str] = &["http://localhost", "http://127.0.0.1"];
 pub struct Check;
 
 impl TextCheck for Check {
+    fn prefilter(&self) -> Option<&'static [&'static str]> {
+        Some(&["http://"])
+    }
+
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
         for (i, line) in ctx.source.lines().enumerate() {

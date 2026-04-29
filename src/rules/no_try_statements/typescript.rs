@@ -2,7 +2,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { on ["try_statement"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["try_statement"] prefilter = ["try"] => |node, source, ctx, diagnostics|
     let pos = node.start_position();
     diagnostics.push(Diagnostic {
         path: std::sync::Arc::clone(&ctx.path_arc),

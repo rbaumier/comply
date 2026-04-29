@@ -6,7 +6,7 @@ fn is_angular_file(source: &str) -> bool {
     source.contains("@angular/") || source.contains("@Component") || source.contains("@Directive")
 }
 
-crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["call_expression"] prefilter = ["@Component", "@Directive"] => |node, source, ctx, diagnostics|
     if !is_angular_file(ctx.source) { return; }
     let Some(callee) = node.child_by_field_name("function") else { return; };
     if callee.kind() != "member_expression" { return; }

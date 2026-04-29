@@ -2,7 +2,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 
 const LOCALE_METHODS: &[&str] = &["toLocaleDateString", "toLocaleTimeString", "toLocaleString"];
 
-crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["call_expression"] prefilter = ["toLocale"] => |node, source, ctx, diagnostics|
     let func = match node.child_by_field_name("function") {
         Some(f) => f,
         None => return,

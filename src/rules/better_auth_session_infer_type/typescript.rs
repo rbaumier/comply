@@ -7,7 +7,7 @@ fn file_imports_better_auth(source: &[u8]) -> bool {
     text.contains("from \"better-auth") || text.contains("from 'better-auth")
 }
 
-crate::ast_check! { on ["interface_declaration", "type_alias_declaration"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["interface_declaration", "type_alias_declaration"] prefilter = ["better-auth"] => |node, source, ctx, diagnostics|
     let Some(name) = node.child_by_field_name("name") else { return };
     if name.utf8_text(source).unwrap_or("") != "Session" {
         return;

@@ -8,7 +8,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { on ["new_expression"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["new_expression"] prefilter = ["QueryClient"] => |node, source, ctx, diagnostics|
     if !is_test_file(ctx.path) { return; }
     let Some(constructor) = node.child_by_field_name("constructor") else { return; };
     if constructor.utf8_text(source).ok() != Some("QueryClient") { return; }

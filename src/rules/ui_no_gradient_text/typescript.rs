@@ -51,7 +51,7 @@ fn has_gradient_background(obj: tree_sitter::Node, source: &[u8]) -> bool {
     })
 }
 
-crate::ast_check! { on ["jsx_attribute"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["jsx_attribute"] prefilter = ["backgroundClip"] => |node, source, ctx, diagnostics|
     let Some(attr_name) = crate::rules::jsx::jsx_attribute_name(node, source) else { return };
     if attr_name != "style" {
         return;

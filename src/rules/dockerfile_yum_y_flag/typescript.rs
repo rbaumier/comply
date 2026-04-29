@@ -1,6 +1,6 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { on ["run_instruction"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["run_instruction"] prefilter = ["yum install"] => |node, source, ctx, diagnostics|
     let shell_text = shell_command_text(node, source);
     if !shell_text.contains("yum install") { return; }
     if shell_text.contains(" -y") || shell_text.contains("--assumeyes") { return; }

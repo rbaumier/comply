@@ -1,6 +1,6 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["call_expression"] prefilter = ["process"] => |node, source, ctx, diagnostics|
     // Skip files with a shebang.
     if ctx.source.starts_with("#!") {
         return;

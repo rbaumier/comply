@@ -37,7 +37,7 @@ fn is_inline_listener(arg: tree_sitter::Node, source: &[u8]) -> bool {
     }
 }
 
-crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["call_expression"] prefilter = ["removeEventListener"] => |node, source, ctx, diagnostics|
     let Some(callee) = node.child_by_field_name("function") else { return };
     if !is_remove_listener(callee, source) {
         return;

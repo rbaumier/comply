@@ -14,7 +14,7 @@ const SAFE_CALLBACK_HOOKS: &[&str] = &[
     "useImperativeHandle",
 ];
 
-crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["program"] prefilter = ["Date.now"] => |node, source, ctx, diagnostics|
     // Only enter function bodies that look like React components: PascalCase
     // name and defined at module scope. We run once per program.
     let mut stack: Vec<tree_sitter::Node> = vec![node];

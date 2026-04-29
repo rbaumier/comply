@@ -15,7 +15,7 @@ fn is_literal(node: tree_sitter::Node) -> bool {
     )
 }
 
-crate::ast_check! { on ["class_body"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["class_body"] prefilter = ["constructor"] => |node, source, ctx, diagnostics|
     // We look for class bodies and scan the constructor.
     // Find the constructor method.
     let mut body_cursor = node.walk();

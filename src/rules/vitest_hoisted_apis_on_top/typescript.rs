@@ -44,7 +44,7 @@ fn is_vi_hoisted_call(node: tree_sitter::Node, source: &[u8]) -> bool {
     false
 }
 
-crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["program"] prefilter = ["hoisted"] => |node, source, ctx, diagnostics|
     if !is_test_file(ctx.path) {
         return;
     }

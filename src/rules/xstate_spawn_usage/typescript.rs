@@ -19,7 +19,7 @@ fn is_assign_call(node: tree_sitter::Node, source: &[u8]) -> bool {
     callee.utf8_text(source).unwrap_or("") == "assign"
 }
 
-crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["call_expression"] prefilter = ["spawn"] => |node, source, ctx, diagnostics|
     let Some(callee) = node.child_by_field_name("function") else { return };
     if callee.kind() != "identifier" {
         return;

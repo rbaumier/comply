@@ -118,7 +118,7 @@ fn classify_context<'a>(
     }
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { prefilter = ["toArray"] => |node, source, ctx, diagnostics|
     if !is_to_array_call(node, source) {
         return;
     }

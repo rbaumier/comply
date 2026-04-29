@@ -2,7 +2,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { on ["component"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["component"] prefilter = ["modelValue"] => |node, source, ctx, diagnostics|
     let _ = source;
     let src = ctx.source;
     if !src.contains("modelValue") {

@@ -30,7 +30,7 @@ const SETUP_COMPOSABLES: &[&str] = &[
     "useRouter",
 ];
 
-crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["call_expression"] prefilter = ["setup"] => |node, source, ctx, diagnostics|
     if !is_nuxt_options_api(ctx.source) {
         return;
     }

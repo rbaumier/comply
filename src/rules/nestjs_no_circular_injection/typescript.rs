@@ -6,7 +6,7 @@ fn is_nestjs_file(source: &str) -> bool {
     source.contains("@nestjs/")
 }
 
-crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["call_expression"] prefilter = ["@nestjs/"] => |node, source, ctx, diagnostics|
     if !is_nestjs_file(ctx.source) { return; }
     let Some(callee) = node.child_by_field_name("function") else { return; };
     if callee.kind() != "identifier" { return; }

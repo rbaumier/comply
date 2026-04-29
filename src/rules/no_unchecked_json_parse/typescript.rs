@@ -66,6 +66,10 @@ fn is_wrapped_in_validator(call: tree_sitter::Node, source: &[u8]) -> bool {
 pub struct Check;
 
 impl AstCheck for Check {
+    fn prefilter(&self) -> Option<&'static [&'static str]> {
+        Some(&["JSON"])
+    }
+
     fn interested_kinds(&self) -> Option<&'static [&'static str]> {
         Some(&["call_expression"])
     }

@@ -6,7 +6,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { on ["internal_module"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["internal_module"] prefilter = ["namespace"] => |node, source, ctx, diagnostics|
     // tree-sitter-typescript parses `namespace Foo {}` as an
     // `internal_module` node (not `module`).
     // Check if this is a `declare namespace` — allowed.

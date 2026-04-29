@@ -2,7 +2,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { on ["new_expression"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["new_expression"] prefilter = ["JSON.stringify"] => |node, source, ctx, diagnostics|
     let Some(ctor) = node.child_by_field_name("constructor") else { return; };
     let Ok(ctor_name) = ctor.utf8_text(source) else { return; };
     if ctor_name != "Response" { return; }

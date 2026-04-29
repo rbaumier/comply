@@ -19,7 +19,7 @@ fn is_nuxt_or_vue_source(src: &str) -> bool {
         || src.contains("defineComponent")
 }
 
-crate::ast_check! { on ["program"] => |_node, _source, ctx, diagnostics|
+crate::ast_check! { on ["program"] prefilter = ["v-html"] => |_node, _source, ctx, diagnostics|
     let src = ctx.source;
     if !is_nuxt_or_vue_source(src) {
         return;

@@ -4,7 +4,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 
 const PATH_GLOBALS: &[&str] = &["__dirname", "__filename"];
 
-crate::ast_check! { on ["binary_expression"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["binary_expression"] prefilter = ["__dirname", "__filename"] => |node, source, ctx, diagnostics|
     // Match binary expressions with `+` operator.
     let Some(op) = node.child_by_field_name("operator") else { return };
     if op.utf8_text(source).unwrap_or("") != "+" {

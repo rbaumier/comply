@@ -54,7 +54,7 @@ fn check_pair(
     None
 }
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { prefilter = ["modulusLength", "namedCurve", "named_curve"] => |node, source, ctx, diagnostics|
     if let Some(msg) = check_pair(node, source) {
         let pos = node.start_position();
         diagnostics.push(Diagnostic {

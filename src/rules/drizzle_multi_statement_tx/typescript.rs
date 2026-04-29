@@ -163,7 +163,7 @@ fn strip_to_call(mut expr_opt: Option<tree_sitter::Node<'_>>) -> Option<tree_sit
     Some(expr)
 }
 
-crate::ast_check! { on ["statement_block"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["statement_block"] prefilter = ["transaction"] => |node, source, ctx, diagnostics|
     // Skip nested blocks: only the outermost function/transaction body
     // should drive a single diagnostic. We rely on the parent kind: if
     // the block's parent is itself an inner control-flow node we let

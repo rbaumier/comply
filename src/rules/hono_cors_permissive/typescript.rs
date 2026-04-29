@@ -2,7 +2,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["call_expression"] prefilter = ["hono/cors"] => |node, source, ctx, diagnostics|
     // Only check files that import from 'hono/cors'.
     if !ctx.source.contains("hono/cors") {
         return;

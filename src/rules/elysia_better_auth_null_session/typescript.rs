@@ -2,7 +2,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["program"] prefilter = ["auth.api.getSession"] => |node, source, ctx, diagnostics|
     let _ = (node, source);
     if !ctx.project.has_framework("elysia") {
         return;

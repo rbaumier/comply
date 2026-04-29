@@ -39,7 +39,7 @@ fn is_root_app_file(source: &str, path: &std::path::Path) -> bool {
     )
 }
 
-crate::ast_check! { on ["new_expression"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["new_expression"] prefilter = [".listen("] => |node, source, ctx, diagnostics|
     if !ctx.project.has_framework("elysia") {
         return;
     }

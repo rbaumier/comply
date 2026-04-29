@@ -13,7 +13,7 @@ const DISABLE_PATTERNS: &[(&str, &str, &str)] = &[
     ("noEscape", "true", "noEscape: true"),
 ];
 
-crate::ast_check! { on ["assignment_expression", "member_expression", "identifier", "pair"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["assignment_expression", "member_expression", "identifier", "pair"] prefilter = ["escapeMarkup", "noEscape"] => |node, source, ctx, diagnostics|
 match node.kind() {
         // Handle: `x.escapeMarkup = false` or `escapeMarkup = false`
         "assignment_expression" => {

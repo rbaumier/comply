@@ -14,6 +14,10 @@ use crate::rules::backend::{AstCheck, CheckCtx};
 pub struct Check;
 
 impl AstCheck for Check {
+    fn prefilter(&self) -> Option<&'static [&'static str]> {
+        Some(&["/**"])
+    }
+
     fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
         let source = ctx.source.as_bytes();
         let root = tree.root_node();

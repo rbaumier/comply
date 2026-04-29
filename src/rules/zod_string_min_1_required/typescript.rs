@@ -24,7 +24,7 @@ const VALID_CONTINUATIONS: &[&str] = &[
     "toUpperCase",
 ];
 
-crate::ast_check! { |node, source, ctx, diagnostics|
+crate::ast_check! { prefilter = ["z.string"] => |node, source, ctx, diagnostics|
     // Match `z.string()` itself.
     let Some(name) = crate::rules::call_expression::call_function_name(node, source) else {
         return;

@@ -39,7 +39,7 @@ fn has_protection(node: tree_sitter::Node, source: &[u8]) -> bool {
     }
 }
 
-crate::ast_check! { on ["new_expression", "call_expression"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["new_expression", "call_expression"] prefilter = ["DOMParser", "XMLParser", "parseXml", "xml2js"] => |node, source, ctx, diagnostics|
     // Match `new DOMParser()`, `new XMLParser()`, `new XMLParser({...})`
     // and `require('xml2js')`, `parseXml(...)`.
     let (is_xml_parser, check_node) = match node.kind() {

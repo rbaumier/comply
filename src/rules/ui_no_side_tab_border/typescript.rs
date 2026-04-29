@@ -37,7 +37,7 @@ fn object_has_bottom_border(object: tree_sitter::Node, source: &[u8]) -> bool {
     })
 }
 
-crate::ast_check! { on ["pair"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["pair"] prefilter = ["borderLeft", "borderRight", "borderTop", "borderBottom"] => |node, source, ctx, diagnostics|
     if !is_in_style_jsx_attribute(node, source) {
         return;
     }
