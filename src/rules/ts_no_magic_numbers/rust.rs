@@ -6,13 +6,23 @@ use crate::diagnostic::{Diagnostic, Severity};
 
 const ALLOWED: &[&str] = &["0", "1", "2", "-1"];
 
-fn normalize(text: &str) -> &str {
-    // Strip surrounding whitespace — enough for the allowlist check.
-    text.trim()
+const SUFFIXES: &[&str] = &[
+    "usize", "isize", "u8", "u16", "u32", "u64", "u128",
+    "i8", "i16", "i32", "i64", "i128", "f32", "f64",
+];
+
+fn strip_suffix(text: &str) -> &str {
+    let t = text.trim();
+    for s in SUFFIXES {
+        if let Some(stripped) = t.strip_suffix(s) {
+            return stripped.trim_end_matches('_');
+        }
+    }
+    t
 }
 
 fn is_allowed(text: &str) -> bool {
-    let n = normalize(text);
+    let n = strip_suffix(text);
     ALLOWED.contains(&n)
 }
 
@@ -55,7 +65,7 @@ crate::ast_check! { on ["integer_literal", "float_literal"] => |node, source, ct
         path: std::sync::Arc::clone(&ctx.path_arc),
         line: pos.row + 1,
         column: pos.column + 1,
-        rule_id: "ts-no-magic-numbers".into(),
+        rule_id: super::META.id.into(),
         message: format!(
             "Magic number `{text}` — extract it into a named `const`."
         ),
@@ -96,5 +106,18 @@ mod tests {
     #[test]
     fn allows_array_size_type() {
         assert!(run_on("fn f() -> [u8; 4] { [0, 0, 0, 0] }").is_empty());
+    }
+
+    #[test]
+    fn allows_zero_with_suffix() {
+        assert!(run_on("fn f() -> usize { 0usize }").is_empty());
+        assert!(run_on("fn f() -> f32 { 0f32 }").is_empty());
+        assert!(run_on("fn f() -> i64 { 1i64 }").is_empty());
+    }
+
+    #[test]
+    fn flags_magic_with_suffix() {
+        assert_eq!(run_on("fn f() -> usize { 42usize }").len(), 1);
+        assert_eq!(run_on("fn f() -> f64 { 3.14f64 }").len(), 1);
     }
 }

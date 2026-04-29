@@ -14,7 +14,12 @@ fn has_assertion(node: tree_sitter::Node, source: &[u8]) -> bool {
     match node.kind() {
         "call_expression" => {
             let text = node.utf8_text(source).unwrap_or("");
-            if text.contains("expect(") || text.contains("assert") {
+            if text.contains("expect(")
+                || text.contains("expectTypeOf(")
+                || text.contains("assert")
+                || text.contains(".plan(")
+                || text.contains(".waitFor")
+            {
                 return true;
             }
         }
@@ -76,6 +81,11 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     }
 
     let Some(body) = callback.child_by_field_name("body") else { return };
+
+    let body_text = body.utf8_text(source).unwrap_or("");
+    if body_text.contains("@ts-expect-error") {
+        return;
+    }
 
     if !has_assertion(body, source) {
         let name = extract_test_name(args, source);
@@ -173,5 +183,48 @@ test("should work", () => {
 });
 "#;
         assert!(run_non_test(src).is_empty());
+    }
+
+    #[test]
+    fn allows_expect_type_of() {
+        let src = r#"
+test("type check", () => {
+  expectTypeOf(result).toEqualTypeOf<string>();
+});
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_t_plan() {
+        let src = r#"
+test("planned", (t) => {
+  t.plan(2);
+  doStuff(t);
+});
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_ts_expect_error() {
+        let src = r#"
+test("type guard", () => {
+  // @ts-expect-error this should fail
+  doNotExecute(() => fn(skipToken));
+});
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_playwright_wait_for() {
+        let src = r#"
+test("page loads", async ({ page }) => {
+  await page.goto('/');
+  await page.waitForSelector('text=Hello');
+});
+"#;
+        assert!(run_on(src).is_empty());
     }
 }

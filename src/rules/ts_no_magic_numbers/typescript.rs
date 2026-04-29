@@ -1,4 +1,4 @@
-//! ts-no-magic-numbers backend — flag numeric literals that are not in
+//! no-magic-numbers TS backend — flag numeric literals that are not in
 //! an allowed context (const declarations, enums, type annotations,
 //! default parameter values, array indices 0/1/-1).
 //!
@@ -90,7 +90,7 @@ crate::ast_check! { on ["number"] => |node, source, ctx, diagnostics|
         path: std::sync::Arc::clone(&ctx.path_arc),
         line: pos.row + 1,
         column: pos.column + 1,
-        rule_id: "ts-no-magic-numbers".into(),
+        rule_id: super::META.id.into(),
         message: format!(
             "Magic number `{text}` — extract into a named constant."
         ),

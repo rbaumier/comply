@@ -20,6 +20,9 @@ fn is_assign_call(node: tree_sitter::Node, source: &[u8]) -> bool {
 }
 
 crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
+    let Some(pkg) = ctx.project.nearest_package_json(ctx.path) else { return };
+    if !pkg.has_dep_or_engine("xstate") { return; }
+
     let Some(callee) = node.child_by_field_name("function") else { return };
     if callee.kind() != "identifier" {
         return;
@@ -49,26 +52,57 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use tempfile::TempDir;
 
-    fn run_on(source: &str) -> Vec<Diagnostic> {
+    use crate::config::Config;
+    use crate::files::{Language, SourceFile};
+    use crate::project::ProjectCtx;
+
+    fn run_xstate(source: &str) -> Vec<Diagnostic> {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"dependencies":{"xstate":"^5"}}"#,
+        )
+        .unwrap();
+        let file_path = dir.path().join("src/machine.ts");
+        fs::create_dir_all(file_path.parent().unwrap()).unwrap();
+        fs::write(&file_path, source).unwrap();
+        let source_file = SourceFile {
+            path: file_path.clone(),
+            language: Language::from_path(&file_path).unwrap(),
+        };
+        let project = ProjectCtx::load(&[&source_file], &Config::default());
+        let canon = fs::canonicalize(&file_path).unwrap();
+        crate::rules::test_helpers::run_tsx_with_project_file_and_path(
+            source,
+            &Check,
+            &project,
+            &crate::rules::file_ctx::FileCtx::default(),
+            canon.to_str().unwrap(),
+        )
+    }
+
+    fn run_no_xstate(source: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_ts(source, &Check)
     }
 
     #[test]
     fn flags_spawn_outside_assign() {
-        let diags = run_on("const actor = spawn(childMachine);");
+        let diags = run_xstate("const actor = spawn(childMachine);");
         assert_eq!(diags.len(), 1);
     }
 
     #[test]
     fn flags_spawn_inside_unrelated_call() {
-        let diags = run_on("doStuff(spawn(childMachine));");
+        let diags = run_xstate("doStuff(spawn(childMachine));");
         assert_eq!(diags.len(), 1);
     }
 
     #[test]
     fn allows_spawn_inside_assign() {
-        assert!(run_on(
+        assert!(run_xstate(
             "const action = assign({ ref: () => spawn(childMachine) });"
         )
         .is_empty());
@@ -76,7 +110,7 @@ mod tests {
 
     #[test]
     fn allows_spawn_inside_assign_with_context_arg() {
-        assert!(run_on(
+        assert!(run_xstate(
             "const action = assign((ctx) => ({ ref: spawn(childMachine) }));"
         )
         .is_empty());
@@ -84,6 +118,11 @@ mod tests {
 
     #[test]
     fn allows_no_spawn_call() {
-        assert!(run_on("const x = foo(childMachine);").is_empty());
+        assert!(run_no_xstate("const x = foo(childMachine);").is_empty());
+    }
+
+    #[test]
+    fn skips_non_xstate_project() {
+        assert!(run_no_xstate("const actor = spawn(childMachine);").is_empty());
     }
 }
