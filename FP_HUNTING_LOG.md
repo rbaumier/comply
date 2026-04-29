@@ -52,6 +52,14 @@ Corrections de faux positifs identifiés en scannant des projets réels dans ~/w
 | tRPC/svelte-kit | `page.waitForSelector()` (Playwright) | Ajouté `.waitFor` à `has_assertion()` |
 | svelte-kit | Assertions déléguées dans helpers (`run_get_pathname_test(...)`) | Non corrigé — nécessiterait analyse inter-procédurale |
 
+## Règles Rust mal calibrées sur projets réels (ripgrep, ruff)
+
+| Règle | Projet | Hits avant | Problème | Fix | Hits après |
+|-------|--------|-----------|----------|-----|------------|
+| `id-length` | ripgrep | 303 | En Rust, `f`, `s`, `v`, `e`, `n`, `m`, `i`, `x`, etc. sont idiomatiques dans les paramètres de fonctions, closures et match arms. La règle flagguait tout identifiant < 2 chars sans distinction. | 1. Ajouté `RUST_IDIOMATIC` (17 noms courants) comme exceptions hard-codées dans le backend Rust. 2. Skip les paramètres de closures, for-loops et if-let (scopes courts où les noms courts sont acceptés). | 13 |
+| `inverted-assertion-arguments` | ripgrep | 225 | En Rust, `assert_eq!` n'a **aucune convention** expected/actual (contrairement à Jest/JUnit). Flaguer `assert_eq!(0, count(...))` est du bruit pur. | Backend Rust supprimé — la règle ne s'applique plus qu'à TS/JS où la convention `expect(actual).toBe(expected)` existe. | 0 |
+| `no-duplicate-string` | ripgrep | 217 | Les strings de test fixtures (`"homer\nlisa\nmaggie"` × 7) sont flaguées car le backend Rust ne skip pas les fichiers de test. | Ajouté garde `in_test_dir` dans le backend Rust. Note : les tests inline `#[cfg(test)]` dans le même fichier restent flaguées — limitation connue. | — |
+
 ## Crashes corrigés
 
 | Bug | Cause | Fix |
