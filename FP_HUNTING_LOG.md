@@ -132,3 +132,47 @@ Corrections de faux positifs identifiés en scannant des projets réels dans ~/w
 | Bug | Cause | Fix |
 |-----|-------|-----|
 | Crash sur `actix-web` | `cargo shear --format=json` retourne du texte non-JSON (stderr) quand le sous-crate n'a pas de Cargo.lock ou que la commande échoue. Le `serde_json::from_slice()?.` propageait l'erreur via `?` jusqu'au `main()`, ce qui crashait comply avec "crashed unexpectedly". | Remplacé le `?` par `let Ok(report) = ... else { return Ok(vec![]); }` — un cargo-shear qui échoue à parser ne doit pas crasher tout comply, on retourne simplement zéro diagnostics pour ce workspace. |
+
+## `no-test-return-statement` — return dans fonctions imbriquées des tests
+
+| Règle | Projet | Hits avant | Problème | Fix | Hits après |
+|-------|--------|-----------|----------|-----|------------|
+| `no-test-return-statement` | swr | 377 | La règle cherche le `return` le plus proche dans un callback `test()`/`it()`, mais ne reconnaît que `arrow_function`, `function_expression` et `function` comme fonctions englobantes. En tree-sitter, `function Page() {}` est un `function_declaration` et `initFocus() { ... }` (méthode raccourcie dans un objet littéral) est un `method_definition` — deux types de nœuds que le walker ignorait. Le walker traversait ces fonctions et remontait jusqu'à l'arrow function du test, flagguant le `return` du composant React ou de la méthode objet comme un return de test. | Ajouté `function_declaration` et `method_definition` au match des fonctions englobantes dans `is_return_in_test_callback()`. | 0 |
+
+## `no-generic-names` — noms génériques dans les fichiers de test et stories
+
+| Règle | Projet | Hits avant | Problème | Fix | Hits après |
+|-------|--------|-----------|----------|-----|------------|
+| `no-generic-names` | swr | 827 | Dans les fichiers de test, les variables `data`, `value`, `result`, `item` sont idiomatiques — on teste une fonction et on vérifie son retour. Flaguer `const { data } = useSWR(...)` dans un test comme "nom générique" est du bruit pur. De même pour les fichiers `.stories.` qui sont des exemples. | Ajouté garde `in_test_dir \|\| in_storybook` dans `visit_node()`. Note : le guard doit être dans `visit_node()` et non dans `check()` car le moteur utilise un dispatch multiplexé qui appelle `visit_node()` directement sans passer par `check()`. | 311 |
+| `no-generic-names` | grafana | 23430 | Même problème à grande échelle — majorité des hits dans les fichiers `.test.` de Grafana. | Même fix. | — |
+| `no-generic-names` | storybook | 3115 | Même problème — noms génériques dans fichiers de test et `.stories.`. | Même fix. | — |
+
+## `no-duplicate-string` — fichiers `.stories.` non skippés
+
+| Règle | Projet | Hits avant | Problème | Fix |
+|-------|--------|-----------|----------|-----|
+| `no-duplicate-string` | storybook | 6172 | Les fichiers `.stories.{ts,tsx,js}` contiennent des strings répétées dans les différentes variantes d'un composant (props, labels, descriptions). Ces fichiers ne sont pas du code de production — ce sont des exemples interactifs. Le skip `in_test_dir` ne les couvrait pas. | Ajouté `ctx.file.path_segments.in_storybook` au guard existant dans le backend TS. |
+
+## `prefer-less-than` — comparaisons variable-vs-littéral flagguées
+
+| Règle | Projet | Hits avant | Problème | Fix |
+|-------|--------|-----------|----------|-----|
+| `prefer-less-than` | remix | 118 | `if (x > 0)`, `if (arr.length >= 1)`, `const ok = count > 5` étaient flaggés. Ces comparaisons variable-vs-littéral sont universellement écrites sujet-en-premier (`x > 0`) plutôt qu'inversées (`0 < x`). La règle n'a de sens que pour les comparaisons variable-vs-variable. | Ajouté un guard dans les backends Rust et TS : si le côté droit est un littéral (number, string, boolean, null, undefined), on ne flag pas. |
+
+## `comment-prose-quality` — faux lexical illusions sur ponctuation
+
+| Règle | Problème | Fix |
+|-------|----------|-----|
+| `comment-prose-quality` | Le détecteur de "lexical illusion" (mot répété à la fin d'une ligne et au début de la suivante) flagguait `// }\n// }` — deux lignes de fermeture d'accolades consécutives. Les tokens purement ponctuation (`}`, `]`, `,`) ne sont pas des illusions lexicales. | Ajouté deux gardes : (1) les tokens sans caractères alphabétiques sont ignorés, (2) les lignes d'un seul mot ne déclenchent pas la détection (un mot seul à la fin d'une ligne n'est pas une "illusion" — c'est juste un mot court). |
+
+## `dead-export` — panic UTF-8 sur header `@generated`
+
+| Règle | Problème | Fix |
+|-------|----------|-----|
+| `dead-export` | `source[..2048]` peut couper au milieu d'un caractère multi-byte quand le fichier contient des caractères non-ASCII dans les 2048 premiers bytes, causant un panic sur la méthode `.contains()` du slice. | Ajouté boucle `while !source.is_char_boundary(end) { end -= 1; }` pour reculer jusqu'à une frontière de caractère valide avant le slice. |
+
+## `no-empty-test-file` — Node.js assert non reconnu comme marqueur de test
+
+| Règle | Problème | Fix |
+|-------|----------|-----|
+| `no-empty-test-file` | Les fichiers de test utilisant `assert.equal()`, `assert.ok()` (Node.js built-in test runner) n'étaient pas reconnus comme contenant du contenu de test. Seuls `test(`, `it(`, `describe(`, `expect(` étaient dans `TEST_MARKERS`. | Ajouté `assert(` et `assert.` à `TEST_MARKERS`. |
