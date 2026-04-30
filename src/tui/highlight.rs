@@ -85,13 +85,3 @@ pub fn highlight_lines(path: &Path, lines: &[(usize, &str)]) -> Vec<Vec<(Color, 
     result
 }
 
-pub fn dim_color(c: Color, factor: f32) -> Color {
-    match c {
-        Color::Rgb(r, g, b) => Color::Rgb(
-            (r as f32 * factor) as u8,
-            (g as f32 * factor) as u8,
-            (b as f32 * factor) as u8,
-        ),
-        other => other,
-    }
-}

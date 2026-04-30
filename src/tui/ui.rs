@@ -6,13 +6,12 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::meta_registry;
 
 use super::app::{App, InputMode, Row, ViewMode};
-use super::highlight;
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let outer = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1),
+            Constraint::Length(3),
             Constraint::Min(1),
             Constraint::Length(1),
         ])
@@ -74,7 +73,8 @@ fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect) {
         Span::styled(count_text, Style::default().fg(Color::Gray)),
     ]);
 
-    frame.render_widget(Paragraph::new(line), area);
+    let block = Block::bordered().border_style(Style::default().fg(Color::DarkGray));
+    frame.render_widget(Paragraph::new(line).block(block), area);
 }
 
 fn draw_main_list(frame: &mut Frame, app: &App, area: Rect) {
@@ -158,8 +158,9 @@ fn draw_preview(frame: &mut Frame, app: &mut App, area: Rect) {
             let inner = border.inner(area);
             frame.render_widget(border, area);
 
-            // Build diagnostic info lines (bottom pane)
-            let mut info_lines: Vec<Line<'_>> = vec![Line::from(vec![
+            // Build diagnostic info lines (inserted inline after target line)
+            let mut info_lines: Vec<Line<'_>> = Vec::new();
+            info_lines.push(Line::from(vec![
                 Span::styled(
                     format!("[{}]", rule_id),
                     Style::default()
@@ -168,7 +169,7 @@ fn draw_preview(frame: &mut Frame, app: &mut App, area: Rect) {
                 ),
                 Span::raw("  "),
                 Span::styled(message, Style::default().fg(Color::White)),
-            ])];
+            ]));
             if let Some(meta) = meta_registry::lookup(&rule_id) {
                 info_lines.push(Line::from(Span::styled(
                     format!("help: {}", meta.remediation),
@@ -184,23 +185,6 @@ fn draw_preview(frame: &mut Frame, app: &mut App, area: Rect) {
                 }
             }
 
-            // Split: code on top, bordered diagnostic info on bottom
-            let info_box_height = info_lines.len() as u16 + 1; // +1 for top border
-            let split = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([Constraint::Min(3), Constraint::Length(info_box_height)])
-                .split(inner);
-            let code_area = split[0];
-            let info_area = split[1];
-
-            let info_block = Block::new()
-                .borders(Borders::TOP)
-                .border_style(Style::default().fg(Color::DarkGray));
-            let info_inner = info_block.inner(info_area);
-            frame.render_widget(info_block, info_area);
-            frame.render_widget(Paragraph::new(Text::from(info_lines)), info_inner);
-
-            // Build source code lines (top pane)
             let context_lines = app.source_lines(&path, diag_line, 15);
             if context_lines.is_empty() {
                 let msg = Paragraph::new(Line::from(Span::styled(
@@ -208,16 +192,17 @@ fn draw_preview(frame: &mut Frame, app: &mut App, area: Rect) {
                     Style::default().fg(Color::DarkGray),
                 )))
                 .alignment(Alignment::Center);
-                let y_offset = code_area.height / 2;
-                if y_offset < code_area.height {
+                let y_offset = inner.height / 2;
+                if y_offset < inner.height {
                     let centered =
-                        Rect::new(code_area.x, code_area.y + y_offset, code_area.width, 1);
+                        Rect::new(inner.x, inner.y + y_offset, inner.width, 1);
                     frame.render_widget(msg, centered);
                 }
                 return;
             }
 
             let gutter_width = context_lines.last().map_or(1, |(ln, _)| digit_count(*ln));
+            let gutter_pad = " ".repeat(gutter_width + 4);
             let mut lines: Vec<Line<'_>> = Vec::new();
 
             for &(ln, src) in context_lines.iter() {
@@ -232,38 +217,63 @@ fn draw_preview(frame: &mut Frame, app: &mut App, area: Rect) {
                     Span::styled(format!("{:>w$} ", ln, w = gutter_width), gutter_style),
                     Span::styled(format!("{} ", marker), gutter_style),
                 ];
+                let mut hl_hit = false;
                 if let Some(file_hl) = app.highlight_cache.get(&path) {
                     if let Some(spans_for_line) = file_hl.get(ln.wrapping_sub(1)) {
                         for (color, text) in spans_for_line {
-                            let fg = if is_target {
-                                *color
-                            } else {
-                                highlight::dim_color(*color, 0.55)
-                            };
-                            spans.push(Span::styled(text.clone(), Style::default().fg(fg)));
+                            spans.push(Span::styled(text.clone(), Style::default().fg(*color)));
                         }
+                        hl_hit = true;
                     }
-                } else {
-                    let fg = if is_target {
-                        Color::White
-                    } else {
-                        Color::DarkGray
-                    };
-                    spans.push(Span::styled(src, Style::default().fg(fg)));
+                }
+                if !hl_hit {
+                    spans.push(Span::styled(src, Style::default().fg(Color::White)));
                 }
                 lines.push(Line::from(spans));
-                if is_target && app.diagnostics[index].span.is_some() {
-                    let (padding, carets) = build_caret_line(&app.diagnostics[index], src);
+
+                if is_target {
+                    let diag_ref = &app.diagnostics[index];
+                    let (padding, carets) = if diag_ref.span.is_some() {
+                        build_caret_line(diag_ref, src)
+                    } else {
+                        let byte_col = diag_ref.column.saturating_sub(1).min(src.len());
+                        let byte_col = floor_char_boundary(src, byte_col);
+                        let prefix = &src[..byte_col];
+                        (" ".repeat(UnicodeWidthStr::width(prefix)), "^".to_string())
+                    };
                     lines.push(Line::from(vec![
                         Span::raw(" ".repeat(gutter_width + 1)),
                         Span::styled("  ", Style::default().fg(Color::DarkGray)),
-                        Span::raw(padding),
+                        Span::raw(padding.clone()),
                         Span::styled(carets, sev_style),
+                    ]));
+
+                    let box_width = inner.width.saturating_sub(gutter_pad.len() as u16 + 2) as usize;
+                    let border_style = Style::default().fg(Color::DarkGray);
+                    lines.push(Line::from(vec![
+                        Span::styled(&gutter_pad, border_style),
+                        Span::styled("┌", border_style),
+                        Span::styled("─".repeat(box_width), border_style),
+                        Span::styled("┐", border_style),
+                    ]));
+                    for il in &info_lines {
+                        let mut prefixed = vec![
+                            Span::styled(&gutter_pad, border_style),
+                            Span::styled("│ ", border_style),
+                        ];
+                        prefixed.extend(il.spans.iter().cloned());
+                        lines.push(Line::from(prefixed));
+                    }
+                    lines.push(Line::from(vec![
+                        Span::styled(&gutter_pad, border_style),
+                        Span::styled("└", border_style),
+                        Span::styled("─".repeat(box_width), border_style),
+                        Span::styled("┘", border_style),
                     ]));
                 }
             }
 
-            frame.render_widget(Paragraph::new(Text::from(lines)), code_area);
+            frame.render_widget(Paragraph::new(Text::from(lines)), inner);
         }
         Row::Group { ref key, .. } => {
             let title = format!(" {} ", key);
