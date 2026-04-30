@@ -74,7 +74,8 @@ fn find_concat<'a>(node: tree_sitter::Node<'a>, source: &[u8]) -> Option<tree_si
     None
 }
 
-/// True if `node` is `s += …` (compound assignment with `+=`).
+/// True if `node` is `s += …` (compound assignment with `+=`) where the
+/// right-hand side is not a numeric literal (avoids flagging `i += 1`).
 fn is_compound_concat_assign(node: tree_sitter::Node, source: &[u8]) -> bool {
     if node.kind() != "compound_assignment_expr" {
         return false;
@@ -82,7 +83,13 @@ fn is_compound_concat_assign(node: tree_sitter::Node, source: &[u8]) -> bool {
     let Some(op) = node.child_by_field_name("operator") else {
         return false;
     };
-    op.utf8_text(source).map(|t| t == "+=").unwrap_or(false)
+    if op.utf8_text(source).map(|t| t != "+=").unwrap_or(true) {
+        return false;
+    }
+    let Some(rhs) = node.child_by_field_name("right") else {
+        return false;
+    };
+    !matches!(rhs.kind(), "integer_literal" | "float_literal")
 }
 
 /// True if `node` is `s = s + …` for the same identifier `s`.
@@ -158,6 +165,12 @@ mod tests {
     #[test]
     fn allows_push_str_outside_loop() {
         let src = r#"fn f() { let mut s = String::new(); s.push_str("x"); }"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_integer_counter_in_loop() {
+        let src = r#"fn f() { let mut i = 0; for _ in v { i += 1; } }"#;
         assert!(run_on(src).is_empty());
     }
 
