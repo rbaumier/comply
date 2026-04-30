@@ -2,8 +2,30 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
+const TEST_MARKERS: &[&str] = &[".test.", ".spec.", "__tests__", "_test.", ".e2e."];
+
+const PLAYWRIGHT_IMPORTS: &[&str] = &[
+    "@playwright/test",
+    "from 'playwright'",
+    "from \"playwright\"",
+    "require('playwright')",
+    "require(\"playwright\")",
+    "require('@playwright/test')",
+    "require(\"@playwright/test\")",
+];
+
+fn is_test_file(path: &std::path::Path) -> bool {
+    let s = path.to_string_lossy();
+    TEST_MARKERS.iter().any(|m| s.contains(m))
+}
+
+fn has_playwright_import(source: &[u8]) -> bool {
+    let src = std::str::from_utf8(source).unwrap_or("");
+    PLAYWRIGHT_IMPORTS.iter().any(|p| src.contains(p))
+}
+
 crate::ast_check! { on ["call_expression"] prefilter = ["pause"] => |node, source, ctx, diagnostics|
-    if !source.windows(16).any(|w| w == b"@playwright/test") {
+    if !is_test_file(ctx.path) && !has_playwright_import(source) {
         return;
     }
     let Some(callee) = node.child_by_field_name("function") else { return };
@@ -78,5 +100,37 @@ mod tests {
 });"#,
         );
         assert_eq!(run(&src).len(), 1);
+    }
+
+    #[test]
+    fn flags_via_playwright_import() {
+        let src = r#"
+import { test, expect } from '@playwright/test';
+
+test('login', async ({ page }) => {
+    await page.pause();
+});
+"#;
+        let d = run("e2e/login.ts", src);
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].rule_id, "playwright-no-page-pause");
+    }
+
+    #[test]
+    fn flags_via_playwright_require() {
+        let src = r#"
+const { chromium } = require('playwright');
+async function run() {
+    await page.pause();
+}
+"#;
+        let d = run("tests/login.ts", src);
+        assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn ignores_no_marker_no_import() {
+        let d = run("src/utils.ts", "await page.pause();");
+        assert!(d.is_empty());
     }
 }
