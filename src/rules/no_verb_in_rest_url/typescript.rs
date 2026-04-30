@@ -6,13 +6,13 @@
 //! REST tooling, and create an infinite proliferation of paths
 //! (`createOrder`, `updateOrder`, `cancelOrder`, `refundOrder`...).
 //!
-//! Detection: walk `string` nodes containing `/api/` followed by a banned
-//! verb prefix in camelCase. This catches string literals used as fetch
+//! Detection: walk string-like nodes containing `/api/` followed by a
+//! banned verb prefix in camelCase. This catches literals used as fetch
 //! URLs or route definitions.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { on ["string"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["string", "template_string"] => |node, source, ctx, diagnostics|
     let Ok(text) = node.utf8_text(source) else {
         return;
     };
@@ -38,14 +38,9 @@ crate::ast_check! { on ["string"] => |node, source, ctx, diagnostics|
 #[cfg(test)]
 mod tests {
     use super::*;
-    
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
-
-
         crate::rules::test_helpers::run_ts(source, &Check)
-
-
     }
 
     #[test]
@@ -68,5 +63,20 @@ mod tests {
     fn allows_verb_in_non_api_string() {
         // Not a URL — regular string.
         assert!(run_on("const label = 'createOrder';").is_empty());
+    }
+
+    #[test]
+    fn flags_static_template_literal() {
+        assert_eq!(run_on("fetch(`/api/createOrder`);").len(), 1);
+    }
+
+    #[test]
+    fn flags_template_literal_route_definition() {
+        assert_eq!(run_on("router.post(`/api/deleteUser`, handler);").len(), 1);
+    }
+
+    #[test]
+    fn allows_dynamic_template_without_verb_segment() {
+        assert!(run_on("fetch(`/api/orders/${id}`);").is_empty());
     }
 }

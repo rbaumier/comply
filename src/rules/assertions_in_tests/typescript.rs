@@ -11,6 +11,10 @@ fn is_test_file(path: &std::path::Path) -> bool {
 /// Check whether a subtree contains an assertion call (expect, assert, .should,
 /// .toBe, .toEqual, .toMatch, .toThrow).
 fn has_assertion(node: tree_sitter::Node, source: &[u8]) -> bool {
+    if is_nested_function_boundary(node) {
+        return false;
+    }
+
     match node.kind() {
         "call_expression" => {
             let text = node.utf8_text(source).unwrap_or("");
@@ -42,6 +46,21 @@ fn has_assertion(node: tree_sitter::Node, source: &[u8]) -> bool {
             return true;
         }
     }
+    false
+}
+
+fn is_nested_function_boundary(node: tree_sitter::Node) -> bool {
+    if matches!(
+        node.kind(),
+        "function_declaration"
+            | "function_expression"
+            | "arrow_function"
+            | "generator_function"
+            | "generator_function_declaration"
+    ) {
+        return true;
+    }
+
     false
 }
 
@@ -226,5 +245,29 @@ test("page loads", async ({ page }) => {
 });
 "#;
         assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_assertion_inside_nested_function() {
+        let src = r#"
+test("does work", () => {
+  function later() {
+    expect(result).toBe(true);
+  }
+  runCode();
+});
+"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn ignores_assertion_inside_nested_arrow_function() {
+        let src = r#"
+test("does work", () => {
+  const later = () => expect(result).toBe(true);
+  runCode();
+});
+"#;
+        assert_eq!(run_on(src).len(), 1);
     }
 }

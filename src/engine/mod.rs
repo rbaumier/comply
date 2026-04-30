@@ -151,6 +151,7 @@ impl WorkerState {
 ///   - thread thresholds through to rules via `CheckCtx`
 ///   - rewrite each diagnostic's severity if the user set one
 #[must_use = "diagnostics from custom rules must be reported"]
+#[allow(dead_code)] // Tests use simple entry point.
 pub fn lint_files(files: &[&SourceFile], config: &Config) -> Result<Vec<Diagnostic>> {
     let project = Arc::new(ProjectCtx::load(files, config));
     lint_files_with_project(files, config, &project, None)
@@ -305,7 +306,7 @@ fn dispatch_with_lang(
     };
     let mut diagnostics = Vec::new();
 
-    for ((&(meta, ref backend), pf)) in ld.applicable.iter().zip(&ld.applicable_prefilters) {
+    for (&(meta, ref backend), pf) in ld.applicable.iter().zip(&ld.applicable_prefilters) {
         if !config.is_rule_enabled(meta.id, path) {
             continue;
         }
@@ -394,4 +395,3 @@ fn is_self_reference(d: &Diagnostic) -> bool {
     let path_str = d.path.to_string_lossy();
     path_str.contains(&needle) || path_str.contains(&alt_needle)
 }
-

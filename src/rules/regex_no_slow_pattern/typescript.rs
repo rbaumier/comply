@@ -20,11 +20,14 @@ fn has_nested_quantifier(pattern: &str) -> bool {
             let mut depth = 1;
             let mut j = i + 1;
             let mut inner_has_quantifier = false;
+            let mut in_character_class = false;
             while j < len && depth > 0 {
                 match bytes[j] {
                     b'\\' => {
                         j += 1; // skip escaped char
                     }
+                    b'[' => in_character_class = true,
+                    b']' => in_character_class = false,
                     b'(' => depth += 1,
                     b')' => {
                         depth -= 1;
@@ -32,7 +35,7 @@ fn has_nested_quantifier(pattern: &str) -> bool {
                             break;
                         }
                     }
-                    b'+' | b'*' => inner_has_quantifier = true,
+                    b'+' | b'*' if !in_character_class => inner_has_quantifier = true,
                     _ => {}
                 }
                 j += 1;
@@ -116,5 +119,15 @@ mod tests {
     fn ignores_scoped_import_path() {
         let src = r#"import X from "@scope/(pkg+)+";"#;
         assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_plus_literal_in_character_class() {
+        assert!(run_on(r#"const re = /([a+])+/;"#).is_empty());
+    }
+
+    #[test]
+    fn ignores_star_literal_in_character_class() {
+        assert!(run_on(r#"const re = /([*])*/;"#).is_empty());
     }
 }

@@ -20,9 +20,13 @@ crate::ast_check! { on ["call_expression"] prefilter = ["JSON.parse"] => |node, 
 
     // Check the first argument is `JSON.stringify(…)`
     let Some(args) = node.child_by_field_name("arguments") else { return };
-    let mut cursor = args.walk();
-    let first_arg = args.children(&mut cursor).find(|c| c.kind() == "call_expression");
-    let Some(inner_call) = first_arg else { return };
+    if args.named_child_count() != 1 {
+        return;
+    }
+    let Some(inner_call) = args.named_child(0) else { return };
+    if inner_call.kind() != "call_expression" {
+        return;
+    }
 
     let Some(inner_callee) = inner_call.child_by_field_name("function") else { return };
     if inner_callee.kind() != "member_expression" {
@@ -35,6 +39,11 @@ crate::ast_check! { on ["call_expression"] prefilter = ["JSON.parse"] => |node, 
     let Ok(inner_prop_text) = inner_prop.utf8_text(source) else { return };
 
     if inner_obj_text != "JSON" || inner_prop_text != "stringify" {
+        return;
+    }
+
+    let Some(inner_args) = inner_call.child_by_field_name("arguments") else { return };
+    if inner_args.named_child_count() != 1 {
         return;
     }
 
@@ -84,5 +93,15 @@ mod tests {
     #[test]
     fn allows_json_stringify_alone() {
         assert!(run_on("const text = JSON.stringify(obj);").is_empty());
+    }
+
+    #[test]
+    fn allows_stringify_replacer() {
+        assert!(run_on("const copy = JSON.parse(JSON.stringify(obj, replacer));").is_empty());
+    }
+
+    #[test]
+    fn allows_parse_reviver() {
+        assert!(run_on("const copy = JSON.parse(JSON.stringify(obj), reviver);").is_empty());
     }
 }

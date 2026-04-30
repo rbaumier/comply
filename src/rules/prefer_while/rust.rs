@@ -26,6 +26,10 @@ crate::ast_check! { on ["loop_expression"] => |node, source, ctx, diagnostics|
         return;
     };
 
+    if if_node.child_by_field_name("alternative").is_some() {
+        return;
+    }
+
     // Check that the if body contains only a break_expression.
     let Some(consequence) = if_node.child_by_field_name("consequence") else { return };
     if consequence.kind() != "block" {
@@ -45,6 +49,10 @@ crate::ast_check! { on ["loop_expression"] => |node, source, ctx, diagnostics|
         only_child
     };
     if break_node.kind() != "break_expression" {
+        return;
+    }
+    let Ok(break_text) = break_node.utf8_text(source) else { return };
+    if break_text.trim() != "break" {
         return;
     }
 
@@ -110,6 +118,55 @@ fn f() {
         let src = r#"
 fn f() {
     while condition {
+        do_work();
+    }
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_labeled_break_guard() {
+        let src = r#"
+fn f() {
+    'outer: loop {
+        loop {
+            if !condition {
+                break 'outer;
+            }
+            do_work();
+        }
+    }
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_value_break_guard() {
+        let src = r#"
+fn f() -> i32 {
+    loop {
+        if !condition {
+            break 42;
+        }
+        do_work();
+    }
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_break_guard_with_else() {
+        let src = r#"
+fn f() {
+    loop {
+        if !condition {
+            break;
+        } else {
+            prepare();
+        }
         do_work();
     }
 }

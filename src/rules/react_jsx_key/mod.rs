@@ -17,6 +17,6 @@ pub const META: RuleMeta = RuleMeta {
 };
 
 pub fn register() -> RuleDef {
-    let mut backends = crate::register_ts_family!(META, react).backends;
+    let backends = crate::register_ts_family!(META, react).backends;
     RuleDef { meta: META, backends }
 }

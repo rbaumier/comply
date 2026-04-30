@@ -114,11 +114,14 @@ fn enclosing_function_scope(node: tree_sitter::Node) -> Option<tree_sitter::Node
 mod tests {
     use super::*;
 
-    const PW: &str = "import { test, expect } from \"@playwright/test\";\n";
-
     fn run_on(source: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_ts(&format!("{source}
-// @playwright/test"), &Check)
+        crate::rules::test_helpers::run_ts(
+            &format!(
+                "{source}
+// @playwright/test"
+            ),
+            &Check,
+        )
     }
 
     #[test]

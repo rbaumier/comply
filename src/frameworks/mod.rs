@@ -75,8 +75,8 @@ fn registry() -> &'static [FrameworkDef] {
     CELL.get_or_init(|| {
         RAW.iter()
             .map(|(stem, body)| {
-                let mut def: FrameworkDef = toml::from_str(body)
-                    .unwrap_or_else(|e| panic!("{stem}.toml malformed: {e}"));
+                let mut def: FrameworkDef =
+                    toml::from_str(body).unwrap_or_else(|e| panic!("{stem}.toml malformed: {e}"));
                 def.name = (*stem).to_string();
                 def
             })
@@ -84,6 +84,7 @@ fn registry() -> &'static [FrameworkDef] {
     })
 }
 
+#[cfg(test)]
 pub fn get_framework(name: &str) -> Option<&'static FrameworkDef> {
     registry().iter().find(|def| def.name == name)
 }
@@ -122,7 +123,11 @@ mod tests {
     #[test]
     fn all_tomls_parse_cleanly() {
         let r = registry();
-        assert!(r.len() >= 6, "expected at least 6 frameworks, got {}", r.len());
+        assert!(
+            r.len() >= 6,
+            "expected at least 6 frameworks, got {}",
+            r.len()
+        );
         for def in r {
             assert!(!def.name.is_empty());
             assert!(

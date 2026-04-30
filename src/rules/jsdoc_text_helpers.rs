@@ -5,11 +5,9 @@
 //! line in the containing file.
 
 /// A JSDoc comment block located in source text.
-pub struct JsdocBlock<'a> {
+pub struct JsdocBlock {
     /// Absolute 0-based line where the `/**` opener sits.
     pub start_line: usize,
-    /// Full raw text of the block (from `/**` to the closing `*/`, inclusive).
-    pub raw: &'a str,
     /// Cleaned content: each line stripped of leading `*` and whitespace,
     /// joined by `\n`. The opening `/**` and closing `*/` markers are dropped.
     pub content: String,
@@ -18,7 +16,7 @@ pub struct JsdocBlock<'a> {
 /// Scan `source` and return every `/** ... */` block (JSDoc style, not ordinary
 /// `/* ... */` C-comments). Nesting is not handled — JSDoc itself doesn't
 /// support nested block comments.
-pub fn find_jsdoc_blocks(source: &str) -> Vec<JsdocBlock<'_>> {
+pub fn find_jsdoc_blocks(source: &str) -> Vec<JsdocBlock> {
     let bytes = source.as_bytes();
     let mut blocks = Vec::new();
     let mut i = 0;
@@ -43,7 +41,6 @@ pub fn find_jsdoc_blocks(source: &str) -> Vec<JsdocBlock<'_>> {
             let raw = &source[start..i.min(source.len())];
             blocks.push(JsdocBlock {
                 start_line,
-                raw,
                 content: clean_jsdoc_body(raw),
             });
         } else {
@@ -61,9 +58,7 @@ pub fn find_jsdoc_blocks(source: &str) -> Vec<JsdocBlock<'_>> {
 /// - Removes leading `*` (plus optional space) on each line.
 /// - Preserves line breaks so `line_offset` tracking stays accurate.
 fn clean_jsdoc_body(raw: &str) -> String {
-    let body = raw
-        .trim_start_matches("/**")
-        .trim_end_matches("*/");
+    let body = raw.trim_start_matches("/**").trim_end_matches("*/");
     let mut out = String::with_capacity(body.len());
     for (idx, line) in body.lines().enumerate() {
         if idx > 0 {
