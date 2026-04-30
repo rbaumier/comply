@@ -83,3 +83,12 @@
 | ISS-089 | no-test-return-statement FP sur return dans fonctions imbriquées | bug | open | high | — | S |
 | ISS-090 | Règles UI/a11y/tailwind ne devraient pas fire sur JSX de test | bug | open | high | — | M |
 | ISS-091 | Crash UTF-8 byte-indexing systémique (2+ règles touchées) | bug | open | critical | — | M |
+
+## Batch 10 — JS/CJS awareness & module system (fastify audit)
+
+| ID | Title | Type | Status | Severity | Blocked by | Estimation |
+|---|---|---|---|---|---|---|
+| ISS-092 | no-unsafe-* rules ne devraient pas fire sur .js purs (36k FPs) | bug | open | critical | — | S |
+| ISS-093 | import-no-commonjs / prefer-module doivent respecter "type" field | bug | open | high | — | M |
+| ISS-094 | data-clumps FP sur signatures d'API framework | bug | open | medium | — | M |
+| ISS-095 | require-hook flagge les require() d'import comme side effects | bug | open | medium | — | S |
