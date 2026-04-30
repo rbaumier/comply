@@ -54,6 +54,10 @@ use diagnostic::Diagnostic;
 use files::{Language, SourceFile};
 
 fn main() -> ExitCode {
+    rayon::ThreadPoolBuilder::new()
+        .stack_size(16 * 1024 * 1024)
+        .build_global()
+        .ok();
     match run() {
         Ok(true) => ExitCode::from(1),  // violations found
         Ok(false) => ExitCode::from(0), // clean

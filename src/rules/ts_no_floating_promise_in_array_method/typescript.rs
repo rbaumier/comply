@@ -15,7 +15,11 @@ const PATTERNS: &[&str] = &[".forEach(async", ".map(async", ".filter(async"];
 
 fn line_already_uses_promise_all(line: &str, match_col: usize) -> bool {
     // Look back from match position for `Promise.all(` on the same line.
-    let prefix = &line[..match_col.min(line.len())];
+    let mut end = match_col.min(line.len());
+    while !line.is_char_boundary(end) {
+        end -= 1;
+    }
+    let prefix = &line[..end];
     prefix.contains("Promise.all(") || prefix.contains("Promise.allSettled(")
 }
 

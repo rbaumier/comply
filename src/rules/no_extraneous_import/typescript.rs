@@ -38,8 +38,10 @@ fn is_test_file(path: &Path) -> bool {
         || path_str.contains(".test.")
         || path_str.contains(".spec.")
         || path_str.contains(".stories.")
+        || path_str.contains(".setup.")
         || path_str.contains("/test/")
         || path_str.contains("/tests/")
+        || path_str.contains("/e2e/")
 }
 
 fn is_bare_specifier(spec: &str) -> bool {

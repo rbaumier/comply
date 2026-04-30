@@ -51,7 +51,10 @@ impl TextCheck for Check {
         // Walk character-by-character with a tiny state machine for <script>.
         let mut i = 0;
         while i < bytes.len() {
-            // Track script open/close in a case-insensitive way.
+            if !source.is_char_boundary(i) {
+                i += 1;
+                continue;
+            }
             if !in_script && i + 7 <= bytes.len() && source[i..].to_ascii_lowercase().starts_with("<script") {
                 in_script = true;
             } else if in_script && i + 9 <= bytes.len() && source[i..].to_ascii_lowercase().starts_with("</script>") {

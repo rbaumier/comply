@@ -40,7 +40,11 @@ fn find_violations(source: &str) -> Vec<(usize, usize, &'static str, &'static st
                 }
                 i += 1;
             }
-            let body = &source[after..i.saturating_sub(1)];
+            let mut body_end = i.saturating_sub(1);
+            while body_end > after && !source.is_char_boundary(body_end) {
+                body_end -= 1;
+            }
+            let body = &source[after..body_end];
             for call in BODY_CALLS {
                 let mut search = 0usize;
                 while let Some(p) = body[search..].find(call) {

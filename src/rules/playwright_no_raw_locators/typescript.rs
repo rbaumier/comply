@@ -16,6 +16,9 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     if !is_test_file(ctx.path) {
         return;
     }
+    if !source.windows(16).any(|w| w == b"@playwright/test") {
+        return;
+    }
     let Some(callee) = node.child_by_field_name("function") else { return };
     if callee.kind() != "member_expression" {
         return;
@@ -60,7 +63,8 @@ mod tests {
     use super::*;
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_ts_with_path(source, &Check, "login.test.ts")
+        let full = format!("{source}\n// @playwright/test");
+        crate::rules::test_helpers::run_ts_with_path(&full, &Check, "login.test.ts")
     }
 
     #[test]

@@ -19,8 +19,21 @@ fn looks_like_route_module(spec: &str) -> bool {
         || inner.starts_with("../views/")
 }
 
+fn is_test_or_e2e(path: &std::path::Path) -> bool {
+    let s = path.to_string_lossy();
+    s.contains("/e2e/")
+        || s.contains("__tests__")
+        || s.contains(".test.")
+        || s.contains(".spec.")
+        || s.contains(".stories.")
+        || s.contains("/test/")
+        || s.contains("/tests/")
+}
+
 crate::ast_check! { on ["import_statement"] prefilter = ["/pages/", "/routes/", "/views/"] => |node, source, ctx, diagnostics|
-    // Skip type-only imports — they erase at build time and don't ship.
+    if is_test_or_e2e(ctx.path) { return; }
+
+
     let node_text = node.utf8_text(source).unwrap_or("");
     if node_text.trim_start().starts_with("import type") {
         return;
@@ -83,5 +96,15 @@ mod tests {
     #[test]
     fn allows_non_route_import() {
         assert!(run("import { clsx } from 'clsx';").is_empty());
+    }
+
+    #[test]
+    fn skips_e2e_files() {
+        let d = crate::rules::test_helpers::run_ts_with_path(
+            "import LoginPage from './pages/login.page';",
+            &Check,
+            "project/e2e/fixtures.ts",
+        );
+        assert!(d.is_empty());
     }
 }

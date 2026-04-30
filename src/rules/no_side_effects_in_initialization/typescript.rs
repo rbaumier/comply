@@ -50,7 +50,7 @@ fn effectful_expression_kind(expr: tree_sitter::Node) -> Option<&'static str> {
 
 fn is_test_file(path: &std::path::Path) -> bool {
     let s = path.to_string_lossy();
-    [".test.", ".spec.", "__tests__", "_test.", ".e2e."]
+    [".test.", ".test-d.", ".spec.", "__tests__", "_test.", ".e2e."]
         .iter()
         .any(|m| s.contains(m))
 }
@@ -156,5 +156,15 @@ mod tests {
         assert!(
             run_on("class Foo { bar() { doThing(); } }").is_empty()
         );
+    }
+
+    #[test]
+    fn skips_type_test_files() {
+        let diags = crate::rules::test_helpers::run_ts_with_path(
+            "expectType<string>(foo());",
+            &Check,
+            "main.test-d.ts",
+        );
+        assert!(diags.is_empty());
     }
 }

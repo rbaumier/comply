@@ -57,4 +57,16 @@ mod tests {
         // Word outside a comment must not fire.
         assert!(run("const basically = 1;").is_empty());
     }
+
+    #[test]
+    fn ignores_punctuation_tokens_for_lexical_illusion() {
+        let src = "// }\n// }";
+        assert!(!run(src).iter().any(|d| d.message.contains("Lexical illusion")));
+    }
+
+    #[test]
+    fn ignores_jsdoc_brace_for_lexical_illusion() {
+        let src = "/**\n * }\n * }\n */";
+        assert!(!run(src).iter().any(|d| d.message.contains("Lexical illusion")));
+    }
 }

@@ -9,6 +9,11 @@ use regex::Regex;
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 
+const RUST_IDIOMATIC: &[&str] = &[
+    "a", "b", "c", "d", "e", "f", "h", "i", "j", "k", "l", "m",
+    "n", "o", "p", "r", "s", "v", "w", "x", "y", "z",
+];
+
 #[derive(Debug)]
 pub struct Check;
 
@@ -38,7 +43,7 @@ impl AstCheck for Check {
         if name.chars().count() >= min {
             return;
         }
-        if exceptions.iter().any(|e| e == name) {
+        if exceptions.iter().any(|e| e == name) || RUST_IDIOMATIC.contains(&name) {
             return;
         }
         if patterns.iter().any(|p| p.is_match(name)) {
@@ -75,7 +80,13 @@ fn is_rust_binding_name(node: tree_sitter::Node) -> bool {
     let parent_kind = parent.kind();
 
     match parent_kind {
-        "let_declaration" | "parameter" => field_matches(parent, "pattern", node),
+        "let_declaration" => field_matches(parent, "pattern", node),
+        "parameter" => {
+            if !field_matches(parent, "pattern", node) {
+                return false;
+            }
+            !is_in_closure_or_tight_scope(parent)
+        }
         "function_item" | "const_item" | "static_item" | "struct_item" | "enum_item"
         | "trait_item" | "type_item" | "union_item" | "enum_variant" => {
             field_matches(parent, "name", node)
@@ -83,6 +94,20 @@ fn is_rust_binding_name(node: tree_sitter::Node) -> bool {
         "field_declaration" => field_matches(parent, "name", node),
         _ => false,
     }
+}
+
+fn is_in_closure_or_tight_scope(node: tree_sitter::Node) -> bool {
+    let mut cur = node.parent();
+    while let Some(ancestor) = cur {
+        match ancestor.kind() {
+            "closure_expression" => return true,
+            "for_expression" | "if_let_expression" | "match_expression" => return true,
+            "function_item" | "impl_item" => return false,
+            _ => {}
+        }
+        cur = ancestor.parent();
+    }
+    false
 }
 
 fn field_matches(parent: tree_sitter::Node, field: &str, node: tree_sitter::Node) -> bool {
@@ -108,22 +133,34 @@ mod tests {
 
     #[test]
     fn flags_short_let_binding() {
-        let diags = run_on("fn main() { let x = 1; }");
+        let diags = run_on("fn main() { let q = 1; }");
         assert_eq!(diags.len(), 1);
-        assert!(diags[0].message.contains("`x`"));
+        assert!(diags[0].message.contains("`q`"));
     }
 
     #[test]
     fn flags_short_function_parameter() {
-        let diags = run_on("fn f(x: u32) -> u32 { x }");
-        // `f` (function name) + `x` (parameter)
+        let diags = run_on("fn g(q: u32) -> u32 { q }");
+        // `g` (function name) + `q` (parameter)
         assert_eq!(diags.len(), 2);
     }
 
     #[test]
     fn flags_short_struct_field() {
-        let diags = run_on("struct S { x: u32 }");
-        assert_eq!(diags.len(), 2, "S and x both < 2 chars");
+        let diags = run_on("struct S { q: u32 }");
+        assert_eq!(diags.len(), 2, "S and q both non-idiomatic and < 2 chars");
+    }
+
+    #[test]
+    fn allows_idiomatic_rust_names() {
+        assert!(run_on("fn fmt(&self, f: &mut std::fmt::Formatter) {}").is_empty());
+        assert!(run_on("fn main() { let s = String::new(); }").is_empty());
+        assert!(run_on("fn main() { let v = Vec::new(); }").is_empty());
+        assert!(run_on("fn main() { let n = 42; }").is_empty());
+        assert!(run_on("fn combine(a: &mut Value, b: &Value) {}").is_empty());
+        assert!(run_on("fn main() { let d = std::mem::discriminant(&x); }").is_empty());
+        assert!(run_on("fn main() { let h = hasher.finish(); }").is_empty());
+        assert!(run_on("fn cmp(l: &Node, r: &Node) -> bool { l > r }").is_empty());
     }
 
     #[test]
@@ -146,12 +183,22 @@ mod tests {
     }
 
     #[test]
+    fn allows_closure_params() {
+        assert!(run_on("fn main() { vec![1].iter().map(|x| x + 1); }").is_empty());
+    }
+
+    #[test]
+    fn allows_for_loop_var() {
+        assert!(run_on("fn main() { for i in 0..10 { println!(\"{}\", i); } }").is_empty());
+    }
+
+    #[test]
     fn message_names_the_identifier() {
-        let diags = run_on("fn main() { let foo = 1; let x = 2; }");
+        let diags = run_on("fn main() { let foo = 1; let q = 2; }");
         assert_eq!(diags.len(), 1);
         assert_eq!(
             diags[0].message,
-            "Identifier `x` is too short (< 2)."
+            "Identifier `q` is too short (< 2)."
         );
     }
 }

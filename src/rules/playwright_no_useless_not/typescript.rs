@@ -26,6 +26,9 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     if !is_test_file(ctx.path) {
         return;
     }
+    if !source.windows(16).any(|w| w == b"@playwright/test") {
+        return;
+    }
     // Pattern: expect(x).not.toBeVisible()
     // AST: call_expression { function: member_expression { object: member_expression { object: call_expression(expect), property: "not" }, property: "toBeVisible" } }
     let Some(callee) = node.child_by_field_name("function") else { return };
@@ -63,8 +66,10 @@ mod tests {
     use super::*;
     use crate::rules::test_helpers::run_ts_with_path;
 
+    const PW_IMPORT: &str = "import { test, expect } from \"@playwright/test\";\n";
+
     fn run_ts(source: &str) -> Vec<Diagnostic> {
-        run_ts_with_path(source, &Check, "app.test.ts")
+        run_ts_with_path(&format!("{PW_IMPORT}{source}"), &Check, "app.test.ts")
     }
 
     #[test]

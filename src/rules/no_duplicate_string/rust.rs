@@ -9,6 +9,9 @@ pub struct Check;
 
 impl AstCheck for Check {
     fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
+        if ctx.file.path_segments.in_test_dir {
+            return Vec::new();
+        }
         super::collect_diagnostics(tree, ctx, RUST_STRING_KINDS)
     }
 }
@@ -75,6 +78,34 @@ mod tests {
                 // fall back if "structured_output" is missing
                 // always read "structured_output" first
                 let field = "structured_output";
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn skips_strings_in_cfg_test_module() {
+        let src = r#"
+            #[cfg(test)]
+            mod tests {
+                fn setup() {
+                    let a = "test fixture data";
+                    let b = "test fixture data";
+                    let c = "test fixture data";
+                }
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn skips_strings_in_test_fn() {
+        let src = r#"
+            #[test]
+            fn it_works() {
+                let a = "expected value here";
+                let b = "expected value here";
+                let c = "expected value here";
             }
         "#;
         assert!(run(src).is_empty());

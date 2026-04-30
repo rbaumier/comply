@@ -33,7 +33,7 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     // certainly Playwright/Locator.fill, not Array.fill.
     if name == "fill" {
         if let Some(object) = callee.child_by_field_name("object") {
-            if object.kind() == "call_expression" {
+            if matches!(object.kind(), "call_expression" | "member_expression") {
                 return;
             }
         }
@@ -99,5 +99,10 @@ mod tests {
     #[test]
     fn still_flags_direct_fill() {
         assert_eq!(run_on("arr.fill(0);").len(), 1);
+    }
+
+    #[test]
+    fn allows_member_expression_fill_playwright() {
+        assert!(run_on(r#"this.input.fill(title);"#).is_empty());
     }
 }

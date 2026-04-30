@@ -51,6 +51,12 @@ fn starts_with_uppercase(name: &str) -> bool {
 }
 
 crate::ast_check! { on ["export_statement"] => |node, source, ctx, diagnostics|
+    // Only flag in React projects.
+    let Some(pkg) = ctx.project.nearest_package_json(ctx.path) else { return };
+    if !pkg.has_dep_or_engine("react") && !pkg.has_dep_or_engine("next") {
+        return;
+    }
+
     // Only flag when at module scope (parent is `program`).
     match node.parent() {
         Some(p) if p.kind() == "program" => {}
@@ -141,8 +147,39 @@ crate::ast_check! { on ["export_statement"] => |node, source, ctx, diagnostics|
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use tempfile::TempDir;
 
-    fn run_on(source: &str) -> Vec<Diagnostic> {
+    use crate::config::Config;
+    use crate::files::{Language, SourceFile};
+    use crate::project::ProjectCtx;
+
+    fn run_react(source: &str) -> Vec<Diagnostic> {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"dependencies":{"react":"^19"}}"#,
+        )
+        .unwrap();
+        let file_path = dir.path().join("src/page.tsx");
+        fs::create_dir_all(file_path.parent().unwrap()).unwrap();
+        fs::write(&file_path, source).unwrap();
+        let source_file = SourceFile {
+            path: file_path.clone(),
+            language: Language::from_path(&file_path).unwrap(),
+        };
+        let project = ProjectCtx::load(&[&source_file], &Config::default());
+        let canon = fs::canonicalize(&file_path).unwrap();
+        crate::rules::test_helpers::run_tsx_with_project_file_and_path(
+            source,
+            &Check,
+            &project,
+            &crate::rules::file_ctx::FileCtx::default(),
+            canon.to_str().unwrap(),
+        )
+    }
+
+    fn run_no_react(source: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_tsx(source, &Check)
     }
 
@@ -154,7 +191,7 @@ export async function getUser(id: string) {
     return res.json();
 }
 "#;
-        assert_eq!(run_on(src).len(), 1);
+        assert_eq!(run_react(src).len(), 1);
     }
 
     #[test]
@@ -165,7 +202,18 @@ export const getUser = async (id: string) => {
     return res.json();
 };
 "#;
-        assert_eq!(run_on(src).len(), 1);
+        assert_eq!(run_react(src).len(), 1);
+    }
+
+    #[test]
+    fn skips_non_react_project() {
+        let src = r#"
+export async function loadData() {
+    const res = await fetch("/api/data");
+    return res.json();
+}
+"#;
+        assert!(run_no_react(src).is_empty());
     }
 
     #[test]
@@ -177,7 +225,7 @@ export const getUser = cache(async (id: string) => {
     return res.json();
 });
 "#;
-        assert!(run_on(src).is_empty());
+        assert!(run_react(src).is_empty());
     }
 
     #[test]
@@ -189,7 +237,7 @@ export const getUser = React.cache(async (id: string) => {
     return res.json();
 });
 "#;
-        assert!(run_on(src).is_empty());
+        assert!(run_react(src).is_empty());
     }
 
     #[test]
@@ -197,33 +245,30 @@ export const getUser = React.cache(async (id: string) => {
         let src = r#"
 export function add(a: number, b: number) { return a + b; }
 "#;
-        assert!(run_on(src).is_empty());
+        assert!(run_react(src).is_empty());
     }
 
     #[test]
     fn allows_async_without_await_or_fetch() {
-        // No data-fetching work — not a fetcher.
         let src = r#"
 export async function noop() { return 42; }
 "#;
-        assert!(run_on(src).is_empty());
+        assert!(run_react(src).is_empty());
     }
 
     #[test]
     fn does_not_flag_pascal_case_components() {
-        // Exported `Page` is a Server Component — not a fetcher. Skip.
         let src = r#"
 export default async function Page() {
     const res = await fetch("/api");
     return res.json();
 }
 "#;
-        assert!(run_on(src).is_empty());
+        assert!(run_react(src).is_empty());
     }
 
     #[test]
     fn does_not_flag_nested_async_function() {
-        // Inner function is not exported at module scope.
         let src = r#"
 export function wrapper() {
     async function inner() {
@@ -233,6 +278,6 @@ export function wrapper() {
     return inner();
 }
 "#;
-        assert!(run_on(src).is_empty());
+        assert!(run_react(src).is_empty());
     }
 }

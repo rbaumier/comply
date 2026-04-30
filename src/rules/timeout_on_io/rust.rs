@@ -6,6 +6,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
+use crate::rules::rust_helpers::is_in_test_context;
 
 /// Method-name suffixes that indicate I/O.
 const IO_METHODS: &[&str] = &[
@@ -33,7 +34,16 @@ impl AstCheck for Check {
         _state: Option<&mut dyn std::any::Any>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
+        if ctx.file.path_segments.in_test_dir {
+            return;
+        }
+        if ctx.path.to_string_lossy().contains("/examples/") {
+            return;
+        }
         let source_bytes = ctx.source.as_bytes();
+        if is_in_test_context(node, source_bytes) {
+            return;
+        }
         // In tree-sitter-rust, `await` is a postfix unary: the AST node
         // kind is `await_expression` wrapping an inner expression.
         let Some(inner) = node.named_child(0) else {

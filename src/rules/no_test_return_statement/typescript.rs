@@ -22,7 +22,7 @@ fn is_return_in_test_callback(node: tree_sitter::Node, source: &[u8]) -> bool {
     let mut cur = node.parent();
     while let Some(p) = cur {
         match p.kind() {
-            "arrow_function" | "function_expression" | "function" => {
+            "arrow_function" | "function_expression" | "function" | "function_declaration" | "method_definition" => {
                 // First enclosing function found. Check that this function is
                 // an argument to a test(...)/it(...) call.
                 let Some(call) = p.parent().and_then(|args| {
@@ -107,6 +107,22 @@ mod tests {
     #[test]
     fn allows_return_outside_test() {
         let d = run_on("function foo() { return 1; }");
+        assert!(d.is_empty());
+    }
+
+    #[test]
+    fn allows_return_in_nested_function_declaration() {
+        let d = run_on(
+            "test('x', () => { function Page() { return <div/>; } expect(Page).toBeDefined(); });",
+        );
+        assert!(d.is_empty());
+    }
+
+    #[test]
+    fn allows_return_in_object_method() {
+        let d = run_on(
+            "test('x', () => { const cfg = { init() { return cleanup; } }; expect(cfg).toBeDefined(); });",
+        );
         assert!(d.is_empty());
     }
 }

@@ -53,6 +53,7 @@ pub struct FileCtx {
     pub rsc_context: RscContext,
     pub path_segments: PathSegments,
     pub is_generated: bool,
+    pub is_minified: bool,
 }
 
 impl FileCtx {
@@ -65,12 +66,14 @@ impl FileCtx {
         let path_segments = scan_path(path);
         let rsc_context = classify_rsc(project.framework, directives, &path_segments);
         let is_generated = scan_generated(source);
+        let is_minified = scan_minified(path, source);
         FileCtx {
             language: Some(language),
             directives,
             rsc_context,
             path_segments,
             is_generated,
+            is_minified,
         }
     }
 }
@@ -179,17 +182,40 @@ fn scan_generated(source: &str) -> bool {
     false
 }
 
+fn scan_minified(path: &Path, source: &str) -> bool {
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+    if !matches!(ext, "js" | "css" | "mjs" | "cjs") {
+        return false;
+    }
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    if name.contains(".min.") {
+        return true;
+    }
+    // Heuristic: >4KB on a single line (or ≤3 lines) is minified.
+    if source.len() > 4096 {
+        let line_count = source.bytes().filter(|&b| b == b'\n').count() + 1;
+        if line_count <= 3 {
+            return true;
+        }
+    }
+    false
+}
+
 fn scan_path(path: &Path) -> PathSegments {
     let lower = path.to_string_lossy().replace('\\', "/");
     PathSegments {
         in_app_router: lower.contains("/app/") || lower.starts_with("app/"),
         in_pages_router: lower.contains("/pages/") || lower.starts_with("pages/"),
         in_test_dir: lower.contains("/tests/")
+            || lower.contains("/test/")
             || lower.contains("/tests-")
             || lower.starts_with("tests/")
+            || lower.starts_with("test/")
             || lower.starts_with("tests-")
             || lower.contains("/__tests__/")
             || lower.starts_with("__tests__/")
+            || lower.contains("/fixtures/")
+            || lower.contains("/__mocks__/")
             || lower.contains(".test.")
             || lower.contains(".spec."),
         in_node_modules: lower.contains("/node_modules/"),

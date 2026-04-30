@@ -90,6 +90,10 @@ impl Language {
     /// which receives URIs from the editor and needs to decide whether
     /// the buffer is in scope before running the lint pass.
     pub fn from_path(path: &Path) -> Option<Self> {
+        let name = path.file_name()?.to_str()?;
+        if name.ends_with(".d.ts") || name.ends_with(".d.mts") {
+            return None;
+        }
         let ext = path.extension()?.to_str()?;
         if TS_EXTENSIONS.contains(&ext) {
             Some(Language::TypeScript)
@@ -140,10 +144,22 @@ pub fn discover(mode: &ScanMode) -> Result<Vec<SourceFile>> {
     }
 }
 
+const ALWAYS_SKIP_DIRS: &[&str] = &["node_modules", "target", "dist", ".git"];
+
 /// Walk a directory tree and classify every file.
 fn walk_directory(path: &Path) -> Result<Vec<SourceFile>> {
     let mut files = Vec::new();
-    let walker = WalkBuilder::new(path).standard_filters(true).build();
+    let walker = WalkBuilder::new(path)
+        .standard_filters(true)
+        .filter_entry(|entry| {
+            if entry.file_type().is_some_and(|ft| ft.is_dir()) {
+                if let Some(name) = entry.file_name().to_str() {
+                    return !ALWAYS_SKIP_DIRS.contains(&name);
+                }
+            }
+            true
+        })
+        .build();
     for entry in walker {
         let entry = entry.context("failed to read directory entry")?;
         if !entry.file_type().is_some_and(|ft| ft.is_file()) {
@@ -206,6 +222,11 @@ fn parse_git_output(stdout: &[u8]) -> Result<Vec<SourceFile>> {
 /// Classify a file path into a Language based on its extension.
 /// Returns None for unsupported extensions (silently skipped).
 fn classify(path: &Path) -> Option<SourceFile> {
+    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+        if name.ends_with(".d.ts") || name.ends_with(".d.mts") {
+            return None;
+        }
+    }
     let language = if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
         if TS_EXTENSIONS.contains(&ext) {
             Language::TypeScript

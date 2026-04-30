@@ -64,6 +64,9 @@ crate::ast_check! { |node, source, ctx, diagnostics|
     if !is_test_file(ctx.path) {
         return;
     }
+    if !source.windows(16).any(|w| w == b"@playwright/test") {
+        return;
+    }
 
     if !is_test_call(node, source) {
         return;
@@ -96,8 +99,10 @@ mod tests {
     use super::*;
     use crate::rules::test_helpers::run_ts_with_path;
 
+    const PW_IMPORT: &str = "import { test, expect } from \"@playwright/test\";\n";
+
     fn run_ts(source: &str) -> Vec<Diagnostic> {
-        run_ts_with_path(source, &Check, "login.test.ts")
+        run_ts_with_path(&format!("{PW_IMPORT}{source}"), &Check, "login.test.ts")
     }
 
     #[test]
@@ -117,5 +122,15 @@ mod tests {
     fn flags_it_without_expect() {
         let d = run_ts("it('works', async () => { await page.click('#btn'); });");
         assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn skips_non_playwright_test_file() {
+        let d = run_ts_with_path(
+            "test('should work', () => { const x = 1; });",
+            &Check,
+            "login.test.ts",
+        );
+        assert!(d.is_empty());
     }
 }

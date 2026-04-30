@@ -32,7 +32,11 @@ impl TextCheck for Check {
                 }
                 i += 1;
             }
-            let body = &ctx.source[after..i.saturating_sub(1)];
+            let mut body_end = i.saturating_sub(1);
+            while body_end > after && !ctx.source.is_char_boundary(body_end) {
+                body_end -= 1;
+            }
+            let body = &ctx.source[after..body_end];
             if !body.contains("ChangeDetectionStrategy.OnPush") {
                 let (line, column) = byte_to_line_col(ctx.source, start);
                 out.push(Diagnostic {

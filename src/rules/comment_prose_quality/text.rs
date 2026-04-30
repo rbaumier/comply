@@ -75,7 +75,7 @@ impl TextCheck for Check {
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
         let lines: Vec<&str> = ctx.source.lines().collect();
-        let mut prev_last_word: Option<String> = None;
+        let mut prev_last_word: Option<(String, usize)> = None;
 
         for (idx, line) in lines.iter().enumerate() {
             let Some(text) = comment_text(line) else {
@@ -123,9 +123,22 @@ impl TextCheck for Check {
             // Lexical illusion: last word of previous comment line == first
             // word of this comment line.
             let words: Vec<&str> = text.split_whitespace().collect();
-            if let Some(ref prev) = prev_last_word
+            let is_rustdoc_heading_echo = prev_last_word.as_ref().is_some_and(|(_, prev_wc)| {
+                *prev_wc == 2
+                    && lines.get(idx.wrapping_sub(1)).and_then(|l| comment_text(l)).is_some_and(
+                        |prev_text| {
+                            let pt = prev_text.trim();
+                            pt.starts_with("# ")
+                        },
+                    )
+            });
+            if let Some((ref prev, prev_wc)) = prev_last_word
+                && words.len() > 1
+                && prev_wc > 1
                 && let Some(&first) = words.first()
+                && first.chars().any(|c| c.is_alphabetic())
                 && first.to_lowercase() == *prev
+                && !is_rustdoc_heading_echo
             {
                 diagnostics.push(Diagnostic {
                     path: std::sync::Arc::clone(&ctx.path_arc),
@@ -139,7 +152,10 @@ impl TextCheck for Check {
                     span: None,
                 });
             }
-            prev_last_word = words.last().map(|w| w.to_lowercase());
+            prev_last_word = words
+                .last()
+                .filter(|w| w.chars().any(|c| c.is_alphabetic()))
+                .map(|w| (w.to_lowercase(), words.len()));
         }
         diagnostics
     }
@@ -192,5 +208,33 @@ mod tests {
         // `///` markers should not trigger lexical illusion on `/`.
         let src = "/// Function doc.\n///\n/// More details.";
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_punctuation_only_tokens_for_lexical_illusion() {
+        let src = "// obj = {\n// },\n// },";
+        assert!(!run(src).iter().any(|d| d.message.contains("Lexical illusion")));
+    }
+
+    #[test]
+    fn ignores_closing_braces_for_lexical_illusion() {
+        let src = "// }\n// }";
+        assert!(!run(src).iter().any(|d| d.message.contains("Lexical illusion")));
+    }
+
+    #[test]
+    fn ignores_jsdoc_star_for_lexical_illusion() {
+        let src = " * @param foo - description\n * @returns bar";
+        assert!(!run(src).iter().any(|d| d.message.contains("Lexical illusion")));
+    }
+
+    #[test]
+    fn ignores_rustdoc_heading_echo() {
+        let src = "/// # Panics\n/// Panics if the buffer is empty.";
+        assert!(!run(src).iter().any(|d| d.message.contains("Lexical illusion")));
+        let src = "/// # Returns\n/// Returns `None` if not found.";
+        assert!(!run(src).iter().any(|d| d.message.contains("Lexical illusion")));
+        let src = "/// # Errors\n/// Errors if the input is invalid.";
+        assert!(!run(src).iter().any(|d| d.message.contains("Lexical illusion")));
     }
 }

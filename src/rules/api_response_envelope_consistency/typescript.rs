@@ -104,19 +104,21 @@ fn has_top_level_data_key(body: &str) -> bool {
             b']' => depth_brack -= 1,
             _ => {}
         }
-        if depth_brace == 0 && depth_paren == 0 && depth_brack == 0 {
-            // Check if the next token is `data:`.
-            // Allow optional whitespace and word boundary before.
+        if depth_brace == 0 && depth_paren == 0 && depth_brack == 0
+            && body.is_char_boundary(i)
+        {
             if (i == 0
                 || !bytes[i - 1].is_ascii_alphanumeric()
                     && bytes[i - 1] != b'_'
                     && bytes[i - 1] != b'$')
                 && body[i..].starts_with("data")
             {
-                let after = &body[i + "data".len()..];
-                let trimmed = after.trim_start();
-                if trimmed.starts_with(':') {
-                    return true;
+                let after_idx = i + "data".len();
+                if body.is_char_boundary(after_idx) {
+                    let trimmed = body[after_idx..].trim_start();
+                    if trimmed.starts_with(':') {
+                        return true;
+                    }
                 }
             }
         }

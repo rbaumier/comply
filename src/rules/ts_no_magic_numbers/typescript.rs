@@ -1,4 +1,4 @@
-//! ts-no-magic-numbers backend — flag numeric literals that are not in
+//! no-magic-numbers TS backend — flag numeric literals that are not in
 //! an allowed context (const declarations, enums, type annotations,
 //! default parameter values, array indices 0/1/-1).
 //!
@@ -14,7 +14,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 /// embedded in string literals (e.g. Tailwind classes like `"p-4"`)
 /// are already ignored because this check only visits `number` AST
 /// nodes, never string contents.
-const ALLOWED: &[&str] = &["-1", "0", "1"];
+const ALLOWED: &[&str] = &["-1", "0", "1", "0.0", "1.0"];
 
 fn is_allowed_context(node: tree_sitter::Node) -> bool {
     let mut current = node.parent();
@@ -62,6 +62,7 @@ fn is_allowed_context(node: tree_sitter::Node) -> bool {
 
 crate::ast_check! { on ["number"] => |node, source, ctx, diagnostics|
     if ctx.file.path_segments.in_test_dir { return; }
+    if ctx.path.to_string_lossy().contains("/examples/") { return; }
     let text = match std::str::from_utf8(&source[node.byte_range()]) {
         Ok(t) => t,
         Err(_) => return,
@@ -90,7 +91,7 @@ crate::ast_check! { on ["number"] => |node, source, ctx, diagnostics|
         path: std::sync::Arc::clone(&ctx.path_arc),
         line: pos.row + 1,
         column: pos.column + 1,
-        rule_id: "ts-no-magic-numbers".into(),
+        rule_id: super::META.id.into(),
         message: format!(
             "Magic number `{text}` — extract into a named constant."
         ),

@@ -23,6 +23,7 @@ const SHARING_WRAPPERS: &[&str] = &[
 ];
 
 crate::ast_check! { on ["generic_type"] => |node, source, ctx, diagnostics|
+    if ctx.file.path_segments.in_test_dir { return; }
     if is_in_test_context(node, source) { return; }
 
     let Some(type_node) = node.child_by_field_name("type") else { return; };

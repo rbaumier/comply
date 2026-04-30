@@ -115,6 +115,10 @@ fn is_likely_untranslatable(value: &str) -> bool {
     if value.starts_with('{') && value.ends_with('}') && !value.contains(' ') {
         return true;
     }
+    // Single words are often proper nouns or technical terms (Discord, CLI, macOS)
+    if !value.contains(' ') {
+        return true;
+    }
     false
 }
 
@@ -276,11 +280,22 @@ mod tests {
     #[test]
     fn detects_multiple_untranslated() {
         let dir = setup_locales(&[
-            ("en.json", r#"{"a": "Hello", "b": "World", "c": "Bonjour"}"#),
-            ("fr.json", r#"{"a": "Hello", "b": "World", "c": "Salut"}"#),
+            ("en.json", r#"{"a": "Hello there friend", "b": "Welcome to the app", "c": "Bonjour"}"#),
+            ("fr.json", r#"{"a": "Hello there friend", "b": "Welcome to the app", "c": "Salut"}"#),
         ]);
 
         let diags = check_file(&dir, "fr.json");
         assert_eq!(diags.len(), 2);
+    }
+
+    #[test]
+    fn allows_single_word_proper_nouns() {
+        let dir = setup_locales(&[
+            ("en.json", r#"{"brand": "Discord", "os": "macOS", "tool": "CLI"}"#),
+            ("fr.json", r#"{"brand": "Discord", "os": "macOS", "tool": "CLI"}"#),
+        ]);
+
+        let diags = check_file(&dir, "fr.json");
+        assert!(diags.is_empty());
     }
 }

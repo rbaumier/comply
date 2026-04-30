@@ -9,7 +9,7 @@ fn is_test_file(path: &std::path::Path) -> bool {
     s.contains(".test.") || s.contains(".spec.") || s.contains("__tests__")
 }
 
-const TEST_MARKERS: &[&str] = &["test(", "it(", "describe(", "expect("];
+const TEST_MARKERS: &[&str] = &["test(", "it(", "describe(", "expect(", "assert(", "assert."];
 
 fn has_test_content(source: &str) -> bool {
     for marker in TEST_MARKERS {
@@ -83,5 +83,14 @@ mod tests {
     #[test]
     fn allows_non_test_file() {
         assert!(run("utils.ts", "export const foo = 1;").is_empty());
+    }
+
+    #[test]
+    fn allows_assert_style_tests() {
+        assert!(run(
+            "plugin.test.js",
+            "import assert from 'assert';\nassert.equal(result, expected);"
+        )
+        .is_empty());
     }
 }

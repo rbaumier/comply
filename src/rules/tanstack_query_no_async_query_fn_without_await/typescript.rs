@@ -64,7 +64,10 @@ fn find_offenses(source: &str) -> Vec<usize> {
         let async_start = source.len() - rest.len();
         // Walk forward from async to find either `{` (block body) or `=>`
         // followed by a fetch expression. Look only within ~2KB.
-        let limit = (async_start + 2048).min(source.len());
+        let mut limit = (async_start + 2048).min(source.len());
+        while limit < source.len() && !source.is_char_boundary(limit) {
+            limit += 1;
+        }
         let window = &source[async_start..limit];
         // Locate the body start: after `=>` or after the first `{`.
         let body_start_rel = window.find("=>").map(|p| p + 2).or_else(|| window.find('{'));

@@ -52,37 +52,44 @@ fn end_of_call(source: &[u8], open: usize) -> Option<usize> {
     None
 }
 
+fn safe_boundary(source: &str, pos: usize) -> usize {
+    let mut p = pos.min(source.len());
+    while p > 0 && !source.is_char_boundary(p) {
+        p -= 1;
+    }
+    p
+}
+
 fn find_offenses(source: &str) -> Vec<usize> {
     let mut out = Vec::new();
     let mut from = 0usize;
     let bytes = source.as_bytes();
-    while let Some(rel) = source[from..].find(".safeParse(") {
-        let abs = from + rel;
+    while from < source.len() {
+        let safe_from = safe_boundary(source, from);
+        let Some(rel) = source[safe_from..].find(".safeParse(") else { break };
+        let abs = safe_from + rel;
         let open = abs + ".safeParse".len();
         let Some(end) = end_of_call(bytes, open) else { break };
-        // Direct chained `.data`?
-        if source[end..].starts_with(".data") {
+        let safe_end = safe_boundary(source, end);
+        if source[safe_end..].starts_with(".data") {
             out.push(abs);
             from = end;
             continue;
         }
         from = end;
     }
-    // Pattern 2: `const <id> = ...safeParse(...)` followed by `<id>.data`
-    // without `<id>.success` between them.
     let mut from = 0usize;
-    while let Some(rel) = source[from..].find(".safeParse(") {
-        let abs = from + rel;
-        // Look back to find variable assignment.
+    while from < source.len() {
+        let safe_from = safe_boundary(source, from);
+        let Some(rel) = source[safe_from..].find(".safeParse(") else { break };
+        let abs = safe_from + rel;
         let preceding = &source[..abs];
-        let look_start = preceding.len().saturating_sub(120);
+        let look_start = safe_boundary(preceding, preceding.len().saturating_sub(120));
         let snippet = &preceding[look_start..];
-        // Look for `const <id> =` or `let <id> =` ending right before `abs`.
         let mut id: Option<&str> = None;
         for keyword in ["const ", "let ", "var "] {
             if let Some(pos) = snippet.rfind(keyword) {
                 let after_kw = &snippet[pos + keyword.len()..];
-                // Read identifier.
                 let bs = after_kw.as_bytes();
                 let mut k = 0usize;
                 while k < bs.len()
@@ -100,17 +107,14 @@ fn find_offenses(source: &str) -> Vec<usize> {
         let open = abs + ".safeParse".len();
         let Some(end) = end_of_call(bytes, open) else { break };
         if let Some(name) = id {
-            // Search a window after `end` for `<name>.data` and check
-            // for `<name>.success` before the `.data` access.
-            let win_end = (end + 2048).min(source.len());
-            let window = &source[end..win_end];
+            let win_end = safe_boundary(source, (end + 2048).min(source.len()));
+            let safe_end = safe_boundary(source, end);
+            let window = &source[safe_end..win_end];
             let data_pat = format!("{name}.data");
             let success_pat = format!("{name}.success");
             if let Some(data_pos) = window.find(&data_pat) {
                 let before_data = &window[..data_pos];
                 if !before_data.contains(&success_pat) {
-                    // Also tolerate destructuring `const { data, success } = r;`
-                    // followed by check `if (success)` / `if (!success)`.
                     let destructure_pat = format!("= {name};");
                     let has_destructure_check = before_data.contains(&destructure_pat)
                         && before_data.contains("success");

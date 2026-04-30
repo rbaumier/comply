@@ -41,7 +41,10 @@ fn line_starts_with_response_context(source: &str, offset: usize) -> bool {
     let line = &source[prev_nl..offset];
     // Look at the broader scope: ~500 chars back for a return statement
     // or response method invocation.
-    let look_start = offset.saturating_sub(500);
+    let mut look_start = offset.saturating_sub(500);
+    while look_start > 0 && !source.is_char_boundary(look_start) {
+        look_start -= 1;
+    }
     let scope = &source[look_start..offset];
     let scope_signals = [
         "return ",

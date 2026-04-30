@@ -40,6 +40,9 @@ crate::ast_check! { |node, source, ctx, diagnostics|
     if !is_test_file(ctx.path) {
         return;
     }
+    if !source.windows(16).any(|w| w == b"@playwright/test") {
+        return;
+    }
 
     if !is_expect_call(node, source) {
         return;
@@ -67,6 +70,8 @@ mod tests {
     use std::path::Path;
     use crate::rules::backend::{AstCheck, CheckCtx};
 
+    const PW: &str = "import { test, expect } from \"@playwright/test\";\n";
+
     fn run(path: &str, source: &str) -> Vec<Diagnostic> {
         let mut parser = tree_sitter::Parser::new();
         parser
@@ -78,40 +83,29 @@ mod tests {
 
     #[test]
     fn flags_expect_inside_if() {
-        let source = "\
-if (condition) {
-  expect(value).toBe(true);
-}";
-        let d = run("login.test.ts", source);
+        let source = format!("{PW}if (condition) {{\n  expect(value).toBe(true);\n}}");
+        let d = run("login.test.ts", &source);
         assert_eq!(d.len(), 1);
         assert_eq!(d[0].rule_id, "playwright-no-conditional-expect");
     }
 
     #[test]
     fn flags_expect_inside_catch() {
-        let source = "\
-try {
-  doSomething();
-} catch(e) {
-  expect(e.message).toBe('error');
-}";
-        let d = run("error.test.ts", source);
+        let source = format!("{PW}try {{\n  doSomething();\n}} catch(e) {{\n  expect(e.message).toBe('error');\n}}");
+        let d = run("error.test.ts", &source);
         assert_eq!(d.len(), 1);
     }
 
     #[test]
     fn allows_expect_at_top_level() {
-        let d = run("login.test.ts", "expect(value).toBe(true);");
+        let d = run("login.test.ts", &format!("{PW}expect(value).toBe(true);"));
         assert!(d.is_empty());
     }
 
     #[test]
     fn ignores_non_test_file() {
-        let source = "\
-if (condition) {
-  expect(value).toBe(true);
-}";
-        let d = run("helpers.ts", source);
+        let source = format!("{PW}if (condition) {{\n  expect(value).toBe(true);\n}}");
+        let d = run("helpers.ts", &source);
         assert!(d.is_empty());
     }
 }
