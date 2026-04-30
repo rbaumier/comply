@@ -209,6 +209,12 @@ mod tests {
     }
 
     #[test]
+    fn no_crash_on_emoji() {
+        let src = "// 💡 Tip: Try adding a new property here\nfunction a() { return { data: 1 }; }\nfunction b() { return { id: 2 }; }";
+        let _ = run_at(src, "src/routes/api.ts");
+    }
+
+    #[test]
     fn ignores_non_api_files() {
         let src = "function a() { return { data: 1 }; }\nfunction b() { return { id: 2 }; }";
         assert!(run_at(src, "src/lib/util.ts").is_empty());

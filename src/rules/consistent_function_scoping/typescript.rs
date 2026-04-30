@@ -29,6 +29,7 @@ pub struct Check;
 
 impl crate::rules::backend::AstCheck for Check {
     fn check(&self, ctx: &CheckCtx, _tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
+        if ctx.file.path_segments.in_test_dir { return Vec::new(); }
         let source_type = source_type_for_path(ctx.path);
         with_semantic(ctx.source, source_type, |semantic| {
             let scoping = semantic.scoping();

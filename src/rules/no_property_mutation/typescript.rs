@@ -13,6 +13,8 @@ fn root_object_name<'a>(node: tree_sitter::Node<'a>, source: &'a [u8]) -> Option
     }
 }
 
+const TEST_GLOBALS: &[&str] = &["console", "window", "global", "globalThis", "process"];
+
 crate::ast_check! { on ["assignment_expression", "augmented_assignment_expression", "update_expression", "unary_expression"] => |node, source, ctx, diagnostics|
 match node.kind() {
         // obj.prop = value or obj['prop'] = value
@@ -25,6 +27,8 @@ match node.kind() {
                 .and_then(|o| o.utf8_text(source).ok())
                 .unwrap_or("");
             if obj_text == "module" || obj_text == "exports" { return; }
+
+            if ctx.file.path_segments.in_test_dir && TEST_GLOBALS.contains(&obj_text) { return; }
 
             // Allow: ref.current = ... (React useRef pattern)
             let prop_text = left.child_by_field_name("property")

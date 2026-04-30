@@ -43,6 +43,9 @@ crate::ast_check! { on ["generic_type"] => |node, source, ctx, diagnostics|
         }
         cur = ancestor.parent();
     }
+    if local_mutex_is_shared_later(node, source) {
+        return;
+    }
 
     diagnostics.push(Diagnostic::at_node(
         ctx.path,
@@ -54,6 +57,61 @@ crate::ast_check! { on ["generic_type"] => |node, source, ctx, diagnostics|
         ),
         Severity::Warning,
     ));
+}
+
+fn local_mutex_is_shared_later(node: tree_sitter::Node, source: &[u8]) -> bool {
+    let Some(name) = enclosing_let_name(node, source) else {
+        return false;
+    };
+    let Ok(after) = std::str::from_utf8(&source[node.end_byte()..]) else {
+        return false;
+    };
+    contains_arc_new_for(after, name)
+        || (after.contains("spawn(") && contains_identifier(after, name))
+}
+
+fn enclosing_let_name<'a>(node: tree_sitter::Node, source: &'a [u8]) -> Option<&'a str> {
+    let mut cur = node.parent();
+    while let Some(parent) = cur {
+        if parent.kind() == "let_declaration" {
+            let pattern = parent.child_by_field_name("pattern")?;
+            if pattern.kind() == "identifier" {
+                return pattern.utf8_text(source).ok();
+            }
+            return None;
+        }
+        cur = parent.parent();
+    }
+    None
+}
+
+fn contains_arc_new_for(text: &str, name: &str) -> bool {
+    for prefix in [
+        "Arc::new(",
+        "std::sync::Arc::new(",
+        "alloc::sync::Arc::new(",
+    ] {
+        let needle = format!("{prefix}{name}");
+        if text.contains(&needle) {
+            return true;
+        }
+    }
+    false
+}
+
+fn contains_identifier(text: &str, name: &str) -> bool {
+    let mut start = 0;
+    while let Some(offset) = text[start..].find(name) {
+        let abs = start + offset;
+        let before_ok = abs == 0 || !text.as_bytes()[abs - 1].is_ascii_alphanumeric();
+        let after = abs + name.len();
+        let after_ok = after >= text.len() || !text.as_bytes()[after].is_ascii_alphanumeric();
+        if before_ok && after_ok {
+            return true;
+        }
+        start = abs + name.len();
+    }
+    false
 }
 
 #[cfg(test)]
@@ -82,7 +140,10 @@ mod tests {
 
     #[test]
     fn flags_bare_local_mutex() {
-        assert_eq!(run("fn f() { let m: Mutex<u32> = Mutex::new(0); }").len(), 1);
+        assert_eq!(
+            run("fn f() { let m: Mutex<u32> = Mutex::new(0); }").len(),
+            1
+        );
     }
 
     #[test]
@@ -100,6 +161,25 @@ mod tests {
         assert!(
             run("static FOO: LazyLock<Mutex<u32>> = LazyLock::new(|| Mutex::new(0));").is_empty()
         );
+    }
+
+    #[test]
+    fn allows_local_mutex_moved_into_arc() {
+        let src = "fn f() { let m: Mutex<u32> = Mutex::new(0); let shared = Arc::new(m); }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_local_mutex_moved_into_spawn() {
+        let src = r#"
+fn f() {
+    let m: Mutex<u32> = Mutex::new(0);
+    std::thread::spawn(move || {
+        let _guard = m.lock().unwrap();
+    });
+}
+"#;
+        assert!(run(src).is_empty());
     }
 
     #[test]

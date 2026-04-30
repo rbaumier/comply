@@ -10,8 +10,19 @@ use crate::rules::backend::CheckCtx;
 #[derive(Debug)]
 pub struct Check;
 
+fn is_type_test_file(path: &std::path::Path) -> bool {
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    name.contains("types.test")
+        || name.contains(".type-test")
+        || name.ends_with(".d.ts")
+        || name.ends_with(".d.tsx")
+}
+
 impl crate::rules::backend::AstCheck for Check {
     fn check(&self, ctx: &CheckCtx, _tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
+        if is_type_test_file(ctx.path) {
+            return Vec::new();
+        }
         let source_type = source_type_for_path(ctx.path);
         with_semantic(ctx.source, source_type, |semantic| {
             let nodes = semantic.nodes();

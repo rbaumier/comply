@@ -42,12 +42,16 @@ crate::ast_check! { on ["variable_declarator"] => |node, source, ctx, diagnostic
     let Ok(var_name) = name_node.utf8_text(source) else { return; };
     if !var_name.chars().all(|c| c.is_alphanumeric() || c == '_') { return; }
 
-    // Scan the full source for `<var_name>.mockReturnValue|mockResolvedValue|mockImplementation`.
     let source_str = ctx.source;
+
+    // Scan the full source for `<var_name>.mockReturnValue|mockResolvedValue|mockImplementation`.
     let configured = ["mockReturnValue", "mockResolvedValue", "mockImplementation"]
         .iter()
         .any(|m| source_str.contains(&format!("{var_name}.{m}")));
     if configured { return; }
+
+    // If the mock is used as a spy (appears in expect()), the undefined return is fine.
+    if source_str.contains(&format!("expect({var_name})")) { return; }
 
     let pos = value.start_position();
     diagnostics.push(Diagnostic {
@@ -106,6 +110,16 @@ mod tests {
     #[test]
     fn allows_impl_passed_to_fn() {
         assert!(run("const m = vi.fn(() => 1);").is_empty());
+    }
+
+    #[test]
+    fn allows_spy_in_expect() {
+        assert!(run("const spy = vi.fn(); expect(spy).toHaveBeenCalled();").is_empty());
+    }
+
+    #[test]
+    fn allows_spy_with_called_with() {
+        assert!(run("const handler = jest.fn(); expect(handler).toHaveBeenCalledWith('a', 'b');").is_empty());
     }
 
     #[test]
