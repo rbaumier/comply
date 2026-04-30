@@ -146,3 +146,11 @@
 |---|---|---|---|---|---|---|
 | ISS-112 | no-duplicate-string FP dans tests Rust inline #[cfg(test)] | bug | open | high | — | S |
 | ISS-113 | rust-impl-debug-on-public-types FP sur crates binaires | bug | open | medium | — | S |
+
+## Batch 18 — Test struct awareness & Rust conventions (clap audit)
+
+| ID | Title | Type | Status | Severity | Blocked by | Estimation |
+|---|---|---|---|---|---|---|
+| ISS-114 | rust-partial-eq-without-eq FP sur structs de test | bug | open | medium | — | S |
+| ISS-115 | filename-naming-convention FP sur exemples binaires Rust | bug | open | low | — | S |
+| ISS-116 | id-length trop strict sur paramètres de closure Rust | bug | open | high | — | S |
