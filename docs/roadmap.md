@@ -64,3 +64,13 @@
 | ISS-080 | filename-naming-convention impose kebab-case sur composants React | bug | open | medium | — | S |
 | ISS-081 | exports-last FP sur inline export const/function | bug | open | medium | — | S |
 | ISS-082 | file-extension-in-import FP quand bundler détecté | bug | open | medium | — | M |
+
+## Batch 8 — Data-processing & Cargo workspace awareness (polars audit)
+
+| ID | Title | Type | Status | Severity | Blocked by | Estimation |
+|---|---|---|---|---|---|---|
+| ISS-083 | explicit-units FP sur noms standard Rust (length, offset) | bug | open | medium | — | S |
+| ISS-084 | no-type-encoded-names FP sur préfixes domaine (str_, arr_) | bug | open | medium | — | S |
+| ISS-085 | rust-unused-dep ne gère pas les deps feature-gated | bug | open | high | — | M |
+| ISS-086 | rust-no-as-numeric-cast trop strict pour data-processing | bug | open | high | — | M |
+| ISS-087 | rust-pub-enum-without-non-exhaustive sur enums workspace-internal | bug | open | low | — | S |
