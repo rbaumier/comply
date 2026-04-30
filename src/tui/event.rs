@@ -56,6 +56,11 @@ fn handle_normal_mode(app: &mut App, key: KeyEvent) {
         KeyCode::Left | KeyCode::Char('h') => app.collapse(),
         KeyCode::Enter => app.enter_action(),
         KeyCode::Tab => app.toggle_view(),
+        KeyCode::BackTab => app.toggle_view_reverse(),
+        KeyCode::PageUp => app.page_up(20),
+        KeyCode::PageDown => app.page_down(20),
+        KeyCode::Home => app.go_top(),
+        KeyCode::End => app.go_bottom(),
         KeyCode::Char('/') => app.start_search(),
         KeyCode::Char('G') => app.go_bottom(),
         KeyCode::Char('g') => {

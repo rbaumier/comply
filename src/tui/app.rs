@@ -458,6 +458,14 @@ impl App {
         }
     }
 
+    pub fn page_up(&mut self, page_size: usize) {
+        self.cursor = self.cursor.saturating_sub(page_size);
+    }
+
+    pub fn page_down(&mut self, page_size: usize) {
+        self.cursor = (self.cursor + page_size).min(self.visible_rows.len().saturating_sub(1));
+    }
+
     pub fn go_top(&mut self) {
         self.cursor = 0;
     }
@@ -519,6 +527,17 @@ impl App {
             ViewMode::All => ViewMode::ByFile,
             ViewMode::ByFile => ViewMode::ByRule,
             ViewMode::ByRule => ViewMode::All,
+        };
+        self.expanded_groups.clear();
+        self.cursor = 0;
+        self.rebuild();
+    }
+
+    pub fn toggle_view_reverse(&mut self) {
+        self.view_mode = match self.view_mode {
+            ViewMode::All => ViewMode::ByRule,
+            ViewMode::ByFile => ViewMode::All,
+            ViewMode::ByRule => ViewMode::ByFile,
         };
         self.expanded_groups.clear();
         self.cursor = 0;

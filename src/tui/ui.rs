@@ -489,7 +489,7 @@ fn draw_help_bar(frame: &mut Frame, app: &App, area: Rect) {
         ))
     } else {
         Line::from(Span::styled(
-            "↑↓ navigate  →← fold  Enter open  / search  Tab view  q quit",
+            "↑↓ navigate  PgUp/Dn page  →← fold  Enter open  / search  Tab view  q quit",
             Style::default().fg(Color::DarkGray),
         ))
     };
