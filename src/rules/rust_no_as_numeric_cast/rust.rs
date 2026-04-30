@@ -51,7 +51,13 @@ impl AstCheck for Check {
         if !NUMERIC_TARGETS.contains(&target) {
             return;
         }
+        if target == "usize" || target == "isize" {
+            return;
+        }
         if is_in_test_context(node, source_bytes) {
+            return;
+        }
+        if is_literal_cast(node, source_bytes) {
             return;
         }
         let pos = node.start_position();
@@ -70,6 +76,16 @@ impl AstCheck for Check {
             span: None,
         });
     }
+}
+
+fn is_literal_cast(node: tree_sitter::Node, source: &[u8]) -> bool {
+    let Some(value) = node.child_by_field_name("value") else {
+        return false;
+    };
+    matches!(
+        value.kind(),
+        "integer_literal" | "float_literal" | "unary_expression"
+    )
 }
 
 #[cfg(test)]
@@ -96,11 +112,19 @@ mod tests {
     }
 
     #[test]
-    fn flags_isize_cast() {
-        assert_eq!(
-            run_on("fn f(p: *const u8) -> usize { p as usize }").len(),
-            1
-        );
+    fn allows_as_usize() {
+        assert!(run_on("fn f(x: u32) -> usize { x as usize }").is_empty());
+    }
+
+    #[test]
+    fn allows_as_isize() {
+        assert!(run_on("fn f(x: i32) -> isize { x as isize }").is_empty());
+    }
+
+    #[test]
+    fn allows_literal_cast() {
+        assert!(run_on("fn f() { let _ = 42 as u8; }").is_empty());
+        assert!(run_on("fn f() { let _ = 1.0 as f32; }").is_empty());
     }
 
     #[test]

@@ -7,6 +7,8 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
+const RUST_DOMAIN_PREFIXES: &[&str] = &["str", "arr", "bool", "obj"];
+
 crate::ast_check! { on ["identifier"] => |node, source, ctx, diagnostics|
     if !is_declaration_site(node) {
         return;
@@ -17,6 +19,9 @@ crate::ast_check! { on ["identifier"] => |node, source, ctx, diagnostics|
     let Some(prefix) = super::type_prefix::matched_snake_case(name) else {
         return;
     };
+    if RUST_DOMAIN_PREFIXES.contains(&prefix) {
+        return;
+    }
     let pos = node.start_position();
     diagnostics.push(Diagnostic {
         path: std::sync::Arc::clone(&ctx.path_arc),
@@ -51,18 +56,18 @@ mod tests {
     }
 
     #[test]
-    fn flags_str_prefix() {
-        assert_eq!(run_on("fn f() { let str_name = String::new(); }").len(), 1);
+    fn allows_str_prefix_domain_qualifier() {
+        assert!(run_on("fn f() { let str_name = String::new(); }").is_empty());
     }
 
     #[test]
-    fn flags_arr_prefix() {
-        assert_eq!(run_on("fn f() { let arr_items = vec![]; }").len(), 1);
+    fn allows_arr_prefix_domain_qualifier() {
+        assert!(run_on("fn f() { let arr_items = vec![]; }").is_empty());
     }
 
     #[test]
-    fn flags_bool_prefix() {
-        assert_eq!(run_on("fn f() { let bool_flag = true; }").len(), 1);
+    fn allows_bool_prefix_domain_qualifier() {
+        assert!(run_on("fn f() { let bool_flag = true; }").is_empty());
     }
 
     #[test]

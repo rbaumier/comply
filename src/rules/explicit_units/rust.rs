@@ -16,17 +16,10 @@ const AMBIGUOUS_BASES: &[&str] = &[
     "elapsed",
     "age",
     "wait",
-    "size",
-    "length",
-    "distance",
-    "offset",
-    "width",
-    "height",
-    "limit",
     "rate",
     "frequency",
-    "threshold",
 ];
+
 
 const KNOWN_SUFFIXES: &[&str] = &[
     "_ms", "_sec", "_seconds", "_minutes", "_hours", "_days", "_bytes", "_kb", "_mb", "_gb",
@@ -162,5 +155,20 @@ mod tests {
     #[test]
     fn does_not_flag_non_ambiguous_name() {
         assert!(run_on("fn f() { let count: u64 = 5; }").is_empty());
+    }
+
+    #[test]
+    fn allows_length_usize() {
+        assert!(run_on("fn zeroed(length: usize) {}").is_empty());
+    }
+
+    #[test]
+    fn allows_offset_and_width() {
+        assert!(run_on("fn f() { let offset: usize = 0; let width: u32 = 80; }").is_empty());
+    }
+
+    #[test]
+    fn allows_size_and_height() {
+        assert!(run_on("fn f(size: usize, height: u64) {}").is_empty());
     }
 }

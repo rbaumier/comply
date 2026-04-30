@@ -107,6 +107,40 @@ fn lint_workspace(workspace: &Path) -> Result<Vec<Diagnostic>> {
     convert_findings(report.findings, workspace)
 }
 
+/// Check whether the dep named in a shear message is declared as
+/// `optional = true` in the manifest. Optional deps are feature-gated
+/// by design — flagging them as unused is noise because cargo-shear
+/// only sees the default feature set.
+fn is_optional_dep(manifest_path: &Path, message: &str) -> bool {
+    let dep_name = message
+        .split('`')
+        .nth(1)
+        .unwrap_or("");
+    if dep_name.is_empty() {
+        return false;
+    }
+    let Ok(content) = fs::read_to_string(manifest_path) else {
+        return false;
+    };
+    let Ok(toml) = content.parse::<toml::Value>() else {
+        return false;
+    };
+    for section in ["dependencies", "dev-dependencies", "build-dependencies"] {
+        if let Some(deps) = toml.get(section).and_then(|d| d.as_table()) {
+            if let Some(entry) = deps.get(dep_name) {
+                if entry
+                    .get("optional")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false)
+                {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
 /// Convert each shear finding into a comply Diagnostic. We only emit
 /// diagnostics for `shear/unused_dependency` findings — shear also surfaces
 /// `shear/unlinked_files` (orphan source files) but those are out of scope
@@ -120,7 +154,10 @@ fn convert_findings(findings: Vec<Finding>, workspace: &Path) -> Result<Vec<Diag
             continue;
         }
         let Some(file) = finding.file else { continue };
-        let manifest_path = workspace.join(file);
+        let manifest_path = workspace.join(&file);
+        if is_optional_dep(&manifest_path, &finding.message) {
+            continue;
+        }
         let offset = finding.location.map(|l| l.offset).unwrap_or(0);
         let (line, column) = byte_offset_to_line_col(&manifest_path, offset).unwrap_or((1, 1));
         diagnostics.push(Diagnostic {

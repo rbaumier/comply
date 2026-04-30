@@ -6,6 +6,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
+use std::path::Path;
 
 const KINDS: &[&str] = &["enum_item"];
 
@@ -31,6 +32,9 @@ impl AstCheck for Check {
         if has_non_exhaustive(node, source_bytes) {
             return;
         }
+        if is_internal_crate(ctx.path) {
+            return;
+        }
         let name = node
             .child_by_field_name("name")
             .and_then(|n| n.utf8_text(source_bytes).ok())
@@ -52,14 +56,26 @@ impl AstCheck for Check {
     }
 }
 
+fn is_internal_crate(path: &Path) -> bool {
+    let mut dir = path.parent();
+    while let Some(d) = dir {
+        let cargo_toml = d.join("Cargo.toml");
+        if let Ok(content) = std::fs::read_to_string(&cargo_toml) {
+            return content.contains("publish = false")
+                || content.contains("publish = []");
+        }
+        dir = d.parent();
+    }
+    false
+}
+
 fn is_pub(item: tree_sitter::Node, source: &[u8]) -> bool {
     let mut cursor = item.walk();
     for child in item.children(&mut cursor) {
         if child.kind() == "visibility_modifier"
             && let Ok(text) = child.utf8_text(source)
-            && text.starts_with("pub")
         {
-            return true;
+            return text == "pub";
         }
     }
     false
@@ -113,5 +129,15 @@ mod tests {
     #[test]
     fn does_not_flag_private_enum() {
         assert!(run_on("enum Status { Ok, Err }").is_empty());
+    }
+
+    #[test]
+    fn does_not_flag_pub_crate_enum() {
+        assert!(run_on("pub(crate) enum Status { Ok, Err }").is_empty());
+    }
+
+    #[test]
+    fn does_not_flag_pub_super_enum() {
+        assert!(run_on("pub(super) enum Status { Ok, Err }").is_empty());
     }
 }

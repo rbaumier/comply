@@ -84,11 +84,11 @@
 
 | ID | Title | Type | Status | Severity | Blocked by | Estimation |
 |---|---|---|---|---|---|---|
-| ISS-083 | explicit-units FP sur noms standard Rust (length, offset) | bug | open | medium | — | S |
-| ISS-084 | no-type-encoded-names FP sur préfixes domaine (str_, arr_) | bug | open | medium | — | S |
-| ISS-085 | rust-unused-dep ne gère pas les deps feature-gated | bug | open | high | — | M |
-| ISS-086 | rust-no-as-numeric-cast trop strict pour data-processing | bug | open | high | — | M |
-| ISS-087 | rust-pub-enum-without-non-exhaustive sur enums workspace-internal | bug | open | low | — | S |
+| ISS-083 | explicit-units FP sur noms standard Rust (length, offset) | bug | done | medium | — | S |
+| ISS-084 | no-type-encoded-names FP sur préfixes domaine (str_, arr_) | bug | done | medium | — | S |
+| ISS-085 | rust-unused-dep ne gère pas les deps feature-gated | bug | done | high | — | M |
+| ISS-086 | rust-no-as-numeric-cast trop strict pour data-processing | bug | done | high | — | M |
+| ISS-087 | rust-pub-enum-without-non-exhaustive sur enums workspace-internal | bug | done | low | — | S |
 
 ## Batch 9 — Test-file awareness & crash fixes (swr + zod audit)
 
