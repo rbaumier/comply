@@ -112,6 +112,17 @@ mod tests {
     }
 
     #[test]
+    fn skips_strings_in_attributes() {
+        let src = r#"
+            #[cfg_attr(feature = "postgres_backend", derive(AsExpression))]
+            #[cfg_attr(feature = "postgres_backend", diesel(sql_type = Ts))]
+            #[cfg_attr(feature = "postgres_backend", derive(FromSqlRow))]
+            struct Proxy;
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
     fn flags_raw_string_duplicated_three_times() {
         // Same raw-string body three times → correctly flagged.
         let src = r###"

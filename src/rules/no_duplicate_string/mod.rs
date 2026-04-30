@@ -211,6 +211,10 @@ pub(super) fn should_ignore_string_node(node: tree_sitter::Node<'_>, source: &[u
                     }
                 }
             }
+            // Rust attributes — `#[cfg(feature = "x")]`, `#[serde(rename = "y")]`,
+            // etc. — strings here are compile-time metadata that cannot be
+            // extracted to a `const`.
+            "attribute_item" | "inner_attribute_item" => return true,
             // `cn(...)` / `clsx(...)` / `cva(...)` etc. — match either
             // a bare callee identifier or a member expression whose
             // last segment is a known helper.
