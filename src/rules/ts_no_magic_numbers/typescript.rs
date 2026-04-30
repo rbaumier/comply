@@ -62,6 +62,7 @@ fn is_allowed_context(node: tree_sitter::Node) -> bool {
 
 crate::ast_check! { on ["number"] => |node, source, ctx, diagnostics|
     if ctx.file.path_segments.in_test_dir { return; }
+    if ctx.path.to_string_lossy().contains("/examples/") { return; }
     let text = match std::str::from_utf8(&source[node.byte_range()]) {
         Ok(t) => t,
         Err(_) => return,

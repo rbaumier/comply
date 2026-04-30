@@ -222,3 +222,9 @@ Corrections de faux positifs identifiés en scannant des projets réels dans ~/w
 | Problème | Projets impactés | Hits | Fix |
 |----------|-----------------|------|-----|
 | Sur 37 règles `playwright-*`, seule 1 (`playwright-no-hooks`) avait un gate vérifiant la présence de `@playwright/test` dans le fichier source. Les 36 autres firaient sur **tous** les fichiers `.test.`/`.spec.` peu importe le framework de test utilisé. Résultat : des dizaines de FPs sur chaque projet non-Playwright — `playwright-prefer-strict-equal` flagge `.toBe()` dans des tests Jest, `playwright-max-expects` compte les `expect()` de Vitest, etc. | zustand (89 FPs), nest (783+ via expect-expect déjà fixé), et potentiellement **tous** les projets TS/JS sans Playwright | Variable par projet | Ajouté `source.windows(16).any(\|w\| w == b"@playwright/test")` dans les 36 règles manquantes. La règle ne fire plus que dans les fichiers qui importent `@playwright/test`. Tests mis à jour avec un marker `// @playwright/test` ou un import réel. |
+
+### `no-magic-numbers` — exemples non skippés (Rust + TS)
+
+| Règle | Projet | Hits avant | Problème | Fix | Hits après |
+|-------|--------|-----------|----------|-----|------------|
+| `no-magic-numbers` | bevy | 11795 | Les fichiers dans `/examples/` sont des démos interactives — couleurs (`Color::rgb(0.3, 0.5, 0.8)`), positions (`Vec3::new(10.0, 20.0, 0.0)`), rotations, dimensions. 7575 des 11795 hits (64%) sont dans `/examples/`. Extraire chaque valeur en constante rendrait les exemples illisibles sans améliorer la qualité du code. | Ajouté skip `/examples/` dans les backends Rust et TypeScript. Les tests et `#[cfg(test)]` étaient déjà skippés. | 4220 |
