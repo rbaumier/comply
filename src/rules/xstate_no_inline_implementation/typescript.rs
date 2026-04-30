@@ -27,6 +27,25 @@ crate::ast_check! { on ["pair"] prefilter = ["xstate"] => |node, source, ctx, di
         return;
     }
 
+    // Walk ancestors: only emit if inside a createMachine / setup call.
+    let mut cur = node.parent();
+    let mut inside_machine = false;
+    while let Some(p) = cur {
+        if p.kind() == "call_expression" {
+            if let Some(callee) = p.child_by_field_name("function") {
+                let callee_text = callee.utf8_text(source).unwrap_or("");
+                if callee_text.contains("createMachine") || callee_text.contains("setup") {
+                    inside_machine = true;
+                    break;
+                }
+            }
+        }
+        cur = p.parent();
+    }
+    if !inside_machine {
+        return;
+    }
+
     diagnostics.push(Diagnostic::at_node(
         ctx.path,
         &node,
@@ -126,5 +145,34 @@ mod tests {
             });
         "#;
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_inline_entry_outside_machine() {
+        let src = r#"
+            import { createMachine } from 'xstate';
+            const uiConfig = { entry: () => openPanel() };
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_inline_entry_inside_create_machine() {
+        let src = r#"
+            import { createMachine } from 'xstate';
+            createMachine({ entry: () => openPanel() });
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_inline_inside_setup() {
+        let src = r#"
+            import { setup } from 'xstate';
+            setup({}).createMachine({
+                entry: () => console.log("hi"),
+            });
+        "#;
+        assert_eq!(run(src).len(), 1);
     }
 }
