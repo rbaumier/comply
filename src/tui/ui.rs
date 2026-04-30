@@ -158,6 +158,49 @@ fn draw_preview(frame: &mut Frame, app: &mut App, area: Rect) {
             let inner = border.inner(area);
             frame.render_widget(border, area);
 
+            // Build diagnostic info lines (bottom pane)
+            let mut info_lines: Vec<Line<'_>> = vec![Line::from(vec![
+                Span::styled(
+                    format!("[{}]", rule_id),
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::raw("  "),
+                Span::styled(message, Style::default().fg(Color::White)),
+            ])];
+            if let Some(meta) = meta_registry::lookup(&rule_id) {
+                info_lines.push(Line::from(Span::styled(
+                    format!("help: {}", meta.remediation),
+                    Style::default().fg(Color::Green),
+                )));
+                if let Some(url) = meta.doc_url {
+                    info_lines.push(Line::from(Span::styled(
+                        format!("url: {}", url),
+                        Style::default()
+                            .fg(Color::Blue)
+                            .add_modifier(Modifier::UNDERLINED),
+                    )));
+                }
+            }
+
+            // Split: code on top, bordered diagnostic info on bottom
+            let info_box_height = info_lines.len() as u16 + 1; // +1 for top border
+            let split = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Min(3), Constraint::Length(info_box_height)])
+                .split(inner);
+            let code_area = split[0];
+            let info_area = split[1];
+
+            let info_block = Block::new()
+                .borders(Borders::TOP)
+                .border_style(Style::default().fg(Color::DarkGray));
+            let info_inner = info_block.inner(info_area);
+            frame.render_widget(info_block, info_area);
+            frame.render_widget(Paragraph::new(Text::from(info_lines)), info_inner);
+
+            // Build source code lines (top pane)
             let context_lines = app.source_lines(&path, diag_line, 15);
             if context_lines.is_empty() {
                 let msg = Paragraph::new(Line::from(Span::styled(
@@ -165,9 +208,10 @@ fn draw_preview(frame: &mut Frame, app: &mut App, area: Rect) {
                     Style::default().fg(Color::DarkGray),
                 )))
                 .alignment(Alignment::Center);
-                let y_offset = inner.height / 2;
-                if y_offset < inner.height {
-                    let centered = Rect::new(inner.x, inner.y + y_offset, inner.width, 1);
+                let y_offset = code_area.height / 2;
+                if y_offset < code_area.height {
+                    let centered =
+                        Rect::new(code_area.x, code_area.y + y_offset, code_area.width, 1);
                     frame.render_widget(msg, centered);
                 }
                 return;
@@ -219,34 +263,7 @@ fn draw_preview(frame: &mut Frame, app: &mut App, area: Rect) {
                 }
             }
 
-            lines.push(Line::from(""));
-            lines.push(Line::from(vec![
-                Span::styled(
-                    format!("[{}]", rule_id),
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::raw("  "),
-                Span::styled(message, Style::default().fg(Color::White)),
-            ]));
-
-            if let Some(meta) = meta_registry::lookup(&rule_id) {
-                lines.push(Line::from(Span::styled(
-                    format!("help: {}", meta.remediation),
-                    Style::default().fg(Color::Green),
-                )));
-                if let Some(url) = meta.doc_url {
-                    lines.push(Line::from(Span::styled(
-                        format!("url: {}", url),
-                        Style::default()
-                            .fg(Color::Blue)
-                            .add_modifier(Modifier::UNDERLINED),
-                    )));
-                }
-            }
-
-            frame.render_widget(Paragraph::new(Text::from(lines)), inner);
+            frame.render_widget(Paragraph::new(Text::from(lines)), code_area);
         }
         Row::Group { ref key, .. } => {
             let title = format!(" {} ", key);
