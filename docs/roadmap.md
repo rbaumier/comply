@@ -1,212 +1,169 @@
-# Roadmap — Comply
+# Roadmap — Comply False Positives (Amadeo audit)
 
-## Bug fixes & FP reduction
+## Batch 1 — Framework detection & graph (high impact)
 
-### Priorité haute
+| ID | Title | Type | Status | Severity | Blocked by | Estimation |
+|---|---|---|---|---|---|---|
+| ISS-001 | unused-file & dead-export : entry points framework manquants | bug | done | critical | — | L |
+| ISS-002 | Règles techno-spécifiques sans vérification framework | bug | done | high | — | M |
+| ISS-003 | no-side-effects-in-initialization sur fichiers de test | bug | done | high | — | S |
+| ISS-008 | no-extraneous-import / no-default-export sans exception config | bug | done | medium | — | S |
 
-| ID | Titre | Status |
-|----|-------|--------|
-| ISS-001 | unused-file & dead-export : entry points framework manquants | open |
-| ISS-003 | no-side-effects-in-initialization sur fichiers de test | open |
-| ISS-005 | no-hardcoded-secret FP sur JSX et formulaires | partiel — JSX et i18n encore FP |
-| ISS-010 | react-jsx-no-jsx-as-prop FP sur patterns shadcn/Radix | open |
-| ISS-030 | prefer-promise-all FP avec destructuring bindings | open |
-| ISS-052 | no-useless-intersection remediation dangereuse pour `& any` | open |
-| ISS-056 | react-passive-event-listeners recommande passive quand preventDefault est utilisé | open |
+## Batch 2 — Heuristics refinement
 
-### Priorité moyenne
+| ID | Title | Type | Status | Severity | Blocked by | Estimation |
+|---|---|---|---|---|---|---|
+| ISS-004 | explicit-module-boundary-types doublon de explicit-function-return-type | enhancement | done | medium | — | M |
+| ISS-005 | no-hardcoded-secret FP sur JSX et formulaires | bug | done | medium | — | M |
+| ISS-007 | no-generic-names trop agressif sur patterns idiomatiques | enhancement | done | medium | — | M |
+| ISS-006 | no-timing-attack FP sur validation client-side | bug | done | low | — | S |
 
-| ID | Titre | Status |
-|----|-------|--------|
-| ISS-002 | Règles techno-spécifiques sans vérification framework | partiel — playwright fixé, reste rn + import-dynamic |
-| ISS-007 | no-generic-names trop agressif | partiel — skip tests/stories ok, scope exceptions à faire |
-| ISS-008 | no-extraneous-import / no-default-export sans exception config | open |
-| ISS-009 | tailwind-classnames-order doublon avec prettier plugin | open |
-| ISS-029 | new-for-builtins FP sur identifiants shadowés | open |
-| ISS-031 | rust-thread-sleep-in-async FP sur tokio::time::sleep | open |
-| ISS-033 | prefer-spread FP sur Array.from avec mapper, String.concat | open |
-| ISS-039 | rust-select-without-biased FP sur futures::select! | open |
-| ISS-040 | ts-no-promise-void-function-misuse à réécrire en AST | open |
-| ISS-042 | sql-no-union-when-union-all heuristique id trop faible | open |
-| ISS-043 | no-submit-handler-without-preventDefault FN receiver + nesting | open |
-| ISS-046 | tanstack-query-pass-signal-to-fetch FN sur ctx.signal | open |
-| ISS-047 | react-no-cookies-in-layout FP — pas de check import next/headers | open |
-| ISS-049 | vue-component-pascal-case FN — tags lowercase custom passent | open |
-| ISS-050 | xstate-no-inline-implementation FP — pas de check createMachine | open |
-| ISS-053 | security-require-rate-limit-auth FP — middlewares globaux non reconnus | open |
-| ISS-055 | rn-no-inline-renderitem FP — pas de check FlatList/SectionList | open |
-| ISS-058 | i18n-json-valid-message-syntax — supporter i18next nativement | open |
-| ISS-059 | ts-no-extraneous-class flagge les classes décorées (voulu) | open |
+## Batch 3 — Polish & ecosystem awareness
 
-### Priorité basse
+| ID | Title | Type | Status | Severity | Blocked by | Estimation |
+|---|---|---|---|---|---|---|
+| ISS-009 | tailwind-classnames-order doublon avec prettier plugin | enhancement | done | low | — | S |
+| ISS-010 | react-jsx-no-jsx-as-prop + règles pédantiques shadcn/Radix | enhancement | done | low | — | M |
 
-| ID | Titre | Status |
-|----|-------|--------|
-| ISS-037 | vitest-no-disabled-tests FN sur test dirs non standard | open |
-| ISS-044 | security-bcrypt-min-rounds FN — ne suit pas les const | open |
-| ISS-051 | import-consistent-type-specifier-style remediation incomplète | open |
-| ISS-054 | no-logger-in-business-logic FN — macros de log importées | open |
+## Batch 4 — Rust cross-fire & scope fixes (tokio audit)
 
-## Features plateforme
+| ID | Title | Type | Status | Severity | Blocked by | Estimation |
+|---|---|---|---|---|---|---|
+| ISS-063 | ts-no-magic-numbers fire sur fichiers Rust | bug | open | high | — | S |
+| ISS-064 | ts-no-loop-func fire sur closures Rust | bug | open | high | — | S |
+| ISS-065 | no-history-in-comments FP sur "was"/"previously" descriptif | bug | open | high | — | M |
+| ISS-066 | comment-prose-quality sur code examples dans doc comments | bug | open | high | — | M |
+| ISS-067 | inverted-assertion-arguments FP sur Rust assert_eq! | bug | open | medium | — | S |
+| ISS-068 | boolean-naming FP sur noms idiomatiques Rust | enhancement | open | medium | — | S |
+| ISS-069 | rust-no-mutex-in-single-threaded heuristique trop simpliste | bug | open | medium | — | M |
 
-| ID | Titre | Status |
-|----|-------|--------|
-| ISS-026 | Capacités plateforme (autofix, reports, config extends, init) | partiel — prefilter done |
+## Batch 5 — Nouvelles règles Rust
 
-## Nouvelles règles (backlog)
+| ID | Title | Type | Status | Severity | Blocked by | Estimation |
+|---|---|---|---|---|---|---|
+| ISS-070 | rust-no-allow-without-reason : #[allow] sans justification | feature | open | medium | — | M |
+| ISS-071 | rust-prefer-arc-clone : Arc::clone(&x) vs x.clone() | feature | open | low | — | M |
 
-| ID | Catégorie | Nb règles |
-|----|-----------|-----------|
-| ISS-011 | Sécurité | 90 |
-| ISS-012 | JavaScript / Fondamentaux | 88 |
-| ISS-013 | TypeScript | 86 |
-| ISS-014 | React | 23 |
-| ISS-015 | Vue / Nuxt | 64 |
-| ISS-016 | Tests | 20 |
-| ISS-017 | Architecture / Complexité / Nommage | 29 |
-| ISS-018 | Prose / Commentaires | 27 |
-| ISS-019 | HTML / SEO + Accessibilité | 47 |
-| ISS-020 | CSS / Tailwind + Package.json | 35 |
-| ISS-021 | GitHub Actions | 38 |
-| ISS-022 | Dockerfile + Kubernetes | 42 |
-| ISS-023 | Environnement + SQL / ORM | 36 |
-| ISS-024 | Rust + IaC + CI/CD | 19 |
-| ISS-025 | OpenAPI + Git/FS + Performance + i18n | 35 |
+## Batch 6 — TS test-awareness & crash fix (zustand + trpc audit)
 
-## Résolu (supprimé du tracker)
+| ID | Title | Type | Status | Severity | Blocked by | Estimation |
+|---|---|---|---|---|---|---|
+| ISS-072 | api-response-envelope-consistency crash sur emoji UTF-8 | bug | open | critical | — | S |
+| ISS-073 | testing-no-undefined-mock-var FP sur spy-only mocks | bug | open | medium | — | M |
+| ISS-074 | no-undefined-argument FP dans les matchers d'assertion | bug | open | medium | — | S |
+| ISS-075 | unused-component-prop FP sur fichiers type-test | bug | open | medium | — | S |
+| ISS-076 | no-property-mutation trop strict dans les tests | bug | open | medium | — | M |
+| ISS-077 | consistent-function-scoping FP dans callbacks de test | enhancement | open | low | — | S |
 
-ISS-004, ISS-006, ISS-027, ISS-028, ISS-032, ISS-034, ISS-035, ISS-036, ISS-038, ISS-041, ISS-045, ISS-048, ISS-057.
+## Batch 7 — Library & monorepo awareness (redux-toolkit audit)
 
----
+| ID | Title | Type | Status | Severity | Blocked by | Estimation |
+|---|---|---|---|---|---|---|
+| ISS-078 | dead-export/unused-file FP sur API publique de bibliothèque | bug | open | high | — | L |
+| ISS-079 | no-implicit-deps ne résout pas les workspace deps (monorepo) | bug | open | high | — | M |
+| ISS-080 | filename-naming-convention impose kebab-case sur composants React | bug | open | medium | — | S |
+| ISS-081 | exports-last FP sur inline export const/function | bug | open | medium | — | S |
+| ISS-082 | file-extension-in-import FP quand bundler détecté | bug | open | medium | — | M |
 
-## FP Hunting — Audits de test-projects
+## Batch 8 — Data-processing & Cargo workspace awareness (polars audit)
 
-### Batch 4 — Rust cross-fire & scope fixes (tokio audit)
+| ID | Title | Type | Status | Severity | Blocked by | Estimation |
+|---|---|---|---|---|---|---|
+| ISS-083 | explicit-units FP sur noms standard Rust (length, offset) | bug | open | medium | — | S |
+| ISS-084 | no-type-encoded-names FP sur préfixes domaine (str_, arr_) | bug | open | medium | — | S |
+| ISS-085 | rust-unused-dep ne gère pas les deps feature-gated | bug | open | high | — | M |
+| ISS-086 | rust-no-as-numeric-cast trop strict pour data-processing | bug | open | high | — | M |
+| ISS-087 | rust-pub-enum-without-non-exhaustive sur enums workspace-internal | bug | open | low | — | S |
 
-| ID | Title | Type | Status | Severity | Estimation |
-|---|---|---|---|---|---|
-| ISS-063 | ts-no-magic-numbers fire sur fichiers Rust | bug | open | high | S |
-| ISS-064 | ts-no-loop-func fire sur closures Rust | bug | open | high | S |
-| ISS-065 | no-history-in-comments FP sur "was"/"previously" descriptif | bug | open | high | M |
-| ISS-066 | comment-prose-quality sur code examples dans doc comments | bug | open | high | M |
-| ISS-067 | inverted-assertion-arguments FP sur Rust assert_eq! | bug | open | medium | S |
-| ISS-068 | boolean-naming FP sur noms idiomatiques Rust | enhancement | open | medium | S |
-| ISS-069 | rust-no-mutex-in-single-threaded heuristique trop simpliste | bug | open | medium | M |
+## Batch 9 — Test-file awareness & crash fixes (swr + zod audit)
 
-### Batch 5 — Nouvelles règles Rust
+| ID | Title | Type | Status | Severity | Blocked by | Estimation |
+|---|---|---|---|---|---|---|
+| ISS-088 | assertions-in-tests / playwright-expect-expect FP sur testing-library | bug | open | high | — | M |
+| ISS-089 | no-test-return-statement FP sur return dans fonctions imbriquées | bug | open | high | — | S |
+| ISS-090 | Règles UI/a11y/tailwind ne devraient pas fire sur JSX de test | bug | open | high | — | M |
+| ISS-091 | Crash UTF-8 byte-indexing systémique (2+ règles touchées) | bug | open | critical | — | M |
 
-| ID | Title | Type | Status | Severity | Estimation |
-|---|---|---|---|---|---|
-| ISS-070 | rust-no-allow-without-reason : #[allow] sans justification | feature | open | medium | M |
-| ISS-071 | rust-prefer-arc-clone : Arc::clone(&x) vs x.clone() | feature | open | low | M |
+## Batch 10 — JS/CJS awareness & module system (fastify audit)
 
-### Batch 6 — TS test-awareness & crash fix (zustand + trpc audit)
+| ID | Title | Type | Status | Severity | Blocked by | Estimation |
+|---|---|---|---|---|---|---|
+| ISS-092 | no-unsafe-* rules ne devraient pas fire sur .js purs (36k FPs) | bug | open | critical | — | S |
+| ISS-093 | import-no-commonjs / prefer-module doivent respecter "type" field | bug | open | high | — | M |
+| ISS-094 | data-clumps FP sur signatures d'API framework | bug | open | medium | — | M |
+| ISS-095 | require-hook flagge les require() d'import comme side effects | bug | open | medium | — | S |
 
-| ID | Title | Type | Status | Severity | Estimation |
-|---|---|---|---|---|---|
-| ISS-072 | api-response-envelope-consistency crash sur emoji UTF-8 | bug | open | critical | S |
-| ISS-073 | testing-no-undefined-mock-var FP sur spy-only mocks | bug | open | medium | M |
-| ISS-074 | no-undefined-argument FP dans les matchers d'assertion | bug | open | medium | S |
-| ISS-075 | unused-component-prop FP sur fichiers type-test | bug | open | medium | S |
-| ISS-076 | no-property-mutation trop strict dans les tests | bug | open | medium | M |
-| ISS-077 | consistent-function-scoping FP dans callbacks de test | enhancement | open | low | S |
+## Batch 11 — Framework routing & JSDoc-as-types (svelte-kit audit)
 
-### Batch 7 — Library & monorepo awareness (redux-toolkit audit)
+| ID | Title | Type | Status | Severity | Blocked by | Estimation |
+|---|---|---|---|---|---|---|
+| ISS-096 | filename-naming-convention FP sur conventions SvelteKit (+page) | bug | open | high | — | S |
+| ISS-097 | jsdoc-needs-description FP sur annotations type-only | bug | open | high | — | S |
+| ISS-098 | node-no-sync FP sur scripts de build et CLI | bug | open | medium | — | S |
 
-| ID | Title | Type | Status | Severity | Estimation |
-|---|---|---|---|---|---|
-| ISS-078 | dead-export/unused-file FP sur API publique de bibliothèque | bug | open | high | L |
-| ISS-079 | no-implicit-deps ne résout pas les workspace deps (monorepo) | bug | open | high | M |
-| ISS-080 | filename-naming-convention impose kebab-case sur composants React | bug | open | medium | S |
-| ISS-081 | exports-last FP sur inline export const/function | bug | open | medium | S |
-| ISS-082 | file-extension-in-import FP quand bundler détecté | bug | open | medium | M |
+## Batch 12 — Relaxed directories & framework internals (axum audit)
 
-### Batch 8 — Data-processing & Cargo workspace awareness (polars audit)
+| ID | Title | Type | Status | Severity | Blocked by | Estimation |
+|---|---|---|---|---|---|---|
+| ISS-099 | timeout-on-io FP sur framework internals et test clients | bug | open | medium | — | M |
+| ISS-100 | Règles trop strictes dans examples/ et benches/ | enhancement | open | medium | — | M |
 
-| ID | Title | Type | Status | Severity | Estimation |
-|---|---|---|---|---|---|
-| ISS-083 | explicit-units FP sur noms standard Rust (length, offset) | bug | open | medium | S |
-| ISS-084 | no-type-encoded-names FP sur préfixes domaine (str_, arr_) | bug | open | medium | S |
-| ISS-085 | rust-unused-dep ne gère pas les deps feature-gated | bug | open | high | M |
-| ISS-086 | rust-no-as-numeric-cast trop strict pour data-processing | bug | open | high | M |
-| ISS-087 | rust-pub-enum-without-non-exhaustive sur enums workspace-internal | bug | open | low | S |
+## Batch 13 — Crash fixes (date-fns & playwright)
 
-### Batch 9 — Test-file awareness & crash fixes (swr + zod audit)
+| ID | Title | Type | Status | Severity | Blocked by | Estimation |
+|---|---|---|---|---|---|---|
+| ISS-091 | Crash UTF-8 byte-indexing systémique (3+ règles confirmées) | bug | open | critical | — | M |
+| ISS-101 | Stack overflow sur projets volumineux (playwright) | bug | open | high | — | M |
 
-| ID | Title | Type | Status | Severity | Estimation |
-|---|---|---|---|---|---|
-| ISS-088 | assertions-in-tests / playwright-expect-expect FP sur testing-library | bug | open | high | M |
-| ISS-089 | no-test-return-statement FP sur return dans fonctions imbriquées | bug | open | high | S |
-| ISS-090 | Règles UI/a11y/tailwind ne devraient pas fire sur JSX de test | bug | open | high | M |
-| ISS-091 | Crash UTF-8 byte-indexing systémique (3+ règles confirmées) | bug | open | critical | M |
+## Batch 14 — Decorator/DI framework awareness (nest audit)
 
-### Batch 10 — JS/CJS awareness & module system (fastify audit)
+| ID | Title | Type | Status | Severity | Blocked by | Estimation |
+|---|---|---|---|---|---|---|
+| ISS-102 | ts-no-extraneous-class ne détecte pas decorators sur export class | bug | open | high | — | S |
+| ISS-103 | parameter-properties FP sur injection de dépendances | bug | open | high | — | M |
+| ISS-104 | ts-class-methods-use-this FP sur méthodes décorées | bug | open | high | — | M |
+| ISS-105 | no-async-without-await FP sur handlers contractuels | bug | open | medium | — | M |
+| ISS-106 | no-class-inheritance FP sur extension points de framework | bug | open | medium | — | S |
 
-| ID | Title | Type | Status | Severity | Estimation |
-|---|---|---|---|---|---|
-| ISS-092 | no-unsafe-* rules ne devraient pas fire sur .js purs (36k FPs) | bug | open | critical | S |
-| ISS-093 | import-no-commonjs / prefer-module doivent respecter "type" field | bug | open | high | M |
-| ISS-094 | data-clumps FP sur signatures d'API framework | bug | open | medium | M |
-| ISS-095 | require-hook flagge les require() d'import comme side effects | bug | open | medium | S |
+## Batch 15 — Playwright scope & test-component awareness (jotai audit)
 
-### Batch 11 — Framework routing & JSDoc-as-types (svelte-kit audit)
+| ID | Title | Type | Status | Severity | Blocked by | Estimation |
+|---|---|---|---|---|---|---|
+| ISS-107 | Toutes les règles playwright-* fire sur vitest/jest | bug | open | high | — | M |
+| ISS-108 | function-component-definition FP sur composants de test inline | bug | open | medium | — | S |
+| ISS-109 | Comply timeout/hang sur projets >1000 fichiers TS | bug | open | high | ISS-101 | L |
 
-| ID | Title | Type | Status | Severity | Estimation |
-|---|---|---|---|---|---|
-| ISS-096 | filename-naming-convention FP sur conventions SvelteKit (+page) | bug | open | high | S |
-| ISS-097 | jsdoc-needs-description FP sur annotations type-only | bug | open | high | S |
-| ISS-098 | node-no-sync FP sur scripts de build et CLI | bug | open | medium | S |
+## Batch 16 — Framework-gated rules & routing conventions (formik audit)
 
-### Batch 12 — Relaxed directories & framework internals (axum audit)
+| ID | Title | Type | Status | Severity | Blocked by | Estimation |
+|---|---|---|---|---|---|---|
+| ISS-110 | shadcn-* rules fire sans shadcn/radix installé | bug | open | high | — | M |
+| ISS-111 | filename-naming-convention FP sur conventions Next.js routing | bug | open | medium | ISS-096 | S |
 
-| ID | Title | Type | Status | Severity | Estimation |
-|---|---|---|---|---|---|
-| ISS-099 | timeout-on-io FP sur framework internals et test clients | bug | open | medium | M |
-| ISS-100 | Règles trop strictes dans examples/ et benches/ | enhancement | open | medium | M |
+## Batch 17 — Binary crate & test-string awareness (starship audit)
 
-### Batch 13 — Crash fixes (date-fns & playwright)
+| ID | Title | Type | Status | Severity | Blocked by | Estimation |
+|---|---|---|---|---|---|---|
+| ISS-112 | no-duplicate-string FP dans tests Rust inline #[cfg(test)] | bug | open | high | — | S |
+| ISS-113 | rust-impl-debug-on-public-types FP sur crates binaires | bug | open | medium | — | S |
 
-| ID | Title | Type | Status | Severity | Estimation |
-|---|---|---|---|---|---|
-| ISS-091 | Crash UTF-8 byte-indexing systémique (3+ règles confirmées) | bug | open | critical | M |
-| ISS-101 | Stack overflow sur projets volumineux (playwright) | bug | open | high | M |
+## Batch 18 — Test struct awareness & Rust conventions (clap audit)
 
-### Batch 14 — Decorator/DI framework awareness (nest audit)
+| ID | Title | Type | Status | Severity | Blocked by | Estimation |
+|---|---|---|---|---|---|---|
+| ISS-114 | rust-partial-eq-without-eq FP sur structs de test | bug | open | medium | — | S |
+| ISS-115 | filename-naming-convention FP sur exemples binaires Rust | bug | open | low | — | S |
+| ISS-116 | id-length trop strict sur paramètres de closure Rust | bug | open | high | — | S |
 
-| ID | Title | Type | Status | Severity | Estimation |
-|---|---|---|---|---|---|
-| ISS-102 | ts-no-extraneous-class ne détecte pas decorators sur export class | bug | open | high | S |
-| ISS-103 | parameter-properties FP sur injection de dépendances | bug | open | high | M |
-| ISS-104 | ts-class-methods-use-this FP sur méthodes décorées | bug | open | high | M |
-| ISS-105 | no-async-without-await FP sur handlers contractuels | bug | open | medium | M |
-| ISS-106 | no-class-inheritance FP sur extension points de framework | bug | open | medium | S |
+## Batch 19 — Reactive framework awareness (solid audit)
 
-### Batch 15 — Playwright scope & test-component awareness (jotai audit)
+| ID | Title | Type | Status | Severity | Blocked by | Estimation |
+|---|---|---|---|---|---|---|
+| ISS-117 | no-side-effects-in-initialization FP sur frameworks réactifs | bug | open | high | — | M |
 
-| ID | Title | Type | Status | Severity | Estimation |
-|---|---|---|---|---|---|
-| ISS-107 | Toutes les règles playwright-* fire sur vitest/jest | bug | open | high | M |
-| ISS-108 | function-component-definition FP sur composants de test inline | bug | open | medium | S |
-| ISS-109 | Comply timeout/hang sur projets >1000 fichiers TS | bug | open | high | L |
+## Batch 20 — Config/routing default exports & env validation (create-t3-app audit)
 
-### Batch 16 — Framework-gated rules & routing conventions (formik audit)
-
-| ID | Title | Type | Status | Severity | Estimation |
-|---|---|---|---|---|---|
-| ISS-110 | shadcn-* rules fire sans shadcn/radix installé | bug | open | high | M |
-| ISS-111 | filename-naming-convention FP sur conventions Next.js routing | bug | open | medium | S |
-
-### Batch 17 — Binary crate & test-string awareness (starship audit)
-
-| ID | Title | Type | Status | Severity | Estimation |
-|---|---|---|---|---|---|
-| ISS-112 | no-duplicate-string FP dans tests Rust inline #[cfg(test)] | bug | open | high | S |
-| ISS-113 | rust-impl-debug-on-public-types FP sur crates binaires | bug | open | medium | S |
-
-### Batch 18 — Test struct awareness & Rust conventions (clap audit)
-
-| ID | Title | Type | Status | Severity | Estimation |
-|---|---|---|---|---|---|
-| ISS-114 | rust-partial-eq-without-eq FP sur structs de test | bug | open | medium | S |
-| ISS-115 | filename-naming-convention FP sur exemples binaires Rust | bug | open | low | S |
-| ISS-116 | id-length trop strict sur paramètres de closure Rust | bug | open | high | S |
+| ID | Title | Type | Status | Severity | Blocked by | Estimation |
+|---|---|---|---|---|---|---|
+| ISS-118 | no-default-export FP sur fichiers config et routing Next.js | bug | open | high | — | S |
+| ISS-119 | zod-validate-env-at-startup FP sur le fichier de validation env | bug | open | high | — | S |
