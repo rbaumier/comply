@@ -26,6 +26,14 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     let event_name = event_text.trim_matches(|c: char| c == '\'' || c == '"');
     if !SCROLL_EVENTS.contains(&event_name) { return; }
 
+    // If the callback calls preventDefault(), passive:true would break it — skip.
+    if let Some(callback) = args.named_child(1) {
+        let cb_text = callback.utf8_text(source).unwrap_or("");
+        if cb_text.contains("preventDefault") {
+            return;
+        }
+    }
+
     let has_passive = match args.named_child(2) {
         Some(opt) => {
             let t = opt.utf8_text(source).unwrap_or("");
@@ -79,5 +87,23 @@ mod tests {
     #[test]
     fn allows_click_no_passive() {
         assert!(run("btn.addEventListener('click', handler)").is_empty());
+    }
+
+    #[test]
+    fn allows_wheel_with_prevent_default() {
+        assert!(run("el.addEventListener('wheel', (e) => { e.preventDefault(); zoom(e); })").is_empty());
+    }
+
+    #[test]
+    fn allows_touchstart_with_prevent_default() {
+        assert!(run("el.addEventListener('touchstart', function(e) { e.preventDefault(); })").is_empty());
+    }
+
+    #[test]
+    fn flags_touchstart_without_prevent_default() {
+        assert_eq!(
+            run("el.addEventListener('touchstart', (e) => { doStuff(); })").len(),
+            1
+        );
     }
 }
