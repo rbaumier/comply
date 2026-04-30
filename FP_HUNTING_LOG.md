@@ -234,3 +234,43 @@ just : 19 → 1 (-18). hyperfine : 8 → 6 (-2). Les fonctions `#[test]` utilise
 ### `no-magic-numbers` / `in_test_dir` — fichiers nommés `test.ts` non détectés (date-fns)
 
 5256 → 376 (-4880, **-93%**). date-fns structure ses tests comme `src/endOfWeek/test.ts` — le fichier s'appelle `test.ts` mais n'est pas dans un dossier `/test/` ni nommé `endOfWeek.test.ts`. Le détecteur `in_test_dir` dans `file_ctx.rs` ne matchait pas ce pattern. Fix : ajouté `lower.ends_with("/test.ts")`, `/test.tsx`, `/test.js`, `/test.jsx` et les variantes sans préfixe de chemin. Cela corrige `no-magic-numbers` et toutes les autres règles qui utilisent `in_test_dir`.
+
+---
+
+## Session 6 — 2026-04-30
+
+**Projets scannés** : solid (packages/solid/src/), fd (src/), create-t3-app, actix-web (actix-web/src/), hyper (src/), serde, tokio
+
+### `typescript/no-non-null-assertion` — doublon avec `ts-no-non-null-assertion` (solid)
+
+238 → 119 (-119, **-50%**). Comply possède sa propre règle `ts-no-non-null-assertion` (dans `src/rules/ts_no_non_null_assertion/`), mais la même vérification était aussi déléguée à oxlint sous le nom `typescript/no-non-null-assertion` (dans `src/rules/delegated/ts.rs`). Résultat : chaque assertion `!` était flaggée **deux fois** — un diagnostic de comply, un d'oxlint. Fix : supprimé l'entrée `typescript/no-non-null-assertion` de `delegated/ts.rs` puisque la règle native comply est suffisante.
+
+### `id-length` — closures et paramètres `fmt` flaggés en Rust (fd, tokio, serde, actix, hyper)
+
+fd : 48 → 16 (-32, **-67%**). Impact estimé sur serde : ~200+ FP éliminés.
+
+Deux patterns idiomatiques Rust étaient flaggés :
+
+1. **Paramètres de closures** (`|e|`, `|x|`, `|c|`, `|m|`) — les closures Rust ont un scope de 1-3 lignes. Les noms single-letter y sont la norme (`vec.iter().map(|x| x + 1)`, `result.map_err(|e| e.to_string())`). Couvre les closures typées (`|a: &i32, b: &i32|`) et non-typées (`|x|`). Fix : ajouté `is_closure_param(node)` qui détecte si le parent (ou grandparent pour les closures typées) est un `closure_parameters`.
+
+2. **Paramètre `f` dans `fn fmt(&self, f: &mut Formatter)`** — c'est LA convention universelle pour implémenter `Display`, `Debug`, `Write` en Rust. Chaque impl de trait formatting utilise `f`. Fix : ajouté `is_fmt_param(node)` qui détecte un paramètre dans une fonction nommée `fmt`.
+
+Note : les ~192 `f` restant sur tokio sont des **function params** de higher-order functions (`fn map(self, f: F)`), pas des closures ni des `fmt`. C'est aussi idiomatique mais plus nuancé — non corrigé pour l'instant.
+
+### `no-abbreviated-names` — `addr` flaggé en Rust (actix-web)
+
+31 → 0 (-31, **-100%**). `addr` est une abréviation standard dans l'écosystème Rust : `std::net::SocketAddr`, `peer_addr()`, `local_addr()`, `bind_addr`. Tous les hits sur actix-web étaient des usages parfaitement idiomatiques. Fix : retiré `addr` de la liste `BANNED_ABBREVIATIONS` dans `no_abbreviated_names/rust.rs`, avec commentaire expliquant pourquoi (même traitement que `ctx`, `idx`, `err`, `fmt` déjà exemptés).
+
+### `no-hardcoded-ip` — IPs de documentation RFC 5737 flaggées (actix-web)
+
+28 → 6 (-22, **-79%**). Les IPs `192.0.2.x` (TEST-NET-1), `198.51.100.x` (TEST-NET-2), et `203.0.113.x` (TEST-NET-3) sont des plages RFC 5737 réservées **exclusivement** à la documentation et aux exemples. Elles ne correspondent jamais à de vraies machines. actix-web les utilise dans ses tests et exemples de parsing HTTP (headers `Forwarded`, `X-Forwarded-For`). Fix : ajouté `is_documentation_ip()` qui détecte les 3 ranges RFC 5737, appelé dans la boucle de détection (`no_hardcoded_ip/text.rs`).
+
+### Bilan session 6
+
+| Règle | Projet | Avant | Après | FP éliminés |
+|---|---|---|---|---|
+| `typescript/no-non-null-assertion` (doublon) | solid | 238 | 119 | -119 |
+| `id-length` (closures + fmt) | fd | 48 | 16 | -32 |
+| `no-abbreviated-names` (`addr`) | actix-web | 31 | 0 | -31 |
+| `no-hardcoded-ip` (RFC 5737) | actix-web | 28 | 6 | -22 |
+| **Total estimé** | | | | **~204+** |
