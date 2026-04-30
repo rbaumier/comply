@@ -100,3 +100,10 @@
 | ISS-096 | filename-naming-convention FP sur conventions SvelteKit (+page) | bug | open | high | — | S |
 | ISS-097 | jsdoc-needs-description FP sur annotations type-only | bug | open | high | — | S |
 | ISS-098 | node-no-sync FP sur scripts de build et CLI | bug | open | medium | — | S |
+
+## Batch 12 — Relaxed directories & framework internals (axum audit)
+
+| ID | Title | Type | Status | Severity | Blocked by | Estimation |
+|---|---|---|---|---|---|---|
+| ISS-099 | timeout-on-io FP sur framework internals et test clients | bug | open | medium | — | M |
+| ISS-100 | Règles trop strictes dans examples/ et benches/ | enhancement | open | medium | — | M |
