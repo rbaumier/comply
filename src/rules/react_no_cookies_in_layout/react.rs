@@ -9,10 +9,21 @@ use crate::diagnostic::{Diagnostic, Severity};
 
 const DYNAMIC_FNS: &[&str] = &["cookies", "headers"];
 
+/// Returns `true` if `source` contains an import from `next/headers`.
+fn has_next_headers_import(source: &[u8]) -> bool {
+    let s = std::str::from_utf8(source).unwrap_or("");
+    s.contains("from 'next/headers'") || s.contains("from \"next/headers\"")
+}
+
 crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     // Only fire on files named `layout.*`.
     let file_stem = ctx.path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
     if file_stem != "layout" {
+        return;
+    }
+
+    // Only flag when the dynamic functions come from next/headers.
+    if !has_next_headers_import(source) {
         return;
     }
 
@@ -56,25 +67,31 @@ mod tests {
 
     #[test]
     fn flags_cookies_in_layout() {
-        let src = "const c = cookies();\nexport default function Layout() { return <div />; }";
+        let src = "import { cookies } from 'next/headers';\nconst c = cookies();\nexport default function Layout() { return <div />; }";
         assert_eq!(run_with_path(src, "app/layout.tsx").len(), 1);
     }
 
     #[test]
     fn flags_headers_in_layout() {
-        let src = "const h = headers();\nexport default function Layout() { return <div />; }";
+        let src = "import { headers } from \"next/headers\";\nconst h = headers();\nexport default function Layout() { return <div />; }";
         assert_eq!(run_with_path(src, "app/layout.tsx").len(), 1);
     }
 
     #[test]
     fn allows_cookies_in_page() {
-        let src = "const c = cookies();\nexport default function Page() { return <div />; }";
+        let src = "import { cookies } from 'next/headers';\nconst c = cookies();\nexport default function Page() { return <div />; }";
         assert!(run_with_path(src, "app/page.tsx").is_empty());
     }
 
     #[test]
     fn allows_layout_without_dynamic_calls() {
         let src = "export default function Layout() { return <div />; }";
+        assert!(run_with_path(src, "app/layout.tsx").is_empty());
+    }
+
+    #[test]
+    fn allows_local_cookies_without_next_headers_import() {
+        let src = "function cookies() { return {}; }\nconst c = cookies();\nexport default function Layout() { return <div />; }";
         assert!(run_with_path(src, "app/layout.tsx").is_empty());
     }
 }
