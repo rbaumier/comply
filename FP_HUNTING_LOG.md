@@ -216,3 +216,9 @@ Corrections de faux positifs identifiés en scannant des projets réels dans ~/w
 |-------|--------|-----------|----------|-----|------------|
 | `rust-no-println-in-async` | axum | 38 | `println!` dans les tests async et les exemples est parfaitement idiomatique — les tests n'ont pas besoin de tracing, et les exemples sont volontairement simples. La règle flagguait `println!` dans `src/routing/tests/`, `src/json.rs` (doctests), et `examples/`. | Ajouté skip `in_test_dir`, `is_in_test_context()` et `/examples/`. | 0 |
 | `rust-no-println-in-async` | tokio | 75 | Même problème — majorité dans les fichiers de test du runtime tokio. | Même fix. | 0 |
+
+### Toutes les règles `playwright-*` — pas de gate sur `@playwright/test` (systémique)
+
+| Problème | Projets impactés | Hits | Fix |
+|----------|-----------------|------|-----|
+| Sur 37 règles `playwright-*`, seule 1 (`playwright-no-hooks`) avait un gate vérifiant la présence de `@playwright/test` dans le fichier source. Les 36 autres firaient sur **tous** les fichiers `.test.`/`.spec.` peu importe le framework de test utilisé. Résultat : des dizaines de FPs sur chaque projet non-Playwright — `playwright-prefer-strict-equal` flagge `.toBe()` dans des tests Jest, `playwright-max-expects` compte les `expect()` de Vitest, etc. | zustand (89 FPs), nest (783+ via expect-expect déjà fixé), et potentiellement **tous** les projets TS/JS sans Playwright | Variable par projet | Ajouté `source.windows(16).any(\|w\| w == b"@playwright/test")` dans les 36 règles manquantes. La règle ne fire plus que dans les fichiers qui importent `@playwright/test`. Tests mis à jour avec un marker `// @playwright/test` ou un import réel. |
