@@ -1,5 +1,5 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
 use std::sync::Arc;
 
@@ -13,6 +13,7 @@ use super::ui;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ViewMode {
+    All,
     ByFile,
     ByRule,
 }
@@ -46,6 +47,8 @@ pub struct App {
     pub sources: HashMap<Arc<Path>, String>,
     line_offsets: HashMap<Arc<Path>, Vec<(usize, usize)>>,
     haystacks: Vec<String>,
+    cwd: PathBuf,
+    cwd_canonical: PathBuf,
 
     pub view_mode: ViewMode,
     by_file: BTreeMap<Arc<Path>, Vec<usize>>,
@@ -67,6 +70,8 @@ pub struct App {
     pub group_summaries: HashMap<String, GroupSummary>,
     pub total_diagnostic_count: usize,
     pub filtered_diagnostic_count: usize,
+
+    pub highlight_cache: Option<(usize, Vec<Vec<(ratatui::style::Color, String)>>)>,
 }
 
 fn build_line_offsets(source: &str) -> Vec<(usize, usize)> {
@@ -182,7 +187,9 @@ impl App {
             sources,
             line_offsets,
             haystacks,
-            view_mode: ViewMode::ByFile,
+            cwd: std::env::current_dir().unwrap_or_default(),
+            cwd_canonical: std::env::current_dir().and_then(std::fs::canonicalize).unwrap_or_default(),
+            view_mode: ViewMode::All,
             by_file,
             by_rule,
             cursor: 0,
@@ -198,9 +205,30 @@ impl App {
             group_summaries: HashMap::new(),
             total_diagnostic_count: total,
             filtered_diagnostic_count: total,
+            highlight_cache: None,
         };
         app.rebuild();
         app
+    }
+
+    pub fn display_path(&self, path: &Path) -> String {
+        path.strip_prefix(&self.cwd)
+            .or_else(|_| path.strip_prefix(&self.cwd_canonical))
+            .unwrap_or(path)
+            .display()
+            .to_string()
+    }
+
+    pub fn ensure_highlights(&mut self, diag_index: usize) {
+        if self.highlight_cache.as_ref().map(|(idx, _)| *idx) == Some(diag_index) {
+            return;
+        }
+        let diag = &self.diagnostics[diag_index];
+        let path = diag.path.clone();
+        let center = diag.line;
+        let lines = self.source_lines(&path, center, 15);
+        let result = super::highlight::highlight_lines(path.as_ref(), &lines);
+        self.highlight_cache = Some((diag_index, result));
     }
 
     pub fn source_lines(&self, path: &Arc<Path>, center: usize, context: usize) -> Vec<(usize, &str)> {
@@ -222,14 +250,21 @@ impl App {
     }
 
     pub fn current_group_info(&self) -> Option<GroupPreviewInfo> {
+        if self.view_mode == ViewMode::All {
+            return None;
+        }
         let key = match self.visible_rows.get(self.cursor)? {
             Row::Group { key, .. } => key.clone(),
             _ => return None,
         };
         let summary = self.group_summaries.get(&key).map(|s| (s.total, s.errors, s.warnings));
         let indices: &[usize] = match self.view_mode {
+            ViewMode::All => unreachable!(),
             ViewMode::ByFile => {
-                self.by_file.get(Path::new(&key) as &Path).map(|v| v.as_slice()).unwrap_or(&[])
+                self.by_file.iter()
+                    .find(|(p, _)| self.display_path(p) == key)
+                    .map(|(_, v)| v.as_slice())
+                    .unwrap_or(&[])
             }
             ViewMode::ByRule => {
                 self.by_rule.get(&key).map(|v| v.as_slice()).unwrap_or(&[])
@@ -244,6 +279,7 @@ impl App {
             .map(|&i| {
                 let d = &self.diagnostics[i];
                 match self.view_mode {
+                    ViewMode::All => unreachable!(),
                     ViewMode::ByFile => format!("{}:{} [{}] {}", d.line, d.column, d.rule_id, d.message),
                     ViewMode::ByRule => format!("{}:{}:{} {}", d.path.display(), d.line, d.column, d.message),
                 }
@@ -274,11 +310,37 @@ impl App {
         let mut summaries: HashMap<String, GroupSummary> = HashMap::new();
         let mut filtered_count = 0usize;
 
+        if self.view_mode == ViewMode::All {
+            let mut indices: Vec<usize> = (0..self.diagnostics.len())
+                .filter(|i| match &self.filtered_indices {
+                    Some(set) => set.contains(i),
+                    None => true,
+                })
+                .collect();
+            indices.sort_by(|&a, &b| {
+                let da = &self.diagnostics[a];
+                let db = &self.diagnostics[b];
+                da.path.cmp(&db.path).then(da.line.cmp(&db.line)).then(da.column.cmp(&db.column))
+            });
+            filtered_count = indices.len();
+            for i in indices {
+                rows.push(Row::Diag { index: i });
+            }
+            self.visible_rows = rows;
+            self.group_summaries = summaries;
+            self.filtered_diagnostic_count = filtered_count;
+            if self.cursor >= self.visible_rows.len() {
+                self.cursor = self.visible_rows.len().saturating_sub(1);
+            }
+            return;
+        }
+
         let groups: Vec<(String, &[usize])> = match self.view_mode {
+            ViewMode::All => unreachable!(),
             ViewMode::ByFile => self
                 .by_file
                 .iter()
-                .map(|(p, v)| (p.display().to_string(), v.as_slice()))
+                .map(|(p, v)| (self.display_path(p), v.as_slice()))
                 .collect(),
             ViewMode::ByRule => self
                 .by_rule
@@ -406,15 +468,17 @@ impl App {
     fn find_parent_group(&self, diag_index: usize) -> Option<String> {
         let diag = &self.diagnostics[diag_index];
         match self.view_mode {
-            ViewMode::ByFile => Some(diag.path.display().to_string()),
+            ViewMode::All => None,
+            ViewMode::ByFile => Some(self.display_path(&diag.path)),
             ViewMode::ByRule => Some(diag.rule_id.to_string()),
         }
     }
 
     pub fn toggle_view(&mut self) {
         self.view_mode = match self.view_mode {
+            ViewMode::All => ViewMode::ByFile,
             ViewMode::ByFile => ViewMode::ByRule,
-            ViewMode::ByRule => ViewMode::ByFile,
+            ViewMode::ByRule => ViewMode::All,
         };
         self.expanded_groups.clear();
         self.cursor = 0;

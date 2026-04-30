@@ -92,6 +92,11 @@ impl Config {
         defaults::default_toml_text().to_string()
     }
 
+    #[must_use]
+    pub fn theme(&self) -> Option<&str> {
+        self.raw.theme.as_deref()
+    }
+
     /// True if `rule_id` is enabled for `file_path`. Combines:
     ///   - global `[rules.<id>] disabled = true` (kills the rule everywhere)
     ///   - per-glob `[overrides."<g>"] disable = [<id>]` (kills it for matches)
@@ -239,6 +244,9 @@ fn find_comply_toml(start: &Path) -> Option<PathBuf> {
 /// while everything they didn't touch falls back to the default.
 /// Per-path overrides replace whatever was at that glob.
 fn merge(mut base: ComplyToml, user: ComplyToml) -> ComplyToml {
+    if user.theme.is_some() {
+        base.theme = user.theme;
+    }
     for (rule_id, user_rule) in user.rules {
         let entry = base.rules.entry(rule_id).or_default();
         if let Some(d) = user_rule.disabled {

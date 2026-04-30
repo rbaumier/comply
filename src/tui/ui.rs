@@ -6,13 +6,14 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::meta_registry;
 
 use super::app::{App, InputMode, Row, ViewMode};
+use super::highlight;
 
 struct VisualBlock<'a> {
     lines: Vec<Line<'a>>,
     row_index: usize,
 }
 
-pub fn draw(frame: &mut Frame, app: &App) {
+pub fn draw(frame: &mut Frame, app: &mut App) {
     let outer = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -42,10 +43,12 @@ fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect) {
     let active = Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD);
     let inactive = Style::default().fg(Color::DarkGray);
 
-    let (file_style, file_icon, rule_style, rule_icon) = match app.view_mode {
-        ViewMode::ByFile => (active, "◉", inactive, "○"),
-        ViewMode::ByRule => (inactive, "○", active, "◉"),
+    let icon = |mode: ViewMode| -> (&str, Style) {
+        if app.view_mode == mode { ("◉", active) } else { ("○", inactive) }
     };
+    let (all_icon, all_style) = icon(ViewMode::All);
+    let (file_icon, file_style) = icon(ViewMode::ByFile);
+    let (rule_icon, rule_style) = icon(ViewMode::ByRule);
 
     let count_text = if app.search_query.is_empty() {
         format!("{} violations", app.total_diagnostic_count)
@@ -59,9 +62,11 @@ fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect) {
     let line = Line::from(vec![
         Span::styled("comply --tui", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
         Span::raw("   "),
-        Span::styled(format!("[{} By file]", file_icon), file_style),
+        Span::styled(format!("[{all_icon} All]"), all_style),
         Span::raw(" "),
-        Span::styled(format!("[{} By rule]", rule_icon), rule_style),
+        Span::styled(format!("[{file_icon} By file]"), file_style),
+        Span::raw(" "),
+        Span::styled(format!("[{rule_icon} By rule]"), rule_style),
         Span::raw("   "),
         Span::styled(count_text, Style::default().fg(Color::Gray)),
     ]);
@@ -123,7 +128,7 @@ fn draw_main_list(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(Paragraph::new(Text::from(visible)), inner);
 }
 
-fn draw_preview(frame: &mut Frame, app: &App, area: Rect) {
+fn draw_preview(frame: &mut Frame, app: &mut App, area: Rect) {
     if app.visible_rows.is_empty() {
         let border = Block::bordered()
             .title(" Preview ")
@@ -133,24 +138,34 @@ fn draw_preview(frame: &mut Frame, app: &App, area: Rect) {
     }
 
     let cursor = app.cursor.min(app.visible_rows.len().saturating_sub(1));
-    match &app.visible_rows[cursor] {
+    let row = app.visible_rows[cursor].clone();
+    match row {
         Row::Diag { index } => {
-            let diag = &app.diagnostics[*index];
-            let title = format!(" {} ", diag.path.display());
+            let diag = &app.diagnostics[index];
+            let title = format!(" {} ", app.display_path(&diag.path));
+            let path = diag.path.clone();
+            let diag_line = diag.line;
+            let sev_style = match diag.severity {
+                Severity::Error => Style::default().fg(Color::Red),
+                Severity::Warning => Style::default().fg(Color::Yellow),
+            };
+            let rule_id = diag.rule_id.clone();
+            let message = diag.message.clone();
+
             let border = Block::bordered()
                 .title(title)
                 .border_style(Style::default().fg(Color::DarkGray));
             let inner = border.inner(area);
             frame.render_widget(border, area);
 
-            let context_lines = app.source_lines(&diag.path, diag.line, 15);
+            app.ensure_highlights(index);
+            let context_lines = app.source_lines(&path, diag_line, 15);
             if context_lines.is_empty() {
                 let msg = Paragraph::new(Line::from(Span::styled(
                     "source unavailable",
                     Style::default().fg(Color::DarkGray),
                 )))
                 .alignment(Alignment::Center);
-                // Center vertically
                 let y_offset = inner.height / 2;
                 if y_offset < inner.height {
                     let centered = Rect::new(inner.x, inner.y + y_offset, inner.width, 1);
@@ -159,36 +174,33 @@ fn draw_preview(frame: &mut Frame, app: &App, area: Rect) {
                 return;
             }
 
-            let sev_style = match diag.severity {
-                Severity::Error => Style::default().fg(Color::Red),
-                Severity::Warning => Style::default().fg(Color::Yellow),
-            };
             let gutter_width = context_lines.last().map_or(1, |(ln, _)| digit_count(*ln));
             let mut lines: Vec<Line<'_>> = Vec::new();
 
-            for &(ln, src) in &context_lines {
-                let is_target = ln == diag.line;
-                let line_style = if is_target {
-                    Style::default().fg(Color::White)
-                } else {
-                    Style::default().fg(Color::Gray).add_modifier(Modifier::DIM)
-                };
+            for (i, &(ln, src)) in context_lines.iter().enumerate() {
+                let is_target = ln == diag_line;
                 let gutter_style = if is_target {
                     sev_style
                 } else {
                     Style::default().fg(Color::DarkGray)
                 };
                 let marker = if is_target { "▶" } else { "│" };
-                lines.push(Line::from(vec![
+                let mut spans = vec![
                     Span::styled(
                         format!("{:>w$} ", ln, w = gutter_width),
                         gutter_style,
                     ),
                     Span::styled(format!("{} ", marker), gutter_style),
-                    Span::styled(src, line_style),
-                ]));
+                ];
+                if let Some((_, ref hl)) = app.highlight_cache {
+                    for (color, text) in &hl[i] {
+                        let fg = if is_target { *color } else { highlight::dim_color(*color, 0.55) };
+                        spans.push(Span::styled(text.clone(), Style::default().fg(fg)));
+                    }
+                }
+                lines.push(Line::from(spans));
                 if is_target {
-                    let (padding, carets) = build_caret_line(diag, src);
+                    let (padding, carets) = build_caret_line(&app.diagnostics[index], src);
                     lines.push(Line::from(vec![
                         Span::raw(" ".repeat(gutter_width + 1)),
                         Span::styled("  ", Style::default().fg(Color::DarkGray)),
@@ -198,18 +210,17 @@ fn draw_preview(frame: &mut Frame, app: &App, area: Rect) {
                 }
             }
 
-            // Rule metadata below the source
             lines.push(Line::from(""));
             lines.push(Line::from(vec![
                 Span::styled(
-                    format!("[{}]", diag.rule_id),
+                    format!("[{}]", rule_id),
                     Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
                 ),
                 Span::raw("  "),
-                Span::styled(diag.message.as_str(), Style::default().fg(Color::White)),
+                Span::styled(message, Style::default().fg(Color::White)),
             ]));
 
-            if let Some(meta) = meta_registry::lookup(&diag.rule_id) {
+            if let Some(meta) = meta_registry::lookup(&rule_id) {
                 lines.push(Line::from(Span::styled(
                     format!("help: {}", meta.remediation),
                     Style::default().fg(Color::Green),
@@ -226,7 +237,7 @@ fn draw_preview(frame: &mut Frame, app: &App, area: Rect) {
 
             frame.render_widget(Paragraph::new(Text::from(lines)), inner);
         }
-        Row::Group { key, .. } => {
+        Row::Group { ref key, .. } => {
             let title = format!(" {} ", key);
             let border = Block::bordered()
                 .title(title)
@@ -317,6 +328,7 @@ fn build_blocks<'a>(app: &'a App, width: u16) -> Vec<VisualBlock<'a>> {
                 let summary = app.group_summaries.get(key);
                 let summary_text = match summary {
                     Some(s) => match app.view_mode {
+                        ViewMode::All => String::new(),
                         ViewMode::ByFile => format!(
                             "  {} ({} err, {} warn)",
                             s.total, s.errors, s.warnings
@@ -346,14 +358,15 @@ fn build_blocks<'a>(app: &'a App, width: u16) -> Vec<VisualBlock<'a>> {
                     Severity::Error => ("✖", Style::default().fg(Color::Red)),
                     Severity::Warning => ("⚠", Style::default().fg(Color::Yellow)),
                 };
+                let indent = if app.view_mode == ViewMode::All { "" } else { "  " };
                 let mut header_spans = vec![
-                    Span::raw("  "),
+                    Span::raw(indent),
                     Span::styled(icon, sev_style),
                     Span::raw(" "),
                 ];
-                if app.view_mode == ViewMode::ByRule {
+                if app.view_mode != ViewMode::ByFile {
                     header_spans.push(Span::styled(
-                        format!("{}:", diag.path.display()),
+                        format!("{}:", app.display_path(&diag.path)),
                         Style::default().fg(Color::Cyan),
                     ));
                 }

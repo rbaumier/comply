@@ -344,7 +344,7 @@ fn lint_project(cli: &Cli) -> Result<bool> {
                     (std::sync::Arc::from(p), content)
                 })
                 .collect();
-            tui::run(after_suppressions, sources)?;
+            tui::run(after_suppressions, sources, config.theme())?;
         } else {
             println!("comply: all clear");
         }

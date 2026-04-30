@@ -28,6 +28,8 @@ use std::collections::HashMap;
 #[serde(deny_unknown_fields)]
 pub struct ComplyToml {
     #[serde(default)]
+    pub theme: Option<String>,
+    #[serde(default)]
     pub rules: HashMap<String, RuleConfig>,
     #[serde(default)]
     pub overrides: HashMap<String, OverrideConfig>,

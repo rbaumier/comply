@@ -1,5 +1,6 @@
 mod app;
 mod event;
+mod highlight;
 mod ui;
 
 use std::collections::HashMap;
@@ -23,7 +24,10 @@ fn restore_terminal() {
     let _ = execute!(io::stdout(), LeaveAlternateScreen);
 }
 
-pub fn run(diagnostics: Vec<Diagnostic>, sources: HashMap<Arc<Path>, String>) -> Result<()> {
+pub fn run(diagnostics: Vec<Diagnostic>, sources: HashMap<Arc<Path>, String>, theme: Option<&str>) -> Result<()> {
+    if let Some(name) = theme {
+        highlight::set_theme(name);
+    }
     let mut app = App::new(diagnostics, sources);
 
     let original_hook = std::panic::take_hook();

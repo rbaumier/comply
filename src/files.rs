@@ -144,9 +144,19 @@ pub fn discover(mode: &ScanMode) -> Result<Vec<SourceFile>> {
     }
 }
 
-const ALWAYS_SKIP_DIRS: &[&str] = &["node_modules", "target", "dist", ".git"];
-
 /// Walk a directory tree and classify every file.
+const EXCLUDED_DIRS: &[&str] = &[
+    "node_modules",
+    "target",
+    "dist",
+    "build",
+    ".output",
+    "coverage",
+    "plans",
+    "documents",
+    ".git",
+];
+
 fn walk_directory(path: &Path) -> Result<Vec<SourceFile>> {
     let mut files = Vec::new();
     let walker = WalkBuilder::new(path)
@@ -154,7 +164,7 @@ fn walk_directory(path: &Path) -> Result<Vec<SourceFile>> {
         .filter_entry(|entry| {
             if entry.file_type().is_some_and(|ft| ft.is_dir()) {
                 if let Some(name) = entry.file_name().to_str() {
-                    return !ALWAYS_SKIP_DIRS.contains(&name);
+                    return !EXCLUDED_DIRS.contains(&name);
                 }
             }
             true

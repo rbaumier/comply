@@ -4,23 +4,33 @@ use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifier
 use super::app::{App, InputMode};
 
 pub fn handle_event(app: &mut App) -> Result<bool> {
-    if !event::poll(std::time::Duration::from_millis(250))? {
+    if !event::poll(std::time::Duration::from_millis(16))? {
         return Ok(false);
     }
 
-    let Event::Key(key) = event::read()? else {
-        return Ok(false);
-    };
+    loop {
+        let Event::Key(key) = event::read()? else {
+            break;
+        };
 
-    if key.kind != KeyEventKind::Press {
-        return Ok(false);
-    }
+        if key.kind != KeyEventKind::Press {
+            continue;
+        }
 
-    app.status_message = None;
+        app.status_message = None;
 
-    match app.input_mode {
-        InputMode::Normal => handle_normal_mode(app, key),
-        InputMode::Search => handle_search_mode(app, key),
+        match app.input_mode {
+            InputMode::Normal => handle_normal_mode(app, key),
+            InputMode::Search => handle_search_mode(app, key),
+        }
+
+        if app.should_quit {
+            return Ok(false);
+        }
+
+        if !event::poll(std::time::Duration::from_millis(0))? {
+            break;
+        }
     }
 
     Ok(false)

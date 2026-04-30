@@ -24,3 +24,9 @@
 |---|---|---|---|---|---|---|
 | ISS-009 | tailwind-classnames-order doublon avec prettier plugin | enhancement | done | low | — | S |
 | ISS-010 | react-jsx-no-jsx-as-prop + règles pédantiques shadcn/Radix | enhancement | done | low | — | M |
+
+## Batch 4 — Performance
+
+| ID | Title | Type | Status | Severity | Blocked by | Estimation |
+|---|---|---|---|---|---|---|
+| ISS-027 | prefilter_pass — pré-filtre par littéraux avant matching AST | feature | done | high | — | M |
