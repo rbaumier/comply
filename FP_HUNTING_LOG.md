@@ -265,6 +265,10 @@ Note : les ~192 `f` restant sur tokio sont des **function params** de higher-ord
 
 28 → 6 (-22, **-79%**). Les IPs `192.0.2.x` (TEST-NET-1), `198.51.100.x` (TEST-NET-2), et `203.0.113.x` (TEST-NET-3) sont des plages RFC 5737 réservées **exclusivement** à la documentation et aux exemples. Elles ne correspondent jamais à de vraies machines. actix-web les utilise dans ses tests et exemples de parsing HTTP (headers `Forwarded`, `X-Forwarded-For`). Fix : ajouté `is_documentation_ip()` qui détecte les 3 ranges RFC 5737, appelé dans la boucle de détection (`no_hardcoded_ip/text.rs`).
 
+### `no-duplicate-string` — strings dans les attributs Rust `#[cfg(...)]` (diesel)
+
+776 → 108 (-668, **-86%**). Les strings dans les attributs Rust (`#[cfg(feature = "postgres_backend")]`, `#[cfg_attr(...)]`, `#[serde(rename = "...")]`) sont de la métadata de compilation — elles ne **peuvent pas** être extraites dans une `const` (la syntaxe des attributs Rust n'accepte pas de références à des constantes). Diesel utilise massivement `cfg_attr` pour le support multi-backend (PostgreSQL, MySQL, SQLite). Fix : ajouté `"attribute_item" | "inner_attribute_item" => return true` dans `should_ignore_string_node` (`no_duplicate_string/mod.rs`). Le fix s'applique aussi aux projets TS via les nœuds `decorator`.
+
 ### Bilan session 6
 
 | Règle | Projet | Avant | Après | FP éliminés |
@@ -273,4 +277,5 @@ Note : les ~192 `f` restant sur tokio sont des **function params** de higher-ord
 | `id-length` (closures + fmt) | fd | 48 | 16 | -32 |
 | `no-abbreviated-names` (`addr`) | actix-web | 31 | 0 | -31 |
 | `no-hardcoded-ip` (RFC 5737) | actix-web | 28 | 6 | -22 |
-| **Total estimé** | | | | **~204+** |
+| `no-duplicate-string` (attributs Rust) | diesel | 776 | 108 | -668 |
+| **Total estimé** | | | | **~872+** |
