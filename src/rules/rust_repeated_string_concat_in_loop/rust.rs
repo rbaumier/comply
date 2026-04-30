@@ -2,14 +2,12 @@
 //!
 //! For each loop kind (`for_expression`, `while_expression`, `loop_expression`)
 //! walk the body looking for either:
-//! - a `call_expression` `<recv>.push_str(...)`, or
 //! - an `assignment_expression` whose right-hand side is a `binary_expression`
 //!   with `+` and whose left-hand side is the same identifier as the assignment
-//!   target (the `s = s + x` shape).
+//!   target (the `s = s + x` shape), or
+//! - a `compound_assignment_expr` with `+=` (the `s += x` shape).
 //!
-//! Pre-sized buffers are out of scope here — the rule fires on the
-//! pattern, not the absence of `with_capacity`. The fix is the user's
-//! responsibility once they see the warning.
+//! `push_str` in a loop is NOT flagged — it is the recommended fix.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -54,10 +52,10 @@ impl AstCheck for Check {
 fn find_concat<'a>(node: tree_sitter::Node<'a>, source: &[u8]) -> Option<tree_sitter::Node<'a>> {
     let mut stack = vec![node];
     while let Some(cur) = stack.pop() {
-        if is_push_str_call(cur, source) {
+        if is_self_concat_assign(cur, source) {
             return Some(cur);
         }
-        if is_self_concat_assign(cur, source) {
+        if is_compound_concat_assign(cur, source) {
             return Some(cur);
         }
         let mut cursor = cur.walk();
@@ -76,20 +74,15 @@ fn find_concat<'a>(node: tree_sitter::Node<'a>, source: &[u8]) -> Option<tree_si
     None
 }
 
-fn is_push_str_call(node: tree_sitter::Node, source: &[u8]) -> bool {
-    if node.kind() != "call_expression" {
+/// True if `node` is `s += …` (compound assignment with `+=`).
+fn is_compound_concat_assign(node: tree_sitter::Node, source: &[u8]) -> bool {
+    if node.kind() != "compound_assignment_expr" {
         return false;
     }
-    let Some(function) = node.child_by_field_name("function") else {
+    let Some(op) = node.child_by_field_name("operator") else {
         return false;
     };
-    if function.kind() != "field_expression" {
-        return false;
-    }
-    let Some(field) = function.child_by_field_name("field") else {
-        return false;
-    };
-    field.utf8_text(source).map(|t| t == "push_str").unwrap_or(false)
+    op.utf8_text(source).map(|t| t == "+=").unwrap_or(false)
 }
 
 /// True if `node` is `s = s + …` for the same identifier `s`.
@@ -133,8 +126,8 @@ mod tests {
     }
 
     #[test]
-    fn flags_push_str_in_for() {
-        let src = r#"fn f() { let mut s = String::new(); for x in v { s.push_str("x"); } }"#;
+    fn flags_self_concat_in_for() {
+        let src = r#"fn f() { let mut s = String::new(); for x in v { s = s + "x"; } }"#;
         assert_eq!(run_on(src).len(), 1);
     }
 
@@ -145,9 +138,21 @@ mod tests {
     }
 
     #[test]
-    fn flags_push_str_in_loop() {
-        let src = r#"fn f() { let mut s = String::new(); loop { s.push_str("x"); break; } }"#;
+    fn flags_plus_eq_in_loop() {
+        let src = r#"fn f() { let mut s = String::new(); loop { s += "x"; break; } }"#;
         assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_push_str_in_for() {
+        let src = r#"fn f() { let mut s = String::new(); for x in v { s.push_str("x"); } }"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_push_str_in_loop() {
+        let src = r#"fn f() { let mut s = String::new(); loop { s.push_str("x"); break; } }"#;
+        assert!(run_on(src).is_empty());
     }
 
     #[test]
