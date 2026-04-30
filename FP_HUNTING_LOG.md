@@ -269,6 +269,10 @@ Note : les ~192 `f` restant sur tokio sont des **function params** de higher-ord
 
 776 → 108 (-668, **-86%**). Les strings dans les attributs Rust (`#[cfg(feature = "postgres_backend")]`, `#[cfg_attr(...)]`, `#[serde(rename = "...")]`) sont de la métadata de compilation — elles ne **peuvent pas** être extraites dans une `const` (la syntaxe des attributs Rust n'accepte pas de références à des constantes). Diesel utilise massivement `cfg_attr` pour le support multi-backend (PostgreSQL, MySQL, SQLite). Fix : ajouté `"attribute_item" | "inner_attribute_item" => return true` dans `should_ignore_string_node` (`no_duplicate_string/mod.rs`). Le fix s'applique aussi aux projets TS via les nœuds `decorator`.
 
+### `no-bitwise-in-boolean` — bitmask tests flaggés en Rust et TS (crossbeam)
+
+35 → 0 (-35, **-100%**). L'expression `state & FLAG == 0` est le pattern standard pour tester un bit flag atomique. En Rust, `&` a une priorité plus haute que `==`, donc c'est `(state & FLAG) == 0` — un test de bitmask intentionnel, pas une confusion `&&`/`||`. La règle flaggait tout opérateur bitwise dans un if/while, même quand il fait partie d'une comparaison. Fix (Rust + TS) : ajouté `COMPARISON_OPS` — si l'opération bitwise est à l'intérieur d'une `binary_expression` avec `==`/`!=`/`<`/`>`/etc., c'est un bitmask test et on ne flag pas (`no_bitwise_in_boolean/rust.rs`, `no_bitwise_in_boolean/typescript.rs`).
+
 ### Bilan session 6
 
 | Règle | Projet | Avant | Après | FP éliminés |
@@ -278,4 +282,5 @@ Note : les ~192 `f` restant sur tokio sont des **function params** de higher-ord
 | `no-abbreviated-names` (`addr`) | actix-web | 31 | 0 | -31 |
 | `no-hardcoded-ip` (RFC 5737) | actix-web | 28 | 6 | -22 |
 | `no-duplicate-string` (attributs Rust) | diesel | 776 | 108 | -668 |
-| **Total estimé** | | | | **~872+** |
+| `no-bitwise-in-boolean` (bitmask tests) | crossbeam | 35 | 0 | -35 |
+| **Total estimé** | | | | **~907+** |
