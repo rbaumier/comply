@@ -273,6 +273,10 @@ Note : les ~192 `f` restant sur tokio sont des **function params** de higher-ord
 
 35 → 0 (-35, **-100%**). L'expression `state & FLAG == 0` est le pattern standard pour tester un bit flag atomique. En Rust, `&` a une priorité plus haute que `==`, donc c'est `(state & FLAG) == 0` — un test de bitmask intentionnel, pas une confusion `&&`/`||`. La règle flaggait tout opérateur bitwise dans un if/while, même quand il fait partie d'une comparaison. Fix (Rust + TS) : ajouté `COMPARISON_OPS` — si l'opération bitwise est à l'intérieur d'une `binary_expression` avec `==`/`!=`/`<`/`>`/etc., c'est un bitmask test et on ne flag pas (`no_bitwise_in_boolean/rust.rs`, `no_bitwise_in_boolean/typescript.rs`).
 
+### `symmetric-pairs` — `get_x`/`get_x_mut` pattern Rust (bevy_ecs)
+
+298 → 226 (-72, **-24%**). En Rust, le pattern idiomatique pour la mutation est `get_x()` + `get_x_mut()` (retourne `&T` / `&mut T`), pas `get_x()` + `set_x()`. La variante `_mut` EST le "setter". La règle flaggait 186 `get_*` pour l'absence de `set_*` et 81 `*_mut` pour l'absence de `set_*_mut`. Fix : (1) ne jamais flagger les fonctions `*_mut` — elles sont la variante mutable d'un getter, pas un point d'API indépendant, (2) si `get_X` et `get_X_mut` coexistent dans le même fichier, supprimer le diagnostic "missing set_X" (`symmetric_pairs/rust.rs`).
+
 ### Bilan session 6
 
 | Règle | Projet | Avant | Après | FP éliminés |
@@ -283,4 +287,5 @@ Note : les ~192 `f` restant sur tokio sont des **function params** de higher-ord
 | `no-hardcoded-ip` (RFC 5737) | actix-web | 28 | 6 | -22 |
 | `no-duplicate-string` (attributs Rust) | diesel | 776 | 108 | -668 |
 | `no-bitwise-in-boolean` (bitmask tests) | crossbeam | 35 | 0 | -35 |
-| **Total estimé** | | | | **~907+** |
+| `symmetric-pairs` (get/get_mut pattern) | bevy_ecs | 298 | 226 | -72 |
+| **Total estimé** | | | | **~979+** |
