@@ -84,6 +84,34 @@ mod tests {
     }
 
     #[test]
+    fn skips_strings_in_cfg_test_module() {
+        let src = r#"
+            #[cfg(test)]
+            mod tests {
+                fn setup() {
+                    let a = "test fixture data";
+                    let b = "test fixture data";
+                    let c = "test fixture data";
+                }
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn skips_strings_in_test_fn() {
+        let src = r#"
+            #[test]
+            fn it_works() {
+                let a = "expected value here";
+                let b = "expected value here";
+                let c = "expected value here";
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
     fn flags_raw_string_duplicated_three_times() {
         // Same raw-string body three times → correctly flagged.
         let src = r###"

@@ -40,4 +40,14 @@ mod tests {
         let src = "/// Function doc.\n///\n/// More details.\nfn f() {}";
         assert!(run(src).is_empty());
     }
+
+    #[test]
+    fn allows_rustdoc_heading_echo() {
+        let src = "/// # Panics\n/// Panics if the buffer is empty.\nfn f() {}";
+        assert!(!run(src).iter().any(|d| d.message.contains("Lexical illusion")));
+        let src = "/// # Returns\n/// Returns `None` if not found.\nfn f() {}";
+        assert!(!run(src).iter().any(|d| d.message.contains("Lexical illusion")));
+        let src = "/// # Errors\n/// Errors if the input is invalid.\nfn f() {}";
+        assert!(!run(src).iter().any(|d| d.message.contains("Lexical illusion")));
+    }
 }

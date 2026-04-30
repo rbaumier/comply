@@ -81,6 +81,7 @@ pub(super) fn collect_diagnostics(
         .threshold("no-duplicate-string", "min_occurrences");
 
     let source_bytes = ctx.source.as_bytes();
+    let is_rust = kinds.iter().any(|k| *k == "string_literal");
     let mut occurrences: HashMap<String, Vec<tree_sitter::Node>> = HashMap::new();
     for node in crate::rules::walker::collect_nodes_of_kinds(tree, kinds) {
         let Ok(raw) = node.utf8_text(source_bytes) else {
@@ -94,6 +95,9 @@ pub(super) fn collect_diagnostics(
             continue;
         }
         if should_ignore_string_node(node, source_bytes) {
+            continue;
+        }
+        if is_rust && crate::rules::rust_helpers::is_in_test_context(node, source_bytes) {
             continue;
         }
         occurrences.entry(content.to_string()).or_default().push(node);

@@ -95,6 +95,7 @@ pub(crate) fn lint_comment_nodes(
     let mut diagnostics = Vec::new();
     let mut prev_last_word: Option<(String, usize)> = None;
     let mut prev_line: Option<usize> = None;
+    let mut text_of_prev_line: Option<String> = None;
 
     for node in nodes {
         let Ok(raw) = node.utf8_text(source) else {
@@ -146,6 +147,9 @@ pub(crate) fn lint_comment_nodes(
             // word of this line. Only triggers when the previous line is
             // immediately adjacent (line_no - 1).
             let words: Vec<&str> = text.split_whitespace().collect();
+            let is_heading_echo = prev_last_word
+                .as_ref()
+                .is_some_and(|(_, wc)| *wc == 2 && text_of_prev_line.as_deref().is_some_and(|pt| pt.trim().starts_with("# ")));
             if let Some((ref prev, prev_wc)) = prev_last_word
                 && let Some(prev_l) = prev_line
                 && prev_l + 1 == line_no
@@ -154,6 +158,7 @@ pub(crate) fn lint_comment_nodes(
                 && let Some(&first) = words.first()
                 && first.chars().any(|c| c.is_alphabetic())
                 && first.to_lowercase() == *prev
+                && !is_heading_echo
             {
                 diagnostics.push(Diagnostic {
                     path: std::sync::Arc::clone(&ctx.path_arc),
@@ -172,6 +177,7 @@ pub(crate) fn lint_comment_nodes(
                 .filter(|w| w.chars().any(|c| c.is_alphabetic()))
                 .map(|w| (w.to_lowercase(), words.len()));
             prev_line = Some(line_no);
+            text_of_prev_line = Some(text.to_string());
         }
     }
     diagnostics

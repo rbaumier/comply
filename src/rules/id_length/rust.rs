@@ -10,8 +10,8 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 
 const RUST_IDIOMATIC: &[&str] = &[
-    "f", "s", "v", "e", "n", "m", "i", "j", "k", "x", "y", "z",
-    "c", "b", "r", "w", "p",
+    "a", "b", "c", "d", "e", "f", "h", "i", "j", "k", "l", "m",
+    "n", "o", "p", "r", "s", "v", "w", "x", "y", "z",
 ];
 
 #[derive(Debug)]
@@ -157,6 +157,10 @@ mod tests {
         assert!(run_on("fn main() { let s = String::new(); }").is_empty());
         assert!(run_on("fn main() { let v = Vec::new(); }").is_empty());
         assert!(run_on("fn main() { let n = 42; }").is_empty());
+        assert!(run_on("fn combine(a: &mut Value, b: &Value) {}").is_empty());
+        assert!(run_on("fn main() { let d = std::mem::discriminant(&x); }").is_empty());
+        assert!(run_on("fn main() { let h = hasher.finish(); }").is_empty());
+        assert!(run_on("fn cmp(l: &Node, r: &Node) -> bool { l > r }").is_empty());
     }
 
     #[test]
