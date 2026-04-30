@@ -227,6 +227,10 @@ just : 19 → 1 (-18). hyperfine : 8 → 6 (-2). Les fonctions `#[test]` utilise
 
 435 → 1 (-434). Le check comparait uniquement le `file_stem()` (`"index"`) de l'import résolu avec celui du fichier courant. Tous les fichiers `src/locale/*/index.ts` de date-fns qui importent `./_lib/formatDistance/index.ts` étaient flaggés parce que `Path::file_stem("_lib/formatDistance/index.ts")` retourne `"index"` — qui matche le stem du fichier importeur. Fix : ajouté un guard `!import_stem.contains('/')` — si l'import traverse un sous-dossier, il ne peut pas être un self-import (`no_self_import/typescript.rs`).
 
+### `rust-serde-deny-unknown-fields` — test structs flaggées (serde)
+
+181 → 4 (-177). Les structs `#[derive(Deserialize)]` dans `test_suite/tests/` étaient flaggées pour l'absence de `#[serde(deny_unknown_fields)]`. Les structs de test n'ont pas besoin de ce guard — ce sont des fixtures, pas des contrats d'API. Fix : ajouté `in_test_dir` guard dans `visit_node` (`rust_serde_deny_unknown_fields/rust.rs`).
+
 ### `no-magic-numbers` / `in_test_dir` — fichiers nommés `test.ts` non détectés (date-fns)
 
 5256 → 376 (-4880, **-93%**). date-fns structure ses tests comme `src/endOfWeek/test.ts` — le fichier s'appelle `test.ts` mais n'est pas dans un dossier `/test/` ni nommé `endOfWeek.test.ts`. Le détecteur `in_test_dir` dans `file_ctx.rs` ne matchait pas ce pattern. Fix : ajouté `lower.ends_with("/test.ts")`, `/test.tsx`, `/test.js`, `/test.jsx` et les variantes sans préfixe de chemin. Cela corrige `no-magic-numbers` et toutes les autres règles qui utilisent `in_test_dir`.

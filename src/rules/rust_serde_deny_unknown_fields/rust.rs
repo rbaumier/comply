@@ -30,6 +30,10 @@ impl AstCheck for Check {
         _state: Option<&mut dyn std::any::Any>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
+        if ctx.file.path_segments.in_test_dir {
+            return;
+        }
+
         let source_bytes = ctx.source.as_bytes();
         let attrs = collect_preceding_attrs(node, source_bytes);
         if !attrs.iter().any(|a| derives_deserialize(a)) {
