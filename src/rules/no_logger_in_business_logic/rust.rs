@@ -40,6 +40,23 @@ fn classify_macro(name: &str) -> Option<String> {
     Some(format!("{ns}::{level}!"))
 }
 
+/// For a bare macro name (e.g. `info`), check if the source has a matching
+/// `use tracing::<level>` or `use log::<level>` import. Returns the canonical
+/// label if found.
+fn classify_bare_macro(name: &str, source: &str) -> Option<String> {
+    if !LOG_LEVELS.contains(&name) {
+        return None;
+    }
+    for ns in LOG_NAMESPACES {
+        // Match `use tracing::info` or `use tracing::{info, debug}` etc.
+        let direct = format!("use {ns}::{name}");
+        if source.contains(&direct) {
+            return Some(format!("{ns}::{name}!"));
+        }
+    }
+    None
+}
+
 crate::ast_check! { on ["macro_invocation"] => |node, source, ctx, diagnostics|
     if !is_business_logic_path(ctx.path) {
         return;
@@ -48,7 +65,8 @@ crate::ast_check! { on ["macro_invocation"] => |node, source, ctx, diagnostics|
     let Some(macro_name_node) = node.child_by_field_name("macro") else { return };
     let Ok(name) = macro_name_node.utf8_text(source) else { return };
 
-    let Some(pattern) = classify_macro(name) else { return };
+    let Some(pattern) = classify_macro(name)
+        .or_else(|| classify_bare_macro(name, &ctx.source)) else { return };
 
     let pos = node.start_position();
     diagnostics.push(Diagnostic {
@@ -101,6 +119,29 @@ mod tests {
     #[test]
     fn allows_comments_mentioning_logger() {
         let diags = run_path("src/service/user.rs", "// log::info! was removed");
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn flags_bare_info_with_tracing_import() {
+        let src = "use tracing::info;\nfn f() { info!(\"msg\"); }";
+        let diags = run_path("src/service/user.rs", src);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("tracing::info!"));
+    }
+
+    #[test]
+    fn flags_bare_warn_with_log_import() {
+        let src = "use log::warn;\nfn f() { warn!(\"msg\"); }";
+        let diags = run_path("src/domain/order.rs", src);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("log::warn!"));
+    }
+
+    #[test]
+    fn allows_bare_info_without_import() {
+        let src = "fn f() { info!(\"msg\"); }";
+        let diags = run_path("src/service/user.rs", src);
         assert!(diags.is_empty());
     }
 }
