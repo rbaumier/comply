@@ -96,6 +96,9 @@ crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
     if !is_test_file(ctx.path) {
         return;
     }
+    if !source.windows(16).any(|w| w == b"@playwright/test") {
+        return;
+    }
     check_hook_order(node, source, ctx, diagnostics);
 }
 
@@ -104,8 +107,10 @@ mod tests {
     use super::*;
     use crate::rules::test_helpers::run_ts_with_path;
 
+    const PW_IMPORT: &str = "import { test, expect } from \"@playwright/test\";\n";
+
     fn run_ts(source: &str) -> Vec<Diagnostic> {
-        run_ts_with_path(source, &Check, "app.test.ts")
+        run_ts_with_path(&format!("{PW_IMPORT}{source}"), &Check, "app.test.ts")
     }
 
     #[test]

@@ -13,6 +13,9 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     if !is_test_file(ctx.path) {
         return;
     }
+    if !source.windows(16).any(|w| w == b"@playwright/test") {
+        return;
+    }
     let Some(callee) = node.child_by_field_name("function") else { return };
     if callee.kind() != "member_expression" {
         return;
@@ -49,12 +52,13 @@ mod tests {
     use crate::rules::backend::{AstCheck, CheckCtx};
 
     fn run(path: &str, source: &str) -> Vec<Diagnostic> {
+        let full = format!("{source}\n// @playwright/test");
         let mut parser = tree_sitter::Parser::new();
         parser
             .set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into())
             .unwrap();
-        let tree = parser.parse(source, None).unwrap();
-        Check.check(&CheckCtx::for_test(Path::new(path), source), &tree)
+        let tree = parser.parse(&full, None).unwrap();
+        Check.check(&CheckCtx::for_test(Path::new(path), &full), &tree)
     }
 
     #[test]

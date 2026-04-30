@@ -10,6 +10,9 @@ use std::collections::HashMap;
 use crate::diagnostic::{Diagnostic, Severity};
 
 crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
+    if !source.windows(16).any(|w| w == b"@playwright/test") {
+        return;
+    }
     // scope node id → list of `test.slow()` call_expression nodes inside it
     let mut by_scope: HashMap<usize, Vec<tree_sitter::Node>> = HashMap::new();
 
@@ -111,8 +114,11 @@ fn enclosing_function_scope(node: tree_sitter::Node) -> Option<tree_sitter::Node
 mod tests {
     use super::*;
 
+    const PW: &str = "import { test, expect } from \"@playwright/test\";\n";
+
     fn run_on(source: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_ts(source, &Check)
+        crate::rules::test_helpers::run_ts(&format!("{source}
+// @playwright/test"), &Check)
     }
 
     #[test]

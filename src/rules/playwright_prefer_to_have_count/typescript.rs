@@ -36,6 +36,9 @@ fn is_await_count(node: tree_sitter::Node, source: &[u8]) -> bool {
 }
 
 crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
+    if !source.windows(16).any(|w| w == b"@playwright/test") {
+        return;
+    }
     // We hook on the outer call: expect(await locator.count()).toBe(n)
     // callee must be `<expect-call>.toBe` / `.toEqual` / `.toStrictEqual`
     let Some(callee) = node.child_by_field_name("function") else { return };
@@ -85,34 +88,36 @@ mod tests {
     use super::*;
     use crate::rules::test_helpers::run_ts;
 
+    fn pw(s: &str) -> String { format!("{s}\n// @playwright/test") }
+
     #[test]
     fn flags_await_count_to_be() {
-        let d = run_ts("expect(await locator.count()).toBe(3);", &Check);
+        let d = run_ts(&pw("expect(await locator.count()).toBe(3);"), &Check);
         assert_eq!(d.len(), 1);
         assert!(d[0].message.contains("toHaveCount"));
     }
 
     #[test]
     fn flags_await_count_to_equal() {
-        let d = run_ts("expect(await page.locator('.item').count()).toEqual(5);", &Check);
+        let d = run_ts(&pw("expect(await page.locator('.item').count()).toEqual(5);"), &Check);
         assert_eq!(d.len(), 1);
     }
 
     #[test]
     fn flags_await_count_to_strict_equal() {
-        let d = run_ts("expect(await rows.count()).toStrictEqual(0);", &Check);
+        let d = run_ts(&pw("expect(await rows.count()).toStrictEqual(0);"), &Check);
         assert_eq!(d.len(), 1);
     }
 
     #[test]
     fn allows_to_have_count() {
-        let d = run_ts("await expect(locator).toHaveCount(3);", &Check);
+        let d = run_ts(&pw("await expect(locator).toHaveCount(3);"), &Check);
         assert!(d.is_empty());
     }
 
     #[test]
     fn allows_non_count_await() {
-        let d = run_ts("expect(await locator.textContent()).toBe('hello');", &Check);
+        let d = run_ts(&pw("expect(await locator.textContent()).toBe('hello');"), &Check);
         assert!(d.is_empty());
     }
 

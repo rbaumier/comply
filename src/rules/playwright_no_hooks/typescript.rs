@@ -63,6 +63,8 @@ mod tests {
     use crate::project::ProjectCtx;
     use std::path::Path;
 
+    const PW_IMPORT: &str = "import { test, expect } from \"@playwright/test\";\n";
+
     fn run_ts(source: &str) -> Vec<Diagnostic> {
         let project = ProjectCtx::for_test_with_framework("playwright");
         crate::rules::test_helpers::run_ts_with_project_and_path(
