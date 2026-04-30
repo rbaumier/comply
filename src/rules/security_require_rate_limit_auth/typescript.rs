@@ -27,6 +27,25 @@ fn looks_like_rate_limit(text: &str) -> bool {
         || lower.contains("slowdown")
 }
 
+/// Returns true when the source contains a global rate-limit middleware
+/// mounted via `.use(rateLimit(…))` or similar.
+fn has_global_rate_limit(source: &[u8]) -> bool {
+    let Ok(text) = std::str::from_utf8(source) else {
+        return false;
+    };
+    let lower = text.to_ascii_lowercase();
+    // Look for `.use(` calls that contain a rate-limit identifier.
+    for (i, _) in lower.match_indices(".use(") {
+        // Grab up to 120 chars after `.use(` to cover the call arguments.
+        let end = (i + 125).min(lower.len());
+        let window = &lower[i..end];
+        if looks_like_rate_limit(window) {
+            return true;
+        }
+    }
+    false
+}
+
 crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     let Some(name) = crate::rules::call_expression::call_function_name(node, source) else {
         return;
@@ -78,6 +97,11 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
         return;
     }
 
+    // A global `.use(rateLimit(...))` covers all routes — skip.
+    if has_global_rate_limit(source) {
+        return;
+    }
+
     diagnostics.push(Diagnostic::at_node(
         ctx.path,
         &node,
@@ -120,5 +144,22 @@ mod tests {
     #[test]
     fn ignores_non_auth_paths() {
         assert!(run("app.post('/widgets', createWidget);").is_empty());
+    }
+
+    #[test]
+    fn allows_global_rate_limit_via_app_use() {
+        let src = "app.use(rateLimit({ windowMs: 60000 }));\napp.post('/login', loginHandler);";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_global_rate_limit_via_router_use() {
+        let src = "router.use(rateLimit());\nrouter.post('/signup', signupHandler);";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_without_global_rate_limit() {
+        assert_eq!(run("app.post('/login', handler);").len(), 1);
     }
 }
