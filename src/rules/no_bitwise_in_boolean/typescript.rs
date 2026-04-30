@@ -4,6 +4,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 
 /// Bitwise binary operators that are likely typos in boolean contexts.
 const BITWISE_OPS: &[&str] = &["&", "|", "^", "~"];
+const COMPARISON_OPS: &[&str] = &["==", "!=", "===", "!==", "<", ">", "<=", ">="];
 
 /// Check whether a node is a bitwise binary or unary expression.
 fn has_bitwise_op(node: tree_sitter::Node, source: &[u8]) -> bool {
@@ -11,11 +12,13 @@ fn has_bitwise_op(node: tree_sitter::Node, source: &[u8]) -> bool {
         "binary_expression" => {
             if let Some(op) = node.child_by_field_name("operator") {
                 let op_text = op.utf8_text(source).unwrap_or("");
+                if COMPARISON_OPS.contains(&op_text) {
+                    return false;
+                }
                 if BITWISE_OPS.contains(&op_text) {
                     return true;
                 }
             }
-            // Recurse into nested expressions within the condition.
             let mut cursor = node.walk();
             for child in node.children(&mut cursor) {
                 if has_bitwise_op(child, source) {
@@ -114,5 +117,11 @@ mod tests {
     #[test]
     fn allows_bitwise_outside_condition() {
         assert!(run_on("const mask = a & b;").is_empty());
+    }
+
+    #[test]
+    fn allows_bitmask_test() {
+        assert!(run_on("if ((state & FLAG) === 0) {}").is_empty());
+        assert!(run_on("while ((mask & bits) !== 0) {}").is_empty());
     }
 }
