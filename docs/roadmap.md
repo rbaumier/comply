@@ -139,3 +139,10 @@
 |---|---|---|---|---|---|---|
 | ISS-110 | shadcn-* rules fire sans shadcn/radix installé | bug | open | high | — | M |
 | ISS-111 | filename-naming-convention FP sur conventions Next.js routing | bug | open | medium | ISS-096 | S |
+
+## Batch 17 — Binary crate & test-string awareness (starship audit)
+
+| ID | Title | Type | Status | Severity | Blocked by | Estimation |
+|---|---|---|---|---|---|---|
+| ISS-112 | no-duplicate-string FP dans tests Rust inline #[cfg(test)] | bug | open | high | — | S |
+| ISS-113 | rust-impl-debug-on-public-types FP sur crates binaires | bug | open | medium | — | S |
