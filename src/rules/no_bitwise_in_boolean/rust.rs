@@ -6,11 +6,16 @@ use crate::diagnostic::{Diagnostic, Severity};
 
 const BITWISE_OPS: &[&str] = &["&", "|", "^"];
 
+const COMPARISON_OPS: &[&str] = &["==", "!=", "<", ">", "<=", ">="];
+
 fn has_bitwise_op(node: tree_sitter::Node, source: &[u8]) -> bool {
     match node.kind() {
         "binary_expression" => {
             if let Some(op) = node.child_by_field_name("operator") {
                 let op_text = op.utf8_text(source).unwrap_or("");
+                if COMPARISON_OPS.contains(&op_text) {
+                    return false;
+                }
                 if BITWISE_OPS.contains(&op_text) {
                     return true;
                 }
@@ -69,5 +74,16 @@ mod tests {
     #[test]
     fn allows_logical_and() {
         assert!(run_on("fn f(a: bool, b: bool) { if a && b {} }").is_empty());
+    }
+
+    #[test]
+    fn allows_bitmask_test() {
+        assert!(run_on("fn f(state: u32) { if state & FLAG == 0 {} }").is_empty());
+        assert!(run_on("fn f(state: u32) { while state & MASK != 0 {} }").is_empty());
+    }
+
+    #[test]
+    fn flags_bare_bitwise_without_comparison() {
+        assert_eq!(run_on("fn f(a: bool, b: bool) { if a | b {} }").len(), 1);
     }
 }
