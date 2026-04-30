@@ -91,7 +91,9 @@ impl Language {
     /// the buffer is in scope before running the lint pass.
     pub fn from_path(path: &Path) -> Option<Self> {
         let name = path.file_name()?.to_str()?;
-        if name.ends_with(".d.ts") || name.ends_with(".d.mts") {
+        if name.ends_with(".d.ts") || name.ends_with(".d.mts")
+            || name.ends_with(".d.cts") || name.ends_with(".d.tsx")
+        {
             return None;
         }
         let ext = path.extension()?.to_str()?;
@@ -118,9 +120,10 @@ impl Language {
         } else if GRAPHQL_EXTENSIONS.contains(&ext) {
             Some(Language::GraphQl)
         } else if DOCKERFILE_EXTENSIONS.contains(&ext)
-            || path.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
-                n == "Dockerfile" || n.starts_with("Dockerfile.")
-            })
+            || path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n == "Dockerfile" || n.starts_with("Dockerfile."))
         {
             Some(Language::Dockerfile)
         } else {
@@ -233,7 +236,9 @@ fn parse_git_output(stdout: &[u8]) -> Result<Vec<SourceFile>> {
 /// Returns None for unsupported extensions (silently skipped).
 fn classify(path: &Path) -> Option<SourceFile> {
     if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-        if name.ends_with(".d.ts") || name.ends_with(".d.mts") {
+        if name.ends_with(".d.ts") || name.ends_with(".d.mts")
+            || name.ends_with(".d.cts") || name.ends_with(".d.tsx")
+        {
             return None;
         }
     }
@@ -265,9 +270,11 @@ fn classify(path: &Path) -> Option<SourceFile> {
         } else {
             return None;
         }
-    } else if path.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
-        n == "Dockerfile" || n.starts_with("Dockerfile.")
-    }) {
+    } else if path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| n == "Dockerfile" || n.starts_with("Dockerfile."))
+    {
         Language::Dockerfile
     } else {
         return None;
@@ -283,7 +290,9 @@ mod tests {
     use super::*;
 
     fn lang_for(ext: &str) -> Language {
-        classify(&PathBuf::from(format!("foo.{ext}"))).unwrap().language
+        classify(&PathBuf::from(format!("foo.{ext}")))
+            .unwrap()
+            .language
     }
 
     #[test]

@@ -8,7 +8,15 @@ use crate::diagnostic::{Diagnostic, Severity};
 crate::ast_check! { on ["class_declaration", "class"] => |node, source, ctx, diagnostics|    // Skip classes with a superclass (extends)
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {
-        if child.kind() == "class_heritage" || child.kind() == "extends_clause" {
+        if child.kind() == "class_heritage" || child.kind() == "extends_clause"
+            || child.kind() == "decorator"
+        {
+            return;
+        }
+    }
+    if let Some(parent) = node.parent() {
+        let mut pc = parent.walk();
+        if parent.named_children(&mut pc).any(|c| c.kind() == "decorator") {
             return;
         }
     }
@@ -142,12 +150,12 @@ mod tests {
     }
 
     #[test]
-    fn flags_decorated_empty_class() {
-        assert!(!run_on("@Component\nclass Foo {}").is_empty());
+    fn allows_decorated_empty_class() {
+        assert!(run_on("@Component\nclass Foo {}").is_empty());
     }
 
     #[test]
-    fn flags_exported_decorated_empty_class() {
-        assert!(!run_on("@Module({})\nexport class AppModule {}").is_empty());
+    fn allows_exported_decorated_empty_class() {
+        assert!(run_on("@Module({})\nexport class AppModule {}").is_empty());
     }
 }
