@@ -154,3 +154,9 @@
 | ISS-114 | rust-partial-eq-without-eq FP sur structs de test | bug | open | medium | — | S |
 | ISS-115 | filename-naming-convention FP sur exemples binaires Rust | bug | open | low | — | S |
 | ISS-116 | id-length trop strict sur paramètres de closure Rust | bug | open | high | — | S |
+
+## Batch 19 — Reactive framework awareness (solid audit)
+
+| ID | Title | Type | Status | Severity | Blocked by | Estimation |
+|---|---|---|---|---|---|---|
+| ISS-117 | no-side-effects-in-initialization FP sur frameworks réactifs | bug | open | high | — | M |
