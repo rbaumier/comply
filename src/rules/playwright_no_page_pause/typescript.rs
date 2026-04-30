@@ -59,13 +59,13 @@ mod tests {
     use crate::rules::backend::{AstCheck, CheckCtx};
     use std::path::Path;
 
-    fn run(source: &str) -> Vec<Diagnostic> {
+    fn run(path: &str, source: &str) -> Vec<Diagnostic> {
         let mut parser = tree_sitter::Parser::new();
         parser
             .set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into())
             .unwrap();
         let tree = parser.parse(source, None).unwrap();
-        Check.check(&CheckCtx::for_test(Path::new("test.spec.ts"), source), &tree)
+        Check.check(&CheckCtx::for_test(Path::new(path), source), &tree)
     }
 
     fn with_import(source: &str) -> String {
@@ -73,9 +73,8 @@ mod tests {
     }
 
     #[test]
-    fn flags_page_pause() {
-        let src = with_import("await page.pause();");
-        let d = run(&src);
+    fn flags_page_pause_in_test_file() {
+        let d = run("test.spec.ts", "await page.pause();");
         assert_eq!(d.len(), 1);
         assert_eq!(d[0].rule_id, "playwright-no-page-pause");
     }
@@ -83,23 +82,13 @@ mod tests {
     #[test]
     fn allows_other_pause() {
         let src = with_import("await video.pause();");
-        assert!(run(&src).is_empty());
+        assert!(run("test.spec.ts", &src).is_empty());
     }
 
     #[test]
-    fn ignores_without_playwright_import() {
-        let d = run("await page.pause();");
+    fn ignores_non_test_without_import() {
+        let d = run("src/utils.ts", "await page.pause();");
         assert!(d.is_empty());
-    }
-
-    #[test]
-    fn flags_with_playwright_import() {
-        let src = with_import(
-            r#"test("debug pause", async ({ page }) => {
-  await page.pause();
-});"#,
-        );
-        assert_eq!(run(&src).len(), 1);
     }
 
     #[test]
@@ -126,11 +115,5 @@ async function run() {
 "#;
         let d = run("tests/login.ts", src);
         assert_eq!(d.len(), 1);
-    }
-
-    #[test]
-    fn ignores_no_marker_no_import() {
-        let d = run("src/utils.ts", "await page.pause();");
-        assert!(d.is_empty());
     }
 }
