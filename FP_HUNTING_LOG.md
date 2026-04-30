@@ -203,3 +203,16 @@ Corrections de faux positifs identifiés en scannant des projets réels dans ~/w
 | Règle | Projet | Hits avant | Problème | Fix | Hits après |
 |-------|--------|-----------|----------|-----|------------|
 | `rust-no-mutex-in-single-threaded` | tokio | 83 | `is_in_test_context()` ne détecte que les `#[cfg(test)]` et `#[test]` dans le AST. Les fichiers standalone dans `tests/` (ex: `tokio/tests/stream_panic.rs`) ne sont pas dans un `#[cfg(test)]` module — ce sont des fichiers de test top-level. | Ajouté garde `ctx.file.path_segments.in_test_dir` avant le check AST. | 74 (restants = Mutex dans le code source, pas dans les tests) |
+
+### `timeout-on-io` — tests et exemples flaggés inutilement
+
+| Règle | Projet | Hits avant | Problème | Fix | Hits après |
+|-------|--------|-----------|----------|-----|------------|
+| `timeout-on-io` | axum | 268 | La majorité des hits (159+) sont dans les fichiers de test — `client.get("/").await` sur un `TestClient` matche car `client` est dans `IO_BASES` et `.get` dans `IO_METHODS`. Les tests axum utilisent un client HTTP local intégré, pas un vrai I/O réseau. Les hits restants sont dans des `#[cfg(test)]` modules inline et dans `/examples/`. Aucun vrai I/O sans timeout dans le code source framework. | Ajouté skip `in_test_dir`, `is_in_test_context()` et `/examples/`. | 0 |
+
+### `rust-no-println-in-async` — tests et exemples flaggés
+
+| Règle | Projet | Hits avant | Problème | Fix | Hits après |
+|-------|--------|-----------|----------|-----|------------|
+| `rust-no-println-in-async` | axum | 38 | `println!` dans les tests async et les exemples est parfaitement idiomatique — les tests n'ont pas besoin de tracing, et les exemples sont volontairement simples. La règle flagguait `println!` dans `src/routing/tests/`, `src/json.rs` (doctests), et `examples/`. | Ajouté skip `in_test_dir`, `is_in_test_context()` et `/examples/`. | 0 |
+| `rust-no-println-in-async` | tokio | 75 | Même problème — majorité dans les fichiers de test du runtime tokio. | Même fix. | 0 |
