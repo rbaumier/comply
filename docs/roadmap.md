@@ -180,3 +180,33 @@ ISS-004, ISS-006, ISS-027, ISS-028, ISS-032, ISS-034, ISS-035, ISS-036, ISS-038,
 | ISS-104 | ts-class-methods-use-this FP sur méthodes décorées | bug | open | high | M |
 | ISS-105 | no-async-without-await FP sur handlers contractuels | bug | open | medium | M |
 | ISS-106 | no-class-inheritance FP sur extension points de framework | bug | open | medium | S |
+
+### Batch 15 — Playwright scope & test-component awareness (jotai audit)
+
+| ID | Title | Type | Status | Severity | Estimation |
+|---|---|---|---|---|---|
+| ISS-107 | Toutes les règles playwright-* fire sur vitest/jest | bug | open | high | M |
+| ISS-108 | function-component-definition FP sur composants de test inline | bug | open | medium | S |
+| ISS-109 | Comply timeout/hang sur projets >1000 fichiers TS | bug | open | high | L |
+
+### Batch 16 — Framework-gated rules & routing conventions (formik audit)
+
+| ID | Title | Type | Status | Severity | Estimation |
+|---|---|---|---|---|---|
+| ISS-110 | shadcn-* rules fire sans shadcn/radix installé | bug | open | high | M |
+| ISS-111 | filename-naming-convention FP sur conventions Next.js routing | bug | open | medium | S |
+
+### Batch 17 — Binary crate & test-string awareness (starship audit)
+
+| ID | Title | Type | Status | Severity | Estimation |
+|---|---|---|---|---|---|
+| ISS-112 | no-duplicate-string FP dans tests Rust inline #[cfg(test)] | bug | open | high | S |
+| ISS-113 | rust-impl-debug-on-public-types FP sur crates binaires | bug | open | medium | S |
+
+### Batch 18 — Test struct awareness & Rust conventions (clap audit)
+
+| ID | Title | Type | Status | Severity | Estimation |
+|---|---|---|---|---|---|
+| ISS-114 | rust-partial-eq-without-eq FP sur structs de test | bug | open | medium | S |
+| ISS-115 | filename-naming-convention FP sur exemples binaires Rust | bug | open | low | S |
+| ISS-116 | id-length trop strict sur paramètres de closure Rust | bug | open | high | S |
