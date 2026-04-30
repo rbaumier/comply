@@ -153,7 +153,7 @@ impl WorkerState {
 #[must_use = "diagnostics from custom rules must be reported"]
 pub fn lint_files(files: &[&SourceFile], config: &Config) -> Result<Vec<Diagnostic>> {
     let project = Arc::new(ProjectCtx::load(files, config));
-    lint_files_with_project(files, config, &project)
+    lint_files_with_project(files, config, &project, None)
 }
 
 /// Same as `lint_files` but with a pre-built `ProjectCtx` so the import
@@ -163,8 +163,12 @@ pub fn lint_files_with_project(
     files: &[&SourceFile],
     config: &Config,
     project: &Arc<ProjectCtx>,
+    rule_filter: Option<&[String]>,
 ) -> Result<Vec<Diagnostic>> {
-    let rule_defs = rules::all_rule_defs();
+    let mut rule_defs = rules::all_rule_defs();
+    if let Some(filter) = rule_filter {
+        rule_defs.retain(|r| filter.iter().any(|id| id == r.meta.id));
+    }
 
     // Pre-compute dispatch tables once per language instead of per-file.
     let languages: Vec<Language> = files.iter().map(|f| f.language).collect::<std::collections::HashSet<_>>().into_iter().collect();

@@ -96,6 +96,18 @@ pub enum Command {
         #[arg(long = "json")]
         should_emit_json: bool,
     },
+    /// Run only the specified rules (comma-separated IDs).
+    ///
+    /// Example: `comply rules "id-length,exhaustive-switch"`
+    Rules {
+        /// Comma-separated rule IDs, e.g. "id-length,exhaustive-switch".
+        rule_ids: String,
+        /// Output as JSON.
+        #[arg(long = "json")]
+        should_emit_json: bool,
+        /// Path to lint (default: current directory).
+        path: Option<PathBuf>,
+    },
     /// Manage the project's `comply.toml` configuration file.
     Config {
         #[command(subcommand)]

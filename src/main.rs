@@ -86,6 +86,40 @@ fn run() -> Result<bool> {
             catalog::run(should_emit_json)?;
             Ok(false)
         }
+        Some(Command::Rules {
+            ref rule_ids,
+            should_emit_json,
+            ref path,
+        }) => {
+            let filter: Vec<String> = rule_ids
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+            if filter.is_empty() {
+                eprintln!("comply: no rule IDs provided");
+                return Ok(true);
+            }
+            let all_defs = rules::all_rule_defs();
+            let unknown: Vec<&str> = filter
+                .iter()
+                .filter(|id| !all_defs.iter().any(|r| r.meta.id == id.as_str()))
+                .map(String::as_str)
+                .collect();
+            if !unknown.is_empty() {
+                eprintln!(
+                    "comply: unknown rule(s): {}\n\
+                     Run `comply list` to see all available rule IDs.",
+                    unknown.join(", ")
+                );
+                return Ok(true);
+            }
+            lint_with_rules(
+                &filter,
+                path.clone().unwrap_or_else(|| std::path::PathBuf::from(".")),
+                should_emit_json,
+            )
+        }
         Some(Command::Config { ref action }) => {
             run_config_action(action)?;
             Ok(false)
@@ -177,6 +211,50 @@ fn print_timings(t: &Timings) {
     eprintln!("  post-filter   {}", fmt_ms(t.post));
     eprintln!("  -----");
     eprintln!("  TOTAL         {}", fmt_ms(t.total));
+}
+
+/// Lint only the rules whose IDs are in `filter`.
+///
+/// Skips external tools (oxlint, clippy, cargo-shear, cargo-modules) and
+/// runs only the in-process engine with the filtered rule set.
+fn lint_with_rules(
+    filter: &[String],
+    path: std::path::PathBuf,
+    should_emit_json: bool,
+) -> Result<bool> {
+    let mode = cli::ScanMode::All(path);
+    let discovered = files::discover(&mode)?;
+    if discovered.is_empty() {
+        if should_emit_json {
+            println!("[]");
+        } else {
+            println!("comply: no files to lint");
+        }
+        return Ok(false);
+    }
+
+    let config_anchor = discovered
+        .first()
+        .and_then(|f| f.path.parent())
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+    let config = Config::load_from(&config_anchor)?;
+
+    let all_refs: Vec<&SourceFile> = discovered.iter().collect();
+    let project = std::sync::Arc::new(crate::project::ProjectCtx::load(&all_refs, &config));
+    let diagnostics =
+        engine::lint_files_with_project(&all_refs, &config, &project, Some(filter))?;
+
+    let after_overrides = apply_config_filters(diagnostics, &config);
+    let after_suppressions = ignore_comments::apply_to_all(after_overrides, &discovered);
+    let has_violations = !after_suppressions.is_empty();
+
+    if should_emit_json {
+        report_diagnostics_json(&after_suppressions)?;
+    } else {
+        report_diagnostics(&after_suppressions);
+    }
+    Ok(has_violations)
 }
 
 /// Top-level lint orchestrator. Returns `true` if any violation was reported.
@@ -300,12 +378,12 @@ fn collect_all_diagnostics(
     }
     if !by_lang.vue.is_empty() {
         let t = Instant::now();
-        let vue_diags = engine::lint_files_with_project(&by_lang.vue, config, &project)?;
+        let vue_diags = engine::lint_files_with_project(&by_lang.vue, config, &project, None)?;
         timings.engine_vue = t.elapsed();
         diagnostics.extend(vue_diags);
     }
     if !by_lang.json.is_empty() {
-        diagnostics.extend(engine::lint_files_with_project(&by_lang.json, config, &project)?);
+        diagnostics.extend(engine::lint_files_with_project(&by_lang.json, config, &project, None)?);
     }
 
     if discovered.len() >= 2 {
@@ -413,7 +491,7 @@ fn lint_rust(
     let project2 = std::sync::Arc::clone(project);
     let engine_phase = || -> PhaseOut {
         let t = Instant::now();
-        (engine::lint_files_with_project(rs_files, config, &project2), t.elapsed())
+        (engine::lint_files_with_project(rs_files, config, &project2, None), t.elapsed())
     };
 
     // rayon::join(|| join(a, b), || join(c, d)) fans out into a
@@ -490,7 +568,7 @@ fn lint_typescript(
     };
     let engine_phase = || -> PhaseOut {
         let t = Instant::now();
-        (engine::lint_files_with_project(ts_files, config, &project2), t.elapsed())
+        (engine::lint_files_with_project(ts_files, config, &project2, None), t.elapsed())
     };
 
     let (oxlint_out, engine_out) = rayon::join(oxlint_phase, engine_phase);
