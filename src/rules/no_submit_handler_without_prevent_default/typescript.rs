@@ -7,16 +7,48 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use tree_sitter::Node;
 
-fn body_calls_prevent_default(body: Node, source: &[u8]) -> bool {
+/// Extract the first parameter name from an arrow/function expression.
+fn event_param_name<'a>(handler: Node, source: &'a [u8]) -> Option<&'a str> {
+    let params = handler.child_by_field_name("parameters")?;
+    let mut cursor = params.walk();
+    for child in params.children(&mut cursor) {
+        match child.kind() {
+            "identifier" => return child.utf8_text(source).ok(),
+            "required_parameter" | "optional_parameter" => {
+                let pat = child.child_by_field_name("pattern")?;
+                if pat.kind() == "identifier" {
+                    return pat.utf8_text(source).ok();
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn body_calls_prevent_default(body: Node, source: &[u8], param_name: &str) -> bool {
     let mut cursor = body.walk();
     let mut stack = vec![body];
     while let Some(node) = stack.pop() {
+        // Don't descend into nested functions.
+        if node != body
+            && matches!(
+                node.kind(),
+                "arrow_function" | "function_expression" | "function_declaration" | "function"
+            )
+        {
+            continue;
+        }
         if node.kind() == "call_expression"
             && let Some(func) = node.child_by_field_name("function")
             && func.kind() == "member_expression"
             && let Some(prop) = func.child_by_field_name("property")
             && let Ok(prop_text) = prop.utf8_text(source)
             && prop_text == "preventDefault"
+            && let Some(obj) = func.child_by_field_name("object")
+            && obj.kind() == "identifier"
+            && let Ok(obj_text) = obj.utf8_text(source)
+            && obj_text == param_name
         {
             return true;
         }
@@ -58,7 +90,9 @@ crate::ast_check! { on ["jsx_attribute"] prefilter = ["onSubmit"] => |node, sour
         _ => return,
     };
 
-    if body_calls_prevent_default(body, source) {
+    let Some(param_name) = event_param_name(expr, source) else { return };
+
+    if body_calls_prevent_default(body, source, param_name) {
         return;
     }
 
@@ -110,6 +144,24 @@ const x = <form onSubmit={(e) => {
   }
 }}>ok</form>;
 "#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_wrong_receiver() {
+        let src = r#"const x = <form onSubmit={(event) => { other.preventDefault(); submit(event); }}>ok</form>;"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_nested_function() {
+        let src = r#"const x = <form onSubmit={(event) => { const f = () => event.preventDefault(); submit(event); }}>ok</form>;"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_short_param_name() {
+        let src = r#"const x = <form onSubmit={(e) => { e.preventDefault(); submit(e); }}>ok</form>;"#;
         assert!(run_on(src).is_empty());
     }
 
