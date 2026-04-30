@@ -10,11 +10,18 @@ fn is_test_file(path: &std::path::Path) -> bool {
     TEST_MARKERS.iter().any(|m| s.contains(m))
 }
 
+const VITEST_IMPORTS: &[&str] = &["from 'vitest'", "from \"vitest\""];
+
+fn has_vitest_import(source: &[u8]) -> bool {
+    let src = std::str::from_utf8(source).unwrap_or("");
+    VITEST_IMPORTS.iter().any(|p| src.contains(p))
+}
+
 const DISABLED_IDENTIFIERS: &[&str] = &["xtest", "xit", "xdescribe"];
 const TEST_FNS: &[&str] = &["test", "it", "describe"];
 
 crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
-    if !is_test_file(ctx.path) {
+    if !is_test_file(ctx.path) && !has_vitest_import(source) {
         return;
     }
     let Some(callee) = node.child_by_field_name("function") else { return };
@@ -101,6 +108,27 @@ mod tests {
     #[test]
     fn ignores_non_test_file() {
         let d = run_ts_with_path("xtest('a', () => {});", &Check, "src/util.ts");
+        assert!(d.is_empty());
+    }
+
+    #[test]
+    fn flags_skip_with_vitest_import_no_marker() {
+        let d = run_ts_with_path(
+            "import { it } from 'vitest';\nit.skip('login', () => {});",
+            &Check,
+            "tests/login.ts",
+        );
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].rule_id, "vitest-no-disabled-tests");
+    }
+
+    #[test]
+    fn ignores_no_marker_no_import() {
+        let d = run_ts_with_path(
+            "it.skip('login', () => {});",
+            &Check,
+            "tests/login.ts",
+        );
         assert!(d.is_empty());
     }
 }
