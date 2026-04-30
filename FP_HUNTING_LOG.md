@@ -210,3 +210,23 @@ axum : 38 hits → 0. tokio : 75 hits → 0. `println!` dans les tests async et 
 ### `no-duplicate-string` — strings dans `#[cfg(test)]` et `#[test]` non skippées (starship)
 
 895 hits → ~7. Le backend Rust skippait les fichiers dans `/tests/` (`in_test_dir`), mais pas les strings à l'intérieur des modules `#[cfg(test)]` inline dans `src/`. Starship utilise des modules de test inline dans chaque fichier source. 886 des 895 hits étaient dans des fonctions `#[test]` — les strings (`"AWS_REGION"` × 16, `"AWS_PROFILE"` × 26, `"c++ --version"` × 6) sont des fixtures de test. Fix : ajouté `is_in_test_context(node, source)` dans la boucle de `collect_diagnostics` (mod.rs) pour les fichiers Rust. Réutilise le helper existant `rust_helpers::is_in_test_context` qui détecte `#[cfg(test)]`, `#[test]` et `#![cfg(test)]`. Ceci corrige aussi la limitation documentée depuis la session 1 sur ripgrep.
+
+---
+
+## Session 5 — 2026-04-30 (just, hyperfine, date-fns)
+
+### `no-confidential-logging` — macros custom `error!` dans du code test (just)
+
+24 → 0. Le backend Rust matche les noms de macros shorthand (`error`, `warn`, `info`, etc.) sans vérifier le crate d'origine. Dans `just`, `error!` est une macro de test custom (syntaxe struct-like `error! { name: ..., input: ..., kind: ... }`) — pas du logging. Tous les 24 hits étaient dans des modules `#[cfg(test)]` (lexer.rs, parser.rs). Fix : ajouté `is_in_test_context` en early return dans le backend Rust (`no_confidential_logging/rust.rs`).
+
+### `no-and-in-function-name` — fonctions de test avec `_and_` dans le nom (just, hyperfine)
+
+just : 19 → 1 (-18). hyperfine : 8 → 6 (-2). Les fonctions `#[test]` utilisent des noms descriptifs comme `takes_both_preparation_and_conclusion_command_into_account_for_computing_number_of_runs` — c'est une convention de nommage des tests, pas une violation CQS. Le backend TS skip aussi les fichiers `in_test_dir`. Fix Rust : ajouté `has_test_attribute(node)` + `is_in_test_context(node)` en early return (`no_and_in_function_name/rust.rs`). Fix TS : ajouté `in_test_dir` guard (`no_and_in_function_name/typescript.rs`).
+
+### `no-self-import` — bug de comparaison de chemin sur les fichiers `index.ts` (date-fns)
+
+435 → 1 (-434). Le check comparait uniquement le `file_stem()` (`"index"`) de l'import résolu avec celui du fichier courant. Tous les fichiers `src/locale/*/index.ts` de date-fns qui importent `./_lib/formatDistance/index.ts` étaient flaggés parce que `Path::file_stem("_lib/formatDistance/index.ts")` retourne `"index"` — qui matche le stem du fichier importeur. Fix : ajouté un guard `!import_stem.contains('/')` — si l'import traverse un sous-dossier, il ne peut pas être un self-import (`no_self_import/typescript.rs`).
+
+### `no-magic-numbers` / `in_test_dir` — fichiers nommés `test.ts` non détectés (date-fns)
+
+5256 → 376 (-4880, **-93%**). date-fns structure ses tests comme `src/endOfWeek/test.ts` — le fichier s'appelle `test.ts` mais n'est pas dans un dossier `/test/` ni nommé `endOfWeek.test.ts`. Le détecteur `in_test_dir` dans `file_ctx.rs` ne matchait pas ce pattern. Fix : ajouté `lower.ends_with("/test.ts")`, `/test.tsx`, `/test.js`, `/test.jsx` et les variantes sans préfixe de chemin. Cela corrige `no-magic-numbers` et toutes les autres règles qui utilisent `in_test_dir`.
