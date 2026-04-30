@@ -74,3 +74,12 @@
 | ISS-085 | rust-unused-dep ne gère pas les deps feature-gated | bug | open | high | — | M |
 | ISS-086 | rust-no-as-numeric-cast trop strict pour data-processing | bug | open | high | — | M |
 | ISS-087 | rust-pub-enum-without-non-exhaustive sur enums workspace-internal | bug | open | low | — | S |
+
+## Batch 9 — Test-file awareness & crash fixes (swr + zod audit)
+
+| ID | Title | Type | Status | Severity | Blocked by | Estimation |
+|---|---|---|---|---|---|---|
+| ISS-088 | assertions-in-tests / playwright-expect-expect FP sur testing-library | bug | open | high | — | M |
+| ISS-089 | no-test-return-statement FP sur return dans fonctions imbriquées | bug | open | high | — | S |
+| ISS-090 | Règles UI/a11y/tailwind ne devraient pas fire sur JSX de test | bug | open | high | — | M |
+| ISS-091 | Crash UTF-8 byte-indexing systémique (2+ règles touchées) | bug | open | critical | — | M |
