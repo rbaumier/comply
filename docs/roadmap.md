@@ -24,3 +24,22 @@
 |---|---|---|---|---|---|---|
 | ISS-009 | tailwind-classnames-order doublon avec prettier plugin | enhancement | done | low | — | S |
 | ISS-010 | react-jsx-no-jsx-as-prop + règles pédantiques shadcn/Radix | enhancement | done | low | — | M |
+
+## Batch 4 — Rust cross-fire & scope fixes (tokio audit)
+
+| ID | Title | Type | Status | Severity | Blocked by | Estimation |
+|---|---|---|---|---|---|---|
+| ISS-063 | ts-no-magic-numbers fire sur fichiers Rust | bug | open | high | — | S |
+| ISS-064 | ts-no-loop-func fire sur closures Rust | bug | open | high | — | S |
+| ISS-065 | no-history-in-comments FP sur "was"/"previously" descriptif | bug | open | high | — | M |
+| ISS-066 | comment-prose-quality sur code examples dans doc comments | bug | open | high | — | M |
+| ISS-067 | inverted-assertion-arguments FP sur Rust assert_eq! | bug | open | medium | — | S |
+| ISS-068 | boolean-naming FP sur noms idiomatiques Rust | enhancement | open | medium | — | S |
+| ISS-069 | rust-no-mutex-in-single-threaded heuristique trop simpliste | bug | open | medium | — | M |
+
+## Batch 5 — Nouvelles règles Rust
+
+| ID | Title | Type | Status | Severity | Blocked by | Estimation |
+|---|---|---|---|---|---|---|
+| ISS-070 | rust-no-allow-without-reason : #[allow] sans justification | feature | open | medium | — | M |
+| ISS-071 | rust-prefer-arc-clone : Arc::clone(&x) vs x.clone() | feature | open | low | — | M |
