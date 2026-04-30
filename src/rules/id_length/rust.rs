@@ -9,11 +9,6 @@ use regex::Regex;
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 
-const RUST_IDIOMATIC: &[&str] = &[
-    "a", "b", "c", "d", "e", "f", "h", "i", "j", "k", "l", "m",
-    "n", "o", "p", "r", "s", "v", "w", "x", "y", "z",
-];
-
 #[derive(Debug)]
 pub struct Check;
 
@@ -43,10 +38,13 @@ impl AstCheck for Check {
         if name.chars().count() >= min {
             return;
         }
-        if exceptions.iter().any(|e| e == name) || RUST_IDIOMATIC.contains(&name) {
+        if exceptions.iter().any(|e| e == name) {
             return;
         }
         if patterns.iter().any(|p| p.is_match(name)) {
+            return;
+        }
+        if is_sort_pair_param(node, source_bytes) {
             return;
         }
         let pos = node.start_position();
@@ -81,12 +79,10 @@ fn is_rust_binding_name(node: tree_sitter::Node) -> bool {
 
     match parent_kind {
         "let_declaration" => field_matches(parent, "pattern", node),
-        "parameter" => {
-            if !field_matches(parent, "pattern", node) {
-                return false;
-            }
-            !is_in_closure_or_tight_scope(parent)
-        }
+        "parameter" => field_matches(parent, "pattern", node),
+        "closure_parameters" => true,
+        "for_expression" => field_matches(parent, "pattern", node),
+        "if_let_expression" | "match_arm" => false,
         "function_item" | "const_item" | "static_item" | "struct_item" | "enum_item"
         | "trait_item" | "type_item" | "union_item" | "enum_variant" => {
             field_matches(parent, "name", node)
@@ -96,18 +92,37 @@ fn is_rust_binding_name(node: tree_sitter::Node) -> bool {
     }
 }
 
-fn is_in_closure_or_tight_scope(node: tree_sitter::Node) -> bool {
-    let mut cur = node.parent();
-    while let Some(ancestor) = cur {
-        match ancestor.kind() {
-            "closure_expression" => return true,
-            "for_expression" | "if_let_expression" | "match_expression" => return true,
-            "function_item" | "impl_item" => return false,
-            _ => {}
-        }
-        cur = ancestor.parent();
+/// Allow `a` and `b` only when they are in a function/closure with exactly
+/// 2 parameters both named `a` and `b` (sort/compare pattern).
+fn is_sort_pair_param(node: tree_sitter::Node, source: &[u8]) -> bool {
+    let Some(parent) = node.parent() else {
+        return false;
+    };
+    if parent.kind() != "parameter" {
+        return false;
     }
-    false
+    let Ok(name) = node.utf8_text(source) else {
+        return false;
+    };
+    if name != "a" && name != "b" {
+        return false;
+    }
+    let Some(func) = parent.parent() else {
+        return false;
+    };
+    if func.kind() != "parameters" && func.kind() != "closure_parameters" {
+        return false;
+    }
+    let param_names: Vec<&str> = (0..func.named_child_count())
+        .filter_map(|i| {
+            let child = func.named_child(i)?;
+            if child.kind() != "parameter" {
+                return None;
+            }
+            child.child_by_field_name("pattern")?.utf8_text(source).ok()
+        })
+        .collect();
+    param_names.len() == 2 && param_names.contains(&"a") && param_names.contains(&"b")
 }
 
 fn field_matches(parent: tree_sitter::Node, field: &str, node: tree_sitter::Node) -> bool {
@@ -141,26 +156,54 @@ mod tests {
     #[test]
     fn flags_short_function_parameter() {
         let diags = run_on("fn g(q: u32) -> u32 { q }");
-        // `g` (function name) + `q` (parameter)
         assert_eq!(diags.len(), 2);
     }
 
     #[test]
     fn flags_short_struct_field() {
         let diags = run_on("struct S { q: u32 }");
-        assert_eq!(diags.len(), 2, "S and q both non-idiomatic and < 2 chars");
+        assert_eq!(diags.len(), 2);
     }
 
     #[test]
-    fn allows_idiomatic_rust_names() {
-        assert!(run_on("fn fmt(&self, f: &mut std::fmt::Formatter) {}").is_empty());
-        assert!(run_on("fn main() { let s = String::new(); }").is_empty());
-        assert!(run_on("fn main() { let v = Vec::new(); }").is_empty());
-        assert!(run_on("fn main() { let n = 42; }").is_empty());
-        assert!(run_on("fn combine(a: &mut Value, b: &Value) {}").is_empty());
-        assert!(run_on("fn main() { let d = std::mem::discriminant(&x); }").is_empty());
-        assert!(run_on("fn main() { let h = hasher.finish(); }").is_empty());
-        assert!(run_on("fn cmp(l: &Node, r: &Node) -> bool { l > r }").is_empty());
+    fn flags_single_letter_names() {
+        assert!(!run_on("fn main() { let f = File::open(\"x\"); }").is_empty());
+        assert!(!run_on("fn main() { let s = String::new(); }").is_empty());
+        assert!(!run_on("fn main() { let v = Vec::new(); }").is_empty());
+        assert!(!run_on("fn main() { let n = 42; }").is_empty());
+    }
+
+    #[test]
+    fn flags_closure_params() {
+        assert!(!run_on("fn main() { vec![1].iter().map(|x| x + 1); }").is_empty());
+    }
+
+    #[test]
+    fn flags_for_loop_var() {
+        assert!(!run_on("fn main() { for i in 0..10 { println!(\"{}\", i); } }").is_empty());
+    }
+
+    #[test]
+    fn allows_sort_pair_ab() {
+        assert!(run_on("fn cmp(a: &i32, b: &i32) -> bool { a > b }").is_empty());
+    }
+
+    #[test]
+    fn allows_closure_sort_pair_ab() {
+        assert!(run_on("fn main() { vec![1].sort_by(|a: &i32, b: &i32| a.cmp(b)); }").is_empty());
+    }
+
+    #[test]
+    fn flags_a_alone() {
+        let diags = run_on("fn process(a: i32) -> i32 { a }");
+        assert!(diags.iter().any(|d| d.message.contains("`a`")));
+    }
+
+    #[test]
+    fn flags_ab_with_third_param() {
+        let diags = run_on("fn process(a: i32, b: i32, c: i32) -> i32 { a + b + c }");
+        assert!(diags.iter().any(|d| d.message.contains("`a`")));
+        assert!(diags.iter().any(|d| d.message.contains("`b`")));
     }
 
     #[test]
@@ -170,8 +213,6 @@ mod tests {
 
     #[test]
     fn does_not_flag_usage_only_references() {
-        // `foo(x)` where `x` is declared elsewhere should not re-flag
-        // the reference.
         assert!(run_on("fn main() { foo(x); }").is_empty());
     }
 
@@ -180,16 +221,6 @@ mod tests {
         let diags = run_on("const N: u32 = 1;");
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("`N`"));
-    }
-
-    #[test]
-    fn allows_closure_params() {
-        assert!(run_on("fn main() { vec![1].iter().map(|x| x + 1); }").is_empty());
-    }
-
-    #[test]
-    fn allows_for_loop_var() {
-        assert!(run_on("fn main() { for i in 0..10 { println!(\"{}\", i); } }").is_empty());
     }
 
     #[test]

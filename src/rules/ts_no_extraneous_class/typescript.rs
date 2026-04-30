@@ -12,24 +12,6 @@ crate::ast_check! { on ["class_declaration", "class"] => |node, source, ctx, dia
             return;
         }
     }
-    // Skip decorated classes — decorators can be children of the class node
-    // itself, or of the parent `export_statement` when the class is exported.
-    let mut dc = node.walk();
-    for child in node.children(&mut dc) {
-        if child.kind() == "decorator" {
-            return;
-        }
-    }
-    if let Some(parent) = node.parent() {
-        if parent.kind() == "export_statement" {
-            let mut pc = parent.walk();
-            for child in parent.children(&mut pc) {
-                if child.kind() == "decorator" {
-                    return;
-                }
-            }
-        }
-    }
     let Some(body) = node.child_by_field_name("body") else {
         return;
     };
@@ -160,12 +142,12 @@ mod tests {
     }
 
     #[test]
-    fn allows_decorated_class() {
-        assert!(run_on("@Component\nclass Foo {}").is_empty());
+    fn flags_decorated_empty_class() {
+        assert!(!run_on("@Component\nclass Foo {}").is_empty());
     }
 
     #[test]
-    fn allows_exported_decorated_class() {
-        assert!(run_on("@Module({})\nexport class AppModule {}").is_empty());
+    fn flags_exported_decorated_empty_class() {
+        assert!(!run_on("@Module({})\nexport class AppModule {}").is_empty());
     }
 }
