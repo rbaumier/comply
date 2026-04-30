@@ -33,8 +33,11 @@ pub fn register() -> RuleDef {
 }
 
 /// True if the SQL string contains a bare `UNION` (not `UNION ALL`) and the
-/// query mentions an `id` column — a proxy for a primary key making the
-/// dedup unnecessary.
+/// query selects an `id` column from the **same** table on both sides — a
+/// proxy for a primary key making the dedup unnecessary.
+///
+/// When the two sides select from **different** tables the `id` values can
+/// overlap, so `UNION ALL` would change the result.
 pub(super) fn sql_violates_union_all(sql: &str) -> bool {
     let upper = sql.to_ascii_uppercase();
     let Some(pos) = upper.find("UNION") else {
@@ -44,8 +47,32 @@ pub(super) fn sql_violates_union_all(sql: &str) -> bool {
     if after.trim_start().starts_with("ALL") {
         return false;
     }
-    upper.contains("SELECT ID")
+    let has_id = upper.contains("SELECT ID")
         || upper.contains(" ID,")
         || upper.contains(" ID ")
-        || upper.contains(".ID")
+        || upper.contains(".ID");
+    if !has_id {
+        return false;
+    }
+    // Only flag when both sides of the UNION select from the same table.
+    let left = &upper[..pos];
+    let right = &upper[pos + "UNION".len()..];
+    let left_table = extract_from_table(left);
+    let right_table = extract_from_table(right);
+    match (left_table, right_table) {
+        (Some(l), Some(r)) => l == r,
+        // Cannot determine tables — don't flag to avoid false positives.
+        _ => false,
+    }
+}
+
+/// Extract the first table name after `FROM` in an SQL fragment.
+fn extract_from_table(sql: &str) -> Option<&str> {
+    let from_pos = sql.find("FROM")?;
+    let after_from = sql[from_pos + "FROM".len()..].trim_start();
+    // Take the next whitespace-delimited token as the table name.
+    let table = after_from.split_whitespace().next()?;
+    // Strip trailing punctuation (parens, commas, semicolons, quotes).
+    let table = table.trim_end_matches(|c: char| c == ',' || c == ')' || c == ';' || c == '"' || c == '\'' || c == '`');
+    if table.is_empty() { None } else { Some(table) }
 }

@@ -48,9 +48,15 @@ mod tests {
     }
 
     #[test]
-    fn flags_union_with_ids() {
-        let src = r#"const q = "SELECT id, name FROM a UNION SELECT id, name FROM b";"#;
+    fn flags_union_same_table_with_ids() {
+        let src = r#"const q = "SELECT id, name FROM users UNION SELECT id, name FROM users";"#;
         assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_union_different_tables_with_ids() {
+        let src = r#"const q = "SELECT id FROM archived_users UNION SELECT id FROM active_users";"#;
+        assert!(run(src).is_empty());
     }
 
     #[test]
