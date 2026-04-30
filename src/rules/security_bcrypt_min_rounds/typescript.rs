@@ -30,13 +30,14 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     let Some(cost_node) = positional.get(1) else {
         return;
     };
-    if cost_node.kind() != "number" {
-        return;
-    }
-    let Ok(text) = cost_node.utf8_text(source) else {
-        return;
-    };
-    let Ok(value) = text.parse::<i64>() else {
+    let value: i64 = if cost_node.kind() == "number" {
+        let Ok(text) = cost_node.utf8_text(source) else { return };
+        let Ok(v) = text.parse::<i64>() else { return };
+        v
+    } else if cost_node.kind() == "identifier" {
+        let Some(v) = resolve_const_number(*cost_node, source) else { return };
+        v
+    } else {
         return;
     };
     if value >= 12 {
@@ -52,6 +53,46 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
         ),
         Severity::Error,
     ));
+}
+
+/// Walk up to the program root, then search for `const <ident> = <number>`.
+/// Returns `Some(value)` only when the identifier resolves to a numeric literal
+/// in a const declaration. Returns `None` for anything else (let, dynamic, etc.).
+fn resolve_const_number(ident: tree_sitter::Node, source: &[u8]) -> Option<i64> {
+    let ident_text = ident.utf8_text(source).ok()?;
+    // Walk up to root.
+    let mut root = ident;
+    while let Some(p) = root.parent() {
+        root = p;
+    }
+    find_const_number(root, source, ident_text)
+}
+
+fn find_const_number(node: tree_sitter::Node, source: &[u8], name: &str) -> Option<i64> {
+    if node.kind() == "lexical_declaration" {
+        let text = node.utf8_text(source).unwrap_or("");
+        if !text.starts_with("const") {
+            return None;
+        }
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if child.kind() == "variable_declarator" {
+                let Some(name_node) = child.child_by_field_name("name") else { continue };
+                let Some(value_node) = child.child_by_field_name("value") else { continue };
+                if name_node.utf8_text(source).ok()? == name && value_node.kind() == "number" {
+                    return value_node.utf8_text(source).ok()?.parse::<i64>().ok();
+                }
+            }
+        }
+        return None;
+    }
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if let Some(v) = find_const_number(child, source, name) {
+            return Some(v);
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -85,5 +126,20 @@ mod tests {
     #[test]
     fn ignores_unrelated_calls() {
         assert!(run("crypto.hash(pw, 8);").is_empty());
+    }
+
+    #[test]
+    fn flags_low_rounds_via_const() {
+        assert_eq!(run("const SALT_ROUNDS = 8;\nbcrypt.hash(pw, SALT_ROUNDS);").len(), 1);
+    }
+
+    #[test]
+    fn allows_sufficient_rounds_via_const() {
+        assert!(run("const SALT_ROUNDS = 12;\nbcrypt.hash(pw, SALT_ROUNDS);").is_empty());
+    }
+
+    #[test]
+    fn ignores_dynamic_identifier() {
+        assert!(run("bcrypt.hash(pw, rounds);").is_empty());
     }
 }
