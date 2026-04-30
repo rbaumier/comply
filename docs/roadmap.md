@@ -107,3 +107,20 @@
 |---|---|---|---|---|---|---|
 | ISS-099 | timeout-on-io FP sur framework internals et test clients | bug | open | medium | — | M |
 | ISS-100 | Règles trop strictes dans examples/ et benches/ | enhancement | open | medium | — | M |
+
+## Batch 13 — Crash fixes (date-fns & playwright)
+
+| ID | Title | Type | Status | Severity | Blocked by | Estimation |
+|---|---|---|---|---|---|---|
+| ISS-091 | Crash UTF-8 byte-indexing systémique (3+ règles confirmées) | bug | open | critical | — | M |
+| ISS-101 | Stack overflow sur projets volumineux (playwright) | bug | open | high | — | M |
+
+## Batch 14 — Decorator/DI framework awareness (nest audit)
+
+| ID | Title | Type | Status | Severity | Blocked by | Estimation |
+|---|---|---|---|---|---|---|
+| ISS-102 | ts-no-extraneous-class ne détecte pas decorators sur export class | bug | open | high | — | S |
+| ISS-103 | parameter-properties FP sur injection de dépendances | bug | open | high | — | M |
+| ISS-104 | ts-class-methods-use-this FP sur méthodes décorées | bug | open | high | — | M |
+| ISS-105 | no-async-without-await FP sur handlers contractuels | bug | open | medium | — | M |
+| ISS-106 | no-class-inheritance FP sur extension points de framework | bug | open | medium | — | S |
