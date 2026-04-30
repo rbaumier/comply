@@ -177,3 +177,29 @@ Corrections de faux positifs identifiés en scannant des projets réels dans ~/w
 | Règle | Problème | Fix |
 |-------|----------|-----|
 | `no-empty-test-file` | Les fichiers de test utilisant `assert.equal()`, `assert.ok()` (Node.js built-in test runner) n'étaient pas reconnus comme contenant du contenu de test. Seuls `test(`, `it(`, `describe(`, `expect(` étaient dans `TEST_MARKERS`. | Ajouté `assert(` et `assert.` à `TEST_MARKERS`. |
+
+## Session 3 — 2026-04-30 (nest, tokio)
+
+### `playwright-expect-expect` — pas de gate sur Playwright
+
+| Règle | Projet | Hits avant | Problème | Fix | Hits après |
+|-------|--------|-----------|----------|-----|------------|
+| `playwright-expect-expect` | nest | 783 | La règle fire sur **tous** les fichiers `.test.`/`.spec.` sans vérifier que le projet utilise Playwright. NestJS utilise Jest + supertest — les tests ont des assertions (`supertest.expect(200)`, `assert()`) que la règle ne reconnaît pas car elle ne cherche que `expect()`. Résultat : bruit pur sur 783 tests non-Playwright. La règle `assertions-in-tests` (plus smart, reconnaît plus de patterns) couvre déjà ce besoin. | Ajouté gate `source.contains("@playwright/test")` : la règle ne fire plus que dans les fichiers qui importent effectivement Playwright. Les fichiers Jest/Mocha/Vitest sont couverts par `assertions-in-tests`. | 0 |
+
+### `no-extraneous-class` (oxlint) — doublon non désactivé
+
+| Règle | Projet | Hits avant | Problème | Fix | Hits après |
+|-------|--------|-----------|----------|-----|------------|
+| `no-extraneous-class` | nest | 622 | Même problème que `explicit-function-return-type` / `ts-explicit-function-return-type` : la version oxlint-déléguée `no-extraneous-class` coexiste avec la version comply `ts-no-extraneous-class`. La version oxlint n'a pas le skip des décorateurs, des superclasses, etc. | Ajouté `[rules.no-extraneous-class] disabled = true` dans `defaults.toml`. | 0 |
+
+### `ts-no-extraneous-class` — décorateurs sur `export class` non détectés
+
+| Règle | Projet | Hits avant | Problème | Fix | Hits après |
+|-------|--------|-----------|----------|-----|------------|
+| `ts-no-extraneous-class` | nest | 402 | Les classes NestJS décorées et exportées (`@Module({...}) export class AppModule {}`) étaient flagguées. En tree-sitter TypeScript, le nœud `decorator` est un enfant de `export_statement`, pas de `class_declaration`. La règle ne cherchait les décorateurs que parmi les enfants directs du nœud classe. | Ajouté check du parent : si le parent est un `export_statement`, on cherche aussi les décorateurs parmi ses enfants. | 207 (restants = classes réellement vides sans décorateur, warning légitime) |
+
+### `rust-no-mutex-in-single-threaded` — fichiers `tests/` standalone non exemptés
+
+| Règle | Projet | Hits avant | Problème | Fix | Hits après |
+|-------|--------|-----------|----------|-----|------------|
+| `rust-no-mutex-in-single-threaded` | tokio | 83 | `is_in_test_context()` ne détecte que les `#[cfg(test)]` et `#[test]` dans le AST. Les fichiers standalone dans `tests/` (ex: `tokio/tests/stream_panic.rs`) ne sont pas dans un `#[cfg(test)]` module — ce sont des fichiers de test top-level. | Ajouté garde `ctx.file.path_segments.in_test_dir` avant le check AST. | 74 (restants = Mutex dans le code source, pas dans les tests) |
