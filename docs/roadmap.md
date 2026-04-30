@@ -54,3 +54,13 @@
 | ISS-075 | unused-component-prop FP sur fichiers type-test | bug | open | medium | — | S |
 | ISS-076 | no-property-mutation trop strict dans les tests | bug | open | medium | — | M |
 | ISS-077 | consistent-function-scoping FP dans callbacks de test | enhancement | open | low | — | S |
+
+## Batch 7 — Library & monorepo awareness (redux-toolkit audit)
+
+| ID | Title | Type | Status | Severity | Blocked by | Estimation |
+|---|---|---|---|---|---|---|
+| ISS-078 | dead-export/unused-file FP sur API publique de bibliothèque | bug | open | high | — | L |
+| ISS-079 | no-implicit-deps ne résout pas les workspace deps (monorepo) | bug | open | high | — | M |
+| ISS-080 | filename-naming-convention impose kebab-case sur composants React | bug | open | medium | — | S |
+| ISS-081 | exports-last FP sur inline export const/function | bug | open | medium | — | S |
+| ISS-082 | file-extension-in-import FP quand bundler détecté | bug | open | medium | — | M |
