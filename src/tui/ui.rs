@@ -252,7 +252,7 @@ fn draw_preview(frame: &mut Frame, app: &mut App, area: Rect) {
                     spans.push(Span::styled(src, Style::default().fg(fg)));
                 }
                 lines.push(Line::from(spans));
-                if is_target {
+                if is_target && app.diagnostics[index].span.is_some() {
                     let (padding, carets) = build_caret_line(&app.diagnostics[index], src);
                     lines.push(Line::from(vec![
                         Span::raw(" ".repeat(gutter_width + 1)),
@@ -438,10 +438,7 @@ fn build_caret_line(diag: &Diagnostic, source_line: &str) -> (String, String) {
 
     let span_end_byte = match diag.span {
         Some((_, byte_len)) => byte_len.min(suffix.len()),
-        None => {
-            let first_char_len = suffix.chars().next().map_or(1, |c| c.len_utf8());
-            first_char_len
-        }
+        None => suffix.len(),
     };
     let boundary = floor_char_boundary(suffix, span_end_byte.max(1));
     if boundary == 0 {
