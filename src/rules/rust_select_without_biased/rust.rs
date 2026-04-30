@@ -36,6 +36,16 @@ impl AstCheck for Check {
         if last_segment != "select" {
             return;
         }
+        // Only flag tokio::select! — not futures::select!, crossbeam::select!, etc.
+        let is_tokio = if macro_name.contains("::") {
+            macro_name.starts_with("tokio::")
+        } else {
+            // Bare `select!` — only flag if file imports from tokio
+            ctx.source.contains("use tokio::")
+        };
+        if !is_tokio {
+            return;
+        }
         let Ok(text) = node.utf8_text(source) else {
             return;
         };
@@ -106,8 +116,17 @@ mod tests {
     }
 
     #[test]
-    fn flags_unprefixed_select_without_biased() {
+    fn no_flag_unprefixed_select_without_tokio_import() {
         let src = r#"async fn f() { select! { _ = a => {}, _ = b => {} } }"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_unprefixed_select_with_tokio_import() {
+        let src = r#"
+use tokio::select;
+async fn f() { select! { _ = a => {}, _ = b => {} } }
+"#;
         assert_eq!(run_on(src).len(), 1);
     }
 
@@ -120,6 +139,18 @@ mod tests {
     #[test]
     fn allows_select_with_biased_no_qualifier() {
         let src = r#"async fn f() { select! { biased; _ = a => {} } }"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_flag_futures_select() {
+        let src = r#"async fn f() { futures::select! { a => {}, b => {} } }"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_flag_crossbeam_select() {
+        let src = r#"fn f() { crossbeam::select! { recv(r) -> msg => {} } }"#;
         assert!(run_on(src).is_empty());
     }
 }
