@@ -132,3 +132,10 @@
 | ISS-107 | Toutes les règles playwright-* fire sur vitest/jest | bug | open | high | — | M |
 | ISS-108 | function-component-definition FP sur composants de test inline | bug | open | medium | — | S |
 | ISS-109 | Comply timeout/hang sur projets >1000 fichiers TS | bug | open | high | ISS-101 | L |
+
+## Batch 16 — Framework-gated rules & routing conventions (formik audit)
+
+| ID | Title | Type | Status | Severity | Blocked by | Estimation |
+|---|---|---|---|---|---|---|
+| ISS-110 | shadcn-* rules fire sans shadcn/radix installé | bug | open | high | — | M |
+| ISS-111 | filename-naming-convention FP sur conventions Next.js routing | bug | open | medium | ISS-096 | S |
