@@ -124,3 +124,11 @@
 | ISS-104 | ts-class-methods-use-this FP sur méthodes décorées | bug | open | high | — | M |
 | ISS-105 | no-async-without-await FP sur handlers contractuels | bug | open | medium | — | M |
 | ISS-106 | no-class-inheritance FP sur extension points de framework | bug | open | medium | — | S |
+
+## Batch 15 — Playwright scope & test-component awareness (jotai audit)
+
+| ID | Title | Type | Status | Severity | Blocked by | Estimation |
+|---|---|---|---|---|---|---|
+| ISS-107 | Toutes les règles playwright-* fire sur vitest/jest | bug | open | high | — | M |
+| ISS-108 | function-component-definition FP sur composants de test inline | bug | open | medium | — | S |
+| ISS-109 | Comply timeout/hang sur projets >1000 fichiers TS | bug | open | high | ISS-101 | L |
