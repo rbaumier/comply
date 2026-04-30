@@ -160,3 +160,10 @@
 | ID | Title | Type | Status | Severity | Blocked by | Estimation |
 |---|---|---|---|---|---|---|
 | ISS-117 | no-side-effects-in-initialization FP sur frameworks réactifs | bug | open | high | — | M |
+
+## Batch 20 — Config/routing default exports & env validation (create-t3-app audit)
+
+| ID | Title | Type | Status | Severity | Blocked by | Estimation |
+|---|---|---|---|---|---|---|
+| ISS-118 | no-default-export FP sur fichiers config et routing Next.js | bug | open | high | — | S |
+| ISS-119 | zod-validate-env-at-startup FP sur le fichier de validation env | bug | open | high | — | S |
