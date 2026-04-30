@@ -11,8 +11,26 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
         let prop_text = prop.utf8_text(source).unwrap_or("");
         let obj_text = obj.utf8_text(source).unwrap_or("");
 
-        // Array.from(...)
+        // Array.from(...) — only when a single iterable arg (no mapFn) and not an object literal
         if obj_text == "Array" && prop_text == "from" {
+            let Some(args) = node.child_by_field_name("arguments") else { return };
+            let mut cursor = args.walk();
+            let arg_nodes: Vec<_> = args
+                .children(&mut cursor)
+                .filter(|c| c.is_named())
+                .collect();
+
+            // Skip Array.from with a mapFn (2+ args) — not equivalent to spread
+            if arg_nodes.len() >= 2 {
+                return;
+            }
+            // Skip Array.from({ ... }) — object literal, not spreadable
+            if let Some(first) = arg_nodes.first() {
+                if first.kind() == "object" {
+                    return;
+                }
+            }
+
             let pos = node.start_position();
             diagnostics.push(Diagnostic {
                 path: std::sync::Arc::clone(&ctx.path_arc),
@@ -26,8 +44,8 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
             return;
         }
 
-        // .concat(...)
-        if prop_text == "concat" {
+        // .concat(...) — only when receiver is an array literal
+        if prop_text == "concat" && obj.kind() == "array" {
             let pos = node.start_position();
             diagnostics.push(Diagnostic {
                 path: std::sync::Arc::clone(&ctx.path_arc),
@@ -85,10 +103,43 @@ mod tests {
     }
 
     #[test]
-    fn flags_concat() {
-        let d = run_on("const combined = arr.concat(other);");
+    fn flags_concat_array_literal() {
+        let d = run_on("const combined = [1,2].concat([3,4]);");
         assert_eq!(d.len(), 1);
         assert!(d[0].message.contains("concat"));
+    }
+
+    #[test]
+    fn allows_concat_identifier() {
+        // Receiver could be a string or custom API — don't report
+        assert!(run_on("const combined = arr.concat(other);").is_empty());
+    }
+
+    #[test]
+    fn allows_concat_string_literal() {
+        assert!(run_on(r#"const s = "hello".concat(name);"#).is_empty());
+    }
+
+    #[test]
+    fn allows_concat_custom_api() {
+        assert!(run_on("observable.concat(other);").is_empty());
+    }
+
+    #[test]
+    fn allows_array_from_with_map_fn() {
+        assert!(run_on("Array.from({ length: 3 }, (_, i) => i);").is_empty());
+    }
+
+    #[test]
+    fn allows_array_from_object_literal() {
+        assert!(run_on("Array.from({ length: 3 });").is_empty());
+    }
+
+    #[test]
+    fn flags_array_from_iterable() {
+        let d = run_on("const arr = Array.from([1,2,3]);");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("Array.from"));
     }
 
     #[test]
