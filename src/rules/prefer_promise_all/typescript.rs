@@ -2,9 +2,55 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 
 struct AwaitStmt {
-    binding: String,
+    /// Individual identifiers introduced by this declaration.
+    bindings: Vec<String>,
     row: usize,
     col: usize,
+}
+
+/// Extract individual identifier names from a binding pattern node.
+/// Handles simple identifiers, object patterns (`{ id, name }`,
+/// `{ id: userId }`), and array patterns (`[first, second]`).
+fn extract_bindings(node: tree_sitter::Node, source: &[u8]) -> Vec<String> {
+    match node.kind() {
+        "object_pattern" => {
+            let mut out = Vec::new();
+            let count = node.named_child_count();
+            for i in 0..count {
+                let child = node.named_child(i).unwrap();
+                match child.kind() {
+                    "shorthand_property_identifier_pattern"
+                    | "shorthand_property_identifier" => {
+                        if let Ok(t) = child.utf8_text(source) {
+                            out.push(t.to_owned());
+                        }
+                    }
+                    "pair_pattern" => {
+                        // `{ id: userId }` — the bound name is the value side
+                        if let Some(val) = child.child_by_field_name("value") {
+                            out.extend(extract_bindings(val, source));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            out
+        }
+        "array_pattern" => {
+            let mut out = Vec::new();
+            let count = node.named_child_count();
+            for i in 0..count {
+                let child = node.named_child(i).unwrap();
+                out.extend(extract_bindings(child, source));
+            }
+            out
+        }
+        _ => {
+            // Simple identifier or other node — use its text as-is.
+            let text = node.utf8_text(source).unwrap_or("").to_owned();
+            if text.is_empty() { vec![] } else { vec![text] }
+        }
+    }
 }
 
 /// Check if `word` appears in `text` as a standalone identifier (word boundary on both sides).
@@ -96,15 +142,17 @@ impl AstCheck for Check {
                 flush_run(&mut run, diagnostics, ctx.path);
                 continue;
             }
-            let binding = name_node.utf8_text(source).unwrap_or("").to_owned();
+            let bindings = extract_bindings(name_node, source);
             let call_text = val_node.utf8_text(source).unwrap_or("").to_owned();
             let pos = child.start_position();
-            let dependent = run.iter().any(|s| contains_word(&call_text, &s.binding));
+            let dependent = run.iter().any(|s| {
+                s.bindings.iter().any(|b| contains_word(&call_text, b))
+            });
             if dependent {
                 flush_run(&mut run, diagnostics, ctx.path);
             }
             run.push(AwaitStmt {
-                binding,
+                bindings,
                 row: pos.row,
                 col: pos.column,
             });
@@ -155,6 +203,50 @@ async function f() {
 }
 "#;
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_dependent_destructured_object() {
+        let src = r#"
+async function load() {
+  const { id } = await getUser();
+  const posts = await getPosts(id);
+}
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_dependent_renamed_destructuring() {
+        let src = r#"
+async function load() {
+  const { id: userId } = await getUser();
+  const posts = await getPosts(userId);
+}
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_dependent_array_destructuring() {
+        let src = r#"
+async function load() {
+  const [first] = await getItems();
+  const details = await getDetails(first);
+}
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_independent_destructured_awaits() {
+        let src = r#"
+async function load() {
+  const { id } = await getUser();
+  const { count } = await getStats();
+}
+"#;
+        assert_eq!(run(src).len(), 2);
     }
 
     #[test]
