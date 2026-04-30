@@ -13,7 +13,7 @@ struct VisualBlock<'a> {
 }
 
 pub fn draw(frame: &mut Frame, app: &App) {
-    let chunks = Layout::default()
+    let outer = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(1),
@@ -22,9 +22,20 @@ pub fn draw(frame: &mut Frame, app: &App) {
         ])
         .split(frame.area());
 
-    draw_status_bar(frame, app, chunks[0]);
-    draw_main_list(frame, app, chunks[1]);
-    draw_help_bar(frame, app, chunks[2]);
+    draw_status_bar(frame, app, outer[0]);
+
+    let panels = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage(40),
+            Constraint::Percentage(60),
+        ])
+        .split(outer[1]);
+
+    draw_main_list(frame, app, panels[0]);
+    draw_preview(frame, app, panels[1]);
+
+    draw_help_bar(frame, app, outer[2]);
 }
 
 fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect) {
@@ -59,7 +70,13 @@ fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_main_list(frame: &mut Frame, app: &App, area: Rect) {
-    let blocks = build_blocks(app, area.width);
+    let border = Block::bordered()
+        .title(" Violations ")
+        .border_style(Style::default().fg(Color::DarkGray));
+    let inner = border.inner(area);
+    frame.render_widget(border, area);
+
+    let blocks = build_blocks(app, inner.width);
     if blocks.is_empty() {
         let msg = if app.search_query.is_empty() {
             "no diagnostics".to_string()
@@ -71,52 +88,190 @@ fn draw_main_list(frame: &mut Frame, app: &App, area: Rect) {
                 msg,
                 Style::default().fg(Color::DarkGray),
             ))),
-            area,
+            inner,
         );
         return;
     }
 
-    let mut row_first_line: Vec<usize> = Vec::with_capacity(blocks.len());
-    let mut row_line_count: Vec<usize> = Vec::with_capacity(blocks.len());
-    let mut all_lines: Vec<(Line<'_>, usize)> = Vec::new();
-    for block in &blocks {
-        row_first_line.push(all_lines.len());
-        row_line_count.push(block.lines.len());
-        for line in &block.lines {
-            all_lines.push((line.clone(), block.row_index));
-        }
-    }
-
-    let height = area.height as usize;
+    let height = inner.height as usize;
     let cursor = app.cursor.min(blocks.len().saturating_sub(1));
-    let cursor_first = row_first_line[cursor];
-    let cursor_last = cursor_first + row_line_count[cursor].saturating_sub(1);
 
     let mut offset = 0usize;
-    if cursor_last >= height {
-        offset = cursor_last + 1 - height;
+    if cursor >= height {
+        offset = cursor + 1 - height;
     }
-    if cursor_first < offset {
-        offset = cursor_first;
+    if cursor < offset {
+        offset = cursor;
     }
 
-    let visible: Vec<Line<'_>> = all_lines
+    let visible: Vec<Line<'_>> = blocks
         .iter()
-        .enumerate()
         .skip(offset)
         .take(height)
-        .map(|(_, (line, row_idx))| {
-            if *row_idx == cursor {
-                let mut styled = line.clone();
+        .map(|block| {
+            let line = block.lines[0].clone();
+            if block.row_index == cursor {
+                let mut styled = line;
                 styled.style = styled.style.bg(Color::DarkGray);
                 styled
             } else {
-                line.clone()
+                line
             }
         })
         .collect();
 
-    frame.render_widget(Paragraph::new(Text::from(visible)), area);
+    frame.render_widget(Paragraph::new(Text::from(visible)), inner);
+}
+
+fn draw_preview(frame: &mut Frame, app: &App, area: Rect) {
+    if app.visible_rows.is_empty() {
+        let border = Block::bordered()
+            .title(" Preview ")
+            .border_style(Style::default().fg(Color::DarkGray));
+        frame.render_widget(border, area);
+        return;
+    }
+
+    let cursor = app.cursor.min(app.visible_rows.len().saturating_sub(1));
+    match &app.visible_rows[cursor] {
+        Row::Diag { index } => {
+            let diag = &app.diagnostics[*index];
+            let title = format!(" {} ", diag.path.display());
+            let border = Block::bordered()
+                .title(title)
+                .border_style(Style::default().fg(Color::DarkGray));
+            let inner = border.inner(area);
+            frame.render_widget(border, area);
+
+            let context_lines = app.source_lines(&diag.path, diag.line, 15);
+            if context_lines.is_empty() {
+                let msg = Paragraph::new(Line::from(Span::styled(
+                    "source unavailable",
+                    Style::default().fg(Color::DarkGray),
+                )))
+                .alignment(Alignment::Center);
+                // Center vertically
+                let y_offset = inner.height / 2;
+                if y_offset < inner.height {
+                    let centered = Rect::new(inner.x, inner.y + y_offset, inner.width, 1);
+                    frame.render_widget(msg, centered);
+                }
+                return;
+            }
+
+            let sev_style = match diag.severity {
+                Severity::Error => Style::default().fg(Color::Red),
+                Severity::Warning => Style::default().fg(Color::Yellow),
+            };
+            let gutter_width = context_lines.last().map_or(1, |(ln, _)| digit_count(*ln));
+            let mut lines: Vec<Line<'_>> = Vec::new();
+
+            for &(ln, src) in &context_lines {
+                let is_target = ln == diag.line;
+                let line_style = if is_target {
+                    Style::default().fg(Color::White)
+                } else {
+                    Style::default().fg(Color::Gray).add_modifier(Modifier::DIM)
+                };
+                let gutter_style = if is_target {
+                    sev_style
+                } else {
+                    Style::default().fg(Color::DarkGray)
+                };
+                let marker = if is_target { "▶" } else { "│" };
+                lines.push(Line::from(vec![
+                    Span::styled(
+                        format!("{:>w$} ", ln, w = gutter_width),
+                        gutter_style,
+                    ),
+                    Span::styled(format!("{} ", marker), gutter_style),
+                    Span::styled(src, line_style),
+                ]));
+                if is_target {
+                    let (padding, carets) = build_caret_line(diag, src);
+                    lines.push(Line::from(vec![
+                        Span::raw(" ".repeat(gutter_width + 1)),
+                        Span::styled("  ", Style::default().fg(Color::DarkGray)),
+                        Span::raw(padding),
+                        Span::styled(carets, sev_style),
+                    ]));
+                }
+            }
+
+            // Rule metadata below the source
+            lines.push(Line::from(""));
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!("[{}]", diag.rule_id),
+                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                ),
+                Span::raw("  "),
+                Span::styled(diag.message.as_str(), Style::default().fg(Color::White)),
+            ]));
+
+            if let Some(meta) = meta_registry::lookup(&diag.rule_id) {
+                lines.push(Line::from(Span::styled(
+                    format!("help: {}", meta.remediation),
+                    Style::default().fg(Color::Green),
+                )));
+                if let Some(url) = meta.doc_url {
+                    lines.push(Line::from(Span::styled(
+                        format!("url: {}", url),
+                        Style::default()
+                            .fg(Color::Blue)
+                            .add_modifier(Modifier::UNDERLINED),
+                    )));
+                }
+            }
+
+            frame.render_widget(Paragraph::new(Text::from(lines)), inner);
+        }
+        Row::Group { key, .. } => {
+            let title = format!(" {} ", key);
+            let border = Block::bordered()
+                .title(title)
+                .border_style(Style::default().fg(Color::DarkGray));
+            let inner = border.inner(area);
+            frame.render_widget(border, area);
+
+            let mut lines: Vec<Line<'_>> = Vec::new();
+
+            if let Some(info) = app.current_group_info() {
+                if let Some((total, errors, warnings)) = info.summary {
+                    lines.push(Line::from(vec![
+                        Span::styled(
+                            format!("{} violations", total),
+                            Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                        ),
+                        Span::raw("  "),
+                        Span::styled(format!("{} errors", errors), Style::default().fg(Color::Red)),
+                        Span::raw("  "),
+                        Span::styled(
+                            format!("{} warnings", warnings),
+                            Style::default().fg(Color::Yellow),
+                        ),
+                    ]));
+                }
+                lines.push(Line::from(""));
+
+                let max_items = inner.height.saturating_sub(3) as usize;
+                for child in info.children.iter().take(max_items) {
+                    lines.push(Line::from(Span::styled(
+                        format!("  {}", child),
+                        Style::default().fg(Color::Gray),
+                    )));
+                }
+                if info.children.len() > max_items {
+                    lines.push(Line::from(Span::styled(
+                        format!("  ... and {} more", info.children.len() - max_items),
+                        Style::default().fg(Color::DarkGray),
+                    )));
+                }
+            }
+
+            frame.render_widget(Paragraph::new(Text::from(lines)), inner);
+        }
+    }
 }
 
 fn truncate_line(line: Line<'_>, max_width: u16) -> Line<'_> {
@@ -185,10 +340,7 @@ fn build_blocks<'a>(app: &'a App, width: u16) -> Vec<VisualBlock<'a>> {
                     row_index,
                 });
             }
-            Row::Diag {
-                index,
-                detail_expanded,
-            } => {
+            Row::Diag { index } => {
                 let diag = &app.diagnostics[*index];
                 let (icon, sev_style) = match diag.severity {
                     Severity::Error => ("✖", Style::default().fg(Color::Red)),
@@ -211,7 +363,7 @@ fn build_blocks<'a>(app: &'a App, width: u16) -> Vec<VisualBlock<'a>> {
                         Style::default().fg(Color::DarkGray),
                     ),
                     Span::raw("  "),
-                    Span::styled(diag.message.clone(), Style::default().fg(Color::White)),
+                    Span::styled(diag.message.as_str(), Style::default().fg(Color::White)),
                     Span::raw("  "),
                     Span::styled(
                         format!("[{}]", diag.rule_id),
@@ -220,81 +372,16 @@ fn build_blocks<'a>(app: &'a App, width: u16) -> Vec<VisualBlock<'a>> {
                 ]);
                 let header = Line::from(header_spans);
 
-                let mut lines = vec![truncate_line(header, width)];
-
-                if *detail_expanded {
-                    let context_lines = app.source_lines(&diag.path, diag.line, 5);
-                    if context_lines.is_empty() {
-                        lines.push(Line::from(vec![
-                            Span::raw("    "),
-                            Span::styled(
-                                "<source unavailable>",
-                                Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM),
-                            ),
-                        ]));
-                    } else {
-                        let gutter_width = context_lines.last().map_or(1, |(ln, _)| digit_count(*ln));
-                        for &(ln, src) in &context_lines {
-                            let is_target = ln == diag.line;
-                            let line_style = if is_target {
-                                Style::default().fg(Color::White)
-                            } else {
-                                Style::default().fg(Color::Gray).add_modifier(Modifier::DIM)
-                            };
-                            let gutter_style = if is_target { sev_style } else { Style::default().fg(Color::DarkGray) };
-                            let marker = if is_target { "▶" } else { "│" };
-                            lines.push(Line::from(vec![
-                                Span::raw("    "),
-                                Span::styled(
-                                    format!("{:>w$} ", ln, w = gutter_width),
-                                    gutter_style,
-                                ),
-                                Span::styled(format!("{} ", marker), gutter_style),
-                                Span::styled(src.to_string(), line_style),
-                            ]));
-                            if is_target {
-                                let (padding, carets) = build_caret_line(diag, src);
-                                lines.push(Line::from(vec![
-                                    Span::raw("    "),
-                                    Span::raw(" ".repeat(gutter_width + 1)),
-                                    Span::styled("  ", Style::default().fg(Color::DarkGray)),
-                                    Span::raw(padding),
-                                    Span::styled(carets, sev_style),
-                                ]));
-                            }
-                        }
-                    }
-
-                    if let Some(meta) = meta_registry::lookup(&diag.rule_id) {
-                        lines.push(Line::from(vec![
-                            Span::raw("    "),
-                            Span::styled(
-                                format!("help: {}", meta.remediation),
-                                Style::default().fg(Color::Green),
-                            ),
-                        ]));
-                        if let Some(url) = meta.doc_url {
-                            lines.push(Line::from(vec![
-                                Span::raw("    "),
-                                Span::styled(
-                                    format!("url: {}", url),
-                                    Style::default()
-                                        .fg(Color::Blue)
-                                        .add_modifier(Modifier::UNDERLINED),
-                                ),
-                            ]));
-                        }
-                    }
-                }
-
-                blocks.push(VisualBlock { lines, row_index });
+                blocks.push(VisualBlock {
+                    lines: vec![truncate_line(header, width)],
+                    row_index,
+                });
             }
         }
     }
 
     blocks
 }
-
 
 fn build_caret_line(diag: &Diagnostic, source_line: &str) -> (String, String) {
     let byte_col = diag.column.saturating_sub(1).min(source_line.len());
@@ -344,11 +431,11 @@ fn draw_help_bar(frame: &mut Frame, app: &App, area: Rect) {
     let line = if app.input_mode == InputMode::Search {
         Line::from(vec![
             Span::styled("/ ", Style::default().fg(Color::Cyan)),
-            Span::raw(app.search_query.clone()),
+            Span::raw(app.search_query.as_str()),
             Span::styled("█", Style::default().fg(Color::Cyan)),
         ])
     } else if let Some(msg) = &app.status_message {
-        Line::from(Span::styled(msg.clone(), Style::default().fg(Color::Yellow)))
+        Line::from(Span::styled(msg.as_str(), Style::default().fg(Color::Yellow)))
     } else {
         Line::from(Span::styled(
             "↑↓ navigate  →← fold  Enter open  / search  Tab view  q quit",

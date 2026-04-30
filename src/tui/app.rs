@@ -26,7 +26,7 @@ pub enum InputMode {
 #[derive(Debug, Clone)]
 pub enum Row {
     Group { key: String, expanded: bool },
-    Diag { index: usize, detail_expanded: bool },
+    Diag { index: usize },
 }
 
 pub struct GroupSummary {
@@ -34,6 +34,11 @@ pub struct GroupSummary {
     pub errors: usize,
     pub warnings: usize,
     pub file_count: usize,
+}
+
+pub struct GroupPreviewInfo {
+    pub summary: Option<(usize, usize, usize)>, // (total, errors, warnings)
+    pub children: Vec<String>,
 }
 
 pub struct App {
@@ -48,7 +53,6 @@ pub struct App {
 
     pub cursor: usize,
     expanded_groups: HashSet<String>,
-    expanded_diags: HashSet<usize>,
 
     pub input_mode: InputMode,
     pub search_query: String,
@@ -183,7 +187,6 @@ impl App {
             by_rule,
             cursor: 0,
             expanded_groups: HashSet::new(),
-            expanded_diags: HashSet::new(),
             input_mode: InputMode::Normal,
             search_query: String::new(),
             filtered_indices: None,
@@ -209,14 +212,44 @@ impl App {
             Some(o) => o,
             None => return Vec::new(),
         };
-        let start = center.saturating_sub(context);
+        let start = center.saturating_sub(context).max(1);
         let end = (center + context).min(offsets.len());
         (start..=end)
             .filter_map(|ln| {
-                let line_1based = ln.max(1);
-                get_line(source, offsets, line_1based).map(|s| (line_1based, s))
+                get_line(source, offsets, ln).map(|s| (ln, s))
             })
             .collect()
+    }
+
+    pub fn current_group_info(&self) -> Option<GroupPreviewInfo> {
+        let key = match self.visible_rows.get(self.cursor)? {
+            Row::Group { key, .. } => key.clone(),
+            _ => return None,
+        };
+        let summary = self.group_summaries.get(&key).map(|s| (s.total, s.errors, s.warnings));
+        let indices: &[usize] = match self.view_mode {
+            ViewMode::ByFile => {
+                self.by_file.get(Path::new(&key) as &Path).map(|v| v.as_slice()).unwrap_or(&[])
+            }
+            ViewMode::ByRule => {
+                self.by_rule.get(&key).map(|v| v.as_slice()).unwrap_or(&[])
+            }
+        };
+        let children: Vec<String> = indices
+            .iter()
+            .filter(|i| match &self.filtered_indices {
+                Some(set) => set.contains(i),
+                None => true,
+            })
+            .map(|&i| {
+                let d = &self.diagnostics[i];
+                match self.view_mode {
+                    ViewMode::ByFile => format!("{}:{} [{}] {}", d.line, d.column, d.rule_id, d.message),
+                    ViewMode::ByRule => format!("{}:{}:{} {}", d.path.display(), d.line, d.column, d.message),
+                }
+            })
+            .collect();
+        Some(GroupPreviewInfo { summary, children })
     }
 
     pub fn run<B: Backend>(&mut self, terminal: &mut Terminal<B>) -> Result<()> {
@@ -296,10 +329,7 @@ impl App {
             });
             if expanded {
                 for idx in kept {
-                    rows.push(Row::Diag {
-                        index: idx,
-                        detail_expanded: self.expanded_diags.contains(&idx),
-                    });
+                    rows.push(Row::Diag { index: idx });
                 }
             }
         }
@@ -336,21 +366,10 @@ impl App {
         if self.cursor >= self.visible_rows.len() {
             return;
         }
-        match self.visible_rows[self.cursor].clone() {
-            Row::Group { key, expanded } => {
-                if !expanded {
-                    self.expanded_groups.insert(key);
-                    self.rebuild();
-                }
-            }
-            Row::Diag {
-                index,
-                detail_expanded,
-            } => {
-                if !detail_expanded {
-                    self.expanded_diags.insert(index);
-                    self.rebuild();
-                }
+        if let Row::Group { ref key, expanded } = self.visible_rows[self.cursor] {
+            if !expanded {
+                self.expanded_groups.insert(key.clone());
+                self.rebuild();
             }
         }
     }
@@ -360,26 +379,18 @@ impl App {
             return;
         }
         match self.visible_rows[self.cursor].clone() {
-            Row::Diag {
-                index,
-                detail_expanded,
-            } => {
-                if detail_expanded {
-                    self.expanded_diags.remove(&index);
+            Row::Diag { index } => {
+                let parent_key = self.find_parent_group(index);
+                if let Some(key) = parent_key {
+                    self.expanded_groups.remove(&key);
                     self.rebuild();
-                } else {
-                    let parent_key = self.find_parent_group(index);
-                    if let Some(key) = parent_key {
-                        self.expanded_groups.remove(&key);
-                        self.rebuild();
-                        if let Some(pos) =
-                            self.visible_rows.iter().position(|r| match r {
-                                Row::Group { key: k, .. } => k == &key,
-                                _ => false,
-                            })
-                        {
-                            self.cursor = pos;
-                        }
+                    if let Some(pos) =
+                        self.visible_rows.iter().position(|r| match r {
+                            Row::Group { key: k, .. } => k == &key,
+                            _ => false,
+                        })
+                    {
+                        self.cursor = pos;
                     }
                 }
             }
