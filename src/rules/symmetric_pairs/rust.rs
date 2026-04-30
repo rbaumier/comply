@@ -93,11 +93,19 @@ impl AstCheck for Check {
         };
         let names: Vec<&str> = state.pub_fns.iter().map(|(n, _, _)| n.as_str()).collect();
         for (name, line, col) in &state.pub_fns {
+            if name.ends_with("_mut") {
+                continue;
+            }
             let Some((prefix, suffix)) = split_prefix(name) else {
                 continue;
             };
             for &(pfx, counterpart_pfx) in PAIRS {
                 if pfx == prefix {
+                    if pfx == "get_"
+                        && names.iter().any(|n| *n == format!("get_{suffix}_mut"))
+                    {
+                        break;
+                    }
                     let expected = format!("{counterpart_pfx}{suffix}");
                     if !names.iter().any(|n| *n == expected) {
                         diagnostics.push(Diagnostic {
@@ -136,6 +144,18 @@ mod tests {
     #[test]
     fn allows_complete_pair() {
         let src = "pub fn open_connection() {}\npub fn close_connection() {}\n";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_get_with_mut_variant() {
+        let src = "pub fn get_value() -> &T {}\npub fn get_value_mut() -> &mut T {}\n";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn skips_mut_functions() {
+        let src = "pub fn get_conditions_mut() {}\n";
         assert!(run_on(src).is_empty());
     }
 }
