@@ -1623,7 +1623,9 @@ pub mod no_conditional_async_return;
 pub mod no_conditional_tests;
 pub mod no_unchecked_json_parse;
 pub mod no_unsanitized_method;
+pub mod rust_no_allow_without_reason;
 pub mod rust_no_mutex_in_single_threaded;
+pub mod rust_prefer_arc_clone;
 pub mod rust_prefer_cow;
 pub mod rust_prefer_fast_hasher;
 pub mod serialize_javascript_no_unsafe;
@@ -3111,7 +3113,9 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         no_unsanitized_method::register(),
         rust_prefer_fast_hasher::register(),
         rust_prefer_cow::register(),
+        rust_no_allow_without_reason::register(),
         rust_no_mutex_in_single_threaded::register(),
+        rust_prefer_arc_clone::register(),
         tailwind_no_magic_spacing::register(),
         tailwind_read_theme_before_classes::register(),
         tanstack_start_loader_stale_time::register(),
