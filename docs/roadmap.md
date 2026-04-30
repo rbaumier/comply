@@ -92,3 +92,11 @@
 | ISS-093 | import-no-commonjs / prefer-module doivent respecter "type" field | bug | open | high | — | M |
 | ISS-094 | data-clumps FP sur signatures d'API framework | bug | open | medium | — | M |
 | ISS-095 | require-hook flagge les require() d'import comme side effects | bug | open | medium | — | S |
+
+## Batch 11 — Framework routing & JSDoc-as-types (svelte-kit audit)
+
+| ID | Title | Type | Status | Severity | Blocked by | Estimation |
+|---|---|---|---|---|---|---|
+| ISS-096 | filename-naming-convention FP sur conventions SvelteKit (+page) | bug | open | high | — | S |
+| ISS-097 | jsdoc-needs-description FP sur annotations type-only | bug | open | high | — | S |
+| ISS-098 | node-no-sync FP sur scripts de build et CLI | bug | open | medium | — | S |
