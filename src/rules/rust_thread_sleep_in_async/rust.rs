@@ -12,7 +12,7 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     let Some(text) = crate::rules::call_expression::call_function_name(node, source) else {
         return;
     };
-    if !is_thread_sleep_call(text) {
+    if !is_thread_sleep_call(text, ctx.source) {
         return;
     }
     if !is_inside_async_fn(node, source) {
@@ -34,11 +34,38 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     });
 }
 
-fn is_thread_sleep_call(text: &str) -> bool {
-    text.ends_with("thread::sleep")
-        || text.ends_with("thread::sleep_ms")
-        || text == "sleep"
-        || text == "sleep_ms"
+fn is_thread_sleep_call(text: &str, source: &str) -> bool {
+    // Qualified calls — always flag.
+    if text.ends_with("thread::sleep") || text.ends_with("thread::sleep_ms") {
+        return true;
+    }
+    // Bare `sleep`/`sleep_ms` — only flag when it comes from std::thread.
+    if text == "sleep" || text == "sleep_ms" {
+        return has_std_thread_import(source) && !has_async_sleep_import(source);
+    }
+    false
+}
+
+/// Returns `true` when the file imports `std::thread` (module or specific fn).
+fn has_std_thread_import(source: &str) -> bool {
+    source.lines().any(|line| {
+        let trimmed = line.trim();
+        trimmed.starts_with("use std::thread")
+            || trimmed.starts_with("use ::std::thread")
+    })
+}
+
+/// Returns `true` when the file imports `sleep` from an async runtime.
+fn has_async_sleep_import(source: &str) -> bool {
+    source.lines().any(|line| {
+        let trimmed = line.trim();
+        trimmed.starts_with("use tokio::time::sleep")
+            || (trimmed.starts_with("use tokio::time::{")
+                && trimmed.contains("sleep"))
+            || trimmed.starts_with("use async_std::task::sleep")
+            || (trimmed.starts_with("use async_std::task::{")
+                && trimmed.contains("sleep"))
+    })
 }
 
 #[cfg(test)]
@@ -70,6 +97,40 @@ mod tests {
     #[test]
     fn allows_tokio_sleep_in_async_fn() {
         let source = "async fn f() { tokio::time::sleep(d).await; }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_bare_tokio_sleep_import_in_async_fn() {
+        let source = "use tokio::time::sleep;\nasync fn f() { sleep(d).await; }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_bare_async_std_sleep_import_in_async_fn() {
+        let source =
+            "use async_std::task::sleep;\nasync fn f() { sleep(d).await; }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_bare_sleep_with_std_thread_import() {
+        let source =
+            "use std::thread::sleep;\nasync fn f() { sleep(d); }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_bare_sleep_with_std_thread_module_import() {
+        let source =
+            "use std::thread;\nasync fn f() { thread::sleep(d); }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn allows_bare_sleep_without_any_import() {
+        // Unknown origin — don't flag to avoid false positives.
+        let source = "async fn f() { sleep(d); }";
         assert!(run_on(source).is_empty());
     }
 }
