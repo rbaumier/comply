@@ -5,8 +5,8 @@ use crate::rules::backend::{CheckCtx, TextCheck};
 use crate::rules::vue_template_helpers::{extract_elements, has_text_content, is_vue_file};
 
 const VOID_ELEMENTS: &[&str] = &[
-    "area", "base", "br", "col", "embed", "hr", "img", "input", "keygen",
-    "link", "meta", "param", "source", "track", "wbr",
+    "area", "base", "br", "col", "embed", "hr", "img", "input", "keygen", "link", "meta", "param",
+    "source", "track", "wbr",
 ];
 
 #[derive(Debug)]
@@ -29,7 +29,10 @@ impl TextCheck for Check {
                     line: elem.line,
                     column: 1,
                     rule_id: "vue-void-elements-no-children".into(),
-                    message: format!("`<{}>` is a void element and cannot have children.", elem.tag),
+                    message: format!(
+                        "`<{}>` is a void element and cannot have children.",
+                        elem.tag
+                    ),
                     severity: Severity::Error,
                     span: None,
                 });

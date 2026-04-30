@@ -30,7 +30,9 @@ crate::ast_check! { on ["rule_set"] => |node, source, ctx, diagnostics|
 fn selector_targets_heading(selector: &str) -> bool {
     selector.split(',').any(|part| {
         let part = part.trim();
-        if part.is_empty() { return false; }
+        if part.is_empty() {
+            return false;
+        }
         let last = part
             .rsplit(|c: char| c.is_whitespace() || c == '>' || c == '+' || c == '~')
             .next()
@@ -43,11 +45,14 @@ fn selector_targets_heading(selector: &str) -> bool {
 fn block_has_text_wrap(block: tree_sitter::Node, source: &[u8]) -> bool {
     let mut c = block.walk();
     block.children(&mut c).any(|decl| {
-        if decl.kind() != "declaration" { return false; }
+        if decl.kind() != "declaration" {
+            return false;
+        }
         let mut dc = decl.walk();
         decl.children(&mut dc).any(|n| {
             n.kind() == "property_name"
-                && n.utf8_text(source).is_ok_and(|t| t.eq_ignore_ascii_case("text-wrap"))
+                && n.utf8_text(source)
+                    .is_ok_and(|t| t.eq_ignore_ascii_case("text-wrap"))
         })
     })
 }

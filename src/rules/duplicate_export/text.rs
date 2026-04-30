@@ -181,14 +181,8 @@ mod tests {
     fn skips_default_reexports() {
         let files: Vec<(&str, &str)> = vec![
             ("impl.ts", "export default function compute() {}"),
-            (
-                "barrel1.ts",
-                "export { default } from './impl';",
-            ),
-            (
-                "barrel2.ts",
-                "export { default } from './impl';",
-            ),
+            ("barrel1.ts", "export { default } from './impl';"),
+            ("barrel2.ts", "export { default } from './impl';"),
         ];
         let target = anchor_rel(&files);
         let (_dir, diags) = run_on_project(&files, target);

@@ -70,9 +70,9 @@ fn is_in_exported_context(param: tree_sitter::Node<'_>) -> bool {
                 let mut up = parent.parent();
                 while let Some(p) = up {
                     match p.kind() {
-                        "variable_declarator"
-                        | "lexical_declaration"
-                        | "variable_declaration" => up = p.parent(),
+                        "variable_declarator" | "lexical_declaration" | "variable_declaration" => {
+                            up = p.parent()
+                        }
                         "export_statement" => return true,
                         _ => return false,
                     }
@@ -184,8 +184,6 @@ mod tests {
 
     #[test]
     fn allows_id_param_in_method_of_non_exported_class() {
-        assert!(
-            run("class Service { find(orderId: string) { return orderId; } }").is_empty()
-        );
+        assert!(run("class Service { find(orderId: string) { return orderId; } }").is_empty());
     }
 }

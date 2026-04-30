@@ -6,8 +6,8 @@ use crate::diagnostic::{Diagnostic, Severity};
 
 /// HTML void elements that must always self-close (never flagged).
 const VOID_ELEMENTS: &[&str] = &[
-    "area", "base", "br", "col", "embed", "hr", "img", "input", "link",
-    "meta", "param", "source", "track", "wbr",
+    "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source",
+    "track", "wbr",
 ];
 
 crate::ast_check! { on ["jsx_element"] => |node, source, ctx, diagnostics|

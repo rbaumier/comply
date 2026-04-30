@@ -3,7 +3,9 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
 fn object_has_project_id(obj: tree_sitter::Node<'_>, source: &[u8]) -> bool {
-    if obj.kind() != "object" { return false; }
+    if obj.kind() != "object" {
+        return false;
+    }
     let mut cursor = obj.walk();
     for child in obj.named_children(&mut cursor) {
         // Look at pair / shorthand_property_identifier entries.

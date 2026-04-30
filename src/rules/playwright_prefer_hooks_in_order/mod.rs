@@ -3,15 +3,17 @@
 mod typescript;
 
 use crate::diagnostic::Severity;
-use crate::rules::meta::RuleMeta;
 use crate::rules::RuleDef;
+use crate::rules::meta::RuleMeta;
 
 pub const META: RuleMeta = RuleMeta {
     id: "playwright-prefer-hooks-in-order",
     description: "Hooks should follow the lifecycle order: beforeAll, beforeEach, afterEach, afterAll.",
     remediation: "Reorder hooks to: `beforeAll` > `beforeEach` > `afterEach` > `afterAll`.",
     severity: Severity::Warning,
-    doc_url: Some("https://github.com/playwright-community/eslint-plugin-playwright/blob/main/docs/rules/prefer-hooks-in-order.md"),
+    doc_url: Some(
+        "https://github.com/playwright-community/eslint-plugin-playwright/blob/main/docs/rules/prefer-hooks-in-order.md",
+    ),
     categories: &["testing"],
 };
 

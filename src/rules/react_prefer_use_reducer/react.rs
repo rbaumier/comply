@@ -162,20 +162,24 @@ function Panel() {
 
     #[test]
     fn allows_three_use_state() {
-        assert!(run(r#"
+        assert!(
+            run(r#"
 function Form() {
     const [a, setA] = useState('');
     const [b, setB] = useState('');
     const [c, setC] = useState('');
     return <div />;
 }
-"#).is_empty());
+"#)
+            .is_empty()
+        );
     }
 
     #[test]
     fn allows_lowercase_function() {
         // Custom hook, not a component.
-        assert!(run(r#"
+        assert!(
+            run(r#"
 function useForm() {
     const [a, setA] = useState('');
     const [b, setB] = useState('');
@@ -183,13 +187,16 @@ function useForm() {
     const [d, setD] = useState('');
     return { a, b, c, d };
 }
-"#).is_empty());
+"#)
+            .is_empty()
+        );
     }
 
     #[test]
     fn ignores_use_state_in_nested_function() {
         // useState inside a nested helper isn't part of the component body.
-        assert!(run(r#"
+        assert!(
+            run(r#"
 function App() {
     const [only] = useState(0);
     function inner() {
@@ -199,6 +206,8 @@ function App() {
     }
     return <div />;
 }
-"#).is_empty());
+"#)
+            .is_empty()
+        );
     }
 }

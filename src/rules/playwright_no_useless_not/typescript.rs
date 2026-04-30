@@ -18,7 +18,10 @@ const MATCHER_PAIRS: &[(&str, &str)] = &[
 ];
 
 fn inverse_of(matcher: &str) -> Option<&'static str> {
-    MATCHER_PAIRS.iter().find(|(m, _)| *m == matcher).map(|(_, inv)| *inv)
+    MATCHER_PAIRS
+        .iter()
+        .find(|(m, _)| *m == matcher)
+        .map(|(_, inv)| *inv)
 }
 
 // Check: expect(…).not.toBeVisible() etc.

@@ -11,7 +11,9 @@ pub const META: RuleMeta = RuleMeta {
     description: "`db.delete(table)` without a chained `.where(...)` deletes every row in the table.",
     remediation: "Add a `.where(condition)` clause, or use a dedicated truncate helper if you really mean to delete every row.",
     severity: Severity::Error,
-    doc_url: Some("https://github.com/sivaprasadreddy/eslint-plugin-drizzle#enforce-delete-with-where"),
+    doc_url: Some(
+        "https://github.com/sivaprasadreddy/eslint-plugin-drizzle#enforce-delete-with-where",
+    ),
     categories: &["database", "drizzle"],
 };
 

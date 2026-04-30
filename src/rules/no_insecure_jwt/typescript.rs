@@ -44,10 +44,7 @@ fn is_jwt_call(call: tree_sitter::Node, source: &[u8]) -> bool {
 /// Scan an `object` AST node for an `algorithm`/`algorithms` pair whose
 /// value is an insecure algorithm. Returns `Some((alg, is_array))` when
 /// the violation is the algorithm string `alg`.
-fn find_insecure_algorithm<'a>(
-    obj: tree_sitter::Node,
-    source: &'a [u8],
-) -> Option<&'a str> {
+fn find_insecure_algorithm<'a>(obj: tree_sitter::Node, source: &'a [u8]) -> Option<&'a str> {
     if obj.kind() != "object" {
         return None;
     }
@@ -78,10 +75,7 @@ fn find_insecure_algorithm<'a>(
 
 /// Check a value node (string literal, array of string literals) for an
 /// insecure algorithm name. Returns the offending string slice.
-fn check_value_for_insecure<'a>(
-    value: tree_sitter::Node,
-    source: &'a [u8],
-) -> Option<&'a str> {
+fn check_value_for_insecure<'a>(value: tree_sitter::Node, source: &'a [u8]) -> Option<&'a str> {
     match value.kind() {
         "string" => {
             let text = value.utf8_text(source).ok()?;
@@ -149,17 +143,26 @@ mod tests {
 
     #[test]
     fn flags_algorithm_none_single_quotes() {
-        assert_eq!(run_on("jwt.verify(token, key, { algorithm: 'none' });").len(), 1);
+        assert_eq!(
+            run_on("jwt.verify(token, key, { algorithm: 'none' });").len(),
+            1
+        );
     }
 
     #[test]
     fn flags_algorithms_array_none() {
-        assert_eq!(run_on("jwt.verify(token, key, { algorithms: ['none'] });").len(), 1);
+        assert_eq!(
+            run_on("jwt.verify(token, key, { algorithms: ['none'] });").len(),
+            1
+        );
     }
 
     #[test]
     fn flags_hs256_in_jwt_context() {
-        assert_eq!(run_on("jwt.sign(payload, secret, { algorithm: 'HS256' });").len(), 1);
+        assert_eq!(
+            run_on("jwt.sign(payload, secret, { algorithm: 'HS256' });").len(),
+            1
+        );
     }
 
     #[test]

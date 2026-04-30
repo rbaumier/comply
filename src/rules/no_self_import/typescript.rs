@@ -11,11 +11,13 @@ fn is_self_import(spec: &str, file_path: &Path) -> bool {
 
     // ./index, ./index.ts, ./index.js, etc.
     let stem = spec.trim_start_matches("./");
-    if matches!(stem, "index" | "index.ts" | "index.tsx" | "index.js" | "index.jsx")
-        && file_path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .is_some_and(|s| s == "index")
+    if matches!(
+        stem,
+        "index" | "index.ts" | "index.tsx" | "index.js" | "index.jsx"
+    ) && file_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .is_some_and(|s| s == "index")
     {
         return true;
     }
@@ -23,12 +25,14 @@ fn is_self_import(spec: &str, file_path: &Path) -> bool {
     // Check if the source matches the file's own name (e.g. `import x from './foo'` in `foo.ts`).
     if let Some(file_stem) = file_path.file_stem().and_then(|s| s.to_str()) {
         let import_stem = spec.trim_start_matches("./");
-        let import_base = Path::new(import_stem)
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or(import_stem);
-        if import_base == file_stem && (spec.starts_with("./") || spec == ".") {
-            return true;
+        if !import_stem.contains('/') {
+            let import_base = Path::new(import_stem)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or(import_stem);
+            if import_base == file_stem && spec.starts_with("./") {
+                return true;
+            }
         }
     }
 
@@ -84,5 +88,11 @@ mod tests {
         let src = "import { foo } from './index';\n";
         let diags = run(src, "src/index.ts");
         assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn allows_subdir_index_import_from_index() {
+        let src = "import { foo } from './_lib/formatDistance/index.ts';\n";
+        assert!(run(src, "src/locale/sl/index.ts").is_empty());
     }
 }

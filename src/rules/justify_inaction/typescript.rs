@@ -135,9 +135,7 @@ mod tests {
 
     #[test]
     fn allows_catch_with_comment_inside() {
-        assert!(
-            run_on("try { x(); } catch (e) { /* swallowed intentionally */ }").is_empty()
-        );
+        assert!(run_on("try { x(); } catch (e) { /* swallowed intentionally */ }").is_empty());
     }
 
     #[test]

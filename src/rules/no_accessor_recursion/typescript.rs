@@ -20,19 +20,28 @@ fn find_accessor_ancestor<'a>(
             let mut accessor_kind = None;
             for child in n.children(&mut cursor) {
                 match child.kind() {
-                    "get" => { accessor_kind = Some("get"); break; }
-                    "set" => { accessor_kind = Some("set"); break; }
+                    "get" => {
+                        accessor_kind = Some("get");
+                        break;
+                    }
+                    "set" => {
+                        accessor_kind = Some("set");
+                        break;
+                    }
                     // If we hit the name or body first, it's a regular method.
-                    "property_identifier" | "private_property_identifier"
-                    | "statement_block" | "formal_parameters" => break,
+                    "property_identifier"
+                    | "private_property_identifier"
+                    | "statement_block"
+                    | "formal_parameters" => break,
                     _ => {}
                 }
             }
             if let Some(kind) = accessor_kind
-                && let Some(name_node) = n.child_by_field_name("name") {
-                    let name = name_node.utf8_text(source).unwrap_or("").to_string();
-                    return Some((kind, name));
-                }
+                && let Some(name_node) = n.child_by_field_name("name")
+            {
+                let name = name_node.utf8_text(source).unwrap_or("").to_string();
+                return Some((kind, name));
+            }
             // It's a method but not get/set — stop searching.
             return None;
         }
@@ -42,7 +51,10 @@ fn find_accessor_ancestor<'a>(
         }
         // Arrow functions inherit `this` so we traverse through them.
         // Regular functions define their own `this` so stop.
-        if n.kind() == "function_declaration" || n.kind() == "function" || n.kind() == "generator_function" {
+        if n.kind() == "function_declaration"
+            || n.kind() == "function"
+            || n.kind() == "generator_function"
+        {
             return None;
         }
         // function_expression (non-arrow) also defines its own `this`.

@@ -98,8 +98,7 @@ mod tests {
 
     #[test]
     fn flags_collect_then_into_iter() {
-        let source =
-            "fn f() { let _: Vec<_> = it.collect::<Vec<_>>().into_iter().collect(); }";
+        let source = "fn f() { let _: Vec<_> = it.collect::<Vec<_>>().into_iter().collect(); }";
         assert_eq!(run_on(source).len(), 1);
     }
 

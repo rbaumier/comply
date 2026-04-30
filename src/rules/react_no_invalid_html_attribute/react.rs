@@ -6,17 +6,46 @@ use crate::diagnostic::{Diagnostic, Severity};
 
 /// Valid `rel` values for `<a>` elements.
 const VALID_A_RELS: &[&str] = &[
-    "alternate", "author", "bookmark", "external", "help", "license",
-    "next", "nofollow", "noopener", "noreferrer", "opener", "prev",
-    "search", "tag", "ugc", "sponsored",
+    "alternate",
+    "author",
+    "bookmark",
+    "external",
+    "help",
+    "license",
+    "next",
+    "nofollow",
+    "noopener",
+    "noreferrer",
+    "opener",
+    "prev",
+    "search",
+    "tag",
+    "ugc",
+    "sponsored",
 ];
 
 /// Valid `rel` values for `<link>` elements.
 const VALID_LINK_RELS: &[&str] = &[
-    "alternate", "author", "canonical", "dns-prefetch", "help", "icon",
-    "license", "manifest", "modulepreload", "next", "pingback",
-    "preconnect", "prefetch", "preload", "prerender", "prev", "search",
-    "shortlink", "stylesheet", "apple-touch-icon",
+    "alternate",
+    "author",
+    "canonical",
+    "dns-prefetch",
+    "help",
+    "icon",
+    "license",
+    "manifest",
+    "modulepreload",
+    "next",
+    "pingback",
+    "preconnect",
+    "prefetch",
+    "preload",
+    "prerender",
+    "prev",
+    "search",
+    "shortlink",
+    "stylesheet",
+    "apple-touch-icon",
 ];
 
 crate::ast_check! { on ["jsx_self_closing_element", "jsx_opening_element"] => |node, source, ctx, diagnostics|

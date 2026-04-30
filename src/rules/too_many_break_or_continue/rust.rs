@@ -5,11 +5,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-const LOOP_KINDS: &[&str] = &[
-    "for_expression",
-    "while_expression",
-    "loop_expression",
-];
+const LOOP_KINDS: &[&str] = &["for_expression", "while_expression", "loop_expression"];
 
 fn count_break_continue(node: tree_sitter::Node) -> usize {
     let mut count = 0;

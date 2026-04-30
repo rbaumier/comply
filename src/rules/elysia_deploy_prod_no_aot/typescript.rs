@@ -105,13 +105,15 @@ mod tests {
 
     #[test]
     fn allows_config_without_aot_when_no_listen() {
-        let src = "import { Elysia } from 'elysia';\nexport const app = new Elysia({ name: 'root' });";
+        let src =
+            "import { Elysia } from 'elysia';\nexport const app = new Elysia({ name: 'root' });";
         assert!(run_on_at(src, "src/index.ts").is_empty());
     }
 
     #[test]
     fn allows_aot_true() {
-        let src = "import { Elysia } from 'elysia';\nconst app = new Elysia({ aot: true }).listen(3000);";
+        let src =
+            "import { Elysia } from 'elysia';\nconst app = new Elysia({ aot: true }).listen(3000);";
         assert!(run_on(src).is_empty());
     }
 

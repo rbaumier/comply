@@ -11,7 +11,9 @@ pub const META: RuleMeta = RuleMeta {
     description: "`db.update(table).set(...)` without `.where(...)` updates every row in the table.",
     remediation: "Add a `.where(condition)` clause to bound the update.",
     severity: Severity::Error,
-    doc_url: Some("https://github.com/sivaprasadreddy/eslint-plugin-drizzle#enforce-update-with-where"),
+    doc_url: Some(
+        "https://github.com/sivaprasadreddy/eslint-plugin-drizzle#enforce-update-with-where",
+    ),
     categories: &["database", "drizzle"],
 };
 

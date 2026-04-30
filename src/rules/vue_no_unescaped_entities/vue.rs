@@ -29,8 +29,7 @@ impl AstCheck for Check {
                 line: pos.row + 1,
                 column: pos.column + 1,
                 rule_id: "vue-no-unescaped-entities".into(),
-                message: "Unescaped entity in template text — use the HTML entity instead."
-                    .into(),
+                message: "Unescaped entity in template text — use the HTML entity instead.".into(),
                 severity: Severity::Warning,
                 span: None,
             });

@@ -9,12 +9,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-const BARREL_LIBS: &[&str] = &[
-    "@mui/material",
-    "@mui/icons-material",
-    "lodash",
-    "date-fns",
-];
+const BARREL_LIBS: &[&str] = &["@mui/material", "@mui/icons-material", "lodash", "date-fns"];
 
 /// Packages that publish a barrel entry point but are explicitly designed
 /// to tree-shake under modern bundlers (Vite/Webpack/Rollup). Each entry

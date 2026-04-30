@@ -241,7 +241,11 @@ impl App {
             Some(s) if !s.is_empty() => s,
             _ => return,
         };
-        let lines: Vec<(usize, &str)> = source.lines().enumerate().map(|(i, l)| (i + 1, l)).collect();
+        let lines: Vec<(usize, &str)> = source
+            .lines()
+            .enumerate()
+            .map(|(i, l)| (i + 1, l))
+            .collect();
         let result = super::highlight::highlight_lines(path.as_ref(), &lines);
         self.highlight_cache.insert(path.clone(), result);
     }

@@ -30,7 +30,8 @@ impl AstCheck for Check {
                 line: idx + 1,
                 column: 1,
                 rule_id: "elysia-cookie-no-samesite".into(),
-                message: "Cookie config has no explicit `sameSite` — set `'lax'` or `'strict'`.".into(),
+                message: "Cookie config has no explicit `sameSite` — set `'lax'` or `'strict'`."
+                    .into(),
                 severity: Severity::Warning,
                 span: None,
             });

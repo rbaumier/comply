@@ -14,12 +14,18 @@ use tree_sitter::Node;
 use crate::diagnostic::{Diagnostic, Severity};
 
 fn collect_object_keys<'a>(obj: Node<'a>, source: &'a [u8]) -> Option<BTreeSet<String>> {
-    if obj.kind() != "object" { return None; }
+    if obj.kind() != "object" {
+        return None;
+    }
     let mut keys = BTreeSet::new();
     let mut cursor = obj.walk();
     for child in obj.named_children(&mut cursor) {
-        if child.kind() != "pair" { continue; }
-        let Some(k) = child.child_by_field_name("key") else { continue };
+        if child.kind() != "pair" {
+            continue;
+        }
+        let Some(k) = child.child_by_field_name("key") else {
+            continue;
+        };
         let Ok(t) = k.utf8_text(source) else { continue };
         keys.insert(t.trim_matches(|c: char| c == '"' || c == '\'').to_string());
     }
@@ -32,15 +38,18 @@ fn collect_schema_key_sets(root: Node<'_>, source: &[u8]) -> Vec<BTreeSet<String
     while let Some(n) = stack.pop() {
         if n.kind() == "call_expression"
             && let Some(f) = n.child_by_field_name("function")
-                && f.utf8_text(source).map(|t| t == "z.object").unwrap_or(false)
-                    && let Some(args) = n.child_by_field_name("arguments") {
-                        let mut ac = args.walk();
-                        for a in args.named_children(&mut ac) {
-                            if let Some(keys) = collect_object_keys(a, source) {
-                                out.push(keys);
-                            }
-                        }
-                    }
+            && f.utf8_text(source)
+                .map(|t| t == "z.object")
+                .unwrap_or(false)
+            && let Some(args) = n.child_by_field_name("arguments")
+        {
+            let mut ac = args.walk();
+            for a in args.named_children(&mut ac) {
+                if let Some(keys) = collect_object_keys(a, source) {
+                    out.push(keys);
+                }
+            }
+        }
         let mut c = n.walk();
         for child in n.named_children(&mut c) {
             stack.push(child);
@@ -50,16 +59,19 @@ fn collect_schema_key_sets(root: Node<'_>, source: &[u8]) -> Vec<BTreeSet<String
 }
 
 fn alias_keys<'a>(type_obj: Node<'a>, source: &'a [u8]) -> Option<BTreeSet<String>> {
-    if type_obj.kind() != "object_type" { return None; }
+    if type_obj.kind() != "object_type" {
+        return None;
+    }
     let mut keys = BTreeSet::new();
     let mut cursor = type_obj.walk();
     for child in type_obj.named_children(&mut cursor) {
         // property_signature has a name field in tree-sitter-typescript.
         if child.kind() == "property_signature"
             && let Some(name) = child.child_by_field_name("name")
-                && let Ok(t) = name.utf8_text(source) {
-                    keys.insert(t.trim_matches(|c: char| c == '"' || c == '\'').to_string());
-                }
+            && let Ok(t) = name.utf8_text(source)
+        {
+            keys.insert(t.trim_matches(|c: char| c == '"' || c == '\'').to_string());
+        }
     }
     if keys.is_empty() { None } else { Some(keys) }
 }

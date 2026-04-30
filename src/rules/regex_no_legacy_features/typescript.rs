@@ -8,14 +8,33 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
 const LEGACY_PROPS: &[&str] = &[
-    "$1", "$2", "$3", "$4", "$5", "$6", "$7", "$8", "$9",
-    "lastMatch", "lastParen", "leftContext", "rightContext", "input",
-    "$_", "$&", "$+", "$`", "$'",
+    "$1",
+    "$2",
+    "$3",
+    "$4",
+    "$5",
+    "$6",
+    "$7",
+    "$8",
+    "$9",
+    "lastMatch",
+    "lastParen",
+    "leftContext",
+    "rightContext",
+    "input",
+    "$_",
+    "$&",
+    "$+",
+    "$`",
+    "$'",
 ];
 
 fn is_regexp_ident(node: &tree_sitter::Node<'_>, source: &[u8]) -> bool {
     node.kind() == "identifier"
-        && node.utf8_text(source).map(|t| t == "RegExp").unwrap_or(false)
+        && node
+            .utf8_text(source)
+            .map(|t| t == "RegExp")
+            .unwrap_or(false)
 }
 
 crate::ast_check! { prefilter = ["RegExp"] => |node, source, ctx, diagnostics|

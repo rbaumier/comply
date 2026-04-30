@@ -40,9 +40,7 @@ const HANDLER_KEYWORDS: &[&str] = &[
     "resolver",
 ];
 
-const HTTP_VERB_EXPORTS: &[&str] = &[
-    "GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS",
-];
+const HTTP_VERB_EXPORTS: &[&str] = &["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"];
 
 fn name_looks_like_handler(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
@@ -68,15 +66,17 @@ fn params_look_like_handler(params: tree_sitter::Node, source: &[u8]) -> bool {
         }
         if let Some(pat) = child.child_by_field_name("pattern")
             && pat.kind() == "identifier"
-                && let Ok(name) = std::str::from_utf8(&source[pat.byte_range()])
-                    && REQUEST_PARAM_NAMES.contains(&name) {
-                        return true;
-                    }
+            && let Ok(name) = std::str::from_utf8(&source[pat.byte_range()])
+            && REQUEST_PARAM_NAMES.contains(&name)
+        {
+            return true;
+        }
         if let Some(type_ann) = child.child_by_field_name("type")
             && let Ok(text) = std::str::from_utf8(&source[type_ann.byte_range()])
-                && (text.contains("Request") || text.contains("NextApiRequest")) {
-                    return true;
-                }
+            && (text.contains("Request") || text.contains("NextApiRequest"))
+        {
+            return true;
+        }
     }
     false
 }
@@ -99,11 +99,12 @@ fn enclosing_function_info<'a>(
                 let mut name = None;
                 if let Some(gp) = parent.parent()
                     && gp.kind() == "variable_declarator"
-                        && let Some(id) = gp.child_by_field_name("name") {
-                            name = std::str::from_utf8(&source[id.byte_range()])
-                                .ok()
-                                .map(|s| s.to_string());
-                        }
+                    && let Some(id) = gp.child_by_field_name("name")
+                {
+                    name = std::str::from_utf8(&source[id.byte_range()])
+                        .ok()
+                        .map(|s| s.to_string());
+                }
                 return Some((name, parent));
             }
             _ => {}
@@ -115,13 +116,15 @@ fn enclosing_function_info<'a>(
 
 fn is_in_handler_context(fn_node: tree_sitter::Node, name: Option<&str>, source: &[u8]) -> bool {
     if let Some(n) = name
-        && name_looks_like_handler(n) {
-            return true;
-        }
+        && name_looks_like_handler(n)
+    {
+        return true;
+    }
     if let Some(params) = fn_node.child_by_field_name("parameters")
-        && params_look_like_handler(params, source) {
-            return true;
-        }
+        && params_look_like_handler(params, source)
+    {
+        return true;
+    }
     if is_inline_route_callback(fn_node, source) {
         return true;
     }
@@ -136,20 +139,30 @@ const ROUTE_VERBS: &[&str] = &[
 /// to a call like `<obj>.<verb>(...)`, where `<verb>` is a router HTTP
 /// method name (`app.get`, `router.post`, …).
 fn is_inline_route_callback(fn_node: tree_sitter::Node<'_>, source: &[u8]) -> bool {
-    let Some(parent) = fn_node.parent() else { return false };
+    let Some(parent) = fn_node.parent() else {
+        return false;
+    };
     if parent.kind() != "arguments" {
         return false;
     }
-    let Some(call) = parent.parent() else { return false };
+    let Some(call) = parent.parent() else {
+        return false;
+    };
     if call.kind() != "call_expression" {
         return false;
     }
-    let Some(callee) = call.child_by_field_name("function") else { return false };
+    let Some(callee) = call.child_by_field_name("function") else {
+        return false;
+    };
     if callee.kind() != "member_expression" {
         return false;
     }
-    let Some(prop) = callee.child_by_field_name("property") else { return false };
-    let Ok(method) = std::str::from_utf8(&source[prop.byte_range()]) else { return false };
+    let Some(prop) = callee.child_by_field_name("property") else {
+        return false;
+    };
+    let Ok(method) = std::str::from_utf8(&source[prop.byte_range()]) else {
+        return false;
+    };
     ROUTE_VERBS.contains(&method)
 }
 
@@ -202,18 +215,17 @@ mod tests {
 
     #[test]
     fn allows_parse_in_handler_named_function() {
-        assert!(run(
-            "function userHandler(req: Request, res: Response) { Schema.parse(req.body); }"
-        )
-        .is_empty());
+        assert!(
+            run("function userHandler(req: Request, res: Response) { Schema.parse(req.body); }")
+                .is_empty()
+        );
     }
 
     #[test]
     fn allows_parse_in_function_with_request_param() {
-        assert!(run(
-            "function run(req: Request, res: Response) { Schema.parse(req.body); }"
-        )
-        .is_empty());
+        assert!(
+            run("function run(req: Request, res: Response) { Schema.parse(req.body); }").is_empty()
+        );
     }
 
     #[test]
@@ -225,7 +237,9 @@ mod tests {
     fn allows_parse_in_verb_prefixed_function_with_request_param() {
         // Still allowed because of the `req: Request` parameter, not
         // because of the `getUser` name.
-        assert!(run("function getUser(req: Request) { return Schema.parse(req.body); }").is_empty());
+        assert!(
+            run("function getUser(req: Request) { return Schema.parse(req.body); }").is_empty()
+        );
     }
 
     #[test]
@@ -247,9 +261,11 @@ mod tests {
 
     #[test]
     fn allows_parse_in_nextjs_uppercase_route_export() {
-        assert!(run(
-            "export async function GET(req: Request) { return Schema.parse(await req.json()); }"
-        )
-        .is_empty());
+        assert!(
+            run(
+                "export async function GET(req: Request) { return Schema.parse(await req.json()); }"
+            )
+            .is_empty()
+        );
     }
 }

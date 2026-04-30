@@ -1,7 +1,9 @@
 //! Flag `uses: actions/setup-node@...` steps whose `with:` block omits a `cache:` key.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::rules::yaml_k8s_helpers::{as_mapping, find_pair, pair_key_text, pair_scalar_value, pair_value_node};
+use crate::rules::yaml_k8s_helpers::{
+    as_mapping, find_pair, pair_key_text, pair_scalar_value, pair_value_node,
+};
 
 crate::ast_check! { on ["block_mapping_pair"] => |node, source, ctx, diagnostics|
     if pair_key_text(node, source).as_deref() != Some("uses") { return; }

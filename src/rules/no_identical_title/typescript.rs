@@ -24,10 +24,7 @@ const TEST_BASES: &[&str] = &["describe", "test", "it"];
 /// returning `(kind, title)` when the first argument is a string
 /// literal and the callee resolves to a recognised base. Returns
 /// `None` for non-matching calls (including dynamic titles).
-fn classify_test_call(
-    node: tree_sitter::Node,
-    source: &[u8],
-) -> Option<(&'static str, String)> {
+fn classify_test_call(node: tree_sitter::Node, source: &[u8]) -> Option<(&'static str, String)> {
     if node.kind() != "call_expression" {
         return None;
     }

@@ -47,7 +47,8 @@ mod tests {
 
     #[test]
     fn flags_response_t_any() {
-        let src = "import { Elysia, t } from 'elysia';\napp.get('/x', () => 1, { response: t.Any() });";
+        let src =
+            "import { Elysia, t } from 'elysia';\napp.get('/x', () => 1, { response: t.Any() });";
         assert_eq!(run_on(src).len(), 1);
     }
 

@@ -39,7 +39,10 @@ mod tests {
 
     #[test]
     fn flags_object_strict_chain() {
-        assert_eq!(run("const S = z.object({ a: z.string() }).strict();").len(), 1);
+        assert_eq!(
+            run("const S = z.object({ a: z.string() }).strict();").len(),
+            1
+        );
     }
 
     #[test]

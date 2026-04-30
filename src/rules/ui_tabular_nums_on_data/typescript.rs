@@ -5,7 +5,14 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
 const DATA_HINTS: &[&str] = &[
-    "counter", "count", "price", "amount", "metric", "stat", "number", "value-display",
+    "counter",
+    "count",
+    "price",
+    "amount",
+    "metric",
+    "stat",
+    "number",
+    "value-display",
 ];
 
 crate::ast_check! { on ["jsx_opening_element", "jsx_self_closing_element"] => |node, source, ctx, diagnostics|

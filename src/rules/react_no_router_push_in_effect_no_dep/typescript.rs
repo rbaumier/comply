@@ -9,12 +9,7 @@ use std::sync::Arc;
 #[derive(Debug)]
 pub struct Check;
 
-const ROUTER_METHODS: &[&str] = &[
-    "router.push(",
-    "router.replace(",
-    ".push(",
-    ".replace(",
-];
+const ROUTER_METHODS: &[&str] = &["router.push(", "router.replace(", ".push(", ".replace("];
 
 fn find_matching_paren(bytes: &[u8], start: usize) -> Option<usize> {
     debug_assert_eq!(bytes[start], b'(');
@@ -25,7 +20,9 @@ fn find_matching_paren(bytes: &[u8], start: usize) -> Option<usize> {
             b'(' => depth += 1,
             b')' => {
                 depth -= 1;
-                if depth == 0 { return Some(i); }
+                if depth == 0 {
+                    return Some(i);
+                }
             }
             _ => {}
         }
@@ -45,8 +42,9 @@ fn last_array_literal(body: &str) -> Option<&str> {
             let mut depth = 0i32;
             let mut j = i;
             while j < bytes.len() {
-                if bytes[j] == b'[' { depth += 1; }
-                else if bytes[j] == b']' {
+                if bytes[j] == b'[' {
+                    depth += 1;
+                } else if bytes[j] == b']' {
                     depth -= 1;
                     if depth == 0 {
                         last = Some(&body[i + 1..j]);
@@ -56,7 +54,9 @@ fn last_array_literal(body: &str) -> Option<&str> {
                 }
                 j += 1;
             }
-            if j == bytes.len() { break; }
+            if j == bytes.len() {
+                break;
+            }
         } else {
             i += 1;
         }
@@ -67,7 +67,9 @@ fn last_array_literal(body: &str) -> Option<&str> {
 fn body_uses_router_navigation(body: &str) -> bool {
     // Require at least one of the router method patterns AND a `router`
     // identifier somewhere — to avoid catching unrelated `.push(` on arrays.
-    if !body.contains("router") { return false; }
+    if !body.contains("router") {
+        return false;
+    }
     ROUTER_METHODS.iter().any(|p| body.contains(p))
 }
 
@@ -79,7 +81,9 @@ impl TextCheck for Check {
         while let Some(rel) = ctx.source[search_from..].find("useEffect(") {
             let abs = search_from + rel;
             let paren = abs + "useEffect".len();
-            let Some(close) = find_matching_paren(bytes, paren) else { break };
+            let Some(close) = find_matching_paren(bytes, paren) else {
+                break;
+            };
             let body = &ctx.source[paren + 1..close];
             let Some(deps) = last_array_literal(body) else {
                 search_from = close + 1;

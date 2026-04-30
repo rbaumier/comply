@@ -39,8 +39,7 @@ impl TextCheck for Check {
                 if j > tag_start {
                     let tag = &template[tag_start..j];
                     if tag.contains(':') {
-                        let line =
-                            lines_before + 1 + template[..i].matches('\n').count();
+                        let line = lines_before + 1 + template[..i].matches('\n').count();
                         diagnostics.push(Diagnostic {
                             path: std::sync::Arc::clone(&ctx.path_arc),
                             line,

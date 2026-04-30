@@ -61,7 +61,8 @@ mod tests {
 
     #[test]
     fn flags_default_in_middle() {
-        let src = "switch (x) {\n  case 1:\n    break;\n  default:\n    break;\n  case 2:\n    break;\n}";
+        let src =
+            "switch (x) {\n  case 1:\n    break;\n  default:\n    break;\n  case 2:\n    break;\n}";
         let d = run_on(src);
         assert_eq!(d.len(), 1);
     }

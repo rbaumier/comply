@@ -12,7 +12,8 @@ fn subtree_has_jsx(node: tree_sitter::Node) -> bool {
         "jsx_element" | "jsx_self_closing_element" | "jsx_fragment" => true,
         _ => {
             let mut cursor = node.walk();
-            node.children(&mut cursor).any(|child| subtree_has_jsx(child))
+            node.children(&mut cursor)
+                .any(|child| subtree_has_jsx(child))
         }
     }
 }
@@ -21,15 +22,27 @@ fn subtree_has_jsx(node: tree_sitter::Node) -> bool {
 fn is_component_name(node: tree_sitter::Node, source: &[u8]) -> bool {
     match node.kind() {
         "function_declaration" => {
-            let Some(name) = node.child_by_field_name("name") else { return false };
-            let Ok(t) = name.utf8_text(source) else { return false };
+            let Some(name) = node.child_by_field_name("name") else {
+                return false;
+            };
+            let Ok(t) = name.utf8_text(source) else {
+                return false;
+            };
             t.starts_with(|c: char| c.is_ascii_uppercase())
         }
         "arrow_function" => {
-            let Some(parent) = node.parent() else { return false };
-            if parent.kind() != "variable_declarator" { return false; }
-            let Some(name) = parent.child_by_field_name("name") else { return false };
-            let Ok(t) = name.utf8_text(source) else { return false };
+            let Some(parent) = node.parent() else {
+                return false;
+            };
+            if parent.kind() != "variable_declarator" {
+                return false;
+            }
+            let Some(name) = parent.child_by_field_name("name") else {
+                return false;
+            };
+            let Ok(t) = name.utf8_text(source) else {
+                return false;
+            };
             t.starts_with(|c: char| c.is_ascii_uppercase())
         }
         _ => false,

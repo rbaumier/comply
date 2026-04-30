@@ -6,9 +6,9 @@ mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
+use crate::rules::RuleDef;
 use crate::rules::backend::Backend;
 use crate::rules::meta::RuleMeta;
-use crate::rules::RuleDef;
 
 pub const META: RuleMeta = RuleMeta {
     id: "comment-paraphrases-code",
@@ -25,5 +25,8 @@ pub fn register() -> RuleDef {
     let mut backends = crate::register_ts_family!(META, typescript).backends;
     backends.push((Language::Rust, Backend::TreeSitter(Box::new(rust::Check))));
     backends.push((Language::Vue, Backend::Text(Box::new(text::Check))));
-    RuleDef { meta: META, backends }
+    RuleDef {
+        meta: META,
+        backends,
+    }
 }

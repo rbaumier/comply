@@ -148,7 +148,9 @@ mod tests {
     #[test]
     fn rejects_prose_with_keywords_as_substrings() {
         // `selected` and `delivered_from` should NOT match.
-        assert!(!is_sql_string("the user selected items delivered from store"));
+        assert!(!is_sql_string(
+            "the user selected items delivered from store"
+        ));
     }
 
     #[test]
@@ -223,7 +225,9 @@ mod tests {
     #[test]
     fn word_followed_by_open_paren_rejects_identifier_suffix() {
         // `varchar_value` should NOT match `varchar`.
-        assert!(!word_followed_by_open_paren("varchar_value(arg)", "varchar"));
+        assert!(!word_followed_by_open_paren(
+            "varchar_value(arg)",
+            "varchar"
+        ));
     }
-
 }

@@ -8,10 +8,7 @@ use std::collections::HashMap;
 /// `import { foo as bar } from './m'`  → { "bar" -> "./m" }  (local name is `bar`)
 /// `import type { foo } from './m'`    → skipped (type-only imports don't
 ///                                       round-trip through `export { foo }`)
-fn collect_named_imports(
-    program: tree_sitter::Node<'_>,
-    source: &[u8],
-) -> HashMap<String, String> {
+fn collect_named_imports(program: tree_sitter::Node<'_>, source: &[u8]) -> HashMap<String, String> {
     let mut map = HashMap::new();
     let mut cursor = program.walk();
     for child in program.children(&mut cursor) {
@@ -24,7 +21,9 @@ fn collect_named_imports(
         let Ok(raw) = std::str::from_utf8(&source[spec_node.byte_range()]) else {
             continue;
         };
-        let specifier = raw.trim_matches(|c| c == '"' || c == '\'' || c == '`').to_string();
+        let specifier = raw
+            .trim_matches(|c| c == '"' || c == '\'' || c == '`')
+            .to_string();
 
         // Walk the import_clause → named_imports → import_specifier nodes.
         let mut ic = child.walk();

@@ -26,7 +26,8 @@ fn find_pure_black<'t>(
     let mut c = decl.walk();
     let children: Vec<_> = decl.children(&mut c).collect();
     // Skip past the property_name + colon — everything after is value position.
-    let after_colon = children.iter()
+    let after_colon = children
+        .iter()
         .position(|n| n.kind() == ":")
         .map_or(0, |i| i + 1);
     for n in children.iter().skip(after_colon) {
@@ -35,9 +36,10 @@ fn find_pure_black<'t>(
         }
         // Descend into call_expression's arguments to catch `rgb(0,0,0)`.
         if n.kind() == "call_expression"
-            && let Some(label) = classify_call_expr(*n, source) {
-                return Some((*n, label));
-            }
+            && let Some(label) = classify_call_expr(*n, source)
+        {
+            return Some((*n, label));
+        }
     }
     None
 }
@@ -45,7 +47,9 @@ fn find_pure_black<'t>(
 fn classify_pure_black(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
     match node.kind() {
         "color_value" => {
-            let Ok(t) = node.utf8_text(source) else { return None };
+            let Ok(t) = node.utf8_text(source) else {
+                return None;
+            };
             let hex = t.trim_start_matches('#');
             if matches!(hex.len(), 3 | 4 | 6 | 8) && hex.bytes().all(|b| b == b'0') {
                 Some(t.to_string())
@@ -54,7 +58,9 @@ fn classify_pure_black(node: tree_sitter::Node, source: &[u8]) -> Option<String>
             }
         }
         "plain_value" => {
-            let Ok(t) = node.utf8_text(source) else { return None };
+            let Ok(t) = node.utf8_text(source) else {
+                return None;
+            };
             if t.trim().eq_ignore_ascii_case("black") {
                 Some("black".into())
             } else {
@@ -69,17 +75,24 @@ fn classify_call_expr(call: tree_sitter::Node, source: &[u8]) -> Option<String> 
     let mut c = call.walk();
     let kids: Vec<_> = call.children(&mut c).collect();
     let name = kids.iter().find(|n| n.kind() == "function_name")?;
-    let Ok(fn_name) = name.utf8_text(source) else { return None };
+    let Ok(fn_name) = name.utf8_text(source) else {
+        return None;
+    };
     let fn_lower = fn_name.to_ascii_lowercase();
-    if fn_lower != "rgb" && fn_lower != "rgba" { return None; }
+    if fn_lower != "rgb" && fn_lower != "rgba" {
+        return None;
+    }
 
     let args = kids.iter().find(|n| n.kind() == "arguments")?;
     let mut ac = args.walk();
-    let nums: Vec<String> = args.children(&mut ac)
+    let nums: Vec<String> = args
+        .children(&mut ac)
         .filter(|n| matches!(n.kind(), "integer_value" | "float_value"))
         .filter_map(|n| n.utf8_text(source).ok().map(|t| t.trim().to_string()))
         .collect();
-    if nums.len() < 3 { return None; }
+    if nums.len() < 3 {
+        return None;
+    }
     if nums[..3].iter().all(|s| s == "0" || s == "0.0") {
         Some(format!("{fn_name}(0, 0, 0)"))
     } else {

@@ -140,4 +140,10 @@ mod tests {
         let src = "myHelper('x', (arg) => { return arg; });";
         assert!(run_on(src).is_empty());
     }
+
+    #[test]
+    fn ignores_projects_without_jest_or_mocha() {
+        let src = "test('x', (done) => { done(); });";
+        assert!(crate::rules::test_helpers::run_ts(src, &Check).is_empty());
+    }
 }

@@ -14,8 +14,16 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
 /// All properties XState accepts on an invoke object.
-const VALID_INVOKE_PROPS: &[&str] =
-    &["src", "id", "input", "onDone", "onError", "onSnapshot", "systemId", "autoForward"];
+const VALID_INVOKE_PROPS: &[&str] = &[
+    "src",
+    "id",
+    "input",
+    "onDone",
+    "onError",
+    "onSnapshot",
+    "systemId",
+    "autoForward",
+];
 
 /// Strip matching surrounding quote characters from a property key.
 fn unquote(s: &str) -> &str {
@@ -36,7 +44,9 @@ fn validate_invoke_object(
         if child.kind() != "pair" {
             continue;
         }
-        let Some(key_node) = child.child_by_field_name("key") else { continue };
+        let Some(key_node) = child.child_by_field_name("key") else {
+            continue;
+        };
         let key = unquote(key_node.utf8_text(source).unwrap_or(""));
         if key == "src" {
             has_src = true;

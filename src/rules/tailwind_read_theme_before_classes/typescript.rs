@@ -31,10 +31,39 @@ const THEME_MARKERS: &[&str] = &[
 /// `data-[state=open]:` or `group-[.is-open]:` are variants, not tokens,
 /// so we leave them alone.
 const ARBITRARY_PREFIXES: &[&str] = &[
-    "p-[", "px-[", "py-[", "pt-[", "pb-[", "pl-[", "pr-[", "m-[", "mx-[", "my-[", "mt-[", "mb-[",
-    "ml-[", "mr-[", "gap-[", "gap-x-[", "gap-y-[", "space-x-[", "space-y-[", "w-[", "h-[",
-    "min-w-[", "min-h-[", "max-w-[", "max-h-[", "text-[", "bg-[", "border-[", "rounded-[",
-    "ring-[", "shadow-[", "leading-[", "tracking-[",
+    "p-[",
+    "px-[",
+    "py-[",
+    "pt-[",
+    "pb-[",
+    "pl-[",
+    "pr-[",
+    "m-[",
+    "mx-[",
+    "my-[",
+    "mt-[",
+    "mb-[",
+    "ml-[",
+    "mr-[",
+    "gap-[",
+    "gap-x-[",
+    "gap-y-[",
+    "space-x-[",
+    "space-y-[",
+    "w-[",
+    "h-[",
+    "min-w-[",
+    "min-h-[",
+    "max-w-[",
+    "max-h-[",
+    "text-[",
+    "bg-[",
+    "border-[",
+    "rounded-[",
+    "ring-[",
+    "shadow-[",
+    "leading-[",
+    "tracking-[",
 ];
 
 fn class_contains_arbitrary(text: &str) -> Option<usize> {
@@ -136,7 +165,10 @@ mod tests {
 
     #[test]
     fn flags_arbitrary_padding_without_theme_read() {
-        assert_eq!(run(r#"export const A = () => <div className="p-[13px]" />;"#).len(), 1);
+        assert_eq!(
+            run(r#"export const A = () => <div className="p-[13px]" />;"#).len(),
+            1
+        );
     }
 
     #[test]

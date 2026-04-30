@@ -7,9 +7,9 @@ mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
+use crate::rules::RuleDef;
 use crate::rules::backend::Backend;
 use crate::rules::meta::RuleMeta;
-use crate::rules::RuleDef;
 
 pub const META: RuleMeta = RuleMeta {
     id: "sql-boolean-column-prefix",
@@ -24,10 +24,22 @@ pub fn register() -> RuleDef {
     RuleDef {
         meta: META,
         backends: vec![
-            (Language::TypeScript, Backend::TreeSitter(Box::new(typescript::Check))),
-            (Language::TypeScript, Backend::TreeSitter(Box::new(drizzle::Check))),
-            (Language::JavaScript, Backend::TreeSitter(Box::new(typescript::Check))),
-            (Language::Tsx, Backend::TreeSitter(Box::new(typescript::Check))),
+            (
+                Language::TypeScript,
+                Backend::TreeSitter(Box::new(typescript::Check)),
+            ),
+            (
+                Language::TypeScript,
+                Backend::TreeSitter(Box::new(drizzle::Check)),
+            ),
+            (
+                Language::JavaScript,
+                Backend::TreeSitter(Box::new(typescript::Check)),
+            ),
+            (
+                Language::Tsx,
+                Backend::TreeSitter(Box::new(typescript::Check)),
+            ),
             (Language::Rust, Backend::TreeSitter(Box::new(rust::Check))),
             (Language::Sql, Backend::Text(Box::new(sql::Check))),
         ],
@@ -40,7 +52,14 @@ pub fn register() -> RuleDef {
 /// in PostgreSQL DDL are line-oriented in practice.
 pub(super) fn find_bad_boolean_columns(sql: &str) -> Vec<String> {
     const KEYWORDS: &[&str] = &[
-        "not", "null", "default", "check", "unique", "constraint", "primary", "references",
+        "not",
+        "null",
+        "default",
+        "check",
+        "unique",
+        "constraint",
+        "primary",
+        "references",
     ];
     let mut out = Vec::new();
     for line in sql.lines() {

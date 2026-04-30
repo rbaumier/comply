@@ -3,8 +3,8 @@
 mod react;
 
 use crate::diagnostic::Severity;
-use crate::rules::meta::RuleMeta;
 use crate::rules::RuleDef;
+use crate::rules::meta::RuleMeta;
 
 pub const META: RuleMeta = RuleMeta {
     id: "react-jsx-no-script-url",
@@ -18,5 +18,8 @@ pub const META: RuleMeta = RuleMeta {
 
 pub fn register() -> RuleDef {
     let backends = crate::register_ts_family!(META, react).backends;
-    RuleDef { meta: META, backends }
+    RuleDef {
+        meta: META,
+        backends,
+    }
 }

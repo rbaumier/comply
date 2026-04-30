@@ -6,8 +6,22 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
 const COLOR_PREFIXES: &[&str] = &[
-    "bg", "text", "border", "ring", "fill", "stroke", "from", "to", "via", "divide", "outline",
-    "accent", "caret", "placeholder", "shadow", "decoration",
+    "bg",
+    "text",
+    "border",
+    "ring",
+    "fill",
+    "stroke",
+    "from",
+    "to",
+    "via",
+    "divide",
+    "outline",
+    "accent",
+    "caret",
+    "placeholder",
+    "shadow",
+    "decoration",
 ];
 
 const COLORS: &[&str] = &[
@@ -26,7 +40,11 @@ fn dark_raw_color_prefix(class: &str) -> Option<&'static str> {
     if segments.len() < 2 {
         return None;
     }
-    if !segments.iter().take(segments.len() - 1).any(|s| *s == "dark") {
+    if !segments
+        .iter()
+        .take(segments.len() - 1)
+        .any(|s| *s == "dark")
+    {
         return None;
     }
     let utility = segments.last().copied().unwrap_or("");
@@ -45,10 +63,7 @@ fn dark_raw_color_prefix(class: &str) -> Option<&'static str> {
     if parts.next().is_some() {
         return None;
     }
-    if shade.len() >= 2
-        && shade.len() <= 3
-        && shade.chars().all(|c| c.is_ascii_digit())
-    {
+    if shade.len() >= 2 && shade.len() <= 3 && shade.chars().all(|c| c.is_ascii_digit()) {
         Some(matched_prefix)
     } else {
         None
@@ -63,7 +78,11 @@ fn has_light_counterpart(value: &str, prefix: &str) -> bool {
         let segments: Vec<&str> = class.split(':').collect();
         // Skip any class that already has a `dark:` segment — we want a
         // non-dark counterpart, not the same dark utility.
-        if segments.iter().take(segments.len().saturating_sub(1)).any(|s| *s == "dark") {
+        if segments
+            .iter()
+            .take(segments.len().saturating_sub(1))
+            .any(|s| *s == "dark")
+        {
             return false;
         }
         let utility = segments.last().copied().unwrap_or("");
@@ -107,12 +126,18 @@ mod tests {
 
     #[test]
     fn flags_dark_bg_gray_900() {
-        assert_eq!(run(r#"const x = <div className="bg-white dark:bg-gray-900">x</div>;"#).len(), 1);
+        assert_eq!(
+            run(r#"const x = <div className="bg-white dark:bg-gray-900">x</div>;"#).len(),
+            1
+        );
     }
 
     #[test]
     fn flags_dark_text_white() {
-        assert_eq!(run(r#"const x = <div className="text-black dark:text-white">x</div>;"#).len(), 1);
+        assert_eq!(
+            run(r#"const x = <div className="text-black dark:text-white">x</div>;"#).len(),
+            1
+        );
     }
 
     #[test]
@@ -122,7 +147,9 @@ mod tests {
 
     #[test]
     fn allows_no_dark_variant() {
-        assert!(run(r#"const x = <div className="bg-primary text-foreground">x</div>;"#).is_empty());
+        assert!(
+            run(r#"const x = <div className="bg-primary text-foreground">x</div>;"#).is_empty()
+        );
     }
 
     #[test]

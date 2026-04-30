@@ -35,7 +35,9 @@ fn find_pair<'a>(
 ) -> Option<tree_sitter::Node<'a>> {
     let mut cursor = object.walk();
     for child in object.named_children(&mut cursor) {
-        if child.kind() != "pair" { continue; }
+        if child.kind() != "pair" {
+            continue;
+        }
         let key = child.child_by_field_name("key")?;
         let raw = key.utf8_text(source).ok()?;
         if raw.trim_matches(|c| c == '"' || c == '\'') == needle {

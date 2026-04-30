@@ -5,8 +5,18 @@ use crate::diagnostic::{Diagnostic, Severity};
 const INTERACTIVE_ELEMENTS: &[&str] = &["button", "a", "input", "select", "textarea"];
 
 const NON_INTERACTIVE_ROLES: &[&str] = &[
-    "article", "banner", "complementary", "contentinfo", "document",
-    "img", "list", "listitem", "note", "presentation", "none", "heading",
+    "article",
+    "banner",
+    "complementary",
+    "contentinfo",
+    "document",
+    "img",
+    "list",
+    "listitem",
+    "note",
+    "presentation",
+    "none",
+    "heading",
 ];
 
 /// Extract the string value from a JSX attribute value node.
@@ -60,12 +70,18 @@ mod tests {
 
     #[test]
     fn flags_button_with_article_role() {
-        assert_eq!(run(r#"const x = <button role="article">X</button>;"#).len(), 1);
+        assert_eq!(
+            run(r#"const x = <button role="article">X</button>;"#).len(),
+            1
+        );
     }
 
     #[test]
     fn flags_a_with_presentation_role() {
-        assert_eq!(run(r##"const x = <a href="#" role="presentation">link</a>;"##).len(), 1);
+        assert_eq!(
+            run(r##"const x = <a href="#" role="presentation">link</a>;"##).len(),
+            1
+        );
     }
 
     #[test]

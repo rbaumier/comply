@@ -63,7 +63,8 @@ mod tests {
 
     #[test]
     fn flags_script_with_other_attrs_but_no_defer() {
-        let diags = run(r#"function App() { return <script src="/main.js" type="text/javascript" />; }"#);
+        let diags =
+            run(r#"function App() { return <script src="/main.js" type="text/javascript" />; }"#);
         assert_eq!(diags.len(), 1);
     }
 
@@ -80,7 +81,9 @@ mod tests {
     #[test]
     fn allows_inline_script() {
         // Inline (no src) is intentional — leave it alone.
-        assert!(run(r#"function App() { return <script>{`console.log("hi");`}</script>; }"#).is_empty());
+        assert!(
+            run(r#"function App() { return <script>{`console.log("hi");`}</script>; }"#).is_empty()
+        );
     }
 
     #[test]

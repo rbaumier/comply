@@ -41,12 +41,17 @@ mod tests {
 
     #[test]
     fn flags_onclick_without_key_handler() {
-        assert_eq!(run_on("const x = <div onClick={handler}>Click</div>;").len(), 1);
+        assert_eq!(
+            run_on("const x = <div onClick={handler}>Click</div>;").len(),
+            1
+        );
     }
 
     #[test]
     fn allows_onclick_with_onkeydown() {
-        assert!(run_on("const x = <div onClick={handler} onKeyDown={handler}>Click</div>;").is_empty());
+        assert!(
+            run_on("const x = <div onClick={handler} onKeyDown={handler}>Click</div>;").is_empty()
+        );
     }
 
     #[test]

@@ -4,8 +4,19 @@ use crate::diagnostic::{Diagnostic, Severity};
 use std::path::Path;
 
 const EXTENSIONS: &[&str] = &[
-    "", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".json",
-    "/index.ts", "/index.tsx", "/index.js", "/index.jsx", "/index.mjs",
+    "",
+    ".ts",
+    ".tsx",
+    ".js",
+    ".jsx",
+    ".mjs",
+    ".cjs",
+    ".json",
+    "/index.ts",
+    "/index.tsx",
+    "/index.js",
+    "/index.jsx",
+    "/index.mjs",
 ];
 
 fn is_relative_path(spec: &str) -> bool {

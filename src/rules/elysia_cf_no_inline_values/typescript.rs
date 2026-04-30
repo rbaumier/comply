@@ -2,7 +2,9 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-const ROUTE_METHODS: &[&str] = &["get", "post", "put", "patch", "delete", "options", "head", "all"];
+const ROUTE_METHODS: &[&str] = &[
+    "get", "post", "put", "patch", "delete", "options", "head", "all",
+];
 
 crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     if !ctx.project.has_framework("elysia") {

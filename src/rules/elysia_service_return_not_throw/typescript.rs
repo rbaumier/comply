@@ -36,16 +36,32 @@ fn imports_frontend(source: &str) -> bool {
 }
 
 const LIFECYCLE_METHODS: &[&str] = &[
-    "guard", "onError", "onRequest", "onTransform", "onParse",
-    "onBeforeHandle", "beforeHandle", "onAfterHandle", "afterHandle",
-    "derive", "resolve", "mapResponse", "onResponse", "trace",
-    "state", "decorate", "macro",
+    "guard",
+    "onError",
+    "onRequest",
+    "onTransform",
+    "onParse",
+    "onBeforeHandle",
+    "beforeHandle",
+    "onAfterHandle",
+    "afterHandle",
+    "derive",
+    "resolve",
+    "mapResponse",
+    "onResponse",
+    "trace",
+    "state",
+    "decorate",
+    "macro",
 ];
 
 fn callee_method_name<'a>(call: tree_sitter::Node<'a>, source: &'a [u8]) -> Option<&'a str> {
     let callee = call.child_by_field_name("function")?;
     match callee.kind() {
-        "member_expression" => callee.child_by_field_name("property")?.utf8_text(source).ok(),
+        "member_expression" => callee
+            .child_by_field_name("property")?
+            .utf8_text(source)
+            .ok(),
         "identifier" => callee.utf8_text(source).ok(),
         _ => None,
     }
@@ -59,9 +75,13 @@ fn is_inside_lifecycle_hook(node: tree_sitter::Node, source: &[u8]) -> bool {
             // Skip through type wrappers: `(handler) as Type`, `handler satisfies T`
             while let Some(gp) = wrapper.parent() {
                 match gp.kind() {
-                    "parenthesized_expression" | "as_expression"
-                    | "satisfies_expression" | "type_assertion"
-                    | "non_null_expression" => { wrapper = gp; }
+                    "parenthesized_expression"
+                    | "as_expression"
+                    | "satisfies_expression"
+                    | "type_assertion"
+                    | "non_null_expression" => {
+                        wrapper = gp;
+                    }
                     _ => break,
                 }
             }

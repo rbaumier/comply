@@ -230,10 +230,7 @@ impl ImportIndex {
         // First pass: stash exports, and partially-populate imports with their
         // raw specifiers resolved against disk (TS) or the module graph (Rust).
         for (path, mut extract) in per_file {
-            let is_rust = matches!(
-                path.extension().and_then(|e| e.to_str()),
-                Some("rs")
-            );
+            let is_rust = matches!(path.extension().and_then(|e| e.to_str()), Some("rs"));
             for imp in &mut extract.imports {
                 if is_rust {
                     if let Some(resolved) = rust_graph.resolve(&path, &imp.specifier) {
@@ -256,7 +253,9 @@ impl ImportIndex {
         let mut symbol_usages: HashMap<(PathBuf, String), Vec<Usage>> = HashMap::new();
         for (importer, imps) in &imports {
             for imp in imps {
-                let Some(src) = &imp.source_path else { continue };
+                let Some(src) = &imp.source_path else {
+                    continue;
+                };
                 let exported_name = match imp.kind {
                     ImportKind::Default => "default".to_string(),
                     ImportKind::Named => imp.imported_name.clone(),
@@ -284,7 +283,9 @@ impl ImportIndex {
             };
             let mut local_to_source: HashMap<String, (PathBuf, String)> = HashMap::new();
             for imp in imps {
-                let Some(src) = &imp.source_path else { continue };
+                let Some(src) = &imp.source_path else {
+                    continue;
+                };
                 let exported_name = match imp.kind {
                     ImportKind::Default => "default".to_string(),
                     ImportKind::Named => imp.imported_name.clone(),
@@ -547,7 +548,10 @@ fn propagate_reexports(
                 .entry((origin.clone(), origin_name.clone()))
                 .or_default();
             for usage in &barrel_usages {
-                if !origin_usages.iter().any(|u| u.importer == usage.importer && u.line == usage.line) {
+                if !origin_usages
+                    .iter()
+                    .any(|u| u.importer == usage.importer && u.line == usage.line)
+                {
                     origin_usages.push(usage.clone());
                     changed = true;
                 }
@@ -603,21 +607,60 @@ fn is_builtin_module(name: &str) -> bool {
     let name = name.strip_prefix("node:").unwrap_or(name);
     matches!(
         name,
-        "assert" | "async_hooks" | "buffer" | "child_process" | "cluster"
-        | "console" | "constants" | "crypto" | "dgram" | "diagnostics_channel"
-        | "dns" | "domain" | "events" | "fs" | "http" | "http2" | "https"
-        | "inspector" | "module" | "net" | "os" | "path" | "perf_hooks"
-        | "process" | "punycode" | "querystring" | "readline" | "repl"
-        | "stream" | "string_decoder" | "sys" | "test" | "timers"
-        | "tls" | "trace_events" | "tty" | "url" | "util" | "v8" | "vm"
-        | "wasi" | "worker_threads" | "zlib"
+        "assert"
+            | "async_hooks"
+            | "buffer"
+            | "child_process"
+            | "cluster"
+            | "console"
+            | "constants"
+            | "crypto"
+            | "dgram"
+            | "diagnostics_channel"
+            | "dns"
+            | "domain"
+            | "events"
+            | "fs"
+            | "http"
+            | "http2"
+            | "https"
+            | "inspector"
+            | "module"
+            | "net"
+            | "os"
+            | "path"
+            | "perf_hooks"
+            | "process"
+            | "punycode"
+            | "querystring"
+            | "readline"
+            | "repl"
+            | "stream"
+            | "string_decoder"
+            | "sys"
+            | "test"
+            | "timers"
+            | "tls"
+            | "trace_events"
+            | "tty"
+            | "url"
+            | "util"
+            | "v8"
+            | "vm"
+            | "wasi"
+            | "worker_threads"
+            | "zlib"
     )
 }
 
 fn is_indexable(lang: Language) -> bool {
     matches!(
         lang,
-        Language::TypeScript | Language::Tsx | Language::JavaScript | Language::Rust | Language::Vue
+        Language::TypeScript
+            | Language::Tsx
+            | Language::JavaScript
+            | Language::Rust
+            | Language::Vue
     )
 }
 
@@ -767,7 +810,8 @@ fn extract_for(parser: &mut Parser, file: &SourceFile) -> Option<(PathBuf, FileE
         "export_statement" => extract_export(node, source.as_bytes(), &mut exports),
         "new_expression" => extract_call(node, source.as_bytes(), CallKind::New, &mut calls),
         "call_expression" => {
-            if node.child_by_field_name("function")
+            if node
+                .child_by_field_name("function")
                 .is_some_and(|c| c.kind() == "import")
             {
                 extract_dynamic_import(node, source.as_bytes(), &mut imports);
@@ -783,14 +827,17 @@ fn extract_for(parser: &mut Parser, file: &SourceFile) -> Option<(PathBuf, FileE
     // different spellings of the same file (relative vs absolute) would miss
     // each other. Fall back to the given path if canonicalize fails.
     let canon = std::fs::canonicalize(&file.path).unwrap_or_else(|_| file.path.clone());
-    Some((canon, FileExtract { exports, imports, calls }))
+    Some((
+        canon,
+        FileExtract {
+            exports,
+            imports,
+            calls,
+        },
+    ))
 }
 
-fn extract_vue(
-    parser: &mut Parser,
-    source: &str,
-    path: &Path,
-) -> Option<(PathBuf, FileExtract)> {
+fn extract_vue(parser: &mut Parser, source: &str, path: &Path) -> Option<(PathBuf, FileExtract)> {
     let vue_lang = tree_sitter_vue_updated::language();
     parser.set_language(&vue_lang).ok()?;
     let vue_tree = parser.parse(source.as_bytes(), None)?;
@@ -857,7 +904,14 @@ fn extract_vue(
     }
 
     let canon = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    Some((canon, FileExtract { exports, imports, calls }))
+    Some((
+        canon,
+        FileExtract {
+            exports,
+            imports,
+            calls,
+        },
+    ))
 }
 
 /// Capture a `new_expression` / `call_expression` when its callee is a bare
@@ -913,9 +967,7 @@ fn extract_import(node: Node, source: &[u8], out: &mut Vec<ImportedSymbol>) {
 
     // `import type { X }` — statement-level type-only: the second child
     // (index 1, right after `import`) is the `type` keyword.
-    let stmt_type_only = node
-        .child(1)
-        .is_some_and(|c| c.kind() == "type");
+    let stmt_type_only = node.child(1).is_some_and(|c| c.kind() == "type");
 
     // Find the import clause child — if absent, it's a side-effect import.
     let clause = node
@@ -1081,9 +1133,7 @@ fn extract_export(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
 
     // `export * from './m'` / `export * as ns from './m'` — `export_clause`
     // may be absent; the wildcard is a `*` token child of export_statement.
-    let has_star = node
-        .children(&mut node.walk())
-        .any(|c| c.kind() == "*");
+    let has_star = node.children(&mut node.walk()).any(|c| c.kind() == "*");
     let source_str = find_specifier_string(node, source);
 
     if let Some(src) = &source_str
@@ -1103,7 +1153,7 @@ fn extract_export(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
                 kind: ExportKind::ReExport,
                 line,
                 reexport_source: Some(src.clone()),
-            params: Vec::new(),
+                params: Vec::new(),
             });
             return;
         }
@@ -1149,7 +1199,7 @@ fn extract_export(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
                 kind,
                 line,
                 reexport_source: source_str.clone(),
-            params: Vec::new(),
+                params: Vec::new(),
             });
         }
         return;
@@ -1219,7 +1269,7 @@ fn extract_export(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
                             kind: ExportKind::Named,
                             line,
                             reexport_source: None,
-            params: Vec::new(),
+                            params: Vec::new(),
                         });
                     }
                 }
@@ -1234,7 +1284,7 @@ fn extract_export(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
                         kind: ExportKind::Named,
                         line,
                         reexport_source: None,
-            params: Vec::new(),
+                        params: Vec::new(),
                     });
                 }
             }
@@ -1250,7 +1300,10 @@ fn find_specifier_string(node: Node, source: &[u8]) -> Option<String> {
         .named_children(&mut node.walk())
         .find(|c| c.kind() == "string")?;
     let raw = text_of(str_node, source);
-    Some(raw.trim_matches(|c| c == '\'' || c == '"' || c == '`').to_string())
+    Some(
+        raw.trim_matches(|c| c == '\'' || c == '"' || c == '`')
+            .to_string(),
+    )
 }
 
 fn text_of(node: Node, source: &[u8]) -> String {
@@ -1271,9 +1324,10 @@ fn extract_params(node: Node, source: &[u8]) -> Vec<String> {
             }
             "required_parameter" | "optional_parameter" => {
                 if let Some(id) = child.child_by_field_name("pattern")
-                    && id.kind() == "identifier" {
-                        result.push(text_of(id, source));
-                    }
+                    && id.kind() == "identifier"
+                {
+                    result.push(text_of(id, source));
+                }
             }
             _ => {}
         }
@@ -1375,7 +1429,9 @@ impl OxcPathResolver {
         let mut tsconfig_dirs: HashMap<PathBuf, PathBuf> = HashMap::new();
 
         for path in known_paths {
-            let Some(mut dir) = path.parent() else { continue };
+            let Some(mut dir) = path.parent() else {
+                continue;
+            };
             loop {
                 if seen_dirs.contains(dir) {
                     break;
@@ -1403,7 +1459,10 @@ impl OxcPathResolver {
 
         let fallback = Some(Self::make_oxc(None));
 
-        Self { resolvers, fallback }
+        Self {
+            resolvers,
+            fallback,
+        }
     }
 
     fn read_path_aliases(tsconfig_dir: &Path, tsconfig_path: &Path) -> Vec<(String, Vec<PathBuf>)> {
@@ -1419,7 +1478,8 @@ impl OxcPathResolver {
             Some(t) => t,
             None => return Vec::new(),
         };
-        let base = tsconfig.base_url
+        let base = tsconfig
+            .base_url
             .as_ref()
             .map(|b| tsconfig_dir.join(b))
             .unwrap_or_else(|| tsconfig_dir.to_path_buf());
@@ -1428,10 +1488,8 @@ impl OxcPathResolver {
             .paths
             .into_iter()
             .map(|(pattern, targets)| {
-                let resolved_targets: Vec<PathBuf> = targets
-                    .into_iter()
-                    .map(|t| base.join(t))
-                    .collect();
+                let resolved_targets: Vec<PathBuf> =
+                    targets.into_iter().map(|t| base.join(t)).collect();
                 (pattern, resolved_targets)
             })
             .collect()
@@ -1503,7 +1561,9 @@ impl OxcPathResolver {
             } else {
                 None
             };
-            let Some(suffix) = matched_suffix else { continue };
+            let Some(suffix) = matched_suffix else {
+                continue;
+            };
             for target in targets {
                 let target_str = target.to_string_lossy();
                 let expanded = if let Some(base) = target_str.strip_suffix('*') {
@@ -1511,7 +1571,7 @@ impl OxcPathResolver {
                 } else {
                     target.clone()
                 };
-                        if let Some(resolved) = probe_path(&expanded, known) {
+                if let Some(resolved) = probe_path(&expanded, known) {
                     return Some(resolved);
                 }
             }
@@ -1533,14 +1593,10 @@ fn extract_rust(
     let mut exports = Vec::new();
     let mut imports = Vec::new();
     walk_tree(tree, |node| match node.kind() {
-        "function_item"
-        | "struct_item"
-        | "enum_item"
-        | "trait_item"
-        | "type_item"
-        | "const_item"
-        | "static_item"
-        | "mod_item" => extract_rust_item(node, source, &mut exports),
+        "function_item" | "struct_item" | "enum_item" | "trait_item" | "type_item"
+        | "const_item" | "static_item" | "mod_item" => {
+            extract_rust_item(node, source, &mut exports)
+        }
         "use_declaration" => extract_rust_use(node, source, &mut exports, &mut imports),
         _ => {}
     });
@@ -1568,7 +1624,7 @@ fn extract_rust_item(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
         kind,
         line: node.start_position().row + 1,
         reexport_source: None,
-            params: Vec::new(),
+        params: Vec::new(),
     });
 }
 
@@ -1638,7 +1694,7 @@ fn extract_rust_use(
                 kind: ExportKind::ReExport,
                 line,
                 reexport_source: Some(specifier),
-            params: Vec::new(),
+                params: Vec::new(),
             });
         }
     }
@@ -1844,7 +1900,9 @@ impl RustModuleGraph {
         for f in &rust_files {
             let mut best: Option<&PathBuf> = None;
             for root in &crate_roots {
-                let Some(root_dir) = root.parent() else { continue };
+                let Some(root_dir) = root.parent() else {
+                    continue;
+                };
                 if f.starts_with(root_dir)
                     && best.is_none_or(|b: &PathBuf| {
                         b.parent().is_some_and(|bd| root_dir.starts_with(bd))
@@ -1956,7 +2014,10 @@ impl RustModuleGraph {
         // declaring dir).
         let (declaring_dir, sibling_name) =
             if file.file_name().and_then(|n| n.to_str()) == Some("mod.rs") {
-                (parent_dir.parent()?, parent_dir.file_name().and_then(|n| n.to_str()))
+                (
+                    parent_dir.parent()?,
+                    parent_dir.file_name().and_then(|n| n.to_str()),
+                )
             } else {
                 (parent_dir, None)
             };
@@ -2057,10 +2118,7 @@ mod tests {
 
     #[test]
     fn indexes_default_export() {
-        let (_dir, index, paths) = build_index(&[(
-            "m.ts",
-            "export default function hello() {}",
-        )]);
+        let (_dir, index, paths) = build_index(&[("m.ts", "export default function hello() {}")]);
         let exports = index.get_exports(&paths[0]);
         assert_eq!(exports.len(), 1);
         assert_eq!(exports[0].name, "default");
@@ -2127,10 +2185,8 @@ mod tests {
 
     #[test]
     fn side_effect_import_is_indexed() {
-        let (_dir, index, paths) = build_index(&[
-            ("m.ts", "console.log('side');"),
-            ("a.ts", "import './m';"),
-        ]);
+        let (_dir, index, paths) =
+            build_index(&[("m.ts", "console.log('side');"), ("a.ts", "import './m';")]);
         let imports = index.get_imports(&paths[1]);
         assert_eq!(imports.len(), 1);
         assert_eq!(imports[0].kind, ImportKind::SideEffect);
@@ -2147,10 +2203,7 @@ mod tests {
 
     #[test]
     fn bare_specifiers_stay_unresolved() {
-        let (_dir, index, paths) = build_index(&[(
-            "a.ts",
-            "import { useState } from 'react';",
-        )]);
+        let (_dir, index, paths) = build_index(&[("a.ts", "import { useState } from 'react';")]);
         let imports = index.get_imports(&paths[0]);
         assert_eq!(imports.len(), 1);
         assert!(imports[0].source_path.is_none());
@@ -2220,14 +2273,8 @@ mod tests {
         ]);
         let sites = index.get_call_sites(&paths[0], "Widget");
         assert_eq!(sites.len(), 2);
-        assert_eq!(
-            sites.iter().filter(|s| s.kind == CallKind::New).count(),
-            1
-        );
-        assert_eq!(
-            sites.iter().filter(|s| s.kind == CallKind::Call).count(),
-            1
-        );
+        assert_eq!(sites.iter().filter(|s| s.kind == CallKind::New).count(), 1);
+        assert_eq!(sites.iter().filter(|s| s.kind == CallKind::Call).count(), 1);
         assert!(sites.iter().all(|s| s.path == paths[1]));
     }
 
@@ -2365,7 +2412,10 @@ mod tests {
         let (_dir, index, paths) = build_index(&[
             ("lib.rs", "pub mod util;\npub use crate::util::helper;\n"),
             ("util.rs", "pub fn helper() {}\n"),
-            ("app.rs", "use crate::util::helper;\nfn main() { helper(); }\n"),
+            (
+                "app.rs",
+                "use crate::util::helper;\nfn main() { helper(); }\n",
+            ),
         ]);
         let util = &paths[1];
         let app = &paths[2];
@@ -2449,10 +2499,8 @@ mod tests {
 
     #[test]
     fn rust_external_crate_uses_stay_unresolved() {
-        let (_dir, index, paths) = build_index(&[(
-            "lib.rs",
-            "use serde::Deserialize;\npub fn _noop() {}\n",
-        )]);
+        let (_dir, index, paths) =
+            build_index(&[("lib.rs", "use serde::Deserialize;\npub fn _noop() {}\n")]);
         let imports = index.get_imports(&paths[0]);
         assert_eq!(imports.len(), 1);
         assert_eq!(imports[0].imported_name, "Deserialize");
@@ -2486,14 +2534,30 @@ mod tests {
         }"#;
         fs::write(dir.path().join("tsconfig.json"), tsconfig).unwrap();
         fs::create_dir_all(dir.path().join("src")).unwrap();
-        fs::write(dir.path().join("src/utils.ts"), "export function helper() {}").unwrap();
-        fs::write(dir.path().join("app.ts"), "import { helper } from '@/utils';").unwrap();
+        fs::write(
+            dir.path().join("src/utils.ts"),
+            "export function helper() {}",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("app.ts"),
+            "import { helper } from '@/utils';",
+        )
+        .unwrap();
 
         let utils_path = dir.path().join("src/utils.ts");
         let app_path = dir.path().join("app.ts");
 
-        let sources = [SourceFile { path: utils_path.clone(), language: Language::TypeScript },
-            SourceFile { path: app_path.clone(), language: Language::TypeScript }];
+        let sources = [
+            SourceFile {
+                path: utils_path.clone(),
+                language: Language::TypeScript,
+            },
+            SourceFile {
+                path: app_path.clone(),
+                language: Language::TypeScript,
+            },
+        ];
         let refs: Vec<&SourceFile> = sources.iter().collect();
         let index = ImportIndex::build(&refs);
 

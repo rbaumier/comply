@@ -20,8 +20,7 @@ impl TextCheck for Check {
                 continue;
             }
             let valid = if has_attr(elem.attrs, "type") {
-                attr_value(elem.attrs, "type")
-                    .is_none_or(|v| VALID_TYPES.contains(&v))
+                attr_value(elem.attrs, "type").is_none_or(|v| VALID_TYPES.contains(&v))
             } else {
                 false
             };

@@ -52,7 +52,10 @@ mod tests {
 
     #[test]
     fn flags_var_greater_than_string() {
-        assert_eq!(run_on(r#"fn f(name: &str) { let _ = name > "xyz"; }"#).len(), 1);
+        assert_eq!(
+            run_on(r#"fn f(name: &str) { let _ = name > "xyz"; }"#).len(),
+            1
+        );
     }
 
     #[test]

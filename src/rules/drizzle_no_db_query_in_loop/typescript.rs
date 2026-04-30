@@ -14,7 +14,9 @@ fn callee_text<'a>(node: tree_sitter::Node<'a>, source: &'a [u8]) -> Option<Stri
 }
 
 fn is_db_query(node: tree_sitter::Node<'_>, source: &[u8]) -> bool {
-    let Some(callee) = node.child_by_field_name("function") else { return false };
+    let Some(callee) = node.child_by_field_name("function") else {
+        return false;
+    };
     if callee.kind() != "member_expression" {
         return false;
     }
@@ -33,7 +35,8 @@ fn is_db_query(node: tree_sitter::Node<'_>, source: &[u8]) -> bool {
             }
         }
         // tx.select(...) / trx.select(...) — common transaction handles.
-        if (text.starts_with("tx.") || text.starts_with("trx.")) && DB_METHODS.contains(&prop_name) {
+        if (text.starts_with("tx.") || text.starts_with("trx.")) && DB_METHODS.contains(&prop_name)
+        {
             return true;
         }
     }
@@ -91,7 +94,8 @@ mod tests {
 
     #[test]
     fn flags_select_in_for_of() {
-        let src = "for (const id of ids) { await db.select().from(users).where(eq(users.id, id)); }";
+        let src =
+            "for (const id of ids) { await db.select().from(users).where(eq(users.id, id)); }";
         assert_eq!(run(src).len(), 1);
     }
 

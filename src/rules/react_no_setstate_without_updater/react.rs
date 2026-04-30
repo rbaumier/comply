@@ -9,10 +9,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 
 /// Return `(state_name, setter_name, declarator_node)` if this is a
 /// `useState` destructuring declaration.
-fn extract_usestate<'a>(
-    node: tree_sitter::Node<'a>,
-    source: &'a [u8],
-) -> Option<(String, String)> {
+fn extract_usestate<'a>(node: tree_sitter::Node<'a>, source: &'a [u8]) -> Option<(String, String)> {
     if node.kind() != "variable_declarator" {
         return None;
     }
@@ -50,9 +47,10 @@ fn argument_references(node: tree_sitter::Node<'_>, source: &[u8], name: &str) -
     }
     if node.kind() == "identifier" {
         if let Ok(text) = node.utf8_text(source)
-            && text == name {
-                return true;
-            }
+            && text == name
+        {
+            return true;
+        }
         return false;
     }
     let mut cursor = node.walk();
@@ -75,17 +73,18 @@ fn scan_function_body<'a>(
     for child in body.children(&mut cursor) {
         if child.kind() == "call_expression"
             && let Some(callee) = child.child_by_field_name("function")
-                && callee.kind() == "identifier"
-                    && callee.utf8_text(source).ok() == Some(setter)
-                    && let Some(args) = child.child_by_field_name("arguments") {
-                        let mut arg_cursor = args.walk();
-                        for arg in args.named_children(&mut arg_cursor) {
-                            if argument_references(arg, source, state) {
-                                out.push(child);
-                                break;
-                            }
-                        }
-                    }
+            && callee.kind() == "identifier"
+            && callee.utf8_text(source).ok() == Some(setter)
+            && let Some(args) = child.child_by_field_name("arguments")
+        {
+            let mut arg_cursor = args.walk();
+            for arg in args.named_children(&mut arg_cursor) {
+                if argument_references(arg, source, state) {
+                    out.push(child);
+                    break;
+                }
+            }
+        }
         scan_function_body(child, source, state, setter, out);
     }
 }

@@ -11,7 +11,9 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-const ROUTE_METHODS: &[&str] = &["get", "post", "put", "patch", "delete", "all", "head", "options", "route"];
+const ROUTE_METHODS: &[&str] = &[
+    "get", "post", "put", "patch", "delete", "all", "head", "options", "route",
+];
 
 fn is_dynamic_path(node: tree_sitter::Node<'_>, source: &[u8]) -> bool {
     match node.kind() {
@@ -146,10 +148,12 @@ mod tests {
         let project = ProjectCtx::for_test_with_framework("elysia");
         let src = "import { Elysia } from 'elysia';\nconst client = makeClient();\nawait client.get(`/users/${id}`);";
         assert!(
-            run_ts_with_project_and_path(src, &Check, &project, Path::new("src/users.test.ts")).is_empty()
+            run_ts_with_project_and_path(src, &Check, &project, Path::new("src/users.test.ts"))
+                .is_empty()
         );
         assert!(
-            run_ts_with_project_and_path(src, &Check, &project, Path::new("__tests__/users.ts")).is_empty()
+            run_ts_with_project_and_path(src, &Check, &project, Path::new("__tests__/users.ts"))
+                .is_empty()
         );
     }
 

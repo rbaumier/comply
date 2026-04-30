@@ -16,15 +16,42 @@ use crate::diagnostic::{Diagnostic, Severity};
 /// sub-categorisation functions that split by CSS property.
 const CONFLICT_PREFIXES: &[&str] = &[
     // spacing
-    "p-", "px-", "py-", "pt-", "pr-", "pb-", "pl-",
-    "m-", "mx-", "my-", "mt-", "mr-", "mb-", "ml-",
+    "p-",
+    "px-",
+    "py-",
+    "pt-",
+    "pr-",
+    "pb-",
+    "pl-",
+    "m-",
+    "mx-",
+    "my-",
+    "mt-",
+    "mr-",
+    "mb-",
+    "ml-",
     // sizing
-    "w-", "h-", "min-w-", "min-h-", "max-w-", "max-h-",
+    "w-",
+    "h-",
+    "min-w-",
+    "min-h-",
+    "max-w-",
+    "max-h-",
     // visual
-    "bg-", "rounded-", "shadow-", "opacity-", "z-",
+    "bg-",
+    "rounded-",
+    "shadow-",
+    "opacity-",
+    "z-",
     // layout
-    "gap-", "grid-cols-", "grid-rows-",
-    "justify-", "items-", "self-", "order-", "overflow-",
+    "gap-",
+    "grid-cols-",
+    "grid-rows-",
+    "justify-",
+    "items-",
+    "self-",
+    "order-",
+    "overflow-",
 ];
 
 /// Display classes that conflict (only one can be active).
@@ -47,19 +74,25 @@ const DISPLAY_CLASSES: &[&str] = &[
 fn css_value_type(value: &str) -> Option<&'static str> {
     let v = value.trim();
     if v.starts_with('#')
-        || v.starts_with("rgb") || v.starts_with("hsl") || v.starts_with("oklch")
-        || v.starts_with("hwb") || v.starts_with("lab") || v.starts_with("lch")
+        || v.starts_with("rgb")
+        || v.starts_with("hsl")
+        || v.starts_with("oklch")
+        || v.starts_with("hwb")
+        || v.starts_with("lab")
+        || v.starts_with("lch")
         || v.starts_with("color(")
     {
         return Some("color");
     }
     const LENGTH_UNITS: &[&str] = &[
-        "px", "rem", "em", "%", "vw", "vh", "dvh", "svh", "lvh",
-        "vmin", "vmax", "ch", "ex", "cap", "lh", "rlh", "pt", "pc", "mm", "cm", "in",
+        "px", "rem", "em", "%", "vw", "vh", "dvh", "svh", "lvh", "vmin", "vmax", "ch", "ex", "cap",
+        "lh", "rlh", "pt", "pc", "mm", "cm", "in",
     ];
     if LENGTH_UNITS.iter().any(|u| v.ends_with(u))
-        || v.starts_with("calc(") || v.starts_with("clamp(")
-        || v.starts_with("min(") || v.starts_with("max(")
+        || v.starts_with("calc(")
+        || v.starts_with("clamp(")
+        || v.starts_with("min(")
+        || v.starts_with("max(")
     {
         return Some("length");
     }
@@ -77,7 +110,9 @@ fn text_category(class: &str) -> Option<&'static str> {
         "left" | "center" | "right" | "justify" | "start" | "end" => return Some("text-align"),
         "ellipsis" | "clip" => return Some("text-overflow"),
         "uppercase" | "lowercase" | "capitalize" | "normal-case" => return Some("text-transform"),
-        "underline" | "overline" | "line-through" | "no-underline" => return Some("text-decoration"),
+        "underline" | "overline" | "line-through" | "no-underline" => {
+            return Some("text-decoration");
+        }
         _ => {}
     }
     if suffix.ends_with("xl") && suffix.len() > 2 {
@@ -107,7 +142,9 @@ fn flex_category(class: &str) -> Option<&'static str> {
 fn border_category(class: &str) -> Option<&'static str> {
     let suffix = &class[7..]; // strip "border-"
     match suffix {
-        "solid" | "dashed" | "dotted" | "double" | "hidden" | "none" => return Some("border-style"),
+        "solid" | "dashed" | "dotted" | "double" | "hidden" | "none" => {
+            return Some("border-style");
+        }
         "collapse" | "separate" => return Some("border-collapse"),
         _ => {}
     }
@@ -115,9 +152,14 @@ fn border_category(class: &str) -> Option<&'static str> {
         return Some("border-width");
     }
     for (side, group) in [
-        ("t", "border-top"), ("r", "border-right"), ("b", "border-bottom"),
-        ("l", "border-left"), ("x", "border-x"), ("y", "border-y"),
-        ("s", "border-start"), ("e", "border-end"),
+        ("t", "border-top"),
+        ("r", "border-right"),
+        ("b", "border-bottom"),
+        ("l", "border-left"),
+        ("x", "border-x"),
+        ("y", "border-y"),
+        ("s", "border-start"),
+        ("e", "border-end"),
     ] {
         if suffix == side || suffix.starts_with(&format!("{side}-")) {
             return Some(group);
@@ -130,18 +172,25 @@ fn font_category(class: &str) -> Option<&'static str> {
     match class {
         "font-sans" | "font-serif" | "font-mono" => Some("font-family"),
         "font-italic" | "font-not-italic" => Some("font-style"),
-        "font-thin" | "font-extralight" | "font-light" | "font-normal"
-        | "font-medium" | "font-semibold" | "font-bold" | "font-extrabold"
-        | "font-black" => Some("font-weight"),
+        "font-thin" | "font-extralight" | "font-light" | "font-normal" | "font-medium"
+        | "font-semibold" | "font-bold" | "font-extrabold" | "font-black" => Some("font-weight"),
         _ => None,
     }
 }
 
 fn conflict_key(class: &str) -> Option<&'static str> {
-    if class.starts_with("text-") { return text_category(class); }
-    if class.starts_with("flex-") { return flex_category(class); }
-    if class.starts_with("border-") { return border_category(class); }
-    if class.starts_with("font-") { return font_category(class); }
+    if class.starts_with("text-") {
+        return text_category(class);
+    }
+    if class.starts_with("flex-") {
+        return flex_category(class);
+    }
+    if class.starts_with("border-") {
+        return border_category(class);
+    }
+    if class.starts_with("font-") {
+        return font_category(class);
+    }
 
     let mut prefixes: Vec<&&str> = CONFLICT_PREFIXES.iter().collect();
     prefixes.sort_by_key(|p| std::cmp::Reverse(p.len()));
@@ -266,7 +315,9 @@ mod tests {
 
     #[test]
     fn allows_text_color_with_text_wrap() {
-        assert!(run(r#"const x = <div className="text-muted-foreground text-pretty" />;"#).is_empty());
+        assert!(
+            run(r#"const x = <div className="text-muted-foreground text-pretty" />;"#).is_empty()
+        );
     }
 
     #[test]
@@ -286,37 +337,57 @@ mod tests {
 
     #[test]
     fn flags_two_text_sizes() {
-        assert_eq!(run(r#"const x = <div className="text-sm text-2xl" />;"#).len(), 1);
+        assert_eq!(
+            run(r#"const x = <div className="text-sm text-2xl" />;"#).len(),
+            1
+        );
     }
 
     #[test]
     fn flags_two_flex_directions() {
-        assert_eq!(run(r#"const x = <div className="flex-row flex-col" />;"#).len(), 1);
+        assert_eq!(
+            run(r#"const x = <div className="flex-row flex-col" />;"#).len(),
+            1
+        );
     }
 
     #[test]
     fn flags_two_border_colors() {
-        assert_eq!(run(r#"const x = <div className="border-red-500 border-blue-500" />;"#).len(), 1);
+        assert_eq!(
+            run(r#"const x = <div className="border-red-500 border-blue-500" />;"#).len(),
+            1
+        );
     }
 
     #[test]
     fn flags_two_font_weights() {
-        assert_eq!(run(r#"const x = <div className="font-bold font-light" />;"#).len(), 1);
+        assert_eq!(
+            run(r#"const x = <div className="font-bold font-light" />;"#).len(),
+            1
+        );
     }
 
     #[test]
     fn allows_arbitrary_size_with_color() {
-        assert!(run(r#"const x = <div className="text-[10px] text-muted-foreground" />;"#).is_empty());
+        assert!(
+            run(r#"const x = <div className="text-[10px] text-muted-foreground" />;"#).is_empty()
+        );
     }
 
     #[test]
     fn flags_two_arbitrary_sizes() {
-        assert_eq!(run(r#"const x = <div className="text-[10px] text-[1.5rem]" />;"#).len(), 1);
+        assert_eq!(
+            run(r#"const x = <div className="text-[10px] text-[1.5rem]" />;"#).len(),
+            1
+        );
     }
 
     #[test]
     fn flags_two_arbitrary_colors() {
-        assert_eq!(run(r#"const x = <div className="text-[#ff0000] text-[#00ff00]" />;"#).len(), 1);
+        assert_eq!(
+            run(r#"const x = <div className="text-[#ff0000] text-[#00ff00]" />;"#).len(),
+            1
+        );
     }
 
     #[test]

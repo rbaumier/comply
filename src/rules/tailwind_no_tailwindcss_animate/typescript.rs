@@ -40,7 +40,10 @@ mod tests {
 
     #[test]
     fn flags_default_import() {
-        assert_eq!(run(r#"import animate from "tailwindcss-animate";"#).len(), 1);
+        assert_eq!(
+            run(r#"import animate from "tailwindcss-animate";"#).len(),
+            1
+        );
     }
 
     #[test]

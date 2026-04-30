@@ -13,12 +13,12 @@ fn file_has_form_action_expr(source: &str) -> bool {
     let bytes = source.as_bytes();
     let mut i = 0;
     while i + 5 < bytes.len() {
-        if &bytes[i..i + 5] == b"<form"
-            && (i == 0 || !bytes[i - 1].is_ascii_alphanumeric())
-        {
+        if &bytes[i..i + 5] == b"<form" && (i == 0 || !bytes[i - 1].is_ascii_alphanumeric()) {
             let scan_end = (i + 500).min(bytes.len());
             let mut j = i;
-            while j < scan_end && bytes[j] != b'>' { j += 1; }
+            while j < scan_end && bytes[j] != b'>' {
+                j += 1;
+            }
             if source[i..j].contains("action={") {
                 return true;
             }
@@ -43,7 +43,9 @@ impl TextCheck for Check {
         if src.contains("useActionState") {
             return Vec::new();
         }
-        let Some(idx) = src.find("useTransition") else { return Vec::new() };
+        let Some(idx) = src.find("useTransition") else {
+            return Vec::new();
+        };
         let prefix = &src[..idx];
         let line = prefix.bytes().filter(|b| *b == b'\n').count() + 1;
         let col = prefix.rfind('\n').map_or(idx, |nl| idx - nl - 1) + 1;

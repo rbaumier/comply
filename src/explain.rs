@@ -6,7 +6,7 @@
 //! up in diagnostics, but without requiring the user to trigger the
 //! violation first.
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 
 use crate::diagnostic::Severity;
 use crate::rules::{self, meta::RuleMeta};
@@ -27,10 +27,7 @@ pub fn run(rule_id: &str) -> Result<()> {
 
 /// Look up a rule by its stable id.
 fn find_rule<'a>(rules: &'a [rules::RuleDef], rule_id: &str) -> Option<&'a RuleMeta> {
-    rules
-        .iter()
-        .map(|r| &r.meta)
-        .find(|m| m.id == rule_id)
+    rules.iter().map(|r| &r.meta).find(|m| m.id == rule_id)
 }
 
 /// Render a rule's metadata for the terminal.
@@ -58,7 +55,8 @@ fn format_meta(meta: &RuleMeta) -> String {
 }
 
 /// Soft-wrap a string at word boundaries to a given character count.
-fn wrap_lines(text: &str, width_chars: usize) -> Vec<String> { // comply-ignore: explicit-units — `_chars` IS the unit suffix.
+fn wrap_lines(text: &str, width_chars: usize) -> Vec<String> {
+    // comply-ignore: explicit-units — `_chars` IS the unit suffix.
     let mut lines = Vec::new();
     let mut current = String::new();
     for word in text.split_whitespace() {
@@ -99,7 +97,8 @@ mod tests {
             description: "A test rule.",
             remediation: "Fix the test.",
             severity: Severity::Warning,
-            doc_url: None, categories: &[],
+            doc_url: None,
+            categories: &[],
         };
         let out = format_meta(&meta);
         assert!(out.contains("[test-rule]"));

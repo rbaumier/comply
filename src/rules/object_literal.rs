@@ -9,10 +9,7 @@
 /// because tree-sitter-typescript exposes string literal nodes WITH
 /// the surrounding quotes.
 #[must_use]
-pub fn object_pair<'a>(
-    node: tree_sitter::Node,
-    source: &'a [u8],
-) -> Option<(&'a str, &'a str)> {
+pub fn object_pair<'a>(node: tree_sitter::Node, source: &'a [u8]) -> Option<(&'a str, &'a str)> {
     if node.kind() != "pair" {
         return None;
     }

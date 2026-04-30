@@ -57,7 +57,8 @@ mod tests {
 
     #[test]
     fn allows_only_zod() {
-        let src = "import { Elysia } from 'elysia';\nimport { z } from 'zod';\nconst s = z.object({});";
+        let src =
+            "import { Elysia } from 'elysia';\nimport { z } from 'zod';\nconst s = z.object({});";
         assert!(run_on(src).is_empty());
     }
 

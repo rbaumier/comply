@@ -42,8 +42,7 @@ impl crate::rules::backend::AstCheck for Check {
 
                 if arr.elements.len() < 2 {
                     let span = var_decl.id.span();
-                    let (line, column) =
-                        byte_offset_to_line_col(ctx.source, span.start as usize);
+                    let (line, column) = byte_offset_to_line_col(ctx.source, span.start as usize);
                     diagnostics.push(Diagnostic {
                         path: std::sync::Arc::clone(&ctx.path_arc),
                         line,

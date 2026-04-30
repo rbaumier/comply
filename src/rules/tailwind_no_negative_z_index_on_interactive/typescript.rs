@@ -66,12 +66,18 @@ mod tests {
 
     #[test]
     fn flags_anchor_with_negative_z() {
-        assert_eq!(run(r#"const x = <a href="/h" className="-z-1">x</a>;"#).len(), 1);
+        assert_eq!(
+            run(r#"const x = <a href="/h" className="-z-1">x</a>;"#).len(),
+            1
+        );
     }
 
     #[test]
     fn flags_role_button_div() {
-        assert_eq!(run(r#"const x = <div role="button" className="-z-50" />;"#).len(), 1);
+        assert_eq!(
+            run(r#"const x = <div role="button" className="-z-50" />;"#).len(),
+            1
+        );
     }
 
     #[test]

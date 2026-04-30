@@ -106,10 +106,7 @@ mod tests {
 
     #[test]
     fn skips_bare_specifier() {
-        let (_dir, project, paths) = setup_project(&[(
-            "app.ts",
-            "import React from 'react';",
-        )]);
+        let (_dir, project, paths) = setup_project(&[("app.ts", "import React from 'react';")]);
         let source = "import React from 'react';";
         let diags = run_ts_with_project_and_path(source, &Check, &project, &paths[0]);
         assert!(diags.is_empty());
@@ -117,10 +114,8 @@ mod tests {
 
     #[test]
     fn flags_parent_relative_unresolved() {
-        let (_dir, project, paths) = setup_project(&[(
-            "sub/app.ts",
-            "import { x } from '../missing';",
-        )]);
+        let (_dir, project, paths) =
+            setup_project(&[("sub/app.ts", "import { x } from '../missing';")]);
         let source = "import { x } from '../missing';";
         let diags = run_ts_with_project_and_path(source, &Check, &project, &paths[0]);
         assert_eq!(diags.len(), 1);

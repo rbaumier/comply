@@ -94,7 +94,8 @@ mod tests {
 
     #[test]
     fn allows_pure_data_migration() {
-        let src = "INSERT INTO users (id) VALUES (1);\nUPDATE users SET role = 'admin' WHERE id = 1;";
+        let src =
+            "INSERT INTO users (id) VALUES (1);\nUPDATE users SET role = 'admin' WHERE id = 1;";
         assert!(run_at(src, "drizzle/0003_seed.sql").is_empty());
     }
 

@@ -121,8 +121,7 @@ mod tests {
 
     #[test]
     fn allows_box_dyn_error_send_sync() {
-        let source =
-            "fn f() -> Result<(), Box<dyn std::error::Error + Send + Sync>> { Ok(()) }";
+        let source = "fn f() -> Result<(), Box<dyn std::error::Error + Send + Sync>> { Ok(()) }";
         assert!(run_on(source).is_empty());
     }
 

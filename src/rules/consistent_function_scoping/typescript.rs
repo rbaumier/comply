@@ -304,10 +304,10 @@ mod tests {
 
     #[test]
     fn skips_inline_function_callback() {
-        assert!(run_on(
-            "const arr = [1,2,3]; arr.forEach(function(x) { console.log(x); });\n"
-        )
-        .is_empty());
+        assert!(
+            run_on("const arr = [1,2,3]; arr.forEach(function(x) { console.log(x); });\n")
+                .is_empty()
+        );
     }
 
     #[test]
@@ -317,13 +317,15 @@ mod tests {
 
     #[test]
     fn skips_function_using_this() {
-        let src = "function outer() {\n  function inner() { return this.value; }\n  return inner;\n}\n";
+        let src =
+            "function outer() {\n  function inner() { return this.value; }\n  return inner;\n}\n";
         assert!(run_on(src).is_empty());
     }
 
     #[test]
     fn flags_nested_arrow_without_capture() {
-        let src = "function outer() {\n  const helper = (a: number) => a * 2;\n  return helper(3);\n}\n";
+        let src =
+            "function outer() {\n  const helper = (a: number) => a * 2;\n  return helper(3);\n}\n";
         let d = run_on(src);
         assert_eq!(d.len(), 1);
     }

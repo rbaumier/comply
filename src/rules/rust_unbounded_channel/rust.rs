@@ -42,8 +42,7 @@ impl AstCheck for Check {
         let is_unbounded = text.ends_with("unbounded_channel")
             || text.ends_with("unbounded")
             || text.ends_with("mpsc::channel")
-            || text == "channel"
-            && is_inside_mpsc_use(node, source_bytes);
+            || text == "channel" && is_inside_mpsc_use(node, source_bytes);
         if !is_unbounded {
             return;
         }
@@ -91,14 +90,9 @@ fn is_inside_mpsc_use(_node: tree_sitter::Node, source: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
-
-
         crate::rules::test_helpers::run_rust(source, &Check)
-
-
     }
 
     #[test]

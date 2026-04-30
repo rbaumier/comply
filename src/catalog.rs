@@ -78,7 +78,11 @@ fn print_markdown(rules: &[rules::RuleDef]) {
     println!("## Categories");
     println!();
     for (cat, group) in &by_category {
-        let anchor = cat.replace(' ', "-").replace('>', "").replace("--", "-").to_lowercase();
+        let anchor = cat
+            .replace(' ', "-")
+            .replace('>', "")
+            .replace("--", "-")
+            .to_lowercase();
         println!("- [{cat}](#{anchor}) ({} rules)", group.len());
     }
     println!();
@@ -116,8 +120,8 @@ fn print_json(rules: &[rules::RuleDef]) -> Result<()> {
         })
         .collect();
 
-    let output = serde_json::to_string_pretty(&json_rules)
-        .context("failed to serialize catalog as JSON")?;
+    let output =
+        serde_json::to_string_pretty(&json_rules).context("failed to serialize catalog as JSON")?;
     println!("{output}");
     Ok(())
 }

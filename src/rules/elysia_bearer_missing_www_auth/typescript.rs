@@ -7,7 +7,9 @@ use crate::rules::backend::{AstCheck, CheckCtx};
 pub struct Check;
 
 impl AstCheck for Check {
-    fn prefilter(&self) -> Option<&'static [&'static str]> { Some(&["WWW-Authenticate"]) }
+    fn prefilter(&self) -> Option<&'static [&'static str]> {
+        Some(&["WWW-Authenticate"])
+    }
 
     fn check(&self, ctx: &CheckCtx, _tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
         if !ctx.project.has_framework("elysia") {
@@ -25,7 +27,9 @@ impl AstCheck for Check {
                     line: idx + 1,
                     column: 1,
                     rule_id: "elysia-bearer-missing-www-auth".into(),
-                    message: "Bearer auth 401/400 response without `WWW-Authenticate` header (RFC 6750).".into(),
+                    message:
+                        "Bearer auth 401/400 response without `WWW-Authenticate` header (RFC 6750)."
+                            .into(),
                     severity: Severity::Warning,
                     span: None,
                 });

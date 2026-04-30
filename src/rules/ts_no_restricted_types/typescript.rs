@@ -10,9 +10,18 @@ use crate::diagnostic::{Diagnostic, Severity};
 
 /// Banned type identifiers and their replacement message.
 const BANNED_TYPES: &[(&str, &str)] = &[
-    ("Function", "Use a specific function type like `() => void` instead of `Function`."),
-    ("Object", "Use `object` or `Record<string, unknown>` instead of `Object`."),
-    ("{}",  "Use `object` or `Record<string, unknown>` instead of `{}`."),
+    (
+        "Function",
+        "Use a specific function type like `() => void` instead of `Function`.",
+    ),
+    (
+        "Object",
+        "Use `object` or `Record<string, unknown>` instead of `Object`.",
+    ),
+    (
+        "{}",
+        "Use `object` or `Record<string, unknown>` instead of `{}`.",
+    ),
 ];
 
 /// True when `node` sits inside a type-annotation context.
@@ -20,12 +29,23 @@ fn in_type_context(node: tree_sitter::Node) -> bool {
     let mut cur = node.parent();
     while let Some(p) = cur {
         match p.kind() {
-            "type_annotation" | "type_alias_declaration" | "extends_clause"
-            | "implements_clause" | "as_expression" | "satisfies_expression"
-            | "generic_type" | "union_type" | "intersection_type"
-            | "type_arguments" | "type_parameters" | "parenthesized_type"
-            | "array_type" | "readonly_type" | "return_type"
-            | "constraint" | "default_type" => return true,
+            "type_annotation"
+            | "type_alias_declaration"
+            | "extends_clause"
+            | "implements_clause"
+            | "as_expression"
+            | "satisfies_expression"
+            | "generic_type"
+            | "union_type"
+            | "intersection_type"
+            | "type_arguments"
+            | "type_parameters"
+            | "parenthesized_type"
+            | "array_type"
+            | "readonly_type"
+            | "return_type"
+            | "constraint"
+            | "default_type" => return true,
             _ => {}
         }
         cur = p.parent();

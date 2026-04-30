@@ -9,9 +9,16 @@ fn is_primitive_arg(arg: &str) -> bool {
     if arg.is_empty() {
         return false;
     }
-    if arg.chars().next().is_some_and(|c| c.is_ascii_digit() || c == '-') {
+    if arg
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_digit() || c == '-')
+    {
         let rest = arg.trim_start_matches('-');
-        if rest.chars().all(|c| c.is_ascii_digit() || c == '.' || c == '_') {
+        if rest
+            .chars()
+            .all(|c| c.is_ascii_digit() || c == '.' || c == '_')
+        {
             return true;
         }
     }
@@ -77,12 +84,18 @@ mod tests {
 
     #[test]
     fn flags_ref_string() {
-        assert_eq!(run("<script setup>\nconst s = ref('hi')\n</script>").len(), 1);
+        assert_eq!(
+            run("<script setup>\nconst s = ref('hi')\n</script>").len(),
+            1
+        );
     }
 
     #[test]
     fn flags_ref_bool() {
-        assert_eq!(run("<script setup>\nconst b = ref(true)\n</script>").len(), 1);
+        assert_eq!(
+            run("<script setup>\nconst b = ref(true)\n</script>").len(),
+            1
+        );
     }
 
     #[test]

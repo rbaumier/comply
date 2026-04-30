@@ -11,15 +11,42 @@ use crate::rules::backend::{AstCheck, CheckCtx};
 const KINDS: &[&str] = &["function_item"];
 
 const ACTION_PREFIXES: &[&str] = &[
-    "save_", "delete_", "remove_", "create_", "update_", "insert_",
-    "parse_", "validate_", "connect_", "send_", "write_", "load_",
-    "execute_", "process_", "publish_", "submit_", "commit_",
-    "apply_", "fetch_", "store_", "register_", "unregister_",
+    "save_",
+    "delete_",
+    "remove_",
+    "create_",
+    "update_",
+    "insert_",
+    "parse_",
+    "validate_",
+    "connect_",
+    "send_",
+    "write_",
+    "load_",
+    "execute_",
+    "process_",
+    "publish_",
+    "submit_",
+    "commit_",
+    "apply_",
+    "fetch_",
+    "store_",
+    "register_",
+    "unregister_",
 ];
 
 const EXEMPT_PREFIXES: &[&str] = &[
-    "is_", "has_", "should_", "can_", "may_", "must_", "needs_",
-    "contains_", "matches_", "supports_", "accepts_",
+    "is_",
+    "has_",
+    "should_",
+    "can_",
+    "may_",
+    "must_",
+    "needs_",
+    "contains_",
+    "matches_",
+    "supports_",
+    "accepts_",
 ];
 
 #[derive(Debug)]
@@ -92,14 +119,9 @@ fn looks_like_predicate(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
-
-
         crate::rules::test_helpers::run_rust(source, &Check)
-
-
     }
 
     #[test]

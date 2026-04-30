@@ -77,8 +77,12 @@ fn find_const_number(node: tree_sitter::Node, source: &[u8], name: &str) -> Opti
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
             if child.kind() == "variable_declarator" {
-                let Some(name_node) = child.child_by_field_name("name") else { continue };
-                let Some(value_node) = child.child_by_field_name("value") else { continue };
+                let Some(name_node) = child.child_by_field_name("name") else {
+                    continue;
+                };
+                let Some(value_node) = child.child_by_field_name("value") else {
+                    continue;
+                };
                 if name_node.utf8_text(source).ok()? == name && value_node.kind() == "number" {
                     return value_node.utf8_text(source).ok()?.parse::<i64>().ok();
                 }
@@ -130,7 +134,10 @@ mod tests {
 
     #[test]
     fn flags_low_rounds_via_const() {
-        assert_eq!(run("const SALT_ROUNDS = 8;\nbcrypt.hash(pw, SALT_ROUNDS);").len(), 1);
+        assert_eq!(
+            run("const SALT_ROUNDS = 8;\nbcrypt.hash(pw, SALT_ROUNDS);").len(),
+            1
+        );
     }
 
     #[test]

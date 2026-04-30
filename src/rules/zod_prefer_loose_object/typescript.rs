@@ -38,7 +38,10 @@ mod tests {
 
     #[test]
     fn flags_passthrough_chain() {
-        assert_eq!(run("const S = z.object({ a: z.string() }).passthrough();").len(), 1);
+        assert_eq!(
+            run("const S = z.object({ a: z.string() }).passthrough();").len(),
+            1
+        );
     }
 
     #[test]

@@ -95,14 +95,9 @@ fn inside_query_hook(node: tree_sitter::Node, source: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
-
-
         crate::rules::test_helpers::run_ts(source, &Check)
-
-
     }
 
     #[test]
@@ -129,8 +124,6 @@ mod tests {
     #[test]
     fn does_not_flag_on_success_in_mutation() {
         // useMutation still supports onSuccess — don't flag it.
-        assert!(
-            run_on("useMutation({ onSuccess: () => {} });").is_empty()
-        );
+        assert!(run_on("useMutation({ onSuccess: () => {} });").is_empty());
     }
 }

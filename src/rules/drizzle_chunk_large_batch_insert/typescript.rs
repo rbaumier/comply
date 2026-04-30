@@ -53,14 +53,18 @@ fn chain_has_insert(mut node: tree_sitter::Node, source: &[u8]) -> bool {
     loop {
         match node.kind() {
             "call_expression" => {
-                let Some(func) = node.child_by_field_name("function") else { return false };
+                let Some(func) = node.child_by_field_name("function") else {
+                    return false;
+                };
                 if func.kind() == "member_expression" {
                     if let Some(prop) = func.child_by_field_name("property")
                         && prop.utf8_text(source).unwrap_or("") == "insert"
                     {
                         return true;
                     }
-                    let Some(obj) = func.child_by_field_name("object") else { return false };
+                    let Some(obj) = func.child_by_field_name("object") else {
+                        return false;
+                    };
                     node = obj;
                     continue;
                 }
@@ -71,7 +75,9 @@ fn chain_has_insert(mut node: tree_sitter::Node, source: &[u8]) -> bool {
                 return false;
             }
             "member_expression" => {
-                let Some(obj) = node.child_by_field_name("object") else { return false };
+                let Some(obj) = node.child_by_field_name("object") else {
+                    return false;
+                };
                 node = obj;
             }
             _ => return false,

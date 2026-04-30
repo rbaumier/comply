@@ -28,11 +28,15 @@ fn has_use_client_directive(program: tree_sitter::Node<'_>, source: &[u8]) -> bo
             }
             return false;
         }
-        let Some(expr) = child.child(0) else { return false };
+        let Some(expr) = child.child(0) else {
+            return false;
+        };
         if expr.kind() != "string" {
             return false;
         }
-        let Ok(text) = expr.utf8_text(source) else { return false };
+        let Ok(text) = expr.utf8_text(source) else {
+            return false;
+        };
         let unquoted = text.trim_matches(|c| c == '"' || c == '\'');
         if unquoted == "use client" {
             return true;

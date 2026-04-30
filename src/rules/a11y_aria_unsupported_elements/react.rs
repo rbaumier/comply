@@ -49,7 +49,10 @@ mod tests {
 
     #[test]
     fn flags_role_on_script() {
-        assert_eq!(run_on(r#"const x = <script role="presentation" />;"#).len(), 1);
+        assert_eq!(
+            run_on(r#"const x = <script role="presentation" />;"#).len(),
+            1
+        );
     }
 
     #[test]

@@ -3,8 +3,8 @@
 mod react;
 
 use crate::diagnostic::Severity;
-use crate::rules::meta::RuleMeta;
 use crate::rules::RuleDef;
+use crate::rules::meta::RuleMeta;
 
 pub const META: RuleMeta = RuleMeta {
     id: "react-no-invalid-html-attribute",
@@ -13,11 +13,16 @@ pub const META: RuleMeta = RuleMeta {
                   `noopener`, `noreferrer`, `nofollow`. For `<link>` they include \
                   `stylesheet`, `icon`, `preload`, `prefetch`.",
     severity: Severity::Warning,
-    doc_url: Some("https://github.com/jsx-eslint/eslint-plugin-react/blob/master/docs/rules/no-invalid-html-attribute.md"),
+    doc_url: Some(
+        "https://github.com/jsx-eslint/eslint-plugin-react/blob/master/docs/rules/no-invalid-html-attribute.md",
+    ),
     categories: &["react"],
 };
 
 pub fn register() -> RuleDef {
     let backends = crate::register_ts_family!(META, react).backends;
-    RuleDef { meta: META, backends }
+    RuleDef {
+        meta: META,
+        backends,
+    }
 }

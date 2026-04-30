@@ -57,7 +57,12 @@ mod tests {
 
     #[test]
     fn allows_enum_with_thiserror() {
-        assert!(run("#[derive(thiserror::Error)]\npub enum MyError { #[error(\"not found\")] NotFound }").is_empty());
+        assert!(
+            run(
+                "#[derive(thiserror::Error)]\npub enum MyError { #[error(\"not found\")] NotFound }"
+            )
+            .is_empty()
+        );
     }
 
     #[test]

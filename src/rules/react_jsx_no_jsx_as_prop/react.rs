@@ -7,9 +7,22 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
 const ALLOWED_PROPS: &[&str] = &[
-    "trigger", "content", "icon", "overlay", "asChild", "fallback",
-    "label", "description", "title", "action", "prefix", "suffix",
-    "left", "right", "header", "footer",
+    "trigger",
+    "content",
+    "icon",
+    "overlay",
+    "asChild",
+    "fallback",
+    "label",
+    "description",
+    "title",
+    "action",
+    "prefix",
+    "suffix",
+    "left",
+    "right",
+    "header",
+    "footer",
 ];
 
 crate::ast_check! { on ["jsx_attribute"] => |node, source, ctx, diagnostics|

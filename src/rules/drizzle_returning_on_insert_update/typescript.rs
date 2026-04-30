@@ -98,8 +98,7 @@ mod tests {
     #[test]
     fn flags_update_without_returning() {
         assert_eq!(
-            run_on("await db.update(users).set({ active: false }).where(eq(users.id, id))")
-                .len(),
+            run_on("await db.update(users).set({ active: false }).where(eq(users.id, id))").len(),
             1
         );
     }
@@ -114,10 +113,12 @@ mod tests {
 
     #[test]
     fn allows_update_with_returning() {
-        assert!(run_on(
-            "await db.update(users).set({ active: false }).where(eq(users.id, id)).returning()"
-        )
-        .is_empty());
+        assert!(
+            run_on(
+                "await db.update(users).set({ active: false }).where(eq(users.id, id)).returning()"
+            )
+            .is_empty()
+        );
     }
 
     #[test]

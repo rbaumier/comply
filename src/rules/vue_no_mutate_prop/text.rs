@@ -96,9 +96,8 @@ fn prop_mutation_column(line: &str) -> Option<usize> {
         // (`.ident`, `[...]` is skipped for simplicity).
         let mut p = start + "props.".len();
         // Must have at least one identifier char.
-        if p >= bytes.len() || !(bytes[p] as char).is_ascii_alphabetic()
-            && bytes[p] != b'_'
-            && bytes[p] != b'$'
+        if p >= bytes.len()
+            || !(bytes[p] as char).is_ascii_alphabetic() && bytes[p] != b'_' && bytes[p] != b'$'
         {
             search_from = start + 6;
             continue;
@@ -202,10 +201,9 @@ impl TextCheck for Check {
                         line: idx + 1,
                         column: col + 1,
                         rule_id: super::META.id.into(),
-                        message:
-                            "Mutating a prop directly breaks Vue's one-way data flow. \
+                        message: "Mutating a prop directly breaks Vue's one-way data flow. \
                              Emit an event or copy the prop into a local ref instead."
-                                .into(),
+                            .into(),
                         severity: Severity::Warning,
                         span: None,
                     });

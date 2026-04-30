@@ -14,8 +14,8 @@ fn mentions_dangerous_identifier(text: &str) -> bool {
         let mut i = 0;
         while i + nb.len() <= bytes.len() {
             if &bytes[i..i + nb.len()] == nb {
-                let before_ok = i == 0
-                    || matches!(bytes[i - 1], b'{' | b'.' | b' ' | b'\t' | b'\n' | b'\r');
+                let before_ok =
+                    i == 0 || matches!(bytes[i - 1], b'{' | b'.' | b' ' | b'\t' | b'\n' | b'\r');
                 let after_idx = i + nb.len();
                 let after_ok = after_idx == bytes.len()
                     || matches!(

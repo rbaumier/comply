@@ -90,8 +90,7 @@ mod tests {
     #[test]
     fn flags_user_scalable_no() {
         assert_eq!(
-            run(r#"<meta name="viewport" content="width=device-width, user-scalable=no" />"#)
-                .len(),
+            run(r#"<meta name="viewport" content="width=device-width, user-scalable=no" />"#).len(),
             1
         );
     }
@@ -99,8 +98,7 @@ mod tests {
     #[test]
     fn flags_maximum_scale_1() {
         assert_eq!(
-            run(r#"<meta name="viewport" content="width=device-width, maximum-scale=1" />"#)
-                .len(),
+            run(r#"<meta name="viewport" content="width=device-width, maximum-scale=1" />"#).len(),
             1
         );
     }
@@ -123,8 +121,6 @@ mod tests {
 
     #[test]
     fn allows_non_viewport_meta() {
-        assert!(
-            run(r#"<meta name="description" content="user-scalable=no" />"#).is_empty()
-        );
+        assert!(run(r#"<meta name="description" content="user-scalable=no" />"#).is_empty());
     }
 }

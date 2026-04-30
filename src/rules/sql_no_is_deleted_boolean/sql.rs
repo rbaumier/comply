@@ -30,10 +30,7 @@ impl TextCheck for Check {
                 buf.clear();
             }
         }
-        if !buf.trim().is_empty()
-            && is_sql_ddl(&buf)
-            && super::sql_uses_is_deleted_boolean(&buf)
-        {
+        if !buf.trim().is_empty() && is_sql_ddl(&buf) && super::sql_uses_is_deleted_boolean(&buf) {
             diagnostics.push(make_diag(ctx, start_line));
         }
         diagnostics

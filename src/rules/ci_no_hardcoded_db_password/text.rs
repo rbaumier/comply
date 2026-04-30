@@ -49,7 +49,8 @@ mod tests {
 
     #[test]
     fn allows_secret_reference() {
-        let yaml = "on: push\njobs:\n  db:\n    env:\n      POSTGRES_PASSWORD: ${{ secrets.PG_PW }}";
+        let yaml =
+            "on: push\njobs:\n  db:\n    env:\n      POSTGRES_PASSWORD: ${{ secrets.PG_PW }}";
         assert!(run(yaml).is_empty());
     }
 }

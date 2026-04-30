@@ -36,8 +36,7 @@ impl AstCheck for Check {
             ) {
                 continue;
             }
-            let Some(var_name) = extract_single_declarator_name(decl_node, source_bytes)
-            else {
+            let Some(var_name) = extract_single_declarator_name(decl_node, source_bytes) else {
                 continue;
             };
             if next_node.kind() != "return_statement" {
@@ -86,11 +85,7 @@ fn extract_single_declarator_name<'a>(
     name.utf8_text(source).ok()
 }
 
-fn return_value_is_identifier(
-    return_node: tree_sitter::Node,
-    source: &[u8],
-    name: &str,
-) -> bool {
+fn return_value_is_identifier(return_node: tree_sitter::Node, source: &[u8], name: &str) -> bool {
     let mut cursor = return_node.walk();
     let Some(value) = return_node.named_children(&mut cursor).next() else {
         return false;

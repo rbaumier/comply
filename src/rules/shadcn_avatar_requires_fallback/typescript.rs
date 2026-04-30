@@ -72,7 +72,10 @@ mod tests {
 
     #[test]
     fn flags_avatar_without_fallback() {
-        assert_eq!(run(r#"const x = <Avatar><AvatarImage src="/a.png" /></Avatar>;"#).len(), 1);
+        assert_eq!(
+            run(r#"const x = <Avatar><AvatarImage src="/a.png" /></Avatar>;"#).len(),
+            1
+        );
     }
 
     #[test]
@@ -87,6 +90,9 @@ mod tests {
 
     #[test]
     fn allows_dotted_avatar_with_fallback() {
-        assert!(run(r#"const x = <Avatar.Root><Avatar.Fallback>AB</Avatar.Fallback></Avatar.Root>;"#).is_empty());
+        assert!(
+            run(r#"const x = <Avatar.Root><Avatar.Fallback>AB</Avatar.Fallback></Avatar.Root>;"#)
+                .is_empty()
+        );
     }
 }

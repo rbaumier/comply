@@ -4,9 +4,9 @@ mod text;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
+use crate::rules::RuleDef;
 use crate::rules::backend::Backend;
 use crate::rules::meta::RuleMeta;
-use crate::rules::RuleDef;
 
 pub const META: RuleMeta = RuleMeta {
     id: "no-bidi-characters",
@@ -28,5 +28,8 @@ pub fn register() -> RuleDef {
     .into_iter()
     .map(|lang| (lang, Backend::Text(Box::new(text::Check))))
     .collect();
-    RuleDef { meta: META, backends }
+    RuleDef {
+        meta: META,
+        backends,
+    }
 }

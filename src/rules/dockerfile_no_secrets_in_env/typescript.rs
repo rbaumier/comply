@@ -47,9 +47,7 @@ fn has_secret_marker(key: &str) -> bool {
     let upper = key.to_ascii_uppercase();
     // `KEY` alone is too noisy (e.g. `ENV PRIMARY_KEY_TYPE=...`); require the
     // longer markers to reduce false positives.
-    SECRET_SUBSTRINGS.iter().any(|m| upper.contains(m))
-        || upper.ends_with("_KEY")
-        || upper == "KEY"
+    SECRET_SUBSTRINGS.iter().any(|m| upper.contains(m)) || upper.ends_with("_KEY") || upper == "KEY"
 }
 
 fn is_pure_var_ref(value: &str) -> bool {

@@ -45,7 +45,10 @@ fn validates_state(text: &str) -> bool {
         return true;
     }
     // Property reads: `req.query.state`, `params.state`, `searchParams.get("state")`.
-    if compact.contains(".state") || compact.contains("[\"state\"]") || compact.contains("['state']") {
+    if compact.contains(".state")
+        || compact.contains("[\"state\"]")
+        || compact.contains("['state']")
+    {
         return true;
     }
     if compact.contains(".get(\"state\")") || compact.contains(".get('state')") {
@@ -158,7 +161,8 @@ mod tests {
 
     #[test]
     fn allows_callback_validating_state() {
-        let src = "app.get('/auth/callback', (req, res) => { if (req.query.state !== saved) throw 0; });";
+        let src =
+            "app.get('/auth/callback', (req, res) => { if (req.query.state !== saved) throw 0; });";
         assert!(run(src).is_empty());
     }
 

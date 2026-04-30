@@ -20,7 +20,8 @@ impl TextCheck for Check {
                     line: elem.line,
                     column: 1,
                     rule_id: "a11y-no-autofocus".into(),
-                    message: "Avoid `autofocus` — it is disorienting for screen reader users.".into(),
+                    message: "Avoid `autofocus` — it is disorienting for screen reader users."
+                        .into(),
                     severity: Severity::Warning,
                     span: None,
                 });

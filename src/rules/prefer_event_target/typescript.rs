@@ -38,10 +38,7 @@ fn walk_subtree<'t, F: FnMut(tree_sitter::Node<'t>)>(root: tree_sitter::Node<'t>
 
 /// Returns true if the file imports the identifier `EventEmitter` from one of
 /// the ignored packages — usage of that identifier should not be flagged then.
-fn imports_event_emitter_from_ignored(
-    program: tree_sitter::Node<'_>,
-    source: &[u8],
-) -> bool {
+fn imports_event_emitter_from_ignored(program: tree_sitter::Node<'_>, source: &[u8]) -> bool {
     let mut cursor = program.walk();
     for child in program.children(&mut cursor) {
         if child.kind() != "import_statement" {

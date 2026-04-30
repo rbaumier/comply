@@ -60,14 +60,9 @@ impl AstCheck for Check {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
-
-
         crate::rules::test_helpers::run_ts(source, &Check)
-
-
     }
 
     #[test]
@@ -77,8 +72,6 @@ mod tests {
 
     #[test]
     fn allows_timestamp_with_options() {
-        assert!(
-            run_on("const t = timestamp('created_at', { withTimezone: true });").is_empty()
-        );
+        assert!(run_on("const t = timestamp('created_at', { withTimezone: true });").is_empty());
     }
 }

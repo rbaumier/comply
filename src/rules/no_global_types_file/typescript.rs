@@ -37,12 +37,18 @@ mod tests {
 
     #[test]
     fn flags_src_types() {
-        assert_eq!(run_with_path("export type User = {}", "src/types.ts").len(), 1);
+        assert_eq!(
+            run_with_path("export type User = {}", "src/types.ts").len(),
+            1
+        );
     }
 
     #[test]
     fn flags_types_index() {
-        assert_eq!(run_with_path("export type User = {}", "src/types/index.ts").len(), 1);
+        assert_eq!(
+            run_with_path("export type User = {}", "src/types/index.ts").len(),
+            1
+        );
     }
 
     #[test]
@@ -57,6 +63,8 @@ mod tests {
 
     #[test]
     fn allows_colocated_types() {
-        assert!(run_with_path("export type Props = {}", "src/components/Button.types.ts").is_empty());
+        assert!(
+            run_with_path("export type Props = {}", "src/components/Button.types.ts").is_empty()
+        );
     }
 }

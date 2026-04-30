@@ -33,14 +33,9 @@ crate::ast_check! { on ["generic_type"] => |node, source, ctx, diagnostics|
 #[cfg(test)]
 mod tests {
     use super::*;
-    
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
-
-
         crate::rules::test_helpers::run_rust(source, &Check)
-
-
     }
 
     #[test]
@@ -50,10 +45,7 @@ mod tests {
 
     #[test]
     fn flags_result_unit_error_in_field() {
-        assert_eq!(
-            run_on("struct S { last: Result<u8, ()> }").len(),
-            1
-        );
+        assert_eq!(run_on("struct S { last: Result<u8, ()> }").len(), 1);
     }
 
     #[test]

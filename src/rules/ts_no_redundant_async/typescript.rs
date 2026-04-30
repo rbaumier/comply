@@ -60,7 +60,8 @@ fn is_single_return_await(body: tree_sitter::Node) -> bool {
         let Some(ret) = found else { return false };
         // The return's child should be an await_expression.
         let mut c = ret.walk();
-        ret.named_children(&mut c).any(|n| n.kind() == "await_expression")
+        ret.named_children(&mut c)
+            .any(|n| n.kind() == "await_expression")
     } else if body.kind() == "await_expression" {
         // Arrow function with `async () => await x` body.
         true
@@ -86,7 +87,9 @@ fn is_async_function(node: tree_sitter::Node, source: &[u8]) -> bool {
         }
     }
     // Fallback: substring scan of the leading text up to the body.
-    let Ok(text) = node.utf8_text(source) else { return false };
+    let Ok(text) = node.utf8_text(source) else {
+        return false;
+    };
     let head = text.split("=>").next().unwrap_or(text);
     head.contains("async")
 }
@@ -143,7 +146,8 @@ mod tests {
 
     #[test]
     fn allows_try_catch() {
-        let src = "async function f() { try { return await fetch(url); } catch (e) { return null; } }";
+        let src =
+            "async function f() { try { return await fetch(url); } catch (e) { return null; } }";
         assert!(run(src).is_empty());
     }
 

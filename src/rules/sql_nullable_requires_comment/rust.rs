@@ -33,9 +33,7 @@ impl AstCheck for Check {
                 line: pos.row + 1 + offset,
                 column: 1,
                 rule_id: super::META.id.into(),
-                message:
-                    "Nullable column has no comment explaining why NULL is allowed."
-                        .into(),
+                message: "Nullable column has no comment explaining why NULL is allowed.".into(),
                 severity: Severity::Warning,
                 span: None,
             });
@@ -59,7 +57,8 @@ mod tests {
 
     #[test]
     fn allows_inline_comment() {
-        let src = "fn f() { let q = r#\"CREATE TABLE t (\n  deleted_at TIMESTAMP, -- nullable\n)\"#; }";
+        let src =
+            "fn f() { let q = r#\"CREATE TABLE t (\n  deleted_at TIMESTAMP, -- nullable\n)\"#; }";
         assert!(run(src).is_empty());
     }
 }

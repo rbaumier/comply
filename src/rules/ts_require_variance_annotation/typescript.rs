@@ -4,7 +4,9 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
 fn is_exported(node: tree_sitter::Node) -> bool {
-    let Some(parent) = node.parent() else { return false };
+    let Some(parent) = node.parent() else {
+        return false;
+    };
     parent.kind() == "export_statement"
 }
 

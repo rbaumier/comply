@@ -38,14 +38,9 @@ crate::ast_check! { prefilter = ["queryKey", "mutationKey"] => |node, source, ct
 #[cfg(test)]
 mod tests {
     use super::*;
-    
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
-
-
         crate::rules::test_helpers::run_ts(source, &Check)
-
-
     }
 
     #[test]
@@ -58,8 +53,6 @@ mod tests {
 
     #[test]
     fn allows_array_query_key() {
-        assert!(
-            run_on("useQuery({ queryKey: ['todos'], queryFn: f });").is_empty()
-        );
+        assert!(run_on("useQuery({ queryKey: ['todos'], queryFn: f });").is_empty());
     }
 }

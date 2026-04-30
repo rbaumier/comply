@@ -54,7 +54,8 @@ mod tests {
 
     #[test]
     fn allows_env_port() {
-        let src = "import { Elysia } from 'elysia';\nnew Elysia().listen(process.env.PORT ?? 3000);";
+        let src =
+            "import { Elysia } from 'elysia';\nnew Elysia().listen(process.env.PORT ?? 3000);";
         assert!(run_on(src).is_empty());
     }
 

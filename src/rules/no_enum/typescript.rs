@@ -54,14 +54,9 @@ impl AstCheck for Check {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
-
-
         crate::rules::test_helpers::run_ts(source, &Check)
-
-
     }
 
     #[test]
@@ -76,8 +71,7 @@ mod tests {
 
     #[test]
     fn allows_as_const_satisfies() {
-        let source =
-            "const STATUS = { active: 'active', inactive: 'inactive' } as const satisfies Record<string, string>;";
+        let source = "const STATUS = { active: 'active', inactive: 'inactive' } as const satisfies Record<string, string>;";
         assert!(run_on(source).is_empty());
     }
 

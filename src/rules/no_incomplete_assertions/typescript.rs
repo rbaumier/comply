@@ -4,13 +4,31 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
 const MATCHERS: &[&str] = &[
-    "toBe", "toEqual", "toMatch", "toThrow", "toContain",
-    "toBeTruthy", "toBeFalsy", "toBeNull", "toBeUndefined",
-    "toBeDefined", "toBeGreaterThan", "toBeLessThan",
-    "toBeInstanceOf", "toHaveBeenCalled", "toHaveBeenCalledWith",
-    "toHaveLength", "toHaveProperty", "toMatchObject",
-    "toMatchSnapshot", "toMatchInlineSnapshot", "toStrictEqual",
-    "resolves", "rejects", "toBeCloseTo", "toBeNaN",
+    "toBe",
+    "toEqual",
+    "toMatch",
+    "toThrow",
+    "toContain",
+    "toBeTruthy",
+    "toBeFalsy",
+    "toBeNull",
+    "toBeUndefined",
+    "toBeDefined",
+    "toBeGreaterThan",
+    "toBeLessThan",
+    "toBeInstanceOf",
+    "toHaveBeenCalled",
+    "toHaveBeenCalledWith",
+    "toHaveLength",
+    "toHaveProperty",
+    "toMatchObject",
+    "toMatchSnapshot",
+    "toMatchInlineSnapshot",
+    "toStrictEqual",
+    "resolves",
+    "rejects",
+    "toBeCloseTo",
+    "toBeNaN",
 ];
 
 fn is_test_file(path: &std::path::Path) -> bool {
@@ -67,18 +85,20 @@ fn has_expect_root_without_matcher(node: tree_sitter::Node, source: &[u8]) -> bo
     // Check if property is a known matcher (it shouldn't be, for this to be incomplete).
     if let Some(prop) = node.child_by_field_name("property")
         && let Ok(prop_name) = prop.utf8_text(source)
-            && MATCHERS.contains(&prop_name) {
-                return false;
-            }
+        && MATCHERS.contains(&prop_name)
+    {
+        return false;
+    }
 
     // Check if the object is `expect(...)` call.
     if let Some(obj) = node.child_by_field_name("object")
         && obj.kind() == "call_expression"
-            && let Some(func) = obj.child_by_field_name("function")
-                && func.kind() == "identifier"
-                    && let Ok(name) = func.utf8_text(source) {
-                        return name == "expect";
-                    }
+        && let Some(func) = obj.child_by_field_name("function")
+        && func.kind() == "identifier"
+        && let Ok(name) = func.utf8_text(source)
+    {
+        return name == "expect";
+    }
 
     false
 }
@@ -95,10 +115,8 @@ mod tests {
             .set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into())
             .unwrap();
         let tree = parser.parse(source, None).unwrap();
-        let ctx = crate::rules::backend::CheckCtx::for_test(
-            std::path::Path::new("foo.test.ts"),
-            source,
-        );
+        let ctx =
+            crate::rules::backend::CheckCtx::for_test(std::path::Path::new("foo.test.ts"), source);
         Check.check(&ctx, &tree)
     }
 

@@ -20,10 +20,7 @@ fn string_inner<'a>(node: tree_sitter::Node, source: &'a [u8]) -> &'a str {
 
 /// Check if a property assignment pair has a weak RSA or EC value.
 /// Looks for patterns like `modulusLength: 1024` or `namedCurve: 'P-192'`.
-fn check_pair(
-    node: tree_sitter::Node,
-    source: &[u8],
-) -> Option<&'static str> {
+fn check_pair(node: tree_sitter::Node, source: &[u8]) -> Option<&'static str> {
     if node.kind() != "pair" {
         return None;
     }
@@ -44,12 +41,13 @@ fn check_pair(
     if (key_text.eq_ignore_ascii_case("namedCurve")
         || key_text.eq_ignore_ascii_case("named_curve")
         || key_text.eq_ignore_ascii_case("curve"))
-        && value.kind() == "string" {
-            let inner = string_inner(value, source).to_ascii_lowercase();
-            if WEAK_CURVES.contains(&inner.as_str()) {
-                return Some("Weak EC curve — use P-256 or stronger.");
-            }
+        && value.kind() == "string"
+    {
+        let inner = string_inner(value, source).to_ascii_lowercase();
+        if WEAK_CURVES.contains(&inner.as_str()) {
+            return Some("Weak EC curve — use P-256 or stronger.");
         }
+    }
 
     None
 }

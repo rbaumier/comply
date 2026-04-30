@@ -15,9 +15,10 @@ fn looks_like_test_comment(text: &str) -> bool {
     // Match: test(, test.only(, it(, it.only(, describe(, describe.only(
     for kw in &["test", "it", "describe"] {
         if let Some(rest) = trimmed.strip_prefix(kw)
-            && (rest.starts_with('(') || rest.starts_with('.') || rest.starts_with('[')) {
-                return true;
-            }
+            && (rest.starts_with('(') || rest.starts_with('.') || rest.starts_with('['))
+        {
+            return true;
+        }
     }
     false
 }

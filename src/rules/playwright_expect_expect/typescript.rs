@@ -17,14 +17,18 @@ fn is_test_call(node: tree_sitter::Node, source: &[u8]) -> bool {
     if node.kind() != "call_expression" {
         return false;
     }
-    let Some(callee) = node.child_by_field_name("function") else { return false };
+    let Some(callee) = node.child_by_field_name("function") else {
+        return false;
+    };
     match callee.kind() {
         "identifier" => {
             let name = callee.utf8_text(source).unwrap_or("");
             TEST_FNS.contains(&name)
         }
         "member_expression" => {
-            let Some(obj) = callee.child_by_field_name("object") else { return false };
+            let Some(obj) = callee.child_by_field_name("object") else {
+                return false;
+            };
             let obj_text = obj.utf8_text(source).unwrap_or("");
             TEST_FNS.contains(&obj_text)
         }
@@ -35,22 +39,23 @@ fn is_test_call(node: tree_sitter::Node, source: &[u8]) -> bool {
 /// Returns true when `node` is (or contains) an `expect(…)` call.
 fn contains_expect(node: tree_sitter::Node, source: &[u8]) -> bool {
     if node.kind() == "call_expression"
-        && let Some(callee) = node.child_by_field_name("function") {
-            let text = match callee.kind() {
-                "identifier" => callee.utf8_text(source).unwrap_or(""),
-                "member_expression" => {
-                    if let Some(obj) = callee.child_by_field_name("object") {
-                        obj.utf8_text(source).unwrap_or("")
-                    } else {
-                        ""
-                    }
+        && let Some(callee) = node.child_by_field_name("function")
+    {
+        let text = match callee.kind() {
+            "identifier" => callee.utf8_text(source).unwrap_or(""),
+            "member_expression" => {
+                if let Some(obj) = callee.child_by_field_name("object") {
+                    obj.utf8_text(source).unwrap_or("")
+                } else {
+                    ""
                 }
-                _ => "",
-            };
-            if text == "expect" {
-                return true;
             }
+            _ => "",
+        };
+        if text == "expect" {
+            return true;
         }
+    }
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         if contains_expect(child, source) {

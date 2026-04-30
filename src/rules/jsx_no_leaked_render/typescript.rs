@@ -8,8 +8,8 @@ fn likely_boolean(name: &str) -> bool {
     let segment = name.rsplit('.').next().unwrap_or(name);
     let lower = segment.to_lowercase();
     const PREFIXES: &[&str] = &[
-        "is", "has", "should", "can", "will", "did", "show", "hide",
-        "enable", "disable", "visible", "active", "open", "loading", "loaded",
+        "is", "has", "should", "can", "will", "did", "show", "hide", "enable", "disable",
+        "visible", "active", "open", "loading", "loaded",
     ];
     PREFIXES.iter().any(|p| lower.starts_with(p))
 }

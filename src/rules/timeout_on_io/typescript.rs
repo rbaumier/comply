@@ -16,15 +16,7 @@ use crate::rules::backend::{AstCheck, CheckCtx};
 
 const IO_CALLEE_BASES: &[&str] = &["fetch", "axios", "http", "https", "db"];
 const IO_METHOD_SUFFIXES: &[&str] = &[
-    "query",
-    "execute",
-    "get",
-    "post",
-    "put",
-    "delete",
-    "patch",
-    "request",
-    "send",
+    "query", "execute", "get", "post", "put", "delete", "patch", "request", "send",
 ];
 
 const KINDS: &[&str] = &["await_expression"];
@@ -51,7 +43,9 @@ impl AstCheck for Check {
         if !is_io_call(call, source_bytes) {
             return;
         }
-        if has_abort_signal_or_timeout(call, source_bytes) || is_wrapped_in_timeout(node, source_bytes) {
+        if has_abort_signal_or_timeout(call, source_bytes)
+            || is_wrapped_in_timeout(node, source_bytes)
+        {
             return;
         }
         let pos = node.start_position();
@@ -137,14 +131,9 @@ fn is_wrapped_in_timeout(await_node: tree_sitter::Node, source: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
-
-
         crate::rules::test_helpers::run_ts(source, &Check)
-
-
     }
 
     #[test]
@@ -154,7 +143,8 @@ mod tests {
 
     #[test]
     fn allows_fetch_with_abort_signal() {
-        let source = "async function f() { await fetch(url, { signal: AbortSignal.timeout(5000) }); }";
+        let source =
+            "async function f() { await fetch(url, { signal: AbortSignal.timeout(5000) }); }";
         assert!(run_on(source).is_empty());
     }
 
@@ -166,7 +156,10 @@ mod tests {
 
     #[test]
     fn flags_bare_db_query() {
-        assert_eq!(run_on("async function f() { await db.query('SELECT *'); }").len(), 1);
+        assert_eq!(
+            run_on("async function f() { await db.query('SELECT *'); }").len(),
+            1
+        );
     }
 
     #[test]

@@ -15,8 +15,21 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 
 const TAILWIND_PREFIXES: &[&str] = &[
-    "bg-", "text-", "border-", "ring-", "shadow-", "from-", "to-", "via-",
-    "fill-", "stroke-", "outline-", "accent-", "caret-", "divide-", "placeholder-",
+    "bg-",
+    "text-",
+    "border-",
+    "ring-",
+    "shadow-",
+    "from-",
+    "to-",
+    "via-",
+    "fill-",
+    "stroke-",
+    "outline-",
+    "accent-",
+    "caret-",
+    "divide-",
+    "placeholder-",
 ];
 
 const KINDS: &[&str] = &["template_string"];
@@ -72,14 +85,9 @@ impl AstCheck for Check {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
-
-
         crate::rules::test_helpers::run_ts(source, &Check)
-
-
     }
 
     #[test]

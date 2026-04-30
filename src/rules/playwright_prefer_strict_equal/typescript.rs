@@ -48,9 +48,11 @@ fn is_expect_chain(node: tree_sitter::Node, source: &[u8]) -> bool {
     match node.kind() {
         "call_expression" => {
             if let Some(f) = node.child_by_field_name("function")
-                && f.kind() == "identifier" && f.utf8_text(source).unwrap_or("") == "expect" {
-                    return true;
-                }
+                && f.kind() == "identifier"
+                && f.utf8_text(source).unwrap_or("") == "expect"
+            {
+                return true;
+            }
             false
         }
         "member_expression" => {

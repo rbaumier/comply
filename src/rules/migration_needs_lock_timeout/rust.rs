@@ -29,11 +29,7 @@ mod tests {
     use crate::diagnostic::Diagnostic;
 
     fn run(src: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_rust_with_path(
-            src,
-            &Check,
-            "/app/migrations/001.rs",
-        )
+        crate::rules::test_helpers::run_rust_with_path(src, &Check, "/app/migrations/001.rs")
     }
 
     fn run_non_migration(src: &str) -> Vec<Diagnostic> {

@@ -9,7 +9,12 @@ fn is_fragment_tag(name_node: tree_sitter::Node, source: &[u8]) -> bool {
     match name_node.kind() {
         "identifier" | "jsx_identifier" => &source[name_node.byte_range()] == b"Fragment",
         "member_expression" | "nested_identifier" => {
-            let Some(object) = name_node.child_by_field_name("object").or_else(|| name_node.child(0)) else { return false };
+            let Some(object) = name_node
+                .child_by_field_name("object")
+                .or_else(|| name_node.child(0))
+            else {
+                return false;
+            };
             let Some(property) = name_node
                 .child_by_field_name("property")
                 .or_else(|| name_node.child(name_node.child_count().saturating_sub(1)))

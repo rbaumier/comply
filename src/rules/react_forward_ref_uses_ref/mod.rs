@@ -3,8 +3,8 @@
 mod react;
 
 use crate::diagnostic::Severity;
-use crate::rules::meta::RuleMeta;
 use crate::rules::RuleDef;
+use crate::rules::meta::RuleMeta;
 
 pub const META: RuleMeta = RuleMeta {
     id: "react-forward-ref-uses-ref",
@@ -12,7 +12,9 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Either use the `ref` parameter in the component body or remove \
                   the `forwardRef` wrapper — it serves no purpose without a ref.",
     severity: Severity::Warning,
-    doc_url: Some("https://github.com/jsx-eslint/eslint-plugin-react/blob/master/docs/rules/forward-ref-uses-ref.md"),
+    doc_url: Some(
+        "https://github.com/jsx-eslint/eslint-plugin-react/blob/master/docs/rules/forward-ref-uses-ref.md",
+    ),
     categories: &["react"],
 };
 

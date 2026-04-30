@@ -15,8 +15,7 @@ impl TextCheck for Check {
                 continue;
             }
             if let (Some(cur_cond), Some(next_cond)) = (extract_v_if(cur), extract_v_if(next))
-                && (next_cond == format!("!{cur_cond}")
-                    || next_cond == format!("!({cur_cond})"))
+                && (next_cond == format!("!{cur_cond}") || next_cond == format!("!({cur_cond})"))
             {
                 diags.push(Diagnostic {
                     path: std::sync::Arc::clone(&ctx.path_arc),

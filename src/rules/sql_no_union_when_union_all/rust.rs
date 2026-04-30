@@ -2,7 +2,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::sql_helpers::{is_sql_string, RUST_STRING_KINDS};
+use crate::rules::sql_helpers::{RUST_STRING_KINDS, is_sql_string};
 
 #[derive(Debug)]
 pub struct Check;
@@ -49,7 +49,8 @@ mod tests {
 
     #[test]
     fn flags_union_same_table_with_ids() {
-        let src = r#"fn f() { let q = "SELECT id, name FROM users UNION SELECT id, name FROM users"; }"#;
+        let src =
+            r#"fn f() { let q = "SELECT id, name FROM users UNION SELECT id, name FROM users"; }"#;
         assert_eq!(run(src).len(), 1);
     }
 
@@ -61,7 +62,8 @@ mod tests {
 
     #[test]
     fn allows_union_all() {
-        let src = r#"fn f() { let q = "SELECT id, name FROM a UNION ALL SELECT id, name FROM b"; }"#;
+        let src =
+            r#"fn f() { let q = "SELECT id, name FROM a UNION ALL SELECT id, name FROM b"; }"#;
         assert!(run(src).is_empty());
     }
 }

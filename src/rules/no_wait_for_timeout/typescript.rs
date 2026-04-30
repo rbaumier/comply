@@ -44,24 +44,23 @@ crate::ast_check! { on ["call_expression"] prefilter = ["waitForTimeout"] => |no
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
     use crate::rules::backend::{AstCheck, CheckCtx};
+    use std::path::Path;
 
     fn run(path: &str, source: &str) -> Vec<Diagnostic> {
         let mut parser = tree_sitter::Parser::new();
         parser
             .set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into())
             .expect("grammar should load");
-        let tree = parser.parse(source, None).expect("parser should produce a tree");
+        let tree = parser
+            .parse(source, None)
+            .expect("parser should produce a tree");
         Check.check(&CheckCtx::for_test(Path::new(path), source), &tree)
     }
 
     #[test]
     fn flags_wait_for_timeout_in_test() {
-        let diags = run(
-            "login.test.ts",
-            "await page.waitForTimeout(1000);",
-        );
+        let diags = run("login.test.ts", "await page.waitForTimeout(1000);");
         assert_eq!(diags.len(), 1);
         assert_eq!(diags[0].rule_id, "no-wait-for-timeout");
     }
@@ -80,19 +79,13 @@ mod tests {
 
     #[test]
     fn allows_wait_for_response() {
-        let diags = run(
-            "api.test.ts",
-            "await page.waitForResponse('**/api/data');",
-        );
+        let diags = run("api.test.ts", "await page.waitForResponse('**/api/data');");
         assert!(diags.is_empty());
     }
 
     #[test]
     fn ignores_non_test_file() {
-        let diags = run(
-            "helpers.ts",
-            "await page.waitForTimeout(1000);",
-        );
+        let diags = run("helpers.ts", "await page.waitForTimeout(1000);");
         assert!(diags.is_empty());
     }
 

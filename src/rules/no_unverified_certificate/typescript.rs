@@ -20,7 +20,9 @@ fn is_false_literal(value: tree_sitter::Node, source: &[u8]) -> bool {
         return true;
     }
     if value.kind() == "string" {
-        let Ok(text) = value.utf8_text(source) else { return false };
+        let Ok(text) = value.utf8_text(source) else {
+            return false;
+        };
         let inner = unquote(text);
         return inner == "0" || inner.eq_ignore_ascii_case("false");
     }
@@ -30,7 +32,9 @@ fn is_false_literal(value: tree_sitter::Node, source: &[u8]) -> bool {
 /// True when `node` reads the `NODE_TLS_REJECT_UNAUTHORIZED` env var name
 /// (used as the LHS of an assignment that disables verification).
 fn is_node_tls_lhs(node: tree_sitter::Node, source: &[u8]) -> bool {
-    let Ok(text) = node.utf8_text(source) else { return false };
+    let Ok(text) = node.utf8_text(source) else {
+        return false;
+    };
     text.contains("NODE_TLS_REJECT_UNAUTHORIZED")
 }
 

@@ -280,8 +280,14 @@ mod tests {
     #[test]
     fn detects_multiple_untranslated() {
         let dir = setup_locales(&[
-            ("en.json", r#"{"a": "Hello there friend", "b": "Welcome to the app", "c": "Bonjour"}"#),
-            ("fr.json", r#"{"a": "Hello there friend", "b": "Welcome to the app", "c": "Salut"}"#),
+            (
+                "en.json",
+                r#"{"a": "Hello there friend", "b": "Welcome to the app", "c": "Bonjour"}"#,
+            ),
+            (
+                "fr.json",
+                r#"{"a": "Hello there friend", "b": "Welcome to the app", "c": "Salut"}"#,
+            ),
         ]);
 
         let diags = check_file(&dir, "fr.json");
@@ -291,8 +297,14 @@ mod tests {
     #[test]
     fn allows_single_word_proper_nouns() {
         let dir = setup_locales(&[
-            ("en.json", r#"{"brand": "Discord", "os": "macOS", "tool": "CLI"}"#),
-            ("fr.json", r#"{"brand": "Discord", "os": "macOS", "tool": "CLI"}"#),
+            (
+                "en.json",
+                r#"{"brand": "Discord", "os": "macOS", "tool": "CLI"}"#,
+            ),
+            (
+                "fr.json",
+                r#"{"brand": "Discord", "os": "macOS", "tool": "CLI"}"#,
+            ),
         ]);
 
         let diags = check_file(&dir, "fr.json");

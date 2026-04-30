@@ -68,7 +68,9 @@ impl AstCheck for Check {
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         // Return value is the first named child.
-        let Some(mut val) = node.named_child(0) else { return };
+        let Some(mut val) = node.named_child(0) else {
+            return;
+        };
         while val.kind() == "parenthesized_expression" {
             match val.named_child(0) {
                 Some(c) => val = c,
@@ -129,8 +131,7 @@ mod tests {
     fn flags_return_await_inside_catch() {
         // In catch, the enclosing try no longer helps — catch handles its own errors.
         // But since catch is not inside the try's body field, it's still redundant.
-        let d =
-            run_on("async function f() { try { x(); } catch (e) { return await g(); } }");
+        let d = run_on("async function f() { try { x(); } catch (e) { return await g(); } }");
         assert_eq!(d.len(), 1);
     }
 

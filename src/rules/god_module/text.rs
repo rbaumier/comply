@@ -127,7 +127,10 @@ mod tests {
         let mut files: Vec<(String, String)> = Vec::new();
         files.push(("hub.ts".to_string(), "export const x = 1;\n".to_string()));
         for i in 0..12 {
-            files.push((format!("a{i}.ts"), "import { x } from './hub';\n".to_string()));
+            files.push((
+                format!("a{i}.ts"),
+                "import { x } from './hub';\n".to_string(),
+            ));
         }
         let borrowed: Vec<(&str, &str)> = files
             .iter()
@@ -168,7 +171,10 @@ mod tests {
             ("c.ts", "import { x } from './hub';"),
         ];
         let (_dir, diags) = run_on_project(&files, "hub.ts");
-        assert!(diags.is_empty(), "absolute importer count < min_importers gates the rule");
+        assert!(
+            diags.is_empty(),
+            "absolute importer count < min_importers gates the rule"
+        );
     }
 
     #[test]

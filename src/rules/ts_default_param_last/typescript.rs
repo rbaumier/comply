@@ -61,9 +61,10 @@ fn has_default_value(node: &tree_sitter::Node) -> bool {
     // Also check for `=` token among children (fallback).
     for i in 0..node.child_count() {
         if let Some(child) = node.child(i)
-            && child.kind() == "=" {
-                return true;
-            }
+            && child.kind() == "="
+        {
+            return true;
+        }
     }
     node.kind() == "assignment_pattern"
 }

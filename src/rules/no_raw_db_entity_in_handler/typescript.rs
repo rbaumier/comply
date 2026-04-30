@@ -2,13 +2,9 @@ use crate::diagnostic::{Diagnostic, Severity};
 
 const ROUTE_METHODS: &[&str] = &["get", "post", "put", "delete", "patch"];
 
-const DB_PATTERNS: &[&str] = &[
-    "prisma", "db", "knex",
-];
+const DB_PATTERNS: &[&str] = &["prisma", "db", "knex"];
 
-const DB_METHODS: &[&str] = &[
-    "findMany", "findFirst", "findUnique", "query",
-];
+const DB_METHODS: &[&str] = &["findMany", "findFirst", "findUnique", "query"];
 
 /// Returns true if this call expression looks like a DB call
 /// (e.g. `prisma.user.findMany()`, `knex(...)`, `db.query(...)`).
@@ -16,12 +12,13 @@ fn is_db_call(node: tree_sitter::Node, source: &[u8]) -> bool {
     let text = node.utf8_text(source).unwrap_or("");
     // Direct calls like `knex("items")`
     if let Some(callee) = node.child_by_field_name("function")
-        && callee.kind() == "identifier" {
-            let name = callee.utf8_text(source).unwrap_or("");
-            if DB_PATTERNS.contains(&name) {
-                return true;
-            }
+        && callee.kind() == "identifier"
+    {
+        let name = callee.utf8_text(source).unwrap_or("");
+        if DB_PATTERNS.contains(&name) {
+            return true;
         }
+    }
     // Member calls: check if any DB pattern + method combination is present
     for pat in DB_PATTERNS {
         for method in DB_METHODS {
@@ -39,13 +36,14 @@ fn is_route_handler(node: tree_sitter::Node, source: &[u8]) -> bool {
     while let Some(n) = current {
         if n.kind() == "call_expression"
             && let Some(callee) = n.child_by_field_name("function")
-                && callee.kind() == "member_expression"
-                    && let Some(prop) = callee.child_by_field_name("property") {
-                        let method = prop.utf8_text(source).unwrap_or("");
-                        if ROUTE_METHODS.contains(&method) {
-                            return true;
-                        }
-                    }
+            && callee.kind() == "member_expression"
+            && let Some(prop) = callee.child_by_field_name("property")
+        {
+            let method = prop.utf8_text(source).unwrap_or("");
+            if ROUTE_METHODS.contains(&method) {
+                return true;
+            }
+        }
         current = n.parent();
     }
     false

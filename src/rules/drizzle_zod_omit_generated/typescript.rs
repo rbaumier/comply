@@ -122,7 +122,8 @@ mod tests {
 
     #[test]
     fn allows_create_insert_schema_with_omit() {
-        let src = "export const schema = createInsertSchema(users).omit({ id: true, createdAt: true })";
+        let src =
+            "export const schema = createInsertSchema(users).omit({ id: true, createdAt: true })";
         assert!(run(src).is_empty());
     }
 

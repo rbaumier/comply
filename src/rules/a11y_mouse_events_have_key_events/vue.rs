@@ -14,14 +14,12 @@ impl TextCheck for Check {
         }
         let mut diagnostics = Vec::new();
         for elem in extract_elements(ctx.source) {
-            let has_mouseover = has_attr(elem.attrs, "@mouseover")
-                || has_attr(elem.attrs, "v-on:mouseover");
-            let has_mouseout = has_attr(elem.attrs, "@mouseout")
-                || has_attr(elem.attrs, "v-on:mouseout");
-            let has_focus = has_attr(elem.attrs, "@focus")
-                || has_attr(elem.attrs, "v-on:focus");
-            let has_blur = has_attr(elem.attrs, "@blur")
-                || has_attr(elem.attrs, "v-on:blur");
+            let has_mouseover =
+                has_attr(elem.attrs, "@mouseover") || has_attr(elem.attrs, "v-on:mouseover");
+            let has_mouseout =
+                has_attr(elem.attrs, "@mouseout") || has_attr(elem.attrs, "v-on:mouseout");
+            let has_focus = has_attr(elem.attrs, "@focus") || has_attr(elem.attrs, "v-on:focus");
+            let has_blur = has_attr(elem.attrs, "@blur") || has_attr(elem.attrs, "v-on:blur");
 
             if has_mouseover && !has_focus {
                 diagnostics.push(Diagnostic {
@@ -29,7 +27,9 @@ impl TextCheck for Check {
                     line: elem.line,
                     column: 1,
                     rule_id: "a11y-mouse-events-have-key-events".into(),
-                    message: "`@mouseover` must be accompanied by `@focus` for keyboard accessibility.".into(),
+                    message:
+                        "`@mouseover` must be accompanied by `@focus` for keyboard accessibility."
+                            .into(),
                     severity: Severity::Warning,
                     span: None,
                 });
@@ -40,7 +40,9 @@ impl TextCheck for Check {
                     line: elem.line,
                     column: 1,
                     rule_id: "a11y-mouse-events-have-key-events".into(),
-                    message: "`@mouseout` must be accompanied by `@blur` for keyboard accessibility.".into(),
+                    message:
+                        "`@mouseout` must be accompanied by `@blur` for keyboard accessibility."
+                            .into(),
                     severity: Severity::Warning,
                     span: None,
                 });
@@ -67,7 +69,8 @@ mod tests {
 
     #[test]
     fn allows_with_focus() {
-        let source = "<template>\n  <div @mouseover=\"handler\" @focus=\"handler\">Hover</div>\n</template>";
+        let source =
+            "<template>\n  <div @mouseover=\"handler\" @focus=\"handler\">Hover</div>\n</template>";
         assert!(run(source).is_empty());
     }
 }

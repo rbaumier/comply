@@ -52,11 +52,13 @@ mod tests {
 
     #[test]
     fn skips_non_migration() {
-        assert!(run(
-            "/app/src/schema.sql",
-            "ALTER TABLE users DROP COLUMN nickname;"
-        )
-        .is_empty());
+        assert!(
+            run(
+                "/app/src/schema.sql",
+                "ALTER TABLE users DROP COLUMN nickname;"
+            )
+            .is_empty()
+        );
     }
 
     #[test]

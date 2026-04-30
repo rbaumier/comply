@@ -19,7 +19,9 @@ crate::ast_check! { on ["while_statement", "do_statement"] => |node, source, ctx
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn run(code: &str) -> Vec<Diagnostic> { crate::rules::test_helpers::run_ts(code, &Check) }
+    fn run(code: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_ts(code, &Check)
+    }
 
     #[test]
     fn flags_while() {

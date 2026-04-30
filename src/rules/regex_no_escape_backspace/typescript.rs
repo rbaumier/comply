@@ -21,10 +21,7 @@ fn has_backspace_in_char_class(pattern: &str) -> bool {
             // Scan inside the class for `\b`.
             let mut j = i + 1;
             while j < bytes.len() && bytes[j] != b']' {
-                if bytes[j] == b'\\'
-                    && j + 1 < bytes.len()
-                    && bytes[j + 1] == b'b'
-                {
+                if bytes[j] == b'\\' && j + 1 < bytes.len() && bytes[j + 1] == b'b' {
                     return true;
                 }
                 if bytes[j] == b'\\' {

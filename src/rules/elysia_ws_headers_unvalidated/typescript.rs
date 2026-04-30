@@ -63,7 +63,8 @@ mod tests {
 
     #[test]
     fn ignores_non_elysia_files() {
-        let src = "app.ws('/chat', { beforeHandle({ headers }) { const t = headers.authorization; } });";
+        let src =
+            "app.ws('/chat', { beforeHandle({ headers }) { const t = headers.authorization; } });";
         assert!(crate::rules::test_helpers::run_ts(src, &Check).is_empty());
     }
 }

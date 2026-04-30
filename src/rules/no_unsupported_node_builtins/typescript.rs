@@ -60,11 +60,17 @@ const STATIC_METHODS: &[(&str, &str, u32)] = &[
 ];
 
 fn lookup_global(name: &str) -> Option<u32> {
-    GLOBAL_APIS.iter().find(|(n, _)| *n == name).map(|(_, v)| *v)
+    GLOBAL_APIS
+        .iter()
+        .find(|(n, _)| *n == name)
+        .map(|(_, v)| *v)
 }
 
 fn lookup_instance_method(name: &str) -> Option<u32> {
-    INSTANCE_METHODS.iter().find(|(n, _)| *n == name).map(|(_, v)| *v)
+    INSTANCE_METHODS
+        .iter()
+        .find(|(n, _)| *n == name)
+        .map(|(_, v)| *v)
 }
 
 fn lookup_static_method(obj: &str, prop: &str) -> Option<u32> {
@@ -191,12 +197,15 @@ fn check_node(
             };
 
             // Static method on `Object` / `Array`.
-            if let Some(obj) = node.child_by_field_name("object")
+            if let Some(obj) = node
+                .child_by_field_name("object")
                 .filter(|o| o.kind() == "identifier")
             {
-                let Ok(obj_text) = obj.utf8_text(source) else { return };
-                if let Some(required) = lookup_static_method(obj_text, prop_text)
-                    .filter(|&r| r > min_version)
+                let Ok(obj_text) = obj.utf8_text(source) else {
+                    return;
+                };
+                if let Some(required) =
+                    lookup_static_method(obj_text, prop_text).filter(|&r| r > min_version)
                 {
                     diagnostics.push(Diagnostic::at_node(
                         ctx.path,
@@ -212,9 +221,7 @@ fn check_node(
             }
 
             // Instance method — flagged regardless of receiver shape.
-            if let Some(required) = lookup_instance_method(prop_text)
-                .filter(|&r| r > min_version)
-            {
+            if let Some(required) = lookup_instance_method(prop_text).filter(|&r| r > min_version) {
                 diagnostics.push(Diagnostic::at_node(
                     ctx.path,
                     &prop,
@@ -276,9 +283,8 @@ mod tests {
 
     fn setup_with_engine(node_version: &str, source: &str) -> Vec<Diagnostic> {
         let dir = TempDir::new().unwrap();
-        let pkg = format!(
-            r#"{{"name":"t","version":"0.0.0","engines":{{"node":"{node_version}"}}}}"#
-        );
+        let pkg =
+            format!(r#"{{"name":"t","version":"0.0.0","engines":{{"node":"{node_version}"}}}}"#);
         fs::write(dir.path().join("package.json"), pkg).unwrap();
         let src_path = dir.path().join("app.ts");
         fs::write(&src_path, source).unwrap();

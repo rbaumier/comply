@@ -16,13 +16,12 @@
 
 mod cargo_modules;
 mod cargo_shear;
+mod catalog;
 mod changed_lines;
 mod cli;
 mod clippy;
 mod clone_detection;
 mod config;
-mod runner_helpers;
-mod catalog;
 mod diagnostic;
 mod engine;
 mod explain;
@@ -35,11 +34,12 @@ mod list;
 mod lsp;
 mod output;
 mod oxc_helpers;
-mod parsing;
 mod oxlint;
 mod oxlint_config;
+mod parsing;
 mod project;
 mod rules;
+mod runner_helpers;
 mod tui;
 
 use std::io::IsTerminal;
@@ -120,7 +120,8 @@ fn run() -> Result<bool> {
             }
             lint_with_rules(
                 &filter,
-                path.clone().unwrap_or_else(|| std::path::PathBuf::from(".")),
+                path.clone()
+                    .unwrap_or_else(|| std::path::PathBuf::from(".")),
                 should_emit_json,
             )
         }
@@ -246,8 +247,7 @@ fn lint_with_rules(
 
     let all_refs: Vec<&SourceFile> = discovered.iter().collect();
     let project = std::sync::Arc::new(crate::project::ProjectCtx::load(&all_refs, &config));
-    let diagnostics =
-        engine::lint_files_with_project(&all_refs, &config, &project, Some(filter))?;
+    let diagnostics = engine::lint_files_with_project(&all_refs, &config, &project, Some(filter))?;
 
     let after_overrides = apply_config_filters(diagnostics, &config);
     let after_suppressions = ignore_comments::apply_to_all(after_overrides, &discovered);
@@ -333,10 +333,8 @@ fn lint_project(cli: &Cli) -> Result<bool> {
             std::process::exit(2);
         }
         if has_violations {
-            let paths: std::collections::HashSet<&std::path::Path> = after_suppressions
-                .iter()
-                .map(|d| d.path.as_ref())
-                .collect();
+            let paths: std::collections::HashSet<&std::path::Path> =
+                after_suppressions.iter().map(|d| d.path.as_ref()).collect();
             let sources: std::collections::HashMap<std::sync::Arc<std::path::Path>, String> = paths
                 .into_iter()
                 .map(|p| {
@@ -346,7 +344,11 @@ fn lint_project(cli: &Cli) -> Result<bool> {
                 .collect();
             let display_root = match &mode {
                 ScanMode::All(path) => {
-                    if path.is_file() { path.parent().unwrap_or(path).to_path_buf() } else { path.clone() }
+                    if path.is_file() {
+                        path.parent().unwrap_or(path).to_path_buf()
+                    } else {
+                        path.clone()
+                    }
                 }
                 _ => std::env::current_dir().unwrap_or_default(),
             };
@@ -393,7 +395,12 @@ fn collect_all_diagnostics(
         diagnostics.extend(vue_diags);
     }
     if !by_lang.json.is_empty() {
-        diagnostics.extend(engine::lint_files_with_project(&by_lang.json, config, &project, None)?);
+        diagnostics.extend(engine::lint_files_with_project(
+            &by_lang.json,
+            config,
+            &project,
+            None,
+        )?);
     }
 
     if discovered.len() >= 2 {
@@ -413,10 +420,7 @@ fn collect_all_diagnostics(
 /// We need this post-filter because oxlint/clippy don't know about
 /// per-glob `disable = [...]` overrides — they run their full lint set
 /// and we filter the resulting diagnostics by `(rule_id, file_path)`.
-fn apply_config_filters(
-    mut diagnostics: Vec<Diagnostic>,
-    config: &Config,
-) -> Vec<Diagnostic> {
+fn apply_config_filters(mut diagnostics: Vec<Diagnostic>, config: &Config) -> Vec<Diagnostic> {
     diagnostics.retain(|d| config.is_rule_enabled(d.rule_id.as_ref(), d.path.as_ref()));
     for d in &mut diagnostics {
         if let Some(override_sev) = config.severity_for(d.rule_id.as_ref()) {
@@ -501,7 +505,10 @@ fn lint_rust(
     let project2 = std::sync::Arc::clone(project);
     let engine_phase = || -> PhaseOut {
         let t = Instant::now();
-        (engine::lint_files_with_project(rs_files, config, &project2, None), t.elapsed())
+        (
+            engine::lint_files_with_project(rs_files, config, &project2, None),
+            t.elapsed(),
+        )
     };
 
     // rayon::join(|| join(a, b), || join(c, d)) fans out into a
@@ -544,10 +551,22 @@ struct FilesByLanguage<'a> {
 
 fn partition_by_language(discovered: &[SourceFile]) -> FilesByLanguage<'_> {
     FilesByLanguage {
-        ts: discovered.iter().filter(|f| f.language.is_typescript_family()).collect(),
-        rs: discovered.iter().filter(|f| f.language == Language::Rust).collect(),
-        vue: discovered.iter().filter(|f| f.language == Language::Vue).collect(),
-        json: discovered.iter().filter(|f| f.language == Language::Json).collect(),
+        ts: discovered
+            .iter()
+            .filter(|f| f.language.is_typescript_family())
+            .collect(),
+        rs: discovered
+            .iter()
+            .filter(|f| f.language == Language::Rust)
+            .collect(),
+        vue: discovered
+            .iter()
+            .filter(|f| f.language == Language::Vue)
+            .collect(),
+        json: discovered
+            .iter()
+            .filter(|f| f.language == Language::Json)
+            .collect(),
     }
 }
 
@@ -578,7 +597,10 @@ fn lint_typescript(
     };
     let engine_phase = || -> PhaseOut {
         let t = Instant::now();
-        (engine::lint_files_with_project(ts_files, config, &project2, None), t.elapsed())
+        (
+            engine::lint_files_with_project(ts_files, config, &project2, None),
+            t.elapsed(),
+        )
     };
 
     let (oxlint_out, engine_out) = rayon::join(oxlint_phase, engine_phase);

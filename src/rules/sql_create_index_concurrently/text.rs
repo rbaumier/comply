@@ -37,7 +37,10 @@ mod tests {
     use std::path::Path;
 
     fn run(src: &str) -> Vec<Diagnostic> {
-        Check.check(&CheckCtx::for_test(Path::new("/app/migrations/001.sql"), src))
+        Check.check(&CheckCtx::for_test(
+            Path::new("/app/migrations/001.sql"),
+            src,
+        ))
     }
 
     fn run_non_migration(src: &str) -> Vec<Diagnostic> {
@@ -64,10 +67,7 @@ mod tests {
 
     #[test]
     fn flags_in_template_literal() {
-        assert_eq!(
-            run(r#"const q = `CREATE INDEX idx_x ON t(x)`;"#).len(),
-            1
-        );
+        assert_eq!(run(r#"const q = `CREATE INDEX idx_x ON t(x)`;"#).len(), 1);
     }
 
     #[test]

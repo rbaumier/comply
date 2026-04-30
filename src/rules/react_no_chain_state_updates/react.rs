@@ -41,9 +41,7 @@ fn count_setter_calls(body: Node, source: &[u8]) -> usize {
 
 fn callback_body<'tree>(node: Node<'tree>) -> Option<Node<'tree>> {
     match node.kind() {
-        "arrow_function" | "function" | "function_expression" => {
-            node.child_by_field_name("body")
-        }
+        "arrow_function" | "function" | "function_expression" => node.child_by_field_name("body"),
         _ => None,
     }
 }

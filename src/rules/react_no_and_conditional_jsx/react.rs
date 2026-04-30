@@ -65,19 +65,17 @@ impl AstCheck for Check {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
-
-
         crate::rules::test_helpers::run_tsx(source, &Check)
-
-
     }
 
     #[test]
     fn flags_and_conditional_jsx() {
-        assert_eq!(run_on("const x = <div>{isAdmin && <Panel />}</div>;").len(), 1);
+        assert_eq!(
+            run_on("const x = <div>{isAdmin && <Panel />}</div>;").len(),
+            1
+        );
     }
 
     #[test]

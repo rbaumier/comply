@@ -1,7 +1,5 @@
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::rules::jsx::{
-    jsx_attribute_name, jsx_attribute_string_value, jsx_element_tag_name,
-};
+use crate::rules::jsx::{jsx_attribute_name, jsx_attribute_string_value, jsx_element_tag_name};
 
 const HEADING_TAGS: &[&str] = &["h1", "h2", "h3", "h4", "h5", "h6"];
 const LARGE_SIZES: &[&str] = &[
@@ -63,17 +61,25 @@ mod tests {
 
     #[test]
     fn flags_h1_text_4xl_no_responsive() {
-        assert_eq!(run(r#"export const A = () => <h1 className="text-4xl" />;"#).len(), 1);
+        assert_eq!(
+            run(r#"export const A = () => <h1 className="text-4xl" />;"#).len(),
+            1
+        );
     }
 
     #[test]
     fn flags_h2_text_6xl_no_responsive() {
-        assert_eq!(run(r#"export const A = () => <h2 className="font-bold text-6xl" />;"#).len(), 1);
+        assert_eq!(
+            run(r#"export const A = () => <h2 className="font-bold text-6xl" />;"#).len(),
+            1
+        );
     }
 
     #[test]
     fn allows_responsive_pair() {
-        assert!(run(r#"export const A = () => <h1 className="text-2xl md:text-4xl" />;"#).is_empty());
+        assert!(
+            run(r#"export const A = () => <h1 className="text-2xl md:text-4xl" />;"#).is_empty()
+        );
     }
 
     #[test]

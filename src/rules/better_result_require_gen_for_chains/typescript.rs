@@ -4,11 +4,15 @@ fn is_andthen_call(node: &tree_sitter::Node<'_>, source: &[u8]) -> bool {
     if node.kind() != "call_expression" {
         return false;
     }
-    let Some(callee) = node.child_by_field_name("function") else { return false; };
+    let Some(callee) = node.child_by_field_name("function") else {
+        return false;
+    };
     if callee.kind() != "member_expression" {
         return false;
     }
-    let Some(prop) = callee.child_by_field_name("property") else { return false; };
+    let Some(prop) = callee.child_by_field_name("property") else {
+        return false;
+    };
     prop.utf8_text(source).unwrap_or("") == "andThen"
 }
 

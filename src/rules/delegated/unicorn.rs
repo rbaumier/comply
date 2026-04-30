@@ -2,7 +2,7 @@
 
 use crate::diagnostic::Severity;
 use crate::rules::meta::RuleMeta;
-use crate::rules::{oxlint_and_clippy, RuleDef};
+use crate::rules::{RuleDef, oxlint_and_clippy};
 
 pub fn register_all() -> Vec<RuleDef> {
     vec![
@@ -41,7 +41,8 @@ fn entry_with_clippy(
             description,
             remediation,
             severity: Severity::Error,
-            doc_url: None, categories: &["typescript"],
+            doc_url: None,
+            categories: &["typescript"],
         },
         oxlint_key,
         clippy_lint,

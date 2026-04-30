@@ -19,7 +19,9 @@ fn unwrap_expr(mut node: tree_sitter::Node) -> tree_sitter::Node {
             | "satisfies_expression"
             | "type_assertion"
     ) {
-        let Some(child) = node.named_child(0) else { break };
+        let Some(child) = node.named_child(0) else {
+            break;
+        };
         node = child;
     }
     node
@@ -30,12 +32,19 @@ fn is_indexof_call(node: tree_sitter::Node, source: &[u8]) -> bool {
     if node.kind() != "call_expression" {
         return false;
     }
-    let Some(callee) = node.child_by_field_name("function") else { return false };
+    let Some(callee) = node.child_by_field_name("function") else {
+        return false;
+    };
     if callee.kind() != "member_expression" {
         return false;
     }
-    let Some(prop) = callee.child_by_field_name("property") else { return false };
-    matches!(prop.utf8_text(source).unwrap_or(""), "indexOf" | "lastIndexOf")
+    let Some(prop) = callee.child_by_field_name("property") else {
+        return false;
+    };
+    matches!(
+        prop.utf8_text(source).unwrap_or(""),
+        "indexOf" | "lastIndexOf"
+    )
 }
 
 /// Return Some(true) if (operand_kind, op, literal_text) is one of the

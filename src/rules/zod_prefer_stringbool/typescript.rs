@@ -17,7 +17,9 @@ const FORM_INDICATORS: &[&str] = &[
 ];
 
 fn file_has_form_context(source: &[u8]) -> bool {
-    let Ok(text) = std::str::from_utf8(source) else { return false; };
+    let Ok(text) = std::str::from_utf8(source) else {
+        return false;
+    };
     FORM_INDICATORS.iter().any(|m| text.contains(m))
 }
 

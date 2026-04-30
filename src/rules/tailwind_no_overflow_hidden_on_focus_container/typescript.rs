@@ -76,12 +76,18 @@ mod tests {
 
     #[test]
     fn flags_overflow_hidden() {
-        assert_eq!(run(r#"const x = <div className="overflow-hidden" />;"#).len(), 1);
+        assert_eq!(
+            run(r#"const x = <div className="overflow-hidden" />;"#).len(),
+            1
+        );
     }
 
     #[test]
     fn flags_overflow_hidden_among_classes() {
-        assert_eq!(run(r#"const x = <div className="rounded overflow-hidden p-4" />;"#).len(), 1);
+        assert_eq!(
+            run(r#"const x = <div className="rounded overflow-hidden p-4" />;"#).len(),
+            1
+        );
     }
 
     #[test]

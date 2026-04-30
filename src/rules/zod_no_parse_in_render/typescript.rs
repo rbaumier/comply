@@ -61,10 +61,18 @@ fn looks_like_in_component_render(source: &str, parse_offset: usize) -> bool {
         near -= 1;
     }
     let near_snippet = &preceding[near..];
-    if near_snippet.rfind("useMemo(").map(|p| p > near_snippet.rfind("})").unwrap_or(0)).unwrap_or(false) {
+    if near_snippet
+        .rfind("useMemo(")
+        .map(|p| p > near_snippet.rfind("})").unwrap_or(0))
+        .unwrap_or(false)
+    {
         return false;
     }
-    if near_snippet.rfind("useCallback(").map(|p| p > near_snippet.rfind("})").unwrap_or(0)).unwrap_or(false) {
+    if near_snippet
+        .rfind("useCallback(")
+        .map(|p| p > near_snippet.rfind("})").unwrap_or(0))
+        .unwrap_or(false)
+    {
         return false;
     }
 
@@ -77,8 +85,7 @@ fn looks_like_in_component_render(source: &str, parse_offset: usize) -> bool {
             // Read identifier
             let bs = after.as_bytes();
             let mut k = 0usize;
-            while k < bs.len()
-                && (bs[k].is_ascii_alphanumeric() || bs[k] == b'_' || bs[k] == b'$')
+            while k < bs.len() && (bs[k].is_ascii_alphanumeric() || bs[k] == b'_' || bs[k] == b'$')
             {
                 k += 1;
             }
@@ -161,7 +168,8 @@ mod tests {
 
     #[test]
     fn flags_parse_in_arrow_component() {
-        let src = "const Comp = (props) => { const data = Schema.parse(props.input); return <div /> }";
+        let src =
+            "const Comp = (props) => { const data = Schema.parse(props.input); return <div /> }";
         assert_eq!(run(src).len(), 1);
     }
 

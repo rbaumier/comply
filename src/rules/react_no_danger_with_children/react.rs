@@ -83,7 +83,8 @@ mod tests {
 
     #[test]
     fn flags_danger_with_children_prop() {
-        let src = r#"const x = <div dangerouslySetInnerHTML={{ __html: html }} children="text" />;"#;
+        let src =
+            r#"const x = <div dangerouslySetInnerHTML={{ __html: html }} children="text" />;"#;
         assert_eq!(run(src).len(), 1);
     }
 

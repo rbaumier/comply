@@ -27,7 +27,9 @@ fn flagged_call(expr: &str) -> Option<&'static str> {
         expr
     };
     let rhs = rhs.trim();
-    for method in [".filter(", ".sort(", ".map(", ".reduce(", ".slice(", ".concat("] {
+    for method in [
+        ".filter(", ".sort(", ".map(", ".reduce(", ".slice(", ".concat(",
+    ] {
         if rhs.contains(method) {
             return Some(match method {
                 ".filter(" => "filter",
@@ -91,18 +93,25 @@ mod tests {
     #[test]
     fn flags_sort_in_vfor() {
         assert_eq!(
-            run("<template><li v-for=\"x in items.sort()\" :key=\"x.id\">{{ x }}</li></template>").len(),
+            run("<template><li v-for=\"x in items.sort()\" :key=\"x.id\">{{ x }}</li></template>")
+                .len(),
             1
         );
     }
 
     #[test]
     fn allows_plain_iterable() {
-        assert!(run("<template><li v-for=\"x in items\" :key=\"x.id\">{{ x }}</li></template>").is_empty());
+        assert!(
+            run("<template><li v-for=\"x in items\" :key=\"x.id\">{{ x }}</li></template>")
+                .is_empty()
+        );
     }
 
     #[test]
     fn allows_computed() {
-        assert!(run("<template><li v-for=\"x in sorted\" :key=\"x.id\">{{ x }}</li></template>").is_empty());
+        assert!(
+            run("<template><li v-for=\"x in sorted\" :key=\"x.id\">{{ x }}</li></template>")
+                .is_empty()
+        );
     }
 }

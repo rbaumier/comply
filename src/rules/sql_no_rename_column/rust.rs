@@ -2,7 +2,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::sql_helpers::{is_sql_ddl, RUST_STRING_KINDS};
+use crate::rules::sql_helpers::{RUST_STRING_KINDS, is_sql_ddl};
 
 #[derive(Debug)]
 pub struct Check;
@@ -49,7 +49,8 @@ mod tests {
 
     #[test]
     fn flags_rename_column() {
-        let src = r#"fn f() { let m = "ALTER TABLE account RENAME COLUMN email TO email_address;"; }"#;
+        let src =
+            r#"fn f() { let m = "ALTER TABLE account RENAME COLUMN email TO email_address;"; }"#;
         assert_eq!(run(src).len(), 1);
     }
 

@@ -144,14 +144,9 @@ impl AstCheck for Check {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
-
-
         crate::rules::test_helpers::run_ts(source, &Check)
-
-
     }
 
     #[test]
@@ -178,8 +173,6 @@ mod tests {
 
     #[test]
     fn allows_nullish_on_property_access() {
-        assert!(
-            run_on("function f(opts: { x?: number }) { return opts.x ?? 0; }").is_empty()
-        );
+        assert!(run_on("function f(opts: { x?: number }) { return opts.x ?? 0; }").is_empty());
     }
 }

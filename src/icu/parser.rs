@@ -30,14 +30,34 @@ pub enum IcuErrorKind {
 impl fmt::Display for IcuError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.kind {
-            IcuErrorKind::UnclosedBrace => write!(f, "unclosed brace at position {}", self.position),
-            IcuErrorKind::UnmatchedCloseBrace => write!(f, "unmatched closing brace at position {}", self.position),
-            IcuErrorKind::EmptyArgument => write!(f, "empty argument at position {}", self.position),
-            IcuErrorKind::InvalidPluralKeyword(kw) => write!(f, "invalid plural keyword `{kw}` at position {}", self.position),
-            IcuErrorKind::MissingOtherCategory => write!(f, "`other` category is required at position {}", self.position),
-            IcuErrorKind::InvalidSelectSyntax => write!(f, "invalid select syntax at position {}", self.position),
-            IcuErrorKind::ExpectedComma => write!(f, "expected comma at position {}", self.position),
-            IcuErrorKind::ExpectedBraceOrKeyword => write!(f, "expected brace or keyword at position {}", self.position),
+            IcuErrorKind::UnclosedBrace => {
+                write!(f, "unclosed brace at position {}", self.position)
+            }
+            IcuErrorKind::UnmatchedCloseBrace => {
+                write!(f, "unmatched closing brace at position {}", self.position)
+            }
+            IcuErrorKind::EmptyArgument => {
+                write!(f, "empty argument at position {}", self.position)
+            }
+            IcuErrorKind::InvalidPluralKeyword(kw) => write!(
+                f,
+                "invalid plural keyword `{kw}` at position {}",
+                self.position
+            ),
+            IcuErrorKind::MissingOtherCategory => write!(
+                f,
+                "`other` category is required at position {}",
+                self.position
+            ),
+            IcuErrorKind::InvalidSelectSyntax => {
+                write!(f, "invalid select syntax at position {}", self.position)
+            }
+            IcuErrorKind::ExpectedComma => {
+                write!(f, "expected comma at position {}", self.position)
+            }
+            IcuErrorKind::ExpectedBraceOrKeyword => {
+                write!(f, "expected brace or keyword at position {}", self.position)
+            }
         }
     }
 }
@@ -400,9 +420,10 @@ pub fn extract_placeholders(input: &str) -> Vec<String> {
                 i += 1;
             }
             if i > start
-                && let Ok(name) = std::str::from_utf8(&bytes[start..i]) {
-                    placeholders.insert(name.to_string());
-                }
+                && let Ok(name) = std::str::from_utf8(&bytes[start..i])
+            {
+                placeholders.insert(name.to_string());
+            }
             // Skip to closing brace (handle nesting)
             let mut depth = 1;
             while i < bytes.len() && depth > 0 {
@@ -479,7 +500,10 @@ mod tests {
 
     #[test]
     fn plural_all_keywords() {
-        assert!(parse("{n, plural, zero {0} one {1} two {2} few {few} many {many} other {other}}").is_ok());
+        assert!(
+            parse("{n, plural, zero {0} one {1} two {2} few {few} many {many} other {other}}")
+                .is_ok()
+        );
     }
 
     #[test]

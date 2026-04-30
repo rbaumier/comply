@@ -52,15 +52,18 @@ mod tests {
 
     #[test]
     fn allows_scoped_rule() {
-        assert!(run(
-            "// eslint-disable-next-line @typescript-eslint/no-explicit-any\nconst x = 1;"
-        )
-        .is_empty());
+        assert!(
+            run("// eslint-disable-next-line @typescript-eslint/no-explicit-any\nconst x = 1;")
+                .is_empty()
+        );
     }
 
     #[test]
     fn flags_with_description_separator() {
-        assert_eq!(run("// eslint-disable-next-line -- reason\nconst x = 1;").len(), 1);
+        assert_eq!(
+            run("// eslint-disable-next-line -- reason\nconst x = 1;").len(),
+            1
+        );
     }
 
     #[test]

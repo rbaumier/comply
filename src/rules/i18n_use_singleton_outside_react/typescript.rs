@@ -55,7 +55,9 @@ crate::ast_check! { on ["call_expression"] prefilter = ["useTranslation"] => |no
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn run(s: &str) -> Vec<Diagnostic> { crate::rules::test_helpers::run_ts(s, &Check) }
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_ts(s, &Check)
+    }
 
     #[test]
     fn flags_outside_component() {

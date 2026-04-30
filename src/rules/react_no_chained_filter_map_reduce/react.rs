@@ -29,12 +29,16 @@ fn receiver<'a>(call: tree_sitter::Node<'a>) -> Option<tree_sitter::Node<'a>> {
 fn chain_length(mut call: tree_sitter::Node<'_>, source: &[u8]) -> u32 {
     let mut count = 0u32;
     loop {
-        let Some(name) = method_name(call, source) else { return count };
+        let Some(name) = method_name(call, source) else {
+            return count;
+        };
         if !CHAIN_METHODS.contains(&name) {
             return count;
         }
         count += 1;
-        let Some(recv) = receiver(call) else { return count };
+        let Some(recv) = receiver(call) else {
+            return count;
+        };
         if recv.kind() != "call_expression" {
             return count;
         }
@@ -45,16 +49,22 @@ fn chain_length(mut call: tree_sitter::Node<'_>, source: &[u8]) -> u32 {
 fn is_outermost_chain_call(call: tree_sitter::Node<'_>, source: &[u8]) -> bool {
     // The chain's outermost qualifying call is one whose parent chain
     // does NOT continue with another qualifying method call.
-    let Some(parent) = call.parent() else { return true };
+    let Some(parent) = call.parent() else {
+        return true;
+    };
     if parent.kind() != "member_expression" {
         return true;
     }
-    let Some(obj) = parent.child_by_field_name("object") else { return true };
+    let Some(obj) = parent.child_by_field_name("object") else {
+        return true;
+    };
     if obj.id() != call.id() {
         return true;
     }
     // Walk up: parent is `call.something`; find the enclosing call.
-    let Some(outer_call) = parent.parent() else { return true };
+    let Some(outer_call) = parent.parent() else {
+        return true;
+    };
     if outer_call.kind() != "call_expression" {
         return true;
     }

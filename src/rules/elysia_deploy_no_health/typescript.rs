@@ -53,7 +53,8 @@ mod tests {
 
     #[test]
     fn flags_listen_without_health() {
-        let src = "import { Elysia } from 'elysia';\nnew Elysia().get('/users', () => []).listen(3000);";
+        let src =
+            "import { Elysia } from 'elysia';\nnew Elysia().get('/users', () => []).listen(3000);";
         assert_eq!(run_on(src).len(), 1);
     }
 

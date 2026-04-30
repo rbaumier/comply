@@ -69,7 +69,10 @@ mod tests {
 
     #[test]
     fn allows_fill_with_sizes() {
-        assert!(run(r#"function App() { return <Image src="/a.png" fill sizes="100vw" alt="" />; }"#).is_empty());
+        assert!(
+            run(r#"function App() { return <Image src="/a.png" fill sizes="100vw" alt="" />; }"#)
+                .is_empty()
+        );
     }
 
     #[test]

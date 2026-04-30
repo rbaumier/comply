@@ -9,7 +9,9 @@ fn is_async_iife(node: tree_sitter::Node, source: &[u8]) -> bool {
     if node.kind() != "call_expression" {
         return false;
     }
-    let Some(callee) = node.child_by_field_name("function") else { return false };
+    let Some(callee) = node.child_by_field_name("function") else {
+        return false;
+    };
     if callee.kind() != "parenthesized_expression" {
         return false;
     }
@@ -19,7 +21,9 @@ fn is_async_iife(node: tree_sitter::Node, source: &[u8]) -> bool {
         match child.kind() {
             "arrow_function" | "function" | "function_expression" => {
                 // Check if it has the `async` keyword
-                let Ok(text) = child.utf8_text(source) else { return false };
+                let Ok(text) = child.utf8_text(source) else {
+                    return false;
+                };
                 return text.starts_with("async ");
             }
             _ => {}
@@ -40,7 +44,9 @@ fn async_func_decl_name<'a>(node: tree_sitter::Node<'a>, source: &'a [u8]) -> Op
         return None;
     }
     // Check async keyword
-    let Ok(text) = node.utf8_text(source) else { return None };
+    let Ok(text) = node.utf8_text(source) else {
+        return None;
+    };
     if !text.starts_with("async ") {
         return None;
     }

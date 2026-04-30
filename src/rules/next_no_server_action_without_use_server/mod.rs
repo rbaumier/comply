@@ -6,9 +6,9 @@ mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
+use crate::rules::RuleDef;
 use crate::rules::backend::Backend;
 use crate::rules::meta::RuleMeta;
-use crate::rules::RuleDef;
 
 pub const META: RuleMeta = RuleMeta {
     id: "next-no-server-action-without-use-server",
@@ -16,7 +16,9 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Add `'use server';` at the top of the file (before any imports), \
                   or rename the file if it isn't meant to host server actions.",
     severity: Severity::Error,
-    doc_url: Some("https://nextjs.org/docs/app/building-your-application/data-fetching/server-actions-and-mutations"),
+    doc_url: Some(
+        "https://nextjs.org/docs/app/building-your-application/data-fetching/server-actions-and-mutations",
+    ),
     categories: &["nextjs"],
 };
 
@@ -24,8 +26,14 @@ pub fn register() -> RuleDef {
     RuleDef {
         meta: META,
         backends: vec![
-            (Language::TypeScript, Backend::Text(Box::new(typescript::Check))),
-            (Language::JavaScript, Backend::Text(Box::new(typescript::Check))),
+            (
+                Language::TypeScript,
+                Backend::Text(Box::new(typescript::Check)),
+            ),
+            (
+                Language::JavaScript,
+                Backend::Text(Box::new(typescript::Check)),
+            ),
             (Language::Tsx, Backend::Text(Box::new(typescript::Check))),
         ],
     }

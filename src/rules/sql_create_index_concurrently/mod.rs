@@ -23,9 +23,18 @@ pub fn register() -> RuleDef {
     RuleDef {
         meta: META,
         backends: vec![
-            (Language::TypeScript, Backend::TreeSitter(Box::new(typescript::Check))),
-            (Language::JavaScript, Backend::TreeSitter(Box::new(typescript::Check))),
-            (Language::Tsx, Backend::TreeSitter(Box::new(typescript::Check))),
+            (
+                Language::TypeScript,
+                Backend::TreeSitter(Box::new(typescript::Check)),
+            ),
+            (
+                Language::JavaScript,
+                Backend::TreeSitter(Box::new(typescript::Check)),
+            ),
+            (
+                Language::Tsx,
+                Backend::TreeSitter(Box::new(typescript::Check)),
+            ),
             (Language::Rust, Backend::TreeSitter(Box::new(rust::Check))),
             (Language::Vue, Backend::Text(Box::new(text::Check))),
             (Language::Sql, Backend::Text(Box::new(text::Check))),

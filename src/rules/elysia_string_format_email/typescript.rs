@@ -3,11 +3,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-const PATTERNS: &[&str] = &[
-    "email:t.String()",
-    "url:t.String()",
-    "uri:t.String()",
-];
+const PATTERNS: &[&str] = &["email:t.String()", "url:t.String()", "uri:t.String()"];
 
 crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
     let _ = source;

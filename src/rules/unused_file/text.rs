@@ -6,7 +6,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::project::{ImportIndex, ProjectCtx};
 use crate::rules::backend::{CheckCtx, TextCheck};
-use crate::rules::path_utils::is_config_file;
+use crate::rules::path_utils::{is_config_file, is_framework_entry_point};
 use std::path::Path;
 
 const RULE_ID: &str = "unused-file";
@@ -45,7 +45,9 @@ impl TextCheck for Check {
             if is_entry_point(path, ctx.project) {
                 continue;
             }
-            if is_declaration_file(path) || is_config_file(path) || is_test_file(path)
+            if is_declaration_file(path)
+                || is_config_file(path)
+                || is_test_file(path)
                 || is_in_ui_library(path)
             {
                 continue;
@@ -65,10 +67,7 @@ impl TextCheck for Check {
     }
 }
 
-fn detect_entry_points<'a>(
-    index: &'a ImportIndex,
-    project: &ProjectCtx,
-) -> Vec<&'a Path> {
+fn detect_entry_points<'a>(index: &'a ImportIndex, project: &ProjectCtx) -> Vec<&'a Path> {
     index
         .indexed_paths()
         .filter(|p| is_entry_point(p, project))
@@ -82,35 +81,15 @@ fn is_entry_point(path: &Path, project: &ProjectCtx) -> bool {
         return true;
     }
 
-    let path_str = path.to_str().unwrap_or("");
-    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-
-    // Framework-declared directory fragments (e.g. "/pages/", "/routes/").
-    if project.framework_entry_dirs().any(|dir| path_str.contains(dir)) {
-        return true;
-    }
-
-    // Framework-declared entry file names (e.g. "middleware.ts").
-    if project.framework_entry_files().any(|f| f == name) {
-        return true;
-    }
-
-    // Framework-declared entry-file suffixes (e.g. ".lazy.tsx", ".route.ts").
-    let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-    if project
-        .framework_entry_file_suffixes()
-        .any(|suf| file_name.ends_with(suf))
-    {
+    if is_framework_entry_point(path, project) {
         return true;
     }
 
     if let Some(root) = project.project_root.as_deref()
         && let Some(parent) = path.parent()
     {
-        let canon_parent =
-            std::fs::canonicalize(parent).unwrap_or_else(|_| parent.to_path_buf());
-        let canon_root =
-            std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+        let canon_parent = std::fs::canonicalize(parent).unwrap_or_else(|_| parent.to_path_buf());
+        let canon_root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
         if canon_parent == canon_root {
             if stem == "main" || stem == "index" {
                 return true;
@@ -134,8 +113,10 @@ fn is_declaration_file(path: &Path) -> bool {
 fn is_test_file(path: &Path) -> bool {
     let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
     let path_str = path.to_str().unwrap_or("");
-    name.contains(".test.") || name.contains(".spec.")
-        || path_str.contains("/__tests__/") || path_str.contains("/tests/")
+    name.contains(".test.")
+        || name.contains(".spec.")
+        || path_str.contains("/__tests__/")
+        || path_str.contains("/tests/")
 }
 
 fn is_in_ui_library(path: &Path) -> bool {
@@ -226,9 +207,7 @@ mod tests {
 
     #[test]
     fn allows_entry_point_itself() {
-        let files: Vec<(&str, &str)> = vec![
-            ("index.ts", "export const x = 1;\n"),
-        ];
+        let files: Vec<(&str, &str)> = vec![("index.ts", "export const x = 1;\n")];
         let (_dir, diags) = run_on_project(&files);
         assert!(diags.is_empty(), "entry points are exempt by definition");
     }

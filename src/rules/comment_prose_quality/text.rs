@@ -58,8 +58,7 @@ fn contains_word(haystack: &str, needle: &str) -> bool {
     let mut start = 0;
     while let Some(idx) = lower[start..].find(needle) {
         let abs = start + idx;
-        let before_ok =
-            abs == 0 || !lower.as_bytes()[abs - 1].is_ascii_alphanumeric();
+        let before_ok = abs == 0 || !lower.as_bytes()[abs - 1].is_ascii_alphanumeric();
         let after_pos = abs + needle.len();
         let after_ok =
             after_pos >= lower.len() || !lower.as_bytes()[after_pos].is_ascii_alphanumeric();
@@ -92,9 +91,7 @@ impl TextCheck for Check {
                         line: idx + 1,
                         column: 1,
                         rule_id: "comment-prose-quality".into(),
-                        message: format!(
-                            "Weasel word `{weasel}` in comment — be specific."
-                        ),
+                        message: format!("Weasel word `{weasel}` in comment — be specific."),
                         severity: Severity::Warning,
                         span: None,
                     });
@@ -125,12 +122,13 @@ impl TextCheck for Check {
             let words: Vec<&str> = text.split_whitespace().collect();
             let is_rustdoc_heading_echo = prev_last_word.as_ref().is_some_and(|(_, prev_wc)| {
                 *prev_wc == 2
-                    && lines.get(idx.wrapping_sub(1)).and_then(|l| comment_text(l)).is_some_and(
-                        |prev_text| {
+                    && lines
+                        .get(idx.wrapping_sub(1))
+                        .and_then(|l| comment_text(l))
+                        .is_some_and(|prev_text| {
                             let pt = prev_text.trim();
                             pt.starts_with("# ")
-                        },
-                    )
+                        })
             });
             if let Some((ref prev, prev_wc)) = prev_last_word
                 && words.len() > 1
@@ -145,9 +143,7 @@ impl TextCheck for Check {
                     line: idx + 1,
                     column: 1,
                     rule_id: "comment-prose-quality".into(),
-                    message: format!(
-                        "Lexical illusion: `{first}` repeated across lines."
-                    ),
+                    message: format!("Lexical illusion: `{first}` repeated across lines."),
                     severity: Severity::Warning,
                     span: None,
                 });
@@ -213,28 +209,52 @@ mod tests {
     #[test]
     fn ignores_punctuation_only_tokens_for_lexical_illusion() {
         let src = "// obj = {\n// },\n// },";
-        assert!(!run(src).iter().any(|d| d.message.contains("Lexical illusion")));
+        assert!(
+            !run(src)
+                .iter()
+                .any(|d| d.message.contains("Lexical illusion"))
+        );
     }
 
     #[test]
     fn ignores_closing_braces_for_lexical_illusion() {
         let src = "// }\n// }";
-        assert!(!run(src).iter().any(|d| d.message.contains("Lexical illusion")));
+        assert!(
+            !run(src)
+                .iter()
+                .any(|d| d.message.contains("Lexical illusion"))
+        );
     }
 
     #[test]
     fn ignores_jsdoc_star_for_lexical_illusion() {
         let src = " * @param foo - description\n * @returns bar";
-        assert!(!run(src).iter().any(|d| d.message.contains("Lexical illusion")));
+        assert!(
+            !run(src)
+                .iter()
+                .any(|d| d.message.contains("Lexical illusion"))
+        );
     }
 
     #[test]
     fn ignores_rustdoc_heading_echo() {
         let src = "/// # Panics\n/// Panics if the buffer is empty.";
-        assert!(!run(src).iter().any(|d| d.message.contains("Lexical illusion")));
+        assert!(
+            !run(src)
+                .iter()
+                .any(|d| d.message.contains("Lexical illusion"))
+        );
         let src = "/// # Returns\n/// Returns `None` if not found.";
-        assert!(!run(src).iter().any(|d| d.message.contains("Lexical illusion")));
+        assert!(
+            !run(src)
+                .iter()
+                .any(|d| d.message.contains("Lexical illusion"))
+        );
         let src = "/// # Errors\n/// Errors if the input is invalid.";
-        assert!(!run(src).iter().any(|d| d.message.contains("Lexical illusion")));
+        assert!(
+            !run(src)
+                .iter()
+                .any(|d| d.message.contains("Lexical illusion"))
+        );
     }
 }

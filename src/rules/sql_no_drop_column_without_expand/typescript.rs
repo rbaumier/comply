@@ -2,7 +2,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::sql_helpers::{is_sql_ddl, TS_STRING_KINDS};
+use crate::rules::sql_helpers::{TS_STRING_KINDS, is_sql_ddl};
 use crate::rules::walker::collect_nodes_of_kinds;
 
 #[derive(Debug)]

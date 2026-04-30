@@ -46,7 +46,9 @@ crate::ast_check! { on ["assignment_expression"] => |node, source, ctx, diagnost
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn run(code: &str) -> Vec<Diagnostic> { crate::rules::test_helpers::run_ts(code, &Check) }
+    fn run(code: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_ts(code, &Check)
+    }
 
     #[test]
     fn flags_this_mutation_in_method() {

@@ -40,12 +40,21 @@ mod tests {
 
     #[test]
     fn flags_ddl_without_search_path() {
-        assert_eq!(run("/app/migrations/001.sql", "CREATE TABLE users (id INT);").len(), 1);
+        assert_eq!(
+            run("/app/migrations/001.sql", "CREATE TABLE users (id INT);").len(),
+            1
+        );
     }
 
     #[test]
     fn allows_ddl_with_search_path() {
-        assert!(run("/app/migrations/001.sql", "SET search_path = pg_catalog, public;\nCREATE TABLE users (id INT);").is_empty());
+        assert!(
+            run(
+                "/app/migrations/001.sql",
+                "SET search_path = pg_catalog, public;\nCREATE TABLE users (id INT);"
+            )
+            .is_empty()
+        );
     }
 
     #[test]

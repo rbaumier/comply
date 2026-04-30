@@ -132,10 +132,8 @@ mod tests {
 
     #[test]
     fn skips_bare_specifier() {
-        let (_dir, project, paths) = setup_project(&[(
-            "app.ts",
-            "import { useState } from 'react';\nuseState();",
-        )]);
+        let (_dir, project, paths) =
+            setup_project(&[("app.ts", "import { useState } from 'react';\nuseState();")]);
         let source = "import { useState } from 'react';\nuseState();";
         let diags = run_ts_with_project_and_path(source, &Check, &project, &paths[0]);
         assert!(diags.is_empty());

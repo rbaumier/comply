@@ -93,9 +93,10 @@ fn is_typechecking_expression(node: tree_sitter::Node, source: &[u8]) -> bool {
                 return true;
             }
             if op == "!"
-                && let Some(arg) = node.child_by_field_name("argument") {
-                    return is_typechecking_expression(arg, source);
-                }
+                && let Some(arg) = node.child_by_field_name("argument")
+            {
+                return is_typechecking_expression(arg, source);
+            }
             false
         }
         "binary_expression" => {
@@ -116,9 +117,10 @@ fn is_typechecking_expression(node: tree_sitter::Node, source: &[u8]) -> bool {
                     // member_expression: check property
                     if r.kind() == "member_expression"
                         && let Some(prop) = r.child_by_field_name("property")
-                            && is_error_constructor_name(prop.utf8_text(source).unwrap_or("")) {
-                                return false;
-                            }
+                        && is_error_constructor_name(prop.utf8_text(source).unwrap_or(""))
+                    {
+                        return false;
+                    }
                 }
                 return true;
             }
@@ -148,9 +150,10 @@ fn is_typecheck_member_expression(node: tree_sitter::Node, source: &[u8]) -> boo
     }
     // Recurse into the object if it's also a member expression.
     if let Some(obj) = node.child_by_field_name("object")
-        && obj.kind() == "member_expression" {
-            return is_typecheck_member_expression(obj, source);
-        }
+        && obj.kind() == "member_expression"
+    {
+        return is_typecheck_member_expression(obj, source);
+    }
     false
 }
 
@@ -233,11 +236,12 @@ impl AstCheck for Check {
             _ => {
                 // Also handle: throw is directly the consequence (no braces).
                 if let Some(gp) = parent.parent()
-                    && gp.kind() == "if_statement" {
-                        // parent is the throw itself, and gp is if_statement.
-                        // But we're already at the throw level, so check
-                        // if throw's parent is if_statement.
-                    }
+                    && gp.kind() == "if_statement"
+                {
+                    // parent is the throw itself, and gp is if_statement.
+                    // But we're already at the throw level, so check
+                    // if throw's parent is if_statement.
+                }
                 // Check if the throw is directly under if_statement consequence.
                 if parent.kind() == "if_statement" {
                     parent

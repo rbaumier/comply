@@ -5,18 +5,54 @@ use crate::rules::backend::{CheckCtx, TextCheck};
 use crate::rules::vue_template_helpers::{collect_attr_names, extract_elements, is_vue_file};
 
 const VALID_ARIA: &[&str] = &[
-    "aria-activedescendant", "aria-atomic", "aria-autocomplete", "aria-busy",
-    "aria-checked", "aria-colcount", "aria-colindex", "aria-colspan",
-    "aria-controls", "aria-current", "aria-describedby", "aria-details",
-    "aria-disabled", "aria-dropeffect", "aria-errormessage", "aria-expanded",
-    "aria-flowto", "aria-grabbed", "aria-haspopup", "aria-hidden",
-    "aria-invalid", "aria-keyshortcuts", "aria-label", "aria-labelledby",
-    "aria-level", "aria-live", "aria-modal", "aria-multiline",
-    "aria-multiselectable", "aria-orientation", "aria-owns", "aria-placeholder",
-    "aria-posinset", "aria-pressed", "aria-readonly", "aria-relevant",
-    "aria-required", "aria-roledescription", "aria-rowcount", "aria-rowindex",
-    "aria-rowspan", "aria-selected", "aria-setsize", "aria-sort",
-    "aria-valuemax", "aria-valuemin", "aria-valuenow", "aria-valuetext",
+    "aria-activedescendant",
+    "aria-atomic",
+    "aria-autocomplete",
+    "aria-busy",
+    "aria-checked",
+    "aria-colcount",
+    "aria-colindex",
+    "aria-colspan",
+    "aria-controls",
+    "aria-current",
+    "aria-describedby",
+    "aria-details",
+    "aria-disabled",
+    "aria-dropeffect",
+    "aria-errormessage",
+    "aria-expanded",
+    "aria-flowto",
+    "aria-grabbed",
+    "aria-haspopup",
+    "aria-hidden",
+    "aria-invalid",
+    "aria-keyshortcuts",
+    "aria-label",
+    "aria-labelledby",
+    "aria-level",
+    "aria-live",
+    "aria-modal",
+    "aria-multiline",
+    "aria-multiselectable",
+    "aria-orientation",
+    "aria-owns",
+    "aria-placeholder",
+    "aria-posinset",
+    "aria-pressed",
+    "aria-readonly",
+    "aria-relevant",
+    "aria-required",
+    "aria-roledescription",
+    "aria-rowcount",
+    "aria-rowindex",
+    "aria-rowspan",
+    "aria-selected",
+    "aria-setsize",
+    "aria-sort",
+    "aria-valuemax",
+    "aria-valuemin",
+    "aria-valuenow",
+    "aria-valuetext",
 ];
 
 #[derive(Debug)]
@@ -36,7 +72,9 @@ impl TextCheck for Check {
                         line: elem.line,
                         column: 1,
                         rule_id: "a11y-aria-props".into(),
-                        message: format!("Invalid ARIA attribute `{name}`. Use a valid WAI-ARIA attribute."),
+                        message: format!(
+                            "Invalid ARIA attribute `{name}`. Use a valid WAI-ARIA attribute."
+                        ),
                         severity: Severity::Error,
                         span: None,
                     });
@@ -66,7 +104,8 @@ mod tests {
 
     #[test]
     fn allows_valid_aria() {
-        let source = "<template>\n  <div aria-label=\"hello\" aria-hidden=\"true\"></div>\n</template>";
+        let source =
+            "<template>\n  <div aria-label=\"hello\" aria-hidden=\"true\"></div>\n</template>";
         assert!(run(source).is_empty());
     }
 }

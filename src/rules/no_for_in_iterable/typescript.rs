@@ -4,8 +4,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 
 /// Heuristic names that suggest an array/iterable.
 const ITERABLE_HINTS: &[&str] = &[
-    "arr", "list", "items", "elements", "array",
-    "values", "entries", "results", "rows", "records",
+    "arr", "list", "items", "elements", "array", "values", "entries", "results", "rows", "records",
 ];
 
 /// Heuristic: the right-hand side looks like an array/iterable.

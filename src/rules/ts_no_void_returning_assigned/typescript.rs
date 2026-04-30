@@ -32,7 +32,9 @@ impl TextCheck for Check {
             let leading = line.len() - trimmed.len();
             let after_kw = &trimmed[kw.len()..];
             // Find an `=` on this line.
-            let Some(eq_rel) = after_kw.find('=') else { continue };
+            let Some(eq_rel) = after_kw.find('=') else {
+                continue;
+            };
             let rhs = &after_kw[eq_rel + 1..];
             for pat in VOID_PATTERNS {
                 if rhs.contains(pat) {

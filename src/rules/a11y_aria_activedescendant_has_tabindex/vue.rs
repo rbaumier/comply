@@ -23,7 +23,9 @@ impl TextCheck for Check {
                     line: elem.line,
                     column: 1,
                     rule_id: "a11y-aria-activedescendant-has-tabindex".into(),
-                    message: "Element with `aria-activedescendant` must have `tabIndex` to be tabbable.".into(),
+                    message:
+                        "Element with `aria-activedescendant` must have `tabIndex` to be tabbable."
+                            .into(),
                     severity: Severity::Error,
                     span: None,
                 });

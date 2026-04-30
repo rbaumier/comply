@@ -27,7 +27,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::project::import_index::{ExportKind, ImportKind};
 use crate::rules::backend::{CheckCtx, TextCheck};
-use crate::rules::path_utils::is_config_file;
+use crate::rules::path_utils::{is_config_file, is_framework_entry_point};
 use std::path::Path;
 
 const RULE_ID: &str = "dead-export";
@@ -76,15 +76,9 @@ impl TextCheck for Check {
         let index = ctx.project.import_index();
         let canon = std::fs::canonicalize(ctx.path).unwrap_or_else(|_| ctx.path.to_path_buf());
 
-        // Files inside framework entry dirs are consumed by the framework itself
-        // (e.g. TanStack Router routes, shadcn ui components) — their exports
-        // are read by tooling, not by other application files in the index.
-        let canon_str = canon.to_string_lossy();
-        if ctx
-            .project
-            .framework_entry_dirs()
-            .any(|dir| canon_str.contains(dir))
-        {
+        // Framework entry points are consumed by framework tooling rather than
+        // imported by application files in the index.
+        if is_framework_entry_point(&canon, ctx.project) {
             return Vec::new();
         }
         let exports = index.get_exports(&canon);
@@ -169,7 +163,18 @@ mod tests {
     use tempfile::TempDir;
 
     fn run_on_project(files: &[(&str, &str)], target_rel: &str) -> (TempDir, Vec<Diagnostic>) {
+        run_on_project_with_pkg(None, files, target_rel)
+    }
+
+    fn run_on_project_with_pkg(
+        package_json: Option<&str>,
+        files: &[(&str, &str)],
+        target_rel: &str,
+    ) -> (TempDir, Vec<Diagnostic>) {
         let dir = TempDir::new().unwrap();
+        if let Some(package_json) = package_json {
+            fs::write(dir.path().join("package.json"), package_json).unwrap();
+        }
         let mut source_files: Vec<SourceFile> = Vec::new();
         for (rel, content) in files {
             let p = dir.path().join(rel);
@@ -258,7 +263,10 @@ mod tests {
             ("app.ts", "import * as ns from './m';"),
         ];
         let (_dir, diags) = run_on_project(&files, "m.ts");
-        assert!(diags.is_empty(), "namespace importer suppresses dead-export");
+        assert!(
+            diags.is_empty(),
+            "namespace importer suppresses dead-export"
+        );
     }
 
     #[test]
@@ -329,10 +337,7 @@ mod tests {
     #[test]
     fn ignores_block_comment_generated_marker() {
         let files: Vec<(&str, &str)> = vec![
-            (
-                "schema.ts",
-                "/* @generated */\nexport const Settings = {};",
-            ),
+            ("schema.ts", "/* @generated */\nexport const Settings = {};"),
             ("app.ts", "export const z = 1;"),
         ];
         let (_dir, diags) = run_on_project(&files, "schema.ts");
@@ -345,7 +350,10 @@ mod tests {
     #[test]
     fn still_flags_components_outside_ui_dir() {
         let files: Vec<(&str, &str)> = vec![
-            ("components/feature/header.tsx", "export function Header() {}"),
+            (
+                "components/feature/header.tsx",
+                "export function Header() {}",
+            ),
             ("app.ts", "export const z = 1;"),
         ];
         let (_dir, diags) = run_on_project(&files, "components/feature/header.tsx");
@@ -353,6 +361,20 @@ mod tests {
             diags.len(),
             1,
             "components/<feature>/ should still be flagged"
+        );
+    }
+
+    #[test]
+    fn ignores_framework_entry_file_names() {
+        let files: Vec<(&str, &str)> = vec![
+            ("src/routeTree.gen.ts", "export const routeTree = {};"),
+            ("src/app.ts", "export const z = 1;"),
+        ];
+        let pkg = r#"{"dependencies":{"@tanstack/react-router":"1"}}"#;
+        let (_dir, diags) = run_on_project_with_pkg(Some(pkg), &files, "src/routeTree.gen.ts");
+        assert!(
+            diags.is_empty(),
+            "generated TanStack route tree should be a framework entry point: {diags:?}"
         );
     }
 }

@@ -3,8 +3,8 @@
 mod react;
 
 use crate::diagnostic::Severity;
-use crate::rules::meta::RuleMeta;
 use crate::rules::RuleDef;
+use crate::rules::meta::RuleMeta;
 
 pub const META: RuleMeta = RuleMeta {
     id: "react-button-has-type",
@@ -12,11 +12,16 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Add an explicit `type` attribute (`button`, `submit`, or `reset`) \
                   to every `<button>` element so the intent is clear.",
     severity: Severity::Warning,
-    doc_url: Some("https://github.com/jsx-eslint/eslint-plugin-react/blob/master/docs/rules/button-has-type.md"),
+    doc_url: Some(
+        "https://github.com/jsx-eslint/eslint-plugin-react/blob/master/docs/rules/button-has-type.md",
+    ),
     categories: &["react"],
 };
 
 pub fn register() -> RuleDef {
     let backends = crate::register_ts_family!(META, react).backends;
-    RuleDef { meta: META, backends }
+    RuleDef {
+        meta: META,
+        backends,
+    }
 }

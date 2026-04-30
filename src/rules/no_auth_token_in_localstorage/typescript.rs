@@ -90,22 +90,14 @@ impl AstCheck for Check {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
-
-
         crate::rules::test_helpers::run_ts(source, &Check)
-
-
     }
 
     #[test]
     fn flags_token_storage() {
-        assert_eq!(
-            run_on("localStorage.setItem('authToken', t);").len(),
-            1
-        );
+        assert_eq!(run_on("localStorage.setItem('authToken', t);").len(), 1);
     }
 
     #[test]

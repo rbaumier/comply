@@ -58,8 +58,12 @@ impl AstCheck for Check {
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let source = ctx.source.as_bytes();
-        let Some(ctor) = node.child_by_field_name("constructor") else { return };
-        let Ok(ctor_name) = ctor.utf8_text(source) else { return };
+        let Some(ctor) = node.child_by_field_name("constructor") else {
+            return;
+        };
+        let Ok(ctor_name) = ctor.utf8_text(source) else {
+            return;
+        };
         if ctor_name != "URL" {
             return;
         }

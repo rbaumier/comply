@@ -9,10 +9,7 @@ use crate::rules::backend::{CheckCtx, TextCheck};
 #[derive(Debug)]
 pub struct Check;
 
-const SECTIONS: &[&str] = &[
-    "\"dependencies\"",
-    "\"devDependencies\"",
-];
+const SECTIONS: &[&str] = &["\"dependencies\"", "\"devDependencies\""];
 
 /// Collect package names from a JSON dependency block. Returns the keys
 /// found and the line index after the closing brace.
@@ -43,7 +40,9 @@ fn collect_keys(lines: &[&str], start: usize) -> (Vec<String>, usize) {
 }
 
 impl TextCheck for Check {
-    fn prefilter(&self) -> Option<&'static [&'static str]> { Some(&["dependencies", "devDependencies"]) }
+    fn prefilter(&self) -> Option<&'static [&'static str]> {
+        Some(&["dependencies", "devDependencies"])
+    }
 
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
         if ctx.path.file_name().and_then(|f| f.to_str()) != Some("package.json") {
@@ -65,10 +64,7 @@ impl TextCheck for Check {
             }
             if let Some(section) = matched_section {
                 let (keys, next) = collect_keys(&lines, i);
-                section_keys
-                    .entry(section)
-                    .or_default()
-                    .extend(keys);
+                section_keys.entry(section).or_default().extend(keys);
                 i = next;
             } else {
                 i += 1;

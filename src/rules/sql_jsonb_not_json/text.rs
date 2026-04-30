@@ -33,7 +33,9 @@ impl TextCheck for Check {
                 line: idx + 1,
                 column: 1,
                 rule_id: "sql-jsonb-not-json".into(),
-                message: "`JSON` re-parses on every read. Use `JSONB` for indexable, binary storage.".into(),
+                message:
+                    "`JSON` re-parses on every read. Use `JSONB` for indexable, binary storage."
+                        .into(),
                 severity: Severity::Warning,
                 span: None,
             });

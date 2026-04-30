@@ -63,10 +63,9 @@ fn is_string_literal(node: tree_sitter::Node) -> bool {
     // Accept `"..."`, `r"..."`, and `&"..."` / `&r"..."`.
     match node.kind() {
         "string_literal" | "raw_string_literal" => true,
-        "reference_expression" => {
-            node.named_child(0)
-                .is_some_and(|inner| matches!(inner.kind(), "string_literal" | "raw_string_literal"))
-        }
+        "reference_expression" => node
+            .named_child(0)
+            .is_some_and(|inner| matches!(inner.kind(), "string_literal" | "raw_string_literal")),
         _ => false,
     }
 }
@@ -74,14 +73,9 @@ fn is_string_literal(node: tree_sitter::Node) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
-
-
         crate::rules::test_helpers::run_rust(source, &Check)
-
-
     }
 
     #[test]

@@ -106,7 +106,9 @@ fn find_offenses(source: &str) -> Vec<(usize, &'static str)> {
         while let Some(rel) = source[from..].find(target) {
             let abs = from + rel;
             let open = abs + target.len() - 1; // position of `(`
-            let Some(end) = end_of_call(bytes, open) else { break };
+            let Some(end) = end_of_call(bytes, open) else {
+                break;
+            };
             if !chain_has_max(source, end) {
                 out.push((abs, *target));
             }
@@ -117,7 +119,9 @@ fn find_offenses(source: &str) -> Vec<(usize, &'static str)> {
 }
 
 impl TextCheck for Check {
-    fn prefilter(&self) -> Option<&'static [&'static str]> { Some(&["z.string(", "z.number(", "z.array("]) }
+    fn prefilter(&self) -> Option<&'static [&'static str]> {
+        Some(&["z.string(", "z.number(", "z.array("])
+    }
 
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
         if !looks_like_api_path(ctx.path) {

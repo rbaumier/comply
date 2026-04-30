@@ -48,7 +48,9 @@ fn collect_enums(
                     let mut members = Vec::new();
                     let mut c = body.walk();
                     for child in body.named_children(&mut c) {
-                        if child.kind() != "enum_assignment" && child.kind() != "property_identifier" {
+                        if child.kind() != "enum_assignment"
+                            && child.kind() != "property_identifier"
+                        {
                             // Some grammars expose enum members as
                             // `enum_assignment` (with an initializer) or
                             // bare `property_identifier` (no initializer).
@@ -56,7 +58,9 @@ fn collect_enums(
                             continue;
                         }
                         let name_node = if child.kind() == "enum_assignment" {
-                            child.child_by_field_name("name").or_else(|| child.named_child(0))
+                            child
+                                .child_by_field_name("name")
+                                .or_else(|| child.named_child(0))
                         } else {
                             Some(child)
                         };

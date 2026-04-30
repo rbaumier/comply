@@ -42,9 +42,15 @@ fn find_pair_value<'a>(
 ) -> Option<tree_sitter::Node<'a>> {
     let mut cursor = object.walk();
     for child in object.children(&mut cursor) {
-        if child.kind() != "pair" { continue; }
-        let Some(k) = child.child_by_field_name("key") else { continue; };
-        let Ok(raw) = k.utf8_text(source) else { continue; };
+        if child.kind() != "pair" {
+            continue;
+        }
+        let Some(k) = child.child_by_field_name("key") else {
+            continue;
+        };
+        let Ok(raw) = k.utf8_text(source) else {
+            continue;
+        };
         let name = raw.trim_matches(|c| c == '"' || c == '\'');
         if name == key {
             return child.child_by_field_name("value");
@@ -71,16 +77,12 @@ mod tests {
 
     #[test]
     fn allows_secure_true() {
-        assert!(
-            run("useSession({ cookie: { secure: true, sameSite: 'lax' } });").is_empty()
-        );
+        assert!(run("useSession({ cookie: { secure: true, sameSite: 'lax' } });").is_empty());
     }
 
     #[test]
     fn allows_secure_expression() {
-        assert!(
-            run("useSession({ cookie: { secure: isProd, sameSite: 'lax' } });").is_empty()
-        );
+        assert!(run("useSession({ cookie: { secure: isProd, sameSite: 'lax' } });").is_empty());
     }
 
     #[test]

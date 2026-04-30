@@ -92,11 +92,7 @@ fn chain_has_let_condition(branches: &[Branch]) -> bool {
     branches.iter().any(|b| b.is_let_condition)
 }
 
-fn collect_if_branches(
-    node: tree_sitter::Node,
-    source: &[u8],
-    branches: &mut Vec<Branch>,
-) {
+fn collect_if_branches(node: tree_sitter::Node, source: &[u8], branches: &mut Vec<Branch>) {
     let cond_node = node.child_by_field_name("condition");
     let condition = cond_node
         .and_then(|c| c.utf8_text(source).ok())

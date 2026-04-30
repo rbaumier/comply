@@ -52,10 +52,10 @@ mod tests {
 
     #[test]
     fn allows_linking_with_trusted_providers() {
-        assert!(run(
-            "betterAuth({ accountLinking: { enabled: true, trustedProviders: ['google'] } })"
-        )
-        .is_empty());
+        assert!(
+            run("betterAuth({ accountLinking: { enabled: true, trustedProviders: ['google'] } })")
+                .is_empty()
+        );
     }
 
     #[test]

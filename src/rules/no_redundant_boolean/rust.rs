@@ -40,8 +40,12 @@ fn check_if_returning_bool(
     ctx: &CheckCtx,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let Some(consequence) = node.child_by_field_name("consequence") else { return };
-    let Some(alternative) = node.child_by_field_name("alternative") else { return };
+    let Some(consequence) = node.child_by_field_name("consequence") else {
+        return;
+    };
+    let Some(alternative) = node.child_by_field_name("alternative") else {
+        return;
+    };
 
     let then_text = block_single_expr_text(consequence, source);
     let else_text = else_single_expr_text(alternative, source);
@@ -49,9 +53,7 @@ fn check_if_returning_bool(
     let Some(then_val) = then_text else { return };
     let Some(else_val) = else_text else { return };
 
-    if (then_val == "true" && else_val == "false")
-        || (then_val == "false" && else_val == "true")
-    {
+    if (then_val == "true" && else_val == "false") || (then_val == "false" && else_val == "true") {
         let pos = node.start_position();
         diagnostics.push(Diagnostic {
             path: std::sync::Arc::clone(&ctx.path_arc),
@@ -95,15 +97,23 @@ fn check_bool_comparison(
     ctx: &CheckCtx,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let Some(op_node) = node.child_by_field_name("operator") else { return };
-    let Ok(op) = op_node.utf8_text(source) else { return };
+    let Some(op_node) = node.child_by_field_name("operator") else {
+        return;
+    };
+    let Ok(op) = op_node.utf8_text(source) else {
+        return;
+    };
 
     if op != "==" && op != "!=" {
         return;
     }
 
-    let Some(right) = node.child_by_field_name("right") else { return };
-    let Ok(right_text) = right.utf8_text(source) else { return };
+    let Some(right) = node.child_by_field_name("right") else {
+        return;
+    };
+    let Ok(right_text) = right.utf8_text(source) else {
+        return;
+    };
 
     if right_text.trim() == "true" || right_text.trim() == "false" {
         let pos = node.start_position();

@@ -2,7 +2,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::sql_helpers::{is_sql_ddl, TS_STRING_KINDS};
+use crate::rules::sql_helpers::{TS_STRING_KINDS, is_sql_ddl};
 use crate::rules::vue_sfc::{self, ScriptBlock};
 use crate::rules::walker::collect_nodes_of_kinds;
 
@@ -88,8 +88,7 @@ mod tests {
 
     #[test]
     fn flags_varchar_in_vue_script() {
-        let src =
-            "<script>\nconst m = `CREATE TABLE users (name VARCHAR(255))`;\n</script>";
+        let src = "<script>\nconst m = `CREATE TABLE users (name VARCHAR(255))`;\n</script>";
         assert_eq!(run(src).len(), 1);
     }
 

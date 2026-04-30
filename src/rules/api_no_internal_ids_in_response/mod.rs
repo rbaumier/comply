@@ -6,15 +6,13 @@
 mod typescript;
 
 use crate::diagnostic::Severity;
-use crate::rules::meta::RuleMeta;
 use crate::rules::RuleDef;
+use crate::rules::meta::RuleMeta;
 
 pub const META: RuleMeta = RuleMeta {
     id: "api-no-internal-ids-in-response",
-    description:
-        "Response DTOs must not expose internal column names, sequential IDs, or implementation fields.",
-    remediation:
-        "Rename the field to its public counterpart (e.g. `user_id` → `userId`, `pk` → `id`) and drop implementation-only columns from the response shape.",
+    description: "Response DTOs must not expose internal column names, sequential IDs, or implementation fields.",
+    remediation: "Rename the field to its public counterpart (e.g. `user_id` → `userId`, `pk` → `id`) and drop implementation-only columns from the response shape.",
     severity: Severity::Warning,
     doc_url: None,
     categories: &["api-design"],

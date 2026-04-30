@@ -21,16 +21,16 @@ use crate::rules::backend::{CheckCtx, TextCheck};
 /// Kept narrow on purpose — false positives here are worse than missed
 /// detections.
 const THIRD_PARTY_CLASSES: &[&str] = &[
-    "Chart",           // chart.js
+    "Chart", // chart.js
     "ChartJS",
     "ApexCharts",
     "ECharts",
     "Highcharts",
     "Plotly",
-    "Map",             // leaflet / maplibre / mapbox (L.Map, mapboxgl.Map)
+    "Map", // leaflet / maplibre / mapbox (L.Map, mapboxgl.Map)
     "LeafletMap",
     "Marker",
-    "Editor",          // tiptap, monaco, codemirror, quill
+    "Editor", // tiptap, monaco, codemirror, quill
     "MonacoEditor",
     "CodeMirror",
     "EditorView",
@@ -38,22 +38,22 @@ const THIRD_PARTY_CLASSES: &[&str] = &[
     "Quill",
     "TipTap",
     "Swiper",
-    "Scene",           // three.js
+    "Scene", // three.js
     "WebGLRenderer",
     "PerspectiveCamera",
     "OrthographicCamera",
-    "Grid",            // ag-grid
+    "Grid", // ag-grid
     "GridApi",
-    "Stage",           // konva
+    "Stage", // konva
     "FabricCanvas",
     "fabric",
     "PDFDocument",
-    "Howl",            // howler.js
+    "Howl", // howler.js
     "YouTubePlayer",
     "Player",
     "Animation",
     "Tween",
-    "Timeline",        // gsap
+    "Timeline", // gsap
 ];
 
 #[derive(Debug)]

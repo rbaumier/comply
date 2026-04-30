@@ -9,9 +9,10 @@ fn is_localstorage_access(node: tree_sitter::Node<'_>, source: &[u8]) -> bool {
     if node.kind() != "member_expression" {
         return false;
     }
-    let Some(object) = node.child_by_field_name("object") else { return false };
-    object.kind() == "identifier"
-        && object.utf8_text(source).ok() == Some("localStorage")
+    let Some(object) = node.child_by_field_name("object") else {
+        return false;
+    };
+    object.kind() == "identifier" && object.utf8_text(source).ok() == Some("localStorage")
 }
 
 fn in_try_block(mut node: tree_sitter::Node<'_>) -> bool {

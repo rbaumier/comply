@@ -65,11 +65,15 @@ impl AstCheck for Check {
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let source = ctx.source.as_bytes();
-        let Some(callee) = node.child_by_field_name("function") else { return };
+        let Some(callee) = node.child_by_field_name("function") else {
+            return;
+        };
         if callee.kind() != "member_expression" {
             return;
         }
-        let Ok(text) = callee.utf8_text(source) else { return };
+        let Ok(text) = callee.utf8_text(source) else {
+            return;
+        };
         if text != "JSON.parse" {
             return;
         }
@@ -114,18 +118,14 @@ mod tests {
 
     #[test]
     fn allows_inside_try() {
-        assert!(
-            run_on("try { const data = JSON.parse(input); } catch (e) { log(e); }").is_empty()
-        );
+        assert!(run_on("try { const data = JSON.parse(input); } catch (e) { log(e); }").is_empty());
     }
 
     #[test]
     fn flags_when_try_only_around_outer_fn() {
         // The try is in the outer fn; the parse is inside a nested arrow.
         // That try can't catch it — flag the parse.
-        let d = run_on(
-            "function outer() { try { arr.map((s) => JSON.parse(s)); } catch (e) {} }",
-        );
+        let d = run_on("function outer() { try { arr.map((s) => JSON.parse(s)); } catch (e) {} }");
         assert_eq!(d.len(), 1);
     }
 

@@ -25,8 +25,7 @@ fn is_effect_hook(node: tree_sitter::Node, source: &[u8]) -> bool {
             let prop = callee
                 .child_by_field_name("property")
                 .and_then(|p| p.utf8_text(source).ok());
-            obj == Some("React")
-                && matches!(prop, Some("useEffect") | Some("useLayoutEffect"))
+            obj == Some("React") && matches!(prop, Some("useEffect") | Some("useLayoutEffect"))
         }
         _ => false,
     }
@@ -107,29 +106,38 @@ mod tests {
 
     #[test]
     fn flags_fetch_in_effect() {
-        assert_eq!(run(r#"
+        assert_eq!(
+            run(r#"
 function App() {
     useEffect(() => {
         fetch('/api/users').then(r => r.json());
     }, []);
 }
-"#).len(), 1);
+"#)
+            .len(),
+            1
+        );
     }
 
     #[test]
     fn flags_fetch_in_layout_effect() {
-        assert_eq!(run(r#"
+        assert_eq!(
+            run(r#"
 function App() {
     useLayoutEffect(() => {
         fetch('/api/data');
     }, []);
 }
-"#).len(), 1);
+"#)
+            .len(),
+            1
+        );
     }
 
     #[test]
     fn flags_fetch_inside_block() {
-        assert_eq!(run(r#"
+        assert_eq!(
+            run(r#"
 function App() {
     useEffect(() => {
         if (id) {
@@ -137,61 +145,80 @@ function App() {
         }
     }, [id]);
 }
-"#).len(), 1);
+"#)
+            .len(),
+            1
+        );
     }
 
     #[test]
     fn flags_react_dot_use_effect() {
-        assert_eq!(run(r#"
+        assert_eq!(
+            run(r#"
 function App() {
     React.useEffect(() => {
         fetch('/x');
     }, []);
 }
-"#).len(), 1);
+"#)
+            .len(),
+            1
+        );
     }
 
     #[test]
     fn allows_fetch_outside_effect() {
-        assert!(run(r#"
+        assert!(
+            run(r#"
 function App() {
     const handler = () => fetch('/api/click');
     return <button onClick={handler} />;
 }
-"#).is_empty());
+"#)
+            .is_empty()
+        );
     }
 
     #[test]
     fn allows_no_fetch_call() {
-        assert!(run(r#"
+        assert!(
+            run(r#"
 function App() {
     useEffect(() => {
         doSomething();
     }, []);
 }
-"#).is_empty());
+"#)
+            .is_empty()
+        );
     }
 
     #[test]
     fn allows_fetch_inside_nested_function() {
         // Helper defined inside the effect — fetch is not on the top-level
         // execution path of the effect itself.
-        assert!(run(r#"
+        assert!(
+            run(r#"
 function App() {
     useEffect(() => {
         const refresh = () => fetch('/api/data');
         window.refresh = refresh;
     }, []);
 }
-"#).is_empty());
+"#)
+            .is_empty()
+        );
     }
 
     #[test]
     fn allows_non_effect_hook() {
-        assert!(run(r#"
+        assert!(
+            run(r#"
 function App() {
     useMemo(() => fetch('/x'), []);
 }
-"#).is_empty());
+"#)
+            .is_empty()
+        );
     }
 }

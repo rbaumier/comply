@@ -1,7 +1,5 @@
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::rules::jsx::{
-    jsx_attribute_name, jsx_attribute_string_value, jsx_element_tag_name,
-};
+use crate::rules::jsx::{jsx_attribute_name, jsx_attribute_string_value, jsx_element_tag_name};
 
 const INTERACTIVE_TAGS: &[&str] = &["button", "a", "input", "select", "textarea"];
 
@@ -16,7 +14,9 @@ fn has_focus_ring(classes: &str) -> bool {
         "focus-visible:outline-0",
     ];
     classes.split_whitespace().any(|tok| {
-        if OUTLINE_REMOVERS.contains(&tok) { return false; }
+        if OUTLINE_REMOVERS.contains(&tok) {
+            return false;
+        }
         tok.starts_with("focus:ring")
             || tok.starts_with("focus-visible:ring")
             || tok.starts_with("focus:outline")
@@ -82,22 +82,32 @@ mod tests {
 
     #[test]
     fn flags_button_without_focus_ring() {
-        assert_eq!(run(r#"export const A = () => <button className="px-4" />;"#).len(), 1);
+        assert_eq!(
+            run(r#"export const A = () => <button className="px-4" />;"#).len(),
+            1
+        );
     }
 
     #[test]
     fn flags_role_button_without_focus_ring() {
-        assert_eq!(run(r#"export const A = () => <div role="button" className="px-4" />;"#).len(), 1);
+        assert_eq!(
+            run(r#"export const A = () => <div role="button" className="px-4" />;"#).len(),
+            1
+        );
     }
 
     #[test]
     fn allows_button_with_focus_ring() {
-        assert!(run(r#"export const A = () => <button className="px-4 focus:ring-2" />;"#).is_empty());
+        assert!(
+            run(r#"export const A = () => <button className="px-4 focus:ring-2" />;"#).is_empty()
+        );
     }
 
     #[test]
     fn allows_input_with_focus_visible_ring() {
-        assert!(run(r#"export const A = () => <input className="focus-visible:ring-2" />;"#).is_empty());
+        assert!(
+            run(r#"export const A = () => <input className="focus-visible:ring-2" />;"#).is_empty()
+        );
     }
 
     #[test]
@@ -126,19 +136,27 @@ mod tests {
     fn allows_outline_none_paired_with_ring() {
         // The recommended pattern: outline-none + a real ring.
         assert!(
-            run(r#"export const A = () => <button className="focus:outline-none focus:ring-2" />;"#)
-                .is_empty()
+            run(
+                r#"export const A = () => <button className="focus:outline-none focus:ring-2" />;"#
+            )
+            .is_empty()
         );
     }
 
     #[test]
     fn allows_focus_visible_border_ring() {
-        assert!(run(r#"export const A = () => <button className="focus-visible:border-ring" />;"#).is_empty());
+        assert!(
+            run(r#"export const A = () => <button className="focus-visible:border-ring" />;"#)
+                .is_empty()
+        );
     }
 
     #[test]
     fn allows_bare_focus_visible_outline() {
-        assert!(run(r#"export const A = () => <button className="focus-visible:outline" />;"#).is_empty());
+        assert!(
+            run(r#"export const A = () => <button className="focus-visible:outline" />;"#)
+                .is_empty()
+        );
     }
 
     #[test]

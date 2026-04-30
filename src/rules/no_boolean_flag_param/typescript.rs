@@ -93,14 +93,9 @@ fn param_name<'a>(node: tree_sitter::Node, source: &'a [u8]) -> Option<&'a str> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
-
-
         crate::rules::test_helpers::run_ts(source, &Check)
-
-
     }
 
     #[test]
@@ -112,10 +107,7 @@ mod tests {
 
     #[test]
     fn flags_arrow_function_boolean_param() {
-        assert_eq!(
-            run_on("const f = (ready: boolean) => ready;").len(),
-            1
-        );
+        assert_eq!(run_on("const f = (ready: boolean) => ready;").len(), 1);
     }
 
     #[test]
@@ -130,9 +122,6 @@ mod tests {
 
     #[test]
     fn flags_multiple_boolean_params() {
-        assert_eq!(
-            run_on("function f(isA: boolean, isB: boolean) {}").len(),
-            2
-        );
+        assert_eq!(run_on("function f(isA: boolean, isB: boolean) {}").len(), 2);
     }
 }

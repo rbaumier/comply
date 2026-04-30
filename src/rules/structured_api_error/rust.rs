@@ -9,10 +9,16 @@ fn is_route_file(source: &[u8]) -> bool {
     let src = std::str::from_utf8(source).unwrap_or("");
     src.lines().any(|line| {
         let t = line.trim();
-        t.contains("axum::") || t.contains("actix_web::") || t.contains("rocket::")
-            || t.contains("#[get(") || t.contains("#[post(") || t.contains("#[put(")
-            || t.contains("#[delete(") || t.contains("#[patch(")
-            || t.contains(".route(") || t.contains("Router::new()")
+        t.contains("axum::")
+            || t.contains("actix_web::")
+            || t.contains("rocket::")
+            || t.contains("#[get(")
+            || t.contains("#[post(")
+            || t.contains("#[put(")
+            || t.contains("#[delete(")
+            || t.contains("#[patch(")
+            || t.contains(".route(")
+            || t.contains("Router::new()")
     })
 }
 

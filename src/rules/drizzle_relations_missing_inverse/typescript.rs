@@ -32,7 +32,10 @@ fn declared_relation_tables(root: tree_sitter::Node<'_>, source: &[u8]) -> HashS
     declared
 }
 
-fn referenced_tables<'a>(node: tree_sitter::Node<'a>, source: &'a [u8]) -> Vec<(String, tree_sitter::Node<'a>)> {
+fn referenced_tables<'a>(
+    node: tree_sitter::Node<'a>,
+    source: &'a [u8],
+) -> Vec<(String, tree_sitter::Node<'a>)> {
     let mut refs = Vec::new();
     let mut stack = vec![node];
     while let Some(n) = stack.pop() {

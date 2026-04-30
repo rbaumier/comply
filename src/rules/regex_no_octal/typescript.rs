@@ -26,7 +26,11 @@ fn has_octal_escape(pattern: &str) -> bool {
             if c % 2 == 1 {
                 // Odd number of backslashes — the last one is an escape.
                 let after = i + c;
-                if after < len && bytes[after].is_ascii_digit() && bytes[after] != b'8' && bytes[after] != b'9' {
+                if after < len
+                    && bytes[after].is_ascii_digit()
+                    && bytes[after] != b'8'
+                    && bytes[after] != b'9'
+                {
                     if bytes[after] == b'0' {
                         // Bare `\0` is fine; `\0` followed by another octal
                         // digit is ambiguous.

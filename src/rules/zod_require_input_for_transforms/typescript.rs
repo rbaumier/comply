@@ -10,9 +10,13 @@ fn find_const_init<'a>(root: Node<'a>, source: &'a [u8], name: &str) -> Option<N
     while let Some(n) = stack.pop() {
         if n.kind() == "variable_declarator"
             && let Some(name_node) = n.child_by_field_name("name")
-                && name_node.utf8_text(source).map(|t| t == name).unwrap_or(false) {
-                    return n.child_by_field_name("value");
-                }
+            && name_node
+                .utf8_text(source)
+                .map(|t| t == name)
+                .unwrap_or(false)
+        {
+            return n.child_by_field_name("value");
+        }
         let mut c = n.walk();
         for child in n.named_children(&mut c) {
             stack.push(child);

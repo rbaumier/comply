@@ -3,7 +3,10 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-const SNAPSHOT_MATCHERS: &[&str] = &["toMatchInlineSnapshot", "toThrowErrorMatchingInlineSnapshot"];
+const SNAPSHOT_MATCHERS: &[&str] = &[
+    "toMatchInlineSnapshot",
+    "toThrowErrorMatchingInlineSnapshot",
+];
 
 crate::ast_check! { on ["call_expression"] prefilter = ["toMatchInlineSnapshot", "toThrowErrorMatchingInlineSnapshot"] => |node, source, ctx, diagnostics|
     let _ = source;

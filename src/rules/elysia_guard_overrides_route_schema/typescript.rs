@@ -4,10 +4,14 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-const ROUTE_METHODS: &[&str] = &["get", "post", "put", "patch", "delete", "all", "head", "options"];
+const ROUTE_METHODS: &[&str] = &[
+    "get", "post", "put", "patch", "delete", "all", "head", "options",
+];
 
 fn arguments_text<'a>(node: tree_sitter::Node<'a>, source: &'a [u8]) -> &'a str {
-    let Some(args) = node.child_by_field_name("arguments") else { return "" };
+    let Some(args) = node.child_by_field_name("arguments") else {
+        return "";
+    };
     args.utf8_text(source).unwrap_or("")
 }
 

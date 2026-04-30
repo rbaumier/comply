@@ -94,9 +94,7 @@ mod tests {
 
     #[test]
     fn flags_nested_shadow() {
-        let d = run_on(
-            "const a = 1; function f() { const a = 2; function g() { const a = 3; } }",
-        );
+        let d = run_on("const a = 1; function f() { const a = 2; function g() { const a = 3; } }");
         assert!(d.len() >= 2);
     }
 

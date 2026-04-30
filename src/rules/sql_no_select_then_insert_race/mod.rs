@@ -5,9 +5,9 @@ mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
+use crate::rules::RuleDef;
 use crate::rules::backend::Backend;
 use crate::rules::meta::RuleMeta;
-use crate::rules::RuleDef;
 
 pub const META: RuleMeta = RuleMeta {
     id: "sql-no-select-then-insert-race",
@@ -22,9 +22,18 @@ pub fn register() -> RuleDef {
     RuleDef {
         meta: META,
         backends: vec![
-            (Language::TypeScript, Backend::TreeSitter(Box::new(typescript::Check))),
-            (Language::JavaScript, Backend::TreeSitter(Box::new(typescript::Check))),
-            (Language::Tsx, Backend::TreeSitter(Box::new(typescript::Check))),
+            (
+                Language::TypeScript,
+                Backend::TreeSitter(Box::new(typescript::Check)),
+            ),
+            (
+                Language::JavaScript,
+                Backend::TreeSitter(Box::new(typescript::Check)),
+            ),
+            (
+                Language::Tsx,
+                Backend::TreeSitter(Box::new(typescript::Check)),
+            ),
             (Language::Rust, Backend::TreeSitter(Box::new(rust::Check))),
         ],
     }
@@ -47,11 +56,7 @@ pub(super) fn extract_select_from_table(sql: &str) -> Option<String> {
             break;
         }
     }
-    if name.is_empty() {
-        None
-    } else {
-        Some(name)
-    }
+    if name.is_empty() { None } else { Some(name) }
 }
 
 pub(super) fn extract_insert_into_table(sql: &str) -> Option<String> {
@@ -68,11 +73,7 @@ pub(super) fn extract_insert_into_table(sql: &str) -> Option<String> {
             break;
         }
     }
-    if name.is_empty() {
-        None
-    } else {
-        Some(name)
-    }
+    if name.is_empty() { None } else { Some(name) }
 }
 
 pub(super) fn has_on_conflict(sql: &str) -> bool {

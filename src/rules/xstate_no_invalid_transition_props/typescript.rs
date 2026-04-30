@@ -34,21 +34,29 @@ fn is_transition_object(obj: tree_sitter::Node, source: &[u8]) -> bool {
         return false;
     }
     // The per-event `pair` (key = EVENT name, value = this object).
-    let Some(event_pair) = obj.parent() else { return false };
+    let Some(event_pair) = obj.parent() else {
+        return false;
+    };
     if event_pair.kind() != "pair" {
         return false;
     }
     // The enclosing `on` object.
-    let Some(on_object) = event_pair.parent() else { return false };
+    let Some(on_object) = event_pair.parent() else {
+        return false;
+    };
     if on_object.kind() != "object" {
         return false;
     }
     // The `on: { ... }` pair itself.
-    let Some(on_pair) = on_object.parent() else { return false };
+    let Some(on_pair) = on_object.parent() else {
+        return false;
+    };
     if on_pair.kind() != "pair" {
         return false;
     }
-    let Some(on_key) = on_pair.child_by_field_name("key") else { return false };
+    let Some(on_key) = on_pair.child_by_field_name("key") else {
+        return false;
+    };
     let key_text = on_key.utf8_text(source).unwrap_or("");
     unquote(key_text) == "on"
 }

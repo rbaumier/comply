@@ -117,8 +117,7 @@ pub fn extract_elements(source: &str) -> Vec<VueElement<'_>> {
 
             // Calculate line number
             let tag_byte_pos = tag_start;
-            let line_num =
-                lines_before + 1 + template[..tag_byte_pos].matches('\n').count();
+            let line_num = lines_before + 1 + template[..tag_byte_pos].matches('\n').count();
 
             elements.push(VueElement {
                 line: line_num,

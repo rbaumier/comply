@@ -21,9 +21,7 @@ fn is_internal_field(name: &str) -> bool {
     if name.starts_with("internal_") || name.starts_with("internal") && name.len() > 8 {
         // "internal" prefix when followed by an uppercase letter or underscore.
         let rest = &name[8..];
-        if rest.starts_with('_')
-            || rest.chars().next().is_some_and(|c| c.is_ascii_uppercase())
-        {
+        if rest.starts_with('_') || rest.chars().next().is_some_and(|c| c.is_ascii_uppercase()) {
             return true;
         }
     }

@@ -34,20 +34,14 @@ crate::ast_check! { prefilter = ["dangerouslySetInnerHTML"] => |node, source, ct
 #[cfg(test)]
 mod tests {
     use super::*;
-    
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
-
-
         crate::rules::test_helpers::run_tsx(source, &Check)
-
-
     }
 
     #[test]
     fn flags_dangerously_set_inner_html() {
-        let source =
-            "const x = <div dangerouslySetInnerHTML={{ __html: raw }} />;";
+        let source = "const x = <div dangerouslySetInnerHTML={{ __html: raw }} />;";
         assert_eq!(run_on(source).len(), 1);
     }
 

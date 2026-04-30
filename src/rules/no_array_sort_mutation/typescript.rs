@@ -56,6 +56,9 @@ mod tests {
 
     #[test]
     fn flags_chained_sort() {
-        assert_eq!(run_on("const sorted = items.filter(x => x).sort();").len(), 1);
+        assert_eq!(
+            run_on("const sorted = items.filter(x => x).sort();").len(),
+            1
+        );
     }
 }

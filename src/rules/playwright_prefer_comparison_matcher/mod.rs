@@ -3,8 +3,8 @@
 mod typescript;
 
 use crate::diagnostic::Severity;
-use crate::rules::meta::RuleMeta;
 use crate::rules::RuleDef;
+use crate::rules::meta::RuleMeta;
 
 pub const META: RuleMeta = RuleMeta {
     id: "playwright-prefer-comparison-matcher",
@@ -12,7 +12,9 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Replace `expect(a > b).toBe(true)` with \
                   `expect(a).toBeGreaterThan(b)`.",
     severity: Severity::Warning,
-    doc_url: Some("https://github.com/playwright-community/eslint-plugin-playwright/blob/main/docs/rules/prefer-comparison-matcher.md"),
+    doc_url: Some(
+        "https://github.com/playwright-community/eslint-plugin-playwright/blob/main/docs/rules/prefer-comparison-matcher.md",
+    ),
     categories: &["testing"],
 };
 

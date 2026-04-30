@@ -66,7 +66,9 @@ crate::ast_check! { on ["import_statement", "call_expression"] => |node, source,
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn run(code: &str) -> Vec<Diagnostic> { crate::rules::test_helpers::run_ts(code, &Check) }
+    fn run(code: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_ts(code, &Check)
+    }
 
     #[test]
     fn flags_lodash() {

@@ -54,8 +54,7 @@ impl TextCheck for Check {
         // Per-project guard: only fire on the lexicographically smallest
         // indexed path. Without this we'd emit the same N diagnostics once
         // per file in the project.
-        let canon =
-            std::fs::canonicalize(ctx.path).unwrap_or_else(|_| ctx.path.to_path_buf());
+        let canon = std::fs::canonicalize(ctx.path).unwrap_or_else(|_| ctx.path.to_path_buf());
         let Some(anchor) = index.indexed_paths().min() else {
             return Vec::new();
         };
@@ -176,9 +175,8 @@ mod tests {
             "name": "demo",
             "dependencies": { "lodash": "^4.0.0" }
         }"#;
-        let files: Vec<(&str, &str)> = vec![
-            ("a.ts", "import _ from 'lodash';\nexport const x = _;"),
-        ];
+        let files: Vec<(&str, &str)> =
+            vec![("a.ts", "import _ from 'lodash';\nexport const x = _;")];
         let (_dir, diags) = run_on_project(&files, pkg, "a.ts");
         assert!(
             diags.is_empty(),

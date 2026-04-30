@@ -43,19 +43,23 @@ fn is_length_minus(node: tree_sitter::Node, source: &[u8], receiver: &str) -> bo
         return false;
     }
     // Operator must be `-`
-    let op_text = node
-        .children(&mut node.walk())
-        .find(|c| c.kind() == "-");
+    let op_text = node.children(&mut node.walk()).find(|c| c.kind() == "-");
     if op_text.is_none() {
         return false;
     }
 
-    let Some(left) = node.child_by_field_name("left") else { return false };
+    let Some(left) = node.child_by_field_name("left") else {
+        return false;
+    };
     if left.kind() != "member_expression" {
         return false;
     }
-    let Some(obj) = left.child_by_field_name("object") else { return false };
-    let Some(prop) = left.child_by_field_name("property") else { return false };
+    let Some(obj) = left.child_by_field_name("object") else {
+        return false;
+    };
+    let Some(prop) = left.child_by_field_name("property") else {
+        return false;
+    };
 
     let obj_text = obj.utf8_text(source).unwrap_or("");
     let prop_text = prop.utf8_text(source).unwrap_or("");

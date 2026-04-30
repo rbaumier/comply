@@ -58,10 +58,7 @@ mod tests {
 
     #[test]
     fn flags_arguments_callee() {
-        assert_eq!(
-            run_on("function f() { return arguments.callee; }").len(),
-            1
-        );
+        assert_eq!(run_on("function f() { return arguments.callee; }").len(), 1);
     }
 
     #[test]

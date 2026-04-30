@@ -1,9 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use oxc_ast::AstKind;
-use oxc_ast::ast::{
-    BindingPattern, PropertyKey, TSSignature, TSType, TSTypeName,
-};
+use oxc_ast::ast::{BindingPattern, PropertyKey, TSSignature, TSType, TSTypeName};
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::{source_type_for_path, with_semantic};
@@ -81,8 +79,7 @@ impl crate::rules::backend::AstCheck for Check {
 
                 for prop in &declared_props {
                     if !used_props.contains(&prop.name) {
-                        let (line, column) =
-                            byte_offset_to_line_col(ctx.source, prop.span_start);
+                        let (line, column) = byte_offset_to_line_col(ctx.source, prop.span_start);
                         diagnostics.push(Diagnostic {
                             path: std::sync::Arc::clone(&ctx.path_arc),
                             line,

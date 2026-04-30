@@ -108,33 +108,24 @@ mod tests {
 
     #[test]
     fn flags_mixed_interface() {
-        let d = run_on(
-            "interface User { name: string; greet(): void; }",
-        );
+        let d = run_on("interface User { name: string; greet(): void; }");
         assert_eq!(d.len(), 1);
         assert!(d[0].message.contains("User"));
     }
 
     #[test]
     fn allows_all_property_interface() {
-        assert!(
-            run_on("interface User { name: string; age: number; }").is_empty()
-        );
+        assert!(run_on("interface User { name: string; age: number; }").is_empty());
     }
 
     #[test]
     fn allows_all_method_interface() {
-        assert!(
-            run_on("interface Api { get(): string; set(v: string): void; }")
-                .is_empty()
-        );
+        assert!(run_on("interface Api { get(): string; set(v: string): void; }").is_empty());
     }
 
     #[test]
     fn flags_mixed_type_alias() {
-        let d = run_on(
-            "type User = { name: string; greet(): void; };",
-        );
+        let d = run_on("type User = { name: string; greet(): void; };");
         assert_eq!(d.len(), 1);
         assert!(d[0].message.contains("User"));
     }
@@ -144,9 +135,6 @@ mod tests {
         // `greet: () => void` is a property signature with a function type —
         // not a method signature. All members are property_signature, so no
         // mix. This is the canonical "use consistent signatures" fix.
-        assert!(
-            run_on("interface User { name: string; greet: () => void; }")
-                .is_empty()
-        );
+        assert!(run_on("interface User { name: string; greet: () => void; }").is_empty());
     }
 }

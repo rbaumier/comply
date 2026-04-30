@@ -39,7 +39,9 @@ impl AstCheck for Check {
         if !has_pk {
             return;
         }
-        let has_v4_default = methods.iter().any(|m| m == "defaultRandom" || m == "default");
+        let has_v4_default = methods
+            .iter()
+            .any(|m| m == "defaultRandom" || m == "default");
         if !has_v4_default {
             return;
         }

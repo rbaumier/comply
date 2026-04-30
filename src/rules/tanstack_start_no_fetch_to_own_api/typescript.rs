@@ -29,7 +29,9 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
 }
 
 fn file_uses_tanstack_start(source: &[u8]) -> bool {
-    let Ok(text) = std::str::from_utf8(source) else { return false; };
+    let Ok(text) = std::str::from_utf8(source) else {
+        return false;
+    };
     text.contains("@tanstack/start") || text.contains("@tanstack/react-start")
 }
 
@@ -50,7 +52,9 @@ fn literal_string_value<'a>(n: tree_sitter::Node<'a>, source: &'a [u8]) -> Optio
             let has_subst = n
                 .children(&mut cursor)
                 .any(|c| c.kind() == "template_substitution");
-            if has_subst { return None; }
+            if has_subst {
+                return None;
+            }
             let text = n.utf8_text(source).ok()?;
             Some(text.trim_matches('`'))
         }

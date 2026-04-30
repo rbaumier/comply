@@ -15,7 +15,9 @@ fn is_promise_type(node: tree_sitter::Node, source: &[u8]) -> bool {
 }
 
 fn is_return_type_position(node: tree_sitter::Node) -> bool {
-    let Some(parent) = node.parent() else { return false };
+    let Some(parent) = node.parent() else {
+        return false;
+    };
     // return_type_annotation or type_annotation as return type
     parent.kind() == "type_annotation" || parent.kind() == "return_type"
 }
@@ -94,9 +96,15 @@ fn check_function_body(
     ctx: &crate::rules::backend::CheckCtx,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    if function_is_async(node, source) { return; }
-    let Some(body) = node.child_by_field_name("body") else { return; };
-    if body.kind() != "statement_block" { return; }
+    if function_is_async(node, source) {
+        return;
+    }
+    let Some(body) = node.child_by_field_name("body") else {
+        return;
+    };
+    if body.kind() != "statement_block" {
+        return;
+    }
 
     let mut has_sync_value = false;
     let mut has_async_value = false;
@@ -115,9 +123,13 @@ fn check_function_body(
 fn function_is_async(node: tree_sitter::Node<'_>, source: &[u8]) -> bool {
     // tree-sitter-typescript exposes `async` as an anonymous keyword child;
     // a textual scan of the leading signature is the cheapest way to detect it.
-    let Some(body) = node.child_by_field_name("body") else { return false; };
+    let Some(body) = node.child_by_field_name("body") else {
+        return false;
+    };
     let head = &source[node.start_byte()..body.start_byte()];
-    std::str::from_utf8(head).map(|t| t.contains("async")).unwrap_or(false)
+    std::str::from_utf8(head)
+        .map(|t| t.contains("async"))
+        .unwrap_or(false)
 }
 
 fn collect_returns(
@@ -147,7 +159,11 @@ fn collect_returns(
     }
 }
 
-enum ReturnKind { Sync, Async, Unknown }
+enum ReturnKind {
+    Sync,
+    Async,
+    Unknown,
+}
 
 fn classify_return_expr(expr: tree_sitter::Node<'_>, source: &[u8]) -> ReturnKind {
     match expr.kind() {
@@ -159,7 +175,11 @@ fn classify_return_expr(expr: tree_sitter::Node<'_>, source: &[u8]) -> ReturnKin
                 .child_by_field_name("constructor")
                 .and_then(|c| c.utf8_text(source).ok())
                 .unwrap_or("");
-            if ctor_text == "Promise" { ReturnKind::Async } else { ReturnKind::Sync }
+            if ctor_text == "Promise" {
+                ReturnKind::Async
+            } else {
+                ReturnKind::Sync
+            }
         }
         // `return Promise.resolve(...)` / `return Promise.reject(...)`.
         "call_expression" => {
@@ -175,16 +195,8 @@ fn classify_return_expr(expr: tree_sitter::Node<'_>, source: &[u8]) -> ReturnKin
             ReturnKind::Unknown
         }
         // Literals / identifiers / object/array — sync values.
-        "string"
-        | "number"
-        | "true"
-        | "false"
-        | "null"
-        | "undefined"
-        | "identifier"
-        | "object"
-        | "array"
-        | "template_string" => ReturnKind::Sync,
+        "string" | "number" | "true" | "false" | "null" | "undefined" | "identifier" | "object"
+        | "array" | "template_string" => ReturnKind::Sync,
         _ => ReturnKind::Unknown,
     }
 }

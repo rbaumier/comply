@@ -132,10 +132,11 @@ mod tests {
 
     #[test]
     fn allows_shared_name_with_outer_use() {
-        let d = run_on(
-            "const x = 1; function f(x: number) { return x; } f(2); console.log(x);",
+        let d = run_on("const x = 1; function f(x: number) { return x; } f(2); console.log(x);");
+        assert!(
+            d.is_empty(),
+            "param `x` is used in body, outer `x` is logged"
         );
-        assert!(d.is_empty(), "param `x` is used in body, outer `x` is logged");
     }
 
     #[test]

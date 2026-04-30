@@ -58,21 +58,33 @@ mod tests {
 
     #[test]
     fn flags_alt_with_image() {
-        assert_eq!(run(r#"const x = <img alt="An image of a cat" src="cat.png" />;"#).len(), 1);
+        assert_eq!(
+            run(r#"const x = <img alt="An image of a cat" src="cat.png" />;"#).len(),
+            1
+        );
     }
 
     #[test]
     fn flags_alt_with_photo_case_insensitive() {
-        assert_eq!(run(r#"const x = <img alt="Photo of sunset" src="sunset.png" />;"#).len(), 1);
+        assert_eq!(
+            run(r#"const x = <img alt="Photo of sunset" src="sunset.png" />;"#).len(),
+            1
+        );
     }
 
     #[test]
     fn flags_alt_with_picture() {
-        assert_eq!(run(r#"const x = <img alt="A picture" src="pic.png" />;"#).len(), 1);
+        assert_eq!(
+            run(r#"const x = <img alt="A picture" src="pic.png" />;"#).len(),
+            1
+        );
     }
 
     #[test]
     fn allows_descriptive_alt() {
-        assert!(run(r#"const x = <img alt="A golden retriever playing fetch" src="dog.png" />;"#).is_empty());
+        assert!(
+            run(r#"const x = <img alt="A golden retriever playing fetch" src="dog.png" />;"#)
+                .is_empty()
+        );
     }
 }

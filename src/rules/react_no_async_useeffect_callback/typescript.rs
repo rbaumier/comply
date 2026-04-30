@@ -8,7 +8,11 @@ use std::sync::Arc;
 #[derive(Debug)]
 pub struct Check;
 
-const NEEDLES: &[&str] = &["useEffect(async", "useLayoutEffect(async", "useInsertionEffect(async"];
+const NEEDLES: &[&str] = &[
+    "useEffect(async",
+    "useLayoutEffect(async",
+    "useInsertionEffect(async",
+];
 
 impl TextCheck for Check {
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {

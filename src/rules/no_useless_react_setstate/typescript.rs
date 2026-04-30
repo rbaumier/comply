@@ -40,9 +40,7 @@ fn extract_state_pair<'a>(
     let mut cursor = name.walk();
     let idents: Vec<tree_sitter::Node> = name
         .named_children(&mut cursor)
-        .filter(|c| {
-            c.kind() == "identifier" || c.kind() == "shorthand_property_identifier_pattern"
-        })
+        .filter(|c| c.kind() == "identifier" || c.kind() == "shorthand_property_identifier_pattern")
         .collect();
     if idents.len() != 2 {
         return None;

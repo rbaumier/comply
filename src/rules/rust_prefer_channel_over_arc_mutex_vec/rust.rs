@@ -51,16 +51,24 @@ fn is_vec_ctor(call: tree_sitter::Node, source: &[u8]) -> bool {
 }
 
 fn is_arc_mutex_vec_call(node: tree_sitter::Node, source: &[u8]) -> bool {
-    if !is_arc_path(fn_text(node, source)) { return false; }
-    let Some(inner) = first_arg(node) else { return false; };
+    if !is_arc_path(fn_text(node, source)) {
+        return false;
+    }
+    let Some(inner) = first_arg(node) else {
+        return false;
+    };
 
     let (mutex_call, target) = if inner.kind() == "call_expression" {
         (inner, first_arg(inner))
     } else {
         return false;
     };
-    if !is_mutex_path(fn_text(mutex_call, source)) { return false; }
-    let Some(target) = target else { return false; };
+    if !is_mutex_path(fn_text(mutex_call, source)) {
+        return false;
+    }
+    let Some(target) = target else {
+        return false;
+    };
 
     match target.kind() {
         "call_expression" => is_vec_ctor(target, source),
@@ -86,13 +94,25 @@ fn first_type_arg(gt: tree_sitter::Node) -> Option<tree_sitter::Node> {
 
 fn is_arc_mutex_vec_type(node: tree_sitter::Node, source: &[u8]) -> bool {
     let outer = type_name(node, source);
-    if outer != "Arc" && outer != "std::sync::Arc" { return false; }
-    let Some(mutex_ty) = first_type_arg(node) else { return false; };
-    if mutex_ty.kind() != "generic_type" { return false; }
+    if outer != "Arc" && outer != "std::sync::Arc" {
+        return false;
+    }
+    let Some(mutex_ty) = first_type_arg(node) else {
+        return false;
+    };
+    if mutex_ty.kind() != "generic_type" {
+        return false;
+    }
     let mutex_name = type_name(mutex_ty, source);
-    if mutex_name != "Mutex" && mutex_name != "std::sync::Mutex" { return false; }
-    let Some(vec_ty) = first_type_arg(mutex_ty) else { return false; };
-    if vec_ty.kind() != "generic_type" { return false; }
+    if mutex_name != "Mutex" && mutex_name != "std::sync::Mutex" {
+        return false;
+    }
+    let Some(vec_ty) = first_type_arg(mutex_ty) else {
+        return false;
+    };
+    if vec_ty.kind() != "generic_type" {
+        return false;
+    }
     let vec_name = type_name(vec_ty, source);
     vec_name == "Vec" || vec_name == "std::vec::Vec"
 }

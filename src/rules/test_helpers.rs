@@ -33,9 +33,9 @@ use crate::diagnostic::Diagnostic;
 use crate::diagnostic::Severity;
 use crate::files::{Language, SourceFile};
 use crate::project::ProjectCtx;
+use crate::rules::RuleDef;
 use crate::rules::backend::{AstCheck, Backend, CheckCtx};
 use crate::rules::file_ctx::FileCtx;
-use crate::rules::RuleDef;
 
 /// Run a tree-sitter `Check` against `source` parsed with the standard
 /// TypeScript grammar (covers `.ts` and plain JS).
@@ -74,7 +74,9 @@ pub fn run_ts_with_project_and_path(
     parser
         .set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into())
         .expect("grammar should load");
-    let tree = parser.parse(source, None).expect("parser should produce a tree");
+    let tree = parser
+        .parse(source, None)
+        .expect("parser should produce a tree");
     check.check(
         &CheckCtx::for_test_with_project(fake_path, source, project),
         &tree,
@@ -139,7 +141,9 @@ pub fn run_tsx_with_project_file_and_path(
     parser
         .set_language(&tree_sitter_typescript::LANGUAGE_TSX.into())
         .expect("grammar should load");
-    let tree = parser.parse(source, None).expect("parser should produce a tree");
+    let tree = parser
+        .parse(source, None)
+        .expect("parser should produce a tree");
     check.check(
         &CheckCtx::for_test_full(Path::new(fake_path), source, project, file),
         &tree,
@@ -170,7 +174,9 @@ pub fn run_tsx_with_framework(
     parser
         .set_language(&tree_sitter_typescript::LANGUAGE_TSX.into())
         .expect("grammar should load");
-    let tree = parser.parse(source, None).expect("parser should produce a tree");
+    let tree = parser
+        .parse(source, None)
+        .expect("parser should produce a tree");
     check.check(
         &CheckCtx::for_test_with_project(Path::new("t.tsx"), source, &project),
         &tree,
@@ -192,12 +198,7 @@ pub fn run_yaml(source: &str, check: &dyn AstCheck) -> Vec<Diagnostic> {
 /// Same as `run_yaml` but with a custom fake filename.
 #[must_use]
 pub fn run_yaml_with_path(source: &str, check: &dyn AstCheck, fake_path: &str) -> Vec<Diagnostic> {
-    run_with_grammar(
-        source,
-        check,
-        tree_sitter_yaml::LANGUAGE.into(),
-        fake_path,
-    )
+    run_with_grammar(source, check, tree_sitter_yaml::LANGUAGE.into(), fake_path)
 }
 
 /// YAML variant with a caller-supplied project context. Use for
@@ -213,7 +214,9 @@ pub fn run_yaml_with_project_and_path(
     parser
         .set_language(&tree_sitter_yaml::LANGUAGE.into())
         .expect("grammar should load");
-    let tree = parser.parse(source, None).expect("parser should produce a tree");
+    let tree = parser
+        .parse(source, None)
+        .expect("parser should produce a tree");
     check.check(
         &CheckCtx::for_test_with_project(fake_path, source, project),
         &tree,
@@ -267,36 +270,21 @@ pub fn assert_clippy_rule(rule: RuleDef, id: &str, severity: Severity, expected_
 /// grammar. Use for rules that target `Language::Css`.
 #[must_use]
 pub fn run_css(source: &str, check: &dyn AstCheck) -> Vec<Diagnostic> {
-    run_with_grammar(
-        source,
-        check,
-        tree_sitter_css::LANGUAGE.into(),
-        "t.css",
-    )
+    run_with_grammar(source, check, tree_sitter_css::LANGUAGE.into(), "t.css")
 }
 
 /// Run a tree-sitter `Check` against `source` parsed with the Rust
 /// grammar.
 #[must_use]
 pub fn run_rust(source: &str, check: &dyn AstCheck) -> Vec<Diagnostic> {
-    run_with_grammar(
-        source,
-        check,
-        tree_sitter_rust::LANGUAGE.into(),
-        "t.rs",
-    )
+    run_with_grammar(source, check, tree_sitter_rust::LANGUAGE.into(), "t.rs")
 }
 
 /// Same as `run_rust` but with a custom fake filename. Use this when
 /// the rule filters on the file path (e.g. `src/main.rs` vs lib files).
 #[must_use]
 pub fn run_rust_with_path(source: &str, check: &dyn AstCheck, fake_path: &str) -> Vec<Diagnostic> {
-    run_with_grammar(
-        source,
-        check,
-        tree_sitter_rust::LANGUAGE.into(),
-        fake_path,
-    )
+    run_with_grammar(source, check, tree_sitter_rust::LANGUAGE.into(), fake_path)
 }
 
 /// Run a tree-sitter `Check` against `source` parsed with the Dockerfile
@@ -319,7 +307,9 @@ fn run_with_grammar(
 ) -> Vec<Diagnostic> {
     let mut parser = tree_sitter::Parser::new();
     parser.set_language(&grammar).expect("grammar should load");
-    let tree = parser.parse(source, None).expect("parser should produce a tree");
+    let tree = parser
+        .parse(source, None)
+        .expect("parser should produce a tree");
     check.check(&CheckCtx::for_test(Path::new(fake_path), source), &tree)
 }
 
@@ -332,7 +322,9 @@ fn run_with_grammar_and_file(
 ) -> Vec<Diagnostic> {
     let mut parser = tree_sitter::Parser::new();
     parser.set_language(&grammar).expect("grammar should load");
-    let tree = parser.parse(source, None).expect("parser should produce a tree");
+    let tree = parser
+        .parse(source, None)
+        .expect("parser should produce a tree");
     check.check(
         &CheckCtx::for_test_with_file(Path::new(fake_path), source, file),
         &tree,

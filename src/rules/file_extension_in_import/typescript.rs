@@ -14,8 +14,8 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
 const KNOWN_EXTENSIONS: &[&str] = &[
-    ".js", ".ts", ".tsx", ".jsx", ".mjs", ".cjs", ".mts", ".cts", ".json",
-    ".css", ".scss", ".less", ".svg", ".png", ".vue", ".svelte",
+    ".js", ".ts", ".tsx", ".jsx", ".mjs", ".cjs", ".mts", ".cts", ".json", ".css", ".scss",
+    ".less", ".svg", ".png", ".vue", ".svelte",
 ];
 
 /// Bundlers and runtimes that resolve extensionless imports natively. Their
@@ -246,14 +246,20 @@ mod tests {
     fn skips_when_webpack_present() {
         let pkg = r#"{"devDependencies":{"webpack":"^5"}}"#;
         let d = run_with_project(Some(pkg), None, "import { foo } from './utils';");
-        assert!(d.is_empty(), "webpack resolves extensionless imports: {d:?}");
+        assert!(
+            d.is_empty(),
+            "webpack resolves extensionless imports: {d:?}"
+        );
     }
 
     #[test]
     fn skips_when_esbuild_present() {
         let pkg = r#"{"devDependencies":{"esbuild":"^0.20"}}"#;
         let d = run_with_project(Some(pkg), None, "import { foo } from './utils';");
-        assert!(d.is_empty(), "esbuild resolves extensionless imports: {d:?}");
+        assert!(
+            d.is_empty(),
+            "esbuild resolves extensionless imports: {d:?}"
+        );
     }
 
     #[test]

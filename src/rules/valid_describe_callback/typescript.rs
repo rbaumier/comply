@@ -95,7 +95,10 @@ fn check_callback(
     };
     // Collect named children of the arguments node.
     let mut cursor = args.walk();
-    let named: Vec<_> = args.children(&mut cursor).filter(|c| c.is_named()).collect();
+    let named: Vec<_> = args
+        .children(&mut cursor)
+        .filter(|c| c.is_named())
+        .collect();
     let Some(cb) = named.get(1) else { return };
 
     let is_fn = matches!(

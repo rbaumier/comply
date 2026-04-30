@@ -29,7 +29,9 @@ crate::ast_check! { on ["call_expression"] prefilter = ["hasOwnProperty"] => |no
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn run(code: &str) -> Vec<Diagnostic> { crate::rules::test_helpers::run_ts(code, &Check) }
+    fn run(code: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_ts(code, &Check)
+    }
 
     #[test]
     fn flags_has_own_property() {

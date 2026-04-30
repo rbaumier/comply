@@ -25,9 +25,9 @@
 use crate::diagnostic::Diagnostic;
 use crate::files::Language;
 
+use super::RuleDef;
 use super::backend::{self, AstCheck, Backend};
 use super::meta::RuleMeta;
-use super::RuleDef;
 
 /// Optional Rust binding for a TS-family rule. Used by `build_ts_family_rule`
 /// to decide whether to append a Rust backend after the TS/JS/TSX triple.

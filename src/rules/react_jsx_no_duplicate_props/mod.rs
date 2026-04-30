@@ -4,9 +4,9 @@ mod react;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
+use crate::rules::RuleDef;
 use crate::rules::backend::Backend;
 use crate::rules::meta::RuleMeta;
-use crate::rules::RuleDef;
 
 pub const META: RuleMeta = RuleMeta {
     id: "react-jsx-no-duplicate-props",
@@ -22,8 +22,6 @@ pub const META: RuleMeta = RuleMeta {
 pub fn register() -> RuleDef {
     RuleDef {
         meta: META,
-        backends: vec![
-            (Language::Tsx, Backend::TreeSitter(Box::new(react::Check))),
-        ],
+        backends: vec![(Language::Tsx, Backend::TreeSitter(Box::new(react::Check)))],
     }
 }

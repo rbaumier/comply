@@ -9,8 +9,8 @@ pub struct Check;
 
 /// HTML void elements — browsers self-close these, never flagged.
 const VOID_ELEMENTS: &[&str] = &[
-    "area", "base", "br", "col", "embed", "hr", "img", "input", "link",
-    "meta", "param", "source", "track", "wbr",
+    "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source",
+    "track", "wbr",
 ];
 
 impl TextCheck for Check {
@@ -31,12 +31,16 @@ impl TextCheck for Check {
         for (i, _) in template.match_indices("></") {
             // Find the close tag end. Skip past "></".
             let rest = &template[i + 3..];
-            let Some(close_end) = rest.find('>') else { continue };
+            let Some(close_end) = rest.find('>') else {
+                continue;
+            };
             let close_tag = &rest[..close_end];
 
             // Find the open tag start — walk backwards from i.
             let before = &template[..i];
-            let Some(open_lt) = before.rfind('<') else { continue };
+            let Some(open_lt) = before.rfind('<') else {
+                continue;
+            };
             let between = &template[open_lt + 1..i];
             // Extract tag name (first word).
             let tag = between.split_whitespace().next().unwrap_or("");
@@ -53,9 +57,7 @@ impl TextCheck for Check {
                 line,
                 column: 1,
                 rule_id: "vue-self-closing-comp".into(),
-                message: format!(
-                    "`<{tag}></{tag}>` has no children — use `<{tag} />` instead."
-                ),
+                message: format!("`<{tag}></{tag}>` has no children — use `<{tag} />` instead."),
                 severity: Severity::Warning,
                 span: None,
             });

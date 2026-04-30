@@ -43,7 +43,9 @@ crate::ast_check! { on ["try_statement"] prefilter = ["new URL"] => |node, sourc
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn run(code: &str) -> Vec<Diagnostic> { crate::rules::test_helpers::run_ts(code, &Check) }
+    fn run(code: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_ts(code, &Check)
+    }
 
     #[test]
     fn flags_try_catch_url_validation() {

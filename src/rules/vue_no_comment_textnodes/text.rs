@@ -36,7 +36,8 @@ impl TextCheck for Check {
                     line: lines_before + 1 + i,
                     column: 1,
                     rule_id: "vue-no-comment-textnodes".into(),
-                    message: "JS comment syntax in template renders as text — use `<!-- -->`.".into(),
+                    message: "JS comment syntax in template renders as text — use `<!-- -->`."
+                        .into(),
                     severity: Severity::Warning,
                     span: None,
                 });

@@ -3,13 +3,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
 /// Non-stable key generators that produce a new value every render.
-const BAD_KEY_CALLS: &[&str] = &[
-    "Math.random",
-    "Date.now",
-    "uuid",
-    "uuidv4",
-    "nanoid",
-];
+const BAD_KEY_CALLS: &[&str] = &["Math.random", "Date.now", "uuid", "uuidv4", "nanoid"];
 
 /// Check if a call expression is a non-stable key generator.
 fn is_bad_key_call(text: &str) -> bool {
@@ -62,37 +56,27 @@ mod tests {
 
     #[test]
     fn flags_date_now_key() {
-        let d = crate::rules::test_helpers::run_tsx(
-            r#"const el = <Item key={Date.now()} />;"#,
-            &Check,
-        );
+        let d =
+            crate::rules::test_helpers::run_tsx(r#"const el = <Item key={Date.now()} />;"#, &Check);
         assert_eq!(d.len(), 1);
     }
 
     #[test]
     fn flags_uuid_key() {
-        let d = crate::rules::test_helpers::run_tsx(
-            r#"const el = <Item key={uuid()} />;"#,
-            &Check,
-        );
+        let d = crate::rules::test_helpers::run_tsx(r#"const el = <Item key={uuid()} />;"#, &Check);
         assert_eq!(d.len(), 1);
     }
 
     #[test]
     fn allows_stable_key() {
-        let d = crate::rules::test_helpers::run_tsx(
-            r#"const el = <Item key={item.id} />;"#,
-            &Check,
-        );
+        let d =
+            crate::rules::test_helpers::run_tsx(r#"const el = <Item key={item.id} />;"#, &Check);
         assert!(d.is_empty());
     }
 
     #[test]
     fn allows_index_key() {
-        let d = crate::rules::test_helpers::run_tsx(
-            r#"const el = <Item key={index} />;"#,
-            &Check,
-        );
+        let d = crate::rules::test_helpers::run_tsx(r#"const el = <Item key={index} />;"#, &Check);
         assert!(d.is_empty());
     }
 }

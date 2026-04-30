@@ -56,4 +56,13 @@ mod tests {
         let d = run_on("const Foo = import(/* some comment */ './foo');");
         assert_eq!(d.len(), 1);
     }
+
+    #[test]
+    fn ignores_non_webpack_projects() {
+        let d = crate::rules::test_helpers::run_ts("const Foo = import('./foo');", &Check);
+        assert!(
+            d.is_empty(),
+            "webpack-only rule must be silent without webpack"
+        );
+    }
 }

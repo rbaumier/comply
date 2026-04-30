@@ -16,14 +16,7 @@ use crate::rules::backend::{AstCheck, CheckCtx};
 
 const KINDS: &[&str] = &["if_expression"];
 
-const LOCK_METHODS: &[&str] = &[
-    "lock",
-    "read",
-    "write",
-    "try_lock",
-    "try_read",
-    "try_write",
-];
+const LOCK_METHODS: &[&str] = &["lock", "read", "write", "try_lock", "try_read", "try_write"];
 
 #[derive(Debug)]
 pub struct Check;

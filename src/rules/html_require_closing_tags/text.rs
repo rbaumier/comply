@@ -152,8 +152,7 @@ mod tests {
 
     #[test]
     fn allows_nested_closed_tags() {
-        let source =
-            "<template>\n  <div><span><p>hi</p></span></div>\n</template>";
+        let source = "<template>\n  <div><span><p>hi</p></span></div>\n</template>";
         assert!(run(source).is_empty());
     }
 

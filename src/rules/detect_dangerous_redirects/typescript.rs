@@ -15,7 +15,9 @@ fn is_req_member(mut node: tree_sitter::Node, source: &[u8]) -> bool {
                 return node.utf8_text(source).unwrap_or("") == "req";
             }
             "member_expression" | "subscript_expression" => {
-                let Some(obj) = node.child_by_field_name("object") else { return false };
+                let Some(obj) = node.child_by_field_name("object") else {
+                    return false;
+                };
                 node = obj;
             }
             _ => return false,

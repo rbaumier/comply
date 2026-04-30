@@ -58,16 +58,12 @@ mod tests {
 
     #[test]
     fn allows_named_identifier_reference() {
-        assert!(
-            run_on("el.addEventListener('click', handleClick)").is_empty()
-        );
+        assert!(run_on("el.addEventListener('click', handleClick)").is_empty());
     }
 
     #[test]
     fn allows_member_expression_reference() {
-        assert!(
-            run_on("el.addEventListener('click', this.handleClick)").is_empty()
-        );
+        assert!(run_on("el.addEventListener('click', this.handleClick)").is_empty());
     }
 
     #[test]

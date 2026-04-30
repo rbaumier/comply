@@ -140,7 +140,8 @@ mod tests {
 
     #[test]
     fn flags_unawaited_prefetch() {
-        let src = "queryClient.prefetchQuery({ queryKey: ['x'] }); const state = dehydrate(queryClient);";
+        let src =
+            "queryClient.prefetchQuery({ queryKey: ['x'] }); const state = dehydrate(queryClient);";
         assert_eq!(run(src).len(), 1);
     }
 

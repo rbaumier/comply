@@ -28,14 +28,19 @@ fn collect_as_const_objects(root: tree_sitter::Node, source: &[u8]) -> HashSet<S
                 if child.kind() != "variable_declarator" {
                     continue;
                 }
-                let Some(name_node) = child.child_by_field_name("name") else { continue };
-                let Some(value_node) = child.child_by_field_name("value") else { continue };
+                let Some(name_node) = child.child_by_field_name("name") else {
+                    continue;
+                };
+                let Some(value_node) = child.child_by_field_name("value") else {
+                    continue;
+                };
                 if value_node.kind() != "as_expression" {
                     continue;
                 }
                 // The text of an as_expression includes "<expr> as const".
                 let text = value_node.utf8_text(source).unwrap_or("");
-                if !text.trim_end().ends_with(" as const") && !text.trim_end().ends_with("as const") {
+                if !text.trim_end().ends_with(" as const") && !text.trim_end().ends_with("as const")
+                {
                     continue;
                 }
                 // The expression part should be an object literal.
@@ -47,7 +52,9 @@ fn collect_as_const_objects(root: tree_sitter::Node, source: &[u8]) -> HashSet<S
                         break;
                     }
                 }
-                if !found_object { continue; }
+                if !found_object {
+                    continue;
+                }
                 if name_node.kind() == "identifier" {
                     if let Ok(text) = name_node.utf8_text(source) {
                         names.insert(text.to_string());
@@ -133,7 +140,8 @@ mod tests {
 
     #[test]
     fn ignores_non_as_const_object() {
-        let src = "const Color = { red: 'r', blue: 'b' };\nfunction f(k: string) { return Color[k]; }";
+        let src =
+            "const Color = { red: 'r', blue: 'b' };\nfunction f(k: string) { return Color[k]; }";
         assert!(run(src).is_empty());
     }
 

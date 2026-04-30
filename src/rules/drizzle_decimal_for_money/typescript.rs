@@ -6,7 +6,8 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
 const MONEY_KEYWORDS: &[&str] = &[
-    "price", "amount", "total", "cost", "fee", "subtotal", "balance", "salary", "wage", "tax", "discount", "revenue", "money",
+    "price", "amount", "total", "cost", "fee", "subtotal", "balance", "salary", "wage", "tax",
+    "discount", "revenue", "money",
 ];
 
 fn is_money_column(name: &str) -> bool {

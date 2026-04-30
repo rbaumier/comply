@@ -13,14 +13,19 @@ fn is_step_call(node: tree_sitter::Node, source: &[u8]) -> bool {
     if node.kind() != "call_expression" {
         return false;
     }
-    let Some(callee) = node.child_by_field_name("function") else { return false };
+    let Some(callee) = node.child_by_field_name("function") else {
+        return false;
+    };
     if callee.kind() != "member_expression" {
         return false;
     }
-    let Some(obj) = callee.child_by_field_name("object") else { return false };
-    let Some(prop) = callee.child_by_field_name("property") else { return false };
-    obj.utf8_text(source).unwrap_or("") == "test"
-        && prop.utf8_text(source).unwrap_or("") == "step"
+    let Some(obj) = callee.child_by_field_name("object") else {
+        return false;
+    };
+    let Some(prop) = callee.child_by_field_name("property") else {
+        return false;
+    };
+    obj.utf8_text(source).unwrap_or("") == "test" && prop.utf8_text(source).unwrap_or("") == "step"
 }
 
 /// Walk ancestors to check if we're inside a `test.step()` callback.
@@ -32,10 +37,11 @@ fn is_inside_step(node: tree_sitter::Node, source: &[u8]) -> bool {
                 // Check if this function's parent is a test.step() call.
                 if let Some(pp) = p.parent()
                     && pp.kind() == "arguments"
-                        && let Some(call) = pp.parent()
-                            && is_step_call(call, source) {
-                                return true;
-                            }
+                    && let Some(call) = pp.parent()
+                    && is_step_call(call, source)
+                {
+                    return true;
+                }
             }
             _ => {}
         }

@@ -48,8 +48,7 @@ mod tests {
 
     #[test]
     fn allows_create_index_with_preceding_comment() {
-        let src =
-            "-- Accelerates dashboard query for user_id\nCREATE INDEX idx_foo ON bar(baz);";
+        let src = "-- Accelerates dashboard query for user_id\nCREATE INDEX idx_foo ON bar(baz);";
         assert!(run(src).is_empty());
     }
 }

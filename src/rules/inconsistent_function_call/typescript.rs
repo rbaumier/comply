@@ -324,7 +324,10 @@ const c = Widget();
             }
             fs::write(&p, content).unwrap();
             let lang = Language::from_path(&p).unwrap();
-            sources.push(SourceFile { path: p.clone(), language: lang });
+            sources.push(SourceFile {
+                path: p.clone(),
+                language: lang,
+            });
             paths.push(fs::canonicalize(&p).unwrap());
         }
         let refs: Vec<&SourceFile> = sources.iter().collect();
@@ -341,8 +344,14 @@ const c = Widget();
     fn cross_file_flags_inconsistent_new_and_call() {
         let (_dir, project, paths) = build_project(&[
             ("utils.ts", "export function Widget() { this.id = 1; }\n"),
-            ("file-a.ts", "import { Widget } from './utils';\nconst a = new Widget();\n"),
-            ("file-b.ts", "import { Widget } from './utils';\nconst b = Widget();\n"),
+            (
+                "file-a.ts",
+                "import { Widget } from './utils';\nconst a = new Widget();\n",
+            ),
+            (
+                "file-b.ts",
+                "import { Widget } from './utils';\nconst b = Widget();\n",
+            ),
         ]);
         let diags = run_on_file(&project, &paths[0]);
         // One `new` site in file-a.ts + one plain site in file-b.ts.
@@ -362,8 +371,14 @@ const c = Widget();
     fn cross_file_allows_consistent_new() {
         let (_dir, project, paths) = build_project(&[
             ("utils.ts", "export function Widget() { this.id = 1; }\n"),
-            ("file-a.ts", "import { Widget } from './utils';\nconst a = new Widget();\n"),
-            ("file-b.ts", "import { Widget } from './utils';\nconst b = new Widget();\n"),
+            (
+                "file-a.ts",
+                "import { Widget } from './utils';\nconst a = new Widget();\n",
+            ),
+            (
+                "file-b.ts",
+                "import { Widget } from './utils';\nconst b = new Widget();\n",
+            ),
         ]);
         assert!(run_on_file(&project, &paths[0]).is_empty());
     }
@@ -372,8 +387,14 @@ const c = Widget();
     fn cross_file_allows_consistent_plain_calls() {
         let (_dir, project, paths) = build_project(&[
             ("utils.ts", "export function helper(x) { return x + 1; }\n"),
-            ("file-a.ts", "import { helper } from './utils';\nhelper(1);\n"),
-            ("file-b.ts", "import { helper } from './utils';\nhelper(2);\n"),
+            (
+                "file-a.ts",
+                "import { helper } from './utils';\nhelper(1);\n",
+            ),
+            (
+                "file-b.ts",
+                "import { helper } from './utils';\nhelper(2);\n",
+            ),
         ]);
         assert!(run_on_file(&project, &paths[0]).is_empty());
     }
@@ -385,8 +406,14 @@ const c = Widget();
         // another is out of scope for this rule.
         let (_dir, project, paths) = build_project(&[
             ("m.ts", "export class MyClass { constructor() {} }\n"),
-            ("a.ts", "import { MyClass } from './m';\nconst a = new MyClass();\n"),
-            ("b.ts", "import { MyClass } from './m';\nconst b = new MyClass();\n"),
+            (
+                "a.ts",
+                "import { MyClass } from './m';\nconst a = new MyClass();\n",
+            ),
+            (
+                "b.ts",
+                "import { MyClass } from './m';\nconst b = new MyClass();\n",
+            ),
         ]);
         assert!(run_on_file(&project, &paths[0]).is_empty());
     }
@@ -400,7 +427,10 @@ const c = Widget();
                 "utils.ts",
                 "export function Widget() { this.id = 1; }\nconst local = new Widget();\n",
             ),
-            ("app.ts", "import { Widget } from './utils';\nconst a = Widget();\n"),
+            (
+                "app.ts",
+                "import { Widget } from './utils';\nconst a = Widget();\n",
+            ),
         ]);
         let diags = run_on_file(&project, &paths[0]);
         assert_eq!(diags.len(), 2, "got: {diags:#?}");
@@ -425,12 +455,10 @@ const c = Widget();
     fn non_exported_function_skips_cross_file_lookup() {
         // `Widget` is not exported. Cross-file usage is impossible; in-file
         // consistency (only `new`) means no diagnostic.
-        let (_dir, project, paths) = build_project(&[
-            (
-                "utils.ts",
-                "function Widget() { this.id = 1; }\nconst a = new Widget();\n",
-            ),
-        ]);
+        let (_dir, project, paths) = build_project(&[(
+            "utils.ts",
+            "function Widget() { this.id = 1; }\nconst a = new Widget();\n",
+        )]);
         assert!(run_on_file(&project, &paths[0]).is_empty());
     }
 }

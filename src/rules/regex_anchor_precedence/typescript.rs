@@ -62,11 +62,22 @@ fn find_top_level_pipes(pattern: &str) -> Vec<usize> {
     let mut i = 0;
     while i < len {
         match bytes[i] {
-            b'\\' => { i += 2; continue; }
+            b'\\' => {
+                i += 2;
+                continue;
+            }
             b'(' => depth += 1,
-            b')' => { if depth > 0 { depth -= 1; } }
+            b')' => {
+                if depth > 0 {
+                    depth -= 1;
+                }
+            }
             b'[' => bracket_depth += 1,
-            b']' => { if bracket_depth > 0 { bracket_depth -= 1; } }
+            b']' => {
+                if bracket_depth > 0 {
+                    bracket_depth -= 1;
+                }
+            }
             b'|' if depth == 0 && bracket_depth == 0 => pipes.push(i),
             _ => {}
         }

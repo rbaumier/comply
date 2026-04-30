@@ -46,7 +46,10 @@ pub fn jsx_attribute_value(node: tree_sitter::Node) -> Option<tree_sitter::Node>
 ///
 /// Returns `None` if the value is not a string literal or can't be read.
 #[must_use]
-pub fn jsx_attribute_string_value<'a>(attr: tree_sitter::Node, source: &'a [u8]) -> Option<&'a str> {
+pub fn jsx_attribute_string_value<'a>(
+    attr: tree_sitter::Node,
+    source: &'a [u8],
+) -> Option<&'a str> {
     let val = jsx_attribute_value(attr)?;
     if val.kind() != "string" {
         return None;

@@ -2,7 +2,7 @@
 
 use crate::diagnostic::Severity;
 use crate::rules::meta::RuleMeta;
-use crate::rules::{oxlint_and_clippy, oxlint_delegate, RuleDef, TS_FAMILY};
+use crate::rules::{RuleDef, TS_FAMILY, oxlint_and_clippy, oxlint_delegate};
 
 // comply-ignore: max-function-lines — this is a flat data table, not logic; splitting it would scatter related rule entries across files for no readability gain.
 pub fn register_all() -> Vec<RuleDef> {
@@ -132,7 +132,8 @@ fn entry(
             description,
             remediation,
             severity,
-            doc_url: None, categories: &["typescript"],
+            doc_url: None,
+            categories: &["typescript"],
         },
         oxlint_key,
         TS_FAMILY,
@@ -154,7 +155,8 @@ fn entry_with_clippy(
             description,
             remediation,
             severity,
-            doc_url: None, categories: &["typescript"],
+            doc_url: None,
+            categories: &["typescript"],
         },
         oxlint_key,
         clippy_lint,

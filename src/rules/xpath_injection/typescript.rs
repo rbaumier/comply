@@ -1,6 +1,12 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
-const XPATH_METHODS: &[&str] = &["select", "select1", "evaluate", "selectNodes", "selectSingleNode"];
+const XPATH_METHODS: &[&str] = &[
+    "select",
+    "select1",
+    "evaluate",
+    "selectNodes",
+    "selectSingleNode",
+];
 
 crate::ast_check! { on ["call_expression"] prefilter = ["evaluate", "selectNodes", "selectSingleNode"] => |node, source, ctx, diagnostics|
     let Some(func) = node.child_by_field_name("function") else { return; };
@@ -46,7 +52,9 @@ crate::ast_check! { on ["call_expression"] prefilter = ["evaluate", "selectNodes
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn run(code: &str) -> Vec<Diagnostic> { crate::rules::test_helpers::run_ts(code, &Check) }
+    fn run(code: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_ts(code, &Check)
+    }
 
     #[test]
     fn flags_select_template() {

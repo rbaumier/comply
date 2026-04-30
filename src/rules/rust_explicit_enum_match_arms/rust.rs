@@ -129,7 +129,9 @@ fn pattern_is_enum_like(pattern: tree_sitter::Node, source: &[u8]) -> bool {
     }
     // Leading identifier starts with ASCII uppercase → looks like a
     // variant or tuple struct (e.g. `Some(x)`, `None`, `Direction`).
-    let first_ident_char = text.chars().find(|c| c.is_ascii_alphanumeric() || *c == '_');
+    let first_ident_char = text
+        .chars()
+        .find(|c| c.is_ascii_alphanumeric() || *c == '_');
     matches!(first_ident_char, Some(c) if c.is_ascii_uppercase())
 }
 

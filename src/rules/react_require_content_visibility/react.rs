@@ -28,16 +28,16 @@ fn enclosing_virtualizer_tag(mut node: tree_sitter::Node<'_>, source: &[u8]) -> 
     while let Some(parent) = node.parent() {
         if parent.kind() == "jsx_element"
             && let Some(open) = parent.child(0)
-                && open.kind() == "jsx_opening_element"
-                    && let Some(name) = open.child_by_field_name("name")
-                        && let Ok(tag) = name.utf8_text(source)
-                            && (tag.contains("Virtual")
-                                || tag.contains("Virtuoso")
-                                || tag.contains("Window")
-                                || tag.ends_with("List"))
-                            {
-                                return true;
-                            }
+            && open.kind() == "jsx_opening_element"
+            && let Some(name) = open.child_by_field_name("name")
+            && let Ok(tag) = name.utf8_text(source)
+            && (tag.contains("Virtual")
+                || tag.contains("Virtuoso")
+                || tag.contains("Window")
+                || tag.ends_with("List"))
+        {
+            return true;
+        }
         node = parent;
     }
     false
@@ -56,15 +56,25 @@ fn is_known_small_array_source(recv: tree_sitter::Node<'_>, source: &[u8]) -> bo
         return count < THRESHOLD;
     }
     if recv.kind() == "call_expression" {
-        let Some(callee) = recv.child_by_field_name("function") else { return false };
-        let Ok(callee_text) = callee.utf8_text(source) else { return false };
+        let Some(callee) = recv.child_by_field_name("function") else {
+            return false;
+        };
+        let Ok(callee_text) = callee.utf8_text(source) else {
+            return false;
+        };
         if callee_text != "Array.from" {
             return false;
         }
-        let Some(args) = recv.child_by_field_name("arguments") else { return false };
+        let Some(args) = recv.child_by_field_name("arguments") else {
+            return false;
+        };
         let mut cursor = args.walk();
-        let Some(first) = args.named_children(&mut cursor).next() else { return false };
-        let Ok(raw) = first.utf8_text(source) else { return false };
+        let Some(first) = args.named_children(&mut cursor).next() else {
+            return false;
+        };
+        let Ok(raw) = first.utf8_text(source) else {
+            return false;
+        };
         if let Some(idx) = raw.find("length") {
             let tail = &raw[idx..];
             if let Some(colon) = tail.find(':') {
@@ -90,16 +100,26 @@ fn large_array_source(recv: tree_sitter::Node<'_>, source: &[u8]) -> bool {
     }
     if recv.kind() == "call_expression" {
         // `Array.from({ length: N })` pattern.
-        let Some(callee) = recv.child_by_field_name("function") else { return false };
-        let Ok(callee_text) = callee.utf8_text(source) else { return false };
+        let Some(callee) = recv.child_by_field_name("function") else {
+            return false;
+        };
+        let Ok(callee_text) = callee.utf8_text(source) else {
+            return false;
+        };
         if callee_text != "Array.from" {
             return false;
         }
-        let Some(args) = recv.child_by_field_name("arguments") else { return false };
+        let Some(args) = recv.child_by_field_name("arguments") else {
+            return false;
+        };
         let mut cursor = args.walk();
-        let Some(first) = args.named_children(&mut cursor).next() else { return false };
+        let Some(first) = args.named_children(&mut cursor).next() else {
+            return false;
+        };
         // Look for `length: <number>`.
-        let Ok(raw) = first.utf8_text(source) else { return false };
+        let Ok(raw) = first.utf8_text(source) else {
+            return false;
+        };
         if let Some(idx) = raw.find("length") {
             let tail = &raw[idx..];
             if let Some(colon) = tail.find(':') {
@@ -114,11 +134,10 @@ fn large_array_source(recv: tree_sitter::Node<'_>, source: &[u8]) -> bool {
     false
 }
 
-fn callback_body_has_content_visibility(
-    cb: tree_sitter::Node<'_>,
-    source: &[u8],
-) -> bool {
-    let Ok(text) = cb.utf8_text(source) else { return false };
+fn callback_body_has_content_visibility(cb: tree_sitter::Node<'_>, source: &[u8]) -> bool {
+    let Ok(text) = cb.utf8_text(source) else {
+        return false;
+    };
     text.contains("contentVisibility") || text.contains("content-visibility")
 }
 

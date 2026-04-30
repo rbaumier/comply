@@ -6,9 +6,9 @@ mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
+use crate::rules::RuleDef;
 use crate::rules::backend::Backend;
 use crate::rules::meta::RuleMeta;
-use crate::rules::RuleDef;
 
 pub const META: RuleMeta = RuleMeta {
     id: "sql-no-reserved-keyword-identifiers",
@@ -23,19 +23,56 @@ pub fn register() -> RuleDef {
     RuleDef {
         meta: META,
         backends: vec![
-            (Language::TypeScript, Backend::TreeSitter(Box::new(typescript::Check))),
-            (Language::TypeScript, Backend::TreeSitter(Box::new(drizzle::Check))),
-            (Language::JavaScript, Backend::TreeSitter(Box::new(typescript::Check))),
-            (Language::Tsx, Backend::TreeSitter(Box::new(typescript::Check))),
+            (
+                Language::TypeScript,
+                Backend::TreeSitter(Box::new(typescript::Check)),
+            ),
+            (
+                Language::TypeScript,
+                Backend::TreeSitter(Box::new(drizzle::Check)),
+            ),
+            (
+                Language::JavaScript,
+                Backend::TreeSitter(Box::new(typescript::Check)),
+            ),
+            (
+                Language::Tsx,
+                Backend::TreeSitter(Box::new(typescript::Check)),
+            ),
             (Language::Rust, Backend::TreeSitter(Box::new(rust::Check))),
         ],
     }
 }
 
 const RESERVED: &[&str] = &[
-    "USER", "ORDER", "GROUP", "TABLE", "SELECT", "FROM", "WHERE", "JOIN", "UNION", "GRANT",
-    "REFERENCES", "CHECK", "DEFAULT", "PRIMARY", "FOREIGN", "UNIQUE", "COLUMN", "CONSTRAINT",
-    "DESC", "ASC", "LIMIT", "OFFSET", "AS", "CASE", "WHEN", "END", "RETURNING", "VALUES",
+    "USER",
+    "ORDER",
+    "GROUP",
+    "TABLE",
+    "SELECT",
+    "FROM",
+    "WHERE",
+    "JOIN",
+    "UNION",
+    "GRANT",
+    "REFERENCES",
+    "CHECK",
+    "DEFAULT",
+    "PRIMARY",
+    "FOREIGN",
+    "UNIQUE",
+    "COLUMN",
+    "CONSTRAINT",
+    "DESC",
+    "ASC",
+    "LIMIT",
+    "OFFSET",
+    "AS",
+    "CASE",
+    "WHEN",
+    "END",
+    "RETURNING",
+    "VALUES",
 ];
 
 #[derive(Debug)]
@@ -62,11 +99,7 @@ fn extract_table_name(upper: &str, original: &str) -> Option<String> {
             break;
         }
     }
-    if ident.is_empty() {
-        None
-    } else {
-        Some(ident)
-    }
+    if ident.is_empty() { None } else { Some(ident) }
 }
 
 /// Scan the (DDL) SQL string line-by-line for CREATE TABLE / ADD COLUMN with

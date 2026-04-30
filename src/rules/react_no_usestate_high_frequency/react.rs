@@ -22,14 +22,14 @@ const HIGH_FREQ_JSX_PROPS: &[&str] = &[
 fn callback_contains_setstate(node: tree_sitter::Node<'_>, source: &[u8]) -> bool {
     if node.kind() == "call_expression"
         && let Some(callee) = node.child_by_field_name("function")
-            && callee.kind() == "identifier"
-                && let Ok(text) = callee.utf8_text(source)
-                    && text.starts_with("set")
-                        && text.len() > 3
-                        && text.as_bytes()[3].is_ascii_uppercase()
-                    {
-                        return true;
-                    }
+        && callee.kind() == "identifier"
+        && let Ok(text) = callee.utf8_text(source)
+        && text.starts_with("set")
+        && text.len() > 3
+        && text.as_bytes()[3].is_ascii_uppercase()
+    {
+        return true;
+    }
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         if callback_contains_setstate(child, source) {

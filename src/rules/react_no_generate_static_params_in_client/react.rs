@@ -4,11 +4,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::project::Framework;
 use crate::rules::file_ctx::RscContext;
 
-fn exports_function_named(
-    export: tree_sitter::Node,
-    source: &[u8],
-    target: &str,
-) -> bool {
+fn exports_function_named(export: tree_sitter::Node, source: &[u8], target: &str) -> bool {
     let mut cursor = export.walk();
     for child in export.children(&mut cursor) {
         if child.kind() != "function_declaration" {

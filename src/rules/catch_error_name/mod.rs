@@ -46,9 +46,9 @@ mod shared_tests;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
+use crate::rules::RuleDef;
 use crate::rules::backend::Backend;
 use crate::rules::meta::RuleMeta;
-use crate::rules::RuleDef;
 
 pub const META: RuleMeta = RuleMeta {
     id: "catch-error-name",
@@ -57,7 +57,9 @@ pub const META: RuleMeta = RuleMeta {
                   variant like `parseError` when disambiguating nested \
                   catches). Use `_` if the parameter is unused.",
     severity: Severity::Warning,
-    doc_url: Some("https://github.com/sindresorhus/eslint-plugin-unicorn/blob/main/docs/rules/catch-error-name.md"),
+    doc_url: Some(
+        "https://github.com/sindresorhus/eslint-plugin-unicorn/blob/main/docs/rules/catch-error-name.md",
+    ),
     categories: &["unicorn"],
 };
 
@@ -84,9 +86,18 @@ pub fn register() -> RuleDef {
     RuleDef {
         meta: META,
         backends: vec![
-            (Language::TypeScript, Backend::TreeSitter(Box::new(typescript::Check))),
-            (Language::JavaScript, Backend::TreeSitter(Box::new(typescript::Check))),
-            (Language::Tsx, Backend::TreeSitter(Box::new(typescript::Check))),
+            (
+                Language::TypeScript,
+                Backend::TreeSitter(Box::new(typescript::Check)),
+            ),
+            (
+                Language::JavaScript,
+                Backend::TreeSitter(Box::new(typescript::Check)),
+            ),
+            (
+                Language::Tsx,
+                Backend::TreeSitter(Box::new(typescript::Check)),
+            ),
             (Language::Vue, Backend::TreeSitter(Box::new(vue::Check))),
         ],
     }

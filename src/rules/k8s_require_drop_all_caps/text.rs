@@ -26,12 +26,19 @@ crate::ast_check! { prefilter = ["apiVersion"] => |node, source, ctx, diagnostic
 }
 
 fn drop_includes_all(container: tree_sitter::Node, source: &[u8]) -> bool {
-    let Some(drop_pair) = find_drop_pair(container, source) else { return false; };
-    let Some(value) = y::pair_value_node(drop_pair) else { return false; };
+    let Some(drop_pair) = find_drop_pair(container, source) else {
+        return false;
+    };
+    let Some(value) = y::pair_value_node(drop_pair) else {
+        return false;
+    };
     sequence_contains(value, source, "ALL")
 }
 
-fn find_drop_pair<'t>(container: tree_sitter::Node<'t>, source: &[u8]) -> Option<tree_sitter::Node<'t>> {
+fn find_drop_pair<'t>(
+    container: tree_sitter::Node<'t>,
+    source: &[u8],
+) -> Option<tree_sitter::Node<'t>> {
     let caps = y::descend_mapping(container, source, &["securityContext", "capabilities"])?;
     y::find_pair(caps, source, "drop")
 }
@@ -47,7 +54,9 @@ fn sequence_contains(value: tree_sitter::Node, source: &[u8], needle: &str) -> b
         "block_sequence" => {
             let mut cursor = value.walk();
             for item in value.named_children(&mut cursor) {
-                if item.kind() != "block_sequence_item" { continue; }
+                if item.kind() != "block_sequence_item" {
+                    continue;
+                }
                 let mut icur = item.walk();
                 for ichild in item.named_children(&mut icur) {
                     if scalar_equals(ichild, source, needle) {

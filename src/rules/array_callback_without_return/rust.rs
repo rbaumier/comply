@@ -6,18 +6,28 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
 const ITERATOR_METHODS: &[&str] = &[
-    "map", "filter", "find", "any", "all", "flat_map", "filter_map",
+    "map",
+    "filter",
+    "find",
+    "any",
+    "all",
+    "flat_map",
+    "filter_map",
 ];
 
 fn is_iterator_method_call(node: tree_sitter::Node, source: &[u8]) -> bool {
     if node.kind() != "call_expression" {
         return false;
     }
-    let Some(func) = node.child_by_field_name("function") else { return false };
+    let Some(func) = node.child_by_field_name("function") else {
+        return false;
+    };
     if func.kind() != "field_expression" {
         return false;
     }
-    let Some(field) = func.child_by_field_name("field") else { return false };
+    let Some(field) = func.child_by_field_name("field") else {
+        return false;
+    };
     let name = field.utf8_text(source).unwrap_or("");
     ITERATOR_METHODS.contains(&name)
 }

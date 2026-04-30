@@ -23,7 +23,9 @@ fn method_name<'a>(call: tree_sitter::Node, source: &'a [u8]) -> Option<&'a str>
 
 /// Iterate over the named argument nodes of a `call_expression`.
 fn argument_nodes<'t>(call: tree_sitter::Node<'t>) -> Vec<tree_sitter::Node<'t>> {
-    let Some(args) = call.child_by_field_name("arguments") else { return Vec::new() };
+    let Some(args) = call.child_by_field_name("arguments") else {
+        return Vec::new();
+    };
     let mut out = Vec::new();
     let mut cursor = args.walk();
     for child in args.named_children(&mut cursor) {
@@ -35,7 +37,9 @@ fn argument_nodes<'t>(call: tree_sitter::Node<'t>) -> Vec<tree_sitter::Node<'t>>
 /// True if any argument's text matches one of the unsafe markers.
 fn arg_text_matches(call: tree_sitter::Node, source: &[u8], markers: &[&str]) -> bool {
     for arg in argument_nodes(call) {
-        let Ok(text) = arg.utf8_text(source) else { continue };
+        let Ok(text) = arg.utf8_text(source) else {
+            continue;
+        };
         let trimmed = text.trim();
         if markers.iter().any(|m| trimmed == *m || trimmed.contains(m)) {
             return true;

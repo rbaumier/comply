@@ -37,17 +37,27 @@ crate::ast_check! { on ["binary_expression"] prefilter = ["indexOf"] => |node, s
 }
 
 fn is_indexof_call(node: tree_sitter::Node, source: &[u8]) -> bool {
-    if node.kind() != "call_expression" { return false; }
-    let Some(func) = node.child_by_field_name("function") else { return false; };
-    if func.kind() != "member_expression" { return false; }
-    let Some(prop) = func.child_by_field_name("property") else { return false; };
+    if node.kind() != "call_expression" {
+        return false;
+    }
+    let Some(func) = node.child_by_field_name("function") else {
+        return false;
+    };
+    if func.kind() != "member_expression" {
+        return false;
+    }
+    let Some(prop) = func.child_by_field_name("property") else {
+        return false;
+    };
     prop.utf8_text(source).unwrap_or("") == "indexOf"
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn run(code: &str) -> Vec<Diagnostic> { crate::rules::test_helpers::run_ts(code, &Check) }
+    fn run(code: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_ts(code, &Check)
+    }
 
     #[test]
     fn flags_indexof_not_minus_one() {

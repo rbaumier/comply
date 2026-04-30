@@ -42,7 +42,11 @@ fn matches_secret(src: &str) -> Option<&'static str> {
     if basename.ends_with(".pem") || basename.ends_with(".key") {
         return Some("private key");
     }
-    if basename == "id_rsa" || basename == "id_dsa" || basename == "id_ecdsa" || basename == "id_ed25519" {
+    if basename == "id_rsa"
+        || basename == "id_dsa"
+        || basename == "id_ecdsa"
+        || basename == "id_ed25519"
+    {
         return Some("SSH private key");
     }
     if basename == ".npmrc" || basename == ".yarnrc" || basename == ".netrc" {

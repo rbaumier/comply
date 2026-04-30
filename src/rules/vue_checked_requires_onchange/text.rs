@@ -35,8 +35,7 @@ impl TextCheck for Check {
                 line: elem.line,
                 column: 1,
                 rule_id: "vue-checked-requires-onchange".into(),
-                message: "`checked` without `@change` or `v-model` renders a frozen input."
-                    .into(),
+                message: "`checked` without `@change` or `v-model` renders a frozen input.".into(),
                 severity: Severity::Warning,
                 span: None,
             });
@@ -75,10 +74,7 @@ mod tests {
 
     #[test]
     fn skips_non_vue() {
-        let d = Check.check(&CheckCtx::for_test(
-            Path::new("f.ts"),
-            "<input checked />",
-        ));
+        let d = Check.check(&CheckCtx::for_test(Path::new("f.ts"), "<input checked />"));
         assert!(d.is_empty());
     }
 }

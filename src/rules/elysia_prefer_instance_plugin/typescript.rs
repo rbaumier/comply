@@ -10,7 +10,9 @@ fn first_param_is_elysia(node: tree_sitter::Node, source: &[u8]) -> bool {
         return false;
     }
     for i in 0..params.child_count() {
-        let Some(child) = params.child(i) else { continue };
+        let Some(child) = params.child(i) else {
+            continue;
+        };
         if child.kind() != "required_parameter" && child.kind() != "optional_parameter" {
             continue;
         }
@@ -20,7 +22,11 @@ fn first_param_is_elysia(node: tree_sitter::Node, source: &[u8]) -> bool {
             if t.kind() != "type_annotation" {
                 continue;
             }
-            let txt = t.utf8_text(source).unwrap_or("").trim_start_matches(':').trim();
+            let txt = t
+                .utf8_text(source)
+                .unwrap_or("")
+                .trim_start_matches(':')
+                .trim();
             if txt == "Elysia" || txt.starts_with("Elysia<") {
                 return true;
             }

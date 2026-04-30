@@ -79,9 +79,7 @@ fn params_contain_name(params: tree_sitter::Node, source: &[u8], name: &str) -> 
         let pk = param.kind();
         if pk == "required_parameter" || pk == "optional_parameter" {
             if let Some(pat) = param.child_by_field_name("pattern") {
-                if pat.kind() == "identifier"
-                    && pat.utf8_text(source).unwrap_or("") == name
-                {
+                if pat.kind() == "identifier" && pat.utf8_text(source).unwrap_or("") == name {
                     return true;
                 }
             }
@@ -105,9 +103,7 @@ fn declarator_binds_name(child: tree_sitter::Node, source: &[u8], name: &str) ->
             let decl = child.child(i).unwrap();
             if decl.kind() == "variable_declarator" {
                 if let Some(n) = decl.child_by_field_name("name") {
-                    if n.kind() == "identifier"
-                        && n.utf8_text(source).unwrap_or("") == name
-                    {
+                    if n.kind() == "identifier" && n.utf8_text(source).unwrap_or("") == name {
                         return true;
                     }
                 }
@@ -125,8 +121,7 @@ fn declarator_binds_name(child: tree_sitter::Node, source: &[u8], name: &str) ->
                 let cc = part.child_count();
                 for j in 0..cc {
                     let inner = part.child(j).unwrap();
-                    if inner.kind() == "identifier"
-                        && inner.utf8_text(source).unwrap_or("") == name
+                    if inner.kind() == "identifier" && inner.utf8_text(source).unwrap_or("") == name
                     {
                         return true;
                     }

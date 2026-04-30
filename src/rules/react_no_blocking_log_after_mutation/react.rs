@@ -6,7 +6,14 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-const LOG_NAMES: &[&str] = &["log", "logger", "analytics", "track", "telemetry", "metrics"];
+const LOG_NAMES: &[&str] = &[
+    "log",
+    "logger",
+    "analytics",
+    "track",
+    "telemetry",
+    "metrics",
+];
 
 fn is_exported_async_function(node: tree_sitter::Node<'_>, source: &[u8]) -> bool {
     if node.kind() != "function_declaration" {
@@ -18,7 +25,9 @@ fn is_exported_async_function(node: tree_sitter::Node<'_>, source: &[u8]) -> boo
         return false;
     }
     // Exported: parent is `export_statement`.
-    let Some(parent) = node.parent() else { return false };
+    let Some(parent) = node.parent() else {
+        return false;
+    };
     parent.kind() == "export_statement"
 }
 
@@ -55,10 +64,7 @@ fn exported_async_arrow_body<'a>(
     node.child_by_field_name("body")
 }
 
-fn await_call_target<'a>(
-    await_node: tree_sitter::Node<'a>,
-    source: &'a [u8],
-) -> Option<&'a str> {
+fn await_call_target<'a>(await_node: tree_sitter::Node<'a>, source: &'a [u8]) -> Option<&'a str> {
     // await_expression -> expression (argument).
     let mut cursor = await_node.walk();
     let arg = await_node.named_children(&mut cursor).next()?;
@@ -99,10 +105,9 @@ fn collect_awaits<'a>(
     }
     // Do not descend into nested functions.
     match node.kind() {
-        "function_declaration"
-        | "function_expression"
-        | "arrow_function"
-        | "method_definition" => return,
+        "function_declaration" | "function_expression" | "arrow_function" | "method_definition" => {
+            return;
+        }
         _ => {}
     }
     let mut cursor = node.walk();

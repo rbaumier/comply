@@ -7,7 +7,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::sql_helpers::{is_sql_string, TS_STRING_KINDS};
+use crate::rules::sql_helpers::{TS_STRING_KINDS, is_sql_string};
 use crate::rules::vue_sfc::{self, ScriptBlock};
 use crate::rules::walker::collect_nodes_of_kinds;
 
@@ -98,8 +98,7 @@ mod tests {
 
     #[test]
     fn does_not_flag_comment_in_vue_script() {
-        let src =
-            "<script>\n// WHERE created_at BETWEEN start AND end\nconst x = 1;\n</script>";
+        let src = "<script>\n// WHERE created_at BETWEEN start AND end\nconst x = 1;\n</script>";
         assert!(run(src).is_empty());
     }
 

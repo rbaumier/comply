@@ -51,8 +51,7 @@ fn has_namespace(manifest: tree_sitter::Node, source: &[u8]) -> bool {
     let Some(pair) = y::find_pair(metadata, source, "namespace") else {
         return false;
     };
-    y::pair_scalar_value(pair, source)
-        .is_some_and(|v| !v.is_empty())
+    y::pair_scalar_value(pair, source).is_some_and(|v| !v.is_empty())
 }
 
 #[cfg(test)]
@@ -78,7 +77,8 @@ mod tests {
 
     #[test]
     fn ignores_cluster_scoped() {
-        let yaml = "apiVersion: rbac.authorization.k8s.io/v1\nkind: ClusterRole\nmetadata:\n  name: c";
+        let yaml =
+            "apiVersion: rbac.authorization.k8s.io/v1\nkind: ClusterRole\nmetadata:\n  name: c";
         assert!(run(yaml).is_empty());
     }
 

@@ -62,14 +62,9 @@ impl AstCheck for Check {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
-
-
         crate::rules::test_helpers::run_ts(source, &Check)
-
-
     }
 
     #[test]
@@ -79,9 +74,7 @@ mod tests {
 
     #[test]
     fn allows_json_parse_with_schema() {
-        assert!(
-            run_on("const u = UserSchema.parse(JSON.parse(raw));").is_empty()
-        );
+        assert!(run_on("const u = UserSchema.parse(JSON.parse(raw));").is_empty());
     }
 
     #[test]

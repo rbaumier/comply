@@ -15,7 +15,11 @@ impl TextCheck for Check {
             // Track BEGIN ... COMMIT (or ROLLBACK) blocks. BEGIN is a whole-line
             // keyword in migrations; allow trailing semicolon.
             let trimmed = upper.trim();
-            if trimmed == "BEGIN" || trimmed == "BEGIN;" || trimmed.starts_with("BEGIN ") || trimmed.starts_with("START TRANSACTION") {
+            if trimmed == "BEGIN"
+                || trimmed == "BEGIN;"
+                || trimmed.starts_with("BEGIN ")
+                || trimmed.starts_with("START TRANSACTION")
+            {
                 in_tx = true;
             }
 
@@ -31,7 +35,11 @@ impl TextCheck for Check {
                 });
             }
 
-            if trimmed == "COMMIT" || trimmed == "COMMIT;" || trimmed == "ROLLBACK" || trimmed == "ROLLBACK;" {
+            if trimmed == "COMMIT"
+                || trimmed == "COMMIT;"
+                || trimmed == "ROLLBACK"
+                || trimmed == "ROLLBACK;"
+            {
                 in_tx = false;
             }
         }

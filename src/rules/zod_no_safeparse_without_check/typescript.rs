@@ -66,10 +66,14 @@ fn find_offenses(source: &str) -> Vec<usize> {
     let bytes = source.as_bytes();
     while from < source.len() {
         let safe_from = safe_boundary(source, from);
-        let Some(rel) = source[safe_from..].find(".safeParse(") else { break };
+        let Some(rel) = source[safe_from..].find(".safeParse(") else {
+            break;
+        };
         let abs = safe_from + rel;
         let open = abs + ".safeParse".len();
-        let Some(end) = end_of_call(bytes, open) else { break };
+        let Some(end) = end_of_call(bytes, open) else {
+            break;
+        };
         let safe_end = safe_boundary(source, end);
         if source[safe_end..].starts_with(".data") {
             out.push(abs);
@@ -81,7 +85,9 @@ fn find_offenses(source: &str) -> Vec<usize> {
     let mut from = 0usize;
     while from < source.len() {
         let safe_from = safe_boundary(source, from);
-        let Some(rel) = source[safe_from..].find(".safeParse(") else { break };
+        let Some(rel) = source[safe_from..].find(".safeParse(") else {
+            break;
+        };
         let abs = safe_from + rel;
         let preceding = &source[..abs];
         let look_start = safe_boundary(preceding, preceding.len().saturating_sub(120));
@@ -105,7 +111,9 @@ fn find_offenses(source: &str) -> Vec<usize> {
             }
         }
         let open = abs + ".safeParse".len();
-        let Some(end) = end_of_call(bytes, open) else { break };
+        let Some(end) = end_of_call(bytes, open) else {
+            break;
+        };
         if let Some(name) = id {
             let win_end = safe_boundary(source, (end + 2048).min(source.len()));
             let safe_end = safe_boundary(source, end);
@@ -116,8 +124,8 @@ fn find_offenses(source: &str) -> Vec<usize> {
                 let before_data = &window[..data_pos];
                 if !before_data.contains(&success_pat) {
                     let destructure_pat = format!("= {name};");
-                    let has_destructure_check = before_data.contains(&destructure_pat)
-                        && before_data.contains("success");
+                    let has_destructure_check =
+                        before_data.contains(&destructure_pat) && before_data.contains("success");
                     if !has_destructure_check {
                         out.push(abs);
                     }

@@ -39,12 +39,24 @@ fn has_bounce_animation_name(value: &str) -> bool {
 }
 
 fn is_in_style_jsx_attribute(node: tree_sitter::Node, source: &[u8]) -> bool {
-    let Some(obj) = node.parent() else { return false };
-    if obj.kind() != "object" { return false; }
-    let Some(jsx_expr) = obj.parent() else { return false };
-    if jsx_expr.kind() != "jsx_expression" { return false; }
-    let Some(jsx_attr) = jsx_expr.parent() else { return false };
-    if jsx_attr.kind() != "jsx_attribute" { return false; }
+    let Some(obj) = node.parent() else {
+        return false;
+    };
+    if obj.kind() != "object" {
+        return false;
+    }
+    let Some(jsx_expr) = obj.parent() else {
+        return false;
+    };
+    if jsx_expr.kind() != "jsx_expression" {
+        return false;
+    }
+    let Some(jsx_attr) = jsx_expr.parent() else {
+        return false;
+    };
+    if jsx_attr.kind() != "jsx_attribute" {
+        return false;
+    }
     crate::rules::jsx::jsx_attribute_name(jsx_attr, source) == Some("style")
 }
 
@@ -97,7 +109,8 @@ mod tests {
 
     #[test]
     fn flags_overshoot_cubic_bezier() {
-        let src = r#"<div style={{ transition: 'all 0.3s cubic-bezier(0.68, -0.55, 0.27, 1.55)' }} />"#;
+        let src =
+            r#"<div style={{ transition: 'all 0.3s cubic-bezier(0.68, -0.55, 0.27, 1.55)' }} />"#;
         assert_eq!(run(src).len(), 1);
     }
 
@@ -120,7 +133,8 @@ mod tests {
 
     #[test]
     fn allows_smooth_cubic_bezier() {
-        let src = r#"<div style={{ transitionTimingFunction: 'cubic-bezier(0.16, 1, 0.3, 1)' }} />"#;
+        let src =
+            r#"<div style={{ transitionTimingFunction: 'cubic-bezier(0.16, 1, 0.3, 1)' }} />"#;
         assert!(run(src).is_empty());
     }
 

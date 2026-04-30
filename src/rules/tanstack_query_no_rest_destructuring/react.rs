@@ -83,51 +83,68 @@ function Users() {
 
     #[test]
     fn flags_use_infinite_query_rest() {
-        assert_eq!(run(r#"
+        assert_eq!(
+            run(r#"
 function Feed() {
     const { data, ...rest } = useInfiniteQuery(opts);
     return <div />;
 }
-"#).len(), 1);
+"#)
+            .len(),
+            1
+        );
     }
 
     #[test]
     fn flags_use_mutation_rest() {
-        assert_eq!(run(r#"
+        assert_eq!(
+            run(r#"
 function Form() {
     const { mutate, ...rest } = useMutation({ mutationFn });
     return <div />;
 }
-"#).len(), 1);
+"#)
+            .len(),
+            1
+        );
     }
 
     #[test]
     fn allows_named_destructuring() {
-        assert!(run(r#"
+        assert!(
+            run(r#"
 function Users() {
     const { data, isLoading, error } = useQuery({ queryKey: ['u'], queryFn });
     return <div />;
 }
-"#).is_empty());
+"#)
+            .is_empty()
+        );
     }
 
     #[test]
     fn allows_full_assignment() {
-        assert!(run(r#"
+        assert!(
+            run(r#"
 function Users() {
     const query = useQuery({ queryKey: ['u'], queryFn });
     return <div />;
 }
-"#).is_empty());
+"#)
+            .is_empty()
+        );
     }
 
     #[test]
     fn allows_rest_on_non_query_call() {
-        assert!(run(r#"
+        assert!(
+            run(r#"
 function App() {
     const { foo, ...rest } = somethingElse();
     return <div />;
 }
-"#).is_empty());
+"#)
+            .is_empty()
+        );
     }
 }

@@ -94,7 +94,8 @@ mod tests {
     #[test]
     fn allows_img_with_srcset() {
         assert!(
-            run(r#"const x = <img src="hero.jpg" srcSet="hero.webp 1x, hero.avif 2x" />;"#).is_empty()
+            run(r#"const x = <img src="hero.jpg" srcSet="hero.webp 1x, hero.avif 2x" />;"#)
+                .is_empty()
         );
     }
 

@@ -48,7 +48,10 @@ impl AstCheck for Check {
         let source = ctx.source.as_bytes();
         // Skip `static mut`.
         let mut cursor = node.walk();
-        if node.children(&mut cursor).any(|c| c.kind() == "mutable_specifier") {
+        if node
+            .children(&mut cursor)
+            .any(|c| c.kind() == "mutable_specifier")
+        {
             return;
         }
         let Some(ty) = node.child_by_field_name("type") else {
@@ -86,13 +89,8 @@ impl AstCheck for Check {
 
 fn is_literal_value(node: tree_sitter::Node) -> bool {
     match node.kind() {
-        "integer_literal"
-        | "float_literal"
-        | "string_literal"
-        | "raw_string_literal"
-        | "char_literal"
-        | "boolean_literal"
-        | "negative_literal" => true,
+        "integer_literal" | "float_literal" | "string_literal" | "raw_string_literal"
+        | "char_literal" | "boolean_literal" | "negative_literal" => true,
         "reference_expression" => node
             .child_by_field_name("value")
             .map(is_literal_value)

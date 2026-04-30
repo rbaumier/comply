@@ -1,8 +1,14 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 
-const CLEANUP_METHODS: &[&str] =
-    &["close", "dispose", "destroy", "disconnect", "release", "end"];
+const CLEANUP_METHODS: &[&str] = &[
+    "close",
+    "dispose",
+    "destroy",
+    "disconnect",
+    "release",
+    "end",
+];
 
 const KINDS: &[&str] = &["try_statement"];
 
@@ -92,17 +98,26 @@ mod tests {
 
     #[test]
     fn flags_try_finally_close() {
-        assert_eq!(run("const c = connect(); try { use(c) } finally { c.close() }").len(), 1);
+        assert_eq!(
+            run("const c = connect(); try { use(c) } finally { c.close() }").len(),
+            1
+        );
     }
 
     #[test]
     fn flags_try_finally_dispose() {
-        assert_eq!(run("const r = open(); try { r.read() } finally { r.dispose() }").len(), 1);
+        assert_eq!(
+            run("const r = open(); try { r.read() } finally { r.dispose() }").len(),
+            1
+        );
     }
 
     #[test]
     fn flags_try_finally_disconnect() {
-        assert_eq!(run("try { query(db) } finally { db.disconnect() }").len(), 1);
+        assert_eq!(
+            run("try { query(db) } finally { db.disconnect() }").len(),
+            1
+        );
     }
 
     #[test]

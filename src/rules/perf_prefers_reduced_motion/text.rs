@@ -44,7 +44,8 @@ mod tests {
 
     #[test]
     fn flags_keyframes_without_reduced_motion() {
-        let css = "@keyframes spin { from { transform: rotate(0); } to { transform: rotate(360deg); } }";
+        let css =
+            "@keyframes spin { from { transform: rotate(0); } to { transform: rotate(360deg); } }";
         assert_eq!(run(css).len(), 1);
     }
 

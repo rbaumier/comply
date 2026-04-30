@@ -20,12 +20,16 @@ fn options_has_body_key(args: tree_sitter::Node, source: &[u8]) -> bool {
             if prop.kind() != "pair" {
                 continue;
             }
-            let Some(key) = prop.child_by_field_name("key") else { continue };
+            let Some(key) = prop.child_by_field_name("key") else {
+                continue;
+            };
             let key_text = key.utf8_text(source).unwrap_or("");
             if key_text != "body" {
                 continue;
             }
-            let Some(value) = prop.child_by_field_name("value") else { continue };
+            let Some(value) = prop.child_by_field_name("value") else {
+                continue;
+            };
             let value_text = value.utf8_text(source).unwrap_or("");
             if !value_text.trim().is_empty() {
                 return true;

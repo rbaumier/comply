@@ -204,7 +204,9 @@ mod tests {
     #[test]
     fn allows_custom_component_with_unusual_prop() {
         // PascalCase component — we don't know its prop surface, skip entirely.
-        assert!(run_on(r#"const x = <MyComponent class="foo" for="bar" onclick={f} />;"#).is_empty());
+        assert!(
+            run_on(r#"const x = <MyComponent class="foo" for="bar" onclick={f} />;"#).is_empty()
+        );
     }
 
     #[test]

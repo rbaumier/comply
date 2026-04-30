@@ -93,11 +93,13 @@ mod tests {
 
     #[test]
     fn allows_get_session_with_headers() {
-        assert!(run_at(
-            "middleware.ts",
-            "const session = await getSession({ headers: await headers() })"
-        )
-        .is_empty());
+        assert!(
+            run_at(
+                "middleware.ts",
+                "const session = await getSession({ headers: await headers() })"
+            )
+            .is_empty()
+        );
     }
 
     #[test]

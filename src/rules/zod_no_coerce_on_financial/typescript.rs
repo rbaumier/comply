@@ -4,10 +4,12 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
 fn is_financial_key(key: &str) -> bool {
-    let k = key.trim_matches(|c: char| c == '"' || c == '\'').to_ascii_lowercase();
+    let k = key
+        .trim_matches(|c: char| c == '"' || c == '\'')
+        .to_ascii_lowercase();
     const NEEDLES: &[&str] = &[
-        "price", "amount", "money", "currency", "cost", "fee",
-        "total", "subtotal", "balance", "salary", "wage",
+        "price", "amount", "money", "currency", "cost", "fee", "total", "subtotal", "balance",
+        "salary", "wage",
     ];
     NEEDLES.iter().any(|n| k.contains(n))
 }
@@ -64,10 +66,10 @@ mod tests {
 
     #[test]
     fn allows_explicit_parse() {
-        assert!(run(
-            "const S = z.object({ price: z.string().regex(/^\\d+$/).transform(Number) });"
-        )
-        .is_empty());
+        assert!(
+            run("const S = z.object({ price: z.string().regex(/^\\d+$/).transform(Number) });")
+                .is_empty()
+        );
     }
 
     #[test]

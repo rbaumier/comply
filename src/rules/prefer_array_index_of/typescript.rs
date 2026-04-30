@@ -90,14 +90,19 @@ fn is_simple_equality(node: tree_sitter::Node, param: &str, source: &[u8]) -> bo
 
     // Check for `===` operator.
     let mut cursor = node.walk();
-    let has_strict_eq = node.children(&mut cursor)
+    let has_strict_eq = node
+        .children(&mut cursor)
         .any(|c| c.kind() == "===" || c.utf8_text(source).unwrap_or("") == "===");
     if !has_strict_eq {
         return false;
     }
 
-    let Some(left) = node.child_by_field_name("left") else { return false };
-    let Some(right) = node.child_by_field_name("right") else { return false };
+    let Some(left) = node.child_by_field_name("left") else {
+        return false;
+    };
+    let Some(right) = node.child_by_field_name("right") else {
+        return false;
+    };
 
     let left_text = left.utf8_text(source).unwrap_or("");
     let right_text = right.utf8_text(source).unwrap_or("");
@@ -128,7 +133,10 @@ mod tests {
 
     #[test]
     fn flags_findindex_parens_arrow() {
-        assert_eq!(run_on("const i = arr.findIndex((x) => x === val);").len(), 1);
+        assert_eq!(
+            run_on("const i = arr.findIndex((x) => x === val);").len(),
+            1
+        );
     }
 
     #[test]

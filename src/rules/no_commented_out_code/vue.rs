@@ -144,7 +144,8 @@ mod tests {
 
     #[test]
     fn allows_prose_comment_in_script_block() {
-        let src = "<script>\n// This component mounts the widget.\nconst visible = true;\n</script>";
+        let src =
+            "<script>\n// This component mounts the widget.\nconst visible = true;\n</script>";
         assert!(run(src).is_empty());
     }
 

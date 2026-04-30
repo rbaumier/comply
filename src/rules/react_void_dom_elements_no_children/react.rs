@@ -6,8 +6,8 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
 const VOID_ELEMENTS: &[&str] = &[
-    "area", "base", "br", "col", "embed", "hr", "img", "input", "keygen",
-    "link", "meta", "param", "source", "track", "wbr",
+    "area", "base", "br", "col", "embed", "hr", "img", "input", "keygen", "link", "meta", "param",
+    "source", "track", "wbr",
 ];
 
 fn is_void_element(name: &str) -> bool {

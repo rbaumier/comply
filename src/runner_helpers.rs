@@ -74,7 +74,10 @@ mod tests {
 
     #[test]
     fn probe_unknown_binary_returns_false() {
-        assert!(!probe_binary("definitely-not-a-real-binary-xyz", &["--version"]));
+        assert!(!probe_binary(
+            "definitely-not-a-real-binary-xyz",
+            &["--version"]
+        ));
     }
 
     #[test]

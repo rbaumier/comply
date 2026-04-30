@@ -24,11 +24,7 @@ fn canonical(raw: &str) -> Option<String> {
         }
     };
 
-    if fixed == raw {
-        None
-    } else {
-        Some(fixed)
-    }
+    if fixed == raw { None } else { Some(fixed) }
 }
 
 crate::ast_check! { on ["integer_literal"] => |node, source, ctx, diagnostics|

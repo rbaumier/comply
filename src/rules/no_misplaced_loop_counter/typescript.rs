@@ -33,10 +33,7 @@ crate::ast_check! { on ["for_statement"] => |node, source, ctx, diagnostics|
 }
 
 /// Extract the identifier being compared in a binary expression condition.
-fn extract_condition_var<'a>(
-    node: tree_sitter::Node<'a>,
-    source: &'a [u8],
-) -> Option<&'a str> {
+fn extract_condition_var<'a>(node: tree_sitter::Node<'a>, source: &'a [u8]) -> Option<&'a str> {
     // The condition is usually a binary_expression like `i < n`
     if node.kind() == "binary_expression" {
         let left = node.child_by_field_name("left")?;
@@ -54,7 +51,10 @@ fn extract_condition_var<'a>(
                 .rsplit(|c: char| !c.is_alphanumeric() && c != '_' && c != '$')
                 .next()?;
             if !ident.is_empty()
-                && ident.chars().next().is_some_and(|c| c.is_alphabetic() || c == '_' || c == '$')
+                && ident
+                    .chars()
+                    .next()
+                    .is_some_and(|c| c.is_alphabetic() || c == '_' || c == '$')
             {
                 return Some(ident);
             }
@@ -64,10 +64,7 @@ fn extract_condition_var<'a>(
 }
 
 /// Extract the identifier being modified in the update expression.
-fn extract_update_var<'a>(
-    node: tree_sitter::Node<'a>,
-    source: &'a [u8],
-) -> Option<&'a str> {
+fn extract_update_var<'a>(node: tree_sitter::Node<'a>, source: &'a [u8]) -> Option<&'a str> {
     match node.kind() {
         "update_expression" => {
             // i++ / ++i / i-- / --i

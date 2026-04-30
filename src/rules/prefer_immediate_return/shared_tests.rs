@@ -25,20 +25,24 @@ const SCENARIOS: &[Scenario] = &[
     Scenario {
         name: "assign, used in method chain, return — user FP",
         expected_flagged: false,
-        ts: Some(r#"
+        ts: Some(
+            r#"
             function run() {
                 const parser = new Parser();
                 parser.setLanguage(Lang.TypeScript);
                 return parser;
             }
-        "#),
-        rust: Some(r#"
+        "#,
+        ),
+        rust: Some(
+            r#"
             fn run() -> Parser {
                 let mut parser = Parser::new();
                 parser.set_language(&Lang).unwrap();
                 parser
             }
-        "#),
+        "#,
+        ),
     },
     Scenario {
         name: "different variable returned",

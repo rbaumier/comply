@@ -22,22 +22,18 @@ const HOOKS: &[&str] = &["useEffect", "useMemo", "useCallback"];
 
 /// Constructors that always allocate a fresh object.
 const ALLOCATING_CONSTRUCTORS: &[&str] = &[
-    "Map", "Set", "WeakMap", "WeakSet", "Date", "Error", "Array", "Object",
-    "RegExp", "Promise",
+    "Map", "Set", "WeakMap", "WeakSet", "Date", "Error", "Array", "Object", "RegExp", "Promise",
 ];
 
 /// Member-call callees that always return a new object/array.
-const ALLOCATING_MEMBER_CALLS: &[(&str, &str)] =
-    &[("Object", "assign"), ("Object", "create")];
+const ALLOCATING_MEMBER_CALLS: &[(&str, &str)] = &[("Object", "assign"), ("Object", "create")];
 
 fn label_for(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
     match node.kind() {
         "object" => Some("Object literal".to_string()),
         "array" => Some("Array literal".to_string()),
         "arrow_function" => Some("Inline arrow function".to_string()),
-        "function_expression" | "function" => {
-            Some("Inline function expression".to_string())
-        }
+        "function_expression" | "function" => Some("Inline function expression".to_string()),
         "spread_element" => {
             // Flag only if the spread argument is an object or array literal.
             let arg = node.named_child(0)?;

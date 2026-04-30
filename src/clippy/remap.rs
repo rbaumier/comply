@@ -39,12 +39,16 @@ mod tests {
             description: "no unwrap",
             remediation: "use ?",
             severity: Severity::Error,
-            doc_url: None, categories: &[],
+            doc_url: None,
+            categories: &[],
         };
         let bindings: Vec<(&'static str, &'static RuleMeta, Severity)> =
             vec![("clippy::unwrap_used", &META, Severity::Error)];
         let table = build_table(&bindings);
-        assert_eq!(table.get("clippy::unwrap_used").unwrap().id, "rust-no-unwrap");
+        assert_eq!(
+            table.get("clippy::unwrap_used").unwrap().id,
+            "rust-no-unwrap"
+        );
         assert!(!table.contains_key("clippy::other"));
     }
 }

@@ -7,7 +7,9 @@ use crate::rules::backend::{AstCheck, CheckCtx};
 pub struct Check;
 
 impl AstCheck for Check {
-    fn prefilter(&self) -> Option<&'static [&'static str]> { Some(&["verifyBearer"]) }
+    fn prefilter(&self) -> Option<&'static [&'static str]> {
+        Some(&["verifyBearer"])
+    }
 
     fn check(&self, ctx: &CheckCtx, _tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
         if !ctx.project.has_framework("elysia") {
@@ -25,13 +27,19 @@ impl AstCheck for Check {
         for (idx, line) in lines.iter().enumerate() {
             // Pattern: `({ bearer })` or `({bearer,...})` in handler arg.
             let norm: String = line.chars().filter(|c| !c.is_whitespace()).collect();
-            if norm.contains("({bearer}") || norm.contains("({bearer,") || norm.contains(",bearer}") || norm.contains(",bearer,") {
+            if norm.contains("({bearer}")
+                || norm.contains("({bearer,")
+                || norm.contains(",bearer}")
+                || norm.contains(",bearer,")
+            {
                 diagnostics.push(Diagnostic {
                     path: std::sync::Arc::clone(&ctx.path_arc),
                     line: idx + 1,
                     column: 1,
                     rule_id: "elysia-bearer-not-validated".into(),
-                    message: "Bearer token is destructured but never validated — any token is accepted.".into(),
+                    message:
+                        "Bearer token is destructured but never validated — any token is accepted."
+                            .into(),
                     severity: Severity::Error,
                     span: None,
                 });
@@ -51,7 +59,8 @@ mod tests {
 
     #[test]
     fn flags_unvalidated_bearer() {
-        let src = "import { bearer } from '@elysiajs/bearer';\napp.get('/me', ({ bearer }) => bearer);";
+        let src =
+            "import { bearer } from '@elysiajs/bearer';\napp.get('/me', ({ bearer }) => bearer);";
         assert_eq!(run_on(src).len(), 1);
     }
 

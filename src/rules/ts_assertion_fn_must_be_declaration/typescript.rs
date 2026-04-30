@@ -4,7 +4,9 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
 fn return_type_has_asserts(arrow: tree_sitter::Node, source: &[u8]) -> bool {
-    let Some(rt) = arrow.child_by_field_name("return_type") else { return false };
+    let Some(rt) = arrow.child_by_field_name("return_type") else {
+        return false;
+    };
     let text = std::str::from_utf8(&source[rt.byte_range()]).unwrap_or("");
     // `: asserts x is T` or `: asserts x`
     text.contains("asserts ")

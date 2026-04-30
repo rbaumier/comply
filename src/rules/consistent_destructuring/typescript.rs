@@ -97,9 +97,10 @@ impl AstCheck for Check {
                     props.push(node_text(source, &child).to_string());
                 } else if child.kind() == "pair_pattern"
                     && let Some(key) = child.child_by_field_name("key")
-                        && (key.kind() == "property_identifier" || key.kind() == "identifier") {
-                            props.push(node_text(source, &key).to_string());
-                        }
+                    && (key.kind() == "property_identifier" || key.kind() == "identifier")
+                {
+                    props.push(node_text(source, &key).to_string());
+                }
             }
 
             if props.is_empty() {
@@ -120,53 +121,58 @@ impl AstCheck for Check {
 
         // member_expression
         if let Some(obj) = node.child_by_field_name("object")
-            && let Some(prop) = node.child_by_field_name("property") {
-                // Skip if parent is a member_expression (nested: `user.address.city`).
-                if let Some(parent) = node.parent() {
-                    if parent.kind() == "member_expression"
-                        && let Some(parent_obj) = parent.child_by_field_name("object")
-                            && parent_obj.id() == node.id() {
-                                // This node is the object of a deeper access — skip.
-                                return;
-                            }
-                    // Skip if this is the callee of a call (`user.greet()`)
-                    if parent.kind() == "call_expression"
-                        && let Some(callee) = parent.child_by_field_name("function")
-                            && callee.id() == node.id() {
-                                return;
-                            }
-                    // Skip assignments (`user.age = 5`)
-                    if parent.kind() == "assignment_expression"
-                        && let Some(left) = parent.child_by_field_name("left")
-                            && left.id() == node.id() {
-                                return;
-                            }
-                    // Skip augmented assignments (`user.age += 1`)
-                    if parent.kind() == "augmented_assignment_expression"
-                        && let Some(left) = parent.child_by_field_name("left")
-                            && left.id() == node.id() {
-                                return;
-                            }
-                }
-
-                // Check if `[` follows object — computed access
-                let obj_end = obj.end_byte();
-                if obj_end < source.len() && source.as_bytes()[obj_end] == b'[' {
+            && let Some(prop) = node.child_by_field_name("property")
+        {
+            // Skip if parent is a member_expression (nested: `user.address.city`).
+            if let Some(parent) = node.parent() {
+                if parent.kind() == "member_expression"
+                    && let Some(parent_obj) = parent.child_by_field_name("object")
+                    && parent_obj.id() == node.id()
+                {
+                    // This node is the object of a deeper access — skip.
                     return;
                 }
-
-                let obj_text = node_text(source, &obj);
-                let prop_text = node_text(source, &prop);
-                let pos = node.start_position();
-
-                state.candidates.push(MemberCandidate {
-                    obj_text: obj_text.to_string(),
-                    prop_text: prop_text.to_string(),
-                    start_byte: node.start_byte(),
-                    line: pos.row + 1,
-                    column: pos.column + 1,
-                });
+                // Skip if this is the callee of a call (`user.greet()`)
+                if parent.kind() == "call_expression"
+                    && let Some(callee) = parent.child_by_field_name("function")
+                    && callee.id() == node.id()
+                {
+                    return;
+                }
+                // Skip assignments (`user.age = 5`)
+                if parent.kind() == "assignment_expression"
+                    && let Some(left) = parent.child_by_field_name("left")
+                    && left.id() == node.id()
+                {
+                    return;
+                }
+                // Skip augmented assignments (`user.age += 1`)
+                if parent.kind() == "augmented_assignment_expression"
+                    && let Some(left) = parent.child_by_field_name("left")
+                    && left.id() == node.id()
+                {
+                    return;
+                }
             }
+
+            // Check if `[` follows object — computed access
+            let obj_end = obj.end_byte();
+            if obj_end < source.len() && source.as_bytes()[obj_end] == b'[' {
+                return;
+            }
+
+            let obj_text = node_text(source, &obj);
+            let prop_text = node_text(source, &prop);
+            let pos = node.start_position();
+
+            state.candidates.push(MemberCandidate {
+                obj_text: obj_text.to_string(),
+                prop_text: prop_text.to_string(),
+                start_byte: node.start_byte(),
+                line: pos.row + 1,
+                column: pos.column + 1,
+            });
+        }
     }
 
     fn finish(
@@ -231,9 +237,7 @@ mod tests {
 
     #[test]
     fn flags_property_access_after_destructuring() {
-        let diags = run_on(
-            "const { name } = user;\nconsole.log(user.age);",
-        );
+        let diags = run_on("const { name } = user;\nconsole.log(user.age);");
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("age"));
     }

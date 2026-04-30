@@ -13,7 +13,11 @@ use crate::diagnostic::{Diagnostic, Severity};
 
 fn has_margin_icon_class(value: &str) -> bool {
     value.split_ascii_whitespace().any(|class| {
-        let util = class.rsplit(':').next().unwrap_or(class).trim_start_matches('!');
+        let util = class
+            .rsplit(':')
+            .next()
+            .unwrap_or(class)
+            .trim_start_matches('!');
         util == "mr-2" || util == "ml-2"
     })
 }
@@ -29,7 +33,10 @@ fn opening_tag_name<'a>(elem: tree_sitter::Node<'a>, source: &'a [u8]) -> Option
     }
 }
 
-fn attributes_node<'a>(elem: tree_sitter::Node<'a>, _source: &'a [u8]) -> Option<tree_sitter::Node<'a>> {
+fn attributes_node<'a>(
+    elem: tree_sitter::Node<'a>,
+    _source: &'a [u8],
+) -> Option<tree_sitter::Node<'a>> {
     match elem.kind() {
         "jsx_element" => elem.child_by_field_name("open_tag"),
         "jsx_self_closing_element" => Some(elem),
@@ -37,7 +44,10 @@ fn attributes_node<'a>(elem: tree_sitter::Node<'a>, _source: &'a [u8]) -> Option
     }
 }
 
-fn child_has_offending_margin<'a>(child: tree_sitter::Node<'a>, source: &'a [u8]) -> Option<tree_sitter::Node<'a>> {
+fn child_has_offending_margin<'a>(
+    child: tree_sitter::Node<'a>,
+    source: &'a [u8],
+) -> Option<tree_sitter::Node<'a>> {
     let attrs = attributes_node(child, source)?;
     let mut cursor = attrs.walk();
     for attr in attrs.children(&mut cursor) {
@@ -66,20 +76,38 @@ fn looks_like_icon(tag: &str) -> bool {
         return true;
     }
     const KNOWN_ICONS: &[&str] = &[
-        "ChevronLeft", "ChevronRight", "ChevronUp", "ChevronDown",
-        "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown",
-        "Plus", "Minus", "Check", "X", "Search", "Trash", "Edit", "Pencil",
-        "Loader", "Spinner",
+        "ChevronLeft",
+        "ChevronRight",
+        "ChevronUp",
+        "ChevronDown",
+        "ArrowLeft",
+        "ArrowRight",
+        "ArrowUp",
+        "ArrowDown",
+        "Plus",
+        "Minus",
+        "Check",
+        "X",
+        "Search",
+        "Trash",
+        "Edit",
+        "Pencil",
+        "Loader",
+        "Spinner",
     ];
     KNOWN_ICONS.contains(&tag)
 }
 
 /// Does `child` carry a `data-icon` attribute (any value)?
 fn has_data_icon_attr(child: tree_sitter::Node, source: &[u8]) -> bool {
-    let Some(attrs) = attributes_node(child, source) else { return false };
+    let Some(attrs) = attributes_node(child, source) else {
+        return false;
+    };
     let mut cursor = attrs.walk();
     for attr in attrs.children(&mut cursor) {
-        if attr.kind() != "jsx_attribute" { continue; }
+        if attr.kind() != "jsx_attribute" {
+            continue;
+        }
         if crate::rules::jsx::jsx_attribute_name(attr, source) == Some("data-icon") {
             return true;
         }

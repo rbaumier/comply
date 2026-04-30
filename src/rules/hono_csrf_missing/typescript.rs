@@ -48,7 +48,8 @@ mod tests {
 
     #[test]
     fn flags_post_without_csrf() {
-        let src = "import { Hono } from 'hono';\nconst app = new Hono();\napp.post('/api', handler);";
+        let src =
+            "import { Hono } from 'hono';\nconst app = new Hono();\napp.post('/api', handler);";
         assert_eq!(run_on(src).len(), 1);
     }
 

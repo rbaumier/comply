@@ -27,9 +27,15 @@ crate::ast_check! { prefilter = ["apiVersion"] => |node, source, ctx, diagnostic
 }
 
 fn has_populated_tls(manifest: tree_sitter::Node, source: &[u8]) -> bool {
-    let Some(spec) = y::descend_mapping(manifest, source, &["spec"]) else { return false; };
-    let Some(pair) = y::find_pair(spec, source, "tls") else { return false; };
-    let Some(value) = y::pair_value_node(pair) else { return false; };
+    let Some(spec) = y::descend_mapping(manifest, source, &["spec"]) else {
+        return false;
+    };
+    let Some(pair) = y::find_pair(spec, source, "tls") else {
+        return false;
+    };
+    let Some(value) = y::pair_value_node(pair) else {
+        return false;
+    };
     sequence_has_item(value)
 }
 

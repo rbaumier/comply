@@ -3,8 +3,8 @@
 mod typescript;
 
 use crate::diagnostic::Severity;
-use crate::rules::meta::RuleMeta;
 use crate::rules::RuleDef;
+use crate::rules::meta::RuleMeta;
 
 pub const META: RuleMeta = RuleMeta {
     id: "playwright-no-wait-for-navigation",
@@ -12,7 +12,9 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Replace `waitForNavigation()` with `page.waitForURL(url)` \
                   or a web-first assertion.",
     severity: Severity::Warning,
-    doc_url: Some("https://github.com/playwright-community/eslint-plugin-playwright/blob/main/docs/rules/no-wait-for-navigation.md"),
+    doc_url: Some(
+        "https://github.com/playwright-community/eslint-plugin-playwright/blob/main/docs/rules/no-wait-for-navigation.md",
+    ),
     categories: &["testing"],
 };
 

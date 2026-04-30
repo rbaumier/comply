@@ -200,11 +200,7 @@ pub fn following_code<'a>(source: &'a str, block_raw: &str) -> &'a str {
             }
         }
     }
-    if end == 0 {
-        tail
-    } else {
-        &tail[..end]
-    }
+    if end == 0 { tail } else { &tail[..end] }
 }
 
 #[cfg(test)]

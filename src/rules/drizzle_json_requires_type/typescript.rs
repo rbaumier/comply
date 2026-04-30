@@ -27,9 +27,10 @@ fn chain_has_type_call(node: tree_sitter::Node<'_>, src: &[u8]) -> bool {
             // we chain into. Then its parent may be a call_expression.
             let prop = parent.child_by_field_name("property");
             if let Some(p) = prop
-                && p.utf8_text(src).unwrap_or("") == "$type" {
-                    return true;
-                }
+                && p.utf8_text(src).unwrap_or("") == "$type"
+            {
+                return true;
+            }
             // Continue walking up.
             cur = parent;
             continue;

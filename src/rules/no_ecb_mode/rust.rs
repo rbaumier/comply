@@ -17,7 +17,11 @@ fn contains_ecb(text: &str) -> bool {
         return true;
     }
     // Strip quotes and check bare "ecb"
-    let inner = if text.len() >= 2 { &text[1..text.len() - 1] } else { text };
+    let inner = if text.len() >= 2 {
+        &text[1..text.len() - 1]
+    } else {
+        text
+    };
     inner.eq_ignore_ascii_case("ecb")
 }
 

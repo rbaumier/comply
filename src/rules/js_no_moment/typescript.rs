@@ -15,14 +15,18 @@ fn is_require_moment(node: tree_sitter::Node, source: &[u8]) -> bool {
     if node.kind() != "call_expression" {
         return false;
     }
-    let Some(callee) = node.child_by_field_name("function") else { return false };
+    let Some(callee) = node.child_by_field_name("function") else {
+        return false;
+    };
     if callee.kind() != "identifier" {
         return false;
     }
     if callee.utf8_text(source).ok() != Some("require") {
         return false;
     }
-    let Some(args) = node.child_by_field_name("arguments") else { return false };
+    let Some(args) = node.child_by_field_name("arguments") else {
+        return false;
+    };
     let mut cursor = args.walk();
     for child in args.children(&mut cursor) {
         if child.kind() == "string" {

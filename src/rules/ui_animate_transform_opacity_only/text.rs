@@ -4,10 +4,22 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
 const FORBIDDEN: &[&str] = &[
-    "top", "left", "right", "bottom",
-    "width", "height",
-    "margin", "margin-top", "margin-bottom", "margin-left", "margin-right",
-    "padding", "padding-top", "padding-bottom", "padding-left", "padding-right",
+    "top",
+    "left",
+    "right",
+    "bottom",
+    "width",
+    "height",
+    "margin",
+    "margin-top",
+    "margin-bottom",
+    "margin-left",
+    "margin-right",
+    "padding",
+    "padding-top",
+    "padding-bottom",
+    "padding-left",
+    "padding-right",
 ];
 
 crate::ast_check! { on ["declaration"] => |node, source, ctx, diagnostics|

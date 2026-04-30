@@ -10,8 +10,22 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
 const COLOR_PREFIXES: &[&str] = &[
-    "bg", "text", "border", "ring", "fill", "stroke", "from", "to", "via", "divide", "outline",
-    "accent", "caret", "placeholder", "shadow", "decoration",
+    "bg",
+    "text",
+    "border",
+    "ring",
+    "fill",
+    "stroke",
+    "from",
+    "to",
+    "via",
+    "divide",
+    "outline",
+    "accent",
+    "caret",
+    "placeholder",
+    "shadow",
+    "decoration",
 ];
 
 const COLORS: &[&str] = &[
@@ -48,9 +62,7 @@ fn is_raw_color_class(class: &str) -> bool {
     if parts.next().is_some() {
         return false;
     }
-    shade.len() >= 2
-        && shade.len() <= 3
-        && shade.chars().all(|c| c.is_ascii_digit())
+    shade.len() >= 2 && shade.len() <= 3 && shade.chars().all(|c| c.is_ascii_digit())
 }
 
 crate::ast_check! { on ["jsx_attribute"] => |node, source, ctx, diagnostics|
@@ -81,22 +93,34 @@ mod tests {
 
     #[test]
     fn flags_bg_blue_500() {
-        assert_eq!(run(r#"const x = <div className="bg-blue-500">x</div>;"#).len(), 1);
+        assert_eq!(
+            run(r#"const x = <div className="bg-blue-500">x</div>;"#).len(),
+            1
+        );
     }
 
     #[test]
     fn flags_text_gray_600() {
-        assert_eq!(run(r#"const x = <span className="text-gray-600">x</span>;"#).len(), 1);
+        assert_eq!(
+            run(r#"const x = <span className="text-gray-600">x</span>;"#).len(),
+            1
+        );
     }
 
     #[test]
     fn flags_mixed_with_other_utilities() {
-        assert_eq!(run(r#"const x = <div className="p-4 bg-red-100 rounded">x</div>;"#).len(), 1);
+        assert_eq!(
+            run(r#"const x = <div className="p-4 bg-red-100 rounded">x</div>;"#).len(),
+            1
+        );
     }
 
     #[test]
     fn allows_semantic_tokens() {
-        assert!(run(r#"const x = <div className="bg-primary text-muted-foreground">x</div>;"#).is_empty());
+        assert!(
+            run(r#"const x = <div className="bg-primary text-muted-foreground">x</div>;"#)
+                .is_empty()
+        );
     }
 
     #[test]

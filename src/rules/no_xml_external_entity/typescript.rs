@@ -14,14 +14,16 @@ fn has_protection(node: tree_sitter::Node, source: &[u8]) -> bool {
     loop {
         let n = cursor.node();
         if n.kind() == "pair"
-            && let Some(key) = n.child_by_field_name("key") {
-                let key_text = key.utf8_text(source).unwrap_or("");
-                if (key_text == "noent" || key_text == "externalEntities")
-                    && let Some(val) = n.child_by_field_name("value")
-                        && val.utf8_text(source).unwrap_or("") == "false" {
-                            return true;
-                        }
+            && let Some(key) = n.child_by_field_name("key")
+        {
+            let key_text = key.utf8_text(source).unwrap_or("");
+            if (key_text == "noent" || key_text == "externalEntities")
+                && let Some(val) = n.child_by_field_name("value")
+                && val.utf8_text(source).unwrap_or("") == "false"
+            {
+                return true;
             }
+        }
         if cursor.goto_first_child() {
             depth += 1;
             continue;

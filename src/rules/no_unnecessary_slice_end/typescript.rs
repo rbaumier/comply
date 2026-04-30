@@ -5,9 +5,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 /// Check if the second argument is an unnecessary end value.
 fn is_unnecessary_end(text: &str) -> bool {
     let trimmed = text.trim();
-    trimmed == "Infinity"
-        || trimmed == "Number.POSITIVE_INFINITY"
-        || trimmed.ends_with(".length")
+    trimmed == "Infinity" || trimmed == "Number.POSITIVE_INFINITY" || trimmed.ends_with(".length")
 }
 
 crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|

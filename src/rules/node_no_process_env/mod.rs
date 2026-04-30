@@ -3,15 +3,17 @@
 mod typescript;
 
 use crate::diagnostic::Severity;
-use crate::rules::meta::RuleMeta;
 use crate::rules::RuleDef;
+use crate::rules::meta::RuleMeta;
 
 pub const META: RuleMeta = RuleMeta {
     id: "node-no-process-env",
     description: "Direct use of `process.env` is discouraged.",
     remediation: "Centralize environment access in a config module instead of scattering `process.env` reads.",
     severity: Severity::Warning,
-    doc_url: Some("https://github.com/eslint-community/eslint-plugin-n/blob/master/docs/rules/no-process-env.md"),
+    doc_url: Some(
+        "https://github.com/eslint-community/eslint-plugin-n/blob/master/docs/rules/no-process-env.md",
+    ),
     categories: &["node"],
 };
 

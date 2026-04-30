@@ -78,10 +78,7 @@ mod tests {
     use std::path::PathBuf;
     use tempfile::TempDir;
 
-    fn run_on_project(
-        files: &[(&str, &str)],
-        package_json: &str,
-    ) -> (TempDir, Vec<Diagnostic>) {
+    fn run_on_project(files: &[(&str, &str)], package_json: &str) -> (TempDir, Vec<Diagnostic>) {
         let dir = TempDir::new().unwrap();
         fs::write(dir.path().join("package.json"), package_json).unwrap();
 
@@ -93,7 +90,10 @@ mod tests {
             }
             fs::write(&p, content).unwrap();
             let lang = Language::from_path(&p).unwrap();
-            source_files.push(SourceFile { path: p, language: lang });
+            source_files.push(SourceFile {
+                path: p,
+                language: lang,
+            });
         }
         let refs: Vec<&SourceFile> = source_files.iter().collect();
         let config = Config::default();
@@ -150,7 +150,10 @@ mod tests {
             "import { PrismaClient } from 'prisma-client';\nexport const x = new PrismaClient();",
         )];
         let (_dir, diags) = run_on_project(&files, pkg);
-        assert!(diags.is_empty(), "runtime import means dep is needed at runtime");
+        assert!(
+            diags.is_empty(),
+            "runtime import means dep is needed at runtime"
+        );
     }
 
     #[test]

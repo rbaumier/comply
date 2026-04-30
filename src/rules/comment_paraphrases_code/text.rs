@@ -22,9 +22,9 @@ impl TextCheck for Check {
         let max_comment_tokens = ctx
             .config
             .threshold("comment-paraphrases-code", "max_comment_tokens");
-        let overlap_threshold = ctx
-            .config
-            .float("comment-paraphrases-code", "overlap_threshold") as f32;
+        let overlap_threshold =
+            ctx.config
+                .float("comment-paraphrases-code", "overlap_threshold") as f32;
         let mut diagnostics = Vec::new();
         let lines: Vec<&str> = ctx.source.lines().collect();
 
@@ -55,9 +55,7 @@ impl TextCheck for Check {
                     line: i, // comment line (1-based: i is 0-based for prev line)
                     column: 1,
                     rule_id: "comment-paraphrases-code".into(),
-                    message: format!(
-                        "Comment above `{fn_name}` paraphrases the function name."
-                    ),
+                    message: format!("Comment above `{fn_name}` paraphrases the function name."),
                     severity: Severity::Warning,
                     span: None,
                 });
@@ -69,12 +67,8 @@ impl TextCheck for Check {
 
 fn extract_fn_name(line: &str) -> Option<&str> {
     // Match patterns like `function foo(`, `async function foo(`, `const foo = (`
-    let rest = line
-        .strip_prefix("export ")
-        .unwrap_or(line);
-    let rest = rest
-        .strip_prefix("async ")
-        .unwrap_or(rest);
+    let rest = line.strip_prefix("export ").unwrap_or(line);
+    let rest = rest.strip_prefix("async ").unwrap_or(rest);
     if let Some(after) = rest.strip_prefix("function ") {
         let name_end = after.find(|c: char| !c.is_alphanumeric() && c != '_')?;
         if name_end > 0 {

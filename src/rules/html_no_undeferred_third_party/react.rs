@@ -4,9 +4,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 
 fn is_third_party_src(value: &str) -> bool {
     let trimmed = value.trim_matches(|c| c == '\'' || c == '"' || c == '`');
-    trimmed.starts_with("http://")
-        || trimmed.starts_with("https://")
-        || trimmed.starts_with("//")
+    trimmed.starts_with("http://") || trimmed.starts_with("https://") || trimmed.starts_with("//")
 }
 
 crate::ast_check! { on ["jsx_self_closing_element", "jsx_opening_element"] => |node, source, ctx, diagnostics|
@@ -76,10 +74,7 @@ mod tests {
 
     #[test]
     fn flags_protocol_relative() {
-        assert_eq!(
-            run(r#"<script src="//cdn.example.com/lib.js" />"#).len(),
-            1
-        );
+        assert_eq!(run(r#"<script src="//cdn.example.com/lib.js" />"#).len(), 1);
     }
 
     #[test]

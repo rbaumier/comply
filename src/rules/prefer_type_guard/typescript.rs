@@ -13,27 +13,30 @@ fn body_has_type_check(body: tree_sitter::Node, source: &[u8]) -> bool {
             "unary_expression" => {
                 // `typeof x` is a unary_expression with operator "typeof"
                 if let Some(op) = n.child_by_field_name("operator")
-                    && op.utf8_text(source).ok() == Some("typeof") {
-                        return true;
-                    }
+                    && op.utf8_text(source).ok() == Some("typeof")
+                {
+                    return true;
+                }
             }
             "binary_expression" => {
                 // Check left operand for typeof
                 if let Some(left) = n.child_by_field_name("left") {
                     if left.kind() == "unary_expression"
                         && let Some(op) = left.child_by_field_name("operator")
-                            && op.utf8_text(source).ok() == Some("typeof") {
-                                return true;
-                            }
+                        && op.utf8_text(source).ok() == Some("typeof")
+                    {
+                        return true;
+                    }
                     if left.kind() == "typeof_expression" {
                         return true;
                     }
                 }
                 // Check for instanceof
                 if let Some(op) = n.child_by_field_name("operator")
-                    && op.utf8_text(source).ok() == Some("instanceof") {
-                        return true;
-                    }
+                    && op.utf8_text(source).ok() == Some("instanceof")
+                {
+                    return true;
+                }
             }
             _ => {}
         }

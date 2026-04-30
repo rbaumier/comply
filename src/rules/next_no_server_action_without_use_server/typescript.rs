@@ -12,7 +12,9 @@ use std::sync::Arc;
 pub struct Check;
 
 fn is_actions_file(path: &std::path::Path) -> bool {
-    let Some(name) = path.file_name().and_then(|n| n.to_str()) else { return false };
+    let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+        return false;
+    };
     // Strip extension.
     let stem = name
         .strip_suffix(".tsx")
@@ -41,11 +43,15 @@ fn exports_async_function(source: &str) -> Option<(usize, usize)> {
     for (idx, line) in source.lines().enumerate() {
         let t = line.trim_start();
         // `export async function foo` / `export default async function`
-        if t.starts_with("export async function") || t.starts_with("export default async function") {
+        if t.starts_with("export async function") || t.starts_with("export default async function")
+        {
             return Some((idx + 1, line.len() - t.len() + 1));
         }
         // `export const foo = async (` / `export const foo = async function`
-        if t.starts_with("export const ") || t.starts_with("export let ") || t.starts_with("export var ") {
+        if t.starts_with("export const ")
+            || t.starts_with("export let ")
+            || t.starts_with("export var ")
+        {
             if let Some(eq) = t.find('=') {
                 let rhs = t[eq + 1..].trim_start();
                 if rhs.starts_with("async ") || rhs.starts_with("async(") {

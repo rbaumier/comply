@@ -9,9 +9,8 @@ use regex::Regex;
 use std::sync::LazyLock;
 
 /// Matches escape sequences with hex digits: \xNN, \uNNNN, \u{N+}
-static RE_ESCAPE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"\\(x[0-9A-Fa-f]{2}|u[0-9A-Fa-f]{4}|u\{[0-9A-Fa-f]+\})").unwrap()
-});
+static RE_ESCAPE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\\(x[0-9A-Fa-f]{2}|u[0-9A-Fa-f]{4}|u\{[0-9A-Fa-f]+\})").unwrap());
 
 crate::ast_check! { on ["string", "template_string"] => |node, source, ctx, diagnostics|
     let text = match node.utf8_text(source) {

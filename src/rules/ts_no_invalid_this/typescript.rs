@@ -16,10 +16,11 @@ fn is_valid_this_context(node: tree_sitter::Node) -> bool {
             // Object literal method — `this` is valid.
             "method_definition" => {
                 if let Some(parent) = ancestor.parent()
-                    && parent.kind() == "object" {
-                        return true;
-                    }
-                    // class_body handled above on next iteration
+                    && parent.kind() == "object"
+                {
+                    return true;
+                }
+                // class_body handled above on next iteration
             }
             // Arrow functions don't bind `this` — keep looking up.
             "arrow_function" => {}
@@ -27,20 +28,21 @@ fn is_valid_this_context(node: tree_sitter::Node) -> bool {
             "function_declaration" | "function_expression" | "function" => {
                 // Check if first param is named `this`.
                 if let Some(params) = ancestor.child_by_field_name("parameters")
-                    && let Some(first) = params.named_child(0) {
-                        // In TS, `this` param is modeled as a required_parameter
-                        // or regular identifier with name "this".
-                        let mut cursor = first.walk();
-                        for child in first.children(&mut cursor) {
-                            if child.kind() == "identifier" {
-                                let range = child.byte_range();
-                                // We can't access source here, so check the text length
-                                // This is a limitation — we'd need source passed in.
-                                // For now, just check if parent is class.
-                                let _ = range;
-                            }
+                    && let Some(first) = params.named_child(0)
+                {
+                    // In TS, `this` param is modeled as a required_parameter
+                    // or regular identifier with name "this".
+                    let mut cursor = first.walk();
+                    for child in first.children(&mut cursor) {
+                        if child.kind() == "identifier" {
+                            let range = child.byte_range();
+                            // We can't access source here, so check the text length
+                            // This is a limitation — we'd need source passed in.
+                            // For now, just check if parent is class.
+                            let _ = range;
                         }
                     }
+                }
                 // Regular function outside class — `this` is invalid.
                 return false;
             }

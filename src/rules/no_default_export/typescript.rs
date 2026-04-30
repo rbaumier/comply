@@ -19,8 +19,7 @@ impl AstCheck for Check {
         if crate::rules::path_utils::is_config_file(ctx.path) {
             return;
         }
-        let path_str = ctx.path.to_string_lossy();
-        if ctx.project.framework_entry_dirs().any(|dir| path_str.contains(dir)) {
+        if crate::rules::path_utils::is_framework_entry_point(ctx.path, ctx.project) {
             return;
         }
         let source = ctx.source.as_bytes();
@@ -76,5 +75,20 @@ mod tests {
     #[test]
     fn allows_re_export_default() {
         assert!(run("export { default } from './foo';").is_empty());
+    }
+
+    #[test]
+    fn allows_framework_entry_file_suffix() {
+        let project = crate::project::ProjectCtx::for_test_with_framework("tanstack-router");
+        let diags = crate::rules::test_helpers::run_ts_with_project_and_path(
+            "export default function RouteComponent() {}",
+            &Check,
+            &project,
+            std::path::Path::new("src/posts.lazy.tsx"),
+        );
+        assert!(
+            diags.is_empty(),
+            "TanStack route suffix entry files require default exports: {diags:?}"
+        );
     }
 }

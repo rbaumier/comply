@@ -32,17 +32,15 @@ fn block_body_text<'a>(node: tree_sitter::Node, source: &'a [u8]) -> Option<&'a 
 }
 
 /// Collect all branch bodies from an if_statement (including else-if chains).
-fn collect_branches(
-    if_node: tree_sitter::Node,
-    source: &[u8],
-) -> Vec<String> {
+fn collect_branches(if_node: tree_sitter::Node, source: &[u8]) -> Vec<String> {
     let mut branches = Vec::new();
 
     // Get the consequence (then block).
     if let Some(consequence) = if_node.child_by_field_name("consequence")
-        && let Some(text) = block_body_text(consequence, source) {
-            branches.push(normalize(text));
-        }
+        && let Some(text) = block_body_text(consequence, source)
+    {
+        branches.push(normalize(text));
+    }
 
     // Get the alternative (else / else-if).
     if let Some(alternative) = if_node.child_by_field_name("alternative") {
@@ -58,9 +56,10 @@ fn collect_branches(
                         return branches;
                     }
                     if child.kind() == "statement_block"
-                        && let Some(text) = block_body_text(child, source) {
-                            branches.push(normalize(text));
-                        }
+                        && let Some(text) = block_body_text(child, source)
+                    {
+                        branches.push(normalize(text));
+                    }
                 }
             }
             "if_statement" => {
@@ -95,9 +94,10 @@ impl AstCheck for Check {
         // Only flag top-level if (not else-if chains — they'll be caught
         // from the parent if_statement).
         if let Some(parent) = node.parent()
-            && parent.kind() == "else_clause" {
-                return;
-            }
+            && parent.kind() == "else_clause"
+        {
+            return;
+        }
 
         let branches = collect_branches(node, source_bytes);
 

@@ -122,7 +122,8 @@ mod tests {
 
     #[test]
     fn flags_unwrap_in_drop() {
-        let source = "struct A; impl Drop for A { fn drop(&mut self) { let _ = self.h.unwrap(); } }";
+        let source =
+            "struct A; impl Drop for A { fn drop(&mut self) { let _ = self.h.unwrap(); } }";
         assert_eq!(run_on(source).len(), 1);
     }
 

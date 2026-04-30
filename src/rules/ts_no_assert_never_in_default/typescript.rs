@@ -85,7 +85,8 @@ mod tests {
 
     #[test]
     fn allows_no_default() {
-        let src = "function f(x: 'a' | 'b') { switch (x) { case 'a': return 1; case 'b': return 2; } }";
+        let src =
+            "function f(x: 'a' | 'b') { switch (x) { case 'a': return 1; case 'b': return 2; } }";
         assert!(run(src).is_empty());
     }
 }

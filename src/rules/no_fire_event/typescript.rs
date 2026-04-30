@@ -43,13 +43,22 @@ mod tests {
 
     #[test]
     fn flags_fire_event_in_test() {
-        let diags = run_on("components/__tests__/button.test.tsx", "fireEvent.click(button)");
+        let diags = run_on(
+            "components/__tests__/button.test.tsx",
+            "fireEvent.click(button)",
+        );
         assert_eq!(diags.len(), 1);
     }
 
     #[test]
     fn allows_user_event() {
-        assert!(run_on("components/__tests__/button.test.tsx", "userEvent.click(button)").is_empty());
+        assert!(
+            run_on(
+                "components/__tests__/button.test.tsx",
+                "userEvent.click(button)"
+            )
+            .is_empty()
+        );
     }
 
     #[test]

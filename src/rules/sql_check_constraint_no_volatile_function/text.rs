@@ -30,9 +30,13 @@ impl TextCheck for Check {
                 continue;
             }
             // Extract content between the first CHECK( and the matching close, on this line.
-            let Some(check_idx) = upper.find("CHECK") else { continue };
+            let Some(check_idx) = upper.find("CHECK") else {
+                continue;
+            };
             let after_check = &upper[check_idx + 5..];
-            let Some(open) = after_check.find('(') else { continue };
+            let Some(open) = after_check.find('(') else {
+                continue;
+            };
             let body = &after_check[open..];
             if VOLATILE.iter().any(|v| body.contains(v)) {
                 diagnostics.push(Diagnostic {

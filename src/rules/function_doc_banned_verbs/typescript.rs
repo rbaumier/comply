@@ -1,13 +1,21 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
 const BANNED_VERBS: &[&str] = &[
-    "reads", "pulls", "fetches", "loads", "sums", "counts", "aggregates", "iterates",
+    "reads",
+    "pulls",
+    "fetches",
+    "loads",
+    "sums",
+    "counts",
+    "aggregates",
+    "iterates",
 ];
 
 fn first_word(body: &str) -> Option<String> {
-    body.split_whitespace()
-        .next()
-        .map(|w| w.trim_matches(|c: char| !c.is_ascii_alphabetic()).to_lowercase())
+    body.split_whitespace().next().map(|w| {
+        w.trim_matches(|c: char| !c.is_ascii_alphabetic())
+            .to_lowercase()
+    })
 }
 
 fn strip_markers(raw: &str) -> String {
@@ -23,7 +31,9 @@ fn strip_markers(raw: &str) -> String {
             .trim_end_matches("*/")
             .trim();
         if !t.is_empty() {
-            if !out.is_empty() { out.push(' '); }
+            if !out.is_empty() {
+                out.push(' ');
+            }
             out.push_str(t);
         }
     }
@@ -31,7 +41,10 @@ fn strip_markers(raw: &str) -> String {
 }
 
 fn is_function_like(kind: &str) -> bool {
-    matches!(kind, "function_declaration" | "method_definition" | "variable_declarator")
+    matches!(
+        kind,
+        "function_declaration" | "method_definition" | "variable_declarator"
+    )
 }
 
 crate::ast_check! { |node, source, ctx, diagnostics|
@@ -63,7 +76,9 @@ crate::ast_check! { |node, source, ctx, diagnostics|
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn run(s: &str) -> Vec<Diagnostic> { crate::rules::test_helpers::run_ts(s, &Check) }
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_ts(s, &Check)
+    }
 
     #[test]
     fn flags_reads_verb() {
@@ -79,7 +94,8 @@ mod tests {
 
     #[test]
     fn allows_intent_verb() {
-        let src = "/** Return the current user, creating one if missing. */\nfunction loadUser() {}";
+        let src =
+            "/** Return the current user, creating one if missing. */\nfunction loadUser() {}";
         assert!(run(src).is_empty());
     }
 }

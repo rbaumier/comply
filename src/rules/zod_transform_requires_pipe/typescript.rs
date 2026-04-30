@@ -47,7 +47,10 @@ mod tests {
 
     #[test]
     fn flags_transform_without_pipe() {
-        assert_eq!(run("const s = z.string().transform(s => s.trim());").len(), 1);
+        assert_eq!(
+            run("const s = z.string().transform(s => s.trim());").len(),
+            1
+        );
     }
 
     #[test]
@@ -72,6 +75,9 @@ mod tests {
     fn flags_transform_as_argument() {
         // `.transform(fn)` used as an argument (not followed by .pipe) still
         // produces an un-validated value — flag it.
-        assert_eq!(run("doStuff(z.string().transform(s => s.trim()));").len(), 1);
+        assert_eq!(
+            run("doStuff(z.string().transform(s => s.trim()));").len(),
+            1
+        );
     }
 }

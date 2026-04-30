@@ -19,9 +19,7 @@ const SECRET_KEY_FRAGMENTS: &[&str] = &[
 
 fn key_looks_like_secret(key: &str) -> bool {
     let lower = key.to_ascii_lowercase();
-    SECRET_KEY_FRAGMENTS
-        .iter()
-        .any(|frag| lower.contains(frag))
+    SECRET_KEY_FRAGMENTS.iter().any(|frag| lower.contains(frag))
 }
 
 fn is_secret_reference(value: &str) -> bool {

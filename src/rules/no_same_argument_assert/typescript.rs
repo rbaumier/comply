@@ -23,7 +23,9 @@ fn single_arg_text<'a>(args: Node, source: &'a [u8]) -> Option<&'a str> {
         return None; // exactly one argument required
     }
     let r = first.byte_range();
-    std::str::from_utf8(&source[r.start..r.end]).ok().map(str::trim)
+    std::str::from_utf8(&source[r.start..r.end])
+        .ok()
+        .map(str::trim)
 }
 
 crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|

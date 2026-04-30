@@ -64,10 +64,7 @@ fn shadow_has_chroma(shadow: &str) -> bool {
 
     for (i, _) in lower.match_indices('#') {
         let rest = &lower[i + 1..];
-        let hex_len = rest
-            .chars()
-            .take_while(|c| c.is_ascii_hexdigit())
-            .count();
+        let hex_len = rest.chars().take_while(|c| c.is_ascii_hexdigit()).count();
         if hex_len >= 3 {
             if let Some((r, g, b)) = parse_hex_rgb(&rest[..hex_len]) {
                 if !is_grayscale_rgb(r, g, b) {

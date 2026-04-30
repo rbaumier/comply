@@ -42,7 +42,12 @@ impl AstCheck for Check {
             return;
         }
         // Must end with the wildcard import.
-        if !trimmed.trim_end().trim_end_matches(';').trim_end().ends_with("::*") {
+        if !trimmed
+            .trim_end()
+            .trim_end_matches(';')
+            .trim_end()
+            .ends_with("::*")
+        {
             return;
         }
         let pos = node.start_position();
@@ -65,14 +70,9 @@ impl AstCheck for Check {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
-
-
         crate::rules::test_helpers::run_rust(source, &Check)
-
-
     }
 
     #[test]

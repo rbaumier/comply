@@ -12,10 +12,10 @@ mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
+use crate::rules::RuleDef;
 use crate::rules::backend::Backend;
 use crate::rules::meta::RuleMeta;
 use crate::rules::sql_helpers::contains_word;
-use crate::rules::RuleDef;
 
 pub const META: RuleMeta = RuleMeta {
     id: "migration-needs-lock-timeout",
@@ -71,6 +71,8 @@ mod helper_tests {
 
     #[test]
     fn rejects_non_lock_timeout() {
-        assert!(!declares_lock_timeout("ALTER TABLE users ADD COLUMN age INT"));
+        assert!(!declares_lock_timeout(
+            "ALTER TABLE users ADD COLUMN age INT"
+        ));
     }
 }

@@ -84,10 +84,7 @@ impl TextCheck for Check {
         }
 
         // Report only top-level nested keys to avoid noise
-        let top_level: Vec<&String> = nested_keys
-            .iter()
-            .filter(|k| !k.contains('.'))
-            .collect();
+        let top_level: Vec<&String> = nested_keys.iter().filter(|k| !k.contains('.')).collect();
 
         if top_level.is_empty() {
             // All nesting is deeper, report the first level found
@@ -110,11 +107,19 @@ impl TextCheck for Check {
 
         // Group into single diagnostic
         let keys_str = if top_level.len() <= 5 {
-            top_level.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")
+            top_level
+                .iter()
+                .map(|s| s.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
         } else {
             format!(
                 "{}, ... and {} more",
-                top_level[..5].iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", "),
+                top_level[..5]
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", "),
                 top_level.len() - 5
             )
         };

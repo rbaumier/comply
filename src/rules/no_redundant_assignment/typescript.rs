@@ -38,10 +38,7 @@ fn statement_target<'a>(stmt: Node<'a>, source: &'a [u8]) -> Option<AssignTarget
             }
             decl.child_by_field_name("value")?; // require an initializer
             let name = std::str::from_utf8(name_node.byte_range_text(source)).ok()?;
-            let is_const = stmt
-                .child(0)
-                .map(|c| c.kind() == "const")
-                .unwrap_or(false);
+            let is_const = stmt.child(0).map(|c| c.kind() == "const").unwrap_or(false);
             Some(AssignTarget { name, is_const })
         }
         // `x = ...;`
@@ -56,7 +53,10 @@ fn statement_target<'a>(stmt: Node<'a>, source: &'a [u8]) -> Option<AssignTarget
                 return None;
             }
             let name = std::str::from_utf8(lhs.byte_range_text(source)).ok()?;
-            Some(AssignTarget { name, is_const: false })
+            Some(AssignTarget {
+                name,
+                is_const: false,
+            })
         }
         _ => None,
     }

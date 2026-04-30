@@ -5,7 +5,9 @@ use crate::diagnostic::{Diagnostic, Severity};
 /// Check if the parent node represents a boolean context (if, while, ternary,
 /// unary `!`, logical `&&`/`||`).
 fn is_boolean_context(node: tree_sitter::Node) -> bool {
-    let Some(parent) = node.parent() else { return false };
+    let Some(parent) = node.parent() else {
+        return false;
+    };
     match parent.kind() {
         "if_statement" | "while_statement" | "do_statement" => {
             // The call must be the condition, not the body
@@ -19,7 +21,9 @@ fn is_boolean_context(node: tree_sitter::Node) -> bool {
         }
         "binary_expression" => {
             // `str.match(...) && x` or `x || str.match(...)`
-            let Some(op) = parent.child_by_field_name("operator") else { return false };
+            let Some(op) = parent.child_by_field_name("operator") else {
+                return false;
+            };
             let op_text = op.kind();
             op_text == "&&" || op_text == "||"
         }

@@ -6,9 +6,9 @@ mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
+use crate::rules::RuleDef;
 use crate::rules::backend::Backend;
 use crate::rules::meta::RuleMeta;
-use crate::rules::RuleDef;
 
 pub const META: RuleMeta = RuleMeta {
     id: "ts-prefer-promise-with-resolvers",
@@ -17,7 +17,9 @@ pub const META: RuleMeta = RuleMeta {
                   `const { promise, resolve, reject } = Promise.withResolvers();` \
                   and call `resolve`/`reject` from wherever you previously did.",
     severity: Severity::Warning,
-    doc_url: Some("https://developer.mozilla.org/docs/Web/JavaScript/Reference/Global_Objects/Promise/withResolvers"),
+    doc_url: Some(
+        "https://developer.mozilla.org/docs/Web/JavaScript/Reference/Global_Objects/Promise/withResolvers",
+    ),
     categories: &["typescript", "async"],
 };
 
@@ -25,8 +27,14 @@ pub fn register() -> RuleDef {
     RuleDef {
         meta: META,
         backends: vec![
-            (Language::TypeScript, Backend::Text(Box::new(typescript::Check))),
-            (Language::JavaScript, Backend::Text(Box::new(typescript::Check))),
+            (
+                Language::TypeScript,
+                Backend::Text(Box::new(typescript::Check)),
+            ),
+            (
+                Language::JavaScript,
+                Backend::Text(Box::new(typescript::Check)),
+            ),
             (Language::Tsx, Backend::Text(Box::new(typescript::Check))),
         ],
     }

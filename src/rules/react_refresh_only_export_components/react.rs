@@ -6,15 +6,15 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
 fn is_pascal_case(name: &str) -> bool {
-    name.chars()
-        .next()
-        .is_some_and(|c| c.is_ascii_uppercase())
+    name.chars().next().is_some_and(|c| c.is_ascii_uppercase())
 }
 
 /// Extract the exported name from an export_statement AST node.
 /// Returns None for type/interface exports, re-exports, and wildcards.
 fn extract_export_name(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
-    let Ok(text) = node.utf8_text(source) else { return None };
+    let Ok(text) = node.utf8_text(source) else {
+        return None;
+    };
 
     // Skip re-exports and wildcards.
     if text.contains(" from ") || text.starts_with("export *") {

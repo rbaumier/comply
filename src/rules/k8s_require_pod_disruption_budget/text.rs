@@ -41,7 +41,9 @@ fn document_manifests<'t>(
         if document.kind() != "document" {
             continue;
         }
-        let Some(mapping) = y::top_mapping_of_document(document) else { continue; };
+        let Some(mapping) = y::top_mapping_of_document(document) else {
+            continue;
+        };
         if !y::is_k8s_manifest_mapping(mapping, source) {
             continue;
         }

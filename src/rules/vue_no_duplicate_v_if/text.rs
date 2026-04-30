@@ -24,7 +24,10 @@ impl TextCheck for Check {
         for (idx, line) in ctx.source.lines().enumerate() {
             let trimmed = line.trim();
             if let Some(cond) = extract_v_if_condition(trimmed) {
-                conditions.entry(cond.to_string()).or_default().push(idx + 1);
+                conditions
+                    .entry(cond.to_string())
+                    .or_default()
+                    .push(idx + 1);
             }
         }
         // For each `v-if="X"`, check if `v-if="!X"` also exists.

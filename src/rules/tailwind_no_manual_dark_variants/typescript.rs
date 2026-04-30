@@ -11,12 +11,18 @@ const COLOR_PREFIXES: &[&str] = &["bg-", "text-", "border-", "ring-", "fill-", "
 
 fn is_raw_color_base(base: &str) -> bool {
     for prefix in COLOR_PREFIXES {
-        let Some(rest) = base.strip_prefix(prefix) else { continue };
-        if RAW_COLORS.contains(&rest) { return true; }
+        let Some(rest) = base.strip_prefix(prefix) else {
+            continue;
+        };
+        if RAW_COLORS.contains(&rest) {
+            return true;
+        }
         if let Some((color, shade)) = rest.rsplit_once('-')
-            && RAW_COLORS.contains(&color) && shade.chars().all(|c| c.is_ascii_digit()) {
-                return true;
-            }
+            && RAW_COLORS.contains(&color)
+            && shade.chars().all(|c| c.is_ascii_digit())
+        {
+            return true;
+        }
     }
     false
 }
@@ -53,22 +59,33 @@ mod tests {
 
     #[test]
     fn flags_dark_bg_raw() {
-        assert_eq!(run(r#"export const A = () => <div className="bg-white dark:bg-zinc-900" />;"#).len(), 1);
+        assert_eq!(
+            run(r#"export const A = () => <div className="bg-white dark:bg-zinc-900" />;"#).len(),
+            1
+        );
     }
 
     #[test]
     fn flags_dark_text_raw() {
-        assert_eq!(run(r#"export const A = () => <div className="dark:text-gray-100" />;"#).len(), 1);
+        assert_eq!(
+            run(r#"export const A = () => <div className="dark:text-gray-100" />;"#).len(),
+            1
+        );
     }
 
     #[test]
     fn allows_semantic_token() {
-        assert!(run(r#"export const A = () => <div className="bg-background text-foreground" />;"#).is_empty());
+        assert!(
+            run(r#"export const A = () => <div className="bg-background text-foreground" />;"#)
+                .is_empty()
+        );
     }
 
     #[test]
     fn allows_dark_on_semantic_token() {
         // `dark:bg-muted` is fine — `muted` is a token, not a raw color.
-        assert!(run(r#"export const A = () => <div className="bg-card dark:bg-muted" />;"#).is_empty());
+        assert!(
+            run(r#"export const A = () => <div className="bg-card dark:bg-muted" />;"#).is_empty()
+        );
     }
 }

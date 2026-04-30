@@ -50,7 +50,9 @@ fn is_simple_expression(node: tree_sitter::Node, source: &[u8]) -> bool {
                 && cons.is_some_and(|n| is_simple_expression(n, source))
                 && alt.is_some_and(|n| is_simple_expression(n, source))
         }
-        "parenthesized_expression" | "as_expression" | "non_null_expression"
+        "parenthesized_expression"
+        | "as_expression"
+        | "non_null_expression"
         | "satisfies_expression" => node
             .named_child(0)
             .is_some_and(|c| is_simple_expression(c, source)),
@@ -86,7 +88,10 @@ fn get_return_expression(callback: tree_sitter::Node) -> Option<tree_sitter::Nod
         return Some(body);
     }
     let mut cursor = body.walk();
-    let named: Vec<_> = body.children(&mut cursor).filter(|c| c.is_named()).collect();
+    let named: Vec<_> = body
+        .children(&mut cursor)
+        .filter(|c| c.is_named())
+        .collect();
     if named.len() != 1 {
         return None;
     }
@@ -153,17 +158,26 @@ mod tests {
 
     #[test]
     fn flags_simple_ternary() {
-        assert_eq!(run("const x = useMemo(() => a ? b : c, [a, b, c]);").len(), 1);
+        assert_eq!(
+            run("const x = useMemo(() => a ? b : c, [a, b, c]);").len(),
+            1
+        );
     }
 
     #[test]
     fn flags_block_body_with_return() {
-        assert_eq!(run("const x = useMemo(() => { return a + b; }, [a, b]);").len(), 1);
+        assert_eq!(
+            run("const x = useMemo(() => { return a + b; }, [a, b]);").len(),
+            1
+        );
     }
 
     #[test]
     fn flags_react_dot_usememo() {
-        assert_eq!(run("const x = React.useMemo(() => a + b, [a, b]);").len(), 1);
+        assert_eq!(
+            run("const x = React.useMemo(() => a + b, [a, b]);").len(),
+            1
+        );
     }
 
     #[test]
@@ -183,7 +197,10 @@ mod tests {
 
     #[test]
     fn allows_multi_statement_body() {
-        assert!(run("const x = useMemo(() => { const tmp = a + b; return tmp * 2; }, [a, b]);").is_empty());
+        assert!(
+            run("const x = useMemo(() => { const tmp = a + b; return tmp * 2; }, [a, b]);")
+                .is_empty()
+        );
     }
 
     #[test]
@@ -198,7 +215,10 @@ mod tests {
 
     #[test]
     fn flags_chained_member_access() {
-        assert_eq!(run("const x = useMemo(() => user.address.city, [user]);").len(), 1);
+        assert_eq!(
+            run("const x = useMemo(() => user.address.city, [user]);").len(),
+            1
+        );
     }
 
     #[test]
@@ -213,7 +233,10 @@ mod tests {
 
     #[test]
     fn flags_as_expression() {
-        assert_eq!(run("const x = useMemo(() => value as Foo, [value]);").len(), 1);
+        assert_eq!(
+            run("const x = useMemo(() => value as Foo, [value]);").len(),
+            1
+        );
     }
 
     #[test]
@@ -223,7 +246,10 @@ mod tests {
 
     #[test]
     fn flags_template_with_simple_substitution() {
-        assert_eq!(run("const x = useMemo(() => `hello ${name}`, [name]);").len(), 1);
+        assert_eq!(
+            run("const x = useMemo(() => `hello ${name}`, [name]);").len(),
+            1
+        );
     }
 
     #[test]

@@ -35,13 +35,15 @@ mod tests {
 
     #[test]
     fn flags_throw_status() {
-        let src = "import { Elysia, status } from 'elysia';\nfunction guard() { throw status(401); }";
+        let src =
+            "import { Elysia, status } from 'elysia';\nfunction guard() { throw status(401); }";
         assert_eq!(run_on(src).len(), 1);
     }
 
     #[test]
     fn allows_return_status() {
-        let src = "import { Elysia, status } from 'elysia';\nfunction guard() { return status(401); }";
+        let src =
+            "import { Elysia, status } from 'elysia';\nfunction guard() { return status(401); }";
         assert!(run_on(src).is_empty());
     }
 

@@ -74,11 +74,8 @@ fn extract_overload_name(node: &tree_sitter::Node, source: &[u8]) -> Option<Stri
             let name_node = node.child_by_field_name("name")?;
             let text = std::str::from_utf8(&source[name_node.byte_range()]).ok()?;
             // Prefix with "static " if static, to distinguish static vs instance.
-            let is_static = (0..node.child_count()).any(|i| {
-                node.child(i)
-                    .map(|c| c.kind() == "static")
-                    .unwrap_or(false)
-            });
+            let is_static = (0..node.child_count())
+                .any(|i| node.child(i).map(|c| c.kind() == "static").unwrap_or(false));
             if is_static {
                 Some(format!("static {text}"))
             } else {

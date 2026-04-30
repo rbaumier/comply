@@ -103,18 +103,17 @@ mod tests {
 
     #[test]
     fn allows_spawn_inside_assign() {
-        assert!(run_xstate(
-            "const action = assign({ ref: () => spawn(childMachine) });"
-        )
-        .is_empty());
+        assert!(
+            run_xstate("const action = assign({ ref: () => spawn(childMachine) });").is_empty()
+        );
     }
 
     #[test]
     fn allows_spawn_inside_assign_with_context_arg() {
-        assert!(run_xstate(
-            "const action = assign((ctx) => ({ ref: spawn(childMachine) }));"
-        )
-        .is_empty());
+        assert!(
+            run_xstate("const action = assign((ctx) => ({ ref: spawn(childMachine) }));")
+                .is_empty()
+        );
     }
 
     #[test]

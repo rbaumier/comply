@@ -3,8 +3,8 @@
 mod react;
 
 use crate::diagnostic::Severity;
-use crate::rules::meta::RuleMeta;
 use crate::rules::RuleDef;
+use crate::rules::meta::RuleMeta;
 
 pub const META: RuleMeta = RuleMeta {
     id: "react-no-children-prop",
@@ -13,7 +13,9 @@ pub const META: RuleMeta = RuleMeta {
                   passing them as a `children` prop. This is more readable and \
                   idiomatic.",
     severity: Severity::Warning,
-    doc_url: Some("https://github.com/jsx-eslint/eslint-plugin-react/blob/master/docs/rules/no-children-prop.md"),
+    doc_url: Some(
+        "https://github.com/jsx-eslint/eslint-plugin-react/blob/master/docs/rules/no-children-prop.md",
+    ),
     categories: &["react"],
 };
 

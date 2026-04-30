@@ -2,7 +2,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::sql_helpers::{is_sql_ddl, TS_STRING_KINDS};
+use crate::rules::sql_helpers::{TS_STRING_KINDS, is_sql_ddl};
 
 #[derive(Debug)]
 pub struct Check;
@@ -61,7 +61,8 @@ mod tests {
 
     #[test]
     fn allows_not_valid() {
-        let src = r#"const m = "ALTER TABLE t ADD CONSTRAINT t_age_chk CHECK (age > 0) NOT VALID;";"#;
+        let src =
+            r#"const m = "ALTER TABLE t ADD CONSTRAINT t_age_chk CHECK (age > 0) NOT VALID;";"#;
         assert!(run(src).is_empty());
     }
 

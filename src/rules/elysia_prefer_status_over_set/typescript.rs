@@ -55,7 +55,8 @@ mod tests {
 
     #[test]
     fn allows_status_helper() {
-        let src = "import { Elysia, status } from 'elysia';\napp.get('/', () => status(401, 'no'));";
+        let src =
+            "import { Elysia, status } from 'elysia';\napp.get('/', () => status(401, 'no'));";
         assert!(run_on(src).is_empty());
     }
 

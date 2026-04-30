@@ -6,7 +6,12 @@ fn tag_matches(tag: &str, flat: &str, dotted_suffix: &str) -> bool {
     tag == flat || tag.ends_with(dotted_suffix)
 }
 
-fn has_descendant_with_tag(node: tree_sitter::Node, source: &[u8], flat: &str, dotted_suffix: &str) -> bool {
+fn has_descendant_with_tag(
+    node: tree_sitter::Node,
+    source: &[u8],
+    flat: &str,
+    dotted_suffix: &str,
+) -> bool {
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         let kind = child.kind();
@@ -72,7 +77,10 @@ mod tests {
 
     #[test]
     fn flags_sheet_content_without_title() {
-        assert_eq!(run(r#"const x = <SheetContent><p>hi</p></SheetContent>;"#).len(), 1);
+        assert_eq!(
+            run(r#"const x = <SheetContent><p>hi</p></SheetContent>;"#).len(),
+            1
+        );
     }
 
     #[test]
@@ -82,7 +90,10 @@ mod tests {
 
     #[test]
     fn allows_sheet_content_with_title() {
-        assert!(run(r#"const x = <SheetContent><SheetTitle>Hi</SheetTitle></SheetContent>;"#).is_empty());
+        assert!(
+            run(r#"const x = <SheetContent><SheetTitle>Hi</SheetTitle></SheetContent>;"#)
+                .is_empty()
+        );
     }
 
     #[test]

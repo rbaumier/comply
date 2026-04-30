@@ -48,12 +48,18 @@ mod tests {
 
     #[test]
     fn flags_div_with_animate_pulse() {
-        assert_eq!(run(r#"const x = <div className="animate-pulse h-4 w-20 rounded" />;"#).len(), 1);
+        assert_eq!(
+            run(r#"const x = <div className="animate-pulse h-4 w-20 rounded" />;"#).len(),
+            1
+        );
     }
 
     #[test]
     fn flags_div_with_other_classes_plus_animate_pulse() {
-        assert_eq!(run(r#"const x = <div className="rounded-md bg-muted animate-pulse" />;"#).len(), 1);
+        assert_eq!(
+            run(r#"const x = <div className="rounded-md bg-muted animate-pulse" />;"#).len(),
+            1
+        );
     }
 
     #[test]

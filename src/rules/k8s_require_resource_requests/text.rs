@@ -31,8 +31,7 @@ fn has_request_scalar(container: tree_sitter::Node, source: &[u8], field: &str) 
     let Some(pair) = y::find_pair(requests, source, field) else {
         return false;
     };
-    y::pair_scalar_value(pair, source)
-        .is_some_and(|v| !v.is_empty())
+    y::pair_scalar_value(pair, source).is_some_and(|v| !v.is_empty())
 }
 
 #[cfg(test)]

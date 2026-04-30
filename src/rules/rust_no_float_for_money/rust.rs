@@ -16,8 +16,8 @@ use crate::rules::backend::{AstCheck, CheckCtx};
 const KINDS: &[&str] = &["field_declaration", "parameter"];
 
 const MONEY_NAMES: &[&str] = &[
-    "price", "amount", "cost", "balance", "fee", "total", "subtotal",
-    "tax", "discount", "revenue", "salary", "wage", "fare", "charge",
+    "price", "amount", "cost", "balance", "fee", "total", "subtotal", "tax", "discount", "revenue",
+    "salary", "wage", "fare", "charge",
 ];
 
 #[derive(Debug)]
@@ -103,14 +103,9 @@ fn make_diagnostic(
 #[cfg(test)]
 mod tests {
     use super::*;
-    
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
-
-
         crate::rules::test_helpers::run_rust(source, &Check)
-
-
     }
 
     #[test]

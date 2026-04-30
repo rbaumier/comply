@@ -64,9 +64,7 @@ fn inside_component_body(node: tree_sitter::Node, source: &[u8]) -> bool {
                 }
             }
             "variable_declarator" => {
-                if let Some(name) = parent
-                    .named_child(0)
-                    .and_then(|n| n.utf8_text(source).ok())
+                if let Some(name) = parent.named_child(0).and_then(|n| n.utf8_text(source).ok())
                     && starts_with_uppercase(name)
                 {
                     // Only count if the assigned value is a function / arrow.
@@ -93,14 +91,9 @@ fn starts_with_uppercase(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
-
-
         crate::rules::test_helpers::run_tsx(source, &Check)
-
-
     }
 
     #[test]

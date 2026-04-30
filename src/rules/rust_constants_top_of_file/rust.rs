@@ -46,9 +46,7 @@ impl AstCheck for Check {
             }
             // `mod foo;` (no body) is a declaration like `use` — not blocking.
             // `mod foo { ... }` (with body) is blocking.
-            if kind == "mod_item"
-                && child.child_by_field_name("body").is_some()
-            {
+            if kind == "mod_item" && child.child_by_field_name("body").is_some() {
                 seen_blocking_item = true;
                 continue;
             }

@@ -128,7 +128,8 @@ mod tests {
 
     #[test]
     fn flags_string_literal_origin() {
-        let src = "import { cors } from 'hono/cors';\napp.use(cors({ origin: 'https://example.com' }));";
+        let src =
+            "import { cors } from 'hono/cors';\napp.use(cors({ origin: 'https://example.com' }));";
         assert_eq!(run(src).len(), 1);
     }
 

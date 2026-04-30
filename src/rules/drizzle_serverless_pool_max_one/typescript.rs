@@ -28,9 +28,7 @@ fn constructor_is_pool<'a>(node: &tree_sitter::Node<'a>, src: &'a [u8]) -> bool 
     ctor.utf8_text(src).unwrap_or("") == "Pool"
 }
 
-fn first_object_arg<'a>(
-    node: &tree_sitter::Node<'a>,
-) -> Option<tree_sitter::Node<'a>> {
+fn first_object_arg<'a>(node: &tree_sitter::Node<'a>) -> Option<tree_sitter::Node<'a>> {
     let args = node.child_by_field_name("arguments")?;
     let mut cursor = args.walk();
     args.children(&mut cursor).find(|&c| c.kind() == "object")
@@ -42,10 +40,14 @@ fn max_is_one(obj: tree_sitter::Node<'_>, src: &[u8]) -> bool {
         if child.kind() != "pair" {
             continue;
         }
-        let Some(k) = child.child_by_field_name("key") else { continue };
+        let Some(k) = child.child_by_field_name("key") else {
+            continue;
+        };
         let kt = k.utf8_text(src).unwrap_or("").trim_matches(['"', '\'']);
         if kt == "max" {
-            let Some(v) = child.child_by_field_name("value") else { continue };
+            let Some(v) = child.child_by_field_name("value") else {
+                continue;
+            };
             return v.utf8_text(src).unwrap_or("").trim() == "1";
         }
     }

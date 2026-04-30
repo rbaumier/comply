@@ -6,20 +6,18 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
 const VERBS: &[&str] = &[
-    "is", "are", "was", "were", "be", "been", "has", "have", "had",
-    "do", "does", "did", "will", "would", "could", "should", "may",
-    "might", "must", "shall", "can", "need", "check", "verify",
-    "ensure", "provide", "specify", "use", "try", "retry", "pass",
-    "set", "add", "remove", "update", "create", "delete", "call",
-    "return", "expect", "require", "missing", "failed", "cannot",
-    "unable", "exceeded", "denied", "rejected", "not",
+    "is", "are", "was", "were", "be", "been", "has", "have", "had", "do", "does", "did", "will",
+    "would", "could", "should", "may", "might", "must", "shall", "can", "need", "check", "verify",
+    "ensure", "provide", "specify", "use", "try", "retry", "pass", "set", "add", "remove",
+    "update", "create", "delete", "call", "return", "expect", "require", "missing", "failed",
+    "cannot", "unable", "exceeded", "denied", "rejected", "not",
 ];
 
 fn has_verb(msg: &str) -> bool {
     let lower = msg.to_ascii_lowercase();
-    VERBS.iter().any(|v| {
-        lower.split_whitespace().any(|w| w == *v)
-    })
+    VERBS
+        .iter()
+        .any(|v| lower.split_whitespace().any(|w| w == *v))
 }
 
 crate::ast_check! { on ["macro_invocation"] => |node, source, ctx, diagnostics|

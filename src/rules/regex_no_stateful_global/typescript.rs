@@ -18,10 +18,7 @@ use crate::rules::regex_ast::pattern_and_flags;
 /// and return its binding identifier text. Returns `None` if the regex
 /// is not directly assigned to a simple name — e.g. it sits inside a
 /// call argument, an object property, or a destructuring pattern.
-fn enclosing_simple_binding<'a>(
-    node: tree_sitter::Node<'_>,
-    source: &'a [u8],
-) -> Option<&'a str> {
+fn enclosing_simple_binding<'a>(node: tree_sitter::Node<'_>, source: &'a [u8]) -> Option<&'a str> {
     let mut current = node.parent()?;
     // Tolerate a single `parenthesized_expression` between the regex
     // and its declarator: `const re = (/foo/g);`.

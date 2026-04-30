@@ -90,7 +90,10 @@ mod tests {
 
     #[test]
     fn flags_optional_with_undefined() {
-        assert_eq!(run_on("interface I { name?: string | undefined; }").len(), 1);
+        assert_eq!(
+            run_on("interface I { name?: string | undefined; }").len(),
+            1
+        );
     }
 
     #[test]

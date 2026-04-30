@@ -1,7 +1,9 @@
 //! compose-cap-drop-all text backend.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::rules::yaml_k8s_helpers::{as_mapping, as_sequence, find_pair, pair_key_text, pair_value_node};
+use crate::rules::yaml_k8s_helpers::{
+    as_mapping, as_sequence, find_pair, pair_key_text, pair_value_node,
+};
 
 fn looks_like_compose(path: &std::path::Path, source: &str) -> bool {
     let name = path
@@ -12,7 +14,9 @@ fn looks_like_compose(path: &std::path::Path, source: &str) -> bool {
     if name.contains("compose") {
         return true;
     }
-    source.lines().any(|l| l == "services:" || l.starts_with("services:"))
+    source
+        .lines()
+        .any(|l| l == "services:" || l.starts_with("services:"))
 }
 
 /// `cap_drop: [ALL]` (flow sequence) or `cap_drop:\n  - ALL` (block sequence).
@@ -32,7 +36,12 @@ fn service_drops_all(service_map: tree_sitter::Node<'_>, source: &[u8]) -> bool 
                 return child.named_children(&mut icur).any(|item| {
                     item.utf8_text(source)
                         .ok()
-                        .map(|s| s.trim().trim_matches('"').trim_matches('\'').eq_ignore_ascii_case("ALL"))
+                        .map(|s| {
+                            s.trim()
+                                .trim_matches('"')
+                                .trim_matches('\'')
+                                .eq_ignore_ascii_case("ALL")
+                        })
                         .unwrap_or(false)
                 });
             }
@@ -49,7 +58,12 @@ fn service_drops_all(service_map: tree_sitter::Node<'_>, source: &[u8]) -> bool 
             item.named_children(&mut icur).any(|c| {
                 c.utf8_text(source)
                     .ok()
-                    .map(|s| s.trim().trim_matches('"').trim_matches('\'').eq_ignore_ascii_case("ALL"))
+                    .map(|s| {
+                        s.trim()
+                            .trim_matches('"')
+                            .trim_matches('\'')
+                            .eq_ignore_ascii_case("ALL")
+                    })
                     .unwrap_or(false)
             })
         });

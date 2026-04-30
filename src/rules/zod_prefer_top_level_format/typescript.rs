@@ -55,8 +55,7 @@ impl AstCheck for Check {
         };
 
         // Check z.string().<method>()
-        if let Some((_, replacement)) =
-            STRING_CHAIN_METHODS.iter().find(|(m, _)| *m == method_name)
+        if let Some((_, replacement)) = STRING_CHAIN_METHODS.iter().find(|(m, _)| *m == method_name)
             && is_z_string_call(object, source_bytes)
         {
             let pos = node.start_position();
@@ -82,8 +81,7 @@ impl AstCheck for Check {
                 line: pos.row + 1,
                 column: pos.column + 1,
                 rule_id: "zod-prefer-top-level-format".into(),
-                message: "`z.number().int()` — use `z.int()` directly."
-                    .into(),
+                message: "`z.number().int()` — use `z.int()` directly.".into(),
                 severity: Severity::Warning,
                 span: None,
             });
@@ -114,14 +112,9 @@ fn is_z_method_call(node: tree_sitter::Node, method: &str, source: &[u8]) -> boo
 #[cfg(test)]
 mod tests {
     use super::*;
-    
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
-
-
         crate::rules::test_helpers::run_ts(source, &Check)
-
-
     }
 
     #[test]

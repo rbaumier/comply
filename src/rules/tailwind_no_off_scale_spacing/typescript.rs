@@ -2,8 +2,8 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::jsx::{jsx_attribute_name, jsx_attribute_string_value};
 
 const SPACING_PREFIXES: &[&str] = &[
-    "p-", "px-", "py-", "pt-", "pb-", "pl-", "pr-", "ps-", "pe-", "m-", "mx-", "my-", "mt-",
-    "mb-", "ml-", "mr-", "ms-", "me-", "gap-", "gap-x-", "gap-y-", "space-x-", "space-y-",
+    "p-", "px-", "py-", "pt-", "pb-", "pl-", "pr-", "ps-", "pe-", "m-", "mx-", "my-", "mt-", "mb-",
+    "ml-", "mr-", "ms-", "me-", "gap-", "gap-x-", "gap-y-", "space-x-", "space-y-",
 ];
 
 /// On-scale values. 0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 6, 8, 10, 12, 14, 16,
@@ -18,7 +18,9 @@ const ON_SCALE: &[&str] = &[
 
 fn is_off_scale(base: &str) -> bool {
     for prefix in SPACING_PREFIXES {
-        let Some(rest) = base.strip_prefix(prefix) else { continue };
+        let Some(rest) = base.strip_prefix(prefix) else {
+            continue;
+        };
         // Skip negative, auto, full, and arbitrary values — they're either
         // fine (`auto`, `full`) or covered by a separate rule (arbitrary).
         if rest.starts_with('-') || rest == "auto" || rest == "full" || rest.starts_with('[') {
@@ -59,17 +61,26 @@ mod tests {
 
     #[test]
     fn flags_p_5() {
-        assert_eq!(run(r#"export const A = () => <div className="p-5" />;"#).len(), 1);
+        assert_eq!(
+            run(r#"export const A = () => <div className="p-5" />;"#).len(),
+            1
+        );
     }
 
     #[test]
     fn flags_mb_7() {
-        assert_eq!(run(r#"export const A = () => <div className="mb-7" />;"#).len(), 1);
+        assert_eq!(
+            run(r#"export const A = () => <div className="mb-7" />;"#).len(),
+            1
+        );
     }
 
     #[test]
     fn flags_gap_9() {
-        assert_eq!(run(r#"export const A = () => <div className="gap-9" />;"#).len(), 1);
+        assert_eq!(
+            run(r#"export const A = () => <div className="gap-9" />;"#).len(),
+            1
+        );
     }
 
     #[test]

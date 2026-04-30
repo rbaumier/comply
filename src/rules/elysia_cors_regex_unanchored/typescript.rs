@@ -69,7 +69,8 @@ mod tests {
 
     #[test]
     fn flags_unanchored_regex() {
-        let src = "import { cors } from '@elysiajs/cors';\napp.use(cors({ origin: /example\\.com/ }));";
+        let src =
+            "import { cors } from '@elysiajs/cors';\napp.use(cors({ origin: /example\\.com/ }));";
         assert_eq!(run_on(src).len(), 1);
     }
 

@@ -77,12 +77,17 @@ mod tests {
 
     #[test]
     fn flags_input_type_image_without_alt() {
-        assert_eq!(run_on("const x = <input type=\"image\" src=\"btn.png\" />;").len(), 1);
+        assert_eq!(
+            run_on("const x = <input type=\"image\" src=\"btn.png\" />;").len(),
+            1
+        );
     }
 
     #[test]
     fn allows_input_type_image_with_alt() {
-        assert!(run_on("const x = <input type=\"image\" alt=\"Submit\" src=\"btn.png\" />;").is_empty());
+        assert!(
+            run_on("const x = <input type=\"image\" alt=\"Submit\" src=\"btn.png\" />;").is_empty()
+        );
     }
 
     #[test]

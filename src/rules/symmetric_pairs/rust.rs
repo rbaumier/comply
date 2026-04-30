@@ -20,8 +20,8 @@ const PAIRS: &[(&str, &str)] = &[
 ];
 
 const PREFIXES: &[&str] = &[
-    "get_", "set_", "add_", "remove_", "open_", "close_", "start_", "stop_", "create_",
-    "delete_", "destroy_",
+    "get_", "set_", "add_", "remove_", "open_", "close_", "start_", "stop_", "create_", "delete_",
+    "destroy_",
 ];
 
 const KINDS: &[&str] = &["function_item"];
@@ -61,17 +61,25 @@ impl AstCheck for Check {
         _diagnostics: &mut Vec<Diagnostic>,
     ) {
         let source = ctx.source.as_bytes();
-        let Ok(text) = node.utf8_text(source) else { return };
+        let Ok(text) = node.utf8_text(source) else {
+            return;
+        };
         if !text.starts_with("pub ") {
             return;
         }
-        let Some(name_node) = node.child_by_field_name("name") else { return };
-        let Ok(name) = name_node.utf8_text(source) else { return };
+        let Some(name_node) = node.child_by_field_name("name") else {
+            return;
+        };
+        let Ok(name) = name_node.utf8_text(source) else {
+            return;
+        };
         let pos = name_node.start_position();
         let Some(state) = state.and_then(|s| s.downcast_mut::<State>()) else {
             return;
         };
-        state.pub_fns.push((name.to_string(), pos.row + 1, pos.column + 1));
+        state
+            .pub_fns
+            .push((name.to_string(), pos.row + 1, pos.column + 1));
     }
 
     fn finish(
@@ -85,7 +93,9 @@ impl AstCheck for Check {
         };
         let names: Vec<&str> = state.pub_fns.iter().map(|(n, _, _)| n.as_str()).collect();
         for (name, line, col) in &state.pub_fns {
-            let Some((prefix, suffix)) = split_prefix(name) else { continue };
+            let Some((prefix, suffix)) = split_prefix(name) else {
+                continue;
+            };
             for &(pfx, counterpart_pfx) in PAIRS {
                 if pfx == prefix {
                     let expected = format!("{counterpart_pfx}{suffix}");
@@ -95,9 +105,7 @@ impl AstCheck for Check {
                             line: *line,
                             column: *col,
                             rule_id: "symmetric-pairs".into(),
-                            message: format!(
-                                "`pub fn {name}` has no `{expected}` counterpart."
-                            ),
+                            message: format!("`pub fn {name}` has no `{expected}` counterpart."),
                             severity: Severity::Warning,
                             span: None,
                         });

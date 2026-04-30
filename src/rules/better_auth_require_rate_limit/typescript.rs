@@ -57,9 +57,7 @@ mod tests {
 
     #[test]
     fn allows_with_rate_limit() {
-        assert!(
-            run("export const auth = betterAuth({ rateLimit: { enabled: true } })").is_empty()
-        );
+        assert!(run("export const auth = betterAuth({ rateLimit: { enabled: true } })").is_empty());
     }
 
     #[test]

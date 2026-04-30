@@ -86,9 +86,9 @@ mod shared_tests;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
+use crate::rules::RuleDef;
 use crate::rules::backend::Backend;
 use crate::rules::meta::RuleMeta;
-use crate::rules::RuleDef;
 
 pub const META: RuleMeta = RuleMeta {
     id: "no-commented-out-code",
@@ -109,9 +109,18 @@ pub fn register() -> RuleDef {
     RuleDef {
         meta: META,
         backends: vec![
-            (Language::TypeScript, Backend::TreeSitter(Box::new(typescript::Check))),
-            (Language::JavaScript, Backend::TreeSitter(Box::new(typescript::Check))),
-            (Language::Tsx, Backend::TreeSitter(Box::new(typescript::Check))),
+            (
+                Language::TypeScript,
+                Backend::TreeSitter(Box::new(typescript::Check)),
+            ),
+            (
+                Language::JavaScript,
+                Backend::TreeSitter(Box::new(typescript::Check)),
+            ),
+            (
+                Language::Tsx,
+                Backend::TreeSitter(Box::new(typescript::Check)),
+            ),
             (Language::Rust, Backend::TreeSitter(Box::new(rust::Check))),
             (Language::Vue, Backend::TreeSitter(Box::new(vue::Check))),
         ],
@@ -174,7 +183,10 @@ mod helper_tests {
 
     #[test]
     fn strip_line_comment() {
-        assert_eq!(strip_comment_syntax("// let x = 1;").as_deref(), Some("let x = 1;"));
+        assert_eq!(
+            strip_comment_syntax("// let x = 1;").as_deref(),
+            Some("let x = 1;")
+        );
     }
 
     #[test]

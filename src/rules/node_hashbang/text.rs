@@ -33,9 +33,7 @@ impl TextCheck for Check {
             line: 1,
             column: 1,
             rule_id: "node-hashbang".into(),
-            message: format!(
-                "Invalid hashbang: `{first_line}`. Expected `#!/usr/bin/env node`."
-            ),
+            message: format!("Invalid hashbang: `{first_line}`. Expected `#!/usr/bin/env node`."),
             severity: Severity::Warning,
             span: None,
         }]

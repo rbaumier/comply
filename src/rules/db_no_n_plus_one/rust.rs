@@ -6,13 +6,22 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
 const QUERY_METHODS: &[&str] = &[
-    "query", "execute", "fetch_one", "fetch_all", "fetch_optional",
-    "find", "insert", "update", "delete",
+    "query",
+    "execute",
+    "fetch_one",
+    "fetch_all",
+    "fetch_optional",
+    "find",
+    "insert",
+    "update",
+    "delete",
 ];
 
 fn is_db_call(node: tree_sitter::Node, source: &[u8]) -> bool {
     let text = node.utf8_text(source).unwrap_or("");
-    QUERY_METHODS.iter().any(|m| text.contains(&format!(".{m}(")))
+    QUERY_METHODS
+        .iter()
+        .any(|m| text.contains(&format!(".{m}(")))
 }
 
 fn is_inside_loop(node: tree_sitter::Node) -> bool {

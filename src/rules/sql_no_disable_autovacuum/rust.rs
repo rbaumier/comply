@@ -2,7 +2,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::sql_helpers::{is_sql_ddl, RUST_STRING_KINDS};
+use crate::rules::sql_helpers::{RUST_STRING_KINDS, is_sql_ddl};
 
 #[derive(Debug)]
 pub struct Check;
@@ -33,7 +33,8 @@ impl AstCheck for Check {
             ctx.path,
             &node,
             super::META.id,
-            "Disabling autovacuum causes bloat and XID wraparound — tune thresholds instead.".into(),
+            "Disabling autovacuum causes bloat and XID wraparound — tune thresholds instead."
+                .into(),
             Severity::Warning,
         ));
     }
@@ -55,7 +56,8 @@ mod tests {
 
     #[test]
     fn allows_threshold_tuning() {
-        let src = r#"fn f() { let m = "ALTER TABLE t SET (autovacuum_vacuum_scale_factor = 0.01)"; }"#;
+        let src =
+            r#"fn f() { let m = "ALTER TABLE t SET (autovacuum_vacuum_scale_factor = 0.01)"; }"#;
         assert!(run(src).is_empty());
     }
 }

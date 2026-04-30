@@ -19,11 +19,17 @@ fn collect_imported_schemas(root: tree_sitter::Node<'_>, source: &[u8]) -> HashS
         }
         let raw = child.utf8_text(source).unwrap_or("");
         // Only consider relative imports — third-party libraries are out of scope.
-        if !(raw.contains("from './") || raw.contains("from \"./") || raw.contains("from '../") || raw.contains("from \"../")) {
+        if !(raw.contains("from './")
+            || raw.contains("from \"./")
+            || raw.contains("from '../")
+            || raw.contains("from \"../"))
+        {
             continue;
         }
         let Some(open) = raw.find('{') else { continue };
-        let Some(close_rel) = raw[open..].find('}') else { continue };
+        let Some(close_rel) = raw[open..].find('}') else {
+            continue;
+        };
         let body = &raw[open + 1..open + close_rel];
         for chunk in body.split(',') {
             let imported = chunk.trim().trim_start_matches("type ").trim();
@@ -97,7 +103,8 @@ mod tests {
 
     #[test]
     fn allows_string_reference() {
-        let src = "import { UserSchema } from './schema';\napp.post('/x', () => 1, { body: 'user' });";
+        let src =
+            "import { UserSchema } from './schema';\napp.post('/x', () => 1, { body: 'user' });";
         assert!(run_on(src).is_empty());
     }
 

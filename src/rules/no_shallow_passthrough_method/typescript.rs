@@ -7,16 +7,19 @@ use crate::diagnostic::{Diagnostic, Severity};
 fn param_names<'a>(params: &tree_sitter::Node<'a>, source: &'a [u8]) -> Vec<String> {
     let mut out = Vec::new();
     for i in 0..params.named_child_count() {
-        let Some(child) = params.named_child(i) else { continue };
+        let Some(child) = params.named_child(i) else {
+            continue;
+        };
         let name_node = match child.kind() {
             "required_parameter" | "optional_parameter" => child.child_by_field_name("pattern"),
             "identifier" => Some(child),
             _ => None,
         };
         if let Some(n) = name_node
-            && let Ok(text) = n.utf8_text(source) {
-                out.push(text.to_string());
-            }
+            && let Ok(text) = n.utf8_text(source)
+        {
+            out.push(text.to_string());
+        }
     }
     out
 }
@@ -24,7 +27,9 @@ fn param_names<'a>(params: &tree_sitter::Node<'a>, source: &'a [u8]) -> Vec<Stri
 fn argument_names<'a>(args: &tree_sitter::Node<'a>, source: &'a [u8]) -> Option<Vec<String>> {
     let mut out = Vec::new();
     for i in 0..args.named_child_count() {
-        let Some(child) = args.named_child(i) else { continue };
+        let Some(child) = args.named_child(i) else {
+            continue;
+        };
         if child.kind() != "identifier" {
             return None;
         }
@@ -60,7 +65,9 @@ crate::ast_check! { on ["method_definition"] => |node, source, ctx, diagnostics|
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn run(s: &str) -> Vec<Diagnostic> { crate::rules::test_helpers::run_ts(s, &Check) }
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_ts(s, &Check)
+    }
 
     #[test]
     fn flags_passthrough() {

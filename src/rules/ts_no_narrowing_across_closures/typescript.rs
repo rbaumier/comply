@@ -16,20 +16,26 @@ use crate::diagnostic::{Diagnostic, Severity};
 fn narrowed_identifier<'a>(cond: tree_sitter::Node<'a>, source: &[u8]) -> Option<String> {
     // if (x) — cond is an identifier
     if cond.kind() == "identifier" {
-        return std::str::from_utf8(&source[cond.byte_range()]).ok().map(str::to_string);
+        return std::str::from_utf8(&source[cond.byte_range()])
+            .ok()
+            .map(str::to_string);
     }
     // if (x !== null) — binary_expression with identifier on left
     if cond.kind() == "binary_expression"
         && let Some(left) = cond.child_by_field_name("left")
         && left.kind() == "identifier"
     {
-        return std::str::from_utf8(&source[left.byte_range()]).ok().map(str::to_string);
+        return std::str::from_utf8(&source[left.byte_range()])
+            .ok()
+            .map(str::to_string);
     }
     None
 }
 
 fn is_closure_call(call: tree_sitter::Node, source: &[u8]) -> bool {
-    let Some(func) = call.child_by_field_name("function") else { return false };
+    let Some(func) = call.child_by_field_name("function") else {
+        return false;
+    };
     let text = std::str::from_utf8(&source[func.byte_range()]).unwrap_or("");
     text == "setTimeout"
         || text == "setInterval"
@@ -146,7 +152,8 @@ mod tests {
 
     #[test]
     fn allows_plain_usage_without_closure() {
-        let src = "function f(user: { name: string } | null) { if (user) { console.log(user.name); } }";
+        let src =
+            "function f(user: { name: string } | null) { if (user) { console.log(user.name); } }";
         assert!(run(src).is_empty());
     }
 }

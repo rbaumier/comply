@@ -50,9 +50,16 @@ fn effectful_expression_kind(expr: tree_sitter::Node) -> Option<&'static str> {
 
 fn is_test_file(path: &std::path::Path) -> bool {
     let s = path.to_string_lossy();
-    [".test.", ".test-d.", ".spec.", "__tests__", "_test.", ".e2e."]
-        .iter()
-        .any(|m| s.contains(m))
+    [
+        ".test.",
+        ".test-d.",
+        ".spec.",
+        "__tests__",
+        "_test.",
+        ".e2e.",
+    ]
+    .iter()
+    .any(|m| s.contains(m))
 }
 
 crate::ast_check! { on ["expression_statement"] => |node, source, ctx, diagnostics|
@@ -120,9 +127,7 @@ mod tests {
 
     #[test]
     fn allows_call_inside_function_body() {
-        assert!(
-            run_on("export function run() { doThing(); }").is_empty()
-        );
+        assert!(run_on("export function run() { doThing(); }").is_empty());
     }
 
     #[test]
@@ -153,9 +158,7 @@ mod tests {
 
     #[test]
     fn allows_call_inside_class_method() {
-        assert!(
-            run_on("class Foo { bar() { doThing(); } }").is_empty()
-        );
+        assert!(run_on("class Foo { bar() { doThing(); } }").is_empty());
     }
 
     #[test]

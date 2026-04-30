@@ -7,7 +7,9 @@ fn is_expect_call(node: tree_sitter::Node, source: &[u8]) -> bool {
     if node.kind() != "call_expression" {
         return false;
     }
-    let Some(callee) = node.child_by_field_name("function") else { return false };
+    let Some(callee) = node.child_by_field_name("function") else {
+        return false;
+    };
     callee.kind() == "identifier" && callee.utf8_text(source).unwrap_or("") == "expect"
 }
 
@@ -19,8 +21,11 @@ fn is_inside_conditional(node: tree_sitter::Node) -> bool {
             "if_statement" | "switch_statement" | "catch_clause" => return true,
             // Don't walk past function boundaries — a function inside a
             // conditional is its own scope.
-            "function_declaration" | "function" | "arrow_function"
-            | "method_definition" | "generator_function_declaration" => return false,
+            "function_declaration"
+            | "function"
+            | "arrow_function"
+            | "method_definition"
+            | "generator_function_declaration" => return false,
             _ => {}
         }
         cur = p.parent();
@@ -67,8 +72,8 @@ crate::ast_check! { |node, source, ctx, diagnostics|
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
     use crate::rules::backend::{AstCheck, CheckCtx};
+    use std::path::Path;
 
     const PW: &str = "import { test, expect } from \"@playwright/test\";\n";
 
@@ -91,7 +96,9 @@ mod tests {
 
     #[test]
     fn flags_expect_inside_catch() {
-        let source = format!("{PW}try {{\n  doSomething();\n}} catch(e) {{\n  expect(e.message).toBe('error');\n}}");
+        let source = format!(
+            "{PW}try {{\n  doSomething();\n}} catch(e) {{\n  expect(e.message).toBe('error');\n}}"
+        );
         let d = run("error.test.ts", &source);
         assert_eq!(d.len(), 1);
     }

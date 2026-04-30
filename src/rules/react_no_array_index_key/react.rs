@@ -39,7 +39,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
     });
 }
 
-/// Returns true when the attribute value is `{identifier}` — i.e. 
+/// Returns true when the attribute value is `{identifier}` — i.e.
 /// a variable reference, not a derived expression.
 fn attribute_value_is_simple_identifier(attr: tree_sitter::Node, _source: &[u8]) -> bool {
     // jsx_attribute → name = jsx_expression → identifier
@@ -119,14 +119,9 @@ fn second_param_matches(params: tree_sitter::Node, name: &str, source: &[u8]) ->
 #[cfg(test)]
 mod tests {
     use super::*;
-    
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
-
-
         crate::rules::test_helpers::run_tsx(source, &Check)
-
-
     }
 
     #[test]

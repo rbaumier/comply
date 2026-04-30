@@ -13,7 +13,14 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
 const LOG_METHODS: &[&str] = &[
-    "log", "error", "warn", "info", "debug", "trace", "captureException", "captureError",
+    "log",
+    "error",
+    "warn",
+    "info",
+    "debug",
+    "trace",
+    "captureException",
+    "captureError",
 ];
 
 const LOG_OBJECTS: &[&str] = &[
@@ -124,8 +131,7 @@ mod tests {
     #[test]
     fn allows_catch_with_wrap() {
         assert!(
-            run_on("try { x(); } catch (e) { throw new Error('boom', { cause: e }); }")
-                .is_empty()
+            run_on("try { x(); } catch (e) { throw new Error('boom', { cause: e }); }").is_empty()
         );
     }
 
@@ -136,9 +142,8 @@ mod tests {
 
     #[test]
     fn allows_catch_with_extra_work() {
-        assert!(run_on(
-            "try { x(); } catch (e) { console.error(e); cleanup(); throw e; }"
-        )
-        .is_empty());
+        assert!(
+            run_on("try { x(); } catch (e) { console.error(e); cleanup(); throw e; }").is_empty()
+        );
     }
 }

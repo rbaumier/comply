@@ -145,11 +145,14 @@ fn is_pure_initializer(node: tree_sitter::Node, source: &[u8]) -> bool {
                 _ => false,
             })
         }
-        "unary_expression" | "parenthesized_expression" | "as_expression"
-        | "type_assertion" | "satisfies_expression" | "non_null_expression" => {
-            node.named_child(0)
-                .is_some_and(|c| is_pure_initializer(c, source))
-        }
+        "unary_expression"
+        | "parenthesized_expression"
+        | "as_expression"
+        | "type_assertion"
+        | "satisfies_expression"
+        | "non_null_expression" => node
+            .named_child(0)
+            .is_some_and(|c| is_pure_initializer(c, source)),
         _ => false,
     }
 }
@@ -250,10 +253,8 @@ mod tests {
             .set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into())
             .unwrap();
         let tree = parser.parse(source, None).unwrap();
-        let ctx = crate::rules::backend::CheckCtx::for_test(
-            std::path::Path::new("foo.test.ts"),
-            source,
-        );
+        let ctx =
+            crate::rules::backend::CheckCtx::for_test(std::path::Path::new("foo.test.ts"), source);
         use crate::rules::backend::AstCheck;
         Check.check(&ctx, &tree)
     }
@@ -264,10 +265,7 @@ mod tests {
             .set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into())
             .unwrap();
         let tree = parser.parse(source, None).unwrap();
-        let ctx = crate::rules::backend::CheckCtx::for_test(
-            std::path::Path::new("foo.ts"),
-            source,
-        );
+        let ctx = crate::rules::backend::CheckCtx::for_test(std::path::Path::new("foo.ts"), source);
         use crate::rules::backend::AstCheck;
         Check.check(&ctx, &tree)
     }
@@ -384,7 +382,10 @@ vi.unmock("./cache");
 describe("x", () => { it("works", () => { expect(1).toBe(1); }); });
 "#;
         let d = run_on(src);
-        assert!(d.is_empty(), "vi.mock/unmock must be allowed at top level: {d:?}");
+        assert!(
+            d.is_empty(),
+            "vi.mock/unmock must be allowed at top level: {d:?}"
+        );
     }
 
     #[test]
@@ -395,7 +396,10 @@ jest.unmock("./cache");
 describe("x", () => { it("works", () => { expect(1).toBe(1); }); });
 "#;
         let d = run_on(src);
-        assert!(d.is_empty(), "jest.mock/unmock must be allowed at top level: {d:?}");
+        assert!(
+            d.is_empty(),
+            "jest.mock/unmock must be allowed at top level: {d:?}"
+        );
     }
 
     #[test]

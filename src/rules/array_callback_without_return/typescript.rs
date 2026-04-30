@@ -13,11 +13,15 @@ fn is_array_method_call(node: tree_sitter::Node, source: &[u8]) -> bool {
     if node.kind() != "call_expression" {
         return false;
     }
-    let Some(func) = node.child_by_field_name("function") else { return false };
+    let Some(func) = node.child_by_field_name("function") else {
+        return false;
+    };
     if func.kind() != "member_expression" {
         return false;
     }
-    let Some(prop) = func.child_by_field_name("property") else { return false };
+    let Some(prop) = func.child_by_field_name("property") else {
+        return false;
+    };
     let name = prop.utf8_text(source).unwrap_or("");
     ARRAY_METHODS.contains(&name)
 }
@@ -28,7 +32,15 @@ fn has_return(node: tree_sitter::Node) -> bool {
         return true;
     }
     // Don't descend into nested functions — their returns don't count.
-    if matches!(node.kind(), "function_declaration" | "function" | "arrow_function" | "method_definition" | "generator_function" | "generator_function_declaration") {
+    if matches!(
+        node.kind(),
+        "function_declaration"
+            | "function"
+            | "arrow_function"
+            | "method_definition"
+            | "generator_function"
+            | "generator_function_declaration"
+    ) {
         return false;
     }
     let count = node.child_count();

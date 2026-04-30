@@ -61,7 +61,10 @@ mod tests {
 
     #[test]
     fn flags_index_key() {
-        assert_eq!(run("<li v-for=\"(item, index) in items\" :key=\"index\">").len(), 1);
+        assert_eq!(
+            run("<li v-for=\"(item, index) in items\" :key=\"index\">").len(),
+            1
+        );
     }
 
     #[test]

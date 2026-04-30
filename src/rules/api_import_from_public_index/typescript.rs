@@ -55,7 +55,10 @@ mod tests {
 
     #[test]
     fn flags_deep_cross_feature_import() {
-        assert_eq!(run("import { query } from '../../users/db/queries'").len(), 1);
+        assert_eq!(
+            run("import { query } from '../../users/db/queries'").len(),
+            1
+        );
     }
 
     #[test]

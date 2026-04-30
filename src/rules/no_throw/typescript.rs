@@ -25,14 +25,9 @@ crate::ast_check! { on ["throw_statement"] prefilter = ["throw"] => |node, _sour
 #[cfg(test)]
 mod tests {
     use super::*;
-    
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
-
-
         crate::rules::test_helpers::run_ts(source, &Check)
-
-
     }
 
     #[test]

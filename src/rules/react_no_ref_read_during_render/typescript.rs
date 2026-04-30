@@ -56,10 +56,7 @@ fn walk_for_current_reads(
         // Skip nested function bodies.
         if matches!(
             node.kind(),
-            "function_declaration"
-                | "function_expression"
-                | "arrow_function"
-                | "method_definition"
+            "function_declaration" | "function_expression" | "arrow_function" | "method_definition"
         ) && node.id() != body_id
         {
             continue;
@@ -68,9 +65,7 @@ fn walk_for_current_reads(
             let prop = node.child_by_field_name("property");
             let obj = node.child_by_field_name("object");
             if let (Some(prop), Some(obj)) = (prop, obj) {
-                if prop.utf8_text(source).unwrap_or("") == "current"
-                    && obj.kind() == "identifier"
-                {
+                if prop.utf8_text(source).unwrap_or("") == "current" && obj.kind() == "identifier" {
                     if let Ok(name) = obj.utf8_text(source) {
                         if refs.contains(name) {
                             let pos = node.start_position();
@@ -138,7 +133,8 @@ mod tests {
 
     #[test]
     fn flags_ref_read_in_render() {
-        let src = "function C() { const r = useRef(0); const v = r.current; return <div>{v}</div>; }";
+        let src =
+            "function C() { const r = useRef(0); const v = r.current; return <div>{v}</div>; }";
         assert_eq!(run(src).len(), 1);
     }
 

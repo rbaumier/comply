@@ -91,12 +91,17 @@ mod tests {
 
     #[test]
     fn allows_wheel_with_prevent_default() {
-        assert!(run("el.addEventListener('wheel', (e) => { e.preventDefault(); zoom(e); })").is_empty());
+        assert!(
+            run("el.addEventListener('wheel', (e) => { e.preventDefault(); zoom(e); })").is_empty()
+        );
     }
 
     #[test]
     fn allows_touchstart_with_prevent_default() {
-        assert!(run("el.addEventListener('touchstart', function(e) { e.preventDefault(); })").is_empty());
+        assert!(
+            run("el.addEventListener('touchstart', function(e) { e.preventDefault(); })")
+                .is_empty()
+        );
     }
 
     #[test]

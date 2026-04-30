@@ -6,9 +6,9 @@ mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
+use crate::rules::RuleDef;
 use crate::rules::backend::Backend;
 use crate::rules::meta::RuleMeta;
-use crate::rules::RuleDef;
 
 pub const META: RuleMeta = RuleMeta {
     id: "sql-no-union-when-union-all",
@@ -23,10 +23,22 @@ pub fn register() -> RuleDef {
     RuleDef {
         meta: META,
         backends: vec![
-            (Language::TypeScript, Backend::TreeSitter(Box::new(typescript::Check))),
-            (Language::TypeScript, Backend::TreeSitter(Box::new(drizzle::Check))),
-            (Language::JavaScript, Backend::TreeSitter(Box::new(typescript::Check))),
-            (Language::Tsx, Backend::TreeSitter(Box::new(typescript::Check))),
+            (
+                Language::TypeScript,
+                Backend::TreeSitter(Box::new(typescript::Check)),
+            ),
+            (
+                Language::TypeScript,
+                Backend::TreeSitter(Box::new(drizzle::Check)),
+            ),
+            (
+                Language::JavaScript,
+                Backend::TreeSitter(Box::new(typescript::Check)),
+            ),
+            (
+                Language::Tsx,
+                Backend::TreeSitter(Box::new(typescript::Check)),
+            ),
             (Language::Rust, Backend::TreeSitter(Box::new(rust::Check))),
         ],
     }
@@ -73,6 +85,8 @@ fn extract_from_table(sql: &str) -> Option<&str> {
     // Take the next whitespace-delimited token as the table name.
     let table = after_from.split_whitespace().next()?;
     // Strip trailing punctuation (parens, commas, semicolons, quotes).
-    let table = table.trim_end_matches(|c: char| c == ',' || c == ')' || c == ';' || c == '"' || c == '\'' || c == '`');
+    let table = table.trim_end_matches(|c: char| {
+        c == ',' || c == ')' || c == ';' || c == '"' || c == '\'' || c == '`'
+    });
     if table.is_empty() { None } else { Some(table) }
 }

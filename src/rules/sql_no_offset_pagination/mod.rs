@@ -49,9 +49,9 @@ mod shared_tests;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
+use crate::rules::RuleDef;
 use crate::rules::backend::Backend;
 use crate::rules::meta::RuleMeta;
-use crate::rules::RuleDef;
 use crate::rules::sql_helpers::contains_word;
 
 pub const META: RuleMeta = RuleMeta {
@@ -69,10 +69,22 @@ pub fn register() -> RuleDef {
     RuleDef {
         meta: META,
         backends: vec![
-            (Language::TypeScript, Backend::TreeSitter(Box::new(typescript::Check))),
-            (Language::TypeScript, Backend::TreeSitter(Box::new(drizzle::Check))),
-            (Language::JavaScript, Backend::TreeSitter(Box::new(typescript::Check))),
-            (Language::Tsx, Backend::TreeSitter(Box::new(typescript::Check))),
+            (
+                Language::TypeScript,
+                Backend::TreeSitter(Box::new(typescript::Check)),
+            ),
+            (
+                Language::TypeScript,
+                Backend::TreeSitter(Box::new(drizzle::Check)),
+            ),
+            (
+                Language::JavaScript,
+                Backend::TreeSitter(Box::new(typescript::Check)),
+            ),
+            (
+                Language::Tsx,
+                Backend::TreeSitter(Box::new(typescript::Check)),
+            ),
             (Language::Rust, Backend::TreeSitter(Box::new(rust::Check))),
             (Language::Vue, Backend::TreeSitter(Box::new(vue::Check))),
             (Language::Sql, Backend::Text(Box::new(sql_text::Check))),
@@ -95,12 +107,16 @@ mod helper_tests {
 
     #[test]
     fn flags_classic_pagination() {
-        assert!(sql_uses_offset_pagination("SELECT * FROM t LIMIT 10 OFFSET 100"));
+        assert!(sql_uses_offset_pagination(
+            "SELECT * FROM t LIMIT 10 OFFSET 100"
+        ));
     }
 
     #[test]
     fn flags_lowercase_pagination() {
-        assert!(sql_uses_offset_pagination("select * from t limit ? offset ?"));
+        assert!(sql_uses_offset_pagination(
+            "select * from t limit ? offset ?"
+        ));
     }
 
     #[test]
@@ -117,6 +133,8 @@ mod helper_tests {
     #[test]
     fn does_not_flag_identifiers_containing_keywords() {
         // `offset_value` and `limit_value` are identifiers, not keywords.
-        assert!(!sql_uses_offset_pagination("offset_value = 1; limit_value = 2;"));
+        assert!(!sql_uses_offset_pagination(
+            "offset_value = 1; limit_value = 2;"
+        ));
     }
 }

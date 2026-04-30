@@ -57,7 +57,8 @@ mod tests {
 
     #[test]
     fn allows_no_credentials() {
-        let src = "import { cors } from '@elysiajs/cors';\napp.use(cors({ origin: 'https://x.com' }));";
+        let src =
+            "import { cors } from '@elysiajs/cors';\napp.use(cors({ origin: 'https://x.com' }));";
         assert!(run_on(src).is_empty());
     }
 

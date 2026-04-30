@@ -1,7 +1,5 @@
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::rules::jsx::{
-    jsx_attribute_name, jsx_attribute_string_value, jsx_element_tag_name,
-};
+use crate::rules::jsx::{jsx_attribute_name, jsx_attribute_string_value, jsx_element_tag_name};
 
 const INTERACTIVE_TAGS: &[&str] = &["button", "a"];
 
@@ -23,7 +21,10 @@ fn has_explicit_size(classes: &str) -> bool {
                     return true;
                 }
                 if let Ok(n) = rest.parse::<u32>()
-                    && n >= 11 { return true; }
+                    && n >= 11
+                {
+                    return true;
+                }
             }
         }
         false
@@ -109,12 +110,18 @@ mod tests {
 
     #[test]
     fn flags_small_button() {
-        assert_eq!(run(r#"export const A = () => <button className="px-2 py-1 text-xs" />;"#).len(), 1);
+        assert_eq!(
+            run(r#"export const A = () => <button className="px-2 py-1 text-xs" />;"#).len(),
+            1
+        );
     }
 
     #[test]
     fn flags_tiny_anchor() {
-        assert_eq!(run(r#"export const A = () => <a className="p-1" />;"#).len(), 1);
+        assert_eq!(
+            run(r#"export const A = () => <a className="p-1" />;"#).len(),
+            1
+        );
     }
 
     #[test]

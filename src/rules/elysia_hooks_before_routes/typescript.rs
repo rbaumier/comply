@@ -2,7 +2,9 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-const ROUTE_METHODS: &[&str] = &["get", "post", "put", "patch", "delete", "all", "head", "options"];
+const ROUTE_METHODS: &[&str] = &[
+    "get", "post", "put", "patch", "delete", "all", "head", "options",
+];
 const HOOK_METHODS: &[&str] = &[
     "onBeforeHandle",
     "onAfterHandle",
@@ -16,21 +18,30 @@ const HOOK_METHODS: &[&str] = &[
 /// Walk the chain `app.foo(...).bar(...).baz(...)` from the outermost call
 /// down to the innermost, returning the sequence of method names in *call
 /// order* (i.e. `[foo, bar, baz]`).
-fn chain_methods<'a>(node: tree_sitter::Node<'a>, source: &'a [u8]) -> Vec<(String, tree_sitter::Node<'a>)> {
+fn chain_methods<'a>(
+    node: tree_sitter::Node<'a>,
+    source: &'a [u8],
+) -> Vec<(String, tree_sitter::Node<'a>)> {
     let mut out: Vec<(String, tree_sitter::Node<'a>)> = Vec::new();
     let mut cur = node;
     loop {
         if cur.kind() != "call_expression" {
             break;
         }
-        let Some(callee) = cur.child_by_field_name("function") else { break };
+        let Some(callee) = cur.child_by_field_name("function") else {
+            break;
+        };
         if callee.kind() != "member_expression" {
             break;
         }
-        let Some(property) = callee.child_by_field_name("property") else { break };
+        let Some(property) = callee.child_by_field_name("property") else {
+            break;
+        };
         let prop = property.utf8_text(source).unwrap_or("").to_string();
         out.push((prop, cur));
-        let Some(object) = callee.child_by_field_name("object") else { break };
+        let Some(object) = callee.child_by_field_name("object") else {
+            break;
+        };
         cur = object;
     }
     out.reverse();

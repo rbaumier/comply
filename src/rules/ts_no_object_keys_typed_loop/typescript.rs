@@ -21,7 +21,11 @@ fn parse_simple_ident(s: &str) -> Option<(&str, usize)> {
             break;
         }
     }
-    if end == 0 { None } else { Some((&s[..end], end)) }
+    if end == 0 {
+        None
+    } else {
+        Some((&s[..end], end))
+    }
 }
 
 impl TextCheck for Check {

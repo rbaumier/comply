@@ -5,11 +5,15 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
 fn select_caller_is_db(callee: tree_sitter::Node<'_>, source: &[u8]) -> bool {
-    let Some(prop) = callee.child_by_field_name("property") else { return false };
+    let Some(prop) = callee.child_by_field_name("property") else {
+        return false;
+    };
     if prop.utf8_text(source).unwrap_or("") != "select" {
         return false;
     }
-    let Some(object) = callee.child_by_field_name("object") else { return false };
+    let Some(object) = callee.child_by_field_name("object") else {
+        return false;
+    };
     let obj_text = object.utf8_text(source).unwrap_or("");
     matches!(obj_text, "db" | "tx" | "trx")
 }

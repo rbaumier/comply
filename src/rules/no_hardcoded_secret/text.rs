@@ -20,7 +20,25 @@ pub struct Check;
 
 impl TextCheck for Check {
     fn prefilter(&self) -> Option<&'static [&'static str]> {
-        Some(&["ACCESS_TOKEN", "AKIA", "API_KEY", "APIKEY", "gho_", "ghp_", "ghr_", "ghs_", "ghu_", "github_pat_", "PASSWORD", "rk_live_", "rk_test_", "SECRET", "service_account", "sk_live_", "sk_test_"])
+        Some(&[
+            "ACCESS_TOKEN",
+            "AKIA",
+            "API_KEY",
+            "APIKEY",
+            "gho_",
+            "ghp_",
+            "ghr_",
+            "ghs_",
+            "ghu_",
+            "github_pat_",
+            "PASSWORD",
+            "rk_live_",
+            "rk_test_",
+            "SECRET",
+            "service_account",
+            "sk_live_",
+            "sk_test_",
+        ])
     }
 
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
@@ -117,7 +135,11 @@ fn contains_github_token(line: &str) -> bool {
     for prefix in ["ghp_", "gho_", "ghs_", "ghu_", "ghr_", "github_pat_"] {
         if let Some(idx) = line.find(prefix) {
             let rest = &line.as_bytes()[idx + prefix.len()..];
-            if rest.len() >= 20 && rest[..20].iter().all(|b| b.is_ascii_alphanumeric() || *b == b'_') {
+            if rest.len() >= 20
+                && rest[..20]
+                    .iter()
+                    .all(|b| b.is_ascii_alphanumeric() || *b == b'_')
+            {
                 return true;
             }
         }
@@ -140,7 +162,11 @@ fn contains_stripe_key(line: &str) -> bool {
 fn contains_openai_key(line: &str) -> bool {
     if let Some(idx) = line.find("sk-") {
         let rest = &line.as_bytes()[idx + 3..];
-        if rest.len() >= 40 && rest[..40].iter().all(|b| b.is_ascii_alphanumeric() || *b == b'-' || *b == b'_') {
+        if rest.len() >= 40
+            && rest[..40]
+                .iter()
+                .all(|b| b.is_ascii_alphanumeric() || *b == b'-' || *b == b'_')
+        {
             return true;
         }
     }
@@ -180,9 +206,7 @@ fn contains_twilio_key(line: &str) -> bool {
     for i in 0..bytes.len().saturating_sub(34) {
         if bytes[i] == b'S'
             && bytes[i + 1] == b'K'
-            && bytes[i + 2..i + 34]
-                .iter()
-                .all(|b| b.is_ascii_hexdigit())
+            && bytes[i + 2..i + 34].iter().all(|b| b.is_ascii_hexdigit())
         {
             // Ensure the char after the 34-char match is NOT hex (exact 32 hex after SK).
             if i + 34 >= bytes.len() || !bytes[i + 34].is_ascii_hexdigit() {
@@ -210,8 +234,17 @@ fn contains_password_in_url(line: &str) -> bool {
         let rest = &after[colon + 1..];
         if let Some(at) = rest.find('@') {
             if at > 0 && !after[..colon].contains('/') {
-                let credentials_and_host = &after[..colon + 1 + at + 1 + rest[at + 1..].find(|c: char| c == ':' || c == '/').unwrap_or(rest.len() - at - 1)];
-                if WELL_KNOWN_TEST_CREDENTIALS.iter().any(|c| credentials_and_host.contains(c)) {
+                let credentials_and_host = &after[..colon
+                    + 1
+                    + at
+                    + 1
+                    + rest[at + 1..]
+                        .find(|c: char| c == ':' || c == '/')
+                        .unwrap_or(rest.len() - at - 1)];
+                if WELL_KNOWN_TEST_CREDENTIALS
+                    .iter()
+                    .any(|c| credentials_and_host.contains(c))
+                {
                     return false;
                 }
                 return true;
@@ -223,8 +256,10 @@ fn contains_password_in_url(line: &str) -> bool {
 
 fn is_doc_or_comment_line(line: &str) -> bool {
     let trimmed = line.trim_start();
-    trimmed.starts_with("///") || trimmed.starts_with("//!")
-        || trimmed.starts_with("* ") || trimmed.starts_with("*\t")
+    trimmed.starts_with("///")
+        || trimmed.starts_with("//!")
+        || trimmed.starts_with("* ")
+        || trimmed.starts_with("*\t")
         || trimmed.starts_with("/**")
 }
 
@@ -282,10 +317,7 @@ mod tests {
 
     #[test]
     fn flags_keyed_literal() {
-        assert_eq!(
-            run("const API_KEY = 'abcd1234567890abcdef';").len(),
-            1
-        );
+        assert_eq!(run("const API_KEY = 'abcd1234567890abcdef';").len(), 1);
     }
 
     #[test]
@@ -300,10 +332,7 @@ mod tests {
 
     #[test]
     fn flags_slack_token() {
-        assert_eq!(
-            run("const token = 'xoxb-1234567890-abcdefghij';").len(),
-            1
-        );
+        assert_eq!(run("const token = 'xoxb-1234567890-abcdefghij';").len(), 1);
     }
 
     #[test]
@@ -375,7 +404,9 @@ mod tests {
 
     #[test]
     fn allows_postgres_test_default() {
-        assert!(run(r#"const db = "postgres://postgres:postgres@localhost:5432/test";"#).is_empty());
+        assert!(
+            run(r#"const db = "postgres://postgres:postgres@localhost:5432/test";"#).is_empty()
+        );
     }
 
     #[test]

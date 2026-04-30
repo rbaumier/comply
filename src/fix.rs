@@ -128,10 +128,7 @@ fn run_clippy_fix(files: &[&SourceFile], config: &Config) -> Result<usize> {
                 let touched: HashSet<&Path> =
                     files_in_ws.iter().map(|f| f.path.as_path()).collect();
                 if let Err(e) = invoke_clippy_fix(&root, &touched, config) {
-                    eprintln!(
-                        "comply: clippy --fix failed for {}: {e:#}",
-                        root.display()
-                    );
+                    eprintln!("comply: clippy --fix failed for {}: {e:#}", root.display());
                 } else {
                     runs += 1;
                 }
@@ -188,11 +185,7 @@ fn find_workspace_root(file: &Path) -> Option<PathBuf> {
 /// crate, not on a per-file basis, so we can't restrict it to the
 /// files comply was asked about. We accept the broader edit scope
 /// because the alternative (no auto-fix at all on Rust) is worse.
-fn invoke_clippy_fix(
-    workspace: &Path,
-    _touched: &HashSet<&Path>,
-    config: &Config,
-) -> Result<()> {
+fn invoke_clippy_fix(workspace: &Path, _touched: &HashSet<&Path>, config: &Config) -> Result<()> {
     let manifest = workspace.join("Cargo.toml");
     let mut cmd = Command::new("cargo");
     cmd.args([
@@ -242,7 +235,11 @@ mod tests {
     #[test]
     fn find_workspace_root_finds_immediate_cargo_toml() {
         let tmp = TempDir::new().unwrap();
-        fs::write(tmp.path().join("Cargo.toml"), "[package]\nname=\"x\"\nversion=\"0.0.0\"").unwrap();
+        fs::write(
+            tmp.path().join("Cargo.toml"),
+            "[package]\nname=\"x\"\nversion=\"0.0.0\"",
+        )
+        .unwrap();
         let src = tmp.path().join("src");
         fs::create_dir(&src).unwrap();
         let file = src.join("main.rs");
@@ -254,8 +251,16 @@ mod tests {
     fn group_by_workspace_buckets_files_correctly() {
         let tmp_a = TempDir::new().unwrap();
         let tmp_b = TempDir::new().unwrap();
-        fs::write(tmp_a.path().join("Cargo.toml"), "[package]\nname=\"a\"\nversion=\"0.0.0\"").unwrap();
-        fs::write(tmp_b.path().join("Cargo.toml"), "[package]\nname=\"b\"\nversion=\"0.0.0\"").unwrap();
+        fs::write(
+            tmp_a.path().join("Cargo.toml"),
+            "[package]\nname=\"a\"\nversion=\"0.0.0\"",
+        )
+        .unwrap();
+        fs::write(
+            tmp_b.path().join("Cargo.toml"),
+            "[package]\nname=\"b\"\nversion=\"0.0.0\"",
+        )
+        .unwrap();
         let file_a = tmp_a.path().join("src/main.rs");
         let file_b = tmp_b.path().join("src/main.rs");
         fs::create_dir_all(file_a.parent().unwrap()).unwrap();
@@ -263,8 +268,14 @@ mod tests {
         fs::write(&file_a, "fn main() {}").unwrap();
         fs::write(&file_b, "fn main() {}").unwrap();
 
-        let sf_a = SourceFile { path: file_a, language: Language::Rust };
-        let sf_b = SourceFile { path: file_b, language: Language::Rust };
+        let sf_a = SourceFile {
+            path: file_a,
+            language: Language::Rust,
+        };
+        let sf_b = SourceFile {
+            path: file_b,
+            language: Language::Rust,
+        };
         let groups = group_by_workspace(&[&sf_a, &sf_b]);
         assert_eq!(groups.len(), 2);
     }

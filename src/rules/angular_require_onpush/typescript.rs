@@ -10,7 +10,9 @@ pub struct Check;
 const DECORATOR: &str = "@Component(";
 
 impl TextCheck for Check {
-    fn prefilter(&self) -> Option<&'static [&'static str]> { Some(&["@Component("]) }
+    fn prefilter(&self) -> Option<&'static [&'static str]> {
+        Some(&["@Component("])
+    }
 
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
         if !ctx.source.contains(DECORATOR) {
@@ -44,8 +46,9 @@ impl TextCheck for Check {
                     line,
                     column,
                     rule_id: super::META.id.into(),
-                    message: "`@Component` is missing `changeDetection: ChangeDetectionStrategy.OnPush`."
-                        .into(),
+                    message:
+                        "`@Component` is missing `changeDetection: ChangeDetectionStrategy.OnPush`."
+                            .into(),
                     severity: Severity::Warning,
                     span: None,
                 });

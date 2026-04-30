@@ -15,11 +15,15 @@ fn is_prevent_default_call(node: tree_sitter::Node, source: &[u8]) -> bool {
     if node.kind() != "call_expression" {
         return false;
     }
-    let Some(callee) = node.child_by_field_name("function") else { return false };
+    let Some(callee) = node.child_by_field_name("function") else {
+        return false;
+    };
     if callee.kind() != "member_expression" {
         return false;
     }
-    let Some(prop) = callee.child_by_field_name("property") else { return false };
+    let Some(prop) = callee.child_by_field_name("property") else {
+        return false;
+    };
     prop.utf8_text(source).ok() == Some("preventDefault")
 }
 
@@ -113,9 +117,12 @@ mod tests {
 
     #[test]
     fn allows_prevent_default_outside_jsx() {
-        assert!(run(r#"
+        assert!(
+            run(r#"
 function handler(e) { e.preventDefault(); }
-"#).is_empty());
+"#)
+            .is_empty()
+        );
     }
 
     #[test]

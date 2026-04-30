@@ -68,7 +68,10 @@ mod tests {
 
     #[test]
     fn flags_member_access() {
-        assert_eq!(run("<script setup>\nwatch(state.count, () => {})\n</script>").len(), 1);
+        assert_eq!(
+            run("<script setup>\nwatch(state.count, () => {})\n</script>").len(),
+            1
+        );
     }
 
     #[test]

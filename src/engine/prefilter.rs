@@ -51,7 +51,10 @@ mod tests {
 
     #[test]
     fn multiple_literals_any_match() {
-        assert!(source_matches_prefilter("...bar...", &finders(&["foo", "bar"])));
+        assert!(source_matches_prefilter(
+            "...bar...",
+            &finders(&["foo", "bar"])
+        ));
     }
 
     #[test]

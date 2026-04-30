@@ -25,18 +25,8 @@ const SERVER_MANAGED_FIELDS: &[&str] = &[
 ];
 
 const OUTPUT_SUFFIXES: &[&str] = &[
-    "Response",
-    "Output",
-    "Dto",
-    "DTO",
-    "Result",
-    "Reply",
-    "Payload",
-    "View",
-    "Entity",
-    "Model",
-    "Row",
-    "Record",
+    "Response", "Output", "Dto", "DTO", "Result", "Reply", "Payload", "View", "Entity", "Model",
+    "Row", "Record",
 ];
 
 const INPUT_SUFFIXES: &[&str] = &[
@@ -119,7 +109,10 @@ fn check_decl(
 fn collect_type_positions(
     program: tree_sitter::Node<'_>,
     source: &[u8],
-) -> (std::collections::HashSet<String>, std::collections::HashSet<String>) {
+) -> (
+    std::collections::HashSet<String>,
+    std::collections::HashSet<String>,
+) {
     use std::collections::HashSet;
     let mut inputs: HashSet<String> = HashSet::new();
     let mut outputs: HashSet<String> = HashSet::new();
@@ -306,20 +299,24 @@ mod tests {
     #[test]
     fn allows_response_type_with_server_fields() {
         // Response suffix used as return type only — that's fine.
-        assert!(run(
-            "interface UserResponse { id: string; name: string; createdAt: string }\n\
+        assert!(
+            run(
+                "interface UserResponse { id: string; name: string; createdAt: string }\n\
              function get(): UserResponse { return {} as UserResponse; }",
-        )
-        .is_empty());
+            )
+            .is_empty()
+        );
     }
 
     #[test]
     fn allows_input_without_server_fields() {
-        assert!(run(
-            "interface CreateUserInput { name: string; email: string }\n\
+        assert!(
+            run(
+                "interface CreateUserInput { name: string; email: string }\n\
              function create(input: CreateUserInput) { return input; }",
-        )
-        .is_empty());
+            )
+            .is_empty()
+        );
     }
 
     #[test]
@@ -327,11 +324,13 @@ mod tests {
         // REVIEW regression: a "bare entity" type with server fields used
         // *only* in a return position should NOT be flagged — it is acting
         // purely as an output DTO.
-        assert!(run(
-            "interface User { id: string; name: string; createdAt: string }\n\
+        assert!(
+            run(
+                "interface User { id: string; name: string; createdAt: string }\n\
              function getUser(): User { return {} as User; }",
-        )
-        .is_empty());
+            )
+            .is_empty()
+        );
     }
 
     #[test]

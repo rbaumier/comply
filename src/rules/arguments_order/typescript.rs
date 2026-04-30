@@ -39,12 +39,13 @@ fn collect_function_signatures(
     while let Some(node) = stack.pop() {
         if node.kind() == "function_declaration"
             && let Some(name_node) = node.child_by_field_name("name")
-                && let Ok(name) = name_node.utf8_text(source) {
-                    let params = extract_param_names(node, source);
-                    if !params.is_empty() {
-                        out.insert(name.to_string(), params);
-                    }
-                }
+            && let Ok(name) = name_node.utf8_text(source)
+        {
+            let params = extract_param_names(node, source);
+            if !params.is_empty() {
+                out.insert(name.to_string(), params);
+            }
+        }
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
             stack.push(child);
@@ -68,9 +69,10 @@ fn extract_param_names(func: tree_sitter::Node<'_>, source: &[u8]) -> Vec<String
             "required_parameter" | "optional_parameter" => {
                 if let Some(pattern) = child.child_by_field_name("pattern")
                     && pattern.kind() == "identifier"
-                        && let Ok(name) = pattern.utf8_text(source) {
-                            result.push(name.to_string());
-                        }
+                    && let Ok(name) = pattern.utf8_text(source)
+                {
+                    result.push(name.to_string());
+                }
             }
             _ => {}
         }
@@ -89,11 +91,12 @@ fn check_calls(
     while let Some(node) = stack.pop() {
         if node.kind() == "call_expression"
             && let Some(callee) = node.child_by_field_name("function")
-                && callee.kind() == "identifier"
-                    && let Ok(name) = callee.utf8_text(source)
-                        && let Some(params) = signatures.get(name) {
-                            check_call_args(node, source, path, name, params, diagnostics);
-                        }
+            && callee.kind() == "identifier"
+            && let Ok(name) = callee.utf8_text(source)
+            && let Some(params) = signatures.get(name)
+        {
+            check_call_args(node, source, path, name, params, diagnostics);
+        }
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
             stack.push(child);
@@ -109,7 +112,9 @@ fn check_call_args(
     params: &[String],
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let Some(args_node) = call.child_by_field_name("arguments") else { return; };
+    let Some(args_node) = call.child_by_field_name("arguments") else {
+        return;
+    };
 
     let mut args: Vec<Option<String>> = Vec::new();
     let mut cursor = args_node.walk();
@@ -142,13 +147,19 @@ fn check_call_args(
 /// Returns (arg1, arg2) if they appear to be swapped based on parameter names.
 fn find_likely_swap(params: &[String], args: &[Option<String>]) -> Option<(String, String)> {
     // Need at least 2 params and args to detect a swap
-    if params.len() < 2 || args.len() < 2 { return None; }
+    if params.len() < 2 || args.len() < 2 {
+        return None;
+    }
 
     // Look for cases where arg[i] matches param[j] and arg[j] matches param[i]
     for i in 0..params.len().min(args.len()) {
         for j in (i + 1)..params.len().min(args.len()) {
-            let Some(arg_i) = &args[i] else { continue; };
-            let Some(arg_j) = &args[j] else { continue; };
+            let Some(arg_i) = &args[i] else {
+                continue;
+            };
+            let Some(arg_j) = &args[j] else {
+                continue;
+            };
 
             // Check if args are swapped relative to params
             // arg[i] matches param[j] AND arg[j] matches param[i]
@@ -168,15 +179,15 @@ fn names_match(arg: &str, param: &str) -> bool {
 }
 
 fn normalize_name(name: &str) -> String {
-    name.to_lowercase()
-        .trim_start_matches('_')
-        .to_string()
+    name.to_lowercase().trim_start_matches('_').to_string()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn run(code: &str) -> Vec<Diagnostic> { crate::rules::test_helpers::run_ts(code, &Check) }
+    fn run(code: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_ts(code, &Check)
+    }
 
     #[test]
     fn flags_swapped_args() {

@@ -59,7 +59,11 @@ impl TextCheck for Check {
                     rule_id: super::META.id.into(),
                     message: format!(
                         "`{klass}` jumps when the mobile URL bar collapses — use `{}` instead.",
-                        if klass.starts_with('w') { "w-full" } else { "min-h-dvh" }
+                        if klass.starts_with('w') {
+                            "w-full"
+                        } else {
+                            "min-h-dvh"
+                        }
                     ),
                     severity: Severity::Warning,
                     span: None,
@@ -85,12 +89,18 @@ mod tests {
 
     #[test]
     fn flags_h_screen() {
-        assert_eq!(run(r#"const x = <div className="flex h-screen" />;"#).len(), 1);
+        assert_eq!(
+            run(r#"const x = <div className="flex h-screen" />;"#).len(),
+            1
+        );
     }
 
     #[test]
     fn flags_both() {
-        assert_eq!(run(r#"const x = <div className="w-screen h-screen" />;"#).len(), 2);
+        assert_eq!(
+            run(r#"const x = <div className="w-screen h-screen" />;"#).len(),
+            2
+        );
     }
 
     #[test]

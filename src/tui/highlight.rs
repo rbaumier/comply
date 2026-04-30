@@ -84,4 +84,3 @@ pub fn highlight_lines(path: &Path, lines: &[(usize, &str)]) -> Vec<Vec<(Color, 
     }
     result
 }
-

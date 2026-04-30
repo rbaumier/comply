@@ -22,14 +22,22 @@ fn extract_route_path<'a>(node: tree_sitter::Node<'_>, source: &'a [u8]) -> Opti
     match node.kind() {
         "string" => {
             let inner = text.trim_matches(|c| c == '"' || c == '\'');
-            if inner.starts_with('/') { Some(inner) } else { None }
+            if inner.starts_with('/') {
+                Some(inner)
+            } else {
+                None
+            }
         }
         "template_string" => {
             if text.contains("${") {
                 return None;
             }
             let inner = text.trim_matches('`');
-            if inner.starts_with('/') { Some(inner) } else { None }
+            if inner.starts_with('/') {
+                Some(inner)
+            } else {
+                None
+            }
         }
         _ => None,
     }
@@ -40,7 +48,9 @@ const INFRA_PATHS: &[&str] = &[
 ];
 
 fn is_infra_path(path: &str) -> bool {
-    INFRA_PATHS.iter().any(|p| path == *p || path.starts_with(&format!("{p}/")))
+    INFRA_PATHS
+        .iter()
+        .any(|p| path == *p || path.starts_with(&format!("{p}/")))
         || path.starts_with("/dev/")
 }
 
@@ -49,7 +59,9 @@ fn has_version_prefix(path: &str) -> bool {
         return false;
     }
     let rest = &path[2..];
-    let digit_end = rest.find(|c: char| !c.is_ascii_digit()).unwrap_or(rest.len());
+    let digit_end = rest
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(rest.len());
     if digit_end == 0 {
         return false;
     }

@@ -30,7 +30,11 @@ pub struct Check;
 
 impl AstCheck for Check {
     fn interested_kinds(&self) -> Option<&'static [&'static str]> {
-        Some(&["function_declaration", "method_definition", "variable_declarator"])
+        Some(&[
+            "function_declaration",
+            "method_definition",
+            "variable_declarator",
+        ])
     }
 
     fn visit_node(
@@ -43,14 +47,12 @@ impl AstCheck for Check {
         let max_comment_tokens = ctx
             .config
             .threshold("comment-paraphrases-code", "max_comment_tokens");
-        let overlap_threshold = ctx
-            .config
-            .float("comment-paraphrases-code", "overlap_threshold") as f32;
+        let overlap_threshold =
+            ctx.config
+                .float("comment-paraphrases-code", "overlap_threshold") as f32;
         let source = ctx.source.as_bytes();
         let name_node = match node.kind() {
-            "function_declaration" | "method_definition" => {
-                node.child_by_field_name("name")
-            }
+            "function_declaration" | "method_definition" => node.child_by_field_name("name"),
             "variable_declarator" => {
                 let value = node.child_by_field_name("value");
                 if !matches!(
@@ -64,7 +66,9 @@ impl AstCheck for Check {
             _ => return,
         };
         let Some(name_node) = name_node else { return };
-        let Ok(name) = name_node.utf8_text(source) else { return };
+        let Ok(name) = name_node.utf8_text(source) else {
+            return;
+        };
         // The comment must precede the documented item. For function
         // declarations the relevant sibling is the function itself; for
         // arrow-function variable_declarators the comment lives above
@@ -75,11 +79,15 @@ impl AstCheck for Check {
         } else {
             node
         };
-        let Some(prev) = anchor.prev_named_sibling() else { return };
+        let Some(prev) = anchor.prev_named_sibling() else {
+            return;
+        };
         if prev.kind() != "comment" {
             return;
         }
-        let Ok(comment_text) = prev.utf8_text(source) else { return };
+        let Ok(comment_text) = prev.utf8_text(source) else {
+            return;
+        };
         // Skip JSDoc — that's a different rule's responsibility.
         if comment_text.starts_with("/**") {
             return;
@@ -176,14 +184,9 @@ fn tokenize_comment(body: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
-
-
         crate::rules::test_helpers::run_ts(source, &Check)
-
-
     }
 
     #[test]
@@ -203,7 +206,8 @@ mod tests {
     #[test]
     fn allows_informative_comment() {
         // Comment explains WHY, vocabulary diverges → no flag.
-        let source = "// Avoid double-fire when the user double-clicks fast\nfunction handleClick() {}";
+        let source =
+            "// Avoid double-fire when the user double-clicks fast\nfunction handleClick() {}";
         assert!(run_on(source).is_empty());
     }
 
@@ -224,13 +228,25 @@ mod tests {
     #[test]
     fn unit_tokenize_identifier() {
         assert_eq!(tokenize_identifier("handleClick"), vec!["handle", "click"]);
-        assert_eq!(tokenize_identifier("fetch_user_data"), vec!["fetch", "user", "data"]);
-        assert_eq!(tokenize_identifier("HTTPClient"), vec!["h", "t", "t", "p", "client"]);
+        assert_eq!(
+            tokenize_identifier("fetch_user_data"),
+            vec!["fetch", "user", "data"]
+        );
+        assert_eq!(
+            tokenize_identifier("HTTPClient"),
+            vec!["h", "t", "t", "p", "client"]
+        );
     }
 
     #[test]
     fn unit_tokenize_comment() {
-        assert_eq!(tokenize_comment("the handle click"), vec!["handle", "click"]);
-        assert_eq!(tokenize_comment("a fetch and a parse"), vec!["fetch", "parse"]);
+        assert_eq!(
+            tokenize_comment("the handle click"),
+            vec!["handle", "click"]
+        );
+        assert_eq!(
+            tokenize_comment("a fetch and a parse"),
+            vec!["fetch", "parse"]
+        );
     }
 }

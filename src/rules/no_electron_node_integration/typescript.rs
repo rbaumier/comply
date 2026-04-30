@@ -25,7 +25,9 @@ fn unwrap_object(mut node: Node<'_>) -> Option<Node<'_>> {
     loop {
         match node.kind() {
             "object" => return Some(node),
-            "parenthesized_expression" | "as_expression" | "satisfies_expression"
+            "parenthesized_expression"
+            | "as_expression"
+            | "satisfies_expression"
             | "type_assertion" => {
                 node = node.named_child(0)?;
             }

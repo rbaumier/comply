@@ -45,12 +45,17 @@ mod tests {
 
     #[test]
     fn flags_onclick_with_role_no_tabindex() {
-        assert_eq!(run(r#"const x = <div onClick={handler} role="button" />;"#).len(), 1);
+        assert_eq!(
+            run(r#"const x = <div onClick={handler} role="button" />;"#).len(),
+            1
+        );
     }
 
     #[test]
     fn allows_onclick_with_role_and_tabindex() {
-        assert!(run(r#"const x = <div onClick={handler} role="button" tabIndex={0} />;"#).is_empty());
+        assert!(
+            run(r#"const x = <div onClick={handler} role="button" tabIndex={0} />;"#).is_empty()
+        );
     }
 
     #[test]

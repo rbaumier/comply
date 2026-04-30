@@ -88,9 +88,9 @@ fn enclosing_for_body_span(
             AstKind::ForStatement(stmt) => return Some(stmt.body.span()),
             AstKind::ForOfStatement(stmt) => return Some(stmt.body.span()),
             AstKind::ForInStatement(stmt) => return Some(stmt.body.span()),
-            AstKind::Function(_)
-            | AstKind::ArrowFunctionExpression(_)
-            | AstKind::Program(_) => return None,
+            AstKind::Function(_) | AstKind::ArrowFunctionExpression(_) | AstKind::Program(_) => {
+                return None;
+            }
             _ => {}
         }
     }

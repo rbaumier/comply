@@ -10,9 +10,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
 use crate::rules::vue_template_helpers::{collect_attr_names, extract_elements, is_vue_file};
 
-const OBSOLETE_TAGS: &[&str] = &[
-    "center", "font", "marquee", "blink", "strike", "big", "tt",
-];
+const OBSOLETE_TAGS: &[&str] = &["center", "font", "marquee", "blink", "strike", "big", "tt"];
 
 const OBSOLETE_ATTRS: &[&str] = &["align", "bgcolor", "border"];
 
@@ -33,9 +31,7 @@ impl TextCheck for Check {
                     line: elem.line,
                     column: 1,
                     rule_id: super::META.id.into(),
-                    message: format!(
-                        "Obsolete HTML tag `<{tag_lower}>`. Use CSS instead."
-                    ),
+                    message: format!("Obsolete HTML tag `<{tag_lower}>`. Use CSS instead."),
                     severity: Severity::Warning,
                     span: None,
                 });

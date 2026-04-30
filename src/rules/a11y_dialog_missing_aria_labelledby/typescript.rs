@@ -9,10 +9,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::jsx::{jsx_attribute_name, jsx_attribute_string_value, jsx_element_tag_name};
 
 fn tag_is_dialog(tag: &str) -> bool {
-    tag == "dialog"
-        || tag == "Dialog"
-        || tag.ends_with("Dialog")
-        || tag == "AlertDialog"
+    tag == "dialog" || tag == "Dialog" || tag.ends_with("Dialog") || tag == "AlertDialog"
 }
 
 crate::ast_check! { on ["jsx_self_closing_element", "jsx_opening_element"] =>

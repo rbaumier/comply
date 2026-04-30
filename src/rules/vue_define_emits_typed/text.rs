@@ -43,7 +43,10 @@ mod tests {
     }
     #[test]
     fn flags_array_form() {
-        assert_eq!(run("const emit = defineEmits(['change', 'update'])").len(), 1);
+        assert_eq!(
+            run("const emit = defineEmits(['change', 'update'])").len(),
+            1
+        );
     }
     #[test]
     fn allows_typed_form() {

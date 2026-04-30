@@ -44,8 +44,13 @@ fn is_component_function(n: tree_sitter::Node<'_>, source: &[u8]) -> bool {
             if !name_is_pascal(n.child_by_field_name("name"), source) {
                 return false;
             }
-            let Some(v) = n.child_by_field_name("value") else { return false; };
-            matches!(v.kind(), "arrow_function" | "function_expression" | "function")
+            let Some(v) = n.child_by_field_name("value") else {
+                return false;
+            };
+            matches!(
+                v.kind(),
+                "arrow_function" | "function_expression" | "function"
+            )
         }
         _ => false,
     }
@@ -97,14 +102,24 @@ fn scan_render_body(
 fn is_nested_function(n: tree_sitter::Node<'_>) -> bool {
     matches!(
         n.kind(),
-        "arrow_function" | "function_expression" | "function" | "function_declaration" | "method_definition"
+        "arrow_function"
+            | "function_expression"
+            | "function"
+            | "function_declaration"
+            | "method_definition"
     )
 }
 
 fn is_safe_callback_hook(n: tree_sitter::Node<'_>, source: &[u8]) -> bool {
-    if n.kind() != "call_expression" { return false; }
-    let Some(callee) = n.child_by_field_name("function") else { return false; };
-    let Ok(name) = callee.utf8_text(source) else { return false; };
+    if n.kind() != "call_expression" {
+        return false;
+    }
+    let Some(callee) = n.child_by_field_name("function") else {
+        return false;
+    };
+    let Ok(name) = callee.utf8_text(source) else {
+        return false;
+    };
     SAFE_CALLBACK_HOOKS.contains(&name)
 }
 
@@ -114,8 +129,12 @@ fn offending_expression(n: tree_sitter::Node<'_>, source: &[u8]) -> Option<&'sta
             let callee = n.child_by_field_name("function")?;
             let text = callee.utf8_text(source).ok()?;
             match text {
-                "Date.now" => Some("`Date.now()` in render causes hydration mismatch. Move to useEffect or a loader."),
-                "Math.random" => Some("`Math.random()` in render causes hydration mismatch. Move to useEffect or a loader."),
+                "Date.now" => Some(
+                    "`Date.now()` in render causes hydration mismatch. Move to useEffect or a loader.",
+                ),
+                "Math.random" => Some(
+                    "`Math.random()` in render causes hydration mismatch. Move to useEffect or a loader.",
+                ),
                 _ => None,
             }
         }
@@ -128,7 +147,9 @@ fn offending_expression(n: tree_sitter::Node<'_>, source: &[u8]) -> Option<&'sta
                 let mut cursor = args.walk();
                 let has_value = args.children(&mut cursor).any(|c| c.is_named());
                 if !has_value {
-                    return Some("`new Date()` in render causes hydration mismatch. Move to useEffect or a loader.");
+                    return Some(
+                        "`new Date()` in render causes hydration mismatch. Move to useEffect or a loader.",
+                    );
                 }
             }
             None

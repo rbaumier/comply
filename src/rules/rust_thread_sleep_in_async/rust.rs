@@ -50,8 +50,7 @@ fn is_thread_sleep_call(text: &str, source: &str) -> bool {
 fn has_std_thread_import(source: &str) -> bool {
     source.lines().any(|line| {
         let trimmed = line.trim();
-        trimmed.starts_with("use std::thread")
-            || trimmed.starts_with("use ::std::thread")
+        trimmed.starts_with("use std::thread") || trimmed.starts_with("use ::std::thread")
     })
 }
 
@@ -60,31 +59,23 @@ fn has_async_sleep_import(source: &str) -> bool {
     source.lines().any(|line| {
         let trimmed = line.trim();
         trimmed.starts_with("use tokio::time::sleep")
-            || (trimmed.starts_with("use tokio::time::{")
-                && trimmed.contains("sleep"))
+            || (trimmed.starts_with("use tokio::time::{") && trimmed.contains("sleep"))
             || trimmed.starts_with("use async_std::task::sleep")
-            || (trimmed.starts_with("use async_std::task::{")
-                && trimmed.contains("sleep"))
+            || (trimmed.starts_with("use async_std::task::{") && trimmed.contains("sleep"))
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
-
-
         crate::rules::test_helpers::run_rust(source, &Check)
-
-
     }
 
     #[test]
     fn flags_thread_sleep_in_async_fn() {
-        let source =
-            "async fn f() { std::thread::sleep(std::time::Duration::from_secs(1)); }";
+        let source = "async fn f() { std::thread::sleep(std::time::Duration::from_secs(1)); }";
         assert_eq!(run_on(source).len(), 1);
     }
 
@@ -108,22 +99,19 @@ mod tests {
 
     #[test]
     fn allows_bare_async_std_sleep_import_in_async_fn() {
-        let source =
-            "use async_std::task::sleep;\nasync fn f() { sleep(d).await; }";
+        let source = "use async_std::task::sleep;\nasync fn f() { sleep(d).await; }";
         assert!(run_on(source).is_empty());
     }
 
     #[test]
     fn flags_bare_sleep_with_std_thread_import() {
-        let source =
-            "use std::thread::sleep;\nasync fn f() { sleep(d); }";
+        let source = "use std::thread::sleep;\nasync fn f() { sleep(d); }";
         assert_eq!(run_on(source).len(), 1);
     }
 
     #[test]
     fn flags_bare_sleep_with_std_thread_module_import() {
-        let source =
-            "use std::thread;\nasync fn f() { thread::sleep(d); }";
+        let source = "use std::thread;\nasync fn f() { thread::sleep(d); }";
         assert_eq!(run_on(source).len(), 1);
     }
 

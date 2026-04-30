@@ -54,7 +54,10 @@ mod tests {
 
     #[test]
     fn flags_lazy_static_macro() {
-        assert_eq!(run("lazy_static! { static ref FOO: String = String::new(); }").len(), 1);
+        assert_eq!(
+            run("lazy_static! { static ref FOO: String = String::new(); }").len(),
+            1
+        );
     }
 
     #[test]
@@ -64,11 +67,18 @@ mod tests {
 
     #[test]
     fn allows_std_once_lock() {
-        assert!(run("static FOO: std::sync::OnceLock<String> = std::sync::OnceLock::new();").is_empty());
+        assert!(
+            run("static FOO: std::sync::OnceLock<String> = std::sync::OnceLock::new();").is_empty()
+        );
     }
 
     #[test]
     fn allows_lazy_lock() {
-        assert!(run("static FOO: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| compute());").is_empty());
+        assert!(
+            run(
+                "static FOO: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| compute());"
+            )
+            .is_empty()
+        );
     }
 }

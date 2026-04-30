@@ -21,6 +21,9 @@ pub const META: RuleMeta = RuleMeta {
 pub fn register() -> RuleDef {
     RuleDef {
         meta: META,
-        backends: vec![(Language::Dockerfile, Backend::TreeSitter(Box::new(typescript::Check)))],
+        backends: vec![(
+            Language::Dockerfile,
+            Backend::TreeSitter(Box::new(typescript::Check)),
+        )],
     }
 }

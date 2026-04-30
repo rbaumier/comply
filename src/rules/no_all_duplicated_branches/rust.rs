@@ -33,9 +33,10 @@ fn collect_if_branches(if_node: tree_sitter::Node, source: &[u8]) -> Vec<String>
     let mut branches = Vec::new();
 
     if let Some(consequence) = if_node.child_by_field_name("consequence")
-        && let Some(text) = block_body_text(consequence, source) {
-            branches.push(normalize(text));
-        }
+        && let Some(text) = block_body_text(consequence, source)
+    {
+        branches.push(normalize(text));
+    }
 
     if let Some(alternative) = if_node.child_by_field_name("alternative") {
         match alternative.kind() {
@@ -48,9 +49,10 @@ fn collect_if_branches(if_node: tree_sitter::Node, source: &[u8]) -> Vec<String>
                         return branches;
                     }
                     if child.kind() == "block"
-                        && let Some(text) = block_body_text(child, source) {
-                            branches.push(normalize(text));
-                        }
+                        && let Some(text) = block_body_text(child, source)
+                    {
+                        branches.push(normalize(text));
+                    }
                 }
             }
             "if_expression" => {
@@ -84,18 +86,19 @@ impl AstCheck for Check {
         let source_bytes = ctx.source.as_bytes();
         match node.kind() {
             "if_expression" => {
-                    if let Some(parent) = node.parent()
-                        && parent.kind() == "else_clause" {
-                            return;
-                        }
+                if let Some(parent) = node.parent()
+                    && parent.kind() == "else_clause"
+                {
+                    return;
+                }
 
-                    let branches = collect_if_branches(node, source_bytes);
-                    if branches.len() >= 2
-                        && !branches[0].is_empty()
-                        && branches.iter().all(|b| *b == branches[0])
-                    {
-                        let pos = node.start_position();
-                        diagnostics.push(Diagnostic {
+                let branches = collect_if_branches(node, source_bytes);
+                if branches.len() >= 2
+                    && !branches[0].is_empty()
+                    && branches.iter().all(|b| *b == branches[0])
+                {
+                    let pos = node.start_position();
+                    diagnostics.push(Diagnostic {
                             path: std::sync::Arc::clone(&ctx.path_arc),
                             line: pos.row + 1,
                             column: pos.column + 1,
@@ -107,25 +110,26 @@ impl AstCheck for Check {
                             severity: Severity::Error,
                             span: None,
                         });
+                }
+            }
+            "match_expression" => {
+                let mut arm_bodies: Vec<String> = Vec::new();
+                let mut cursor = node.walk();
+                for child in node.named_children(&mut cursor) {
+                    if child.kind() == "match_arm"
+                        && let Some(body) = child.child_by_field_name("value")
+                        && let Ok(text) = body.utf8_text(source_bytes)
+                    {
+                        arm_bodies.push(normalize(text));
                     }
                 }
-                "match_expression" => {
-                    let mut arm_bodies: Vec<String> = Vec::new();
-                    let mut cursor = node.walk();
-                    for child in node.named_children(&mut cursor) {
-                        if child.kind() == "match_arm"
-                            && let Some(body) = child.child_by_field_name("value")
-                                && let Ok(text) = body.utf8_text(source_bytes) {
-                                    arm_bodies.push(normalize(text));
-                                }
-                    }
 
-                    if arm_bodies.len() >= 2
-                        && !arm_bodies[0].is_empty()
-                        && arm_bodies.iter().all(|b| *b == arm_bodies[0])
-                    {
-                        let pos = node.start_position();
-                        diagnostics.push(Diagnostic {
+                if arm_bodies.len() >= 2
+                    && !arm_bodies[0].is_empty()
+                    && arm_bodies.iter().all(|b| *b == arm_bodies[0])
+                {
+                    let pos = node.start_position();
+                    diagnostics.push(Diagnostic {
                             path: std::sync::Arc::clone(&ctx.path_arc),
                             line: pos.row + 1,
                             column: pos.column + 1,
@@ -137,8 +141,8 @@ impl AstCheck for Check {
                             severity: Severity::Error,
                             span: None,
                         });
-                    }
                 }
+            }
             _ => {}
         }
     }

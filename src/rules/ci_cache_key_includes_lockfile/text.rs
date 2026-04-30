@@ -1,7 +1,9 @@
 //! Flag `actions/cache` steps whose `key:` lacks `hashFiles(...)`.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::rules::yaml_k8s_helpers::{find_pair, pair_key_text, pair_scalar_value, pair_value_node};
+use crate::rules::yaml_k8s_helpers::{
+    find_pair, pair_key_text, pair_scalar_value, pair_value_node,
+};
 
 /// A `block_sequence_item` (a step) is the parent of the `uses:` pair's
 /// mapping. Walk up twice to reach it so we can look for sibling `with:`.

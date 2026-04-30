@@ -33,7 +33,9 @@ impl TextCheck for Check {
                         line: i + 1,
                         column: match_start + 1,
                         rule_id: super::META.id.into(),
-                        message: "Redundant `type` attribute: this is the default and can be omitted.".into(),
+                        message:
+                            "Redundant `type` attribute: this is the default and can be omitted."
+                                .into(),
                         severity: Severity::Warning,
                         span: None,
                     });

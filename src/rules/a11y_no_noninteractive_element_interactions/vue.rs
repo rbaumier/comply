@@ -62,7 +62,8 @@ mod tests {
 
     #[test]
     fn allows_with_role() {
-        let source = "<template>\n  <div @click=\"handler\" role=\"button\">Click</div>\n</template>";
+        let source =
+            "<template>\n  <div @click=\"handler\" role=\"button\">Click</div>\n</template>";
         assert!(run(source).is_empty());
     }
 }

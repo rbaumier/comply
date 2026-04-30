@@ -194,8 +194,7 @@ fn draw_preview(frame: &mut Frame, app: &mut App, area: Rect) {
                 .alignment(Alignment::Center);
                 let y_offset = inner.height / 2;
                 if y_offset < inner.height {
-                    let centered =
-                        Rect::new(inner.x, inner.y + y_offset, inner.width, 1);
+                    let centered = Rect::new(inner.x, inner.y + y_offset, inner.width, 1);
                     frame.render_widget(msg, centered);
                 }
                 return;
@@ -248,7 +247,8 @@ fn draw_preview(frame: &mut Frame, app: &mut App, area: Rect) {
                         Span::styled(carets, sev_style),
                     ]));
 
-                    let box_width = inner.width.saturating_sub(gutter_pad.len() as u16 + 2) as usize;
+                    let box_width =
+                        inner.width.saturating_sub(gutter_pad.len() as u16 + 2) as usize;
                     let border_style = Style::default().fg(Color::DarkGray);
                     lines.push(Line::from(vec![
                         Span::styled(&gutter_pad, border_style),

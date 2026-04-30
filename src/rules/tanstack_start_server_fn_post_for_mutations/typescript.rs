@@ -45,10 +45,11 @@ fn find_create_server_fn_call<'a>(
     while let Some(n) = stack.pop() {
         if n.kind() == "call_expression"
             && let Some(callee) = n.child_by_field_name("function")
-                && let Ok(text) = callee.utf8_text(source)
-                    && (text == "createServerFn" || text.ends_with(".createServerFn")) {
-                        return Some(n);
-                    }
+            && let Ok(text) = callee.utf8_text(source)
+            && (text == "createServerFn" || text.ends_with(".createServerFn"))
+        {
+            return Some(n);
+        }
         let mut cursor = n.walk();
         for c in n.children(&mut cursor) {
             stack.push(c);
@@ -69,9 +70,15 @@ fn find_pair_value<'a>(
 ) -> Option<tree_sitter::Node<'a>> {
     let mut cursor = object.walk();
     for child in object.children(&mut cursor) {
-        if child.kind() != "pair" { continue; }
-        let Some(k) = child.child_by_field_name("key") else { continue; };
-        let Ok(raw) = k.utf8_text(source) else { continue; };
+        if child.kind() != "pair" {
+            continue;
+        }
+        let Some(k) = child.child_by_field_name("key") else {
+            continue;
+        };
+        let Ok(raw) = k.utf8_text(source) else {
+            continue;
+        };
         let name = raw.trim_matches(|c| c == '"' || c == '\'');
         if name == key {
             return child.child_by_field_name("value");
@@ -113,8 +120,6 @@ mod tests {
 
     #[test]
     fn allows_getter_name() {
-        assert!(
-            run("const getUser = createServerFn({ method: 'GET' }).handler(fn);").is_empty()
-        );
+        assert!(run("const getUser = createServerFn({ method: 'GET' }).handler(fn);").is_empty());
     }
 }

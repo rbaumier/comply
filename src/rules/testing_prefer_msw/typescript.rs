@@ -28,7 +28,11 @@ fn unquote(raw: &str) -> &str {
         .trim_end_matches(['\'', '"', '`'])
 }
 
-fn push(diagnostics: &mut Vec<Diagnostic>, ctx: &crate::rules::backend::CheckCtx, node: tree_sitter::Node) {
+fn push(
+    diagnostics: &mut Vec<Diagnostic>,
+    ctx: &crate::rules::backend::CheckCtx,
+    node: tree_sitter::Node,
+) {
     let pos = node.start_position();
     diagnostics.push(Diagnostic {
         path: std::sync::Arc::clone(&ctx.path_arc),
@@ -165,9 +169,7 @@ mod tests {
 
     #[test]
     fn allows_msw_handler() {
-        assert!(
-            run("a.test.ts", "server.use(http.get('/api', resolver));").is_empty()
-        );
+        assert!(run("a.test.ts", "server.use(http.get('/api', resolver));").is_empty());
     }
 
     #[test]

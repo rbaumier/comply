@@ -6,12 +6,12 @@
 //! `setStatusToClosed` → `closeAccount` makes the call site self-documenting
 //! and decouples callers from the storage shape.
 
-mod typescript;
 mod rust;
+mod typescript;
 
 use crate::diagnostic::Severity;
-use crate::rules::meta::RuleMeta;
 use crate::rules::RuleDef;
+use crate::rules::meta::RuleMeta;
 
 pub const META: RuleMeta = RuleMeta {
     id: "no-set-x-to-y",
@@ -22,6 +22,7 @@ pub const META: RuleMeta = RuleMeta {
     severity: Severity::Error,
     doc_url: None,
     categories: &["naming"],
-};pub fn register() -> RuleDef {
+};
+pub fn register() -> RuleDef {
     crate::register_ts_family_with_rust!(META, typescript, rust)
 }

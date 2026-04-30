@@ -6,17 +6,46 @@ use crate::rules::vue_template_helpers::{attr_value, extract_elements, is_vue_fi
 
 /// Valid `rel` values for `<a>` elements.
 const VALID_A_RELS: &[&str] = &[
-    "alternate", "author", "bookmark", "external", "help", "license",
-    "next", "nofollow", "noopener", "noreferrer", "opener", "prev",
-    "search", "tag", "ugc", "sponsored",
+    "alternate",
+    "author",
+    "bookmark",
+    "external",
+    "help",
+    "license",
+    "next",
+    "nofollow",
+    "noopener",
+    "noreferrer",
+    "opener",
+    "prev",
+    "search",
+    "tag",
+    "ugc",
+    "sponsored",
 ];
 
 /// Valid `rel` values for `<link>` elements.
 const VALID_LINK_RELS: &[&str] = &[
-    "alternate", "author", "canonical", "dns-prefetch", "help", "icon",
-    "license", "manifest", "modulepreload", "next", "pingback",
-    "preconnect", "prefetch", "preload", "prerender", "prev", "search",
-    "shortlink", "stylesheet", "apple-touch-icon",
+    "alternate",
+    "author",
+    "canonical",
+    "dns-prefetch",
+    "help",
+    "icon",
+    "license",
+    "manifest",
+    "modulepreload",
+    "next",
+    "pingback",
+    "preconnect",
+    "prefetch",
+    "preload",
+    "prerender",
+    "prev",
+    "search",
+    "shortlink",
+    "stylesheet",
+    "apple-touch-icon",
 ];
 
 #[derive(Debug)]
@@ -44,10 +73,7 @@ impl TextCheck for Check {
                         line: elem.line,
                         column: 1,
                         rule_id: "vue-no-invalid-html-attribute".into(),
-                        message: format!(
-                            "Invalid `rel` value `{token}` on `<{}>`.",
-                            elem.tag,
-                        ),
+                        message: format!("Invalid `rel` value `{token}` on `<{}>`.", elem.tag,),
                         severity: Severity::Warning,
                         span: None,
                     });

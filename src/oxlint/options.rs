@@ -31,7 +31,10 @@ mod tests {
 
     #[test]
     fn no_confusing_void_expression_has_options() {
-        let opts = for_rule("typescript/no-confusing-void-expression", default_static_config());
+        let opts = for_rule(
+            "typescript/no-confusing-void-expression",
+            default_static_config(),
+        );
         assert!(opts.is_some());
         let v = opts.unwrap();
         assert_eq!(v["ignoreArrowShorthand"], true);

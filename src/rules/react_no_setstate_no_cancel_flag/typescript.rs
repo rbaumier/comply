@@ -67,7 +67,9 @@ fn body_uses_set_state(body: &str) -> bool {
 }
 
 impl TextCheck for Check {
-    fn prefilter(&self) -> Option<&'static [&'static str]> { Some(&["useEffect"]) }
+    fn prefilter(&self) -> Option<&'static [&'static str]> {
+        Some(&["useEffect"])
+    }
 
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
@@ -76,7 +78,9 @@ impl TextCheck for Check {
         while let Some(rel) = ctx.source[search_from..].find("useEffect(") {
             let abs = search_from + rel;
             let paren_open = abs + "useEffect".len();
-            let Some(paren_close) = find_matching_paren(bytes, paren_open) else { break };
+            let Some(paren_close) = find_matching_paren(bytes, paren_open) else {
+                break;
+            };
             let body = &ctx.source[paren_open + 1..paren_close];
             if body.contains("await ")
                 && body_uses_set_state(body)

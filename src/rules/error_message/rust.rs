@@ -7,14 +7,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-const ERROR_MACROS: &[&str] = &[
-    "anyhow",
-    "bail",
-    "eyre",
-    "panic",
-    "todo",
-    "unimplemented",
-];
+const ERROR_MACROS: &[&str] = &["anyhow", "bail", "eyre", "panic", "todo", "unimplemented"];
 
 crate::ast_check! { on ["macro_invocation"] => |node, source, ctx, diagnostics|
     let Some(macro_node) = node.child_by_field_name("macro") else { return };

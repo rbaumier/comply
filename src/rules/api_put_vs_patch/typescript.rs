@@ -114,12 +114,18 @@ mod tests {
 
     #[test]
     fn allows_put_with_full_type() {
-        assert!(run("app.put('/users/:id', (req: Request<{id: string}, {}, User>, res) => {});").is_empty());
+        assert!(
+            run("app.put('/users/:id', (req: Request<{id: string}, {}, User>, res) => {});")
+                .is_empty()
+        );
     }
 
     #[test]
     fn allows_patch_with_partial() {
-        assert!(run("app.patch('/users/:id', (req: Request<{}, {}, Partial<User>>, res) => {});").is_empty());
+        assert!(
+            run("app.patch('/users/:id', (req: Request<{}, {}, Partial<User>>, res) => {});")
+                .is_empty()
+        );
     }
 
     #[test]

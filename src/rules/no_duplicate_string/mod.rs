@@ -32,9 +32,9 @@ mod shared_tests;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
+use crate::rules::RuleDef;
 use crate::rules::backend::Backend;
 use crate::rules::meta::RuleMeta;
-use crate::rules::RuleDef;
 
 pub const META: RuleMeta = RuleMeta {
     id: "no-duplicate-string",
@@ -51,9 +51,18 @@ pub fn register() -> RuleDef {
     RuleDef {
         meta: META,
         backends: vec![
-            (Language::TypeScript, Backend::TreeSitter(Box::new(typescript::Check))),
-            (Language::JavaScript, Backend::TreeSitter(Box::new(typescript::Check))),
-            (Language::Tsx, Backend::TreeSitter(Box::new(typescript::Check))),
+            (
+                Language::TypeScript,
+                Backend::TreeSitter(Box::new(typescript::Check)),
+            ),
+            (
+                Language::JavaScript,
+                Backend::TreeSitter(Box::new(typescript::Check)),
+            ),
+            (
+                Language::Tsx,
+                Backend::TreeSitter(Box::new(typescript::Check)),
+            ),
             (Language::Rust, Backend::TreeSitter(Box::new(rust::Check))),
             (Language::Vue, Backend::TreeSitter(Box::new(vue::Check))),
         ],
@@ -100,7 +109,10 @@ pub(super) fn collect_diagnostics(
         if is_rust && crate::rules::rust_helpers::is_in_test_context(node, source_bytes) {
             continue;
         }
-        occurrences.entry(content.to_string()).or_default().push(node);
+        occurrences
+            .entry(content.to_string())
+            .or_default()
+            .push(node);
     }
 
     let mut diagnostics = Vec::new();
@@ -135,7 +147,13 @@ fn is_spec_literal(s: &str) -> bool {
         "about:", "http:", "https:", "data:", "blob:", "file:", "mailto:", "tel:", "urn:",
     ];
     const MIME_PREFIXES: &[&str] = &[
-        "application/", "text/", "image/", "audio/", "video/", "multipart/", "font/",
+        "application/",
+        "text/",
+        "image/",
+        "audio/",
+        "video/",
+        "multipart/",
+        "font/",
     ];
     URI_SCHEMES.iter().any(|scheme| s.starts_with(scheme))
         || MIME_PREFIXES.iter().any(|prefix| s.starts_with(prefix))
@@ -145,7 +163,14 @@ fn is_spec_literal(s: &str) -> bool {
 /// to these mean their string arguments are class lists, not data
 /// constants worth extracting.
 const TAILWIND_HELPERS: &[&str] = &[
-    "cn", "clsx", "classnames", "cva", "tw", "twMerge", "twJoin", "clx",
+    "cn",
+    "clsx",
+    "classnames",
+    "cva",
+    "tw",
+    "twMerge",
+    "twJoin",
+    "clx",
 ];
 
 /// Decide whether a string-literal node sits in a context where
@@ -161,10 +186,7 @@ const TAILWIND_HELPERS: &[&str] = &[
 /// Walks ancestors so a string nested inside a template literal,
 /// conditional expression, or array passed to one of these helpers
 /// is still recognized.
-pub(super) fn should_ignore_string_node(
-    node: tree_sitter::Node<'_>,
-    source: &[u8],
-) -> bool {
+pub(super) fn should_ignore_string_node(node: tree_sitter::Node<'_>, source: &[u8]) -> bool {
     let mut current = node;
     while let Some(parent) = current.parent() {
         match parent.kind() {

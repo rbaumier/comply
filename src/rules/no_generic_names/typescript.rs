@@ -27,8 +27,8 @@ use crate::rules::backend::{AstCheck, CheckCtx};
 /// declaration sites so the rule fires once per variable, not once per
 /// use.
 const BANNED_WORDS: &[&str] = &[
-    "info", "temp", "result", "obj", "item", "thing", "stuff", "val",
-    "retval", "value", "foo", "bar",
+    "info", "temp", "result", "obj", "item", "thing", "stuff", "val", "retval", "value", "foo",
+    "bar",
 ];
 
 /// Prefixes that describe mechanics rather than intent. Word-boundary
@@ -159,9 +159,27 @@ fn check_banned_prefix(
 }
 
 const DESCRIPTIVE_SUFFIXES: &[&str] = &[
-    "_DIR", "_PATH", "_FILE", "_URL", "_URI", "_KEY", "_ID", "_PORT",
-    "_HOST", "_ADDR", "_SIZE", "_LEN", "_COUNT", "_MAX", "_MIN",
-    "_TIMEOUT", "_INTERVAL", "_LIMIT", "_TTL", "_ROOT", "_BASE",
+    "_DIR",
+    "_PATH",
+    "_FILE",
+    "_URL",
+    "_URI",
+    "_KEY",
+    "_ID",
+    "_PORT",
+    "_HOST",
+    "_ADDR",
+    "_SIZE",
+    "_LEN",
+    "_COUNT",
+    "_MAX",
+    "_MIN",
+    "_TIMEOUT",
+    "_INTERVAL",
+    "_LIMIT",
+    "_TTL",
+    "_ROOT",
+    "_BASE",
 ];
 
 /// Return the banned prefix matching `name` on a word boundary, or None.
@@ -184,7 +202,10 @@ fn matched_banned_prefix(name: &str) -> Option<&'static str> {
                 continue;
             }
             let suffix = &name[plen..];
-            if DESCRIPTIVE_SUFFIXES.iter().any(|s| suffix.eq_ignore_ascii_case(s)) {
+            if DESCRIPTIVE_SUFFIXES
+                .iter()
+                .any(|s| suffix.eq_ignore_ascii_case(s))
+            {
                 continue;
             }
             true
@@ -238,12 +259,18 @@ fn is_destructuring_property(node: tree_sitter::Node) -> bool {
 /// True when the identifier is a method name being called (`obj.execute()`).
 /// API method names are chosen by the library, not the developer.
 fn is_method_call_name(node: tree_sitter::Node) -> bool {
-    let Some(parent) = node.parent() else { return false };
-    if parent.kind() != "member_expression" { return false; }
+    let Some(parent) = node.parent() else {
+        return false;
+    };
+    if parent.kind() != "member_expression" {
+        return false;
+    }
     if parent.child_by_field_name("property").map(|p| p.id()) != Some(node.id()) {
         return false;
     }
-    let Some(gp) = parent.parent() else { return false };
+    let Some(gp) = parent.parent() else {
+        return false;
+    };
     gp.kind() == "call_expression"
 }
 
@@ -251,7 +278,9 @@ fn is_method_call_name(node: tree_sitter::Node) -> bool {
 /// (`{ data: session }` or shorthand `{ data }`). These names are part
 /// of a return contract / API shape, not the author's naming choice.
 fn is_object_literal_key(node: tree_sitter::Node) -> bool {
-    let Some(parent) = node.parent() else { return false };
+    let Some(parent) = node.parent() else {
+        return false;
+    };
     // Shorthand property: `{ data }` in an object literal
     if parent.kind() == "shorthand_property_identifier" {
         if let Some(gp) = parent.parent() {
@@ -270,14 +299,24 @@ fn is_object_literal_key(node: tree_sitter::Node) -> bool {
 }
 
 const ITERATOR_METHODS: &[&str] = &[
-    "map", "filter", "find", "findIndex", "forEach", "some", "every",
-    "flatMap", "reduce", "sort",
+    "map",
+    "filter",
+    "find",
+    "findIndex",
+    "forEach",
+    "some",
+    "every",
+    "flatMap",
+    "reduce",
+    "sort",
 ];
 
 /// True when the identifier is a parameter of an inline arrow/function
 /// passed directly to an array iterator method (.map(), .filter(), etc.).
 fn is_iterator_callback_param(node: tree_sitter::Node, source: &[u8]) -> bool {
-    let Some(parent) = node.parent() else { return false };
+    let Some(parent) = node.parent() else {
+        return false;
+    };
     if parent.kind() != "required_parameter"
         && parent.kind() != "formal_parameters"
         && parent.kind() != "arrow_function"
@@ -303,19 +342,27 @@ fn is_iterator_callback_param(node: tree_sitter::Node, source: &[u8]) -> bool {
 }
 
 fn is_arg_of_iterator_call(func_node: tree_sitter::Node, source: &[u8]) -> bool {
-    let Some(args) = func_node.parent() else { return false };
+    let Some(args) = func_node.parent() else {
+        return false;
+    };
     if args.kind() != "arguments" {
         return false;
     }
-    let Some(call) = args.parent() else { return false };
+    let Some(call) = args.parent() else {
+        return false;
+    };
     if call.kind() != "call_expression" {
         return false;
     }
-    let Some(callee) = call.child_by_field_name("function") else { return false };
+    let Some(callee) = call.child_by_field_name("function") else {
+        return false;
+    };
     if callee.kind() != "member_expression" {
         return false;
     }
-    let Some(prop) = callee.child_by_field_name("property") else { return false };
+    let Some(prop) = callee.child_by_field_name("property") else {
+        return false;
+    };
     let method = prop.utf8_text(source).unwrap_or("");
     ITERATOR_METHODS.contains(&method)
 }
@@ -367,51 +414,65 @@ mod tests {
 
     #[test]
     fn flags_process_prefix_camel_case() {
-        assert!(run_on("function processOrder() {}")
-            .iter()
-            .any(|d| d.message.contains("processOrder")));
+        assert!(
+            run_on("function processOrder() {}")
+                .iter()
+                .any(|d| d.message.contains("processOrder"))
+        );
     }
 
     #[test]
     fn flags_process_prefix_snake_case() {
-        assert!(run_on("const process_order = 1;")
-            .iter()
-            .any(|d| d.message.contains("process_order")));
+        assert!(
+            run_on("const process_order = 1;")
+                .iter()
+                .any(|d| d.message.contains("process_order"))
+        );
     }
 
     #[test]
     fn flags_do_prefix() {
-        assert!(run_on("function doStuff() {}")
-            .iter()
-            .any(|d| d.message.contains("doStuff")));
+        assert!(
+            run_on("function doStuff() {}")
+                .iter()
+                .any(|d| d.message.contains("doStuff"))
+        );
     }
 
     #[test]
     fn flags_execute_prefix() {
-        assert!(run_on("function executeSomething() {}")
-            .iter()
-            .any(|d| d.message.contains("executeSomething")));
+        assert!(
+            run_on("function executeSomething() {}")
+                .iter()
+                .any(|d| d.message.contains("executeSomething"))
+        );
     }
 
     #[test]
     fn flags_run_prefix() {
-        assert!(run_on("function runTask() {}")
-            .iter()
-            .any(|d| d.message.contains("runTask")));
+        assert!(
+            run_on("function runTask() {}")
+                .iter()
+                .any(|d| d.message.contains("runTask"))
+        );
     }
 
     #[test]
     fn flags_perform_prefix() {
-        assert!(run_on("function performAction() {}")
-            .iter()
-            .any(|d| d.message.contains("performAction")));
+        assert!(
+            run_on("function performAction() {}")
+                .iter()
+                .any(|d| d.message.contains("performAction"))
+        );
     }
 
     #[test]
     fn flags_data_prefix_compound() {
-        assert!(run_on("const dataSource = 1;")
-            .iter()
-            .any(|d| d.message.contains("dataSource")));
+        assert!(
+            run_on("const dataSource = 1;")
+                .iter()
+                .any(|d| d.message.contains("dataSource"))
+        );
     }
 
     // --- boundary / false-positive regressions ---
@@ -465,19 +526,28 @@ mod tests {
         // Derived names still hit the prefix rule — only the exact global
         // name `process` is exempted. `processor` has no word boundary so
         // it's also allowed (no banned-prefix match).
-        assert!(run_on("const processOrder = 1;")
-            .iter()
-            .any(|d| d.message.contains("processOrder")));
-        assert!(run_on("const process_order = 1;")
-            .iter()
-            .any(|d| d.message.contains("process_order")));
+        assert!(
+            run_on("const processOrder = 1;")
+                .iter()
+                .any(|d| d.message.contains("processOrder"))
+        );
+        assert!(
+            run_on("const process_order = 1;")
+                .iter()
+                .any(|d| d.message.contains("process_order"))
+        );
     }
 
     #[test]
     fn does_not_flag_word_with_prefix_letters() {
         for name in [
-            "document", "database", "domain", "handler", "dataset",
-            "performance", "runtime",
+            "document",
+            "database",
+            "domain",
+            "handler",
+            "dataset",
+            "performance",
+            "runtime",
         ] {
             let source = format!("const {name} = 5;");
             assert!(
@@ -495,14 +565,18 @@ mod tests {
 
     #[test]
     fn does_not_flag_screaming_snake_with_prefix_substring() {
-        assert!(run_on("const DATABASE_ERROR = 1;").is_empty(),
-            "DATABASE_ERROR must not match prefix 'data'");
+        assert!(
+            run_on("const DATABASE_ERROR = 1;").is_empty(),
+            "DATABASE_ERROR must not match prefix 'data'"
+        );
     }
 
     #[test]
     fn still_flags_screaming_snake_with_real_boundary() {
-        assert!(!run_on("const DATA_SOURCE = 1;").is_empty(),
-            "DATA_SOURCE should flag — DATA + _ is a word boundary");
+        assert!(
+            !run_on("const DATA_SOURCE = 1;").is_empty(),
+            "DATA_SOURCE should flag — DATA + _ is a word boundary"
+        );
     }
 
     #[test]

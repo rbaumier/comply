@@ -9,7 +9,10 @@ fn enclosing_statement<'a>(node: tree_sitter::Node<'a>) -> tree_sitter::Node<'a>
     while let Some(parent) = cur.parent() {
         if matches!(
             parent.kind(),
-            "expression_statement" | "variable_declarator" | "lexical_declaration" | "return_statement"
+            "expression_statement"
+                | "variable_declarator"
+                | "lexical_declaration"
+                | "return_statement"
         ) {
             return parent;
         }

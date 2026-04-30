@@ -35,7 +35,9 @@ impl AstCheck for Check {
             return;
         };
         let source = ctx.source.as_bytes();
-        let Some(source_node) = node.child_by_field_name("source") else { return };
+        let Some(source_node) = node.child_by_field_name("source") else {
+            return;
+        };
         let module = source_node
             .utf8_text(source)
             .unwrap_or("")

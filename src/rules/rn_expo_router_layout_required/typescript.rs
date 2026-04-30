@@ -10,7 +10,9 @@ fn file_is_layout(path: &std::path::Path) -> bool {
 }
 
 fn dir_has_layout(dir: &std::path::Path) -> bool {
-    let Ok(read) = std::fs::read_dir(dir) else { return true }; // missing dir → don't flag
+    let Ok(read) = std::fs::read_dir(dir) else {
+        return true;
+    }; // missing dir → don't flag
     for entry in read.flatten() {
         let p = entry.path();
         if file_is_layout(&p) {
@@ -68,7 +70,11 @@ mod tests {
     #[test]
     fn allows_with_layout_sibling() {
         let dir = TempDir::new().unwrap();
-        fs::write(dir.path().join("_layout.tsx"), "export default function L() { return null; }").unwrap();
+        fs::write(
+            dir.path().join("_layout.tsx"),
+            "export default function L() { return null; }",
+        )
+        .unwrap();
         let src = "import { Link } from 'expo-router';";
         assert!(run_in(dir.path(), "index.tsx", src).is_empty());
     }

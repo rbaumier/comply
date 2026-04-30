@@ -84,7 +84,11 @@ impl AstCheck for Check {
         }
         // Also flag classes that share a name with an interface
         for (class_name, line, col) in &state.class_names {
-            if state.interface_names.iter().any(|(i, _, _)| i == class_name) {
+            if state
+                .interface_names
+                .iter()
+                .any(|(i, _, _)| i == class_name)
+            {
                 diagnostics.push(Diagnostic {
                     path: std::sync::Arc::clone(&ctx.path_arc),
                     line: *line,

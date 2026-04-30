@@ -71,7 +71,9 @@ fn collect_responses(source: &str) -> Vec<(usize, Shape)> {
             let abs = from + rel;
             // Locate the `{` byte.
             let brace_offset = abs + trigger.len() - 1;
-            let Some(close) = matching_brace(bytes, brace_offset) else { break };
+            let Some(close) = matching_brace(bytes, brace_offset) else {
+                break;
+            };
             let body = &source[brace_offset + 1..close];
             let shape = if has_top_level_data_key(body) {
                 Shape::Envelope
@@ -104,9 +106,7 @@ fn has_top_level_data_key(body: &str) -> bool {
             b']' => depth_brack -= 1,
             _ => {}
         }
-        if depth_brace == 0 && depth_paren == 0 && depth_brack == 0
-            && body.is_char_boundary(i)
-        {
+        if depth_brace == 0 && depth_paren == 0 && depth_brack == 0 && body.is_char_boundary(i) {
             if (i == 0
                 || !bytes[i - 1].is_ascii_alphanumeric()
                     && bytes[i - 1] != b'_'
@@ -135,12 +135,24 @@ fn find_offenses(source: &str) -> Vec<usize> {
         return Vec::new();
     }
     // Determine majority shape; flag the minority occurrences.
-    let envelope_count = responses.iter().filter(|(_, s)| matches!(s, Shape::Envelope)).count();
+    let envelope_count = responses
+        .iter()
+        .filter(|(_, s)| matches!(s, Shape::Envelope))
+        .count();
     let raw_count = responses.len() - envelope_count;
-    let minority = if envelope_count <= raw_count { Shape::Envelope } else { Shape::Raw };
+    let minority = if envelope_count <= raw_count {
+        Shape::Envelope
+    } else {
+        Shape::Raw
+    };
     responses
         .into_iter()
-        .filter(|(_, s)| matches!((s, minority), (Shape::Envelope, Shape::Envelope) | (Shape::Raw, Shape::Raw)))
+        .filter(|(_, s)| {
+            matches!(
+                (s, minority),
+                (Shape::Envelope, Shape::Envelope) | (Shape::Raw, Shape::Raw)
+            )
+        })
         .map(|(o, _)| o)
         .collect()
 }

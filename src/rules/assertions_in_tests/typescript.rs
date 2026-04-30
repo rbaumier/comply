@@ -67,14 +67,15 @@ fn is_nested_function_boundary(node: tree_sitter::Node) -> bool {
 /// Extract the test name from the first string argument of a call.
 fn extract_test_name(args: tree_sitter::Node, source: &[u8]) -> String {
     if let Some(first) = args.named_child(0)
-        && matches!(first.kind(), "string" | "template_string") {
-            let raw = first.utf8_text(source).unwrap_or("unnamed");
-            // Strip quotes
-            return raw
-                .trim_start_matches(['\'', '"', '`'])
-                .trim_end_matches(['\'', '"', '`'])
-                .to_string();
-        }
+        && matches!(first.kind(), "string" | "template_string")
+    {
+        let raw = first.utf8_text(source).unwrap_or("unnamed");
+        // Strip quotes
+        return raw
+            .trim_start_matches(['\'', '"', '`'])
+            .trim_end_matches(['\'', '"', '`'])
+            .to_string();
+    }
     "unnamed".to_string()
 }
 
@@ -132,10 +133,8 @@ mod tests {
             .set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into())
             .unwrap();
         let tree = parser.parse(source, None).unwrap();
-        let ctx = crate::rules::backend::CheckCtx::for_test(
-            std::path::Path::new("foo.test.ts"),
-            source,
-        );
+        let ctx =
+            crate::rules::backend::CheckCtx::for_test(std::path::Path::new("foo.test.ts"), source);
         use crate::rules::backend::AstCheck;
         Check.check(&ctx, &tree)
     }
@@ -146,10 +145,7 @@ mod tests {
             .set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into())
             .unwrap();
         let tree = parser.parse(source, None).unwrap();
-        let ctx = crate::rules::backend::CheckCtx::for_test(
-            std::path::Path::new("foo.ts"),
-            source,
-        );
+        let ctx = crate::rules::backend::CheckCtx::for_test(std::path::Path::new("foo.ts"), source);
         use crate::rules::backend::AstCheck;
         Check.check(&ctx, &tree)
     }

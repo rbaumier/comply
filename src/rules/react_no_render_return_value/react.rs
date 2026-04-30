@@ -5,12 +5,18 @@ use crate::diagnostic::{Diagnostic, Severity};
 
 /// True if `call` is `ReactDOM.render(...)`.
 fn is_reactdom_render(call: tree_sitter::Node, source: &[u8]) -> bool {
-    let Some(func) = call.child_by_field_name("function") else { return false };
+    let Some(func) = call.child_by_field_name("function") else {
+        return false;
+    };
     if func.kind() != "member_expression" {
         return false;
     }
-    let Some(object) = func.child_by_field_name("object") else { return false };
-    let Some(property) = func.child_by_field_name("property") else { return false };
+    let Some(object) = func.child_by_field_name("object") else {
+        return false;
+    };
+    let Some(property) = func.child_by_field_name("property") else {
+        return false;
+    };
     &source[object.byte_range()] == b"ReactDOM" && &source[property.byte_range()] == b"render"
 }
 

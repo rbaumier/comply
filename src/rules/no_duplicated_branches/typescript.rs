@@ -96,9 +96,10 @@ fn body_text(node: &tree_sitter::Node, source: &[u8]) -> String {
     let mut parts = Vec::new();
     for i in 0..node.named_child_count() {
         if let Some(child) = node.named_child(i)
-            && let Ok(t) = child.utf8_text(source) {
-                parts.push(t.trim().to_string());
-            }
+            && let Ok(t) = child.utf8_text(source)
+        {
+            parts.push(t.trim().to_string());
+        }
     }
     parts.join("\n")
 }

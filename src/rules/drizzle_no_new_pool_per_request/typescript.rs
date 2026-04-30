@@ -34,9 +34,9 @@ fn function_decl_is_exported(func: tree_sitter::Node<'_>) -> bool {
             let mut up = func.parent();
             while let Some(p) = up {
                 match p.kind() {
-                    "variable_declarator"
-                    | "lexical_declaration"
-                    | "variable_declaration" => up = p.parent(),
+                    "variable_declarator" | "lexical_declaration" | "variable_declaration" => {
+                        up = p.parent()
+                    }
                     "export_statement" => return true,
                     _ => return false,
                 }

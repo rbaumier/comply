@@ -86,7 +86,14 @@ fn find_raw_clones(file_data: &[Option<FileTokens>]) -> Vec<RawClone> {
                     && let Some(ref canon_ft) = file_data[occ.file_idx]
                     && verify_tokens(ft, start, canon_ft, occ.start_token)
                 {
-                    raw.push((fi, start, ft.tokens[start].line, occ.file_idx, occ.start_token, occ.start_line));
+                    raw.push((
+                        fi,
+                        start,
+                        ft.tokens[start].line,
+                        occ.file_idx,
+                        occ.start_token,
+                        occ.start_line,
+                    ));
                     matched = true;
                     break;
                 }
@@ -171,7 +178,11 @@ fn merge_and_emit(
         let mut j = i + 1;
         while j < raw.len() {
             let (nrfi, nrstart, _, ncfi, ncstart, _) = raw[j];
-            if nrfi == rfi && ncfi == cfi && nrstart == last_rstart + 1 && ncstart == last_cstart + 1 {
+            if nrfi == rfi
+                && ncfi == cfi
+                && nrstart == last_rstart + 1
+                && ncstart == last_cstart + 1
+            {
                 last_rstart = nrstart;
                 last_cstart = ncstart;
                 j += 1;
@@ -206,7 +217,12 @@ fn merge_and_emit(
     out
 }
 
-fn clone_line_span(file_data: &[Option<FileTokens>], fi: usize, first_tok: usize, last_window_tok: usize) -> usize {
+fn clone_line_span(
+    file_data: &[Option<FileTokens>],
+    fi: usize,
+    first_tok: usize,
+    last_window_tok: usize,
+) -> usize {
     let Some(ref ft) = file_data[fi] else {
         debug_assert!(false, "clone_line_span called with None file_data[{fi}]");
         return MIN_TOKENS;
@@ -247,7 +263,13 @@ fn tokenize_file(parser: &mut Parser, file: &SourceFile) -> Option<FileTokens> {
             let end_byte = node.end_byte();
             let line = node.start_position().row + 1;
             let hash = token_hash(grammar_tag, kind_id, &source[start_byte..end_byte]);
-            tokens.push(Token { kind_id, start_byte, end_byte, line, hash });
+            tokens.push(Token {
+                kind_id,
+                start_byte,
+                end_byte,
+                line,
+                hash,
+            });
         }
 
         if cursor.goto_first_child() {
@@ -285,11 +307,7 @@ fn grammar_family(lang: Language) -> Option<u8> {
         Language::Css => Some(3),
         Language::Yaml => Some(4),
         Language::Dockerfile => Some(5),
-        Language::Vue
-        | Language::Toml
-        | Language::Json
-        | Language::Sql
-        | Language::GraphQl => None,
+        Language::Vue | Language::Toml | Language::Json | Language::Sql | Language::GraphQl => None,
     }
 }
 
@@ -309,7 +327,9 @@ fn token_hash(grammar_tag: u8, kind_id: u16, text: &[u8]) -> u64 {
 fn window_hash(tokens: &[Token]) -> u64 {
     let mut h: u64 = 0;
     for t in tokens {
-        h = h.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(t.hash);
+        h = h
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(t.hash);
     }
     h
 }
@@ -343,8 +363,14 @@ mod tests {
             _ => Language::TypeScript,
         };
         (
-            SourceFile { path: pa, language: lang },
-            SourceFile { path: pb, language: lang },
+            SourceFile {
+                path: pa,
+                language: lang,
+            },
+            SourceFile {
+                path: pb,
+                language: lang,
+            },
         )
     }
 
@@ -402,8 +428,14 @@ mod tests {
         let pb = dir.path().join("b.ts");
         std::fs::write(&pa, &block_a).unwrap();
         std::fs::write(&pb, &block_b).unwrap();
-        let fa = SourceFile { path: pa, language: Language::TypeScript };
-        let fb = SourceFile { path: pb, language: Language::TypeScript };
+        let fa = SourceFile {
+            path: pa,
+            language: Language::TypeScript,
+        };
+        let fb = SourceFile {
+            path: pb,
+            language: Language::TypeScript,
+        };
         assert!(lint_files(&[&fa, &fb]).is_empty());
     }
 
@@ -424,8 +456,14 @@ mod tests {
         let pb = dir.path().join("b.ts");
         std::fs::write(&pa, &block).unwrap();
         std::fs::write(&pb, &block).unwrap();
-        let fa = SourceFile { path: pa, language: Language::JavaScript };
-        let fb = SourceFile { path: pb, language: Language::TypeScript };
+        let fa = SourceFile {
+            path: pa,
+            language: Language::JavaScript,
+        };
+        let fb = SourceFile {
+            path: pb,
+            language: Language::TypeScript,
+        };
         let diags = lint_files(&[&fa, &fb]);
         assert_eq!(diags.len(), 1);
     }
@@ -445,8 +483,14 @@ mod tests {
         let pb = dir.path().join("b.ts");
         std::fs::write(&pa, &compact).unwrap();
         std::fs::write(&pb, &spaced).unwrap();
-        let fa = SourceFile { path: pa, language: Language::TypeScript };
-        let fb = SourceFile { path: pb, language: Language::TypeScript };
+        let fa = SourceFile {
+            path: pa,
+            language: Language::TypeScript,
+        };
+        let fb = SourceFile {
+            path: pb,
+            language: Language::TypeScript,
+        };
         let diags = lint_files(&[&fa, &fb]);
         assert_eq!(diags.len(), 1);
     }
@@ -455,7 +499,9 @@ mod tests {
     fn ignores_comments() {
         let dir = tempfile::tempdir().unwrap();
         let with_comments: String = (1..=20)
-            .map(|i| format!("// comment {i}\nconst value_{i} = computeExpensive({i}, \"param_{i}\");"))
+            .map(|i| {
+                format!("// comment {i}\nconst value_{i} = computeExpensive({i}, \"param_{i}\");")
+            })
             .collect::<Vec<_>>()
             .join("\n");
         let without: String = (1..=20)
@@ -466,8 +512,14 @@ mod tests {
         let pb = dir.path().join("b.ts");
         std::fs::write(&pa, &with_comments).unwrap();
         std::fs::write(&pb, &without).unwrap();
-        let fa = SourceFile { path: pa, language: Language::TypeScript };
-        let fb = SourceFile { path: pb, language: Language::TypeScript };
+        let fa = SourceFile {
+            path: pa,
+            language: Language::TypeScript,
+        };
+        let fb = SourceFile {
+            path: pb,
+            language: Language::TypeScript,
+        };
         let diags = lint_files(&[&fa, &fb]);
         assert_eq!(diags.len(), 1);
     }
@@ -503,9 +555,18 @@ mod tests {
         };
 
         let file_data: Vec<Option<FileTokens>> = vec![
-            Some(FileTokens { source: make_source(b'a'), tokens: make_tokens(MIN_TOKENS) }),
-            Some(FileTokens { source: make_source(b'b'), tokens: make_tokens(MIN_TOKENS) }),
-            Some(FileTokens { source: make_source(b'a'), tokens: make_tokens(MIN_TOKENS) }),
+            Some(FileTokens {
+                source: make_source(b'a'),
+                tokens: make_tokens(MIN_TOKENS),
+            }),
+            Some(FileTokens {
+                source: make_source(b'b'),
+                tokens: make_tokens(MIN_TOKENS),
+            }),
+            Some(FileTokens {
+                source: make_source(b'a'),
+                tokens: make_tokens(MIN_TOKENS),
+            }),
         ];
 
         let raw = find_raw_clones(&file_data);
@@ -528,7 +589,10 @@ mod tests {
         let broken = format!("function foo( {{\n{stmts}\n}}}}}}");
         let pa = dir.path().join("a.ts");
         std::fs::write(&pa, &broken).unwrap();
-        let fa = SourceFile { path: pa, language: Language::TypeScript };
+        let fa = SourceFile {
+            path: pa,
+            language: Language::TypeScript,
+        };
         let mut parser = Parser::new();
         let ft = tokenize_file(&mut parser, &fa).unwrap();
         assert!(
@@ -554,10 +618,15 @@ mod tests {
                 .collect();
             FileTokens {
                 source,
-                tokens: (0..n).map(|i| Token {
-                    kind_id: 1, start_byte: i * 4, end_byte: i * 4 + 4,
-                    line: i + 1, hash: i as u64,
-                }).collect(),
+                tokens: (0..n)
+                    .map(|i| Token {
+                        kind_id: 1,
+                        start_byte: i * 4,
+                        end_byte: i * 4 + 4,
+                        line: i + 1,
+                        hash: i as u64,
+                    })
+                    .collect(),
             }
         };
         let file_data: Vec<Option<FileTokens>> = vec![
@@ -571,9 +640,7 @@ mod tests {
             .map(|k| (0usize, k, k + 1, 1usize, k, k + 1))
             .collect();
         // Second run: starts after a gap → separate clone, also long enough.
-        raw.extend((0..50).map(|k| {
-            (0usize, 10 + 50 + k, 20 + 50 + k, 1usize, 50 + k, 80 + k)
-        }));
+        raw.extend((0..50).map(|k| (0usize, 10 + 50 + k, 20 + 50 + k, 1usize, 50 + k, 80 + k)));
         let diags = merge_and_emit(&mut raw, &file_data, &file_refs);
         assert_eq!(diags.len(), 2);
     }
@@ -586,8 +653,14 @@ mod tests {
         let pb = dir.path().join("b.vue");
         std::fs::write(&pa, content).unwrap();
         std::fs::write(&pb, content).unwrap();
-        let fa = SourceFile { path: pa, language: Language::Vue };
-        let fb = SourceFile { path: pb, language: Language::Vue };
+        let fa = SourceFile {
+            path: pa,
+            language: Language::Vue,
+        };
+        let fb = SourceFile {
+            path: pb,
+            language: Language::Vue,
+        };
         assert!(lint_files(&[&fa, &fb]).is_empty());
     }
 
@@ -612,7 +685,10 @@ mod tests {
         let pa = dir.path().join("a.ts");
         let content = "// header\nconst x = 1;\n\n// comment\nconst y = 2;\n";
         std::fs::write(&pa, content).unwrap();
-        let f = SourceFile { path: pa, language: Language::TypeScript };
+        let f = SourceFile {
+            path: pa,
+            language: Language::TypeScript,
+        };
         let mut parser = Parser::new();
         let ft = tokenize_file(&mut parser, &f).unwrap();
         assert!(ft.tokens.len() >= 10);
@@ -637,8 +713,14 @@ mod tests {
         let pb = dir.path().join("b.rs");
         std::fs::write(&pa, &wrapped).unwrap();
         std::fs::write(&pb, &wrapped).unwrap();
-        let fa = SourceFile { path: pa, language: Language::Rust };
-        let fb = SourceFile { path: pb, language: Language::Rust };
+        let fa = SourceFile {
+            path: pa,
+            language: Language::Rust,
+        };
+        let fb = SourceFile {
+            path: pb,
+            language: Language::Rust,
+        };
         let diags = lint_files(&[&fa, &fb]);
         assert!(
             diags.is_empty(),

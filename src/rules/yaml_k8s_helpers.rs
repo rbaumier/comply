@@ -50,7 +50,8 @@ pub fn has_key(mapping: Node, source: &[u8], key: &str) -> bool {
 pub fn find_pair<'t>(mapping: Node<'t>, source: &[u8], key: &str) -> Option<Node<'t>> {
     let mut cursor = mapping.walk();
     mapping.named_children(&mut cursor).find(|child| {
-        child.kind() == "block_mapping_pair" && pair_key_text(*child, source).as_deref() == Some(key)
+        child.kind() == "block_mapping_pair"
+            && pair_key_text(*child, source).as_deref() == Some(key)
     })
 }
 
@@ -121,7 +122,9 @@ pub fn sequence_item_mappings<'t>(sequence: Node<'t>) -> Vec<Node<'t>> {
             continue;
         }
         let mut inner = item.walk();
-        if let Some(block_node) = item.named_children(&mut inner).find(|c| c.kind() == "block_node")
+        if let Some(block_node) = item
+            .named_children(&mut inner)
+            .find(|c| c.kind() == "block_node")
             && let Some(mapping) = as_mapping(block_node)
         {
             out.push(mapping);
@@ -143,11 +146,7 @@ pub fn manifest_kind(manifest: Node, source: &[u8]) -> Option<String> {
 /// mapping node at the end of the path, or `None` if any step is missing
 /// or the terminal value is not a mapping.
 #[must_use]
-pub fn descend_mapping<'t>(
-    mapping: Node<'t>,
-    source: &[u8],
-    path: &[&str],
-) -> Option<Node<'t>> {
+pub fn descend_mapping<'t>(mapping: Node<'t>, source: &[u8], path: &[&str]) -> Option<Node<'t>> {
     let mut current = mapping;
     for key in path {
         let pair = find_pair(current, source, key)?;
@@ -159,11 +158,7 @@ pub fn descend_mapping<'t>(
 
 /// Walk a path and return the terminal `block_sequence`, if any.
 #[must_use]
-pub fn descend_sequence<'t>(
-    mapping: Node<'t>,
-    source: &[u8],
-    path: &[&str],
-) -> Option<Node<'t>> {
+pub fn descend_sequence<'t>(mapping: Node<'t>, source: &[u8], path: &[&str]) -> Option<Node<'t>> {
     if path.is_empty() {
         return None;
     }
@@ -184,11 +179,7 @@ pub fn descend_sequence<'t>(
 /// and a bare `Pod` (`spec`). Returns `None` if the manifest kind doesn't
 /// carry a pod spec.
 #[must_use]
-pub fn pod_spec_mapping<'t>(
-    manifest: Node<'t>,
-    source: &[u8],
-    kind: &str,
-) -> Option<Node<'t>> {
+pub fn pod_spec_mapping<'t>(manifest: Node<'t>, source: &[u8], kind: &str) -> Option<Node<'t>> {
     match kind {
         "Pod" => descend_mapping(manifest, source, &["spec"]),
         "CronJob" => descend_mapping(
@@ -215,9 +206,7 @@ pub fn containers_of_pod_spec<'t>(
     if let Some(seq) = descend_sequence(pod_spec, source, &["containers"]) {
         out.extend(sequence_item_mappings(seq));
     }
-    if include_init
-        && let Some(seq) = descend_sequence(pod_spec, source, &["initContainers"])
-    {
+    if include_init && let Some(seq) = descend_sequence(pod_spec, source, &["initContainers"]) {
         out.extend(sequence_item_mappings(seq));
     }
     out

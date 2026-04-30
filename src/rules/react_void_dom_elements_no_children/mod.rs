@@ -3,8 +3,8 @@
 mod react;
 
 use crate::diagnostic::Severity;
-use crate::rules::meta::RuleMeta;
 use crate::rules::backend::Backend;
+use crate::rules::meta::RuleMeta;
 use crate::rules::{RuleDef, TS_FAMILY};
 
 pub const META: RuleMeta = RuleMeta {

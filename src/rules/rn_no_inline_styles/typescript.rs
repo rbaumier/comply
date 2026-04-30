@@ -51,4 +51,10 @@ mod tests {
         let src = "const x = <View style={[styles.a, styles.b]} />;";
         assert!(run(src).is_empty());
     }
+
+    #[test]
+    fn ignores_non_react_native_projects() {
+        let src = "const x = <div style={{ padding: 8 }} />;";
+        assert!(crate::rules::test_helpers::run_tsx(src, &Check).is_empty());
+    }
 }

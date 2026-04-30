@@ -82,10 +82,10 @@ mod tests {
         // literal are not nesting — the tree-sitter AST has a single
         // `template_string` node with two `template_substitution`
         // children.
-        assert!(run(
-            r#"const url = baseUrl + `${baseUrl}/api/v1/subscriptions/${subscriptionId}`;"#
-        )
-        .is_empty());
+        assert!(
+            run(r#"const url = baseUrl + `${baseUrl}/api/v1/subscriptions/${subscriptionId}`;"#)
+                .is_empty()
+        );
     }
 
     #[test]

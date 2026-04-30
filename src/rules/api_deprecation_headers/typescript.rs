@@ -38,8 +38,12 @@ fn handler_name<'a>(export_node: tree_sitter::Node, source: &'a [u8]) -> Option<
                     if decl.kind() != "variable_declarator" {
                         continue;
                     }
-                    let Some(name) = decl.child_by_field_name("name") else { continue };
-                    let Ok(text) = std::str::from_utf8(&source[name.byte_range()]) else { continue };
+                    let Some(name) = decl.child_by_field_name("name") else {
+                        continue;
+                    };
+                    let Ok(text) = std::str::from_utf8(&source[name.byte_range()]) else {
+                        continue;
+                    };
                     if HTTP_METHODS.contains(&text) {
                         return Some(text);
                     }
@@ -134,29 +138,33 @@ mod tests {
 
     #[test]
     fn allows_deprecated_with_only_sunset() {
-        assert!(run_on(
-            "/** @deprecated */\n\
+        assert!(
+            run_on(
+                "/** @deprecated */\n\
              export async function GET() { \
                 return new Response('ok', { headers: { 'Sunset': 'Wed, 31 Dec 2025' } }); \
              }"
-        )
-        .is_empty());
+            )
+            .is_empty()
+        );
     }
 
     #[test]
     fn allows_non_deprecated_handler() {
-        assert!(run_on(
-            "export async function GET() { return Response.json({ ok: true }); }"
-        )
-        .is_empty());
+        assert!(
+            run_on("export async function GET() { return Response.json({ ok: true }); }")
+                .is_empty()
+        );
     }
 
     #[test]
     fn allows_deprecated_non_http_export() {
-        assert!(run_on(
-            "/** @deprecated */\n\
+        assert!(
+            run_on(
+                "/** @deprecated */\n\
              export function helper() { return 1; }"
-        )
-        .is_empty());
+            )
+            .is_empty()
+        );
     }
 }

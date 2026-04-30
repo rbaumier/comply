@@ -35,7 +35,9 @@ fn collect_setters(body: tree_sitter::Node, source: &[u8]) -> HashSet<String> {
             let name = node.child_by_field_name("name");
             if let (Some(value), Some(name)) = (value, name) {
                 if value.kind() == "call_expression" {
-                    let Some(callee) = value.child_by_field_name("function") else { continue };
+                    let Some(callee) = value.child_by_field_name("function") else {
+                        continue;
+                    };
                     let callee_text = callee.utf8_text(source).unwrap_or("");
                     if callee_text == "useState" || callee_text.ends_with(".useState") {
                         if name.kind() == "array_pattern" {
@@ -58,10 +60,7 @@ fn collect_setters(body: tree_sitter::Node, source: &[u8]) -> HashSet<String> {
         // direct render body.
         if matches!(
             node.kind(),
-            "function_declaration"
-                | "function_expression"
-                | "arrow_function"
-                | "method_definition"
+            "function_declaration" | "function_expression" | "arrow_function" | "method_definition"
         ) && node.id() != body.id()
         {
             continue;
@@ -98,10 +97,7 @@ fn walk_for_calls(
         // Skip nested function-like bodies.
         if matches!(
             node.kind(),
-            "function_declaration"
-                | "function_expression"
-                | "arrow_function"
-                | "method_definition"
+            "function_declaration" | "function_expression" | "arrow_function" | "method_definition"
         ) && node.id() != body_id
         {
             continue;
@@ -134,9 +130,13 @@ fn check_function(
     if !starts_with_uppercase(name) && !starts_with_use_hook(name) {
         return Vec::new();
     }
-    let Some(body) = fn_node.child_by_field_name("body") else { return Vec::new() };
+    let Some(body) = fn_node.child_by_field_name("body") else {
+        return Vec::new();
+    };
     let setters = collect_setters(body, source);
-    if setters.is_empty() { return Vec::new(); }
+    if setters.is_empty() {
+        return Vec::new();
+    }
     let mut out = Vec::new();
     walk_for_calls(body, source, &setters, &mut out);
     out

@@ -57,7 +57,10 @@ mod tests {
 
     #[test]
     fn flags_let_destructure_reactive() {
-        assert_eq!(run("let { name, age } = reactive({ name: '', age: 0 })").len(), 1);
+        assert_eq!(
+            run("let { name, age } = reactive({ name: '', age: 0 })").len(),
+            1
+        );
     }
 
     #[test]

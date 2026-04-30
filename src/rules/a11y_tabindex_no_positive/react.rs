@@ -4,20 +4,26 @@ use crate::diagnostic::{Diagnostic, Severity};
 
 /// Check if a tabIndex attribute has a positive value (> 0).
 fn is_positive_tabindex(attr: tree_sitter::Node, source: &[u8]) -> bool {
-    let Some(val) = crate::rules::jsx::jsx_attribute_value(attr) else { return false };
-    let Ok(text) = val.utf8_text(source) else { return false };
+    let Some(val) = crate::rules::jsx::jsx_attribute_value(attr) else {
+        return false;
+    };
+    let Ok(text) = val.utf8_text(source) else {
+        return false;
+    };
     // JSX expression: {N} — extract the number
     let inner = text.strip_prefix('{').and_then(|s| s.strip_suffix('}'));
     if let Some(num_str) = inner
-        && let Ok(n) = num_str.trim().parse::<i32>() {
-            return n > 0;
-        }
+        && let Ok(n) = num_str.trim().parse::<i32>()
+    {
+        return n > 0;
+    }
     // String literal: "N"
     let inner = text.strip_prefix('"').and_then(|s| s.strip_suffix('"'));
     if let Some(num_str) = inner
-        && let Ok(n) = num_str.trim().parse::<i32>() {
-            return n > 0;
-        }
+        && let Ok(n) = num_str.trim().parse::<i32>()
+    {
+        return n > 0;
+    }
     false
 }
 

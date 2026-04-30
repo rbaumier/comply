@@ -22,7 +22,9 @@ const WRITE_METHODS: &[&str] = &[
 ];
 
 fn is_prisma_file(source: &str) -> bool {
-    source.contains("@prisma/client") || source.contains("PrismaClient") || source.contains("prisma.")
+    source.contains("@prisma/client")
+        || source.contains("PrismaClient")
+        || source.contains("prisma.")
 }
 
 impl TextCheck for Check {

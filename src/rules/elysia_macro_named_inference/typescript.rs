@@ -50,13 +50,15 @@ mod tests {
 
     #[test]
     fn flags_object_first_arg() {
-        let src = "import { Elysia } from 'elysia';\nnew Elysia().macro({ isAuth: { resolve() {} } });";
+        let src =
+            "import { Elysia } from 'elysia';\nnew Elysia().macro({ isAuth: { resolve() {} } });";
         assert_eq!(run_on(src).len(), 1);
     }
 
     #[test]
     fn allows_named_form() {
-        let src = "import { Elysia } from 'elysia';\nnew Elysia().macro('isAuth', { resolve() {} });";
+        let src =
+            "import { Elysia } from 'elysia';\nnew Elysia().macro('isAuth', { resolve() {} });";
         assert!(run_on(src).is_empty());
     }
 

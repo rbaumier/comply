@@ -96,20 +96,14 @@ fn collect_unwraps_in(
 #[cfg(test)]
 mod tests {
     use super::*;
-    
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
-
-
         crate::rules::test_helpers::run_rust(source, &Check)
-
-
     }
 
     #[test]
     fn flags_unwrap_in_from_impl() {
-        let source =
-            "impl From<&str> for u32 { fn from(s: &str) -> Self { s.parse().unwrap() } }";
+        let source = "impl From<&str> for u32 { fn from(s: &str) -> Self { s.parse().unwrap() } }";
         assert_eq!(run_on(source).len(), 1);
     }
 
@@ -132,8 +126,7 @@ mod tests {
 
     #[test]
     fn allows_clean_from_impl() {
-        let source =
-            "impl From<u32> for u64 { fn from(x: u32) -> Self { x as u64 } }";
+        let source = "impl From<u32> for u64 { fn from(x: u32) -> Self { x as u64 } }";
         assert!(run_on(source).is_empty());
     }
 }

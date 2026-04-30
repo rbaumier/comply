@@ -149,7 +149,8 @@ mod tests {
 
     #[test]
     fn flags_gray_on_red() {
-        let src = r#"<p style={{ color: 'rgb(128, 128, 128)', backgroundColor: 'rgb(200, 50, 50)' }} />"#;
+        let src =
+            r#"<p style={{ color: 'rgb(128, 128, 128)', backgroundColor: 'rgb(200, 50, 50)' }} />"#;
         assert_eq!(run(src).len(), 1);
     }
 

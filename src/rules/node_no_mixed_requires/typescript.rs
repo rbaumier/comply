@@ -6,10 +6,11 @@ use crate::diagnostic::{Diagnostic, Severity};
 fn is_require_init(declarator: tree_sitter::Node, source: &[u8]) -> bool {
     if let Some(init) = declarator.child_by_field_name("value")
         && init.kind() == "call_expression"
-            && let Some(callee) = init.child_by_field_name("function") {
-                return callee.kind() == "identifier"
-                    && callee.utf8_text(source).unwrap_or("") == "require";
-            }
+        && let Some(callee) = init.child_by_field_name("function")
+    {
+        return callee.kind() == "identifier"
+            && callee.utf8_text(source).unwrap_or("") == "require";
+    }
     false
 }
 

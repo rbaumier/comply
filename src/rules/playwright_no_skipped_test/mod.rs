@@ -3,8 +3,8 @@
 mod typescript;
 
 use crate::diagnostic::Severity;
-use crate::rules::meta::RuleMeta;
 use crate::rules::RuleDef;
+use crate::rules::meta::RuleMeta;
 
 pub const META: RuleMeta = RuleMeta {
     id: "playwright-no-skipped-test",
@@ -12,7 +12,9 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Remove the `.skip()` annotation, fix the test, or delete it \
                   if it's no longer relevant.",
     severity: Severity::Warning,
-    doc_url: Some("https://github.com/playwright-community/eslint-plugin-playwright/blob/main/docs/rules/no-skipped-test.md"),
+    doc_url: Some(
+        "https://github.com/playwright-community/eslint-plugin-playwright/blob/main/docs/rules/no-skipped-test.md",
+    ),
     categories: &["testing"],
 };
 

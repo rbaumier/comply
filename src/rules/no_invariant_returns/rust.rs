@@ -45,10 +45,7 @@ fn literal_text<'a>(value: tree_sitter::Node, source: &'a [u8]) -> Option<&'a st
 
 /// Pull the value of a `return_expression`, if any (bare `return` has no
 /// child). Returns `None` for bare returns and non-literal values.
-fn return_value_literal<'a>(
-    ret: tree_sitter::Node,
-    source: &'a [u8],
-) -> Option<&'a str> {
+fn return_value_literal<'a>(ret: tree_sitter::Node, source: &'a [u8]) -> Option<&'a str> {
     let value = ret.named_child(0)?;
     literal_text(value, source)
 }

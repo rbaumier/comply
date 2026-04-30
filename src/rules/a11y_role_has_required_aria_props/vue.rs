@@ -2,7 +2,9 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
-use crate::rules::vue_template_helpers::{attr_value, collect_attr_names, extract_elements, is_vue_file};
+use crate::rules::vue_template_helpers::{
+    attr_value, collect_attr_names, extract_elements, is_vue_file,
+};
 
 fn required_props(role: &str) -> &'static [&'static str] {
     match role {
@@ -24,7 +26,9 @@ impl TextCheck for Check {
         }
         let mut diagnostics = Vec::new();
         for elem in extract_elements(ctx.source) {
-            let Some(role) = attr_value(elem.attrs, "role") else { continue };
+            let Some(role) = attr_value(elem.attrs, "role") else {
+                continue;
+            };
             let props = required_props(role);
             if props.is_empty() {
                 continue;
@@ -41,10 +45,7 @@ impl TextCheck for Check {
                     line: elem.line,
                     column: 1,
                     rule_id: "a11y-role-has-required-aria-props".into(),
-                    message: format!(
-                        "Role `{role}` requires ARIA props: {}.",
-                        missing.join(", ")
-                    ),
+                    message: format!("Role `{role}` requires ARIA props: {}.", missing.join(", ")),
                     severity: Severity::Error,
                     span: None,
                 });
@@ -73,7 +74,8 @@ mod tests {
 
     #[test]
     fn allows_with_required_props() {
-        let source = "<template>\n  <div role=\"checkbox\" aria-checked=\"true\"></div>\n</template>";
+        let source =
+            "<template>\n  <div role=\"checkbox\" aria-checked=\"true\"></div>\n</template>";
         assert!(run(source).is_empty());
     }
 }

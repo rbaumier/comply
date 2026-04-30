@@ -51,9 +51,9 @@ mod shared_tests;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
+use crate::rules::RuleDef;
 use crate::rules::backend::Backend;
 use crate::rules::meta::RuleMeta;
-use crate::rules::RuleDef;
 use crate::rules::sql_helpers::word_followed_by_open_paren;
 
 pub const META: RuleMeta = RuleMeta {
@@ -71,10 +71,22 @@ pub fn register() -> RuleDef {
     RuleDef {
         meta: META,
         backends: vec![
-            (Language::TypeScript, Backend::TreeSitter(Box::new(typescript::Check))),
-            (Language::TypeScript, Backend::TreeSitter(Box::new(drizzle::Check))),
-            (Language::JavaScript, Backend::TreeSitter(Box::new(typescript::Check))),
-            (Language::Tsx, Backend::TreeSitter(Box::new(typescript::Check))),
+            (
+                Language::TypeScript,
+                Backend::TreeSitter(Box::new(typescript::Check)),
+            ),
+            (
+                Language::TypeScript,
+                Backend::TreeSitter(Box::new(drizzle::Check)),
+            ),
+            (
+                Language::JavaScript,
+                Backend::TreeSitter(Box::new(typescript::Check)),
+            ),
+            (
+                Language::Tsx,
+                Backend::TreeSitter(Box::new(typescript::Check)),
+            ),
             (Language::Rust, Backend::TreeSitter(Box::new(rust::Check))),
             (Language::Vue, Backend::TreeSitter(Box::new(vue::Check))),
             (Language::Sql, Backend::Text(Box::new(sql_text::Check))),
@@ -88,8 +100,7 @@ pub fn register() -> RuleDef {
 /// `same_char` don't trigger.
 pub(super) fn sql_uses_varchar_or_char(sql: &str) -> bool {
     let lower = sql.to_ascii_lowercase();
-    word_followed_by_open_paren(&lower, "varchar")
-        || word_followed_by_open_paren(&lower, "char")
+    word_followed_by_open_paren(&lower, "varchar") || word_followed_by_open_paren(&lower, "char")
 }
 
 #[cfg(test)]

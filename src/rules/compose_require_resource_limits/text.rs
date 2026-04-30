@@ -1,7 +1,9 @@
 //! compose-require-resource-limits text backend.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::rules::yaml_k8s_helpers::{as_mapping, descend_mapping, find_pair, pair_key_text, pair_scalar_value, pair_value_node};
+use crate::rules::yaml_k8s_helpers::{
+    as_mapping, descend_mapping, find_pair, pair_key_text, pair_scalar_value, pair_value_node,
+};
 
 fn looks_like_compose(path: &std::path::Path, source: &str) -> bool {
     let name = path
@@ -12,7 +14,9 @@ fn looks_like_compose(path: &std::path::Path, source: &str) -> bool {
     if name.contains("compose") {
         return true;
     }
-    source.lines().any(|l| l == "services:" || l.starts_with("services:"))
+    source
+        .lines()
+        .any(|l| l == "services:" || l.starts_with("services:"))
 }
 
 fn service_has_memory_limit(svc_map: tree_sitter::Node<'_>, source: &[u8]) -> bool {

@@ -93,9 +93,7 @@ crate::ast_check! { on ["variable_declarator"] => |node, source, ctx, diagnostic
 ///   `{ foo = 1 }`    → "foo"
 fn destructured_property_name(child: tree_sitter::Node, source: &[u8]) -> Option<String> {
     match child.kind() {
-        "shorthand_property_identifier_pattern" => {
-            child.utf8_text(source).ok().map(String::from)
-        }
+        "shorthand_property_identifier_pattern" => child.utf8_text(source).ok().map(String::from),
         "pair_pattern" => {
             // Renamed: `{ key: binding }` — we want `key` because that is
             // the property name exposed by useQuery (isPending). The
@@ -139,11 +137,13 @@ fn enclosing_function_body(node: tree_sitter::Node) -> Option<tree_sitter::Node>
 fn has_identifier_guard(body: tree_sitter::Node, source: &[u8], names: &[String]) -> bool {
     let mut cursor = body.walk();
     for child in body.children(&mut cursor) {
-        if child.kind() != "if_statement" { continue; }
-        let Some(cond) = child.child_by_field_name("condition") else { continue; };
-        if !condition_mentions_any(cond, source, |ident| {
-            names.iter().any(|n| n == ident)
-        }) {
+        if child.kind() != "if_statement" {
+            continue;
+        }
+        let Some(cond) = child.child_by_field_name("condition") else {
+            continue;
+        };
+        if !condition_mentions_any(cond, source, |ident| names.iter().any(|n| n == ident)) {
             continue;
         }
         if consequent_has_return(child) {
@@ -158,9 +158,15 @@ fn has_identifier_guard(body: tree_sitter::Node, source: &[u8], names: &[String]
 fn has_member_guard(body: tree_sitter::Node, source: &[u8], obj_name: &str) -> bool {
     let mut cursor = body.walk();
     for child in body.children(&mut cursor) {
-        if child.kind() != "if_statement" { continue; }
-        let Some(cond) = child.child_by_field_name("condition") else { continue; };
-        if !condition_has_pending_member(cond, source, obj_name) { continue; }
+        if child.kind() != "if_statement" {
+            continue;
+        }
+        let Some(cond) = child.child_by_field_name("condition") else {
+            continue;
+        };
+        if !condition_has_pending_member(cond, source, obj_name) {
+            continue;
+        }
         if consequent_has_return(child) {
             return true;
         }
@@ -176,12 +182,20 @@ where
 {
     let mut found = false;
     walk_subtree(cond, &mut |n| {
-        if found { return; }
-        if n.kind() != "identifier" { return; }
-        let Some(parent) = n.parent() else { return; };
+        if found {
+            return;
+        }
+        if n.kind() != "identifier" {
+            return;
+        }
+        let Some(parent) = n.parent() else {
+            return;
+        };
         // Skip the property side of `a.b`.
         if parent.kind() == "member_expression"
-            && parent.child_by_field_name("property").is_some_and(|p| p == n)
+            && parent
+                .child_by_field_name("property")
+                .is_some_and(|p| p == n)
         {
             return;
         }
@@ -199,12 +213,24 @@ where
 fn condition_has_pending_member(cond: tree_sitter::Node, source: &[u8], obj_name: &str) -> bool {
     let mut found = false;
     walk_subtree(cond, &mut |n| {
-        if found { return; }
-        if n.kind() != "member_expression" { return; }
-        let Some(obj) = n.child_by_field_name("object") else { return; };
-        let Some(prop) = n.child_by_field_name("property") else { return; };
-        let Ok(obj_text) = obj.utf8_text(source) else { return; };
-        let Ok(prop_text) = prop.utf8_text(source) else { return; };
+        if found {
+            return;
+        }
+        if n.kind() != "member_expression" {
+            return;
+        }
+        let Some(obj) = n.child_by_field_name("object") else {
+            return;
+        };
+        let Some(prop) = n.child_by_field_name("property") else {
+            return;
+        };
+        let Ok(obj_text) = obj.utf8_text(source) else {
+            return;
+        };
+        let Ok(prop_text) = prop.utf8_text(source) else {
+            return;
+        };
         if obj_text == obj_name && PENDING_FLAGS.contains(&prop_text) {
             found = true;
         }
@@ -216,10 +242,14 @@ fn condition_has_pending_member(cond: tree_sitter::Node, source: &[u8], obj_name
 /// `return …` statement (either directly or as the sole statement of a
 /// block).
 fn consequent_has_return(if_node: tree_sitter::Node) -> bool {
-    let Some(cons) = if_node.child_by_field_name("consequence") else { return false; };
+    let Some(cons) = if_node.child_by_field_name("consequence") else {
+        return false;
+    };
     let mut found = false;
     walk_subtree(cons, &mut |n| {
-        if n.kind() == "return_statement" { found = true; }
+        if n.kind() == "return_statement" {
+            found = true;
+        }
     });
     found
 }
@@ -235,20 +265,32 @@ where
     loop {
         let node = cursor.node();
         if node.is_error() || node.is_missing() {
-            if !goto_next(&mut cursor, root_id) { return; }
+            if !goto_next(&mut cursor, root_id) {
+                return;
+            }
             continue;
         }
         visit(node);
-        if cursor.goto_first_child() { continue; }
-        if !goto_next(&mut cursor, root_id) { return; }
+        if cursor.goto_first_child() {
+            continue;
+        }
+        if !goto_next(&mut cursor, root_id) {
+            return;
+        }
     }
 }
 
 fn goto_next(cursor: &mut tree_sitter::TreeCursor, root_id: usize) -> bool {
     loop {
-        if cursor.node().id() == root_id { return false; }
-        if cursor.goto_next_sibling() { return true; }
-        if !cursor.goto_parent() { return false; }
+        if cursor.node().id() == root_id {
+            return false;
+        }
+        if cursor.goto_next_sibling() {
+            return true;
+        }
+        if !cursor.goto_parent() {
+            return false;
+        }
     }
 }
 

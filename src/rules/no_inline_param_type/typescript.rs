@@ -81,14 +81,9 @@ fn param_name<'a>(node: tree_sitter::Node, source: &'a [u8]) -> Option<&'a str> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
-
-
         crate::rules::test_helpers::run_ts(source, &Check)
-
-
     }
 
     #[test]
@@ -111,6 +106,9 @@ mod tests {
 
     #[test]
     fn flags_inline_on_arrow_function() {
-        assert_eq!(run_on("const f = (opts: { a: number }) => opts.a;").len(), 1);
+        assert_eq!(
+            run_on("const f = (opts: { a: number }) => opts.a;").len(),
+            1
+        );
     }
 }

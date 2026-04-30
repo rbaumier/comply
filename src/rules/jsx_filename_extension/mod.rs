@@ -1,14 +1,16 @@
 mod typescript;
 use crate::diagnostic::Severity;
-use crate::rules::meta::RuleMeta;
 use crate::rules::RuleDef;
+use crate::rules::meta::RuleMeta;
 
 pub const META: RuleMeta = RuleMeta {
     id: "jsx-filename-extension",
     description: "JSX syntax must live in `.jsx` or `.tsx` files.",
     remediation: "Rename the file to `.jsx` or `.tsx`, or move the JSX out.",
     severity: Severity::Warning,
-    doc_url: Some("https://github.com/jsx-eslint/eslint-plugin-react/blob/master/docs/rules/jsx-filename-extension.md"),
+    doc_url: Some(
+        "https://github.com/jsx-eslint/eslint-plugin-react/blob/master/docs/rules/jsx-filename-extension.md",
+    ),
     categories: &["react"],
 };
 

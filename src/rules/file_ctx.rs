@@ -146,7 +146,8 @@ fn skip_ws_comments(bytes: &[u8], mut cursor: usize) -> usize {
         }
         if cursor + 1 < bytes.len() && bytes[cursor] == b'/' && bytes[cursor + 1] == b'*' {
             cursor += 2;
-            while cursor + 1 < bytes.len() && !(bytes[cursor] == b'*' && bytes[cursor + 1] == b'/') {
+            while cursor + 1 < bytes.len() && !(bytes[cursor] == b'*' && bytes[cursor + 1] == b'/')
+            {
                 cursor += 1;
             }
             cursor = (cursor + 2).min(bytes.len());
@@ -217,7 +218,15 @@ fn scan_path(path: &Path) -> PathSegments {
             || lower.contains("/fixtures/")
             || lower.contains("/__mocks__/")
             || lower.contains(".test.")
-            || lower.contains(".spec."),
+            || lower.contains(".spec.")
+            || lower.ends_with("/test.ts")
+            || lower.ends_with("/test.tsx")
+            || lower.ends_with("/test.js")
+            || lower.ends_with("/test.jsx")
+            || lower == "test.ts"
+            || lower == "test.tsx"
+            || lower == "test.js"
+            || lower == "test.jsx",
         in_node_modules: lower.contains("/node_modules/"),
         in_storybook: lower.contains(".stories."),
     }

@@ -47,20 +47,32 @@ fn unquote(raw: &str) -> &str {
 
 /// Is `node`'s callee a bare `fetch` identifier?
 fn is_fetch_call(node: tree_sitter::Node, source: &[u8]) -> bool {
-    let Some(func) = node.child_by_field_name("function") else { return false };
-    if func.kind() != "identifier" { return false }
+    let Some(func) = node.child_by_field_name("function") else {
+        return false;
+    };
+    if func.kind() != "identifier" {
+        return false;
+    }
     func.utf8_text(source).unwrap_or("") == "fetch"
 }
 
 /// Is `node`'s callee `axios.<http-method>` or `axios(...)`?
 fn is_axios_call(node: tree_sitter::Node, source: &[u8]) -> bool {
-    let Some(func) = node.child_by_field_name("function") else { return false };
+    let Some(func) = node.child_by_field_name("function") else {
+        return false;
+    };
     match func.kind() {
         "identifier" => func.utf8_text(source).unwrap_or("") == "axios",
         "member_expression" => {
-            let Some(obj) = func.child_by_field_name("object") else { return false };
-            let Some(prop) = func.child_by_field_name("property") else { return false };
-            if obj.utf8_text(source).unwrap_or("") != "axios" { return false }
+            let Some(obj) = func.child_by_field_name("object") else {
+                return false;
+            };
+            let Some(prop) = func.child_by_field_name("property") else {
+                return false;
+            };
+            if obj.utf8_text(source).unwrap_or("") != "axios" {
+                return false;
+            }
             AXIOS_METHODS.contains(&prop.utf8_text(source).unwrap_or(""))
         }
         _ => false,
@@ -104,7 +116,11 @@ mod tests {
     #[test]
     fn flags_fetch_to_stripe() {
         assert_eq!(
-            run("a.test.ts", "await fetch('https://api.stripe.com/v1/charges');").len(),
+            run(
+                "a.test.ts",
+                "await fetch('https://api.stripe.com/v1/charges');"
+            )
+            .len(),
             1
         );
     }
@@ -112,7 +128,11 @@ mod tests {
     #[test]
     fn flags_axios_get_to_openai() {
         assert_eq!(
-            run("a.spec.ts", "const r = axios.get('https://api.openai.com/v1/chat');").len(),
+            run(
+                "a.spec.ts",
+                "const r = axios.get('https://api.openai.com/v1/chat');"
+            )
+            .len(),
             1
         );
     }
@@ -120,7 +140,11 @@ mod tests {
     #[test]
     fn flags_axios_post_to_sendgrid() {
         assert_eq!(
-            run("a.test.ts", "await axios.post('https://api.sendgrid.com/v3/mail/send', body);").len(),
+            run(
+                "a.test.ts",
+                "await axios.post('https://api.sendgrid.com/v3/mail/send', body);"
+            )
+            .len(),
             1
         );
     }

@@ -97,7 +97,10 @@ mod tests {
 
     #[test]
     fn flags_isize_cast() {
-        assert_eq!(run_on("fn f(p: *const u8) -> usize { p as usize }").len(), 1);
+        assert_eq!(
+            run_on("fn f(p: *const u8) -> usize { p as usize }").len(),
+            1
+        );
     }
 
     #[test]

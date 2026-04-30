@@ -2,7 +2,9 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
-use crate::rules::vue_template_helpers::{extract_elements, has_attr, has_text_content, is_vue_file};
+use crate::rules::vue_template_helpers::{
+    extract_elements, has_attr, has_text_content, is_vue_file,
+};
 
 #[derive(Debug)]
 pub struct Check;

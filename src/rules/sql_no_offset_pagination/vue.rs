@@ -6,7 +6,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::sql_helpers::{is_sql_string, TS_STRING_KINDS};
+use crate::rules::sql_helpers::{TS_STRING_KINDS, is_sql_string};
 use crate::rules::vue_sfc::{self, ScriptBlock};
 use crate::rules::walker::collect_nodes_of_kinds;
 

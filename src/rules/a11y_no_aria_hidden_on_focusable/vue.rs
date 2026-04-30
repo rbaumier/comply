@@ -20,7 +20,8 @@ impl TextCheck for Check {
             if !is_aria_hidden {
                 continue;
             }
-            let is_focusable = FOCUSABLE_TAGS.contains(&elem.tag) || has_attr(elem.attrs, "tabindex");
+            let is_focusable =
+                FOCUSABLE_TAGS.contains(&elem.tag) || has_attr(elem.attrs, "tabindex");
             if is_focusable {
                 diagnostics.push(Diagnostic {
                     path: std::sync::Arc::clone(&ctx.path_arc),

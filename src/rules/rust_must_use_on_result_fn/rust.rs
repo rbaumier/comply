@@ -56,12 +56,18 @@ mod tests {
 
     #[test]
     fn flags_pub_result_without_must_use() {
-        assert_eq!(run("pub fn connect() -> Result<String, Error> { Ok(String::new()) }").len(), 1);
+        assert_eq!(
+            run("pub fn connect() -> Result<String, Error> { Ok(String::new()) }").len(),
+            1
+        );
     }
 
     #[test]
     fn allows_must_use_attribute() {
-        assert!(run("#[must_use]\npub fn connect() -> Result<String, Error> { Ok(String::new()) }").is_empty());
+        assert!(
+            run("#[must_use]\npub fn connect() -> Result<String, Error> { Ok(String::new()) }")
+                .is_empty()
+        );
     }
 
     #[test]

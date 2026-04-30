@@ -6,9 +6,9 @@ mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
+use crate::rules::RuleDef;
 use crate::rules::backend::Backend;
 use crate::rules::meta::RuleMeta;
-use crate::rules::RuleDef;
 
 pub const META: RuleMeta = RuleMeta {
     id: "sql-no-truncate-in-app",
@@ -23,9 +23,18 @@ pub fn register() -> RuleDef {
     RuleDef {
         meta: META,
         backends: vec![
-            (Language::TypeScript, Backend::TreeSitter(Box::new(typescript::Check))),
-            (Language::JavaScript, Backend::TreeSitter(Box::new(typescript::Check))),
-            (Language::Tsx, Backend::TreeSitter(Box::new(typescript::Check))),
+            (
+                Language::TypeScript,
+                Backend::TreeSitter(Box::new(typescript::Check)),
+            ),
+            (
+                Language::JavaScript,
+                Backend::TreeSitter(Box::new(typescript::Check)),
+            ),
+            (
+                Language::Tsx,
+                Backend::TreeSitter(Box::new(typescript::Check)),
+            ),
             (Language::Rust, Backend::TreeSitter(Box::new(rust::Check))),
             (Language::Sql, Backend::Text(Box::new(sql::Check))),
         ],
@@ -68,9 +77,8 @@ pub(super) fn looks_like_sql_truncate(text: &str) -> bool {
     // Trim surrounding string-literal delimiters (`"` / `'` / `` ` ``)
     // and trailing whitespace so a SQL string with a closing `;` still
     // matches when the AST node text includes the quotes.
-    let trimmed = text.trim_end_matches(|c: char| {
-        c.is_ascii_whitespace() || c == '"' || c == '\'' || c == '`'
-    });
+    let trimmed = text
+        .trim_end_matches(|c: char| c.is_ascii_whitespace() || c == '"' || c == '\'' || c == '`');
     trimmed.ends_with(';')
         || upper.contains("CASCADE")
         || upper.contains("RESTRICT")

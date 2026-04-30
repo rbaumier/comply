@@ -21,7 +21,7 @@
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
-use super::all_args::{ArgKind, ClippyArg, CLIPPY_THRESHOLD_LINTS};
+use super::all_args::{ArgKind, CLIPPY_THRESHOLD_LINTS, ClippyArg};
 use crate::config::Config;
 
 /// Build the body of a temporary `clippy.toml` from the user's

@@ -27,7 +27,9 @@ fn imports_motion_specifier(node: tree_sitter::Node, source: &[u8]) -> bool {
                 if spec.kind() != "import_specifier" {
                     continue;
                 }
-                let Some(name_node) = spec.child_by_field_name("name") else { continue };
+                let Some(name_node) = spec.child_by_field_name("name") else {
+                    continue;
+                };
                 if name_node.utf8_text(source).ok() == Some("motion") {
                     return true;
                 }

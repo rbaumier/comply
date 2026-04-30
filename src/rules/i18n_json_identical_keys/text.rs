@@ -127,10 +127,7 @@ mod tests {
     #[test]
     fn detects_multiple_missing_keys() {
         let dir = setup_locales(&[
-            (
-                "en.json",
-                r#"{"a": "A", "b": "B", "c": "C", "d": "D"}"#,
-            ),
+            ("en.json", r#"{"a": "A", "b": "B", "c": "C", "d": "D"}"#),
             ("fr.json", r#"{"a": "A"}"#),
         ]);
 
@@ -143,7 +140,10 @@ mod tests {
     fn allows_complete_translation() {
         let dir = setup_locales(&[
             ("en.json", r#"{"greeting": "Hello", "farewell": "Goodbye"}"#),
-            ("fr.json", r#"{"greeting": "Bonjour", "farewell": "Au revoir"}"#),
+            (
+                "fr.json",
+                r#"{"greeting": "Bonjour", "farewell": "Au revoir"}"#,
+            ),
         ]);
 
         let diags = check_file(&dir, "fr.json");

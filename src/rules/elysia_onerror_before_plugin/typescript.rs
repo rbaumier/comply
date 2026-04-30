@@ -15,14 +15,20 @@ fn chain_methods<'a>(
         if cur.kind() != "call_expression" {
             break;
         }
-        let Some(callee) = cur.child_by_field_name("function") else { break };
+        let Some(callee) = cur.child_by_field_name("function") else {
+            break;
+        };
         if callee.kind() != "member_expression" {
             break;
         }
-        let Some(property) = callee.child_by_field_name("property") else { break };
+        let Some(property) = callee.child_by_field_name("property") else {
+            break;
+        };
         let prop = property.utf8_text(source).unwrap_or("").to_string();
         out.push((prop, cur));
-        let Some(object) = callee.child_by_field_name("object") else { break };
+        let Some(object) = callee.child_by_field_name("object") else {
+            break;
+        };
         cur = object;
     }
     out.reverse();

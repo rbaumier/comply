@@ -94,6 +94,7 @@ mod tests {
         // TS overloads: method_definition without body followed by one with body.
         // tree-sitter may model these differently, but if both lack a body, fine.
         // overload parsing varies — at minimum we don't crash
-        let _ = run_on("class Foo {\n  bar(): void;\n  bar(x: string): void;\n  bar(x?: string) {}\n}");
+        let _ =
+            run_on("class Foo {\n  bar(): void;\n  bar(x: string): void;\n  bar(x?: string) {}\n}");
     }
 }

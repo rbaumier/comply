@@ -13,15 +13,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
 const SIDE_EFFECT_MARKERS: &[&str] = &[
-    "emit(",
-    "console.",
-    "fetch(",
-    "axios.",
-    ".post(",
-    ".put(",
-    ".delete(",
-    ".patch(",
-    "$emit(",
+    "emit(", "console.", "fetch(", "axios.", ".post(", ".put(", ".delete(", ".patch(", "$emit(",
 ];
 
 crate::ast_check! { on ["component"] => |node, source, ctx, diagnostics|
@@ -101,7 +93,8 @@ mod tests {
 
     #[test]
     fn flags_console_in_computed() {
-        let sfc = "<script setup>\nconst c = computed(() => { console.log('x'); return 1 })\n</script>";
+        let sfc =
+            "<script setup>\nconst c = computed(() => { console.log('x'); return 1 })\n</script>";
         assert_eq!(run(sfc).len(), 1);
     }
 
@@ -113,7 +106,8 @@ mod tests {
 
     #[test]
     fn flags_value_assign_in_computed() {
-        let sfc = "<script setup>\nconst c = computed(() => { other.value = 2; return 1 })\n</script>";
+        let sfc =
+            "<script setup>\nconst c = computed(() => { other.value = 2; return 1 })\n</script>";
         assert_eq!(run(sfc).len(), 1);
     }
 

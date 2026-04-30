@@ -34,7 +34,11 @@ fn has_confusing_quantifier(pattern: &str) -> bool {
                             break;
                         }
                     }
-                    b'?' if depth == 1 && j > 0 && bytes[j - 1] != b'(' && bytes[j - 1] != b'\\' => {
+                    b'?' if depth == 1
+                        && j > 0
+                        && bytes[j - 1] != b'('
+                        && bytes[j - 1] != b'\\' =>
+                    {
                         inner_has_optional = true;
                     }
                     b'*' if depth == 1 => {

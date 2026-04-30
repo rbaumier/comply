@@ -3,10 +3,31 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
 const FS_METHODS: &[&str] = &[
-    "readFile", "writeFile", "appendFile", "copyFile", "mkdir", "mkdtemp",
-    "open", "readdir", "readlink", "rename", "rmdir", "rm", "stat", "lstat",
-    "unlink", "access", "chmod", "lchmod", "lchown", "chown", "link",
-    "symlink", "truncate", "realpath", "utimes",
+    "readFile",
+    "writeFile",
+    "appendFile",
+    "copyFile",
+    "mkdir",
+    "mkdtemp",
+    "open",
+    "readdir",
+    "readlink",
+    "rename",
+    "rmdir",
+    "rm",
+    "stat",
+    "lstat",
+    "unlink",
+    "access",
+    "chmod",
+    "lchmod",
+    "lchown",
+    "chown",
+    "link",
+    "symlink",
+    "truncate",
+    "realpath",
+    "utimes",
 ];
 
 crate::ast_check! { on ["call_expression"] prefilter = ["fs"] => |node, source, ctx, diagnostics|

@@ -56,7 +56,9 @@ fn inspect_catch(
     ctx: &CheckCtx,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let Some(param) = node.child_by_field_name("parameter") else { return };
+    let Some(param) = node.child_by_field_name("parameter") else {
+        return;
+    };
 
     let ident = if param.kind() == "identifier" {
         param
@@ -67,7 +69,9 @@ fn inspect_catch(
         }
     };
 
-    let Ok(name) = ident.utf8_text(source) else { return };
+    let Ok(name) = ident.utf8_text(source) else {
+        return;
+    };
 
     if super::is_acceptable_name(name) {
         return;

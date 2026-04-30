@@ -13,15 +13,21 @@ fn is_describe_call(node: tree_sitter::Node, source: &[u8]) -> bool {
     if node.kind() != "call_expression" {
         return false;
     }
-    let Some(callee) = node.child_by_field_name("function") else { return false };
+    let Some(callee) = node.child_by_field_name("function") else {
+        return false;
+    };
     match callee.kind() {
         "identifier" => callee.utf8_text(source).unwrap_or("") == "describe",
         "member_expression" => {
-            let Some(obj) = callee.child_by_field_name("object") else { return false };
+            let Some(obj) = callee.child_by_field_name("object") else {
+                return false;
+            };
             obj.utf8_text(source).unwrap_or("") == "describe"
-                || callee.child_by_field_name("property")
+                || callee
+                    .child_by_field_name("property")
                     .and_then(|p| p.utf8_text(source).ok())
-                    .unwrap_or("") == "describe"
+                    .unwrap_or("")
+                    == "describe"
         }
         _ => false,
     }
@@ -44,9 +50,7 @@ fn check_describe_depth(
                 line: pos.row + 1,
                 column: pos.column + 1,
                 rule_id: "playwright-max-nested-describe".into(),
-                message: format!(
-                    "Describe depth {new_depth} exceeds maximum allowed {max_depth}."
-                ),
+                message: format!("Describe depth {new_depth} exceeds maximum allowed {max_depth}."),
                 severity: Severity::Warning,
                 span: None,
             });

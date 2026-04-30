@@ -40,7 +40,8 @@ mod tests {
     }
     #[test]
     fn flags_nullable_return() {
-        let src = "import { Result } from 'better-result';\nfunction f(): User | null { return null; }";
+        let src =
+            "import { Result } from 'better-result';\nfunction f(): User | null { return null; }";
         assert_eq!(run(src).len(), 1);
     }
     #[test]

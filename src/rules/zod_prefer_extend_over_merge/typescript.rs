@@ -12,11 +12,15 @@ fn receiver_has_zod_root(mut node: tree_sitter::Node<'_>, source: &[u8]) -> bool
                 return node.utf8_text(source).map(|t| t == "z").unwrap_or(false);
             }
             "member_expression" => {
-                let Some(obj) = node.child_by_field_name("object") else { return false };
+                let Some(obj) = node.child_by_field_name("object") else {
+                    return false;
+                };
                 node = obj;
             }
             "call_expression" => {
-                let Some(f) = node.child_by_field_name("function") else { return false };
+                let Some(f) = node.child_by_field_name("function") else {
+                    return false;
+                };
                 node = f;
             }
             _ => return false,

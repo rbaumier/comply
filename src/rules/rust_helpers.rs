@@ -131,4 +131,3 @@ pub fn has_test_attribute(item: Node, source: &[u8]) -> bool {
     }
     false
 }
-

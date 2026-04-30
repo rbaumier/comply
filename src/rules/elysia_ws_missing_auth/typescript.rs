@@ -41,7 +41,8 @@ mod tests {
 
     #[test]
     fn flags_ws_without_before_handle() {
-        let src = "import { Elysia } from 'elysia';\nnew Elysia().ws('/chat', { message(ws, msg) {} });";
+        let src =
+            "import { Elysia } from 'elysia';\nnew Elysia().ws('/chat', { message(ws, msg) {} });";
         assert_eq!(run_on(src).len(), 1);
     }
 

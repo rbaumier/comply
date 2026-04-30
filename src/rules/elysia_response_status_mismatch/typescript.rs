@@ -3,8 +3,9 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
 const STATUSES: &[&str] = &["401", "403", "404", "409", "500"];
-const ROUTE_METHODS: &[&str] =
-    &["get", "post", "put", "patch", "delete", "options", "head", "all"];
+const ROUTE_METHODS: &[&str] = &[
+    "get", "post", "put", "patch", "delete", "options", "head", "all",
+];
 
 fn extract_response_block(args_text: &str) -> Option<&str> {
     let idx = args_text.find("response:")?;

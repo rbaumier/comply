@@ -45,7 +45,8 @@ mod tests {
 
     #[test]
     fn flags_derive_reading_body() {
-        let src = "import { Elysia } from 'elysia';\nnew Elysia().derive(({ body }) => ({ b: body }));";
+        let src =
+            "import { Elysia } from 'elysia';\nnew Elysia().derive(({ body }) => ({ b: body }));";
         assert_eq!(run_on(src).len(), 1);
     }
 

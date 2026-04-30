@@ -81,7 +81,9 @@ mod tests {
 
     #[test]
     fn allows_object_from_entries() {
-        assert!(run_on("const obj = Object.fromEntries(pairs.map(([k, v]) => [k, v]));").is_empty());
+        assert!(
+            run_on("const obj = Object.fromEntries(pairs.map(([k, v]) => [k, v]));").is_empty()
+        );
     }
 
     #[test]

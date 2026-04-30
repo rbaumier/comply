@@ -57,10 +57,9 @@ mod tests {
 
     #[test]
     fn allows_fk_with_index() {
-        assert!(run_on(
-            "userId: integer('user_id').references(() => users.id)\n  .index()"
-        )
-        .is_empty());
+        assert!(
+            run_on("userId: integer('user_id').references(() => users.id)\n  .index()").is_empty()
+        );
     }
 
     #[test]

@@ -94,7 +94,8 @@ mod tests {
 
     #[test]
     fn allows_specific_origin() {
-        let src = "import { cors } from 'hono/cors';\napp.use(cors({ origin: 'https://example.com' }));";
+        let src =
+            "import { cors } from 'hono/cors';\napp.use(cors({ origin: 'https://example.com' }));";
         assert!(run_on(src).is_empty());
     }
 

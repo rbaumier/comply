@@ -29,11 +29,7 @@ mod tests {
     use crate::diagnostic::Diagnostic;
 
     fn run(src: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_ts_with_path(
-            src,
-            &Check,
-            "/app/migrations/001_add_col.ts",
-        )
+        crate::rules::test_helpers::run_ts_with_path(src, &Check, "/app/migrations/001_add_col.ts")
     }
 
     fn run_non_migration(src: &str) -> Vec<Diagnostic> {

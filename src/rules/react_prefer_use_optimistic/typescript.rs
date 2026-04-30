@@ -17,7 +17,9 @@ fn find_matching_brace(bytes: &[u8], start: usize) -> Option<usize> {
             b'{' => depth += 1,
             b'}' => {
                 depth -= 1;
-                if depth == 0 { return Some(i); }
+                if depth == 0 {
+                    return Some(i);
+                }
             }
             _ => {}
         }
@@ -76,9 +78,15 @@ impl TextCheck for Check {
             }
             // Some catches are `catch\n{`. Allow newlines.
             while j < bytes.len() && bytes[j] != b'{' {
-                if bytes[j] != b' ' && bytes[j] != b'\t' && bytes[j] != b'\n'
-                    && bytes[j] != b'(' && bytes[j] != b')' && !bytes[j].is_ascii_alphanumeric()
-                    && bytes[j] != b'_' && bytes[j] != b':' {
+                if bytes[j] != b' '
+                    && bytes[j] != b'\t'
+                    && bytes[j] != b'\n'
+                    && bytes[j] != b'('
+                    && bytes[j] != b')'
+                    && !bytes[j].is_ascii_alphanumeric()
+                    && bytes[j] != b'_'
+                    && bytes[j] != b':'
+                {
                     break;
                 }
                 j += 1;
@@ -87,7 +95,9 @@ impl TextCheck for Check {
                 search_from = abs + 1;
                 continue;
             }
-            let Some(end) = find_matching_brace(bytes, j) else { break };
+            let Some(end) = find_matching_brace(bytes, j) else {
+                break;
+            };
             let body = &ctx.source[j + 1..end];
             if body_calls_setter(body) {
                 let prefix = &ctx.source[..abs];
@@ -98,9 +108,10 @@ impl TextCheck for Check {
                     line,
                     column: col,
                     rule_id: super::META.id.into(),
-                    message: "Rolling back state in a `catch` is the manual optimistic-update pattern \
+                    message:
+                        "Rolling back state in a `catch` is the manual optimistic-update pattern \
                               — `useOptimistic` handles rollback for you and is race-safe."
-                        .into(),
+                            .into(),
                     severity: Severity::Warning,
                     span: None,
                 });

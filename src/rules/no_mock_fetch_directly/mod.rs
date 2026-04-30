@@ -3,13 +3,12 @@
 mod typescript;
 
 use crate::diagnostic::Severity;
-use crate::rules::meta::RuleMeta;
 use crate::rules::RuleDef;
+use crate::rules::meta::RuleMeta;
 
 pub const META: RuleMeta = RuleMeta {
     id: "no-mock-fetch-directly",
-    description:
-        "Mocking `fetch`/`axios` directly couples tests to the HTTP client implementation.",
+    description: "Mocking `fetch`/`axios` directly couples tests to the HTTP client implementation.",
     remediation: "Use MSW (`msw`) to intercept at the network level instead \
                   of `vi.mock('axios')` or `global.fetch = vi.fn()`. MSW \
                   handlers are reusable, work with any HTTP client, and \

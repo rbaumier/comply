@@ -86,12 +86,13 @@ fn count_complexity(node: tree_sitter::Node, source: &[u8]) -> usize {
 
         // Count logical operators in binary expressions.
         if child.kind() == "binary_expression"
-            && let Some(op) = child.child_by_field_name("operator") {
-                let op_text = op.utf8_text(source).unwrap_or("");
-                if LOGICAL_OPS.contains(&op_text) {
-                    count += 1;
-                }
+            && let Some(op) = child.child_by_field_name("operator")
+        {
+            let op_text = op.utf8_text(source).unwrap_or("");
+            if LOGICAL_OPS.contains(&op_text) {
+                count += 1;
             }
+        }
 
         count += count_complexity(child, source);
 

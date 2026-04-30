@@ -102,66 +102,88 @@ mod tests {
 
     #[test]
     fn flags_use_query_in_effect() {
-        assert_eq!(run(r#"
+        assert_eq!(
+            run(r#"
 function App() {
     useEffect(() => {
         const { data } = useQuery({ queryKey: ['a'], queryFn: fetchA });
     }, []);
 }
-"#).len(), 1);
+"#)
+            .len(),
+            1
+        );
     }
 
     #[test]
     fn flags_use_mutation_in_effect() {
-        assert_eq!(run(r#"
+        assert_eq!(
+            run(r#"
 function App() {
     useEffect(() => {
         useMutation({ mutationFn: doThing });
     }, []);
 }
-"#).len(), 1);
+"#)
+            .len(),
+            1
+        );
     }
 
     #[test]
     fn flags_use_infinite_query_in_layout_effect() {
-        assert_eq!(run(r#"
+        assert_eq!(
+            run(r#"
 function Feed() {
     useLayoutEffect(() => {
         useInfiniteQuery(opts);
     }, []);
 }
-"#).len(), 1);
+"#)
+            .len(),
+            1
+        );
     }
 
     #[test]
     fn flags_react_dot_use_effect() {
-        assert_eq!(run(r#"
+        assert_eq!(
+            run(r#"
 function App() {
     React.useEffect(() => {
         useQuery({ queryKey: ['k'], queryFn });
     }, []);
 }
-"#).len(), 1);
+"#)
+            .len(),
+            1
+        );
     }
 
     #[test]
     fn allows_query_outside_effect() {
-        assert!(run(r#"
+        assert!(
+            run(r#"
 function App() {
     const { data } = useQuery({ queryKey: ['a'], queryFn: fetchA });
     return <div>{data}</div>;
 }
-"#).is_empty());
+"#)
+            .is_empty()
+        );
     }
 
     #[test]
     fn allows_non_query_in_effect() {
-        assert!(run(r#"
+        assert!(
+            run(r#"
 function App() {
     useEffect(() => {
         fetchData();
     }, []);
 }
-"#).is_empty());
+"#)
+            .is_empty()
+        );
     }
 }

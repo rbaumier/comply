@@ -3,8 +3,8 @@
 mod react;
 
 use crate::diagnostic::Severity;
-use crate::rules::meta::RuleMeta;
 use crate::rules::RuleDef;
+use crate::rules::meta::RuleMeta;
 
 pub const META: RuleMeta = RuleMeta {
     id: "react-no-typos",
@@ -13,7 +13,9 @@ pub const META: RuleMeta = RuleMeta {
                   (should be `getDerivedStateFromProps`) and `componentWillRecieveProps` \
                   (should be `componentWillReceiveProps`).",
     severity: Severity::Error,
-    doc_url: Some("https://github.com/jsx-eslint/eslint-plugin-react/blob/master/docs/rules/no-typos.md"),
+    doc_url: Some(
+        "https://github.com/jsx-eslint/eslint-plugin-react/blob/master/docs/rules/no-typos.md",
+    ),
     categories: &["react"],
 };
 

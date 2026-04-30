@@ -18,8 +18,12 @@ fn contains_identifier(node: tree_sitter::Node, source: &[u8], name: &str) -> bo
 }
 
 fn type_param_name<'a>(tp: tree_sitter::Node<'a>, source: &[u8]) -> Option<String> {
-    let name_node = tp.child_by_field_name("name").or_else(|| tp.named_child(0))?;
-    std::str::from_utf8(&source[name_node.byte_range()]).ok().map(str::to_string)
+    let name_node = tp
+        .child_by_field_name("name")
+        .or_else(|| tp.named_child(0))?;
+    std::str::from_utf8(&source[name_node.byte_range()])
+        .ok()
+        .map(str::to_string)
 }
 
 crate::ast_check! { |node, source, ctx, diagnostics|

@@ -6,9 +6,9 @@ mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
+use crate::rules::RuleDef;
 use crate::rules::backend::Backend;
 use crate::rules::meta::RuleMeta;
-use crate::rules::RuleDef;
 
 pub const META: RuleMeta = RuleMeta {
     id: "no-abusive-eslint-disable",
@@ -40,10 +40,7 @@ pub(crate) fn is_abusive_disable(text: &str) -> bool {
                 continue;
             }
             let after_trimmed = text[end..].trim();
-            if after_trimmed.is_empty()
-                || after_trimmed == "*/"
-                || after_trimmed == "-->"
-            {
+            if after_trimmed.is_empty() || after_trimmed == "*/" || after_trimmed == "-->" {
                 return true;
             }
             if after_trimmed.starts_with("--") {
@@ -64,9 +61,18 @@ pub fn register() -> RuleDef {
     RuleDef {
         meta: META,
         backends: vec![
-            (Language::TypeScript, Backend::TreeSitter(Box::new(typescript::Check))),
-            (Language::Tsx, Backend::TreeSitter(Box::new(typescript::Check))),
-            (Language::JavaScript, Backend::TreeSitter(Box::new(typescript::Check))),
+            (
+                Language::TypeScript,
+                Backend::TreeSitter(Box::new(typescript::Check)),
+            ),
+            (
+                Language::Tsx,
+                Backend::TreeSitter(Box::new(typescript::Check)),
+            ),
+            (
+                Language::JavaScript,
+                Backend::TreeSitter(Box::new(typescript::Check)),
+            ),
             (Language::Rust, Backend::TreeSitter(Box::new(rust::Check))),
             (Language::Vue, Backend::Text(Box::new(text::Check))),
         ],

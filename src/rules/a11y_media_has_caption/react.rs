@@ -18,16 +18,17 @@ fn has_caption_track(parent: tree_sitter::Node, source: &[u8]) -> bool {
         let k = current.kind();
         if (k == "jsx_self_closing_element" || k == "jsx_opening_element")
             && let Some(name) = current.child_by_field_name("name")
-                && name.utf8_text(source).ok() == Some("track") {
-                    let mut cursor = current.walk();
-                    for child in current.children(&mut cursor) {
-                        if jsx_attribute_name(child, source) == Some("kind")
-                            && jsx_attr_has_value(child, source, "captions")
-                        {
-                            return true;
-                        }
-                    }
+            && name.utf8_text(source).ok() == Some("track")
+        {
+            let mut cursor = current.walk();
+            for child in current.children(&mut cursor) {
+                if jsx_attribute_name(child, source) == Some("kind")
+                    && jsx_attr_has_value(child, source, "captions")
+                {
+                    return true;
                 }
+            }
+        }
         let mut cursor = current.walk();
         for child in current.children(&mut cursor) {
             stack.push(child);

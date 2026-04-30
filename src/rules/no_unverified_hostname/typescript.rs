@@ -51,7 +51,10 @@ mod tests {
 
     #[test]
     fn flags_arrow_noop() {
-        assert_eq!(run_on("const x = { checkServerIdentity: () => {} };").len(), 1);
+        assert_eq!(
+            run_on("const x = { checkServerIdentity: () => {} };").len(),
+            1
+        );
     }
 
     #[test]

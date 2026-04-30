@@ -46,12 +46,17 @@ mod tests {
 
     #[test]
     fn flags_missing_tabindex() {
-        assert_eq!(run_on(r#"const x = <div aria-activedescendant="item-1" />;"#).len(), 1);
+        assert_eq!(
+            run_on(r#"const x = <div aria-activedescendant="item-1" />;"#).len(),
+            1
+        );
     }
 
     #[test]
     fn allows_with_tabindex() {
-        assert!(run_on(r#"const x = <div aria-activedescendant="item-1" tabIndex={0} />;"#).is_empty());
+        assert!(
+            run_on(r#"const x = <div aria-activedescendant="item-1" tabIndex={0} />;"#).is_empty()
+        );
     }
 
     #[test]

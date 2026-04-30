@@ -30,7 +30,9 @@ impl AstCheck for Check {
                 line: idx + 1,
                 column: 1,
                 rule_id: "elysia-cookie-no-httponly".into(),
-                message: "Cookie config is missing `httpOnly: true` — readable from JavaScript (XSS).".into(),
+                message:
+                    "Cookie config is missing `httpOnly: true` — readable from JavaScript (XSS)."
+                        .into(),
                 severity: Severity::Error,
                 span: None,
             });

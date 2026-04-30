@@ -11,8 +11,12 @@ fn extends_react_component(node: tree_sitter::Node, source: &[u8]) -> bool {
         if child.kind() != "class_heritage" {
             continue;
         }
-        let Ok(heritage_text) = child.utf8_text(source) else { continue };
-        let Some(rest) = heritage_text.strip_prefix("extends") else { continue };
+        let Ok(heritage_text) = child.utf8_text(source) else {
+            continue;
+        };
+        let Some(rest) = heritage_text.strip_prefix("extends") else {
+            continue;
+        };
         let super_name = rest
             .trim()
             .split(|c: char| !c.is_alphanumeric() && c != '.')

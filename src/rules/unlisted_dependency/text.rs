@@ -168,8 +168,7 @@ mod tests {
             ("a.ts", "import axios from 'axios';"),
             ("b.ts", "export const x = 1;"),
         ];
-        let (_dir, diags) =
-            run_on_project(&files, Some(r#"{ "dependencies": {} }"#), None);
+        let (_dir, diags) = run_on_project(&files, Some(r#"{ "dependencies": {} }"#), None);
         assert_eq!(diags.len(), 1, "axios should be flagged: {diags:?}");
         assert_eq!(diags[0].rule_id, "unlisted-dependency");
         assert!(

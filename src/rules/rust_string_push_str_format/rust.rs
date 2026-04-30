@@ -79,7 +79,10 @@ fn is_ref_to_format_macro(node: tree_sitter::Node, source: &[u8]) -> bool {
     let Some(macro_name) = value.child_by_field_name("macro") else {
         return false;
     };
-    macro_name.utf8_text(source).map(|t| t == "format").unwrap_or(false)
+    macro_name
+        .utf8_text(source)
+        .map(|t| t == "format")
+        .unwrap_or(false)
 }
 
 #[cfg(test)]

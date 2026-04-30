@@ -44,8 +44,13 @@ fn is_component_function(n: tree_sitter::Node<'_>, source: &[u8]) -> bool {
             if !name_is_pascal(n.child_by_field_name("name"), source) {
                 return false;
             }
-            let Some(v) = n.child_by_field_name("value") else { return false; };
-            matches!(v.kind(), "arrow_function" | "function_expression" | "function")
+            let Some(v) = n.child_by_field_name("value") else {
+                return false;
+            };
+            matches!(
+                v.kind(),
+                "arrow_function" | "function_expression" | "function"
+            )
         }
         _ => false,
     }
@@ -97,14 +102,24 @@ fn scan_render_body(
 fn is_nested_function(n: tree_sitter::Node<'_>) -> bool {
     matches!(
         n.kind(),
-        "arrow_function" | "function_expression" | "function" | "function_declaration" | "method_definition"
+        "arrow_function"
+            | "function_expression"
+            | "function"
+            | "function_declaration"
+            | "method_definition"
     )
 }
 
 fn is_safe_callback_hook(n: tree_sitter::Node<'_>, source: &[u8]) -> bool {
-    if n.kind() != "call_expression" { return false; }
-    let Some(callee) = n.child_by_field_name("function") else { return false; };
-    let Ok(name) = callee.utf8_text(source) else { return false; };
+    if n.kind() != "call_expression" {
+        return false;
+    }
+    let Some(callee) = n.child_by_field_name("function") else {
+        return false;
+    };
+    let Ok(name) = callee.utf8_text(source) else {
+        return false;
+    };
     SAFE_CALLBACK_HOOKS.contains(&name)
 }
 
@@ -136,9 +151,13 @@ fn is_guarded_by_typeof(n: tree_sitter::Node<'_>, source: &[u8], name: &str) -> 
 }
 
 fn offending_member(n: tree_sitter::Node<'_>, source: &[u8]) -> Option<&'static str> {
-    if n.kind() != "member_expression" { return None; }
+    if n.kind() != "member_expression" {
+        return None;
+    }
     let obj = n.child_by_field_name("object")?;
-    if obj.kind() != "identifier" { return None; }
+    if obj.kind() != "identifier" {
+        return None;
+    }
     let name = obj.utf8_text(source).ok()?;
     match name {
         "window" => Some("window"),

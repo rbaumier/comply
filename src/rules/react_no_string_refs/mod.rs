@@ -3,8 +3,8 @@
 mod react;
 
 use crate::diagnostic::Severity;
-use crate::rules::meta::RuleMeta;
 use crate::rules::RuleDef;
+use crate::rules::meta::RuleMeta;
 
 pub const META: RuleMeta = RuleMeta {
     id: "react-no-string-refs",
@@ -12,7 +12,9 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Replace `ref=\"myRef\"` with a `useRef()` hook or a callback ref. \
                   String refs are a legacy API that has been removed in React 19.",
     severity: Severity::Error,
-    doc_url: Some("https://github.com/jsx-eslint/eslint-plugin-react/blob/master/docs/rules/no-string-refs.md"),
+    doc_url: Some(
+        "https://github.com/jsx-eslint/eslint-plugin-react/blob/master/docs/rules/no-string-refs.md",
+    ),
     categories: &["react"],
 };
 

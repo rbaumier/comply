@@ -12,24 +12,42 @@ const RAW_COLORS: &[&str] = &[
 ];
 
 const COLOR_PREFIXES: &[&str] = &[
-    "bg-", "text-", "border-", "ring-", "fill-", "stroke-", "from-", "to-", "via-", "divide-",
-    "outline-", "decoration-", "placeholder-", "caret-", "accent-", "shadow-",
+    "bg-",
+    "text-",
+    "border-",
+    "ring-",
+    "fill-",
+    "stroke-",
+    "from-",
+    "to-",
+    "via-",
+    "divide-",
+    "outline-",
+    "decoration-",
+    "placeholder-",
+    "caret-",
+    "accent-",
+    "shadow-",
 ];
 
 /// Return true if a single class token (already stripped of any variant
 /// prefix like `hover:`) references a raw palette color.
 fn is_raw_color_class(token: &str) -> bool {
     for prefix in COLOR_PREFIXES {
-        let Some(rest) = token.strip_prefix(prefix) else { continue };
+        let Some(rest) = token.strip_prefix(prefix) else {
+            continue;
+        };
         // `bg-white` / `bg-black` — no numeric suffix.
         if RAW_COLORS.contains(&rest) {
             return true;
         }
         // `bg-blue-500`, `text-gray-900` — color-shade pairs.
         if let Some((color, shade)) = rest.rsplit_once('-')
-            && RAW_COLORS.contains(&color) && shade.chars().all(|c| c.is_ascii_digit()) {
-                return true;
-            }
+            && RAW_COLORS.contains(&color)
+            && shade.chars().all(|c| c.is_ascii_digit())
+        {
+            return true;
+        }
     }
     false
 }
@@ -69,26 +87,43 @@ mod tests {
 
     #[test]
     fn flags_bg_white() {
-        assert_eq!(run(r#"export const A = () => <div className="bg-white" />;"#).len(), 1);
+        assert_eq!(
+            run(r#"export const A = () => <div className="bg-white" />;"#).len(),
+            1
+        );
     }
 
     #[test]
     fn flags_text_gray_900() {
-        assert_eq!(run(r#"export const A = () => <div className="text-gray-900" />;"#).len(), 1);
+        assert_eq!(
+            run(r#"export const A = () => <div className="text-gray-900" />;"#).len(),
+            1
+        );
     }
 
     #[test]
     fn flags_bg_blue_500() {
-        assert_eq!(run(r#"export const A = () => <div className="p-4 bg-blue-500" />;"#).len(), 1);
+        assert_eq!(
+            run(r#"export const A = () => <div className="p-4 bg-blue-500" />;"#).len(),
+            1
+        );
     }
 
     #[test]
     fn allows_semantic_tokens() {
-        assert!(run(r#"export const A = () => <div className="bg-background text-foreground" />;"#).is_empty());
+        assert!(
+            run(r#"export const A = () => <div className="bg-background text-foreground" />;"#)
+                .is_empty()
+        );
     }
 
     #[test]
     fn allows_bg_primary() {
-        assert!(run(r#"export const A = () => <div className="bg-primary text-primary-foreground" />;"#).is_empty());
+        assert!(
+            run(
+                r#"export const A = () => <div className="bg-primary text-primary-foreground" />;"#
+            )
+            .is_empty()
+        );
     }
 }

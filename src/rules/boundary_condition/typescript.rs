@@ -45,12 +45,18 @@ fn is_last_index(index: tree_sitter::Node, object: &str, source: &[u8]) -> bool 
         return false;
     }
     // Operator must be `-`.
-    let op = index.child_by_field_name("operator").and_then(|n| n.utf8_text(source).ok());
+    let op = index
+        .child_by_field_name("operator")
+        .and_then(|n| n.utf8_text(source).ok());
     if op != Some("-") {
         return false;
     }
-    let Some(left) = index.child_by_field_name("left") else { return false };
-    let Some(right) = index.child_by_field_name("right") else { return false };
+    let Some(left) = index.child_by_field_name("left") else {
+        return false;
+    };
+    let Some(right) = index.child_by_field_name("right") else {
+        return false;
+    };
     if right.kind() != "number" || right.utf8_text(source).unwrap_or("") != "1" {
         return false;
     }
@@ -59,18 +65,26 @@ fn is_last_index(index: tree_sitter::Node, object: &str, source: &[u8]) -> bool 
     if left.kind() != "member_expression" {
         return false;
     }
-    let prop = left.child_by_field_name("property").and_then(|n| n.utf8_text(source).ok());
+    let prop = left
+        .child_by_field_name("property")
+        .and_then(|n| n.utf8_text(source).ok());
     if prop != Some("length") {
         return false;
     }
-    let Some(left_obj) = left.child_by_field_name("object") else { return false };
-    object_text(left_obj, source).map(|s| s == object).unwrap_or(false)
+    let Some(left_obj) = left.child_by_field_name("object") else {
+        return false;
+    };
+    object_text(left_obj, source)
+        .map(|s| s == object)
+        .unwrap_or(false)
 }
 
 /// Return true if the subscript is the left-hand side of an assignment
 /// (i.e. it is a write, not a read).
 fn is_assignment_target(node: tree_sitter::Node) -> bool {
-    let Some(parent) = node.parent() else { return false };
+    let Some(parent) = node.parent() else {
+        return false;
+    };
     if !matches!(
         parent.kind(),
         "assignment_expression" | "augmented_assignment_expression"

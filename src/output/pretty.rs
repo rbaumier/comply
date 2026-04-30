@@ -141,8 +141,7 @@ impl miette::Diagnostic for MietteDiag<'_> {
     // Label text is omitted — miette draws the message as the error header already; a label would repeat it next to the caret.
     fn labels(&self) -> Option<Box<dyn Iterator<Item = LabeledSpan> + '_>> {
         Some(Box::new(std::iter::once(LabeledSpan::new_with_span(
-            None,
-            self.span,
+            None, self.span,
         ))))
     }
 }

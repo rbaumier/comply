@@ -78,7 +78,8 @@ mod tests {
 
     #[test]
     fn ignores_non_redirect_status() {
-        let src = "import { Elysia } from 'elysia';\napp.get('/', ({ set }) => { set.status = 401; });";
+        let src =
+            "import { Elysia } from 'elysia';\napp.get('/', ({ set }) => { set.status = 401; });";
         assert!(crate::rules::test_helpers::run_ts(src, &Check).is_empty());
     }
 }

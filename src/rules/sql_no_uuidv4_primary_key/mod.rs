@@ -7,9 +7,9 @@ mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
+use crate::rules::RuleDef;
 use crate::rules::backend::Backend;
 use crate::rules::meta::RuleMeta;
-use crate::rules::RuleDef;
 
 pub const META: RuleMeta = RuleMeta {
     id: "sql-no-uuidv4-primary-key",
@@ -24,10 +24,22 @@ pub fn register() -> RuleDef {
     RuleDef {
         meta: META,
         backends: vec![
-            (Language::TypeScript, Backend::TreeSitter(Box::new(typescript::Check))),
-            (Language::TypeScript, Backend::TreeSitter(Box::new(drizzle::Check))),
-            (Language::JavaScript, Backend::TreeSitter(Box::new(typescript::Check))),
-            (Language::Tsx, Backend::TreeSitter(Box::new(typescript::Check))),
+            (
+                Language::TypeScript,
+                Backend::TreeSitter(Box::new(typescript::Check)),
+            ),
+            (
+                Language::TypeScript,
+                Backend::TreeSitter(Box::new(drizzle::Check)),
+            ),
+            (
+                Language::JavaScript,
+                Backend::TreeSitter(Box::new(typescript::Check)),
+            ),
+            (
+                Language::Tsx,
+                Backend::TreeSitter(Box::new(typescript::Check)),
+            ),
             (Language::Rust, Backend::TreeSitter(Box::new(rust::Check))),
             (Language::Sql, Backend::Text(Box::new(sql::Check))),
         ],
@@ -39,8 +51,7 @@ pub fn register() -> RuleDef {
 pub(super) fn sql_uses_uuidv4_pk(sql: &str) -> bool {
     for line in sql.lines() {
         let upper = line.to_ascii_uppercase();
-        let has_v4 =
-            upper.contains("GEN_RANDOM_UUID()") || upper.contains("UUID_GENERATE_V4()");
+        let has_v4 = upper.contains("GEN_RANDOM_UUID()") || upper.contains("UUID_GENERATE_V4()");
         if !has_v4 {
             continue;
         }

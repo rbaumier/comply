@@ -10,8 +10,18 @@ use crate::rules::rust_helpers::is_in_test_context;
 
 /// Method-name suffixes that indicate I/O.
 const IO_METHODS: &[&str] = &[
-    "get", "post", "put", "delete", "patch", "request", "send", "execute",
-    "query", "fetch_all", "fetch_one", "fetch_optional",
+    "get",
+    "post",
+    "put",
+    "delete",
+    "patch",
+    "request",
+    "send",
+    "execute",
+    "query",
+    "fetch_all",
+    "fetch_one",
+    "fetch_optional",
 ];
 
 /// Callee bases that indicate I/O clients.
@@ -83,9 +93,7 @@ fn is_io_call(node: tree_sitter::Node, source: &[u8]) -> bool {
     };
     // Match trailing method name + some base hint.
     for method in IO_METHODS {
-        if text.ends_with(&format!(".{method}"))
-            || text.ends_with(&format!("::{method}"))
-        {
+        if text.ends_with(&format!(".{method}")) || text.ends_with(&format!("::{method}")) {
             // Require a known I/O base in the callee path.
             if IO_BASES.iter().any(|b| text.contains(b)) {
                 return true;
@@ -114,14 +122,9 @@ fn is_wrapped_in_timeout(node: tree_sitter::Node, source: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
-
-
         crate::rules::test_helpers::run_rust(source, &Check)
-
-
     }
 
     #[test]

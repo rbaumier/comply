@@ -14,9 +14,8 @@ use crate::diagnostic::{Diagnostic, Severity};
 use tree_sitter::Node;
 
 const BOOLEAN_PREFIXES: &[&str] = &[
-    "is", "has", "should", "can", "will", "did", "show", "hide",
-    "enable", "disable", "visible", "active", "open", "loading", "loaded",
-    "allow", "need", "must",
+    "is", "has", "should", "can", "will", "did", "show", "hide", "enable", "disable", "visible",
+    "active", "open", "loading", "loaded", "allow", "need", "must",
 ];
 
 fn last_segment(name: &str) -> &str {

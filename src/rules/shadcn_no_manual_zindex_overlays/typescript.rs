@@ -38,7 +38,8 @@ fn is_zindex_class(class: &str) -> bool {
     if rest == "auto" {
         return false;
     }
-    rest.chars().all(|c| c.is_ascii_digit() || c == '[' || c == ']')
+    rest.chars()
+        .all(|c| c.is_ascii_digit() || c == '[' || c == ']')
         && rest.chars().any(|c| c.is_ascii_digit())
 }
 
@@ -91,12 +92,18 @@ mod tests {
 
     #[test]
     fn flags_z_on_dialog_content() {
-        assert_eq!(run(r#"const x = <DialogContent className="z-50">x</DialogContent>;"#).len(), 1);
+        assert_eq!(
+            run(r#"const x = <DialogContent className="z-50">x</DialogContent>;"#).len(),
+            1
+        );
     }
 
     #[test]
     fn flags_z_on_dotted_popover() {
-        assert_eq!(run(r#"const x = <Popover.Content className="p-4 z-[999]">x</Popover.Content>;"#).len(), 1);
+        assert_eq!(
+            run(r#"const x = <Popover.Content className="p-4 z-[999]">x</Popover.Content>;"#).len(),
+            1
+        );
     }
 
     #[test]
@@ -111,6 +118,8 @@ mod tests {
 
     #[test]
     fn allows_z_auto() {
-        assert!(run(r#"const x = <DialogContent className="z-auto">x</DialogContent>;"#).is_empty());
+        assert!(
+            run(r#"const x = <DialogContent className="z-auto">x</DialogContent>;"#).is_empty()
+        );
     }
 }

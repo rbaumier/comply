@@ -3,7 +3,15 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-const STOP_KEYS: &[&str] = &["params:", "query:", "headers:", "response:", "cookie:", "detail:", "tags:"];
+const STOP_KEYS: &[&str] = &[
+    "params:",
+    "query:",
+    "headers:",
+    "response:",
+    "cookie:",
+    "detail:",
+    "tags:",
+];
 
 crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     if !ctx.project.has_framework("elysia") {

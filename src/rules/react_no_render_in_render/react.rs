@@ -152,50 +152,65 @@ function App({ items }) {
 
     #[test]
     fn allows_component_jsx() {
-        assert!(run(r#"
+        assert!(
+            run(r#"
 function Header() {
     return <header>Title</header>;
 }
 function App() {
     return <div><Header /></div>;
 }
-"#).is_empty());
+"#)
+            .is_empty()
+        );
     }
 
     #[test]
     fn allows_non_render_call() {
-        assert!(run(r#"
+        assert!(
+            run(r#"
 function App() {
     return <div>{getData()}</div>;
 }
-"#).is_empty());
+"#)
+            .is_empty()
+        );
     }
 
     #[test]
     fn allows_render_lowercase_suffix() {
-        assert!(run(r#"
+        assert!(
+            run(r#"
 function App() {
     return <div>{rendering()}</div>;
 }
-"#).is_empty());
+"#)
+            .is_empty()
+        );
     }
 
     #[test]
     fn allows_render_to_string() {
-        assert!(run(r#"
+        assert!(
+            run(r#"
 function App() {
     return <pre>{renderToString(<Inner/>)}</pre>;
 }
-"#).is_empty());
+"#)
+            .is_empty()
+        );
     }
 
     #[test]
     fn allows_props_render_method() {
-        assert!(run(r#"
+        assert!(
+            run(r#"
 function App(props) {
     return <div>{props.renderHeader()}</div>;
 }
-"#).is_empty());
+"#)
+            .is_empty()
+        );
     }
 
     #[test]

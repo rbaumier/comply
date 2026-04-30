@@ -5,6 +5,12 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
 crate::ast_check! { on ["function_item", "function_signature_item"] => |node, source, ctx, diagnostics|
+    if crate::rules::rust_helpers::has_test_attribute(node, source)
+        || crate::rules::rust_helpers::is_in_test_context(node, source)
+    {
+        return;
+    }
+
     let Some(name_node) = node.child_by_field_name("name") else { return };
     let Ok(name) = name_node.utf8_text(source) else { return };
 
@@ -48,5 +54,15 @@ mod tests {
     #[test]
     fn allows_command_handler() {
         assert!(run_on("fn handle_command() {}").is_empty());
+    }
+
+    #[test]
+    fn skips_test_fn() {
+        assert!(run_on("#[test]\nfn fetch_and_parse_works() {}").is_empty());
+    }
+
+    #[test]
+    fn skips_cfg_test_module() {
+        assert!(run_on("#[cfg(test)]\nmod tests {\n  fn fetch_and_parse() {}\n}").is_empty());
     }
 }

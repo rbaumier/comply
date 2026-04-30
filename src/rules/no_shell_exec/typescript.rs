@@ -28,7 +28,9 @@ fn options_object_has_shell_true(arg: tree_sitter::Node, source: &[u8]) -> bool 
     if arg.kind() != "object" {
         return false;
     }
-    let Ok(text) = arg.utf8_text(source) else { return false };
+    let Ok(text) = arg.utf8_text(source) else {
+        return false;
+    };
     let compact: String = text.chars().filter(|c| !c.is_whitespace()).collect();
     compact.contains("shell:true")
 }
@@ -77,10 +79,7 @@ mod tests {
 
     #[test]
     fn flags_shell_true() {
-        assert_eq!(
-            run_on("spawn('sh', ['-c', cmd], { shell: true })").len(),
-            1
-        );
+        assert_eq!(run_on("spawn('sh', ['-c', cmd], { shell: true })").len(), 1);
     }
 
     #[test]

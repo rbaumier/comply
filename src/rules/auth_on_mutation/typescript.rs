@@ -5,7 +5,13 @@ use crate::diagnostic::{Diagnostic, Severity};
 
 const MUTATION_METHODS: &[&str] = &["post", "put", "delete", "patch"];
 const AUTH_KEYWORDS: &[&str] = &[
-    "auth", "token", "session", "middleware", "guard", "protect", "verify",
+    "auth",
+    "token",
+    "session",
+    "middleware",
+    "guard",
+    "protect",
+    "verify",
 ];
 
 const TEST_MARKERS: &[&str] = &[".test.", ".spec.", "__tests__", "_test.", ".e2e."];

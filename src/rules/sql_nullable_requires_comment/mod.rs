@@ -23,9 +23,18 @@ pub fn register() -> RuleDef {
     RuleDef {
         meta: META,
         backends: vec![
-            (Language::TypeScript, Backend::TreeSitter(Box::new(typescript::Check))),
-            (Language::JavaScript, Backend::TreeSitter(Box::new(typescript::Check))),
-            (Language::Tsx, Backend::TreeSitter(Box::new(typescript::Check))),
+            (
+                Language::TypeScript,
+                Backend::TreeSitter(Box::new(typescript::Check)),
+            ),
+            (
+                Language::JavaScript,
+                Backend::TreeSitter(Box::new(typescript::Check)),
+            ),
+            (
+                Language::Tsx,
+                Backend::TreeSitter(Box::new(typescript::Check)),
+            ),
             (Language::Rust, Backend::TreeSitter(Box::new(rust::Check))),
             (Language::Vue, Backend::Text(Box::new(text::Check))),
             (Language::Sql, Backend::Text(Box::new(text::Check))),
@@ -34,9 +43,28 @@ pub fn register() -> RuleDef {
 }
 
 const SQL_TYPES: &[&str] = &[
-    "INTEGER", "INT", "BIGINT", "SMALLINT", "TEXT", "VARCHAR", "CHAR",
-    "BOOLEAN", "BOOL", "TIMESTAMP", "DATE", "DECIMAL", "NUMERIC", "FLOAT",
-    "REAL", "DOUBLE", "UUID", "JSONB", "JSON", "BYTEA", "SERIAL", "BIGSERIAL",
+    "INTEGER",
+    "INT",
+    "BIGINT",
+    "SMALLINT",
+    "TEXT",
+    "VARCHAR",
+    "CHAR",
+    "BOOLEAN",
+    "BOOL",
+    "TIMESTAMP",
+    "DATE",
+    "DECIMAL",
+    "NUMERIC",
+    "FLOAT",
+    "REAL",
+    "DOUBLE",
+    "UUID",
+    "JSONB",
+    "JSON",
+    "BYTEA",
+    "SERIAL",
+    "BIGSERIAL",
 ];
 
 /// Returns the zero-based line offsets within `text` that declare a

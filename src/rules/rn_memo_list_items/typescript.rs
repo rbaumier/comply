@@ -4,7 +4,9 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
 fn source_wraps_in_memo(source: &[u8], ident: &str) -> bool {
-    let Ok(text) = std::str::from_utf8(source) else { return true };
+    let Ok(text) = std::str::from_utf8(source) else {
+        return true;
+    };
     // Look for `memo(Ident)` or `React.memo(Ident)` or `const Ident = memo(`.
     let patterns = [
         format!("memo({ident})"),

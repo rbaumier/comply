@@ -11,20 +11,28 @@ use crate::diagnostic::{Diagnostic, Severity};
 fn is_component_fn(node: tree_sitter::Node, source: &[u8]) -> bool {
     match node.kind() {
         "function_declaration" => {
-            let Some(name) = node.child_by_field_name("name") else { return false };
-            let Ok(t) = name.utf8_text(source) else { return false };
+            let Some(name) = node.child_by_field_name("name") else {
+                return false;
+            };
+            let Ok(t) = name.utf8_text(source) else {
+                return false;
+            };
             t.starts_with(|c: char| c.is_ascii_uppercase())
         }
         "lexical_declaration" => {
             // `const Foo = (...) => { ... }`
-            let Ok(t) = node.utf8_text(source) else { return false };
+            let Ok(t) = node.utf8_text(source) else {
+                return false;
+            };
             // Find the identifier after const/let
-            let rest = t.strip_prefix("const ")
+            let rest = t
+                .strip_prefix("const ")
                 .or_else(|| t.strip_prefix("let "))
                 .or_else(|| t.strip_prefix("export const "))
                 .or_else(|| t.strip_prefix("export default const "))
                 .unwrap_or("");
-            let name: String = rest.chars()
+            let name: String = rest
+                .chars()
                 .take_while(|c| c.is_alphanumeric() || *c == '_')
                 .collect();
             name.starts_with(|c: char| c.is_ascii_uppercase())
@@ -33,7 +41,8 @@ fn is_component_fn(node: tree_sitter::Node, source: &[u8]) -> bool {
         "export_statement" => {
             // Check the declaration inside the export
             let mut cursor = node.walk();
-            node.named_children(&mut cursor).any(|child| is_component_fn(child, source))
+            node.named_children(&mut cursor)
+                .any(|child| is_component_fn(child, source))
         }
         _ => false,
     }
@@ -48,7 +57,9 @@ fn has_object_defaults(node: tree_sitter::Node, _source: &[u8]) -> bool {
         // In tree-sitter these appear as assignment_pattern or
         // object_assignment_pattern
         if child.kind().contains("assignment_pattern") {
-            let Some(right) = child.child_by_field_name("right") else { continue };
+            let Some(right) = child.child_by_field_name("right") else {
+                continue;
+            };
             match right.kind() {
                 "object" | "array" | "arrow_function" => return true,
                 _ => {}

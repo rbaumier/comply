@@ -11,7 +11,8 @@ fn subtree_has_jsx(node: tree_sitter::Node) -> bool {
         "jsx_element" | "jsx_self_closing_element" | "jsx_fragment" => true,
         _ => {
             let mut cursor = node.walk();
-            node.children(&mut cursor).any(|child| subtree_has_jsx(child))
+            node.children(&mut cursor)
+                .any(|child| subtree_has_jsx(child))
         }
     }
 }

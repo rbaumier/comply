@@ -95,7 +95,10 @@ mod tests {
 
     #[test]
     fn flags_v_memo_without_v_for() {
-        assert_eq!(run("<template><div v-memo=\"[dep]\">hi</div></template>").len(), 1);
+        assert_eq!(
+            run("<template><div v-memo=\"[dep]\">hi</div></template>").len(),
+            1
+        );
     }
 
     #[test]

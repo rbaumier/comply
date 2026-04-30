@@ -43,8 +43,7 @@ fn is_param_default(node: tree_sitter::Node) -> bool {
             if gp.kind() != "formal_parameters" {
                 return false;
             }
-            gp.parent()
-                .is_some_and(|ggp| is_function_like(ggp.kind()))
+            gp.parent().is_some_and(|ggp| is_function_like(ggp.kind()))
         }
         _ => false,
     }

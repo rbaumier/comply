@@ -100,10 +100,7 @@ mod tests {
     #[test]
     fn flags_default_import_matching_named_export() {
         let (_dir, project, paths) = setup_project(&[
-            (
-                "utils.ts",
-                "export const foo = 1;\nexport default 42;",
-            ),
+            ("utils.ts", "export const foo = 1;\nexport default 42;"),
             ("app.ts", "import foo from './utils';"),
         ]);
         let source = "import foo from './utils';";
@@ -115,10 +112,7 @@ mod tests {
     #[test]
     fn allows_default_import_not_matching() {
         let (_dir, project, paths) = setup_project(&[
-            (
-                "utils.ts",
-                "export const foo = 1;\nexport default 42;",
-            ),
+            ("utils.ts", "export const foo = 1;\nexport default 42;"),
             ("app.ts", "import bar from './utils';"),
         ]);
         let source = "import bar from './utils';";
@@ -150,10 +144,7 @@ mod tests {
     fn skips_source_with_star_reexport() {
         let (_dir, project, paths) = setup_project(&[
             ("base.ts", "export const foo = 1;"),
-            (
-                "utils.ts",
-                "export * from './base';\nexport default 42;",
-            ),
+            ("utils.ts", "export * from './base';\nexport default 42;"),
             ("app.ts", "import foo from './utils';"),
         ]);
         let source = "import foo from './utils';";
@@ -164,10 +155,7 @@ mod tests {
     #[test]
     fn allows_named_import() {
         let (_dir, project, paths) = setup_project(&[
-            (
-                "utils.ts",
-                "export const foo = 1;\nexport default 42;",
-            ),
+            ("utils.ts", "export const foo = 1;\nexport default 42;"),
             ("app.ts", "import { foo } from './utils';"),
         ]);
         let source = "import { foo } from './utils';";

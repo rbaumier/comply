@@ -31,8 +31,12 @@ fn is_entity_import(line: &str) -> bool {
         return true;
     }
     // Imported identifier ending in `Entity` inside `{ ... }`.
-    let Some(open) = trimmed.find('{') else { return false };
-    let Some(close) = trimmed[open..].find('}') else { return false };
+    let Some(open) = trimmed.find('{') else {
+        return false;
+    };
+    let Some(close) = trimmed[open..].find('}') else {
+        return false;
+    };
     let names = &trimmed[open + 1..open + close];
     names
         .split(',')
@@ -92,7 +96,8 @@ mod tests {
 
     #[test]
     fn allows_dto_import() {
-        let src = "import { CreateUserDto } from './dto/create-user.dto';\n@Controller() class C {}";
+        let src =
+            "import { CreateUserDto } from './dto/create-user.dto';\n@Controller() class C {}";
         assert!(run(src).is_empty());
     }
 

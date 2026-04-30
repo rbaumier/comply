@@ -15,10 +15,13 @@ fn is_effect_hook(node: tree_sitter::Node, source: &[u8]) -> bool {
             name == "useEffect" || name == "useLayoutEffect"
         }
         "member_expression" => {
-            let obj = callee.child_by_field_name("object").and_then(|o| o.utf8_text(source).ok());
-            let prop = callee.child_by_field_name("property").and_then(|p| p.utf8_text(source).ok());
-            obj == Some("React")
-                && matches!(prop, Some("useEffect") | Some("useLayoutEffect"))
+            let obj = callee
+                .child_by_field_name("object")
+                .and_then(|o| o.utf8_text(source).ok());
+            let prop = callee
+                .child_by_field_name("property")
+                .and_then(|p| p.utf8_text(source).ok());
+            obj == Some("React") && matches!(prop, Some("useEffect") | Some("useLayoutEffect"))
         }
         _ => false,
     }
@@ -62,7 +65,10 @@ fn callback_is_sole_setter(callback: tree_sitter::Node, source: &[u8]) -> bool {
 
     let sole_expr = if body.kind() == "statement_block" {
         let mut cursor = body.walk();
-        let stmts: Vec<_> = body.children(&mut cursor).filter(|c| c.is_named()).collect();
+        let stmts: Vec<_> = body
+            .children(&mut cursor)
+            .filter(|c| c.is_named())
+            .collect();
         if stmts.len() != 1 {
             return false;
         }
@@ -131,108 +137,145 @@ mod tests {
 
     #[test]
     fn flags_use_effect_empty_deps_setter() {
-        assert_eq!(run(r#"
+        assert_eq!(
+            run(r#"
 function App() {
     const [val, setVal] = useState(false);
     useEffect(() => { setVal(true); }, []);
 }
-"#).len(), 1);
+"#)
+            .len(),
+            1
+        );
     }
 
     #[test]
     fn flags_arrow_concise_body() {
-        assert_eq!(run(r#"
+        assert_eq!(
+            run(r#"
 function App() {
     const [w, setWidth] = useState(0);
     useEffect(() => setWidth(window.innerWidth), []);
 }
-"#).len(), 1);
+"#)
+            .len(),
+            1
+        );
     }
 
     #[test]
     fn flags_use_layout_effect() {
-        assert_eq!(run(r#"
+        assert_eq!(
+            run(r#"
 function App() {
     const [v, setValue] = useState(null);
     useLayoutEffect(() => { setValue(getVal()); }, []);
 }
-"#).len(), 1);
+"#)
+            .len(),
+            1
+        );
     }
 
     #[test]
     fn allows_non_empty_deps() {
-        assert!(run(r#"
+        assert!(
+            run(r#"
 function App() {
     const [v, setValue] = useState(0);
     useEffect(() => { setValue(x); }, [x]);
 }
-"#).is_empty());
+"#)
+            .is_empty()
+        );
     }
 
     #[test]
     fn allows_no_deps_array() {
-        assert!(run(r#"
+        assert!(
+            run(r#"
 function App() {
     useEffect(() => { setValue(true); });
 }
-"#).is_empty());
+"#)
+            .is_empty()
+        );
     }
 
     #[test]
     fn allows_multi_statement_body() {
-        assert!(run(r#"
+        assert!(
+            run(r#"
 function App() {
     useEffect(() => {
         const v = compute();
         setVal(v);
     }, []);
 }
-"#).is_empty());
+"#)
+            .is_empty()
+        );
     }
 
     #[test]
     fn allows_non_setter_call() {
-        assert!(run(r#"
+        assert!(
+            run(r#"
 function App() {
     useEffect(() => { fetchData(); }, []);
 }
-"#).is_empty());
+"#)
+            .is_empty()
+        );
     }
 
     #[test]
     fn allows_non_effect_hook() {
-        assert!(run(r#"
+        assert!(
+            run(r#"
 function App() {
     useMemo(() => { setValue(true); }, []);
 }
-"#).is_empty());
+"#)
+            .is_empty()
+        );
     }
 
     #[test]
     fn allows_set_timeout() {
-        assert!(run(r#"
+        assert!(
+            run(r#"
 function App() {
     useEffect(() => { setTimeout(fn, 100); }, []);
 }
-"#).is_empty());
+"#)
+            .is_empty()
+        );
     }
 
     #[test]
     fn allows_set_interval() {
-        assert!(run(r#"
+        assert!(
+            run(r#"
 function App() {
     useEffect(() => { setInterval(tick, 1000); }, []);
 }
-"#).is_empty());
+"#)
+            .is_empty()
+        );
     }
 
     #[test]
     fn flags_react_dot_use_effect() {
-        assert_eq!(run(r#"
+        assert_eq!(
+            run(r#"
 function App() {
     const [v, setVal] = useState(false);
     React.useEffect(() => { setVal(true); }, []);
 }
-"#).len(), 1);
+"#)
+            .len(),
+            1
+        );
     }
 }

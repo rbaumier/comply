@@ -73,11 +73,13 @@ mod tests {
 
     #[test]
     fn allows_test_file_with_tests() {
-        assert!(run(
-            "utils.test.ts",
-            "test('adds 1+1', () => { expect(1+1).toBe(2); });"
-        )
-        .is_empty());
+        assert!(
+            run(
+                "utils.test.ts",
+                "test('adds 1+1', () => { expect(1+1).toBe(2); });"
+            )
+            .is_empty()
+        );
     }
 
     #[test]
@@ -87,10 +89,12 @@ mod tests {
 
     #[test]
     fn allows_assert_style_tests() {
-        assert!(run(
-            "plugin.test.js",
-            "import assert from 'assert';\nassert.equal(result, expected);"
-        )
-        .is_empty());
+        assert!(
+            run(
+                "plugin.test.js",
+                "import assert from 'assert';\nassert.equal(result, expected);"
+            )
+            .is_empty()
+        );
     }
 }

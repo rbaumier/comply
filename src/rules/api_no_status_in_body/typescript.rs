@@ -55,8 +55,8 @@ fn line_starts_with_response_context(source: &str, offset: usize) -> bool {
         "res.json(",
         "res.send(",
     ];
-    let line_or_scope_match = line.contains("return")
-        || scope_signals.iter().any(|s| scope.contains(s));
+    let line_or_scope_match =
+        line.contains("return") || scope_signals.iter().any(|s| scope.contains(s));
     line_or_scope_match
 }
 
@@ -91,7 +91,9 @@ fn find_offenses(source: &str) -> Vec<usize> {
 }
 
 impl TextCheck for Check {
-    fn prefilter(&self) -> Option<&'static [&'static str]> { Some(&["status:"]) }
+    fn prefilter(&self) -> Option<&'static [&'static str]> {
+        Some(&["status:"])
+    }
 
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
         if !looks_like_api_path(ctx.path) {

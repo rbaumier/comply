@@ -43,7 +43,8 @@ fn is_inside_create_server_fn(node: tree_sitter::Node<'_>, source: &[u8]) -> boo
         if matches!(
             p.kind(),
             "arrow_function" | "function_expression" | "function" | "method_definition"
-        ) && callback_belongs_to_create_server_fn(p, source) {
+        ) && callback_belongs_to_create_server_fn(p, source)
+        {
             return true;
         }
         cur = p.parent();
@@ -58,9 +59,7 @@ fn callback_belongs_to_create_server_fn(func_node: tree_sitter::Node<'_>, source
     // it; check whether any function in the call chain is `createServerFn`.
     let mut cur = func_node.parent();
     while let Some(p) = cur {
-        if p.kind() == "call_expression"
-            && call_chain_root_is_create_server_fn(p, source)
-        {
+        if p.kind() == "call_expression" && call_chain_root_is_create_server_fn(p, source) {
             return true;
         }
         // Don't bail — outer chained calls may still be createServerFn.
@@ -79,13 +78,20 @@ fn callback_belongs_to_create_server_fn(func_node: tree_sitter::Node<'_>, source
 fn call_chain_root_is_create_server_fn(call: tree_sitter::Node<'_>, source: &[u8]) -> bool {
     let mut cur = call;
     loop {
-        let Some(callee) = cur.child_by_field_name("function") else { return false; };
+        let Some(callee) = cur.child_by_field_name("function") else {
+            return false;
+        };
         match callee.kind() {
             "identifier" => {
-                return callee.utf8_text(source).map(|t| t == "createServerFn").unwrap_or(false);
+                return callee
+                    .utf8_text(source)
+                    .map(|t| t == "createServerFn")
+                    .unwrap_or(false);
             }
             "member_expression" => {
-                let Some(obj) = callee.child_by_field_name("object") else { return false; };
+                let Some(obj) = callee.child_by_field_name("object") else {
+                    return false;
+                };
                 if obj.kind() == "call_expression" {
                     cur = obj;
                     continue;

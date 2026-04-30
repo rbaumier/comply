@@ -67,7 +67,9 @@ fn line_col_for_offset(src: &str, offset: usize) -> (usize, usize) {
 }
 
 impl TextCheck for Check {
-    fn prefilter(&self) -> Option<&'static [&'static str]> { Some(&["unhandledRejection"]) }
+    fn prefilter(&self) -> Option<&'static [&'static str]> {
+        Some(&["unhandledRejection"])
+    }
 
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
         if !ctx.source.contains("unhandledRejection") {
@@ -117,7 +119,8 @@ mod tests {
 
     #[test]
     fn allows_handler_with_process_exit() {
-        let src = "process.on('unhandledRejection', (err) => { console.error(err); process.exit(1); });";
+        let src =
+            "process.on('unhandledRejection', (err) => { console.error(err); process.exit(1); });";
         assert!(run(src).is_empty());
     }
 

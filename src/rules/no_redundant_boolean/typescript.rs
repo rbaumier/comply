@@ -195,7 +195,8 @@ mod tests {
 
     #[test]
     fn flags_if_else_block() {
-        let src = "function f() {\n  if (c) {\n    return true;\n  } else {\n    return false;\n  }\n}";
+        let src =
+            "function f() {\n  if (c) {\n    return true;\n  } else {\n    return false;\n  }\n}";
         assert_eq!(run_on(src).len(), 1);
     }
 

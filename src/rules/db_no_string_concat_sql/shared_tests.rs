@@ -19,7 +19,9 @@ const SCENARIOS: &[Scenario] = &[
         name: "SELECT with interpolation — flagged",
         expected_flagged: true,
         ts: Some(r#"const q = "SELECT * FROM users WHERE id = " + userId;"#),
-        rust: Some(r#"fn f(id: i32) { let q = format!("SELECT * FROM users WHERE id = {}", id); }"#),
+        rust: Some(
+            r#"fn f(id: i32) { let q = format!("SELECT * FROM users WHERE id = {}", id); }"#,
+        ),
     },
     Scenario {
         name: "non-SQL string concat",
@@ -31,7 +33,9 @@ const SCENARIOS: &[Scenario] = &[
         name: "format!/concat with from_utf8_lossy arg — user FP",
         expected_flagged: false,
         ts: None, // TS-side equivalent doesn't exist
-        rust: Some(r#"fn f(stderr: &[u8]) -> String { format!("failed to parse oxlint output: {}", String::from_utf8_lossy(stderr)) }"#),
+        rust: Some(
+            r#"fn f(stderr: &[u8]) -> String { format!("failed to parse oxlint output: {}", String::from_utf8_lossy(stderr)) }"#,
+        ),
     },
     Scenario {
         name: "string concat with userFromDb identifier — TS FP family",

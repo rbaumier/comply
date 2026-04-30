@@ -22,18 +22,24 @@ fn is_on_object(obj: tree_sitter::Node, source: &[u8]) -> bool {
     if obj.kind() != "object" {
         return false;
     }
-    let Some(on_pair) = obj.parent() else { return false };
+    let Some(on_pair) = obj.parent() else {
+        return false;
+    };
     if on_pair.kind() != "pair" {
         return false;
     }
-    let Some(key) = on_pair.child_by_field_name("key") else { return false };
+    let Some(key) = on_pair.child_by_field_name("key") else {
+        return false;
+    };
     unquote(key.utf8_text(source).unwrap_or("")) == "on"
 }
 
 /// SCREAMING_SNAKE_CASE: starts with A-Z, contains only A-Z, 0-9, underscore.
 fn is_screaming_snake(s: &str) -> bool {
     let mut chars = s.chars();
-    let Some(first) = chars.next() else { return false };
+    let Some(first) = chars.next() else {
+        return false;
+    };
     if !first.is_ascii_uppercase() {
         return false;
     }

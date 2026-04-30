@@ -2,10 +2,15 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
-use crate::rules::vue_template_helpers::{extract_elements, element_text_content, is_vue_file};
+use crate::rules::vue_template_helpers::{element_text_content, extract_elements, is_vue_file};
 
 const AMBIGUOUS_TEXTS: &[&str] = &[
-    "click here", "here", "link", "a link", "read more", "learn more",
+    "click here",
+    "here",
+    "link",
+    "a link",
+    "read more",
+    "learn more",
 ];
 
 #[derive(Debug)]

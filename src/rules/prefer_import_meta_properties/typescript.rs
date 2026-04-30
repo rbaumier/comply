@@ -91,7 +91,10 @@ fn is_method_call_with_import_meta_url(
 
 /// Return the only "real" argument inside an `arguments` node, ignoring
 /// punctuation children (the `(`, `,`, `)` tokens are children too).
-fn single_argument<'a>(args: tree_sitter::Node<'a>, _source: &[u8]) -> Option<tree_sitter::Node<'a>> {
+fn single_argument<'a>(
+    args: tree_sitter::Node<'a>,
+    _source: &[u8],
+) -> Option<tree_sitter::Node<'a>> {
     let mut found = None;
     let mut cursor = args.walk();
     for child in args.children(&mut cursor) {

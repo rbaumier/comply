@@ -33,7 +33,8 @@ mod tests {
     }
     #[test]
     fn allows_yield_propagation() {
-        let src = "function f() { return Result.gen(function* () { const v = yield* r; return v; }); }";
+        let src =
+            "function f() { return Result.gen(function* () { const v = yield* r; return v; }); }";
         assert!(run(src).is_empty());
     }
 }

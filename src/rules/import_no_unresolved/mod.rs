@@ -1,14 +1,16 @@
 mod typescript;
 use crate::diagnostic::Severity;
-use crate::rules::meta::RuleMeta;
 use crate::rules::RuleDef;
+use crate::rules::meta::RuleMeta;
 
 pub const META: RuleMeta = RuleMeta {
     id: "import-no-unresolved",
     description: "Relative import path must resolve to an existing file.",
     remediation: "Fix the import path — the target file may have been moved, renamed, or deleted.",
     severity: Severity::Warning,
-    doc_url: Some("https://github.com/import-js/eslint-plugin-import/blob/main/docs/rules/no-unresolved.md"),
+    doc_url: Some(
+        "https://github.com/import-js/eslint-plugin-import/blob/main/docs/rules/no-unresolved.md",
+    ),
     categories: &["imports"],
 };
 

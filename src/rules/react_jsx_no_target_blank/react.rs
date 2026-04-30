@@ -80,7 +80,8 @@ mod tests {
 
     #[test]
     fn allows_target_blank_with_noreferrer() {
-        let src = r#"const x = <a href="https://example.com" target="_blank" rel="noreferrer">link</a>;"#;
+        let src =
+            r#"const x = <a href="https://example.com" target="_blank" rel="noreferrer">link</a>;"#;
         assert!(run(src).is_empty());
     }
 

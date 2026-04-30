@@ -19,7 +19,7 @@ mod schema;
 
 pub use options::for_rule as options_for;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use rustc_hash::FxHashMap;
 use std::path::Path;
 use std::process::Command;
@@ -44,11 +44,13 @@ pub fn is_available() -> bool {
     })
 }
 
-
 /// Invoke oxlint on the given TS/JS files and return unified diagnostics.
 /// Always enables type-aware rules via `--type-aware` (requires oxlint-tsgolint).
 #[must_use = "diagnostics from oxlint must be reported"]
-pub fn lint_files(files: &[&SourceFile], config: &crate::config::Config) -> Result<Vec<Diagnostic>> {
+pub fn lint_files(
+    files: &[&SourceFile],
+    config: &crate::config::Config,
+) -> Result<Vec<Diagnostic>> {
     if files.is_empty() {
         return Ok(vec![]);
     }
@@ -134,10 +136,7 @@ fn into_diagnostic(d: OxlintDiag, remap: &FxHashMap<String, &'static RuleMeta>) 
 
     let oxlint_code = d.code.clone().unwrap_or_default();
     let (rule_id, severity) = match remap.get(&oxlint_code) {
-        Some(meta) => (
-            std::borrow::Cow::Borrowed(meta.id),
-            meta.severity,
-        ),
+        Some(meta) => (std::borrow::Cow::Borrowed(meta.id), meta.severity),
         None => (
             std::borrow::Cow::Owned(d.code.unwrap_or_else(|| "oxlint/unknown".into())),
             match d.severity {

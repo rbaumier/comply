@@ -107,7 +107,8 @@ mod tests {
 
     #[test]
     fn allows_search_path_set() {
-        let src = r#"const m = "SET search_path = pg_catalog, public; CREATE TABLE account (id INT);";"#;
+        let src =
+            r#"const m = "SET search_path = pg_catalog, public; CREATE TABLE account (id INT);";"#;
         assert!(run_at("db/migrations/001_init.sql.ts", src).is_empty());
     }
 

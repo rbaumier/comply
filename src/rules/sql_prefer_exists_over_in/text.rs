@@ -8,7 +8,7 @@ impl TextCheck for Check {
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
         for (idx, line) in ctx.source.lines().enumerate() {
-    let line_upper = line.to_ascii_uppercase();
+            let line_upper = line.to_ascii_uppercase();
             if line_upper.contains("IN (SELECT") || line_upper.contains("IN(SELECT") {
                 diagnostics.push(Diagnostic {
                     path: std::sync::Arc::clone(&ctx.path_arc),
@@ -24,7 +24,6 @@ impl TextCheck for Check {
         diagnostics
     }
 }
-
 
 #[cfg(test)]
 mod tests {

@@ -24,15 +24,23 @@ use crate::diagnostic::{Diagnostic, Severity};
 fn has_side_effects(node: tree_sitter::Node) -> bool {
     match node.kind() {
         // Always side-effectful
-        "call_expression" | "new_expression" | "await_expression"
-        | "yield_expression" | "assignment_expression"
-        | "augmented_assignment_expression" | "update_expression"
-        | "delete_expression" | "void_expression"
+        "call_expression"
+        | "new_expression"
+        | "await_expression"
+        | "yield_expression"
+        | "assignment_expression"
+        | "augmented_assignment_expression"
+        | "update_expression"
+        | "delete_expression"
+        | "void_expression"
         | "tagged_template_expression" => true,
 
         // TS non-null assertion: unwrap and check inner
         "non_null_expression" => {
-            if let Some(inner) = node.child_by_field_name("expression").or_else(|| node.named_child(0)) {
+            if let Some(inner) = node
+                .child_by_field_name("expression")
+                .or_else(|| node.named_child(0))
+            {
                 has_side_effects(inner)
             } else {
                 false
@@ -60,9 +68,10 @@ fn has_side_effects(node: tree_sitter::Node) -> bool {
                 }
             }
             if (op == "&&" || op == "||" || op == "??")
-                && let Some(right) = node.child_by_field_name("right") {
-                    return has_side_effects(right);
-                }
+                && let Some(right) = node.child_by_field_name("right")
+            {
+                return has_side_effects(right);
+            }
             false
         }
 
@@ -82,16 +91,15 @@ fn has_side_effects(node: tree_sitter::Node) -> bool {
         "sequence_expression" => {
             let count = node.named_child_count();
             if count > 0
-                && let Some(last) = node.named_child(count - 1) {
-                    return has_side_effects(last);
-                }
+                && let Some(last) = node.named_child(count - 1)
+            {
+                return has_side_effects(last);
+            }
             false
         }
 
         // Parenthesized
-        "parenthesized_expression" => {
-            node.named_child(0).is_some_and(|c| has_side_effects(c))
-        }
+        "parenthesized_expression" => node.named_child(0).is_some_and(|c| has_side_effects(c)),
 
         _ => false,
     }

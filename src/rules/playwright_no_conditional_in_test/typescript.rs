@@ -11,11 +11,7 @@ fn is_test_file(path: &std::path::Path) -> bool {
 
 const TEST_FNS: &[&str] = &["test", "it"];
 
-const CONDITIONAL_KINDS: &[&str] = &[
-    "if_statement",
-    "switch_statement",
-    "ternary_expression",
-];
+const CONDITIONAL_KINDS: &[&str] = &["if_statement", "switch_statement", "ternary_expression"];
 
 /// Walk up from `node` to check if it's inside a test callback.
 fn is_inside_test_callback(node: tree_sitter::Node, source: &[u8]) -> bool {

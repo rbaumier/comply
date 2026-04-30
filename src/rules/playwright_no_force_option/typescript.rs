@@ -11,8 +11,16 @@ fn is_test_file(path: &std::path::Path) -> bool {
 
 /// Playwright actions that accept a `force` option.
 const FORCE_ACTIONS: &[&str] = &[
-    "click", "fill", "hover", "check", "uncheck", "selectOption",
-    "dblclick", "tap", "press", "dragTo",
+    "click",
+    "fill",
+    "hover",
+    "check",
+    "uncheck",
+    "selectOption",
+    "dblclick",
+    "tap",
+    "press",
+    "dragTo",
 ];
 
 /// Check if a node is a `force: true` property assignment.
@@ -20,9 +28,14 @@ fn is_force_true(node: tree_sitter::Node, source: &[u8]) -> bool {
     if node.kind() != "pair" {
         return false;
     }
-    let Some(key) = node.child_by_field_name("key") else { return false };
-    let Some(value) = node.child_by_field_name("value") else { return false };
-    key.utf8_text(source).unwrap_or("") == "force" && value.utf8_text(source).unwrap_or("") == "true"
+    let Some(key) = node.child_by_field_name("key") else {
+        return false;
+    };
+    let Some(value) = node.child_by_field_name("value") else {
+        return false;
+    };
+    key.utf8_text(source).unwrap_or("") == "force"
+        && value.utf8_text(source).unwrap_or("") == "true"
 }
 
 /// Walk descendants to find a `force: true` pair in an object literal.
@@ -79,8 +92,8 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
     use crate::rules::backend::{AstCheck, CheckCtx};
+    use std::path::Path;
 
     fn run(path: &str, source: &str) -> Vec<Diagnostic> {
         let full = format!("{source}\n// @playwright/test");
@@ -94,14 +107,20 @@ mod tests {
 
     #[test]
     fn flags_force_true_on_click() {
-        let d = run("login.test.ts", "await page.click('#btn', { force: true });");
+        let d = run(
+            "login.test.ts",
+            "await page.click('#btn', { force: true });",
+        );
         assert_eq!(d.len(), 1);
         assert_eq!(d[0].rule_id, "playwright-no-force-option");
     }
 
     #[test]
     fn flags_force_true_on_fill() {
-        let d = run("form.spec.ts", "await input.fill('hello', { force: true });");
+        let d = run(
+            "form.spec.ts",
+            "await input.fill('hello', { force: true });",
+        );
         assert_eq!(d.len(), 1);
     }
 
@@ -113,7 +132,10 @@ mod tests {
 
     #[test]
     fn allows_force_false() {
-        let d = run("login.test.ts", "await page.click('#btn', { force: false });");
+        let d = run(
+            "login.test.ts",
+            "await page.click('#btn', { force: false });",
+        );
         assert!(d.is_empty());
     }
 

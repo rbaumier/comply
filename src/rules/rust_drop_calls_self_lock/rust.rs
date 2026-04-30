@@ -12,14 +12,7 @@ use crate::rules::backend::{AstCheck, CheckCtx};
 
 const KINDS: &[&str] = &["impl_item"];
 
-const LOCK_METHODS: &[&str] = &[
-    "lock",
-    "read",
-    "write",
-    "try_lock",
-    "try_read",
-    "try_write",
-];
+const LOCK_METHODS: &[&str] = &["lock", "read", "write", "try_lock", "try_read", "try_write"];
 
 #[derive(Debug)]
 pub struct Check;
@@ -98,21 +91,20 @@ mod tests {
 
     #[test]
     fn flags_lock_on_self_field_in_drop() {
-        let source =
-            "struct A; impl Drop for A { fn drop(&mut self) { let _g = self.m.lock(); } }";
+        let source = "struct A; impl Drop for A { fn drop(&mut self) { let _g = self.m.lock(); } }";
         assert_eq!(run_on(source).len(), 1);
     }
 
     #[test]
     fn flags_write_on_self_field_in_drop() {
-        let source = "struct A; impl Drop for A { fn drop(&mut self) { let _g = self.rw.write(); } }";
+        let source =
+            "struct A; impl Drop for A { fn drop(&mut self) { let _g = self.rw.write(); } }";
         assert_eq!(run_on(source).len(), 1);
     }
 
     #[test]
     fn allows_lock_on_external_in_drop() {
-        let source =
-            "struct A; impl Drop for A { fn drop(&mut self) { let _g = OTHER.lock(); } }";
+        let source = "struct A; impl Drop for A { fn drop(&mut self) { let _g = OTHER.lock(); } }";
         assert!(run_on(source).is_empty());
     }
 
@@ -124,7 +116,8 @@ mod tests {
 
     #[test]
     fn flags_try_lock_on_self() {
-        let source = "struct A; impl Drop for A { fn drop(&mut self) { let _ = self.m.try_lock(); } }";
+        let source =
+            "struct A; impl Drop for A { fn drop(&mut self) { let _ = self.m.try_lock(); } }";
         assert_eq!(run_on(source).len(), 1);
     }
 }

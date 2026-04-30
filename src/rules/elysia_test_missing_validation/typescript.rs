@@ -44,7 +44,12 @@ mod tests {
 
     fn run_on_test(source: &str) -> Vec<Diagnostic> {
         let project = crate::project::ProjectCtx::for_test_with_framework("elysia");
-        crate::rules::test_helpers::run_ts_with_project_and_path(source, &Check, &project, std::path::Path::new("create.test.ts"))
+        crate::rules::test_helpers::run_ts_with_project_and_path(
+            source,
+            &Check,
+            &project,
+            std::path::Path::new("create.test.ts"),
+        )
     }
 
     #[test]

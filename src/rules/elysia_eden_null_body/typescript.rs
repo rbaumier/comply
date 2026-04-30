@@ -74,7 +74,8 @@ mod tests {
 
     #[test]
     fn allows_payload_body() {
-        let src = "import { treaty } from '@elysiajs/eden';\nawait treaty.users.post({ name: 'a' });";
+        let src =
+            "import { treaty } from '@elysiajs/eden';\nawait treaty.users.post({ name: 'a' });";
         assert!(run_on(src).is_empty());
     }
 

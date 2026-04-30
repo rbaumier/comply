@@ -29,10 +29,16 @@ impl TextCheck for Check {
             let mut from = 0;
             while let Some(rel) = line[from..].find("useLayoutEffect") {
                 let col = from + rel;
-                let prev = if col == 0 { None } else { line.as_bytes().get(col - 1).copied() };
+                let prev = if col == 0 {
+                    None
+                } else {
+                    line.as_bytes().get(col - 1).copied()
+                };
                 let next = line.as_bytes().get(col + "useLayoutEffect".len()).copied();
-                let prev_ok = prev.is_none_or(|b| !b.is_ascii_alphanumeric() && b != b'_' && b != b'$');
-                let next_ok = next.is_none_or(|b| !b.is_ascii_alphanumeric() && b != b'_' && b != b'$');
+                let prev_ok =
+                    prev.is_none_or(|b| !b.is_ascii_alphanumeric() && b != b'_' && b != b'$');
+                let next_ok =
+                    next.is_none_or(|b| !b.is_ascii_alphanumeric() && b != b'_' && b != b'$');
                 if prev_ok && next_ok {
                     diagnostics.push(Diagnostic {
                         path: Arc::clone(&ctx.path_arc),

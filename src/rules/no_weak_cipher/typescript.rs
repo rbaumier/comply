@@ -19,9 +19,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 const WEAK_PREFIXES: &[&str] = &["bf", "blowfish", "des", "rc2", "rc4"];
 
 fn is_weak_cipher_spec(value: &str) -> bool {
-    WEAK_PREFIXES
-        .iter()
-        .any(|prefix| value.starts_with(prefix))
+    WEAK_PREFIXES.iter().any(|prefix| value.starts_with(prefix))
 }
 
 crate::ast_check! { on ["call_expression"] prefilter = ["des", "rc2", "rc4", "blowfish", "DES", "RC2", "RC4"] => |node, source, ctx, diagnostics|

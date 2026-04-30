@@ -2,7 +2,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::sql_helpers::{is_sql_string, TS_STRING_KINDS};
+use crate::rules::sql_helpers::{TS_STRING_KINDS, is_sql_string};
 
 #[derive(Debug)]
 pub struct Check;
@@ -51,7 +51,8 @@ mod tests {
 
     #[test]
     fn flags_date_trunc() {
-        let src = r#"const q = "SELECT id FROM log WHERE date_trunc('day', created_at) = '2024-01-01'";"#;
+        let src =
+            r#"const q = "SELECT id FROM log WHERE date_trunc('day', created_at) = '2024-01-01'";"#;
         assert_eq!(run(src).len(), 1);
     }
 

@@ -3,10 +3,23 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
 const DNS_METHODS: &[&str] = &[
-    "lookup", "lookupService", "resolve", "resolve4", "resolve6",
-    "resolveAny", "resolveCname", "resolveMx", "resolveNaptr", "resolveNs",
-    "resolvePtr", "resolveSoa", "resolveSrv", "resolveTxt", "reverse",
-    "getServers", "setServers",
+    "lookup",
+    "lookupService",
+    "resolve",
+    "resolve4",
+    "resolve6",
+    "resolveAny",
+    "resolveCname",
+    "resolveMx",
+    "resolveNaptr",
+    "resolveNs",
+    "resolvePtr",
+    "resolveSoa",
+    "resolveSrv",
+    "resolveTxt",
+    "reverse",
+    "getServers",
+    "setServers",
 ];
 
 crate::ast_check! { on ["call_expression"] prefilter = ["dns"] => |node, source, ctx, diagnostics|

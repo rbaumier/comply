@@ -40,9 +40,7 @@ fn unquote(s: &str) -> &str {
 }
 
 /// Iterate direct `pair` children of an `object` node.
-fn object_pairs<'a>(
-    object: tree_sitter::Node<'a>,
-) -> impl Iterator<Item = tree_sitter::Node<'a>> {
+fn object_pairs<'a>(object: tree_sitter::Node<'a>) -> impl Iterator<Item = tree_sitter::Node<'a>> {
     let mut cursor = object.walk();
     let mut pairs = Vec::new();
     for child in object.children(&mut cursor) {

@@ -33,11 +33,9 @@ fn imports_tanstack_router(source: &str) -> bool {
 
 fn matches_url_name(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
-    URL_NAMES.iter().any(|n| {
-        lower == *n
-            || lower.starts_with(n)
-            || lower.ends_with(n)
-    })
+    URL_NAMES
+        .iter()
+        .any(|n| lower == *n || lower.starts_with(n) || lower.ends_with(n))
 }
 
 /// Find offsets for `const [<urlName>, set...] = useState(...)`.

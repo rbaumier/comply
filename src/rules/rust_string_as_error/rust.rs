@@ -36,14 +36,9 @@ crate::ast_check! { on ["generic_type"] => |node, source, ctx, diagnostics|
 #[cfg(test)]
 mod tests {
     use super::*;
-    
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
-
-
         crate::rules::test_helpers::run_rust(source, &Check)
-
-
     }
 
     #[test]

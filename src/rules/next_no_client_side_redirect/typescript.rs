@@ -24,15 +24,15 @@ fn is_window_or_location(node: tree_sitter::Node, source: &[u8]) -> Option<&'sta
 
 /// Returns the property name (e.g. `location`, `href`) of a member expression.
 fn member_property_name<'a>(node: tree_sitter::Node, source: &'a [u8]) -> Option<&'a str> {
-    node.child_by_field_name("property")?
-        .utf8_text(source)
-        .ok()
+    node.child_by_field_name("property")?.utf8_text(source).ok()
 }
 
 /// True if `node` is `window.location` or `location` (bare).
 fn is_window_location_target(node: tree_sitter::Node, source: &[u8]) -> bool {
     if node.kind() == "member_expression" {
-        let Some(obj) = node.child_by_field_name("object") else { return false };
+        let Some(obj) = node.child_by_field_name("object") else {
+            return false;
+        };
         if is_window_or_location(obj, source) == Some("window")
             && member_property_name(node, source) == Some("location")
         {
@@ -42,7 +42,12 @@ fn is_window_location_target(node: tree_sitter::Node, source: &[u8]) -> bool {
     is_window_or_location(node, source) == Some("location")
 }
 
-fn report(node: tree_sitter::Node, ctx: &crate::rules::backend::CheckCtx, diagnostics: &mut Vec<Diagnostic>, msg: &str) {
+fn report(
+    node: tree_sitter::Node,
+    ctx: &crate::rules::backend::CheckCtx,
+    diagnostics: &mut Vec<Diagnostic>,
+    msg: &str,
+) {
     diagnostics.push(Diagnostic {
         path: std::sync::Arc::clone(&ctx.path_arc),
         line: node.start_position().row + 1,

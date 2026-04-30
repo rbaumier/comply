@@ -98,7 +98,8 @@ mod tests {
 
     #[test]
     fn allows_static_origin_allowlist() {
-        let src = "app.use(cors({ origin: ['https://example.com', 'https://admin.example.com'] }));";
+        let src =
+            "app.use(cors({ origin: ['https://example.com', 'https://admin.example.com'] }));";
         assert!(run(src).is_empty());
     }
 

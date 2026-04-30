@@ -19,8 +19,7 @@ impl TextCheck for Check {
             if !STATIC_ELEMENTS.contains(&elem.tag) {
                 continue;
             }
-            let has_click = has_attr(elem.attrs, "@click")
-                || has_attr(elem.attrs, "v-on:click");
+            let has_click = has_attr(elem.attrs, "@click") || has_attr(elem.attrs, "v-on:click");
             let has_role = has_attr(elem.attrs, "role");
             if has_click && !has_role {
                 diagnostics.push(Diagnostic {
@@ -58,7 +57,8 @@ mod tests {
 
     #[test]
     fn allows_with_role() {
-        let source = "<template>\n  <div @click=\"handler\" role=\"button\">Click</div>\n</template>";
+        let source =
+            "<template>\n  <div @click=\"handler\" role=\"button\">Click</div>\n</template>";
         assert!(run(source).is_empty());
     }
 }

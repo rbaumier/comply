@@ -5,12 +5,24 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
 fn is_in_style_jsx_attribute(node: tree_sitter::Node, source: &[u8]) -> bool {
-    let Some(obj) = node.parent() else { return false };
-    if obj.kind() != "object" { return false; }
-    let Some(jsx_expr) = obj.parent() else { return false };
-    if jsx_expr.kind() != "jsx_expression" { return false; }
-    let Some(jsx_attr) = jsx_expr.parent() else { return false };
-    if jsx_attr.kind() != "jsx_attribute" { return false; }
+    let Some(obj) = node.parent() else {
+        return false;
+    };
+    if obj.kind() != "object" {
+        return false;
+    }
+    let Some(jsx_expr) = obj.parent() else {
+        return false;
+    };
+    if jsx_expr.kind() != "jsx_expression" {
+        return false;
+    }
+    let Some(jsx_attr) = jsx_expr.parent() else {
+        return false;
+    };
+    if jsx_attr.kind() != "jsx_attribute" {
+        return false;
+    }
     crate::rules::jsx::jsx_attribute_name(jsx_attr, source) == Some("style")
 }
 
@@ -59,7 +71,10 @@ mod tests {
 
     #[test]
     fn flags_will_change_transform() {
-        assert_eq!(run(r#"<div style={{ willChange: 'transform' }} />"#).len(), 1);
+        assert_eq!(
+            run(r#"<div style={{ willChange: 'transform' }} />"#).len(),
+            1
+        );
     }
 
     #[test]

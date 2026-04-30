@@ -76,7 +76,8 @@ mod tests {
 
     #[test]
     fn ignores_non_elysia_files() {
-        let src = "app.guard({ beforeHandle: ({ headers }) => headers.authorization }, app => app);";
+        let src =
+            "app.guard({ beforeHandle: ({ headers }) => headers.authorization }, app => app);";
         assert!(crate::rules::test_helpers::run_ts(src, &Check).is_empty());
     }
 }

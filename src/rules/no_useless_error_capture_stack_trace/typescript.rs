@@ -42,140 +42,140 @@ impl AstCheck for Check {
         let source = ctx.source.as_bytes();
         // We look for class declarations/expressions that extend a builtin Error.
 
-            // Check superclass is a builtin Error.
-            let super_name = {
-                let mut found = None;
-                let mut cursor = node.walk();
-                for child in node.children(&mut cursor) {
-                    if child.kind() == "class_heritage" {
-                        let text = child.utf8_text(source).unwrap_or("");
-                        if let Some(rest) = text.strip_prefix("extends") {
-                            let name = rest
-                                .trim()
-                                .split(|c: char| !c.is_alphanumeric())
-                                .next()
-                                .unwrap_or("");
-                            if BUILTIN_ERRORS.contains(&name) {
-                                found = Some(name.to_string());
-                            }
+        // Check superclass is a builtin Error.
+        let super_name = {
+            let mut found = None;
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                if child.kind() == "class_heritage" {
+                    let text = child.utf8_text(source).unwrap_or("");
+                    if let Some(rest) = text.strip_prefix("extends") {
+                        let name = rest
+                            .trim()
+                            .split(|c: char| !c.is_alphanumeric())
+                            .next()
+                            .unwrap_or("");
+                        if BUILTIN_ERRORS.contains(&name) {
+                            found = Some(name.to_string());
                         }
                     }
                 }
-                found
+            }
+            found
+        };
+        if super_name.is_none() {
+            return;
+        }
+
+        // Get class name (for matching the second argument).
+        let class_name = node
+            .child_by_field_name("name")
+            .and_then(|n| n.utf8_text(source).ok())
+            .unwrap_or("");
+
+        // Find the constructor.
+        let Some(body) = node.child_by_field_name("body") else {
+            return;
+        };
+        let mut body_cursor = body.walk();
+        for member in body.children(&mut body_cursor) {
+            if member.kind() != "method_definition" {
+                continue;
+            }
+            let Some(name_node) = member.child_by_field_name("name") else {
+                continue;
             };
-            if super_name.is_none() {
-                return;
+            if name_node.utf8_text(source).unwrap_or("") != "constructor" {
+                continue;
             }
 
-            // Get class name (for matching the second argument).
-            let class_name = node
-                .child_by_field_name("name")
-                .and_then(|n| n.utf8_text(source).ok())
-                .unwrap_or("");
-
-            // Find the constructor.
-            let Some(body) = node.child_by_field_name("body") else {
-                return;
+            // Found the constructor — now walk its body for
+            // `Error.captureStackTrace(this, ClassName)` calls.
+            let Some(func_body) = member.child_by_field_name("body") else {
+                continue;
             };
-            let mut body_cursor = body.walk();
-            for member in body.children(&mut body_cursor) {
-                if member.kind() != "method_definition" {
+            let block = if func_body.kind() == "statement_block" {
+                func_body
+            } else if let Some(b) = func_body.child_by_field_name("body") {
+                b
+            } else {
+                continue;
+            };
+
+            let mut stmt_cursor = block.walk();
+            for stmt in block.children(&mut stmt_cursor) {
+                if stmt.kind() != "expression_statement" {
                     continue;
                 }
-                let Some(name_node) = member.child_by_field_name("name") else {
+                let Some(expr) = stmt.named_child(0) else {
                     continue;
                 };
-                if name_node.utf8_text(source).unwrap_or("") != "constructor" {
+                if expr.kind() != "call_expression" {
                     continue;
                 }
 
-                // Found the constructor — now walk its body for
-                // `Error.captureStackTrace(this, ClassName)` calls.
-                let Some(func_body) = member.child_by_field_name("body") else {
+                // Check callee is `Error.captureStackTrace`.
+                let Some(callee) = expr.child_by_field_name("function") else {
                     continue;
                 };
-                let block = if func_body.kind() == "statement_block" {
-                    func_body
-                } else if let Some(b) = func_body.child_by_field_name("body") {
-                    b
-                } else {
+                if callee.kind() != "member_expression" {
+                    continue;
+                }
+                let Some(obj) = callee.child_by_field_name("object") else {
+                    continue;
+                };
+                let Some(prop) = callee.child_by_field_name("property") else {
+                    continue;
+                };
+                if obj.utf8_text(source).unwrap_or("") != "Error" {
+                    continue;
+                }
+                if prop.utf8_text(source).unwrap_or("") != "captureStackTrace" {
+                    continue;
+                }
+
+                // Check arguments: (this, ClassName) or (this, new.target) or (this, this.constructor).
+                let Some(args) = expr.child_by_field_name("arguments") else {
+                    continue;
+                };
+                if args.named_child_count() != 2 {
+                    continue;
+                }
+                let Some(first_arg) = args.named_child(0) else {
+                    continue;
+                };
+                let Some(second_arg) = args.named_child(1) else {
                     continue;
                 };
 
-                let mut stmt_cursor = block.walk();
-                for stmt in block.children(&mut stmt_cursor) {
-                    if stmt.kind() != "expression_statement" {
-                        continue;
-                    }
-                    let Some(expr) = stmt.named_child(0) else {
-                        continue;
-                    };
-                    if expr.kind() != "call_expression" {
-                        continue;
-                    }
+                if first_arg.kind() != "this" {
+                    continue;
+                }
 
-                    // Check callee is `Error.captureStackTrace`.
-                    let Some(callee) = expr.child_by_field_name("function") else {
-                        continue;
-                    };
-                    if callee.kind() != "member_expression" {
-                        continue;
-                    }
-                    let Some(obj) = callee.child_by_field_name("object") else {
-                        continue;
-                    };
-                    let Some(prop) = callee.child_by_field_name("property") else {
-                        continue;
-                    };
-                    if obj.utf8_text(source).unwrap_or("") != "Error" {
-                        continue;
-                    }
-                    if prop.utf8_text(source).unwrap_or("") != "captureStackTrace" {
-                        continue;
-                    }
+                let second_text = second_arg.utf8_text(source).unwrap_or("");
+                let is_class_ref = second_text == class_name
+                    || second_text == "new.target"
+                    || second_text == "this.constructor";
 
-                    // Check arguments: (this, ClassName) or (this, new.target) or (this, this.constructor).
-                    let Some(args) = expr.child_by_field_name("arguments") else {
-                        continue;
-                    };
-                    if args.named_child_count() != 2 {
-                        continue;
-                    }
-                    let Some(first_arg) = args.named_child(0) else {
-                        continue;
-                    };
-                    let Some(second_arg) = args.named_child(1) else {
-                        continue;
-                    };
+                if !is_class_ref {
+                    continue;
+                }
 
-                    if first_arg.kind() != "this" {
-                        continue;
-                    }
-
-                    let second_text = second_arg.utf8_text(source).unwrap_or("");
-                    let is_class_ref = second_text == class_name
-                        || second_text == "new.target"
-                        || second_text == "this.constructor";
-
-                    if !is_class_ref {
-                        continue;
-                    }
-
-                    let pos = expr.start_position();
-                    diagnostics.push(Diagnostic {
-                        path: std::sync::Arc::clone(&ctx.path_arc),
-                        line: pos.row + 1,
-                        column: pos.column + 1,
-                        rule_id: "no-useless-error-capture-stack-trace".into(),
-                        message: "Unnecessary `Error.captureStackTrace()` call. \
+                let pos = expr.start_position();
+                diagnostics.push(Diagnostic {
+                    path: std::sync::Arc::clone(&ctx.path_arc),
+                    line: pos.row + 1,
+                    column: pos.column + 1,
+                    rule_id: "no-useless-error-capture-stack-trace".into(),
+                    message: "Unnecessary `Error.captureStackTrace()` call. \
                                   Built-in Error subclasses capture the stack \
                                   trace automatically via `super()`."
-                            .into(),
-                        severity: Severity::Warning,
-                        span: None,
-                    });
-                }
+                        .into(),
+                    severity: Severity::Warning,
+                    span: None,
+                });
             }
+        }
     }
 }
 

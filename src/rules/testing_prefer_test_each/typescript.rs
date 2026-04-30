@@ -64,7 +64,12 @@ fn contains_test_call(root: tree_sitter::Node, source: &[u8]) -> bool {
     false
 }
 
-fn push(diagnostics: &mut Vec<Diagnostic>, ctx: &crate::rules::backend::CheckCtx, node: tree_sitter::Node, kind: &str) {
+fn push(
+    diagnostics: &mut Vec<Diagnostic>,
+    ctx: &crate::rules::backend::CheckCtx,
+    node: tree_sitter::Node,
+    kind: &str,
+) {
     let pos = node.start_position();
     diagnostics.push(Diagnostic {
         path: std::sync::Arc::clone(&ctx.path_arc),

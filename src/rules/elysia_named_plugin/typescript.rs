@@ -70,7 +70,8 @@ mod tests {
 
     #[test]
     fn allows_named_plugin() {
-        let src = "import { Elysia } from 'elysia';\nexport const plugin = new Elysia({ name: 'auth' });";
+        let src =
+            "import { Elysia } from 'elysia';\nexport const plugin = new Elysia({ name: 'auth' });";
         assert!(run_on(src).is_empty());
     }
 

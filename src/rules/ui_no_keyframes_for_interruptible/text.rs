@@ -44,19 +44,30 @@ crate::ast_check! { on ["rule_set"] => |node, source, ctx, diagnostics|
 fn animation_name(block: tree_sitter::Node, source: &[u8]) -> Option<String> {
     let mut c = block.walk();
     for decl in block.children(&mut c) {
-        if decl.kind() != "declaration" { continue; }
+        if decl.kind() != "declaration" {
+            continue;
+        }
         let mut dc = decl.walk();
         let kids: Vec<_> = decl.children(&mut dc).collect();
         let prop = kids.iter().find(|n| n.kind() == "property_name")?;
-        let Ok(prop_text) = prop.utf8_text(source) else { continue };
+        let Ok(prop_text) = prop.utf8_text(source) else {
+            continue;
+        };
         let prop_lower = prop_text.to_ascii_lowercase();
-        if prop_lower != "animation" && prop_lower != "animation-name" { continue; }
+        if prop_lower != "animation" && prop_lower != "animation-name" {
+            continue;
+        }
         // First plain_value after the property is the name in the shorthand.
-        for n in kids.iter().skip_while(|n| n.kind() != "property_name").skip(1) {
+        for n in kids
+            .iter()
+            .skip_while(|n| n.kind() != "property_name")
+            .skip(1)
+        {
             if n.kind() == "plain_value"
-                && let Ok(t) = n.utf8_text(source) {
-                    return Some(t.trim().to_string());
-                }
+                && let Ok(t) = n.utf8_text(source)
+            {
+                return Some(t.trim().to_string());
+            }
         }
     }
     None

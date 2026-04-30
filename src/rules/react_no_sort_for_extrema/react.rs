@@ -12,11 +12,15 @@ fn is_sort_call(node: tree_sitter::Node<'_>, source: &[u8]) -> bool {
     if node.kind() != "call_expression" {
         return false;
     }
-    let Some(callee) = node.child_by_field_name("function") else { return false };
+    let Some(callee) = node.child_by_field_name("function") else {
+        return false;
+    };
     if callee.kind() != "member_expression" {
         return false;
     }
-    let Some(prop) = callee.child_by_field_name("property") else { return false };
+    let Some(prop) = callee.child_by_field_name("property") else {
+        return false;
+    };
     prop.utf8_text(source).ok() == Some("sort")
 }
 
@@ -29,31 +33,37 @@ fn is_length_minus_one(node: tree_sitter::Node<'_>, source: &[u8]) -> bool {
         return false;
     }
     // tree-sitter fields: left, operator, right.
-    let Some(op) = node.child_by_field_name("operator") else { return false };
+    let Some(op) = node.child_by_field_name("operator") else {
+        return false;
+    };
     if op.utf8_text(source).ok() != Some("-") {
         return false;
     }
-    let Some(right) = node.child_by_field_name("right") else { return false };
+    let Some(right) = node.child_by_field_name("right") else {
+        return false;
+    };
     if right.utf8_text(source).ok() != Some("1") {
         return false;
     }
-    let Some(left) = node.child_by_field_name("left") else { return false };
+    let Some(left) = node.child_by_field_name("left") else {
+        return false;
+    };
     if left.kind() != "member_expression" {
         return false;
     }
-    let Some(prop) = left.child_by_field_name("property") else { return false };
+    let Some(prop) = left.child_by_field_name("property") else {
+        return false;
+    };
     prop.utf8_text(source).ok() == Some("length")
 }
 
 /// Look for a sibling `lexical_declaration` (above `subscript`) that binds
 /// `name` to a `.sort(...)` call. Walks up to the enclosing program /
 /// statement_block and scans preceding statements.
-fn identifier_bound_to_sort(
-    subscript: tree_sitter::Node<'_>,
-    name: &str,
-    source: &[u8],
-) -> bool {
-    let Some(mut cur) = subscript.parent() else { return false };
+fn identifier_bound_to_sort(subscript: tree_sitter::Node<'_>, name: &str, source: &[u8]) -> bool {
+    let Some(mut cur) = subscript.parent() else {
+        return false;
+    };
     // Walk up to the nearest statement-list parent; check siblings before
     // the current node. Repeat at outer scope (function bodies, blocks).
     loop {
@@ -77,11 +87,7 @@ fn identifier_bound_to_sort(
     false
 }
 
-fn declarator_binds_sort(
-    stmt: tree_sitter::Node<'_>,
-    name: &str,
-    source: &[u8],
-) -> Option<()> {
+fn declarator_binds_sort(stmt: tree_sitter::Node<'_>, name: &str, source: &[u8]) -> Option<()> {
     if stmt.kind() != "lexical_declaration" && stmt.kind() != "variable_declaration" {
         return None;
     }
@@ -90,14 +96,18 @@ fn declarator_binds_sort(
         if decl.kind() != "variable_declarator" {
             continue;
         }
-        let Some(name_node) = decl.child_by_field_name("name") else { continue };
+        let Some(name_node) = decl.child_by_field_name("name") else {
+            continue;
+        };
         if name_node.kind() != "identifier" {
             continue;
         }
         if name_node.utf8_text(source).ok() != Some(name) {
             continue;
         }
-        let Some(value) = decl.child_by_field_name("value") else { continue };
+        let Some(value) = decl.child_by_field_name("value") else {
+            continue;
+        };
         if is_sort_call(value, source) {
             return Some(());
         }

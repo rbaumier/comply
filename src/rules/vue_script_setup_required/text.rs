@@ -23,8 +23,9 @@ impl TextCheck for Check {
                     line: i + 1,
                     column: 1,
                     rule_id: super::META.id.into(),
-                    message: "Use `<script setup>` instead of `<script>` with a `setup()` function."
-                        .into(),
+                    message:
+                        "Use `<script setup>` instead of `<script>` with a `setup()` function."
+                            .into(),
                     severity: Severity::Warning,
                     span: None,
                 });

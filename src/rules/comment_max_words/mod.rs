@@ -2,8 +2,8 @@ mod rust;
 mod typescript;
 
 use crate::diagnostic::Severity;
-use crate::rules::meta::RuleMeta;
 use crate::rules::RuleDef;
+use crate::rules::meta::RuleMeta;
 
 pub const META: RuleMeta = RuleMeta {
     id: "comment-max-words",
@@ -37,7 +37,9 @@ pub(crate) fn strip_markers(raw: &str) -> String {
             .trim_end_matches("*/")
             .trim();
         if !trimmed.is_empty() {
-            if !out.is_empty() { out.push(' '); }
+            if !out.is_empty() {
+                out.push(' ');
+            }
             out.push_str(trimmed);
         }
     }

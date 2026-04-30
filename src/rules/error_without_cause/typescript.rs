@@ -25,7 +25,15 @@ pub struct Check;
 
 impl AstCheck for Check {
     fn prefilter(&self) -> Option<&'static [&'static str]> {
-        Some(&["Error", "TypeError", "RangeError", "SyntaxError", "ReferenceError", "EvalError", "URIError"])
+        Some(&[
+            "Error",
+            "TypeError",
+            "RangeError",
+            "SyntaxError",
+            "ReferenceError",
+            "EvalError",
+            "URIError",
+        ])
     }
 
     fn interested_kinds(&self) -> Option<&'static [&'static str]> {
@@ -83,14 +91,9 @@ impl AstCheck for Check {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
-
-
         crate::rules::test_helpers::run_ts(source, &Check)
-
-
     }
 
     #[test]
@@ -102,9 +105,7 @@ mod tests {
 
     #[test]
     fn allows_wrap_with_cause() {
-        let diags = run_on(
-            "try { f(); } catch (e) { throw new Error(e.message, { cause: e }); }",
-        );
+        let diags = run_on("try { f(); } catch (e) { throw new Error(e.message, { cause: e }); }");
         assert!(diags.is_empty());
     }
 

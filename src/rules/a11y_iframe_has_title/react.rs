@@ -45,16 +45,24 @@ mod tests {
 
     #[test]
     fn flags_iframe_without_title() {
-        assert_eq!(run(r#"const x = <iframe src="https://example.com" />;"#).len(), 1);
+        assert_eq!(
+            run(r#"const x = <iframe src="https://example.com" />;"#).len(),
+            1
+        );
     }
 
     #[test]
     fn allows_iframe_with_title() {
-        assert!(run(r#"const x = <iframe src="https://example.com" title="Example" />;"#).is_empty());
+        assert!(
+            run(r#"const x = <iframe src="https://example.com" title="Example" />;"#).is_empty()
+        );
     }
 
     #[test]
     fn flags_iframe_opening_without_title() {
-        assert_eq!(run(r#"const x = <iframe src="https://example.com"></iframe>;"#).len(), 1);
+        assert_eq!(
+            run(r#"const x = <iframe src="https://example.com"></iframe>;"#).len(),
+            1
+        );
     }
 }

@@ -11,7 +11,9 @@ pub const META: RuleMeta = RuleMeta {
     description: "Template literals passed to snapshot matchers should not contain interpolation.",
     remediation: "Don't use interpolation in snapshot matchers",
     severity: Severity::Warning,
-    doc_url: Some("https://github.com/jest-community/eslint-plugin-jest/blob/main/docs/rules/no-interpolation-in-snapshots.md"),
+    doc_url: Some(
+        "https://github.com/jest-community/eslint-plugin-jest/blob/main/docs/rules/no-interpolation-in-snapshots.md",
+    ),
     categories: &["testing"],
 };
 

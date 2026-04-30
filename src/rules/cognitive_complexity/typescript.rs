@@ -47,12 +47,13 @@ fn compute(node: tree_sitter::Node, source: &[u8], nesting: u32) -> u32 {
 
     // Logical operators in binary expressions.
     if kind == "binary_expression"
-        && let Some(op) = node.child_by_field_name("operator") {
-            let op_text = op.utf8_text(source).unwrap_or("");
-            if LOGICAL_OPS.contains(&op_text) {
-                score += 1;
-            }
+        && let Some(op) = node.child_by_field_name("operator")
+    {
+        let op_text = op.utf8_text(source).unwrap_or("");
+        if LOGICAL_OPS.contains(&op_text) {
+            score += 1;
         }
+    }
 
     // Nesting increases for blocks that are children of flow control.
     let nest_increase = matches!(
@@ -138,7 +139,9 @@ pub(super) fn compute_source(source: &str) -> u32 {
     let mut parser = tree_sitter::Parser::new();
     let lang: tree_sitter::Language = tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into();
     parser.set_language(&lang).expect("grammar should load");
-    let tree = parser.parse(source, None).expect("parser should produce a tree");
+    let tree = parser
+        .parse(source, None)
+        .expect("parser should produce a tree");
     find_first_fn_body(tree.root_node())
         .map(|body| compute(body, source.as_bytes(), 0))
         .unwrap_or(0)

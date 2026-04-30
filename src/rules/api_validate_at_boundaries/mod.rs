@@ -7,15 +7,13 @@
 mod typescript;
 
 use crate::diagnostic::Severity;
-use crate::rules::meta::RuleMeta;
 use crate::rules::RuleDef;
+use crate::rules::meta::RuleMeta;
 
 pub const META: RuleMeta = RuleMeta {
     id: "api-validate-at-boundaries",
-    description:
-        "Validation schemas (zod.parse) must run only at API boundaries, not between internal typed functions.",
-    remediation:
-        "Move the `.parse(...)` call to the HTTP handler or middleware. Internal callers should trust the static type contract.",
+    description: "Validation schemas (zod.parse) must run only at API boundaries, not between internal typed functions.",
+    remediation: "Move the `.parse(...)` call to the HTTP handler or middleware. Internal callers should trust the static type contract.",
     severity: Severity::Warning,
     doc_url: None,
     categories: &["api-design"],

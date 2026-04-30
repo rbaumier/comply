@@ -70,9 +70,10 @@ impl AstCheck for Check {
         // the same cognitive level as the outer `if`, counted once.
         if node.kind() == "if_expression"
             && let Some(parent) = node.parent()
-                && parent.kind() == "else_clause" {
-                    return;
-                }
+            && parent.kind() == "else_clause"
+        {
+            return;
+        }
         let depth = control_flow_depth(node) + 1;
         if depth > max_depth {
             let line = node.start_position().row + 1;
@@ -82,9 +83,7 @@ impl AstCheck for Check {
                     line,
                     column: node.start_position().column + 1,
                     rule_id: "nested-control-flow".into(),
-                    message: format!(
-                        "Control-flow nesting depth is {depth} (max: {max_depth})."
-                    ),
+                    message: format!("Control-flow nesting depth is {depth} (max: {max_depth})."),
                     severity: Severity::Error,
                     span: None,
                 });

@@ -10,10 +10,18 @@ use crate::diagnostic::{Diagnostic, Severity};
 
 /// Is `func` a `vi.<method>` member expression with `property` in `props`?
 fn is_vi_method(func: tree_sitter::Node, source: &[u8], props: &[&str]) -> bool {
-    if func.kind() != "member_expression" { return false; }
-    let Some(obj) = func.child_by_field_name("object") else { return false; };
-    let Some(prop) = func.child_by_field_name("property") else { return false; };
-    if obj.utf8_text(source).unwrap_or("") != "vi" { return false; }
+    if func.kind() != "member_expression" {
+        return false;
+    }
+    let Some(obj) = func.child_by_field_name("object") else {
+        return false;
+    };
+    let Some(prop) = func.child_by_field_name("property") else {
+        return false;
+    };
+    if obj.utf8_text(source).unwrap_or("") != "vi" {
+        return false;
+    }
     props.contains(&prop.utf8_text(source).unwrap_or(""))
 }
 
@@ -39,11 +47,21 @@ fn is_inside_after_hook(node: tree_sitter::Node, source: &[u8]) -> bool {
 fn has_scoped_unstub(tree: &tree_sitter::Tree, source: &[u8], method: &str) -> bool {
     let mut found = false;
     crate::rules::walker::walk_tree(tree, |n| {
-        if found { return; }
-        if n.kind() != "call_expression" { return; }
-        let Some(func) = n.child_by_field_name("function") else { return; };
-        if !is_vi_method(func, source, &[method]) { return; }
-        if is_inside_after_hook(n, source) { found = true; }
+        if found {
+            return;
+        }
+        if n.kind() != "call_expression" {
+            return;
+        }
+        let Some(func) = n.child_by_field_name("function") else {
+            return;
+        };
+        if !is_vi_method(func, source, &[method]) {
+            return;
+        }
+        if is_inside_after_hook(n, source) {
+            found = true;
+        }
     });
     found
 }
@@ -60,15 +78,21 @@ impl crate::rules::backend::AstCheck for Check {
         let source = ctx.source.as_bytes();
         let has_stub_global = ctx.source.contains("stubGlobal");
         let has_stub_env = ctx.source.contains("stubEnv");
-        if !(has_stub_global || has_stub_env) { return Vec::new(); }
+        if !(has_stub_global || has_stub_env) {
+            return Vec::new();
+        }
 
         let unstubbed_globals = has_scoped_unstub(tree, source, "unstubAllGlobals");
         let unstubbed_envs = has_scoped_unstub(tree, source, "unstubAllEnvs");
 
         let mut diagnostics = Vec::new();
         crate::rules::walker::walk_tree(tree, |node| {
-            if node.kind() != "call_expression" { return; }
-            let Some(func) = node.child_by_field_name("function") else { return; };
+            if node.kind() != "call_expression" {
+                return;
+            }
+            let Some(func) = node.child_by_field_name("function") else {
+                return;
+            };
 
             if is_vi_method(func, source, &["stubGlobal"]) && !unstubbed_globals {
                 diagnostics.push(Diagnostic::at_node(

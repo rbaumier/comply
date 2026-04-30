@@ -23,11 +23,7 @@ fn unquote(s: &str) -> &str {
     s.trim_matches(|c| c == '"' || c == '\'' || c == '`')
 }
 
-fn lookup_property<'a>(
-    obj: tree_sitter::Node,
-    source: &'a [u8],
-    name: &str,
-) -> PropValue<'a> {
+fn lookup_property<'a>(obj: tree_sitter::Node, source: &'a [u8], name: &str) -> PropValue<'a> {
     if obj.kind() != "object" {
         return PropValue::Missing;
     }

@@ -10,17 +10,27 @@ use crate::diagnostic::{Diagnostic, Severity};
 use std::collections::HashSet;
 
 /// Collect names bound by `let`/`var` at program scope.
-fn collect_program_let_var(root: tree_sitter::Node, source: &[u8], out: &mut Vec<(String, tree_sitter::Range)>) {
+fn collect_program_let_var(
+    root: tree_sitter::Node,
+    source: &[u8],
+    out: &mut Vec<(String, tree_sitter::Range)>,
+) {
     let mut cursor = root.walk();
     for child in root.named_children(&mut cursor) {
         let is_let = child.kind() == "lexical_declaration"
             && child.child(0).and_then(|n| n.utf8_text(source).ok()) == Some("let");
         let is_var = child.kind() == "variable_declaration";
-        if !(is_let || is_var) { continue; }
+        if !(is_let || is_var) {
+            continue;
+        }
         let mut dc = child.walk();
         for declarator in child.named_children(&mut dc) {
-            if declarator.kind() != "variable_declarator" { continue; }
-            let Some(name_node) = declarator.child_by_field_name("name") else { continue; };
+            if declarator.kind() != "variable_declarator" {
+                continue;
+            }
+            let Some(name_node) = declarator.child_by_field_name("name") else {
+                continue;
+            };
             if name_node.kind() == "identifier" {
                 let name = name_node.utf8_text(source).unwrap_or("").to_string();
                 out.push((name, declarator.range()));
@@ -32,8 +42,19 @@ fn collect_program_let_var(root: tree_sitter::Node, source: &[u8], out: &mut Vec
 /// Mutating array/collection methods. A `name.push(...)` call mutates the
 /// shared binding even though tree-sitter sees no `assignment_expression`.
 const MUTATING_METHODS: &[&str] = &[
-    "push", "pop", "shift", "unshift", "splice", "sort", "reverse", "fill", "copyWithin",
-    "set", "delete", "clear", "add",
+    "push",
+    "pop",
+    "shift",
+    "unshift",
+    "splice",
+    "sort",
+    "reverse",
+    "fill",
+    "copyWithin",
+    "set",
+    "delete",
+    "clear",
+    "add",
 ];
 
 /// Does `fn_node`'s body contain an assignment OR a mutation to any of `names`?
@@ -42,9 +63,15 @@ const MUTATING_METHODS: &[&str] = &[
 ///   1. `name = ...` (re-assignment)
 ///   2. `name.prop = ...` / `name[key] = ...` (property write)
 ///   3. `name.push(...)` / `name.set(...)` / etc. (mutating method call)
-fn body_assigns_any(fn_node: tree_sitter::Node, source: &[u8], names: &HashSet<String>) -> HashSet<String> {
+fn body_assigns_any(
+    fn_node: tree_sitter::Node,
+    source: &[u8],
+    names: &HashSet<String>,
+) -> HashSet<String> {
     let mut found = HashSet::new();
-    let Some(body) = fn_node.child_by_field_name("body") else { return found; };
+    let Some(body) = fn_node.child_by_field_name("body") else {
+        return found;
+    };
     let mut stack = vec![body];
     while let Some(n) = stack.pop() {
         if n.kind() == "assignment_expression"
@@ -53,7 +80,9 @@ fn body_assigns_any(fn_node: tree_sitter::Node, source: &[u8], names: &HashSet<S
             // Case 1: bare identifier on the LHS → reassignment.
             if lhs.kind() == "identifier" {
                 let t = lhs.utf8_text(source).unwrap_or("").to_string();
-                if names.contains(&t) { found.insert(t); }
+                if names.contains(&t) {
+                    found.insert(t);
+                }
             }
             // Cases 2: `obj.prop = ...` / `obj[k] = ...` — the LHS is a
             // member/subscript expression rooted at the shared identifier.
@@ -62,7 +91,9 @@ fn body_assigns_any(fn_node: tree_sitter::Node, source: &[u8], names: &HashSet<S
                 && obj.kind() == "identifier"
             {
                 let t = obj.utf8_text(source).unwrap_or("").to_string();
-                if names.contains(&t) { found.insert(t); }
+                if names.contains(&t) {
+                    found.insert(t);
+                }
             }
         }
 
@@ -82,32 +113,45 @@ fn body_assigns_any(fn_node: tree_sitter::Node, source: &[u8], names: &HashSet<S
         }
 
         let mut c = n.walk();
-        for child in n.named_children(&mut c) { stack.push(child); }
+        for child in n.named_children(&mut c) {
+            stack.push(child);
+        }
     }
     found
 }
 
 /// Walk call_expression nodes at any depth; return list of (callee-name, callback-node).
-fn collect_hook_calls<'a>(root: tree_sitter::Node<'a>, source: &[u8], want: &[&str]) -> Vec<(String, tree_sitter::Node<'a>)> {
+fn collect_hook_calls<'a>(
+    root: tree_sitter::Node<'a>,
+    source: &[u8],
+    want: &[&str],
+) -> Vec<(String, tree_sitter::Node<'a>)> {
     let mut out = Vec::new();
     let mut stack = vec![root];
     while let Some(n) = stack.pop() {
         if n.kind() == "call_expression"
             && let Some(func) = n.child_by_field_name("function")
-                && func.kind() == "identifier" {
-                    let name = func.utf8_text(source).unwrap_or("");
-                    if want.contains(&name)
-                        && let Some(args) = n.child_by_field_name("arguments") {
-                            let mut ac = args.walk();
-                            for arg in args.named_children(&mut ac) {
-                                if matches!(arg.kind(), "arrow_function" | "function_expression" | "function") {
-                                    out.push((name.to_string(), arg));
-                                }
-                            }
-                        }
+            && func.kind() == "identifier"
+        {
+            let name = func.utf8_text(source).unwrap_or("");
+            if want.contains(&name)
+                && let Some(args) = n.child_by_field_name("arguments")
+            {
+                let mut ac = args.walk();
+                for arg in args.named_children(&mut ac) {
+                    if matches!(
+                        arg.kind(),
+                        "arrow_function" | "function_expression" | "function"
+                    ) {
+                        out.push((name.to_string(), arg));
+                    }
                 }
+            }
+        }
         let mut c = n.walk();
-        for child in n.named_children(&mut c) { stack.push(child); }
+        for child in n.named_children(&mut c) {
+            stack.push(child);
+        }
     }
     out
 }
@@ -127,15 +171,21 @@ impl crate::rules::backend::AstCheck for Check {
         // Gather program-level let/var bindings.
         let mut bindings: Vec<(String, tree_sitter::Range)> = Vec::new();
         collect_program_let_var(root, source, &mut bindings);
-        if bindings.is_empty() { return Vec::new(); }
+        if bindings.is_empty() {
+            return Vec::new();
+        }
 
         let names: HashSet<String> = bindings.iter().map(|(n, _)| n.clone()).collect();
 
         // Collect test/it callbacks and beforeEach callbacks.
         let test_cbs: Vec<_> = collect_hook_calls(root, source, &["test", "it"])
-            .into_iter().map(|(_, cb)| cb).collect();
+            .into_iter()
+            .map(|(_, cb)| cb)
+            .collect();
         let before_each_cbs: Vec<_> = collect_hook_calls(root, source, &["beforeEach"])
-            .into_iter().map(|(_, cb)| cb).collect();
+            .into_iter()
+            .map(|(_, cb)| cb)
+            .collect();
 
         // Names reassigned inside test/it callbacks.
         let mut mutated_in_tests: HashSet<String> = HashSet::new();
@@ -144,7 +194,9 @@ impl crate::rules::backend::AstCheck for Check {
                 mutated_in_tests.insert(n);
             }
         }
-        if mutated_in_tests.is_empty() { return Vec::new(); }
+        if mutated_in_tests.is_empty() {
+            return Vec::new();
+        }
 
         // Names reset in a beforeEach.
         let mut reset_in_before_each: HashSet<String> = HashSet::new();
@@ -156,8 +208,12 @@ impl crate::rules::backend::AstCheck for Check {
 
         let mut diagnostics = Vec::new();
         for (name, range) in &bindings {
-            if !mutated_in_tests.contains(name) { continue; }
-            if reset_in_before_each.contains(name) { continue; }
+            if !mutated_in_tests.contains(name) {
+                continue;
+            }
+            if reset_in_before_each.contains(name) {
+                continue;
+            }
             diagnostics.push(Diagnostic {
                 path: std::sync::Arc::clone(&ctx.path_arc),
                 line: range.start_point.row + 1,

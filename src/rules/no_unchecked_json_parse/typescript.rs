@@ -29,8 +29,7 @@ fn is_json_parse_call(node: tree_sitter::Node, source: &[u8]) -> bool {
     let Some(prop) = func.child_by_field_name("property") else {
         return false;
     };
-    obj.utf8_text(source).unwrap_or("") == "JSON"
-        && prop.utf8_text(source).unwrap_or("") == "parse"
+    obj.utf8_text(source).unwrap_or("") == "JSON" && prop.utf8_text(source).unwrap_or("") == "parse"
 }
 
 /// Return true when `call` is being passed as an argument to an enclosing

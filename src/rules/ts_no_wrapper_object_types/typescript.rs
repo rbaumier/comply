@@ -19,12 +19,23 @@ fn in_type_context(node: tree_sitter::Node) -> bool {
     let mut cur = node.parent();
     while let Some(p) = cur {
         match p.kind() {
-            "type_annotation" | "type_alias_declaration" | "extends_clause"
-            | "implements_clause" | "as_expression" | "satisfies_expression"
-            | "generic_type" | "union_type" | "intersection_type"
-            | "type_arguments" | "type_parameters" | "parenthesized_type"
-            | "array_type" | "readonly_type" | "return_type"
-            | "constraint" | "default_type" => return true,
+            "type_annotation"
+            | "type_alias_declaration"
+            | "extends_clause"
+            | "implements_clause"
+            | "as_expression"
+            | "satisfies_expression"
+            | "generic_type"
+            | "union_type"
+            | "intersection_type"
+            | "type_arguments"
+            | "type_parameters"
+            | "parenthesized_type"
+            | "array_type"
+            | "readonly_type"
+            | "return_type"
+            | "constraint"
+            | "default_type" => return true,
             _ => {}
         }
         cur = p.parent();

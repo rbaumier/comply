@@ -9,8 +9,12 @@ use crate::diagnostic::{Diagnostic, Severity};
 
 /// True for `x++` / `x--` (postfix), false for `++x` / `--x` (prefix).
 fn is_postfix_update(update: tree_sitter::Node) -> bool {
-    let Some(arg) = update.child_by_field_name("argument") else { return false };
-    let Some(op) = update.child_by_field_name("operator") else { return false };
+    let Some(arg) = update.child_by_field_name("argument") else {
+        return false;
+    };
+    let Some(op) = update.child_by_field_name("operator") else {
+        return false;
+    };
     arg.start_byte() < op.start_byte()
 }
 

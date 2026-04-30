@@ -72,11 +72,7 @@ impl<'a> CheckCtx<'a> {
     /// framework-scoped rules).
     #[cfg(test)]
     #[allow(dead_code)] // Chantier #2+ rules adopt this as they migrate.
-    pub fn for_test_with_project(
-        path: &'a Path,
-        source: &'a str,
-        project: &'a ProjectCtx,
-    ) -> Self {
+    pub fn for_test_with_project(path: &'a Path, source: &'a str, project: &'a ProjectCtx) -> Self {
         Self {
             path,
             path_arc: Arc::from(path),

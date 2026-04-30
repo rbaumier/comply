@@ -133,7 +133,8 @@ mod tests {
 
     #[test]
     fn allows_get_with_query() {
-        let src = "import { Hono } from 'hono';\napp.get('/x', (c) => c.json({ q: c.req.query('q') }));";
+        let src =
+            "import { Hono } from 'hono';\napp.get('/x', (c) => c.json({ q: c.req.query('q') }));";
         assert!(run(src).is_empty());
     }
 

@@ -28,15 +28,21 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
 }
 
 fn is_test_slow_unconditional(call: tree_sitter::Node, source: &[u8]) -> bool {
-    let Some(func) = call.child_by_field_name("function") else { return false };
+    let Some(func) = call.child_by_field_name("function") else {
+        return false;
+    };
     if func.kind() != "member_expression" {
         return false;
     }
-    let Some(obj) = func.child_by_field_name("object") else { return false };
+    let Some(obj) = func.child_by_field_name("object") else {
+        return false;
+    };
     if obj.kind() != "identifier" || &source[obj.byte_range()] != b"test" {
         return false;
     }
-    let Some(prop) = func.child_by_field_name("property") else { return false };
+    let Some(prop) = func.child_by_field_name("property") else {
+        return false;
+    };
     if prop.kind() != "property_identifier" || &source[prop.byte_range()] != b"slow" {
         return false;
     }

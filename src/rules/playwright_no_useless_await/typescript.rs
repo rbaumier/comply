@@ -11,24 +11,49 @@ fn is_test_file(path: &std::path::Path) -> bool {
 
 /// Locator methods that are synchronous (return Locator, not Promise).
 const SYNC_LOCATOR_METHODS: &[&str] = &[
-    "and", "first", "getByAltText", "getByLabel", "getByPlaceholder",
-    "getByRole", "getByTestId", "getByText", "getByTitle", "last",
-    "locator", "nth", "or",
+    "and",
+    "first",
+    "getByAltText",
+    "getByLabel",
+    "getByPlaceholder",
+    "getByRole",
+    "getByTestId",
+    "getByText",
+    "getByTitle",
+    "last",
+    "locator",
+    "nth",
+    "or",
 ];
 
 /// Page/frame methods that are synchronous.
-const SYNC_PAGE_METHODS: &[&str] = &[
-    "frameLocator", "isClosed", "url", "viewportSize",
-];
+const SYNC_PAGE_METHODS: &[&str] = &["frameLocator", "isClosed", "url", "viewportSize"];
 
 /// Sync expect matchers (non-web-first).
 const SYNC_MATCHERS: &[&str] = &[
-    "toBe", "toBeCloseTo", "toBeDefined", "toBeFalsy", "toBeGreaterThan",
-    "toBeGreaterThanOrEqual", "toBeInstanceOf", "toBeLessThan",
-    "toBeLessThanOrEqual", "toBeNaN", "toBeNull", "toBeTruthy",
-    "toBeUndefined", "toContain", "toContainEqual", "toEqual",
-    "toHaveLength", "toHaveProperty", "toMatch", "toMatchObject",
-    "toStrictEqual", "toThrow", "toThrowError",
+    "toBe",
+    "toBeCloseTo",
+    "toBeDefined",
+    "toBeFalsy",
+    "toBeGreaterThan",
+    "toBeGreaterThanOrEqual",
+    "toBeInstanceOf",
+    "toBeLessThan",
+    "toBeLessThanOrEqual",
+    "toBeNaN",
+    "toBeNull",
+    "toBeTruthy",
+    "toBeUndefined",
+    "toContain",
+    "toContainEqual",
+    "toEqual",
+    "toHaveLength",
+    "toHaveProperty",
+    "toMatch",
+    "toMatchObject",
+    "toStrictEqual",
+    "toThrow",
+    "toThrowError",
 ];
 
 fn get_method_name<'a>(node: tree_sitter::Node<'a>, source: &'a [u8]) -> Option<&'a str> {
@@ -45,17 +70,23 @@ fn is_sync_expect_chain(node: tree_sitter::Node, source: &[u8]) -> bool {
     if node.kind() != "call_expression" {
         return false;
     }
-    let Some(callee) = node.child_by_field_name("function") else { return false };
+    let Some(callee) = node.child_by_field_name("function") else {
+        return false;
+    };
     if callee.kind() != "member_expression" {
         return false;
     }
-    let Some(prop) = callee.child_by_field_name("property") else { return false };
+    let Some(prop) = callee.child_by_field_name("property") else {
+        return false;
+    };
     let matcher = prop.utf8_text(source).unwrap_or("");
     if !SYNC_MATCHERS.contains(&matcher) {
         return false;
     }
     // The object should be an expect() call or expect().not
-    let Some(obj) = callee.child_by_field_name("object") else { return false };
+    let Some(obj) = callee.child_by_field_name("object") else {
+        return false;
+    };
     contains_expect_root(obj, source)
 }
 
@@ -63,9 +94,10 @@ fn contains_expect_root(node: tree_sitter::Node, source: &[u8]) -> bool {
     match node.kind() {
         "call_expression" => {
             if let Some(fn_node) = node.child_by_field_name("function")
-                && fn_node.kind() == "identifier" {
-                    return fn_node.utf8_text(source).unwrap_or("") == "expect";
-                }
+                && fn_node.kind() == "identifier"
+            {
+                return fn_node.utf8_text(source).unwrap_or("") == "expect";
+            }
             false
         }
         "member_expression" => {

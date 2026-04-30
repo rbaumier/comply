@@ -7,16 +7,33 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-const SIDE_KEYS: &[&str] = &["borderLeft", "borderRight", "borderLeftWidth", "borderRightWidth"];
+const SIDE_KEYS: &[&str] = &[
+    "borderLeft",
+    "borderRight",
+    "borderLeftWidth",
+    "borderRightWidth",
+];
 const BOTTOM_KEYS: &[&str] = &["borderBottom", "borderBottomWidth"];
 
 fn is_in_style_jsx_attribute(node: tree_sitter::Node, source: &[u8]) -> bool {
-    let Some(obj) = node.parent() else { return false };
-    if obj.kind() != "object" { return false; }
-    let Some(jsx_expr) = obj.parent() else { return false };
-    if jsx_expr.kind() != "jsx_expression" { return false; }
-    let Some(jsx_attr) = jsx_expr.parent() else { return false };
-    if jsx_attr.kind() != "jsx_attribute" { return false; }
+    let Some(obj) = node.parent() else {
+        return false;
+    };
+    if obj.kind() != "object" {
+        return false;
+    }
+    let Some(jsx_expr) = obj.parent() else {
+        return false;
+    };
+    if jsx_expr.kind() != "jsx_expression" {
+        return false;
+    }
+    let Some(jsx_attr) = jsx_expr.parent() else {
+        return false;
+    };
+    if jsx_attr.kind() != "jsx_attribute" {
+        return false;
+    }
     crate::rules::jsx::jsx_attribute_name(jsx_attr, source) == Some("style")
 }
 
@@ -29,7 +46,9 @@ fn pair_key<'a>(pair: tree_sitter::Node, source: &'a [u8]) -> Option<&'a str> {
 fn object_has_bottom_border(object: tree_sitter::Node, source: &[u8]) -> bool {
     let mut cursor = object.walk();
     object.children(&mut cursor).any(|child| {
-        if child.kind() != "pair" { return false; }
+        if child.kind() != "pair" {
+            return false;
+        }
         match pair_key(child, source) {
             Some(name) => BOTTOM_KEYS.contains(&name),
             None => false,
@@ -87,14 +106,18 @@ mod tests {
 
     #[test]
     fn flags_border_left_with_border_bottom() {
-        let diags = run(r#"<div style={{ borderLeft: '1px solid red', borderBottom: '2px solid blue' }} />"#);
+        let diags = run(
+            r#"<div style={{ borderLeft: '1px solid red', borderBottom: '2px solid blue' }} />"#,
+        );
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("borderLeft"));
     }
 
     #[test]
     fn flags_border_right_with_border_bottom() {
-        let diags = run(r#"<div style={{ borderRight: '1px solid red', borderBottom: '2px solid blue' }} />"#);
+        let diags = run(
+            r#"<div style={{ borderRight: '1px solid red', borderBottom: '2px solid blue' }} />"#,
+        );
         assert_eq!(diags.len(), 1);
     }
 
@@ -106,7 +129,9 @@ mod tests {
 
     #[test]
     fn flags_both_sides_with_border_bottom() {
-        let diags = run(r#"<div style={{ borderLeft: '1px solid red', borderRight: '1px solid red', borderBottom: '2px solid blue' }} />"#);
+        let diags = run(
+            r#"<div style={{ borderLeft: '1px solid red', borderRight: '1px solid red', borderBottom: '2px solid blue' }} />"#,
+        );
         assert_eq!(diags.len(), 2);
     }
 
@@ -122,12 +147,18 @@ mod tests {
 
     #[test]
     fn allows_zero_width_side_border() {
-        assert!(run(r#"<div style={{ borderLeftWidth: 0, borderBottom: '2px solid blue' }} />"#).is_empty());
+        assert!(
+            run(r#"<div style={{ borderLeftWidth: 0, borderBottom: '2px solid blue' }} />"#)
+                .is_empty()
+        );
     }
 
     #[test]
     fn allows_zero_px_width_side_border() {
-        assert!(run(r#"<div style={{ borderRightWidth: '0px', borderBottom: '2px solid blue' }} />"#).is_empty());
+        assert!(
+            run(r#"<div style={{ borderRightWidth: '0px', borderBottom: '2px solid blue' }} />"#)
+                .is_empty()
+        );
     }
 
     #[test]

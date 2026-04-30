@@ -132,10 +132,7 @@ fn field_matches(parent: tree_sitter::Node, field: &str, node: tree_sitter::Node
 }
 
 fn compile_patterns(patterns: &[String]) -> Vec<Regex> {
-    patterns
-        .iter()
-        .filter_map(|p| Regex::new(p).ok())
-        .collect()
+    patterns.iter().filter_map(|p| Regex::new(p).ok()).collect()
 }
 
 #[cfg(test)]
@@ -227,9 +224,6 @@ mod tests {
     fn message_names_the_identifier() {
         let diags = run_on("fn main() { let foo = 1; let q = 2; }");
         assert_eq!(diags.len(), 1);
-        assert_eq!(
-            diags[0].message,
-            "Identifier `q` is too short (< 2)."
-        );
+        assert_eq!(diags[0].message, "Identifier `q` is too short (< 2).");
     }
 }

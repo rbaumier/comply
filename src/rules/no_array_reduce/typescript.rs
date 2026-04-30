@@ -16,25 +16,32 @@ const SIMPLE_OPS: &[&str] = &["+", "-", "*", "/", "%", "**"];
 /// enough to allow — the rule targets complex reduces that build objects
 /// or nest conditionals.
 fn is_simple_arithmetic(node: tree_sitter::Node, source: &[u8]) -> bool {
-    let Some(args) = node.child_by_field_name("arguments") else { return false };
-    let callback = args.named_children(&mut args.walk())
+    let Some(args) = node.child_by_field_name("arguments") else {
+        return false;
+    };
+    let callback = args
+        .named_children(&mut args.walk())
         .find(|c| c.kind() == "arrow_function" || c.kind() == "function_expression");
     let Some(cb) = callback else { return false };
 
     // Get the callback body — for arrow functions it's either a direct
     // expression (concise body) or a statement_block.
-    let Some(body) = cb.child_by_field_name("body") else { return false };
+    let Some(body) = cb.child_by_field_name("body") else {
+        return false;
+    };
 
     // Concise arrow: `(acc, x) => acc + x` — body is a binary_expression.
     if body.kind() == "binary_expression" {
-        let op = body.child_by_field_name("operator")
+        let op = body
+            .child_by_field_name("operator")
             .map(|o| o.utf8_text(source).unwrap_or(""));
         return op.is_some_and(|o| SIMPLE_OPS.contains(&o));
     }
 
     // Block body with a single return: `(acc, x) => { return acc + x; }`
     if body.kind() == "statement_block" {
-        let stmts: Vec<_> = body.named_children(&mut body.walk())
+        let stmts: Vec<_> = body
+            .named_children(&mut body.walk())
             .filter(|c| c.kind() != "comment")
             .collect();
         if stmts.len() == 1 && stmts[0].kind() == "return_statement" {
@@ -43,7 +50,8 @@ fn is_simple_arithmetic(node: tree_sitter::Node, source: &[u8]) -> bool {
             if let Some(e) = expr
                 && e.kind() == "binary_expression"
             {
-                let op = e.child_by_field_name("operator")
+                let op = e
+                    .child_by_field_name("operator")
                     .map(|o| o.utf8_text(source).unwrap_or(""));
                 return op.is_some_and(|o| SIMPLE_OPS.contains(&o));
             }
@@ -52,7 +60,8 @@ fn is_simple_arithmetic(node: tree_sitter::Node, source: &[u8]) -> bool {
 
     // Also allow Math.min/Math.max callbacks: `(a, b) => Math.min(a, b)`
     if body.kind() == "call_expression" {
-        let callee_text = body.child_by_field_name("function")
+        let callee_text = body
+            .child_by_field_name("function")
             .map(|f| f.utf8_text(source).unwrap_or(""));
         if callee_text.is_some_and(|t| t == "Math.min" || t == "Math.max") {
             return true;
@@ -125,12 +134,18 @@ mod tests {
 
     #[test]
     fn flags_complex_reduce() {
-        assert_eq!(run_on("const obj = arr.reduce((acc, x) => ({ ...acc, [x.id]: x }), {});").len(), 1);
+        assert_eq!(
+            run_on("const obj = arr.reduce((acc, x) => ({ ...acc, [x.id]: x }), {});").len(),
+            1
+        );
     }
 
     #[test]
     fn flags_reduce_right_complex() {
-        assert_eq!(run_on("const r = arr.reduceRight((acc, x) => acc.concat(x.items), []);").len(), 1);
+        assert_eq!(
+            run_on("const r = arr.reduceRight((acc, x) => acc.concat(x.items), []);").len(),
+            1
+        );
     }
 
     #[test]

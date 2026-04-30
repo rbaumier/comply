@@ -19,11 +19,7 @@ fn find_trivially_nested_quantifiers(pattern: &str) -> Vec<usize> {
 
     while i < len {
         // Look for `(?:` non-capturing group.
-        if bytes[i] == b'('
-            && i + 2 < len
-            && bytes[i + 1] == b'?'
-            && bytes[i + 2] == b':'
-        {
+        if bytes[i] == b'(' && i + 2 < len && bytes[i + 1] == b'?' && bytes[i + 2] == b':' {
             let group_start = i;
             let content_start = i + 3;
             let mut depth = 1;

@@ -2,10 +2,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-const METHODS: &[(&str, &str)] = &[
-    ("readAsText", "text"),
-    ("readAsArrayBuffer", "arrayBuffer"),
-];
+const METHODS: &[(&str, &str)] = &[("readAsText", "text"), ("readAsArrayBuffer", "arrayBuffer")];
 
 crate::ast_check! { on ["call_expression"] prefilter = ["readAsText", "readAsArrayBuffer"] => |node, source, ctx, diagnostics|
     let Some(func) = node.child_by_field_name("function") else { return };

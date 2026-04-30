@@ -3,15 +3,17 @@
 mod typescript;
 
 use crate::diagnostic::Severity;
-use crate::rules::meta::RuleMeta;
 use crate::rules::RuleDef;
+use crate::rules::meta::RuleMeta;
 
 pub const META: RuleMeta = RuleMeta {
     id: "playwright-max-nested-describe",
     description: "Deeply nested `describe` blocks reduce readability.",
     remediation: "Flatten the describe hierarchy to at most 5 levels deep.",
     severity: Severity::Warning,
-    doc_url: Some("https://github.com/playwright-community/eslint-plugin-playwright/blob/main/docs/rules/max-nested-describe.md"),
+    doc_url: Some(
+        "https://github.com/playwright-community/eslint-plugin-playwright/blob/main/docs/rules/max-nested-describe.md",
+    ),
     categories: &["testing"],
 };
 

@@ -42,7 +42,9 @@ fn has_gradient_background(obj: tree_sitter::Node, source: &[u8]) -> bool {
         if k != "background" && k != "backgroundImage" {
             return false;
         }
-        let Some(val) = child.child_by_field_name("value") else { return false };
+        let Some(val) = child.child_by_field_name("value") else {
+            return false;
+        };
         if val.kind() != "string" && val.kind() != "template_string" {
             return false;
         }

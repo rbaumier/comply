@@ -24,8 +24,12 @@ impl TextCheck for Check {
             let looks_like_directive = trimmed.starts_with("@plugin")
                 || trimmed.starts_with("@import")
                 || trimmed.starts_with("@use");
-            if !looks_like_directive { continue; }
-            if !line.contains(FORBIDDEN) { continue; }
+            if !looks_like_directive {
+                continue;
+            }
+            if !line.contains(FORBIDDEN) {
+                continue;
+            }
             let column = line.find(FORBIDDEN).unwrap_or(0) + 1;
             diagnostics.push(Diagnostic {
                 path: std::sync::Arc::clone(&ctx.path_arc),

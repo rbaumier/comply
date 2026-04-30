@@ -37,12 +37,18 @@ mod tests {
 
     #[test]
     fn flags_space_x() {
-        assert_eq!(run(r#"const x = <div className="space-x-2">x</div>;"#).len(), 1);
+        assert_eq!(
+            run(r#"const x = <div className="space-x-2">x</div>;"#).len(),
+            1
+        );
     }
 
     #[test]
     fn flags_space_y_with_other_classes() {
-        assert_eq!(run(r#"const x = <div className="p-4 space-y-4 items-start">x</div>;"#).len(), 1);
+        assert_eq!(
+            run(r#"const x = <div className="p-4 space-y-4 items-start">x</div>;"#).len(),
+            1
+        );
     }
 
     #[test]

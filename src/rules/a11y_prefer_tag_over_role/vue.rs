@@ -5,9 +5,14 @@ use crate::rules::backend::{CheckCtx, TextCheck};
 use crate::rules::vue_template_helpers::{attr_value, extract_elements, is_vue_file};
 
 const ROLE_TO_TAG: &[(&str, &str)] = &[
-    ("button", "<button>"), ("link", "<a>"), ("img", "<img>"),
-    ("heading", "<h1>-<h6>"), ("navigation", "<nav>"),
-    ("banner", "<header>"), ("contentinfo", "<footer>"), ("main", "<main>"),
+    ("button", "<button>"),
+    ("link", "<a>"),
+    ("img", "<img>"),
+    ("heading", "<h1>-<h6>"),
+    ("navigation", "<nav>"),
+    ("banner", "<header>"),
+    ("contentinfo", "<footer>"),
+    ("main", "<main>"),
 ];
 const GENERIC: &[&str] = &["div", "span"];
 

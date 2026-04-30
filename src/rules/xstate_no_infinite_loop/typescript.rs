@@ -77,13 +77,8 @@ fn find_property<'a>(
 
 /// True if the transition object would cause an infinite loop: no guard/cond,
 /// and either no target (self-loop) or target equals the enclosing state.
-fn is_infinite(
-    obj: tree_sitter::Node,
-    source: &[u8],
-    enclosing_state: Option<&str>,
-) -> bool {
-    if find_property(obj, source, "guard").is_some()
-        || find_property(obj, source, "cond").is_some()
+fn is_infinite(obj: tree_sitter::Node, source: &[u8], enclosing_state: Option<&str>) -> bool {
+    if find_property(obj, source, "guard").is_some() || find_property(obj, source, "cond").is_some()
     {
         return false;
     }

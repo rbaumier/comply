@@ -45,7 +45,12 @@ mod tests {
 
     fn run_at(path: &str, src: &str) -> Vec<Diagnostic> {
         let project = crate::project::ProjectCtx::for_test_with_framework("elysia");
-        crate::rules::test_helpers::run_ts_with_project_and_path(src, &Check, &project, std::path::Path::new(path))
+        crate::rules::test_helpers::run_ts_with_project_and_path(
+            src,
+            &Check,
+            &project,
+            std::path::Path::new(path),
+        )
     }
 
     #[test]
@@ -69,6 +74,8 @@ mod tests {
     #[test]
     fn ignores_non_elysia_files() {
         let src = "export class NotFoundError extends Error {}";
-        assert!(crate::rules::test_helpers::run_ts_with_path(src, &Check, "user.service.ts").is_empty());
+        assert!(
+            crate::rules::test_helpers::run_ts_with_path(src, &Check, "user.service.ts").is_empty()
+        );
     }
 }

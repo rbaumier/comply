@@ -6,9 +6,9 @@ mod typescript;
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::files::Language;
+use crate::rules::RuleDef;
 use crate::rules::backend::{Backend, CheckCtx};
 use crate::rules::meta::RuleMeta;
-use crate::rules::RuleDef;
 
 pub const META: RuleMeta = RuleMeta {
     id: "comment-prose-quality",
@@ -72,8 +72,8 @@ fn contains_word(haystack: &str, needle: &str) -> bool {
         let abs = start + idx;
         let before_ok = abs == 0 || !lower.as_bytes()[abs - 1].is_ascii_alphanumeric();
         let after_pos = abs + needle.len();
-        let after_ok = after_pos >= lower.len()
-            || !lower.as_bytes()[after_pos].is_ascii_alphanumeric();
+        let after_ok =
+            after_pos >= lower.len() || !lower.as_bytes()[after_pos].is_ascii_alphanumeric();
         if before_ok && after_ok {
             return true;
         }
@@ -115,9 +115,7 @@ pub(crate) fn lint_comment_nodes(
                         line: line_no,
                         column: 1,
                         rule_id: META.id.into(),
-                        message: format!(
-                            "Weasel word `{weasel}` in comment — be specific."
-                        ),
+                        message: format!("Weasel word `{weasel}` in comment — be specific."),
                         severity: Severity::Warning,
                         span: None,
                     });
@@ -147,9 +145,12 @@ pub(crate) fn lint_comment_nodes(
             // word of this line. Only triggers when the previous line is
             // immediately adjacent (line_no - 1).
             let words: Vec<&str> = text.split_whitespace().collect();
-            let is_heading_echo = prev_last_word
-                .as_ref()
-                .is_some_and(|(_, wc)| *wc == 2 && text_of_prev_line.as_deref().is_some_and(|pt| pt.trim().starts_with("# ")));
+            let is_heading_echo = prev_last_word.as_ref().is_some_and(|(_, wc)| {
+                *wc == 2
+                    && text_of_prev_line
+                        .as_deref()
+                        .is_some_and(|pt| pt.trim().starts_with("# "))
+            });
             if let Some((ref prev, prev_wc)) = prev_last_word
                 && let Some(prev_l) = prev_line
                 && prev_l + 1 == line_no
@@ -165,9 +166,7 @@ pub(crate) fn lint_comment_nodes(
                     line: line_no,
                     column: 1,
                     rule_id: META.id.into(),
-                    message: format!(
-                        "Lexical illusion: `{first}` repeated across lines."
-                    ),
+                    message: format!("Lexical illusion: `{first}` repeated across lines."),
                     severity: Severity::Warning,
                     span: None,
                 });
@@ -187,9 +186,18 @@ pub fn register() -> RuleDef {
     RuleDef {
         meta: META,
         backends: vec![
-            (Language::TypeScript, Backend::TreeSitter(Box::new(typescript::Check))),
-            (Language::Tsx, Backend::TreeSitter(Box::new(typescript::Check))),
-            (Language::JavaScript, Backend::TreeSitter(Box::new(typescript::Check))),
+            (
+                Language::TypeScript,
+                Backend::TreeSitter(Box::new(typescript::Check)),
+            ),
+            (
+                Language::Tsx,
+                Backend::TreeSitter(Box::new(typescript::Check)),
+            ),
+            (
+                Language::JavaScript,
+                Backend::TreeSitter(Box::new(typescript::Check)),
+            ),
             (Language::Rust, Backend::TreeSitter(Box::new(rust::Check))),
             (Language::Vue, Backend::Text(Box::new(text::Check))),
         ],

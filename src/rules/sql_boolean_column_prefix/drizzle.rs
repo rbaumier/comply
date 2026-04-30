@@ -36,9 +36,13 @@ impl AstCheck for Check {
             return;
         };
         for i in 0..args.named_child_count() {
-            let Some(arg) = args.named_child(i) else { continue };
+            let Some(arg) = args.named_child(i) else {
+                continue;
+            };
             if arg.kind() == "string" {
-                let Ok(raw) = arg.utf8_text(source_bytes) else { continue };
+                let Ok(raw) = arg.utf8_text(source_bytes) else {
+                    continue;
+                };
                 let col_name = raw.trim_matches(|c| c == '"' || c == '\'' || c == '`');
                 let lower = col_name.to_ascii_lowercase();
                 if !lower.starts_with("is_") && !lower.starts_with("has_") {

@@ -18,7 +18,9 @@ const DEP_SECTIONS: &[&str] = &[
 ];
 
 impl TextCheck for Check {
-    fn prefilter(&self) -> Option<&'static [&'static str]> { Some(&["dependencies", "devDependencies", "peerDependencies"]) }
+    fn prefilter(&self) -> Option<&'static [&'static str]> {
+        Some(&["dependencies", "devDependencies", "peerDependencies"])
+    }
 
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
         // Only apply to package.json files.

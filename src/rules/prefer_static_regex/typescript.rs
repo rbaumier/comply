@@ -55,7 +55,9 @@ crate::ast_check! { on ["regex"] => |node, source, ctx, diagnostics|
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn run(code: &str) -> Vec<Diagnostic> { crate::rules::test_helpers::run_ts(code, &Check) }
+    fn run(code: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_ts(code, &Check)
+    }
     fn run_at(code: &str, path: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_ts_with_path(code, &Check, path)
     }

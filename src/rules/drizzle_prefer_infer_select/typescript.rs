@@ -62,7 +62,10 @@ mod tests {
 
     #[test]
     fn flags_infer_insert_model() {
-        assert_eq!(run("type NewUser = InferInsertModel<typeof users>").len(), 1);
+        assert_eq!(
+            run("type NewUser = InferInsertModel<typeof users>").len(),
+            1
+        );
     }
 
     #[test]

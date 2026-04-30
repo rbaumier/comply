@@ -130,10 +130,8 @@ mod tests {
     #[test]
     fn allows_star_reexport_with_named() {
         let source = "export * from './a';\nexport const foo = 1;\n";
-        let (_dir, project, paths) = setup_project(&[
-            ("a.ts", "export const bar = 1;\n"),
-            ("m.ts", source),
-        ]);
+        let (_dir, project, paths) =
+            setup_project(&[("a.ts", "export const bar = 1;\n"), ("m.ts", source)]);
         let diags = run_ts_with_project_and_path(source, &Check, &project, &paths[1]);
         assert!(diags.is_empty());
     }

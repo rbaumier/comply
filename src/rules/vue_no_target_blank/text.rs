@@ -54,7 +54,8 @@ mod tests {
 
     #[test]
     fn flags_vue_template() {
-        let source = "<template>\n  <a href=\"https://example.com\" target=\"_blank\">link</a>\n</template>";
+        let source =
+            "<template>\n  <a href=\"https://example.com\" target=\"_blank\">link</a>\n</template>";
         assert_eq!(run(source).len(), 1);
     }
 

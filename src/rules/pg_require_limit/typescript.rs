@@ -121,7 +121,11 @@ fn strip_quotes(raw: &str) -> &str {
 /// leading `SELECT` or `WITH` both qualify — both can be unbounded.
 fn starts_with_select(text: &str) -> bool {
     let trimmed = text.trim_start();
-    let head: String = trimmed.chars().take(8).collect::<String>().to_ascii_lowercase();
+    let head: String = trimmed
+        .chars()
+        .take(8)
+        .collect::<String>()
+        .to_ascii_lowercase();
     head.starts_with("select") || head.starts_with("with ") || head.starts_with("with\t")
 }
 
@@ -161,7 +165,10 @@ fn is_implicitly_bounded(lower: &str) -> bool {
 }
 
 fn contains_phrase(lower: &str, phrase: &str) -> bool {
-    lower.split_whitespace().collect::<Vec<_>>().windows(phrase.split_whitespace().count())
+    lower
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .windows(phrase.split_whitespace().count())
         .any(|window| window.join(" ") == phrase)
 }
 

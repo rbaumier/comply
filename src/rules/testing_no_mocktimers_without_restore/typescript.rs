@@ -13,9 +13,15 @@ use crate::diagnostic::{Diagnostic, Severity};
 
 /// Is `func` a `vi.useFakeTimers` / `jest.useFakeTimers` member expression?
 fn is_use_fake_timers(func: tree_sitter::Node, source: &[u8]) -> bool {
-    if func.kind() != "member_expression" { return false; }
-    let Some(obj) = func.child_by_field_name("object") else { return false; };
-    let Some(prop) = func.child_by_field_name("property") else { return false; };
+    if func.kind() != "member_expression" {
+        return false;
+    }
+    let Some(obj) = func.child_by_field_name("object") else {
+        return false;
+    };
+    let Some(prop) = func.child_by_field_name("property") else {
+        return false;
+    };
     let obj_txt = obj.utf8_text(source).unwrap_or("");
     let prop_txt = prop.utf8_text(source).unwrap_or("");
     matches!(obj_txt, "vi" | "jest") && prop_txt == "useFakeTimers"
@@ -43,13 +49,27 @@ fn is_inside_after_hook(node: tree_sitter::Node, source: &[u8]) -> bool {
 fn has_scoped_real_timer_restore(tree: &tree_sitter::Tree, source: &[u8]) -> bool {
     let mut found = false;
     crate::rules::walker::walk_tree(tree, |n| {
-        if found { return; }
-        if n.kind() != "call_expression" { return; }
-        let Some(func) = n.child_by_field_name("function") else { return; };
-        if func.kind() != "member_expression" { return; }
-        let Some(prop) = func.child_by_field_name("property") else { return; };
-        if prop.utf8_text(source).unwrap_or("") != "useRealTimers" { return; }
-        if is_inside_after_hook(n, source) { found = true; }
+        if found {
+            return;
+        }
+        if n.kind() != "call_expression" {
+            return;
+        }
+        let Some(func) = n.child_by_field_name("function") else {
+            return;
+        };
+        if func.kind() != "member_expression" {
+            return;
+        }
+        let Some(prop) = func.child_by_field_name("property") else {
+            return;
+        };
+        if prop.utf8_text(source).unwrap_or("") != "useRealTimers" {
+            return;
+        }
+        if is_inside_after_hook(n, source) {
+            found = true;
+        }
     });
     found
 }
@@ -64,14 +84,24 @@ impl crate::rules::backend::AstCheck for Check {
         tree: &tree_sitter::Tree,
     ) -> Vec<Diagnostic> {
         let source = ctx.source.as_bytes();
-        if !ctx.source.contains("useFakeTimers") { return Vec::new(); }
-        if has_scoped_real_timer_restore(tree, source) { return Vec::new(); }
+        if !ctx.source.contains("useFakeTimers") {
+            return Vec::new();
+        }
+        if has_scoped_real_timer_restore(tree, source) {
+            return Vec::new();
+        }
 
         let mut diagnostics = Vec::new();
         crate::rules::walker::walk_tree(tree, |node| {
-            if node.kind() != "call_expression" { return; }
-            let Some(func) = node.child_by_field_name("function") else { return; };
-            if !is_use_fake_timers(func, source) { return; }
+            if node.kind() != "call_expression" {
+                return;
+            }
+            let Some(func) = node.child_by_field_name("function") else {
+                return;
+            };
+            if !is_use_fake_timers(func, source) {
+                return;
+            }
             diagnostics.push(Diagnostic::at_node(
                 ctx.path,
                 &node,
@@ -94,18 +124,12 @@ mod tests {
 
     #[test]
     fn flags_vi_use_fake_timers_without_restore() {
-        assert_eq!(
-            run("beforeEach(() => { vi.useFakeTimers(); });").len(),
-            1
-        );
+        assert_eq!(run("beforeEach(() => { vi.useFakeTimers(); });").len(), 1);
     }
 
     #[test]
     fn flags_jest_use_fake_timers_without_restore() {
-        assert_eq!(
-            run("beforeAll(() => { jest.useFakeTimers(); });").len(),
-            1
-        );
+        assert_eq!(run("beforeAll(() => { jest.useFakeTimers(); });").len(), 1);
     }
 
     #[test]

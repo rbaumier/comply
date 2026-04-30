@@ -86,9 +86,7 @@ mod tests {
 
     #[test]
     fn allows_multiple_statements_false() {
-        assert!(
-            run("mysql.createConnection({ multipleStatements: false })").is_empty()
-        );
+        assert!(run("mysql.createConnection({ multipleStatements: false })").is_empty());
     }
 
     #[test]
@@ -98,8 +96,6 @@ mod tests {
 
     #[test]
     fn ignores_other_callers() {
-        assert!(
-            run("db.createConnection({ multipleStatements: true })").is_empty()
-        );
+        assert!(run("db.createConnection({ multipleStatements: true })").is_empty());
     }
 }

@@ -31,7 +31,9 @@ fn touches_node_streams(source: &str) -> bool {
 }
 
 impl TextCheck for Check {
-    fn prefilter(&self) -> Option<&'static [&'static str]> { Some(&[".pipe("]) }
+    fn prefilter(&self) -> Option<&'static [&'static str]> {
+        Some(&[".pipe("])
+    }
 
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
         if !touches_node_streams(ctx.source) {

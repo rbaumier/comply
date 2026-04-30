@@ -22,7 +22,11 @@ impl TextCheck for Check {
                 // Refine to the line that actually contains "TYPE".
                 let line = stmt
                     .find("TYPE")
-                    .map(|off| line + upper[stmt_start_byte..stmt_start_byte + off].matches('\n').count())
+                    .map(|off| {
+                        line + upper[stmt_start_byte..stmt_start_byte + off]
+                            .matches('\n')
+                            .count()
+                    })
                     .unwrap_or(line);
                 diagnostics.push(Diagnostic {
                     path: std::sync::Arc::clone(&ctx.path_arc),
@@ -48,7 +52,8 @@ fn statement_is_alter_type_without_using(stmt: &str) -> bool {
         return false;
     }
     // Look for "TYPE" as a keyword after ALTER COLUMN — accept "TYPE " or "SET DATA TYPE ".
-    let has_type = stmt.contains(" TYPE ") || stmt.contains("\nTYPE ") || stmt.contains("SET DATA TYPE");
+    let has_type =
+        stmt.contains(" TYPE ") || stmt.contains("\nTYPE ") || stmt.contains("SET DATA TYPE");
     if !has_type {
         return false;
     }

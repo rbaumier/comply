@@ -15,9 +15,15 @@ fn unquote(raw: &str) -> &str {
 
 /// Is `func` a `vi.mock` / `jest.mock` member expression?
 fn is_mock_callee(func: tree_sitter::Node, source: &[u8]) -> bool {
-    if func.kind() != "member_expression" { return false; }
-    let Some(obj) = func.child_by_field_name("object") else { return false; };
-    let Some(prop) = func.child_by_field_name("property") else { return false; };
+    if func.kind() != "member_expression" {
+        return false;
+    }
+    let Some(obj) = func.child_by_field_name("object") else {
+        return false;
+    };
+    let Some(prop) = func.child_by_field_name("property") else {
+        return false;
+    };
     let obj_txt = obj.utf8_text(source).unwrap_or("");
     let prop_txt = prop.utf8_text(source).unwrap_or("");
     matches!(obj_txt, "vi" | "jest") && prop_txt == "mock"

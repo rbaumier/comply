@@ -74,19 +74,17 @@ fn has_must_use_attribute(item: tree_sitter::Node, source: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
-
-
         crate::rules::test_helpers::run_rust(source, &Check)
-
-
     }
 
     #[test]
     fn flags_builder_without_must_use() {
-        assert_eq!(run_on("struct RequestBuilder { headers: Vec<String> }").len(), 1);
+        assert_eq!(
+            run_on("struct RequestBuilder { headers: Vec<String> }").len(),
+            1
+        );
     }
 
     #[test]

@@ -227,7 +227,11 @@ mod tests {
     #[test]
     fn flags_adjacent_commented_lines() {
         let src = "// const x = 5;\n// const y = 10;";
-        assert_eq!(run(src).len(), 1, "adjacent comments should produce ONE diagnostic");
+        assert_eq!(
+            run(src).len(),
+            1,
+            "adjacent comments should produce ONE diagnostic"
+        );
     }
 
     #[test]

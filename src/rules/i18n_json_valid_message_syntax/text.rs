@@ -32,9 +32,7 @@ fn is_i18n_file(path: &std::path::Path) -> bool {
             return true;
         }
         // Language with region: en-US, fr-FR, zh_CN
-        if (stem.len() == 5 || stem.len() == 6)
-            && (stem.contains('-') || stem.contains('_'))
-        {
+        if (stem.len() == 5 || stem.len() == 6) && (stem.contains('-') || stem.contains('_')) {
             let parts: Vec<&str> = stem.split(['-', '_']).collect();
             if parts.len() == 2
                 && parts[0].len() == 2

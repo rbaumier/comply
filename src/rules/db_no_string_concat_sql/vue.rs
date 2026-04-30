@@ -123,8 +123,7 @@ mod tests {
 
     #[test]
     fn flags_sql_concat_in_vue_script() {
-        let src =
-            "<script>\nconst q = \"SELECT * FROM users WHERE id = \" + userId;\n</script>";
+        let src = "<script>\nconst q = \"SELECT * FROM users WHERE id = \" + userId;\n</script>";
         assert_eq!(run(src).len(), 1);
     }
 

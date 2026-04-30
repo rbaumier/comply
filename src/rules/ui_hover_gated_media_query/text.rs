@@ -41,8 +41,12 @@ crate::ast_check! { on ["rule_set"] prefilter = [":hover"] => |node, source, ctx
 fn block_has_motion(block: tree_sitter::Node, source: &[u8]) -> bool {
     let mut c = block.walk();
     for decl in block.children(&mut c) {
-        if decl.kind() != "declaration" { continue; }
-        let Ok(txt) = decl.utf8_text(source) else { continue };
+        if decl.kind() != "declaration" {
+            continue;
+        }
+        let Ok(txt) = decl.utf8_text(source) else {
+            continue;
+        };
         let lower = txt.to_ascii_lowercase();
         let has_transform_prop = lower.trim_start().starts_with("transform:");
         let has_fn = lower.contains("scale(") || lower.contains("translate(");
@@ -58,12 +62,17 @@ fn media_gates_hover(media: tree_sitter::Node, source: &[u8]) -> bool {
     let mut stack: Vec<tree_sitter::Node> = vec![media];
     while let Some(n) = stack.pop() {
         // Don't descend into the media body.
-        if n.kind() == "block" { continue; }
+        if n.kind() == "block" {
+            continue;
+        }
         if n.kind() == "feature_query"
             && let Ok(t) = n.utf8_text(source)
-                && t.to_ascii_lowercase().replace(' ', "").contains("hover:hover") {
-                    return true;
-                }
+            && t.to_ascii_lowercase()
+                .replace(' ', "")
+                .contains("hover:hover")
+        {
+            return true;
+        }
         let mut c = n.walk();
         for child in n.children(&mut c) {
             stack.push(child);

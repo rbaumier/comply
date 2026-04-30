@@ -2,7 +2,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::sql_helpers::{is_sql_ddl, TS_STRING_KINDS};
+use crate::rules::sql_helpers::{TS_STRING_KINDS, is_sql_ddl};
 
 #[derive(Debug)]
 pub struct Check;
@@ -33,7 +33,8 @@ impl AstCheck for Check {
             ctx.path,
             &node,
             super::META.id,
-            "UUIDv4 primary keys fragment B-tree indexes — use UUIDv7 or BIGINT IDENTITY instead.".into(),
+            "UUIDv4 primary keys fragment B-tree indexes — use UUIDv7 or BIGINT IDENTITY instead."
+                .into(),
             Severity::Warning,
         ));
     }

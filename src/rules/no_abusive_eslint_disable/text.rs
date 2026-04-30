@@ -35,9 +35,11 @@ fn is_abusive_disable(line: &str) -> bool {
             // Rule names start with a letter or `@` (scoped packages).
             // Anything else means no rule was specified.
             if let Some(first) = after_trimmed.chars().next()
-                && !first.is_ascii_alphabetic() && first != '@' {
-                    return true;
-                }
+                && !first.is_ascii_alphabetic()
+                && first != '@'
+            {
+                return true;
+            }
         }
     }
     false

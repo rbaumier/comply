@@ -49,19 +49,23 @@ mod tests {
 
     #[test]
     fn skips_non_migration() {
-        assert!(run(
-            "/app/src/schema.sql",
-            "ALTER TABLE users RENAME COLUMN name TO full_name;"
-        )
-        .is_empty());
+        assert!(
+            run(
+                "/app/src/schema.sql",
+                "ALTER TABLE users RENAME COLUMN name TO full_name;"
+            )
+            .is_empty()
+        );
     }
 
     #[test]
     fn allows_other_alters() {
-        assert!(run(
-            "/app/migrations/001.sql",
-            "ALTER TABLE users ADD COLUMN age INT;"
-        )
-        .is_empty());
+        assert!(
+            run(
+                "/app/migrations/001.sql",
+                "ALTER TABLE users ADD COLUMN age INT;"
+            )
+            .is_empty()
+        );
     }
 }

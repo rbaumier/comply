@@ -7,9 +7,10 @@ use crate::diagnostic::{Diagnostic, Severity};
 fn is_find_or_get(name: &str) -> bool {
     for prefix in &["find", "get"] {
         if let Some(rest) = name.strip_prefix(prefix)
-            && rest.starts_with(|c: char| c.is_ascii_uppercase()) {
-                return true;
-            }
+            && rest.starts_with(|c: char| c.is_ascii_uppercase())
+        {
+            return true;
+        }
     }
     false
 }
@@ -20,7 +21,9 @@ fn is_null_return(node: tree_sitter::Node, _source: &[u8]) -> bool {
         return false;
     }
     // The returned expression is the second child (first is `return` keyword).
-    let Some(expr) = node.child(1) else { return false };
+    let Some(expr) = node.child(1) else {
+        return false;
+    };
     matches!(expr.kind(), "null" | "undefined")
 }
 
@@ -33,8 +36,11 @@ fn has_null_return(node: tree_sitter::Node, source: &[u8]) -> bool {
     for child in node.children(&mut cursor) {
         // Don't descend into nested function bodies.
         match child.kind() {
-            "function_declaration" | "function" | "arrow_function"
-            | "generator_function_declaration" | "generator_function"
+            "function_declaration"
+            | "function"
+            | "arrow_function"
+            | "generator_function_declaration"
+            | "generator_function"
             | "method_definition" => continue,
             _ => {}
         }

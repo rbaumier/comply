@@ -8,13 +8,11 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
 const VERBS: &[&str] = &[
-    "is", "are", "was", "were", "be", "been", "has", "have", "had",
-    "do", "does", "did", "will", "would", "could", "should", "may",
-    "might", "must", "shall", "can", "need", "check", "verify",
-    "ensure", "provide", "specify", "use", "try", "retry", "pass",
-    "set", "add", "remove", "update", "create", "delete", "call",
-    "return", "expect", "require", "missing", "failed", "cannot",
-    "unable", "exceeded", "denied", "rejected", "not",
+    "is", "are", "was", "were", "be", "been", "has", "have", "had", "do", "does", "did", "will",
+    "would", "could", "should", "may", "might", "must", "shall", "can", "need", "check", "verify",
+    "ensure", "provide", "specify", "use", "try", "retry", "pass", "set", "add", "remove",
+    "update", "create", "delete", "call", "return", "expect", "require", "missing", "failed",
+    "cannot", "unable", "exceeded", "denied", "rejected", "not",
 ];
 
 crate::ast_check! { on ["new_expression"] prefilter = ["Error"] => |node, source, ctx, diagnostics|
@@ -105,9 +103,7 @@ mod tests {
 
     #[test]
     fn allows_message_with_verb() {
-        assert!(
-            run_on(r#"throw new Error("Cannot connect to the database server");"#).is_empty()
-        );
+        assert!(run_on(r#"throw new Error("Cannot connect to the database server");"#).is_empty());
     }
 
     #[test]

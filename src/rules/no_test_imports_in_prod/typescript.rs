@@ -55,20 +55,14 @@ mod tests {
 
     #[test]
     fn flags_import_of_test_file_from_prod() {
-        let d = run_on_path(
-            "import { fixture } from './foo.test.ts';",
-            "src/foo.ts",
-        );
+        let d = run_on_path("import { fixture } from './foo.test.ts';", "src/foo.ts");
         assert_eq!(d.len(), 1);
         assert!(d[0].message.contains("foo.test.ts"));
     }
 
     #[test]
     fn flags_import_of_spec_file_from_prod() {
-        let d = run_on_path(
-            "import { stub } from './bar.spec.ts';",
-            "src/bar.ts",
-        );
+        let d = run_on_path("import { stub } from './bar.spec.ts';", "src/bar.ts");
         assert_eq!(d.len(), 1);
     }
 
@@ -83,10 +77,7 @@ mod tests {
 
     #[test]
     fn flags_import_from_mocks_folder() {
-        let d = run_on_path(
-            "import svc from './__mocks__/service';",
-            "src/app.ts",
-        );
+        let d = run_on_path("import svc from './__mocks__/service';", "src/app.ts");
         assert_eq!(d.len(), 1);
     }
 
@@ -101,10 +92,7 @@ mod tests {
 
     #[test]
     fn allows_normal_import() {
-        let d = run_on_path(
-            "import { foo } from './foo';",
-            "src/bar.ts",
-        );
+        let d = run_on_path("import { foo } from './foo';", "src/bar.ts");
         assert!(d.is_empty());
     }
 }

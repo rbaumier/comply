@@ -14,10 +14,7 @@ fn is_postgres_image(value: &str) -> bool {
 /// Raw text of a pair's value node — works for flow scalars and block scalars
 /// alike. `options:` is commonly written as a folded block scalar (`>-`),
 /// which `pair_scalar_value` skips because it only handles `flow_node`.
-fn pair_value_text<'a>(
-    pair: tree_sitter::Node<'a>,
-    source: &'a [u8],
-) -> Option<&'a str> {
+fn pair_value_text<'a>(pair: tree_sitter::Node<'a>, source: &'a [u8]) -> Option<&'a str> {
     pair.named_child(1)?.utf8_text(source).ok()
 }
 

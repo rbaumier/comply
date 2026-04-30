@@ -5,8 +5,8 @@
 //! Simplified approach: for each class, collect private member names
 //! from declarations, then scan the class body for references.
 
-use std::collections::HashMap;
 use crate::diagnostic::{Diagnostic, Severity};
+use std::collections::HashMap;
 
 /// Collect all text content of a node's subtree for reference scanning.
 fn collect_text_references(node: tree_sitter::Node, source: &[u8], refs: &mut Vec<String>) {
@@ -30,9 +30,10 @@ fn has_private_modifier(member: tree_sitter::Node, source: &[u8]) -> bool {
     for child in member.children(&mut cursor) {
         if child.kind() == "accessibility_modifier"
             && let Ok(text) = child.utf8_text(source)
-                && text == "private" {
-                    return true;
-                }
+            && text == "private"
+        {
+            return true;
+        }
     }
     false
 }
@@ -50,12 +51,16 @@ fn is_es_private_name(member: tree_sitter::Node) -> bool {
 }
 
 /// Get the name of a class member (from "name" or "property" field).
-fn member_name<'a>(member: tree_sitter::Node<'a>, source: &'a [u8]) -> Option<(&'a str, tree_sitter::Point)> {
+fn member_name<'a>(
+    member: tree_sitter::Node<'a>,
+    source: &'a [u8],
+) -> Option<(&'a str, tree_sitter::Point)> {
     for field in &["name", "property"] {
         if let Some(name_node) = member.child_by_field_name(field)
-            && let Ok(name) = name_node.utf8_text(source) {
-                return Some((name, name_node.start_position()));
-            }
+            && let Ok(name) = name_node.utf8_text(source)
+        {
+            return Some((name, name_node.start_position()));
+        }
     }
     None
 }

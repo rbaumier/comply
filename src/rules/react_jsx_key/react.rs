@@ -9,8 +9,12 @@ fn has_key_prop(node: tree_sitter::Node, source: &[u8]) -> bool {
     // For jsx_element, check the opening element.
     // For jsx_self_closing_element, check the node itself.
     let tag_node = if node.kind() == "jsx_element" {
-        let Some(opening) = node.child(0) else { return false };
-        if opening.kind() != "jsx_opening_element" { return false; }
+        let Some(opening) = node.child(0) else {
+            return false;
+        };
+        if opening.kind() != "jsx_opening_element" {
+            return false;
+        }
         opening
     } else {
         node
@@ -21,8 +25,12 @@ fn has_key_prop(node: tree_sitter::Node, source: &[u8]) -> bool {
         if child.kind() != "jsx_attribute" {
             return false;
         }
-        let Some(attr_name) = child.child(0) else { return false };
-        let Ok(name_text) = attr_name.utf8_text(source) else { return false };
+        let Some(attr_name) = child.child(0) else {
+            return false;
+        };
+        let Ok(name_text) = attr_name.utf8_text(source) else {
+            return false;
+        };
         name_text == "key"
     })
 }
@@ -33,7 +41,9 @@ fn is_in_iterator(node: tree_sitter::Node, source: &[u8]) -> bool {
     while let Some(p) = parent {
         match p.kind() {
             "array" => return true,
-            "parenthesized_expression" | "jsx_expression" | "return_statement"
+            "parenthesized_expression"
+            | "jsx_expression"
+            | "return_statement"
             | "expression_statement" => {
                 // Transparent wrappers — keep walking.
             }
@@ -41,16 +51,19 @@ fn is_in_iterator(node: tree_sitter::Node, source: &[u8]) -> bool {
                 // Check if the parent of this function is a .map()/.flatMap() call.
                 if let Some(args) = p.parent()
                     && args.kind() == "arguments"
-                        && let Some(call_expr) = args.parent()
-                            && call_expr.kind() == "call_expression"
-                                && let Some(fn_node) = call_expr.child(0)
-                                    && fn_node.kind() == "member_expression"
-                                        && let Some(prop) = fn_node.child_by_field_name("property") {
-                                            let Ok(method) = prop.utf8_text(source) else { return false };
-                                            if matches!(method, "map" | "flatMap" | "from") {
-                                                return true;
-                                            }
-                                        }
+                    && let Some(call_expr) = args.parent()
+                    && call_expr.kind() == "call_expression"
+                    && let Some(fn_node) = call_expr.child(0)
+                    && fn_node.kind() == "member_expression"
+                    && let Some(prop) = fn_node.child_by_field_name("property")
+                {
+                    let Ok(method) = prop.utf8_text(source) else {
+                        return false;
+                    };
+                    if matches!(method, "map" | "flatMap" | "from") {
+                        return true;
+                    }
+                }
                 return false;
             }
             _ => return false,

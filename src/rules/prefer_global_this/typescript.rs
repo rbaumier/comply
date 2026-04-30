@@ -169,10 +169,7 @@ mod tests {
     /// Build a temp project with an optional package.json body, then run
     /// the check on a source file placed inside `src/`. Returns the
     /// tempdir handle (so the caller keeps it alive) and the diagnostics.
-    fn run_in_project(
-        package_json: Option<&str>,
-        source: &str,
-    ) -> (TempDir, Vec<Diagnostic>) {
+    fn run_in_project(package_json: Option<&str>, source: &str) -> (TempDir, Vec<Diagnostic>) {
         let dir = TempDir::new().unwrap();
         if let Some(body) = package_json {
             fs::write(dir.path().join("package.json"), body).unwrap();
@@ -243,7 +240,10 @@ mod tests {
             Some(r#"{ "engines": { "vscode": "^1.85.0" } }"#),
             "const x = window.foo;",
         );
-        assert!(diags.is_empty(), "VSCode extension should not flag window.foo: {diags:?}");
+        assert!(
+            diags.is_empty(),
+            "VSCode extension should not flag window.foo: {diags:?}"
+        );
     }
 
     #[test]
@@ -252,7 +252,10 @@ mod tests {
             Some(r#"{ "engines": { "electron": "^28.0.0" } }"#),
             "const x = window.foo;",
         );
-        assert!(diags.is_empty(), "Electron app should not flag window.foo: {diags:?}");
+        assert!(
+            diags.is_empty(),
+            "Electron app should not flag window.foo: {diags:?}"
+        );
     }
 
     #[test]
@@ -261,7 +264,10 @@ mod tests {
             Some(r#"{ "browserslist": ["> 0.5%", "last 2 versions"] }"#),
             "const x = window.foo;",
         );
-        assert!(diags.is_empty(), "Browser target should not flag window.foo: {diags:?}");
+        assert!(
+            diags.is_empty(),
+            "Browser target should not flag window.foo: {diags:?}"
+        );
     }
 
     #[test]
@@ -270,6 +276,10 @@ mod tests {
             Some(r#"{ "dependencies": { "express": "^4.0.0" } }"#),
             "const x = window.foo;",
         );
-        assert_eq!(diags.len(), 1, "Pure Node project should still flag window.foo: {diags:?}");
+        assert_eq!(
+            diags.len(),
+            1,
+            "Pure Node project should still flag window.foo: {diags:?}"
+        );
     }
 }

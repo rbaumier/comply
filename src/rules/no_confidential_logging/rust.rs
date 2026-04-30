@@ -40,7 +40,9 @@ const SENSITIVE_WORDS: &[&str] = &[
     "credit_card",
 ];
 
-const BOOLEAN_PREFIXES: &[&str] = &["has_", "is_", "no_", "without_", "needs_", "can_", "should_"];
+const BOOLEAN_PREFIXES: &[&str] = &[
+    "has_", "is_", "no_", "without_", "needs_", "can_", "should_",
+];
 
 fn is_boolean_name(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
@@ -56,7 +58,9 @@ fn has_sensitive_identifier(node: tree_sitter::Node, source: &[u8]) -> bool {
         let mut cursor = node.walk();
         if let Some(field) = node.children(&mut cursor).last() {
             if field.kind() == "field_identifier" {
-                let Ok(field_name) = field.utf8_text(source) else { return false };
+                let Ok(field_name) = field.utf8_text(source) else {
+                    return false;
+                };
                 let lower = field_name.to_ascii_lowercase();
                 return SENSITIVE_WORDS.iter().any(|w| lower.contains(w));
             }
@@ -64,7 +68,9 @@ fn has_sensitive_identifier(node: tree_sitter::Node, source: &[u8]) -> bool {
         return false;
     }
     if kind == "identifier" || kind == "field_identifier" {
-        let Ok(text) = node.utf8_text(source) else { return false };
+        let Ok(text) = node.utf8_text(source) else {
+            return false;
+        };
         if is_boolean_name(text) {
             return false;
         }
@@ -88,6 +94,10 @@ fn has_sensitive_identifier(node: tree_sitter::Node, source: &[u8]) -> bool {
 }
 
 crate::ast_check! { on ["macro_invocation"] => |node, source, ctx, diagnostics|
+    if crate::rules::rust_helpers::is_in_test_context(node, source) {
+        return;
+    }
+
     let Some(macro_node) = node.child_by_field_name("macro") else { return };
     let Ok(macro_name) = macro_node.utf8_text(source) else { return };
 
@@ -127,7 +137,10 @@ mod tests {
 
     #[test]
     fn flags_println_with_password() {
-        assert_eq!(run_on(r#"fn f() { println!("password: {}", password); }"#).len(), 1);
+        assert_eq!(
+            run_on(r#"fn f() { println!("password: {}", password); }"#).len(),
+            1
+        );
     }
 
     #[test]
@@ -155,17 +168,26 @@ mod tests {
 
     #[test]
     fn allows_descriptive_error_about_secret() {
-        assert!(run_on(r#"fn f() { error!("Error creating Biscuit from application secret: {e}"); }"#).is_empty());
+        assert!(
+            run_on(r#"fn f() { error!("Error creating Biscuit from application secret: {e}"); }"#)
+                .is_empty()
+        );
     }
 
     #[test]
     fn flags_interpolated_secret_variable() {
-        assert_eq!(run_on(r#"fn f() { info!("value: {}", api_key); }"#).len(), 1);
+        assert_eq!(
+            run_on(r#"fn f() { info!("value: {}", api_key); }"#).len(),
+            1
+        );
     }
 
     #[test]
     fn allows_boolean_has_secret() {
-        assert!(run_on(r#"fn f() { println!("Auth: {}", if has_secret { "Yes" } else { "No" }); }"#).is_empty());
+        assert!(
+            run_on(r#"fn f() { println!("Auth: {}", if has_secret { "Yes" } else { "No" }); }"#)
+                .is_empty()
+        );
     }
 
     #[test]
@@ -175,11 +197,38 @@ mod tests {
 
     #[test]
     fn allows_non_sensitive_field_on_secret_struct() {
-        assert!(run_on(r#"fn f() { debug!("id: {}", application_secret.application_id); }"#).is_empty());
+        assert!(
+            run_on(r#"fn f() { debug!("id: {}", application_secret.application_id); }"#).is_empty()
+        );
     }
 
     #[test]
     fn flags_sensitive_field_access() {
-        assert_eq!(run_on(r#"fn f() { info!("val: {}", config.api_key); }"#).len(), 1);
+        assert_eq!(
+            run_on(r#"fn f() { info!("val: {}", config.api_key); }"#).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn skips_cfg_test_module() {
+        assert!(run_on(r#"
+            #[cfg(test)]
+            mod tests {
+                fn check() { error!("token: {}", token); }
+            }
+        "#)
+        .is_empty());
+    }
+
+    #[test]
+    fn skips_test_fn() {
+        assert!(run_on(r#"
+            #[test]
+            fn it_works() {
+                info!("token: {}", api_key);
+            }
+        "#)
+        .is_empty());
     }
 }

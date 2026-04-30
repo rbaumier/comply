@@ -62,7 +62,10 @@ mod tests {
         fs::create_dir_all(file_path.parent().unwrap()).unwrap();
         fs::write(&file_path, source).unwrap();
         let lang = Language::from_path(&file_path).unwrap();
-        let source_file = SourceFile { path: file_path.clone(), language: lang };
+        let source_file = SourceFile {
+            path: file_path.clone(),
+            language: lang,
+        };
         let refs = vec![&source_file];
         let config = Config::default();
         let project = ProjectCtx::load(&refs, &config);

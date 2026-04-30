@@ -16,10 +16,7 @@
 /// Returns `None` if `node` isn't a `call_expression` or if the
 /// function child can't be read as UTF-8.
 #[must_use]
-pub fn call_function_name<'a>(
-    node: tree_sitter::Node,
-    source: &'a [u8],
-) -> Option<&'a str> {
+pub fn call_function_name<'a>(node: tree_sitter::Node, source: &'a [u8]) -> Option<&'a str> {
     if node.kind() != "call_expression" {
         return None;
     }

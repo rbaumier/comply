@@ -18,7 +18,7 @@
 //! mode, preventing the classic `/tmp` symlink attack.
 
 use anyhow::{Context, Result};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::BTreeSet;
 use std::io::Write;
 
@@ -117,7 +117,10 @@ mod tests {
         ];
         let config = build_config_json(&rules);
         assert_eq!(config["plugins"], json!(["typescript"]));
-        assert_eq!(config["rules"]["typescript/no-explicit-any"], json!("error"));
+        assert_eq!(
+            config["rules"]["typescript/no-explicit-any"],
+            json!("error")
+        );
         assert_eq!(config["rules"]["eqeqeq"], json!("warn"));
     }
 

@@ -95,7 +95,8 @@ mod tests {
 
     #[test]
     fn allows_recursive_with_depth() {
-        let src = "type Flatten<T, Depth extends number = 5> = Depth extends 0 ? T : Flatten<T, 0>;";
+        let src =
+            "type Flatten<T, Depth extends number = 5> = Depth extends 0 ? T : Flatten<T, 0>;";
         assert!(run(src).is_empty());
     }
 

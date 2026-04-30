@@ -25,7 +25,9 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-const RESPONSE_SUFFIXES: &[&str] = &["Response", "Dto", "DTO", "Payload", "Reply", "Result", "Body"];
+const RESPONSE_SUFFIXES: &[&str] = &[
+    "Response", "Dto", "DTO", "Payload", "Reply", "Result", "Body",
+];
 
 fn looks_like_response_type(name: &str) -> bool {
     RESPONSE_SUFFIXES.iter().any(|s| name.ends_with(s))
@@ -144,10 +146,10 @@ mod tests {
 
     #[test]
     fn allows_string_union_in_response() {
-        assert!(run_on(
-            "interface UserResponse { id: string; status: 'active' | 'inactive' }"
-        )
-        .is_empty());
+        assert!(
+            run_on("interface UserResponse { id: string; status: 'active' | 'inactive' }")
+                .is_empty()
+        );
     }
 
     #[test]

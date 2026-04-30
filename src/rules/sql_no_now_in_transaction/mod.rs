@@ -5,9 +5,9 @@ mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
+use crate::rules::RuleDef;
 use crate::rules::backend::Backend;
 use crate::rules::meta::RuleMeta;
-use crate::rules::RuleDef;
 
 pub const META: RuleMeta = RuleMeta {
     id: "sql-no-now-in-transaction",
@@ -22,9 +22,18 @@ pub fn register() -> RuleDef {
     RuleDef {
         meta: META,
         backends: vec![
-            (Language::TypeScript, Backend::TreeSitter(Box::new(typescript::Check))),
-            (Language::JavaScript, Backend::TreeSitter(Box::new(typescript::Check))),
-            (Language::Tsx, Backend::TreeSitter(Box::new(typescript::Check))),
+            (
+                Language::TypeScript,
+                Backend::TreeSitter(Box::new(typescript::Check)),
+            ),
+            (
+                Language::JavaScript,
+                Backend::TreeSitter(Box::new(typescript::Check)),
+            ),
+            (
+                Language::Tsx,
+                Backend::TreeSitter(Box::new(typescript::Check)),
+            ),
             (Language::Rust, Backend::TreeSitter(Box::new(rust::Check))),
         ],
     }
@@ -45,9 +54,8 @@ pub(super) fn sql_uses_now_in_tx(sql: &str) -> bool {
         // (`, ", #, r — for raw strings) so the BEGIN/COMMIT prefix checks work
         // on the SQL content even when the literal's opening quote sits on the
         // same line as the SQL.
-        let trimmed = line.trim_start_matches(|c: char| {
-            c.is_whitespace() || matches!(c, '`' | '"' | '#' | 'R')
-        });
+        let trimmed = line
+            .trim_start_matches(|c: char| c.is_whitespace() || matches!(c, '`' | '"' | '#' | 'R'));
         if trimmed.starts_with("BEGIN;")
             || trimmed == "BEGIN"
             || trimmed.starts_with("BEGIN ")

@@ -10,9 +10,7 @@ fn constructor_is_pool<'a>(node: &tree_sitter::Node<'a>, src: &'a [u8]) -> bool 
     ctor.utf8_text(src).unwrap_or("") == "Pool"
 }
 
-fn first_object_arg<'a>(
-    node: &tree_sitter::Node<'a>,
-) -> Option<tree_sitter::Node<'a>> {
+fn first_object_arg<'a>(node: &tree_sitter::Node<'a>) -> Option<tree_sitter::Node<'a>> {
     let args = node.child_by_field_name("arguments")?;
     let mut cursor = args.walk();
     args.children(&mut cursor).find(|&c| c.kind() == "object")
@@ -24,7 +22,9 @@ fn has_key(obj: tree_sitter::Node<'_>, src: &[u8], key: &str) -> bool {
         if child.kind() != "pair" {
             continue;
         }
-        let Some(k) = child.child_by_field_name("key") else { continue };
+        let Some(k) = child.child_by_field_name("key") else {
+            continue;
+        };
         let t = k.utf8_text(src).unwrap_or("").trim_matches(['"', '\'']);
         if t == key {
             return true;

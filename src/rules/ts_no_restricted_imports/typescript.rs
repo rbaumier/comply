@@ -101,9 +101,7 @@ mod tests {
             .join(", ");
         fs::write(
             &cfg_path,
-            format!(
-                "[rules.ts-no-restricted-imports]\npatterns = [{patterns_toml}]\n"
-            ),
+            format!("[rules.ts-no-restricted-imports]\npatterns = [{patterns_toml}]\n"),
         )
         .expect("write cfg");
         let cfg = Config::load_from(tmp.path()).expect("load cfg");
@@ -137,14 +135,10 @@ mod tests {
 
     #[test]
     fn flags_matching_restricted_import() {
-        let d = run_with_patterns(
-            "import { foo } from '@banned/foo';",
-            &["@banned/*"],
-        );
+        let d = run_with_patterns("import { foo } from '@banned/foo';", &["@banned/*"]);
         assert_eq!(d.len(), 1, "expected one diagnostic, got {d:?}");
         assert!(
-            d[0].message.contains("@banned/foo")
-                && d[0].message.contains("@banned/*"),
+            d[0].message.contains("@banned/foo") && d[0].message.contains("@banned/*"),
             "message should cite specifier and pattern: {}",
             d[0].message
         );
@@ -154,19 +148,13 @@ mod tests {
     fn flags_matching_type_only_import() {
         // Type-only imports are included — the ESLint base rule covers
         // them and excluding them would leave a hole.
-        let d = run_with_patterns(
-            "import type { Foo } from 'legacy';",
-            &["legacy"],
-        );
+        let d = run_with_patterns("import type { Foo } from 'legacy';", &["legacy"]);
         assert_eq!(d.len(), 1);
     }
 
     #[test]
     fn ignores_non_matching_import() {
-        let d = run_with_patterns(
-            "import { ok } from '@ok/foo';",
-            &["@banned/*"],
-        );
+        let d = run_with_patterns("import { ok } from '@ok/foo';", &["@banned/*"]);
         assert!(d.is_empty());
     }
 
@@ -174,10 +162,7 @@ mod tests {
     fn exact_pattern_does_not_match_prefix() {
         // `lodash` should not match `lodash/fp` — only trailing-`*`
         // patterns match prefixes.
-        let d = run_with_patterns(
-            "import fp from 'lodash/fp';",
-            &["lodash"],
-        );
+        let d = run_with_patterns("import fp from 'lodash/fp';", &["lodash"]);
         assert!(d.is_empty());
     }
 }

@@ -107,7 +107,9 @@ pub(super) fn compute_source(source: &str) -> u32 {
     let mut parser = tree_sitter::Parser::new();
     let lang: tree_sitter::Language = tree_sitter_rust::LANGUAGE.into();
     parser.set_language(&lang).expect("grammar should load");
-    let tree = parser.parse(source, None).expect("parser should produce a tree");
+    let tree = parser
+        .parse(source, None)
+        .expect("parser should produce a tree");
     find_first_fn_body(tree.root_node())
         .map(|body| compute(body, source.as_bytes(), 0))
         .unwrap_or(0)

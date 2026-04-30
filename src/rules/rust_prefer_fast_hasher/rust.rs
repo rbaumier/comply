@@ -63,10 +63,7 @@ mod tests {
 
     #[test]
     fn flags_hashmap_u64_key() {
-        assert_eq!(
-            run("fn f() -> HashMap<u64, String> { todo!() }").len(),
-            1
-        );
+        assert_eq!(run("fn f() -> HashMap<u64, String> { todo!() }").len(), 1);
     }
 
     #[test]
@@ -81,9 +78,7 @@ mod tests {
 
     #[test]
     fn allows_hashmap_with_explicit_hasher() {
-        assert!(
-            run("fn f() -> HashMap<u64, String, FxBuildHasher> { todo!() }").is_empty()
-        );
+        assert!(run("fn f() -> HashMap<u64, String, FxBuildHasher> { todo!() }").is_empty());
     }
 
     #[test]

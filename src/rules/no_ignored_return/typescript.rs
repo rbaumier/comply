@@ -4,8 +4,16 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
 const PURE_METHODS: &[&str] = &[
-    "map", "filter", "slice", "concat", "trim", "replace",
-    "toUpperCase", "toLowerCase", "split", "join",
+    "map",
+    "filter",
+    "slice",
+    "concat",
+    "trim",
+    "replace",
+    "toUpperCase",
+    "toLowerCase",
+    "split",
+    "join",
 ];
 
 crate::ast_check! { on ["expression_statement"] => |node, source, ctx, diagnostics|

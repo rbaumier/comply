@@ -14,7 +14,11 @@ pub struct Check;
 
 impl AstCheck for Check {
     fn interested_kinds(&self) -> Option<&'static [&'static str]> {
-        Some(&["function_declaration", "method_definition", "variable_declarator"])
+        Some(&[
+            "function_declaration",
+            "method_definition",
+            "variable_declarator",
+        ])
     }
 
     fn visit_node(
@@ -26,9 +30,7 @@ impl AstCheck for Check {
     ) {
         let source = ctx.source.as_bytes();
         let name_node = match node.kind() {
-            "function_declaration" | "method_definition" => {
-                node.child_by_field_name("name")
-            }
+            "function_declaration" | "method_definition" => node.child_by_field_name("name"),
             "variable_declarator" => {
                 let value = node.child_by_field_name("value");
                 match value.map(|v| v.kind()) {
@@ -41,7 +43,9 @@ impl AstCheck for Check {
             _ => None,
         };
         let Some(name_node) = name_node else { return };
-        let Ok(name) = name_node.utf8_text(source) else { return };
+        let Ok(name) = name_node.utf8_text(source) else {
+            return;
+        };
         if !contains_and_boundary(name) {
             return;
         }
@@ -89,14 +93,9 @@ fn contains_and_boundary(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
-
-
         crate::rules::test_helpers::run_ts(source, &Check)
-
-
     }
 
     #[test]

@@ -55,13 +55,19 @@ fn target_is_narrowing(target: tree_sitter::Node<'_>, source: &[u8]) -> bool {
         // narrowing types), allow lowercase aliases (e.g. type aliases for
         // primitives) which are widening or neutral.
         "type_identifier" => {
-            let Ok(name) = target.utf8_text(source) else { return false; };
+            let Ok(name) = target.utf8_text(source) else {
+                return false;
+            };
             name.chars().next().is_some_and(|c| c.is_ascii_uppercase())
         }
         // `as NonNullable<T>` / `as Exclude<T, U>` / `as Pick<T, K>`.
         "generic_type" => {
-            let Some(name_node) = target.child_by_field_name("name") else { return false; };
-            let Ok(name) = name_node.utf8_text(source) else { return false; };
+            let Some(name_node) = target.child_by_field_name("name") else {
+                return false;
+            };
+            let Ok(name) = name_node.utf8_text(source) else {
+                return false;
+            };
             NARROWING_UTILITY_TYPES.contains(&name)
         }
         _ => false,

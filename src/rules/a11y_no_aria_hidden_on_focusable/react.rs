@@ -85,12 +85,18 @@ mod tests {
 
     #[test]
     fn flags_button_with_aria_hidden() {
-        assert_eq!(run(r#"const x = <button aria-hidden="true">Click</button>;"#).len(), 1);
+        assert_eq!(
+            run(r#"const x = <button aria-hidden="true">Click</button>;"#).len(),
+            1
+        );
     }
 
     #[test]
     fn flags_aria_hidden_with_jsx_expression() {
-        assert_eq!(run(r#"const x = <button aria-hidden={true}>Click</button>;"#).len(), 1);
+        assert_eq!(
+            run(r#"const x = <button aria-hidden={true}>Click</button>;"#).len(),
+            1
+        );
     }
 
     #[test]
@@ -105,6 +111,9 @@ mod tests {
 
     #[test]
     fn flags_tabindex_with_aria_hidden() {
-        assert_eq!(run(r#"const x = <div tabIndex={0} aria-hidden="true">Hidden</div>;"#).len(), 1);
+        assert_eq!(
+            run(r#"const x = <div tabIndex={0} aria-hidden="true">Hidden</div>;"#).len(),
+            1
+        );
     }
 }

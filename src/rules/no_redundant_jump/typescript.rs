@@ -105,10 +105,10 @@ fn is_redundant(start: tree_sitter::Node, kind: JumpKind) -> bool {
             // switch_case: require the jump to be the last statement of
             // the case block (fall-through semantics mean a jump before
             // more code is NOT redundant).
-            if (pk == "switch_case" || pk == "switch_default")
-                && !is_last_named_child(parent, node) {
-                    return false;
-                }
+            if (pk == "switch_case" || pk == "switch_default") && !is_last_named_child(parent, node)
+            {
+                return false;
+            }
             node = parent;
             continue;
         }

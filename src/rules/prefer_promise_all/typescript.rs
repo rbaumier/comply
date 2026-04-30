@@ -19,8 +19,7 @@ fn extract_bindings(node: tree_sitter::Node, source: &[u8]) -> Vec<String> {
             for i in 0..count {
                 let child = node.named_child(i).unwrap();
                 match child.kind() {
-                    "shorthand_property_identifier_pattern"
-                    | "shorthand_property_identifier" => {
+                    "shorthand_property_identifier_pattern" | "shorthand_property_identifier" => {
                         if let Ok(t) = child.utf8_text(source) {
                             out.push(t.to_owned());
                         }
@@ -145,9 +144,9 @@ impl AstCheck for Check {
             let bindings = extract_bindings(name_node, source);
             let call_text = val_node.utf8_text(source).unwrap_or("").to_owned();
             let pos = child.start_position();
-            let dependent = run.iter().any(|s| {
-                s.bindings.iter().any(|b| contains_word(&call_text, b))
-            });
+            let dependent = run
+                .iter()
+                .any(|s| s.bindings.iter().any(|b| contains_word(&call_text, b)));
             if dependent {
                 flush_run(&mut run, diagnostics, ctx.path);
             }

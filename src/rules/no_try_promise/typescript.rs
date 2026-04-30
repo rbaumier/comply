@@ -91,10 +91,7 @@ try {
 
     #[test]
     fn ignores_fetch_outside_try() {
-        let d = crate::rules::test_helpers::run_ts(
-            r#"const res = fetch("/api");"#,
-            &Check,
-        );
+        let d = crate::rules::test_helpers::run_ts(r#"const res = fetch("/api");"#, &Check);
         assert!(d.is_empty());
     }
 }

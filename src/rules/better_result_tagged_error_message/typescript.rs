@@ -21,7 +21,9 @@ fn has_message_field(body: &tree_sitter::Node<'_>, source: &[u8]) -> bool {
             child.kind(),
             "public_field_definition" | "property_signature" | "field_definition"
         ) {
-            let Some(name) = child.child_by_field_name("name") else { continue; };
+            let Some(name) = child.child_by_field_name("name") else {
+                continue;
+            };
             if name.utf8_text(source).unwrap_or("") == "message" {
                 return true;
             }

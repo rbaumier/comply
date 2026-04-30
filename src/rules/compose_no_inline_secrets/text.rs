@@ -1,7 +1,9 @@
 //! compose-no-inline-secrets text backend.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::rules::yaml_k8s_helpers::{as_mapping, as_sequence, pair_key_text, pair_scalar_value, pair_value_node};
+use crate::rules::yaml_k8s_helpers::{
+    as_mapping, as_sequence, pair_key_text, pair_scalar_value, pair_value_node,
+};
 
 const SECRET_SUBSTRINGS: &[&str] = &["SECRET", "TOKEN", "PASSWORD", "PASSWD", "APIKEY"];
 
@@ -14,7 +16,9 @@ fn looks_like_compose(path: &std::path::Path, source: &str) -> bool {
     if name.contains("compose") {
         return true;
     }
-    source.lines().any(|l| l == "services:" || l.starts_with("services:"))
+    source
+        .lines()
+        .any(|l| l == "services:" || l.starts_with("services:"))
 }
 
 fn is_secret_name(name: &str) -> bool {

@@ -4,7 +4,16 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
 const SECTIONS: &[&str] = &["params:z.object({", "query:z.object({"];
-const STOP_KEYS: &[&str] = &["body:", "params:", "query:", "headers:", "response:", "cookie:", "detail:", "tags:"];
+const STOP_KEYS: &[&str] = &[
+    "body:",
+    "params:",
+    "query:",
+    "headers:",
+    "response:",
+    "cookie:",
+    "detail:",
+    "tags:",
+];
 
 crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
     let _ = source;

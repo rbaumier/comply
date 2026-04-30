@@ -16,19 +16,30 @@ use crate::rules::backend::{AstCheck, CheckCtx};
 
 /// Identifier bases that demand an explicit unit. Lowercase compared.
 const AMBIGUOUS_BASES: &[&str] = &[
-    "delay", "timeout", "interval", "duration", "elapsed", "age", "wait",
-    "size", "length", "distance", "offset", "width", "height", "limit",
-    "rate", "frequency", "threshold",
+    "delay",
+    "timeout",
+    "interval",
+    "duration",
+    "elapsed",
+    "age",
+    "wait",
+    "size",
+    "length",
+    "distance",
+    "offset",
+    "width",
+    "height",
+    "limit",
+    "rate",
+    "frequency",
+    "threshold",
 ];
 
 /// Recognised unit suffixes. An identifier matching a base is accepted if
 /// it ends with one of these (case-insensitive).
 const KNOWN_SUFFIXES: &[&str] = &[
-    "Ms", "Sec", "Seconds", "Minutes", "Hours", "Days",
-    "Bytes", "Kb", "Mb", "Gb", "Kib", "Mib", "Gib",
-    "Px", "Em", "Rem", "Pct", "Percent",
-    "Rps", "Qps", "Hz", "Khz",
-    "Count",
+    "Ms", "Sec", "Seconds", "Minutes", "Hours", "Days", "Bytes", "Kb", "Mb", "Gb", "Kib", "Mib",
+    "Gib", "Px", "Em", "Rem", "Pct", "Percent", "Rps", "Qps", "Hz", "Khz", "Count",
 ];
 
 #[derive(Debug)]
@@ -121,14 +132,9 @@ fn has_known_suffix(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
-
-
         crate::rules::test_helpers::run_ts(source, &Check)
-
-
     }
 
     #[test]

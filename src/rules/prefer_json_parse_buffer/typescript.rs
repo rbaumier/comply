@@ -21,8 +21,12 @@ fn is_utf8_encoding_arg(arg: tree_sitter::Node<'_>, source: &[u8]) -> bool {
                 if prop.kind() != "pair" {
                     continue;
                 }
-                let Some(key) = prop.child_by_field_name("key") else { continue };
-                let Some(value) = prop.child_by_field_name("value") else { continue };
+                let Some(key) = prop.child_by_field_name("key") else {
+                    continue;
+                };
+                let Some(value) = prop.child_by_field_name("value") else {
+                    continue;
+                };
                 let key_text = std::str::from_utf8(&source[key.byte_range()]).unwrap_or("");
                 if unquote(key_text) != "encoding" {
                     continue;

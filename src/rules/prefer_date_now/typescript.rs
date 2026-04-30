@@ -7,11 +7,15 @@ fn is_new_date_no_args(node: tree_sitter::Node, source: &[u8]) -> bool {
     if node.kind() != "new_expression" {
         return false;
     }
-    let Some(constructor) = node.child_by_field_name("constructor") else { return false };
+    let Some(constructor) = node.child_by_field_name("constructor") else {
+        return false;
+    };
     if constructor.utf8_text(source).unwrap_or("") != "Date" {
         return false;
     }
-    let Some(args) = node.child_by_field_name("arguments") else { return false };
+    let Some(args) = node.child_by_field_name("arguments") else {
+        return false;
+    };
     // arguments node should have no named children (empty parens)
     args.named_child_count() == 0
 }

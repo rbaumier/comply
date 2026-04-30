@@ -70,7 +70,10 @@ fn find_offenses(source: &str) -> Vec<usize> {
         }
         let window = &source[async_start..limit];
         // Locate the body start: after `=>` or after the first `{`.
-        let body_start_rel = window.find("=>").map(|p| p + 2).or_else(|| window.find('{'));
+        let body_start_rel = window
+            .find("=>")
+            .map(|p| p + 2)
+            .or_else(|| window.find('{'));
         let Some(body_off) = body_start_rel else {
             from = after;
             continue;
@@ -129,7 +132,8 @@ fn find_offenses(source: &str) -> Vec<usize> {
             if !stripped.ends_with("await") {
                 // Verify it's a standalone fetch( call, not e.g. `prefetch(`.
                 let pre_char = body.as_bytes().get(pos.saturating_sub(1)).copied();
-                let is_word_boundary = pre_char.is_none_or(|c| !c.is_ascii_alphanumeric() && c != b'_' && c != b'$');
+                let is_word_boundary =
+                    pre_char.is_none_or(|c| !c.is_ascii_alphanumeric() && c != b'_' && c != b'$');
                 if is_word_boundary {
                     out.push(body_abs + pos);
                     flagged = true;
@@ -197,7 +201,8 @@ mod tests {
 
     #[test]
     fn allows_awaited_fetch() {
-        let src = "useQuery({ queryFn: async () => { const r = await fetch('/x'); return r.json(); } })";
+        let src =
+            "useQuery({ queryFn: async () => { const r = await fetch('/x'); return r.json(); } })";
         assert!(run(src).is_empty());
     }
 

@@ -9,7 +9,7 @@
 //! Rules still run on the full file so context-dependent checks work;
 //! only the reporting step is filtered.
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -34,13 +34,9 @@ pub fn changed_lines(mode: &ScanMode) -> Result<ChangedLines> {
         ScanMode::LastCommit => {
             run_git_diff(&["diff", "--unified=0", "--no-color", "HEAD~1", "HEAD"])
         }
-        ScanMode::Commit(sha) => run_git_diff(&[
-            "show",
-            "--unified=0",
-            "--no-color",
-            "--pretty=format:",
-            sha,
-        ]),
+        ScanMode::Commit(sha) => {
+            run_git_diff(&["show", "--unified=0", "--no-color", "--pretty=format:", sha])
+        }
         ScanMode::Range(from, to) => run_git_diff(&[
             "diff",
             "--unified=0",

@@ -60,7 +60,10 @@ mod tests {
 
     #[test]
     fn flags_dot_slash_double_quotes() {
-        assert_eq!(run_on(r#"const url = new URL("./file.js", base);"#).len(), 1);
+        assert_eq!(
+            run_on(r#"const url = new URL("./file.js", base);"#).len(),
+            1
+        );
     }
 
     #[test]

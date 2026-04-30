@@ -15,7 +15,9 @@ crate::ast_check! { on ["line_comment", "block_comment"] => |node, source, ctx, 
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn run(s: &str) -> Vec<Diagnostic> { crate::rules::test_helpers::run_rust(s, &Check) }
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rust(s, &Check)
+    }
 
     #[test]
     fn flags_previously_rust() {

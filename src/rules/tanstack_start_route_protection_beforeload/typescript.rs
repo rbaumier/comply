@@ -30,8 +30,12 @@ crate::ast_check! { on ["call_expression"] prefilter = ["beforeLoad"] => |node, 
 
 fn first_function_argument<'a>(args: tree_sitter::Node<'a>) -> Option<tree_sitter::Node<'a>> {
     let mut cursor = args.walk();
-    args.children(&mut cursor)
-        .find(|c| matches!(c.kind(), "arrow_function" | "function_expression" | "function"))
+    args.children(&mut cursor).find(|c| {
+        matches!(
+            c.kind(),
+            "arrow_function" | "function_expression" | "function"
+        )
+    })
 }
 
 fn contains_auth_redirect(root: tree_sitter::Node<'_>, source: &[u8]) -> bool {
@@ -64,8 +68,7 @@ fn contains_auth_redirect(root: tree_sitter::Node<'_>, source: &[u8]) -> bool {
             && let Some(callee) = n.child_by_field_name("function")
             && callee.kind() == "member_expression"
             && let Ok(callee_text) = callee.utf8_text(source)
-            && (callee_text == "window.location.assign"
-                || callee_text == "window.location.replace")
+            && (callee_text == "window.location.assign" || callee_text == "window.location.replace")
             && let Some(args) = n.child_by_field_name("arguments")
             && arg_targets_auth(args, source)
         {
@@ -96,8 +99,12 @@ fn path_looks_like_auth(s: &str) -> bool {
 }
 
 fn expr_is_auth_string(n: tree_sitter::Node<'_>, source: &[u8]) -> bool {
-    if !matches!(n.kind(), "string" | "template_string") { return false; }
-    let Ok(t) = n.utf8_text(source) else { return false; };
+    if !matches!(n.kind(), "string" | "template_string") {
+        return false;
+    }
+    let Ok(t) = n.utf8_text(source) else {
+        return false;
+    };
     let inner = t.trim_matches(|ch| ch == '"' || ch == '\'' || ch == '`');
     path_looks_like_auth(inner)
 }
@@ -107,19 +114,33 @@ fn arg_targets_auth(args: tree_sitter::Node<'_>, source: &[u8]) -> bool {
     for c in args.children(&mut cursor) {
         match c.kind() {
             "string" | "template_string" => {
-                if expr_is_auth_string(c, source) { return true; }
+                if expr_is_auth_string(c, source) {
+                    return true;
+                }
             }
             "object" => {
                 // { to: '/login' } / { to: '/auth/sign-in' }
                 let mut cur = c.walk();
                 for pair in c.children(&mut cur) {
-                    if pair.kind() != "pair" { continue; }
-                    let Some(k) = pair.child_by_field_name("key") else { continue; };
-                    let Ok(kt) = k.utf8_text(source) else { continue; };
+                    if pair.kind() != "pair" {
+                        continue;
+                    }
+                    let Some(k) = pair.child_by_field_name("key") else {
+                        continue;
+                    };
+                    let Ok(kt) = k.utf8_text(source) else {
+                        continue;
+                    };
                     let kname = kt.trim_matches(|ch| ch == '"' || ch == '\'');
-                    if kname != "to" { continue; }
-                    let Some(v) = pair.child_by_field_name("value") else { continue; };
-                    if expr_is_auth_string(v, source) { return true; }
+                    if kname != "to" {
+                        continue;
+                    }
+                    let Some(v) = pair.child_by_field_name("value") else {
+                        continue;
+                    };
+                    if expr_is_auth_string(v, source) {
+                        return true;
+                    }
                 }
             }
             _ => {}

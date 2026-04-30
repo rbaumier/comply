@@ -9,10 +9,16 @@ fn detect_self_comparison(text: &str) -> Option<&'static str> {
             let before = text[..pos].trim();
             let after = text[pos + op.len()..].trim();
             let lhs = before.rsplit(['(', ' ', '!']).next().unwrap_or("").trim();
-            let rhs = after.split([')', ' ', ';', ',']).next().unwrap_or("").trim();
+            let rhs = after
+                .split([')', ' ', ';', ','])
+                .next()
+                .unwrap_or("")
+                .trim();
             if !lhs.is_empty()
                 && lhs == rhs
-                && lhs.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '.')
+                && lhs
+                    .chars()
+                    .all(|c| c.is_alphanumeric() || c == '_' || c == '.')
             {
                 if op.starts_with('!') {
                     return Some("comparison `x !== x` is always false (unless NaN)");

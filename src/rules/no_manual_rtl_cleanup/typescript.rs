@@ -34,10 +34,7 @@ crate::ast_check! { on ["import_statement"] prefilter = ["@testing-library"] => 
 
 fn is_test_file(path: &std::path::Path) -> bool {
     let s = path.to_string_lossy();
-    s.contains(".test.")
-        || s.contains(".spec.")
-        || s.contains("__tests__")
-        || s.contains("_test.")
+    s.contains(".test.") || s.contains(".spec.") || s.contains("__tests__") || s.contains("_test.")
 }
 
 fn has_cleanup_specifier(node: tree_sitter::Node, source: &[u8]) -> bool {

@@ -10,7 +10,12 @@ fn tag_matches(tag: &str, flat: &str, dotted_suffix: &str) -> bool {
     tag == flat || tag.ends_with(dotted_suffix)
 }
 
-fn has_descendant_with_tag(node: tree_sitter::Node, source: &[u8], flat: &str, dotted_suffix: &str) -> bool {
+fn has_descendant_with_tag(
+    node: tree_sitter::Node,
+    source: &[u8],
+    flat: &str,
+    dotted_suffix: &str,
+) -> bool {
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         let kind = child.kind();
@@ -77,7 +82,10 @@ mod tests {
 
     #[test]
     fn flags_dialog_content_without_title() {
-        assert_eq!(run(r#"const x = <DialogContent><p>hi</p></DialogContent>;"#).len(), 1);
+        assert_eq!(
+            run(r#"const x = <DialogContent><p>hi</p></DialogContent>;"#).len(),
+            1
+        );
     }
 
     #[test]
@@ -87,12 +95,18 @@ mod tests {
 
     #[test]
     fn allows_dialog_content_with_title() {
-        assert!(run(r#"const x = <DialogContent><DialogTitle>Hi</DialogTitle></DialogContent>;"#).is_empty());
+        assert!(
+            run(r#"const x = <DialogContent><DialogTitle>Hi</DialogTitle></DialogContent>;"#)
+                .is_empty()
+        );
     }
 
     #[test]
     fn allows_dotted_dialog_content_with_title() {
-        assert!(run(r#"const x = <Dialog.Content><Dialog.Title>Hi</Dialog.Title></Dialog.Content>;"#).is_empty());
+        assert!(
+            run(r#"const x = <Dialog.Content><Dialog.Title>Hi</Dialog.Title></Dialog.Content>;"#)
+                .is_empty()
+        );
     }
 
     #[test]

@@ -127,10 +127,7 @@ fn compute_line_offsets(source: &str) -> Vec<(usize, &str)> {
 /// Collect `(start_byte, end_byte)` ranges for every comment node in
 /// the tree. Delegates the cursor walk to `walker::collect_nodes_of_kinds`
 /// and maps each node to its byte range.
-fn collect_comment_ranges(
-    tree: &tree_sitter::Tree,
-    comment_kinds: &[&str],
-) -> Vec<(usize, usize)> {
+fn collect_comment_ranges(tree: &tree_sitter::Tree, comment_kinds: &[&str]) -> Vec<(usize, usize)> {
     crate::rules::walker::collect_nodes_of_kinds(tree, comment_kinds)
         .into_iter()
         .map(|n| (n.start_byte(), n.end_byte()))

@@ -37,10 +37,9 @@ fn exported_function<'a>(
             continue;
         }
         match child.kind() {
-            "function_declaration"
-            | "function"
-            | "function_expression"
-            | "arrow_function" => return Some(child),
+            "function_declaration" | "function" | "function_expression" | "arrow_function" => {
+                return Some(child);
+            }
             _ => continue,
         }
     }

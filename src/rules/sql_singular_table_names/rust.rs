@@ -2,7 +2,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::sql_helpers::{is_sql_ddl, RUST_STRING_KINDS};
+use crate::rules::sql_helpers::{RUST_STRING_KINDS, is_sql_ddl};
 
 #[derive(Debug)]
 pub struct Check;
@@ -31,9 +31,7 @@ impl AstCheck for Check {
                 ctx.path,
                 &node,
                 super::META.id,
-                format!(
-                    "Table `{name}` appears plural — use singular (one row = one entity)."
-                ),
+                format!("Table `{name}` appears plural — use singular (one row = one entity)."),
                 Severity::Warning,
             ));
         }

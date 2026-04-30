@@ -9,7 +9,9 @@ const LAYOUT_PREFIXES: &[&str] = &[
 fn is_layout_utility(tok: &str) -> bool {
     let base = tok.rsplit(':').next().unwrap_or(tok);
     LAYOUT_PREFIXES.iter().any(|p| {
-        let Some(rest) = base.strip_prefix(p) else { return false };
+        let Some(rest) = base.strip_prefix(p) else {
+            return false;
+        };
         // Animatable layout sizes: numeric scale, full/screen/auto, or arbitrary.
         !rest.is_empty()
             && (rest == "full"
@@ -54,21 +56,35 @@ mod tests {
 
     #[test]
     fn flags_transition_all_with_width() {
-        assert_eq!(run(r#"export const A = () => <div className="transition-all w-64" />;"#).len(), 1);
+        assert_eq!(
+            run(r#"export const A = () => <div className="transition-all w-64" />;"#).len(),
+            1
+        );
     }
 
     #[test]
     fn flags_transition_all_with_top() {
-        assert_eq!(run(r#"export const A = () => <div className="transition-all top-4" />;"#).len(), 1);
+        assert_eq!(
+            run(r#"export const A = () => <div className="transition-all top-4" />;"#).len(),
+            1
+        );
     }
 
     #[test]
     fn allows_transition_transform() {
-        assert!(run(r#"export const A = () => <div className="transition-transform translate-x-4" />;"#).is_empty());
+        assert!(
+            run(
+                r#"export const A = () => <div className="transition-transform translate-x-4" />;"#
+            )
+            .is_empty()
+        );
     }
 
     #[test]
     fn allows_transition_all_without_layout() {
-        assert!(run(r#"export const A = () => <div className="transition-all opacity-50" />;"#).is_empty());
+        assert!(
+            run(r#"export const A = () => <div className="transition-all opacity-50" />;"#)
+                .is_empty()
+        );
     }
 }

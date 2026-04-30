@@ -48,10 +48,19 @@ fn find_declaration<'t>(
     let block = rule_set.children(&mut c).find(|n| n.kind() == "block")?;
     let mut bc = block.walk();
     for decl in block.children(&mut bc) {
-        if decl.kind() != "declaration" { continue; }
+        if decl.kind() != "declaration" {
+            continue;
+        }
         let mut dc = decl.walk();
-        let Some(prop) = decl.children(&mut dc).find(|n| n.kind() == "property_name") else { continue };
-        if !prop.utf8_text(source).is_ok_and(|t| t.eq_ignore_ascii_case(needle)) { continue; }
+        let Some(prop) = decl.children(&mut dc).find(|n| n.kind() == "property_name") else {
+            continue;
+        };
+        if !prop
+            .utf8_text(source)
+            .is_ok_and(|t| t.eq_ignore_ascii_case(needle))
+        {
+            continue;
+        }
         let value_has_calc = decl
             .utf8_text(source)
             .is_ok_and(|t| t.to_ascii_lowercase().contains("calc("));

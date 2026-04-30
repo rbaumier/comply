@@ -22,10 +22,14 @@ fn extract_single_param(arrow_src: &str) -> Option<&str> {
     if let Some(rest) = head.strip_prefix('(') {
         let inner = rest.strip_suffix(')')?.trim();
         // No commas → single parameter.
-        if inner.is_empty() || inner.contains(',') { return None; }
+        if inner.is_empty() || inner.contains(',') {
+            return None;
+        }
         // Drop any type annotation: `x: T` → `x`.
         let name = inner.split(':').next()?.trim();
-        if !is_ident(name) { return None; }
+        if !is_ident(name) {
+            return None;
+        }
         Some(name)
     } else {
         if is_ident(head) { Some(head) } else { None }
@@ -34,21 +38,37 @@ fn extract_single_param(arrow_src: &str) -> Option<&str> {
 
 fn is_ident(s: &str) -> bool {
     !s.is_empty()
-        && s.chars().next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_' || c == '$')
-        && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$')
+        && s.chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic() || c == '_' || c == '$')
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$')
 }
 
 /// Return true when `expr` is a shape-preserving expression for `param`.
 fn is_same_shape_expr(expr_text: &str, param: &str) -> bool {
     let t = expr_text.trim().trim_end_matches(';');
     // Bare identifier identity (`s => s`).
-    if t == param { return true; }
+    if t == param {
+        return true;
+    }
     // `param.xxx(...)` — method call on the parameter.
     if let Some(rest) = t.strip_prefix(param)
-        && rest.starts_with('.') { return true; }
+        && rest.starts_with('.')
+    {
+        return true;
+    }
     // `Math.round(param)` / `Math.floor(param)` / `Math.ceil(param)` / ...
-    for fun in ["Math.round", "Math.floor", "Math.ceil", "Math.abs", "Math.trunc"] {
-        if t.starts_with(fun) && t.contains(param) { return true; }
+    for fun in [
+        "Math.round",
+        "Math.floor",
+        "Math.ceil",
+        "Math.abs",
+        "Math.trunc",
+    ] {
+        if t.starts_with(fun) && t.contains(param) {
+            return true;
+        }
     }
     // Arithmetic on the parameter: `param + N`, `param - N`, `param * N`, `param / N`.
     // Conservative: the operand on the other side must be a numeric literal so we
@@ -128,7 +148,10 @@ mod tests {
 
     #[test]
     fn flags_trim_transform() {
-        assert_eq!(run("const S = z.string().transform(s => s.trim());").len(), 1);
+        assert_eq!(
+            run("const S = z.string().transform(s => s.trim());").len(),
+            1
+        );
     }
 
     #[test]

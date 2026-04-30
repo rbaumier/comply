@@ -44,7 +44,10 @@ mod tests {
 
     #[test]
     fn flags_z_unknown_inside_object() {
-        assert_eq!(run_on("const s = z.object({ data: z.unknown() });").len(), 1);
+        assert_eq!(
+            run_on("const s = z.object({ data: z.unknown() });").len(),
+            1
+        );
     }
 
     #[test]

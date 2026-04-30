@@ -6,8 +6,10 @@ pub struct Check;
 
 /// Unicode bidi control characters — trojan source attack vectors.
 fn has_bidi_char(line: &str) -> bool {
-    line.chars().any(|c| matches!(c,
-        '\u{202A}' // LRE — left-to-right embedding
+    line.chars().any(|c| {
+        matches!(
+            c,
+            '\u{202A}' // LRE — left-to-right embedding
         | '\u{202B}' // RLE — right-to-left embedding
         | '\u{202C}' // PDF — pop directional formatting
         | '\u{202D}' // LRO — left-to-right override
@@ -18,14 +20,15 @@ fn has_bidi_char(line: &str) -> bool {
         | '\u{2069}' // PDI — pop directional isolate
         | '\u{200F}' // RLM — right-to-left mark
         | '\u{200E}' // LRM — left-to-right mark
-    ))
+        )
+    })
 }
 
 impl TextCheck for Check {
     fn prefilter(&self) -> Option<&'static [&'static str]> {
         Some(&[
-            "\u{202E}", "\u{202D}", "\u{202A}", "\u{202B}", "\u{202C}",
-            "\u{2066}", "\u{2067}", "\u{2068}", "\u{2069}",
+            "\u{202E}", "\u{202D}", "\u{202A}", "\u{202B}", "\u{202C}", "\u{2066}", "\u{2067}",
+            "\u{2068}", "\u{2069}",
         ])
     }
 

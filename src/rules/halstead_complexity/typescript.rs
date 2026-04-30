@@ -30,12 +30,12 @@ const KEYWORD_OPS: &[&str] = &[
     "try_statement",
     "catch_clause",
     "new_expression",
-    "unary_expression",      // covers `typeof`, `void`, `delete`, `!`, `-`, `+`
-    "update_expression",     // `++`, `--`
-    "ternary_expression",    // `?:`
-    "call_expression",       // `()`
-    "member_expression",     // `.` and `?.`
-    "subscript_expression",  // `[]`
+    "unary_expression",     // covers `typeof`, `void`, `delete`, `!`, `-`, `+`
+    "update_expression",    // `++`, `--`
+    "ternary_expression",   // `?:`
+    "call_expression",      // `()`
+    "member_expression",    // `.` and `?.`
+    "subscript_expression", // `[]`
 ];
 
 fn is_function_node(kind: &str) -> bool {
@@ -107,8 +107,10 @@ fn visit(node: tree_sitter::Node, source: &[u8], counts: &mut Counts, depth: u32
     }
 
     // Binary / assignment expressions: use the textual operator.
-    if matches!(kind, "binary_expression" | "augmented_assignment_expression")
-        && let Some(op) = node.child_by_field_name("operator")
+    if matches!(
+        kind,
+        "binary_expression" | "augmented_assignment_expression"
+    ) && let Some(op) = node.child_by_field_name("operator")
     {
         let text = op.utf8_text(source).unwrap_or("");
         if !text.is_empty() {
@@ -161,10 +163,18 @@ fn compute_metrics(body: tree_sitter::Node, source: &[u8]) -> Metrics {
     } else {
         0.0
     };
-    let difficulty = if n2 > 0.0 { (n1 / 2.0) * (big_n2 / n2) } else { 0.0 };
+    let difficulty = if n2 > 0.0 {
+        (n1 / 2.0) * (big_n2 / n2)
+    } else {
+        0.0
+    };
     let effort = difficulty * volume;
 
-    Metrics { volume, difficulty, effort }
+    Metrics {
+        volume,
+        difficulty,
+        effort,
+    }
 }
 
 /// Skip trivial accessors: a method_definition whose body is a single
@@ -174,7 +184,9 @@ fn is_trivial_accessor(func: tree_sitter::Node) -> bool {
     if func.kind() != "method_definition" {
         return false;
     }
-    let Some(body) = func.child_by_field_name("body") else { return false };
+    let Some(body) = func.child_by_field_name("body") else {
+        return false;
+    };
     if body.kind() != "statement_block" {
         return false;
     }

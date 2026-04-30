@@ -50,7 +50,11 @@ impl AstCheck for Check {
             return;
         }
         let pos = node.start_position();
-        let kind_label = if kind == "struct_item" { "struct" } else { "enum" };
+        let kind_label = if kind == "struct_item" {
+            "struct"
+        } else {
+            "enum"
+        };
         diagnostics.push(Diagnostic {
             path: std::sync::Arc::clone(&ctx.path_arc),
             line: pos.row + 1,
@@ -114,14 +118,9 @@ fn has_debug_derive(item: tree_sitter::Node, source: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
-
-
         crate::rules::test_helpers::run_rust(source, &Check)
-
-
     }
 
     #[test]
@@ -142,15 +141,13 @@ mod tests {
     #[test]
     fn allows_pub_struct_with_mixed_derive() {
         assert!(
-            run_on("#[derive(Clone, Debug, Default)]\npub struct User { name: String }")
-                .is_empty()
+            run_on("#[derive(Clone, Debug, Default)]\npub struct User { name: String }").is_empty()
         );
     }
 
     #[test]
     fn allows_pub_struct_with_manual_debug_impl() {
-        let source =
-            "pub struct Closure { f: Box<dyn Fn()> }\nimpl Debug for Closure { fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result { Ok(()) } }";
+        let source = "pub struct Closure { f: Box<dyn Fn()> }\nimpl Debug for Closure { fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result { Ok(()) } }";
         assert!(run_on(source).is_empty());
     }
 

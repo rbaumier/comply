@@ -110,10 +110,9 @@ mod tests {
 
     #[test]
     fn allows_branded_id() {
-        assert!(run_on(
-            "const S = z.object({ userId: z.string().brand<\"UserId\">() });",
-        )
-        .is_empty());
+        assert!(
+            run_on("const S = z.object({ userId: z.string().brand<\"UserId\">() });",).is_empty()
+        );
     }
 
     #[test]
@@ -134,9 +133,7 @@ mod tests {
 
     #[test]
     fn flags_multiple_ids() {
-        let d = run_on(
-            "const S = z.object({ userId: z.string(), postId: z.string() });",
-        );
+        let d = run_on("const S = z.object({ userId: z.string(), postId: z.string() });");
         assert_eq!(d.len(), 2);
     }
 }

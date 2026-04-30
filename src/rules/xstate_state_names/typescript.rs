@@ -17,18 +17,24 @@ fn is_states_object(obj: tree_sitter::Node, source: &[u8]) -> bool {
     if obj.kind() != "object" {
         return false;
     }
-    let Some(states_pair) = obj.parent() else { return false };
+    let Some(states_pair) = obj.parent() else {
+        return false;
+    };
     if states_pair.kind() != "pair" {
         return false;
     }
-    let Some(key) = states_pair.child_by_field_name("key") else { return false };
+    let Some(key) = states_pair.child_by_field_name("key") else {
+        return false;
+    };
     unquote(key.utf8_text(source).unwrap_or("")) == "states"
 }
 
 /// camelCase: lowercase first char, alphanumerics only.
 fn is_camel_case(s: &str) -> bool {
     let mut chars = s.chars();
-    let Some(first) = chars.next() else { return false };
+    let Some(first) = chars.next() else {
+        return false;
+    };
     if !first.is_ascii_lowercase() {
         return false;
     }
@@ -38,7 +44,9 @@ fn is_camel_case(s: &str) -> bool {
 /// snake_case: lowercase first char, lowercase letters / digits / underscore only.
 fn is_snake_case(s: &str) -> bool {
     let mut chars = s.chars();
-    let Some(first) = chars.next() else { return false };
+    let Some(first) = chars.next() else {
+        return false;
+    };
     if !first.is_ascii_lowercase() {
         return false;
     }

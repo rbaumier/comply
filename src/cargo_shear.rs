@@ -122,8 +122,7 @@ fn convert_findings(findings: Vec<Finding>, workspace: &Path) -> Result<Vec<Diag
         let Some(file) = finding.file else { continue };
         let manifest_path = workspace.join(file);
         let offset = finding.location.map(|l| l.offset).unwrap_or(0);
-        let (line, column) =
-            byte_offset_to_line_col(&manifest_path, offset).unwrap_or((1, 1));
+        let (line, column) = byte_offset_to_line_col(&manifest_path, offset).unwrap_or((1, 1));
         diagnostics.push(Diagnostic {
             path: manifest_path.into(),
             line,
@@ -165,7 +164,6 @@ fn byte_offset_to_line_col(path: &Path, offset_bytes: usize) -> Option<(usize, u
     }
     Some((line, col))
 }
-
 
 /// External wire format mirror — see comply:rust-serde-deny-unknown-fields.
 #[derive(Debug, Deserialize)]

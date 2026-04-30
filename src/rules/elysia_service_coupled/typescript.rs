@@ -53,7 +53,12 @@ mod tests {
 
     fn run_on(path: &str, source: &str) -> Vec<Diagnostic> {
         let project = ProjectCtx::for_test_with_framework("elysia");
-        crate::rules::test_helpers::run_ts_with_project_and_path(source, &Check, &project, std::path::Path::new(path))
+        crate::rules::test_helpers::run_ts_with_project_and_path(
+            source,
+            &Check,
+            &project,
+            std::path::Path::new(path),
+        )
     }
 
     #[test]
@@ -70,7 +75,8 @@ mod tests {
 
     #[test]
     fn allows_status_only_import() {
-        let src = "import { status } from 'elysia';\nexport const notFound = () => status(404, 'gone');";
+        let src =
+            "import { status } from 'elysia';\nexport const notFound = () => status(404, 'gone');";
         assert!(run_on("src/services/user.ts", src).is_empty());
     }
 

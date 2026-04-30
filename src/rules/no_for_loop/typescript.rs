@@ -125,17 +125,18 @@ fn check_update(update: tree_sitter::Node, source: &[u8], idx_name: &str) -> boo
             if op_text.contains('=') && !op_text.contains("==") {
                 // i = i + 1  or  i = 1 + i
                 if let Some(r) = right
-                    && r.kind() == "binary_expression" {
-                        let rl = r.child_by_field_name("left");
-                        let rr = r.child_by_field_name("right");
-                        return match (rl, rr) {
-                            (Some(a), Some(b)) => {
-                                (text(a, source) == idx_name && is_literal_one(b, source))
-                                    || (is_literal_one(a, source) && text(b, source) == idx_name)
-                            }
-                            _ => false,
-                        };
-                    }
+                    && r.kind() == "binary_expression"
+                {
+                    let rl = r.child_by_field_name("left");
+                    let rr = r.child_by_field_name("right");
+                    return match (rl, rr) {
+                        (Some(a), Some(b)) => {
+                            (text(a, source) == idx_name && is_literal_one(b, source))
+                                || (is_literal_one(a, source) && text(b, source) == idx_name)
+                        }
+                        _ => false,
+                    };
+                }
             }
             false
         }

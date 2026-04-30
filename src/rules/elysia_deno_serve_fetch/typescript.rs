@@ -58,7 +58,8 @@ mod tests {
 
     #[test]
     fn allows_serve_app_fetch() {
-        let src = "import { Elysia } from 'elysia';\nconst app = new Elysia();\nDeno.serve(app.fetch);";
+        let src =
+            "import { Elysia } from 'elysia';\nconst app = new Elysia();\nDeno.serve(app.fetch);";
         assert!(run_on(src).is_empty());
     }
 

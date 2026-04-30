@@ -25,8 +25,12 @@ impl TextCheck for Check {
                 continue;
             }
             // Extract the column list inside parentheses.
-            let Some(open) = lower_line.find('(') else { continue };
-            let Some(close) = lower_line[open + 1..].find(')') else { continue };
+            let Some(open) = lower_line.find('(') else {
+                continue;
+            };
+            let Some(close) = lower_line[open + 1..].find(')') else {
+                continue;
+            };
             let col_list = &lower_line[open + 1..open + 1 + close];
             let cols: Vec<&str> = col_list.split(',').map(|c| c.trim()).collect();
             if cols.iter().any(|c| bool_columns.contains(*c)) {

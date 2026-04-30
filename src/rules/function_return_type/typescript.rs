@@ -47,17 +47,23 @@ crate::ast_check! { on ["function_declaration", "function_expression", "method_d
     });
 }
 
-fn collect_return_types<'a>(node: tree_sitter::Node<'a>, source: &'a [u8], types: &mut HashSet<&'a str>) {
+fn collect_return_types<'a>(
+    node: tree_sitter::Node<'a>,
+    source: &'a [u8],
+    types: &mut HashSet<&'a str>,
+) {
     if node.kind() == "return_statement"
-        && let Some(value) = node.named_child(0) {
-            let type_hint = infer_type(value, source);
-            types.insert(type_hint);
-        }
+        && let Some(value) = node.named_child(0)
+    {
+        let type_hint = infer_type(value, source);
+        types.insert(type_hint);
+    }
 
     // Don't descend into nested functions
     if node.kind() == "function_declaration"
         || node.kind() == "function_expression"
-        || node.kind() == "arrow_function" {
+        || node.kind() == "arrow_function"
+    {
         return;
     }
 
@@ -78,7 +84,11 @@ fn infer_type<'a>(node: tree_sitter::Node<'a>, source: &'a [u8]) -> &'a str {
         "object" => "object",
         "identifier" => {
             let text = node.utf8_text(source).unwrap_or("");
-            if text == "undefined" { "undefined" } else { "unknown" }
+            if text == "undefined" {
+                "undefined"
+            } else {
+                "unknown"
+            }
         }
         _ => "unknown",
     }
@@ -87,7 +97,9 @@ fn infer_type<'a>(node: tree_sitter::Node<'a>, source: &'a [u8]) -> &'a str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn run(code: &str) -> Vec<Diagnostic> { crate::rules::test_helpers::run_ts(code, &Check) }
+    fn run(code: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_ts(code, &Check)
+    }
 
     #[test]
     fn flags_string_or_number() {

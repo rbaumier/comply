@@ -53,7 +53,16 @@ pub struct Check;
 
 impl AstCheck for Check {
     fn prefilter(&self) -> Option<&'static [&'static str]> {
-        Some(&["Error", "TypeError", "RangeError", "SyntaxError", "ReferenceError", "EvalError", "URIError", "AggregateError"])
+        Some(&[
+            "Error",
+            "TypeError",
+            "RangeError",
+            "SyntaxError",
+            "ReferenceError",
+            "EvalError",
+            "URIError",
+            "AggregateError",
+        ])
     }
 
     fn interested_kinds(&self) -> Option<&'static [&'static str]> {
@@ -68,12 +77,18 @@ impl AstCheck for Check {
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let source = ctx.source.as_bytes();
-        let Some(arg) = node.named_child(0) else { return };
+        let Some(arg) = node.named_child(0) else {
+            return;
+        };
         if arg.kind() != "new_expression" {
             return;
         }
-        let Some(ctor) = arg.child_by_field_name("constructor") else { return };
-        let Ok(ctor_name) = ctor.utf8_text(source) else { return };
+        let Some(ctor) = arg.child_by_field_name("constructor") else {
+            return;
+        };
+        let Ok(ctor_name) = ctor.utf8_text(source) else {
+            return;
+        };
         if !ERROR_CTORS.contains(&ctor_name) {
             return;
         }
@@ -82,7 +97,9 @@ impl AstCheck for Check {
         }
         // Must have at least one argument — a bare `new Error()` is a
         // placeholder, skip.
-        let Some(args) = arg.child_by_field_name("arguments") else { return };
+        let Some(args) = arg.child_by_field_name("arguments") else {
+            return;
+        };
         if args.named_child_count() == 0 {
             return;
         }
@@ -131,8 +148,7 @@ mod tests {
     #[test]
     fn allows_rethrow_with_cause() {
         assert!(
-            run_on("try { x(); } catch (e) { throw new Error('boom', { cause: e }); }")
-                .is_empty()
+            run_on("try { x(); } catch (e) { throw new Error('boom', { cause: e }); }").is_empty()
         );
     }
 

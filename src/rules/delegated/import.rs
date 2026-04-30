@@ -2,7 +2,7 @@
 
 use crate::diagnostic::Severity;
 use crate::rules::meta::RuleMeta;
-use crate::rules::{oxlint_delegate, RuleDef, TS_FAMILY};
+use crate::rules::{RuleDef, TS_FAMILY, oxlint_delegate};
 
 pub fn register_all() -> Vec<RuleDef> {
     vec![
@@ -11,11 +11,11 @@ pub fn register_all() -> Vec<RuleDef> {
             RuleMeta {
                 id: "import/no-mutable-exports",
                 description: "Exported bindings must be immutable.",
-                remediation:
-                    "Replace `export let foo = ...` with `export const foo = ...`. \
+                remediation: "Replace `export let foo = ...` with `export const foo = ...`. \
                      Mutable exports create invisible cross-module coupling.",
                 severity: Severity::Error,
-                doc_url: None, categories: &["typescript"],
+                doc_url: None,
+                categories: &["typescript"],
             },
             "import/no-mutable-exports",
             TS_FAMILY,

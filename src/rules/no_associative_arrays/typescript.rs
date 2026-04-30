@@ -15,10 +15,9 @@ fn text<'a>(node: tree_sitter::Node<'a>, source: &'a [u8]) -> &'a str {
 fn is_array_init(node: tree_sitter::Node, source: &[u8]) -> bool {
     match node.kind() {
         "array" => true,
-        "new_expression" => {
-            node.child_by_field_name("constructor")
-                .is_some_and(|c| text(c, source) == "Array")
-        }
+        "new_expression" => node
+            .child_by_field_name("constructor")
+            .is_some_and(|c| text(c, source) == "Array"),
         _ => false,
     }
 }

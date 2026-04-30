@@ -30,7 +30,9 @@ impl AstCheck for Check {
                 line: idx + 1,
                 column: 1,
                 rule_id: "elysia-cookie-no-secure".into(),
-                message: "Cookie config is missing `secure: true` — cookie can travel over plain HTTP.".into(),
+                message:
+                    "Cookie config is missing `secure: true` — cookie can travel over plain HTTP."
+                        .into(),
                 severity: Severity::Warning,
                 span: None,
             });

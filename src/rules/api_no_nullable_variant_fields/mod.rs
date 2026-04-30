@@ -7,15 +7,13 @@
 mod typescript;
 
 use crate::diagnostic::Severity;
-use crate::rules::meta::RuleMeta;
 use crate::rules::RuleDef;
+use crate::rules::meta::RuleMeta;
 
 pub const META: RuleMeta = RuleMeta {
     id: "api-no-nullable-variant-fields",
-    description:
-        "Interfaces must not encode state via clusters of optional fields; use discriminated unions.",
-    remediation:
-        "Replace the optional cluster with a `status: 'cancelled'; cancelReason: string; cancelledAt: string` variant in a discriminated union.",
+    description: "Interfaces must not encode state via clusters of optional fields; use discriminated unions.",
+    remediation: "Replace the optional cluster with a `status: 'cancelled'; cancelReason: string; cancelledAt: string` variant in a discriminated union.",
     severity: Severity::Warning,
     doc_url: None,
     categories: &["api-design"],

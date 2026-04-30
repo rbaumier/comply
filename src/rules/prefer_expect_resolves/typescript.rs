@@ -69,7 +69,8 @@ mod tests {
 
     #[test]
     fn allows_await_expect_resolves() {
-        let d = run_on("async function t() { await expect(fetchUser()).resolves.toEqual({id: 1}); }");
+        let d =
+            run_on("async function t() { await expect(fetchUser()).resolves.toEqual({id: 1}); }");
         assert!(d.is_empty());
     }
 

@@ -29,7 +29,10 @@ fn text_leaks_error_details(text: &str) -> bool {
                 .rfind(|c: char| !(c.is_alphanumeric() || c == '_'))
                 .map_or(0, |i| i + 1);
             let ident = &prefix[ident_end..];
-            if ERROR_VAR_PREFIXES.iter().any(|p| ident.eq_ignore_ascii_case(p)) {
+            if ERROR_VAR_PREFIXES
+                .iter()
+                .any(|p| ident.eq_ignore_ascii_case(p))
+            {
                 return true;
             }
             haystack = &haystack[idx + suffix.len()..];

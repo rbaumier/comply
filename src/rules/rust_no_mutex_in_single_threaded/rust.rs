@@ -13,14 +13,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::rust_helpers::is_in_test_context;
 
-const SHARING_WRAPPERS: &[&str] = &[
-    "Arc",
-    "Rc",
-    "LazyLock",
-    "OnceLock",
-    "Lazy",
-    "OnceCell",
-];
+const SHARING_WRAPPERS: &[&str] = &["Arc", "Rc", "LazyLock", "OnceLock", "Lazy", "OnceCell"];
 
 crate::ast_check! { on ["generic_type"] => |node, source, ctx, diagnostics|
     if ctx.file.path_segments.in_test_dir { return; }

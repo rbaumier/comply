@@ -8,8 +8,8 @@
 //! DO read. `IgnoredAny` is zero-allocation: it consumes the JSON but stores
 //! nothing, unlike `serde_json::Map<String, Value>` which heap-allocates.
 
-use serde::de::IgnoredAny;
 use serde::Deserialize;
+use serde::de::IgnoredAny;
 
 /// External wire format mirror — see comply:rust-serde-deny-unknown-fields.
 /// Top-level oxlint JSON output envelope.

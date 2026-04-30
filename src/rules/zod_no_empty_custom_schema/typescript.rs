@@ -55,9 +55,7 @@ mod tests {
 
     #[test]
     fn allows_z_custom_with_validator() {
-        assert!(
-            run_on("const s = z.custom<string>((v) => typeof v === 'string');").is_empty()
-        );
+        assert!(run_on("const s = z.custom<string>((v) => typeof v === 'string');").is_empty());
     }
 
     #[test]

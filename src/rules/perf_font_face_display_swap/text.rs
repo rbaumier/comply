@@ -55,7 +55,8 @@ mod tests {
 
     #[test]
     fn flags_multiple_blocks_independently() {
-        let css = "@font-face { font-family: a; } @font-face { font-family: b; font-display: swap; }";
+        let css =
+            "@font-face { font-family: a; } @font-face { font-family: b; font-display: swap; }";
         assert_eq!(run(css).len(), 1);
     }
 }

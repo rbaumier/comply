@@ -91,12 +91,18 @@ where
         let node = cursor.node();
         if node.is_error() || node.is_missing() {
             // Skip this subtree entirely.
-            if !goto_next(&mut cursor, root_id) { return; }
+            if !goto_next(&mut cursor, root_id) {
+                return;
+            }
             continue;
         }
         visit(node);
-        if cursor.goto_first_child() { continue; }
-        if !goto_next(&mut cursor, root_id) { return; }
+        if cursor.goto_first_child() {
+            continue;
+        }
+        if !goto_next(&mut cursor, root_id) {
+            return;
+        }
     }
 }
 
@@ -105,8 +111,12 @@ fn goto_next(cursor: &mut tree_sitter::TreeCursor, root_id: usize) -> bool {
         if cursor.node().id() == root_id {
             return false;
         }
-        if cursor.goto_next_sibling() { return true; }
-        if !cursor.goto_parent() { return false; }
+        if cursor.goto_next_sibling() {
+            return true;
+        }
+        if !cursor.goto_parent() {
+            return false;
+        }
     }
 }
 
@@ -236,9 +246,7 @@ fn inside_query_hook(node: tree_sitter::Node, source: &[u8]) -> bool {
 /// - `x.y.useQuery` → "useQuery"
 fn function_callee_name(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
     match node.kind() {
-        "identifier" | "property_identifier" => {
-            node.utf8_text(source).ok().map(String::from)
-        }
+        "identifier" | "property_identifier" => node.utf8_text(source).ok().map(String::from),
         "member_expression" => {
             let prop = node.child_by_field_name("property")?;
             prop.utf8_text(source).ok().map(String::from)
@@ -276,22 +284,20 @@ fn collect_binding_identifiers(node: tree_sitter::Node, source: &[u8], out: &mut
 /// Collect identifiers declared with `const` / `let` / `var` / `function` /
 /// `class` / `import` inside the function body. Treated as locally bound.
 fn collect_local_declarations(node: tree_sitter::Node, source: &[u8], out: &mut Vec<String>) {
-    walk_subtree(node, &mut |n| {
-        match n.kind() {
-            "variable_declarator" => {
-                if let Some(name) = n.child_by_field_name("name") {
-                    collect_binding_identifiers(name, source, out);
-                }
+    walk_subtree(node, &mut |n| match n.kind() {
+        "variable_declarator" => {
+            if let Some(name) = n.child_by_field_name("name") {
+                collect_binding_identifiers(name, source, out);
             }
-            "function_declaration" | "generator_function_declaration" | "class_declaration" => {
-                if let Some(name) = n.child_by_field_name("name")
-                    && let Ok(text) = name.utf8_text(source)
-                {
-                    out.push(text.to_string());
-                }
-            }
-            _ => {}
         }
+        "function_declaration" | "generator_function_declaration" | "class_declaration" => {
+            if let Some(name) = n.child_by_field_name("name")
+                && let Ok(text) = name.utf8_text(source)
+            {
+                out.push(text.to_string());
+            }
+        }
+        _ => {}
     });
 }
 
@@ -300,8 +306,12 @@ fn collect_local_declarations(node: tree_sitter::Node, source: &[u8], out: &mut 
 /// annotation). Best-effort — used for the free-variable set.
 fn collect_free_references(node: tree_sitter::Node, source: &[u8], out: &mut Vec<String>) {
     walk_subtree(node, &mut |n| {
-        if n.kind() != "identifier" { return; }
-        let Some(parent) = n.parent() else { return; };
+        if n.kind() != "identifier" {
+            return;
+        }
+        let Some(parent) = n.parent() else {
+            return;
+        };
         match parent.kind() {
             // `obj.foo` → only `obj` counts; skip the `foo` property ident.
             // tree-sitter-typescript uses `property_identifier` for .foo,
@@ -309,7 +319,10 @@ fn collect_free_references(node: tree_sitter::Node, source: &[u8], out: &mut Vec
             // `property` field pointing to this node shouldn't happen
             // (property is its own kind), but guard anyway.
             "member_expression" => {
-                if parent.child_by_field_name("property").is_some_and(|p| p == n) {
+                if parent
+                    .child_by_field_name("property")
+                    .is_some_and(|p| p == n)
+                {
                     return;
                 }
             }
@@ -320,8 +333,8 @@ fn collect_free_references(node: tree_sitter::Node, source: &[u8], out: &mut Vec
                 }
             }
             // TS type annotations / type references — skip.
-            "type_annotation" | "type_identifier" | "predefined_type"
-                | "type_reference" | "generic_type" => return,
+            "type_annotation" | "type_identifier" | "predefined_type" | "type_reference"
+            | "generic_type" => return,
             // Property key in destructuring patterns — skip.
             "pair_pattern" => {
                 if parent.child_by_field_name("key").is_some_and(|k| k == n) {
@@ -330,13 +343,17 @@ fn collect_free_references(node: tree_sitter::Node, source: &[u8], out: &mut Vec
             }
             // Parameter name declaration inside a nested function — skip;
             // those are bindings, not references.
-            "formal_parameters" | "required_parameter" | "optional_parameter"
-                | "rest_pattern" => return,
+            "formal_parameters" | "required_parameter" | "optional_parameter" | "rest_pattern" => {
+                return;
+            }
             // Callee of a call expression — imported/module-scope
             // functions don't vary per-render, so they aren't cache
             // inputs. `fetchUser(userId)` should flag only `userId`.
             "call_expression" => {
-                if parent.child_by_field_name("function").is_some_and(|f| f == n) {
+                if parent
+                    .child_by_field_name("function")
+                    .is_some_and(|f| f == n)
+                {
                     return;
                 }
             }
@@ -377,26 +394,22 @@ mod tests {
 
     #[test]
     fn flags_closure_var_missing_from_key() {
-        let diags = run_on(
-            "useQuery({ queryKey: ['user'], queryFn: () => fetchUser(userId) });",
-        );
+        let diags = run_on("useQuery({ queryKey: ['user'], queryFn: () => fetchUser(userId) });");
         assert_eq!(diags.len(), 1, "{diags:?}");
         assert!(diags[0].message.contains("userId"));
     }
 
     #[test]
     fn allows_closure_var_present_in_key() {
-        let diags = run_on(
-            "useQuery({ queryKey: ['user', userId], queryFn: () => fetchUser(userId) });",
-        );
+        let diags =
+            run_on("useQuery({ queryKey: ['user', userId], queryFn: () => fetchUser(userId) });");
         assert!(diags.is_empty(), "{diags:?}");
     }
 
     #[test]
     fn flags_only_missing_when_multiple_vars() {
-        let diags = run_on(
-            "useQuery({ queryKey: ['user', userId], queryFn: () => api(userId, filter) });",
-        );
+        let diags =
+            run_on("useQuery({ queryKey: ['user', userId], queryFn: () => api(userId, filter) });");
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("filter"));
         assert!(!diags[0].message.contains("`userId`"));
@@ -413,25 +426,21 @@ mod tests {
 
     #[test]
     fn ignores_globals_and_pascal_case() {
-        let diags = run_on(
-            "useQuery({ queryKey: ['x'], queryFn: () => fetch(URL).then(JSON.parse) });",
-        );
+        let diags =
+            run_on("useQuery({ queryKey: ['x'], queryFn: () => fetch(URL).then(JSON.parse) });");
         assert!(diags.is_empty(), "{diags:?}");
     }
 
     #[test]
     fn handles_query_options_factory() {
-        let diags = run_on(
-            "queryOptions({ queryKey: ['user'], queryFn: () => fetchUser(userId) });",
-        );
+        let diags =
+            run_on("queryOptions({ queryKey: ['user'], queryFn: () => fetchUser(userId) });");
         assert_eq!(diags.len(), 1);
     }
 
     #[test]
     fn ignores_non_query_hooks() {
-        let diags = run_on(
-            "someOther({ queryKey: ['user'], queryFn: () => fetchUser(userId) });",
-        );
+        let diags = run_on("someOther({ queryKey: ['user'], queryFn: () => fetchUser(userId) });");
         assert!(diags.is_empty(), "{diags:?}");
     }
 
@@ -445,9 +454,8 @@ mod tests {
 
     #[test]
     fn template_string_interpolation_in_key_counts() {
-        let diags = run_on(
-            "useQuery({ queryKey: [`user-${userId}`], queryFn: () => fetchUser(userId) });",
-        );
+        let diags =
+            run_on("useQuery({ queryKey: [`user-${userId}`], queryFn: () => fetchUser(userId) });");
         assert!(diags.is_empty(), "{diags:?}");
     }
 

@@ -34,9 +34,8 @@ fn has_single_char_alternation(pattern: &str) -> bool {
         }
     };
 
-    let alternation_hit = |run: &[Option<u8>]| -> bool {
-        run.len() >= 3 && run.iter().all(|t| t.is_some())
-    };
+    let alternation_hit =
+        |run: &[Option<u8>]| -> bool { run.len() >= 3 && run.iter().all(|t| t.is_some()) };
 
     while i < bytes.len() {
         let b = bytes[i];

@@ -11,15 +11,13 @@
 mod typescript;
 
 use crate::diagnostic::Severity;
-use crate::rules::meta::RuleMeta;
 use crate::rules::RuleDef;
+use crate::rules::meta::RuleMeta;
 
 pub const META: RuleMeta = RuleMeta {
     id: "api-deprecation-headers",
-    description:
-        "Route handlers marked `@deprecated` must set `Deprecation` and `Sunset` response headers.",
-    remediation:
-        "Add `Deprecation: true` and `Sunset: <date>` to the handler response so clients can detect the deprecation at runtime (RFC 9745 / RFC 8594).",
+    description: "Route handlers marked `@deprecated` must set `Deprecation` and `Sunset` response headers.",
+    remediation: "Add `Deprecation: true` and `Sunset: <date>` to the handler response so clients can detect the deprecation at runtime (RFC 9745 / RFC 8594).",
     severity: Severity::Warning,
     doc_url: Some("https://datatracker.ietf.org/doc/html/rfc9745"),
     categories: &["api"],

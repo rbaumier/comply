@@ -33,14 +33,9 @@ impl AstCheck for Check {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
-
-
         crate::rules::test_helpers::run_ts(source, &Check)
-
-
     }
 
     #[test]
@@ -63,8 +58,7 @@ mod tests {
     #[test]
     fn does_not_count_operators_inside_trailing_line_comment() {
         // TS equivalent of the Rust FP from RULES_TO_FIX.md #6.
-        let source =
-            "expect(run(\"utils.spec.ts\", \"// TODO: add tests\").length).toBe(1); // eslint-disable-next-line — test content not a real marker";
+        let source = "expect(run(\"utils.spec.ts\", \"// TODO: add tests\").length).toBe(1); // eslint-disable-next-line — test content not a real marker";
         assert!(run_on(source).is_empty());
     }
 

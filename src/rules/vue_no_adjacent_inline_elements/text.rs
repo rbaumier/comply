@@ -7,17 +7,13 @@ use crate::rules::backend::{CheckCtx, TextCheck};
 use crate::rules::vue_template_helpers::{extract_template, is_vue_file};
 
 const INLINE_ELEMENTS: &[&str] = &[
-    "a", "abbr", "b", "bdi", "bdo", "br", "cite", "code", "data", "dfn", "em", "i", "kbd",
-    "mark", "q", "rp", "rt", "ruby", "s", "samp", "small", "span", "strong", "sub", "sup",
-    "time", "u", "var", "wbr", "img", "input", "button", "label", "select", "textarea",
+    "a", "abbr", "b", "bdi", "bdo", "br", "cite", "code", "data", "dfn", "em", "i", "kbd", "mark",
+    "q", "rp", "rt", "ruby", "s", "samp", "small", "span", "strong", "sub", "sup", "time", "u",
+    "var", "wbr", "img", "input", "button", "label", "select", "textarea",
 ];
 
 fn is_inline_tag(tag: &str) -> bool {
-    INLINE_ELEMENTS.contains(&tag)
-        || tag
-            .chars()
-            .next()
-            .is_some_and(|c| c.is_ascii_uppercase())
+    INLINE_ELEMENTS.contains(&tag) || tag.chars().next().is_some_and(|c| c.is_ascii_uppercase())
 }
 
 fn extract_tag_name(s: &str) -> Option<&str> {
@@ -75,16 +71,14 @@ impl TextCheck for Check {
                     && is_inline_tag(close_tag)
                     && is_inline_tag(open_tag)
                 {
-                    let line =
-                        lines_before + 1 + template[..after].matches('\n').count();
+                    let line = lines_before + 1 + template[..after].matches('\n').count();
                     diagnostics.push(Diagnostic {
                         path: std::sync::Arc::clone(&ctx.path_arc),
                         line,
                         column: 1,
                         rule_id: "vue-no-adjacent-inline-elements".into(),
-                        message:
-                            "Adjacent inline elements without whitespace — add a space."
-                                .into(),
+                        message: "Adjacent inline elements without whitespace — add a space."
+                            .into(),
                         severity: Severity::Warning,
                         span: None,
                     });

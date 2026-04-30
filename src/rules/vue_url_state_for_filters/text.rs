@@ -104,8 +104,7 @@ fn declared_ref_name(line: &str) -> Option<&str> {
     if rest.starts_with('{') || rest.starts_with('[') {
         return None;
     }
-    let name_end = rest
-        .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '$'))?;
+    let name_end = rest.find(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '$'))?;
     let name = &rest[..name_end];
     if name.is_empty() {
         return None;
@@ -120,7 +119,9 @@ fn declared_ref_name(line: &str) -> Option<&str> {
         after
     };
     let after = after.strip_prefix('=')?.trim_start();
-    if after.starts_with("ref(") || after.starts_with("reactive(") || after.starts_with("shallowRef(")
+    if after.starts_with("ref(")
+        || after.starts_with("reactive(")
+        || after.starts_with("shallowRef(")
     {
         Some(name)
     } else {

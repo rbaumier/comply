@@ -9,8 +9,12 @@ fn has_jsx_attr(node: tree_sitter::Node, source: &[u8], attr_name: &str) -> bool
         if child.kind() != "jsx_attribute" {
             continue;
         }
-        let Some(name_node) = child.child(0) else { continue };
-        let Ok(name) = name_node.utf8_text(source) else { continue };
+        let Some(name_node) = child.child(0) else {
+            continue;
+        };
+        let Ok(name) = name_node.utf8_text(source) else {
+            continue;
+        };
         if name == attr_name {
             return true;
         }
@@ -70,7 +74,8 @@ mod tests {
 
     #[test]
     fn allows_checked_with_onchange() {
-        let src = r#"const x = <input type="checkbox" checked={isChecked} onChange={handleChange} />;"#;
+        let src =
+            r#"const x = <input type="checkbox" checked={isChecked} onChange={handleChange} />;"#;
         assert!(run_on(src).is_empty());
     }
 

@@ -122,10 +122,7 @@ mod tests {
     #[test]
     fn flags_update_set_returning_without_where() {
         assert_eq!(
-            run_on(
-                "await db.update(usersTable).set({ active: true }).returning()"
-            )
-            .len(),
+            run_on("await db.update(usersTable).set({ active: true }).returning()").len(),
             1
         );
     }
@@ -133,10 +130,8 @@ mod tests {
     #[test]
     fn allows_update_with_where() {
         assert!(
-            run_on(
-                "await db.update(usersTable).set({ active: true }).where(eq(usersTable.id, 1))"
-            )
-            .is_empty()
+            run_on("await db.update(usersTable).set({ active: true }).where(eq(usersTable.id, 1))")
+                .is_empty()
         );
     }
 

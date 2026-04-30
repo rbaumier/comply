@@ -56,25 +56,24 @@ fn args_contain_expect(args: Node<'_>, source: &[u8]) -> bool {
     let mut stack: Vec<Node<'_>> = args.named_children(&mut cursor).collect();
     while let Some(n) = stack.pop() {
         if n.kind() == "call_expression"
-            && let Some(callee) = n.child_by_field_name("function") {
-                let name_bytes = match callee.kind() {
-                    "identifier" => Some(&source[callee.byte_range()]),
-                    "member_expression" => callee
-                        .child_by_field_name("object")
-                        .map(|o| &source[o.byte_range()]),
-                    _ => None,
-                };
-                if name_bytes == Some(b"expect".as_slice()) {
-                    return true;
-                }
-                // Also catch `expect(x).resolves.toBe(...)` style where the
-                // call's function is a member chain rooted on `expect(...)`.
-                if callee.kind() == "member_expression"
-                    && member_root_is_expect_call(callee, source)
-                {
-                    return true;
-                }
+            && let Some(callee) = n.child_by_field_name("function")
+        {
+            let name_bytes = match callee.kind() {
+                "identifier" => Some(&source[callee.byte_range()]),
+                "member_expression" => callee
+                    .child_by_field_name("object")
+                    .map(|o| &source[o.byte_range()]),
+                _ => None,
+            };
+            if name_bytes == Some(b"expect".as_slice()) {
+                return true;
             }
+            // Also catch `expect(x).resolves.toBe(...)` style where the
+            // call's function is a member chain rooted on `expect(...)`.
+            if callee.kind() == "member_expression" && member_root_is_expect_call(callee, source) {
+                return true;
+            }
+        }
         let mut c = n.walk();
         for child in n.named_children(&mut c) {
             stack.push(child);

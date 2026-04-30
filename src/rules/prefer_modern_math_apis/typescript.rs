@@ -16,7 +16,9 @@ fn is_math_call(node: tree_sitter::Node, name: &str, source: &[u8]) -> bool {
     if node.kind() != "call_expression" {
         return false;
     }
-    let Some(callee) = node.child_by_field_name("function") else { return false };
+    let Some(callee) = node.child_by_field_name("function") else {
+        return false;
+    };
     is_math_member(callee, name, source)
 }
 
@@ -25,11 +27,15 @@ fn is_math_member(node: tree_sitter::Node, name: &str, source: &[u8]) -> bool {
     if node.kind() != "member_expression" {
         return false;
     }
-    let Some(obj) = node.child_by_field_name("object") else { return false };
+    let Some(obj) = node.child_by_field_name("object") else {
+        return false;
+    };
     if obj.utf8_text(source).unwrap_or("") != "Math" {
         return false;
     }
-    let Some(prop) = node.child_by_field_name("property") else { return false };
+    let Some(prop) = node.child_by_field_name("property") else {
+        return false;
+    };
     prop.utf8_text(source).unwrap_or("") == name
 }
 
@@ -50,10 +56,7 @@ fn unwrap(mut n: tree_sitter::Node) -> tree_sitter::Node {
 
 /// If the binary_expression is one of the log-conversion shapes, return
 /// the suggestion message.
-fn log_violation_message(
-    node: tree_sitter::Node,
-    source: &[u8],
-) -> Option<&'static str> {
+fn log_violation_message(node: tree_sitter::Node, source: &[u8]) -> Option<&'static str> {
     let op_node = node.child_by_field_name("operator")?;
     let op = op_node.utf8_text(source).ok()?;
     let left = unwrap(node.child_by_field_name("left")?);
@@ -106,7 +109,9 @@ fn is_squared(node: tree_sitter::Node, source: &[u8]) -> bool {
     if op != "**" {
         return false;
     }
-    let Some(right) = n.child_by_field_name("right") else { return false };
+    let Some(right) = n.child_by_field_name("right") else {
+        return false;
+    };
     let r = unwrap(right);
     r.kind() == "number" && r.utf8_text(source).unwrap_or("") == "2"
 }
@@ -124,8 +129,12 @@ fn is_self_mul(node: tree_sitter::Node, source: &[u8]) -> bool {
     if op != "*" {
         return false;
     }
-    let Some(left) = n.child_by_field_name("left") else { return false };
-    let Some(right) = n.child_by_field_name("right") else { return false };
+    let Some(left) = n.child_by_field_name("left") else {
+        return false;
+    };
+    let Some(right) = n.child_by_field_name("right") else {
+        return false;
+    };
     let lt = unwrap(left).utf8_text(source).unwrap_or("");
     let rt = unwrap(right).utf8_text(source).unwrap_or("");
     !lt.is_empty() && lt == rt
@@ -136,11 +145,7 @@ fn is_self_mul(node: tree_sitter::Node, source: &[u8]) -> bool {
 fn is_sum_of_squares(node: tree_sitter::Node, source: &[u8]) -> bool {
     // Collect `+`-joined terms.
     let mut terms: Vec<tree_sitter::Node> = Vec::new();
-    fn collect<'t>(
-        n: tree_sitter::Node<'t>,
-        source: &[u8],
-        out: &mut Vec<tree_sitter::Node<'t>>,
-    ) {
+    fn collect<'t>(n: tree_sitter::Node<'t>, source: &[u8], out: &mut Vec<tree_sitter::Node<'t>>) {
         let n = unwrap(n);
         if n.kind() == "binary_expression"
             && n.child_by_field_name("operator")
@@ -161,7 +166,9 @@ fn is_sum_of_squares(node: tree_sitter::Node, source: &[u8]) -> bool {
     if terms.len() < 2 {
         return false;
     }
-    terms.iter().all(|t| is_squared(*t, source) || is_self_mul(*t, source))
+    terms
+        .iter()
+        .all(|t| is_squared(*t, source) || is_self_mul(*t, source))
 }
 
 crate::ast_check! { on ["binary_expression", "call_expression"] => |node, source, ctx, diagnostics|

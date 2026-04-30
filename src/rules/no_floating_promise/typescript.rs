@@ -22,8 +22,8 @@ use crate::diagnostic::{Diagnostic, Severity};
 
 const ASYNC_LOOKING_METHODS: &[&str] = &[
     "send", "save", "load", "fetch", "query", "emit", "publish", "write", "insert", "update",
-    "delete", "close", "connect", "dispatch", "sync", "flush", "commit", "rollback", "run",
-    "exec", "execute", "process", "handle",
+    "delete", "close", "connect", "dispatch", "sync", "flush", "commit", "rollback", "run", "exec",
+    "execute", "process", "handle",
 ];
 
 /// Does the call end with `.then(...)` / `.catch(...)` / `.finally(...)`?

@@ -7,12 +7,24 @@ use crate::diagnostic::{Diagnostic, Severity};
 const BLUR_THRESHOLD_PX: f64 = 20.0;
 
 fn is_in_style_jsx_attribute(node: tree_sitter::Node, source: &[u8]) -> bool {
-    let Some(obj) = node.parent() else { return false };
-    if obj.kind() != "object" { return false; }
-    let Some(jsx_expr) = obj.parent() else { return false };
-    if jsx_expr.kind() != "jsx_expression" { return false; }
-    let Some(jsx_attr) = jsx_expr.parent() else { return false };
-    if jsx_attr.kind() != "jsx_attribute" { return false; }
+    let Some(obj) = node.parent() else {
+        return false;
+    };
+    if obj.kind() != "object" {
+        return false;
+    }
+    let Some(jsx_expr) = obj.parent() else {
+        return false;
+    };
+    if jsx_expr.kind() != "jsx_expression" {
+        return false;
+    }
+    let Some(jsx_attr) = jsx_expr.parent() else {
+        return false;
+    };
+    if jsx_attr.kind() != "jsx_attribute" {
+        return false;
+    }
     crate::rules::jsx::jsx_attribute_name(jsx_attr, source) == Some("style")
 }
 
@@ -26,7 +38,9 @@ fn max_blur_px(value: &str) -> Option<f64> {
         let Some(end) = rest.find(')') else { continue };
         let inner = rest[..end].trim();
         let num_part = inner.strip_suffix("px").unwrap_or(inner).trim();
-        let Ok(n) = num_part.parse::<f64>() else { continue };
+        let Ok(n) = num_part.parse::<f64>() else {
+            continue;
+        };
         max = Some(max.map_or(n, |m| m.max(n)));
     }
     max
@@ -106,9 +120,7 @@ mod tests {
 
     #[test]
     fn allows_non_blur_filter() {
-        assert!(
-            run(r#"<div style={{ filter: 'brightness(1.2) contrast(1.1)' }} />"#).is_empty()
-        );
+        assert!(run(r#"<div style={{ filter: 'brightness(1.2) contrast(1.1)' }} />"#).is_empty());
     }
 
     #[test]

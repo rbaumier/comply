@@ -73,26 +73,36 @@ mod tests {
 
     #[test]
     fn flags_set_property_in_raf() {
-        assert_eq!(run(r#"
+        assert_eq!(
+            run(r#"
 requestAnimationFrame(() => {
     document.documentElement.style.setProperty('--scroll', window.scrollY);
 });
-"#).len(), 1);
+"#)
+            .len(),
+            1
+        );
     }
 
     #[test]
     fn allows_scoped_set_property_in_raf() {
-        assert!(run(r#"
+        assert!(
+            run(r#"
 requestAnimationFrame(() => {
     element.style.setProperty('--x', value);
 });
-"#).is_empty());
+"#)
+            .is_empty()
+        );
     }
 
     #[test]
     fn allows_set_property_outside_raf() {
-        assert!(run(r#"
+        assert!(
+            run(r#"
 document.documentElement.style.setProperty('--theme', 'dark');
-"#).is_empty());
+"#)
+            .is_empty()
+        );
     }
 }

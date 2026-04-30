@@ -69,7 +69,10 @@ mod tests {
 
     #[test]
     fn flags_callback_only_effect() {
-        assert_eq!(run("useEffect(() => { onChange(value) }, [value])").len(), 1);
+        assert_eq!(
+            run("useEffect(() => { onChange(value) }, [value])").len(),
+            1
+        );
     }
 
     #[test]
@@ -79,7 +82,10 @@ mod tests {
 
     #[test]
     fn flags_on_data_change() {
-        assert_eq!(run("useEffect(() => { onDataChange(items) }, [items])").len(), 1);
+        assert_eq!(
+            run("useEffect(() => { onDataChange(items) }, [items])").len(),
+            1
+        );
     }
 
     #[test]

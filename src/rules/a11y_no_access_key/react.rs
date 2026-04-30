@@ -32,7 +32,10 @@ mod tests {
 
     #[test]
     fn flags_access_key() {
-        assert_eq!(run(r#"const x = <button accessKey="s">Save</button>;"#).len(), 1);
+        assert_eq!(
+            run(r#"const x = <button accessKey="s">Save</button>;"#).len(),
+            1
+        );
     }
 
     #[test]

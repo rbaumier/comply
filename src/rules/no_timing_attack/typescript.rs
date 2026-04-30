@@ -97,18 +97,11 @@ fn member_object_text<'a>(node: tree_sitter::Node<'a>, source: &'a [u8]) -> Opti
         .and_then(|o| o.utf8_text(source).ok())
 }
 
-fn both_from_same_object(
-    left: tree_sitter::Node,
-    right: tree_sitter::Node,
-    source: &[u8],
-) -> bool {
+fn both_from_same_object(left: tree_sitter::Node, right: tree_sitter::Node, source: &[u8]) -> bool {
     let left_obj = member_object_text(left, source);
     let right_obj = member_object_text(right, source);
     matches!((left_obj, right_obj), (Some(a), Some(b)) if a == b)
 }
-
-
-
 
 #[cfg(test)]
 mod tests {

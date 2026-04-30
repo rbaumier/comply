@@ -10,7 +10,9 @@ fn is_use_server(node: tree_sitter::Node, source: &[u8]) -> bool {
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         if child.kind() == "string" {
-            let Ok(text) = child.utf8_text(source) else { continue };
+            let Ok(text) = child.utf8_text(source) else {
+                continue;
+            };
             let inner = text.trim_matches(|c| c == '"' || c == '\'' || c == ';');
             if inner == "use server" {
                 return true;
@@ -22,7 +24,9 @@ fn is_use_server(node: tree_sitter::Node, source: &[u8]) -> bool {
 
 /// Check if a function node has the `async` keyword.
 fn is_async_func(node: tree_sitter::Node, source: &[u8]) -> bool {
-    let Ok(text) = node.utf8_text(source) else { return false };
+    let Ok(text) = node.utf8_text(source) else {
+        return false;
+    };
     text.starts_with("async ")
 }
 

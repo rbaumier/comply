@@ -73,9 +73,7 @@ fn is_empty_array(node: Node) -> bool {
 /// `arrow_function` or a `function` expression.
 fn callback_body<'tree>(node: Node<'tree>) -> Option<Node<'tree>> {
     match node.kind() {
-        "arrow_function" | "function" | "function_expression" => {
-            node.child_by_field_name("body")
-        }
+        "arrow_function" | "function" | "function_expression" => node.child_by_field_name("body"),
         _ => None,
     }
 }

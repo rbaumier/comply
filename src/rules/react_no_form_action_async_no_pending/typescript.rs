@@ -26,15 +26,16 @@ impl TextCheck for Check {
         let bytes = ctx.source.as_bytes();
         let mut i = 0;
         while i + 5 < bytes.len() {
-            if &bytes[i..i + 5] == b"<form"
-                && (i == 0 || !bytes[i - 1].is_ascii_alphanumeric())
-            {
+            if &bytes[i..i + 5] == b"<form" && (i == 0 || !bytes[i - 1].is_ascii_alphanumeric()) {
                 // Find end of tag (`>`), bounded to a few hundred chars.
                 let scan_end = (i + 500).min(bytes.len());
                 let mut tag_end = i;
                 let mut found = false;
                 while tag_end < scan_end {
-                    if bytes[tag_end] == b'>' { found = true; break; }
+                    if bytes[tag_end] == b'>' {
+                        found = true;
+                        break;
+                    }
                     tag_end += 1;
                 }
                 if found {

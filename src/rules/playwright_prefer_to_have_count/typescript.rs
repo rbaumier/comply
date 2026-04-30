@@ -88,7 +88,9 @@ mod tests {
     use super::*;
     use crate::rules::test_helpers::run_ts;
 
-    fn pw(s: &str) -> String { format!("{s}\n// @playwright/test") }
+    fn pw(s: &str) -> String {
+        format!("{s}\n// @playwright/test")
+    }
 
     #[test]
     fn flags_await_count_to_be() {
@@ -99,7 +101,10 @@ mod tests {
 
     #[test]
     fn flags_await_count_to_equal() {
-        let d = run_ts(&pw("expect(await page.locator('.item').count()).toEqual(5);"), &Check);
+        let d = run_ts(
+            &pw("expect(await page.locator('.item').count()).toEqual(5);"),
+            &Check,
+        );
         assert_eq!(d.len(), 1);
     }
 
@@ -117,7 +122,10 @@ mod tests {
 
     #[test]
     fn allows_non_count_await() {
-        let d = run_ts(&pw("expect(await locator.textContent()).toBe('hello');"), &Check);
+        let d = run_ts(
+            &pw("expect(await locator.textContent()).toBe('hello');"),
+            &Check,
+        );
         assert!(d.is_empty());
     }
 

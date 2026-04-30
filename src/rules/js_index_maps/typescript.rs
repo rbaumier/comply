@@ -139,35 +139,47 @@ const result = items.map(item => {
 
     #[test]
     fn allows_find_outside_loop() {
-        assert!(run(r#"
+        assert!(
+            run(r#"
 const user = users.find(u => u.id === targetId);
-"#).is_empty());
+"#)
+            .is_empty()
+        );
     }
 
     #[test]
     fn allows_map_without_find() {
-        assert!(run(r#"
+        assert!(
+            run(r#"
 const names = items.map(i => i.name);
-"#).is_empty());
+"#)
+            .is_empty()
+        );
     }
 
     #[test]
     fn allows_find_on_non_loop_call() {
-        assert!(run(r#"
+        assert!(
+            run(r#"
 function process() {
     const item = arr.find(x => x.id === id);
     return item;
 }
-"#).is_empty());
+"#)
+            .is_empty()
+        );
     }
 
     #[test]
     fn allows_find_in_named_function_inside_loop() {
-        assert!(run(r#"
+        assert!(
+            run(r#"
 items.forEach(item => {
     function helper() { return others.find(o => o.id === id); }
     return helper;
 });
-"#).is_empty());
+"#)
+            .is_empty()
+        );
     }
 }

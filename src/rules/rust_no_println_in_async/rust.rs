@@ -3,16 +3,20 @@
 //! `async fn` or an `async { … }` / `async move { … }` block.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::rules::rust_helpers::{is_inside_async_fn, is_in_test_context};
+use crate::rules::rust_helpers::{is_in_test_context, is_inside_async_fn};
 
 /// True when `node` lies inside an `async { … }` or `async move { … }` block.
 /// tree-sitter-rust represents these as `async_block` nodes.
 fn is_inside_async_block(node: tree_sitter::Node<'_>) -> bool {
     let mut cur = node.parent();
     while let Some(p) = cur {
-        if p.kind() == "async_block" { return true; }
+        if p.kind() == "async_block" {
+            return true;
+        }
         // Stop at function boundaries — `is_inside_async_fn` covers those.
-        if p.kind() == "function_item" { return false; }
+        if p.kind() == "function_item" {
+            return false;
+        }
         cur = p.parent();
     }
     false

@@ -26,7 +26,11 @@ impl TextCheck for Check {
         }
 
         // 1-based line number of the `<html` tag.
-        let line = source[..html_offset].bytes().filter(|b| *b == b'\n').count() + 1;
+        let line = source[..html_offset]
+            .bytes()
+            .filter(|b| *b == b'\n')
+            .count()
+            + 1;
 
         vec![Diagnostic {
             path: std::sync::Arc::clone(&ctx.path_arc),
@@ -51,7 +55,8 @@ mod tests {
 
     #[test]
     fn flags_html_missing_meta_charset() {
-        let src = "<!DOCTYPE html>\n<html>\n  <head><title>x</title></head>\n  <body></body>\n</html>\n";
+        let src =
+            "<!DOCTYPE html>\n<html>\n  <head><title>x</title></head>\n  <body></body>\n</html>\n";
         let diags = run("index.html", src);
         assert_eq!(diags.len(), 1);
     }

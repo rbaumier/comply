@@ -7,10 +7,9 @@ use crate::diagnostic::{Diagnostic, Severity};
 
 /// Common inline HTML elements.
 const INLINE_ELEMENTS: &[&str] = &[
-    "a", "abbr", "b", "bdi", "bdo", "br", "cite", "code", "data", "dfn",
-    "em", "i", "kbd", "mark", "q", "rp", "rt", "ruby", "s", "samp",
-    "small", "span", "strong", "sub", "sup", "time", "u", "var", "wbr",
-    "img", "input", "button", "label", "select", "textarea",
+    "a", "abbr", "b", "bdi", "bdo", "br", "cite", "code", "data", "dfn", "em", "i", "kbd", "mark",
+    "q", "rp", "rt", "ruby", "s", "samp", "small", "span", "strong", "sub", "sup", "time", "u",
+    "var", "wbr", "img", "input", "button", "label", "select", "textarea",
 ];
 
 fn is_inline_jsx(kind: &str, source: &[u8], node: &tree_sitter::Node) -> bool {
@@ -18,7 +17,9 @@ fn is_inline_jsx(kind: &str, source: &[u8], node: &tree_sitter::Node) -> bool {
         return false;
     }
     let tag_node = if kind == "jsx_element" {
-        let Some(opening) = node.child(0) else { return false };
+        let Some(opening) = node.child(0) else {
+            return false;
+        };
         opening
     } else {
         *node
@@ -26,7 +27,9 @@ fn is_inline_jsx(kind: &str, source: &[u8], node: &tree_sitter::Node) -> bool {
     let Some(name_node) = tag_node.child_by_field_name("name") else {
         return false;
     };
-    let Ok(name) = name_node.utf8_text(source) else { return false };
+    let Ok(name) = name_node.utf8_text(source) else {
+        return false;
+    };
     // User components (PascalCase) are inline by default.
     if name.chars().next().unwrap_or('a').is_ascii_uppercase() {
         return true;

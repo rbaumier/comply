@@ -9,7 +9,8 @@ fn subtree_has_jsx(node: tree_sitter::Node) -> bool {
         "jsx_element" | "jsx_self_closing_element" | "jsx_fragment" => true,
         _ => {
             let mut cursor = node.walk();
-            node.children(&mut cursor).any(|child| subtree_has_jsx(child))
+            node.children(&mut cursor)
+                .any(|child| subtree_has_jsx(child))
         }
     }
 }
@@ -116,11 +117,14 @@ mod tests {
 
     #[test]
     fn allows_small_component() {
-        assert!(run(r#"
+        assert!(
+            run(r#"
 function SmallComponent() {
     return <div>hello</div>;
 }
-"#).is_empty());
+"#)
+            .is_empty()
+        );
     }
 
     #[test]

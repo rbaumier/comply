@@ -74,6 +74,9 @@ mod tests {
 
     #[test]
     fn flags_img_with_only_width() {
-        assert_eq!(run(r#"const x = <img src="/a.png" width={200} />;"#).len(), 1);
+        assert_eq!(
+            run(r#"const x = <img src="/a.png" width={200} />;"#).len(),
+            1
+        );
     }
 }

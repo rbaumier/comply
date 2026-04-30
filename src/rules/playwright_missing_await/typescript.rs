@@ -4,19 +4,70 @@ use crate::diagnostic::{Diagnostic, Severity};
 
 /// Known Playwright async method names (without the object prefix).
 const ASYNC_METHODS: &[&str] = &[
-    "goto", "click", "dblclick", "fill", "type", "press", "check",
-    "uncheck", "selectOption", "setInputFiles", "waitForSelector",
-    "waitForNavigation", "waitForLoadState", "waitForURL", "waitForEvent",
-    "waitForFunction", "waitForTimeout", "waitForResponse", "waitForRequest",
-    "screenshot", "pdf", "content", "title", "evaluate", "evaluateHandle",
-    "reload", "goBack", "goForward", "close", "hover", "focus", "tap",
-    "dragAndDrop", "setContent", "addInitScript", "route", "unroute",
-    "exposeFunction", "emulateMedia", "setViewportSize", "setExtraHTTPHeaders",
-    "dragTo", "scrollIntoViewIfNeeded", "selectText", "setChecked",
-    "inputValue", "textContent", "innerText", "innerHTML", "getAttribute",
-    "isVisible", "isHidden", "isEnabled", "isDisabled", "isChecked",
-    "isEditable", "boundingBox", "waitFor", "clear",
-    "newPage", "newContext", "clearCookies", "addCookies", "cookies",
+    "goto",
+    "click",
+    "dblclick",
+    "fill",
+    "type",
+    "press",
+    "check",
+    "uncheck",
+    "selectOption",
+    "setInputFiles",
+    "waitForSelector",
+    "waitForNavigation",
+    "waitForLoadState",
+    "waitForURL",
+    "waitForEvent",
+    "waitForFunction",
+    "waitForTimeout",
+    "waitForResponse",
+    "waitForRequest",
+    "screenshot",
+    "pdf",
+    "content",
+    "title",
+    "evaluate",
+    "evaluateHandle",
+    "reload",
+    "goBack",
+    "goForward",
+    "close",
+    "hover",
+    "focus",
+    "tap",
+    "dragAndDrop",
+    "setContent",
+    "addInitScript",
+    "route",
+    "unroute",
+    "exposeFunction",
+    "emulateMedia",
+    "setViewportSize",
+    "setExtraHTTPHeaders",
+    "dragTo",
+    "scrollIntoViewIfNeeded",
+    "selectText",
+    "setChecked",
+    "inputValue",
+    "textContent",
+    "innerText",
+    "innerHTML",
+    "getAttribute",
+    "isVisible",
+    "isHidden",
+    "isEnabled",
+    "isDisabled",
+    "isChecked",
+    "isEditable",
+    "boundingBox",
+    "waitFor",
+    "clear",
+    "newPage",
+    "newContext",
+    "clearCookies",
+    "addCookies",
+    "cookies",
     "storageState",
 ];
 
@@ -25,12 +76,30 @@ const PW_OBJECTS: &[&str] = &["page", "locator", "browser", "context", "frame"];
 
 /// Known Playwright async expect matchers.
 const ASYNC_EXPECT_METHODS: &[&str] = &[
-    "toBeVisible", "toBeHidden", "toBeEnabled", "toBeDisabled",
-    "toBeChecked", "toBeEditable", "toBeEmpty", "toBeFocused",
-    "toBeAttached", "toBeInViewport", "toContainText", "toHaveAttribute",
-    "toHaveClass", "toHaveCount", "toHaveCSS", "toHaveId",
-    "toHaveJSProperty", "toHaveScreenshot", "toHaveText", "toHaveTitle",
-    "toHaveURL", "toHaveValue", "toHaveValues", "toPass",
+    "toBeVisible",
+    "toBeHidden",
+    "toBeEnabled",
+    "toBeDisabled",
+    "toBeChecked",
+    "toBeEditable",
+    "toBeEmpty",
+    "toBeFocused",
+    "toBeAttached",
+    "toBeInViewport",
+    "toContainText",
+    "toHaveAttribute",
+    "toHaveClass",
+    "toHaveCount",
+    "toHaveCSS",
+    "toHaveId",
+    "toHaveJSProperty",
+    "toHaveScreenshot",
+    "toHaveText",
+    "toHaveTitle",
+    "toHaveURL",
+    "toHaveValue",
+    "toHaveValues",
+    "toPass",
 ];
 
 /// Walk ancestors to check if we're inside an `await_expression`.
@@ -42,8 +111,9 @@ fn is_inside_await(node: tree_sitter::Node) -> bool {
         }
         // Don't walk past function boundaries.
         match p.kind() {
-            "function_declaration" | "function" | "arrow_function"
-            | "method_definition" => return false,
+            "function_declaration" | "function" | "arrow_function" | "method_definition" => {
+                return false;
+            }
             _ => {}
         }
         cur = p.parent();
@@ -152,7 +222,9 @@ mod tests {
 
     const PW: &str = "import { test, expect } from \"@playwright/test\";\n";
 
-    fn pw(s: &str) -> String { format!("{PW}{s}") }
+    fn pw(s: &str) -> String {
+        format!("{PW}{s}")
+    }
 
     #[test]
     fn flags_missing_await_on_page_click() {

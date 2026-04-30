@@ -109,7 +109,10 @@ mod tests {
 
     #[test]
     fn flags_hero_without_fetchpriority() {
-        assert_eq!(run(r#"const x = <img src="h.jpg" width="1200" height="800" />;"#).len(), 1);
+        assert_eq!(
+            run(r#"const x = <img src="h.jpg" width="1200" height="800" />;"#).len(),
+            1
+        );
     }
 
     #[test]
@@ -127,7 +130,9 @@ mod tests {
 
     #[test]
     fn allows_hero_with_fetchpriority_high() {
-        assert!(run(r#"const x = <img src="h.jpg" width="1200" fetchpriority="high" />;"#).is_empty());
+        assert!(
+            run(r#"const x = <img src="h.jpg" width="1200" fetchpriority="high" />;"#).is_empty()
+        );
     }
 
     #[test]

@@ -12,9 +12,7 @@ fn looks_like_variant_prop(name: &str) -> bool {
             return false;
         }
         let rest = &name[prefix.len()..];
-        rest.chars()
-            .next()
-            .is_some_and(|c| c.is_ascii_uppercase())
+        rest.chars().next().is_some_and(|c| c.is_ascii_uppercase())
     };
     check("is") || check("has")
 }
@@ -26,18 +24,28 @@ fn function_name_is_component(name: &str) -> bool {
 fn is_function_component(node: tree_sitter::Node<'_>, source: &[u8]) -> bool {
     match node.kind() {
         "function_declaration" => {
-            let Some(name) = node.child_by_field_name("name") else { return false };
-            let Ok(text) = name.utf8_text(source) else { return false };
+            let Some(name) = node.child_by_field_name("name") else {
+                return false;
+            };
+            let Ok(text) = name.utf8_text(source) else {
+                return false;
+            };
             function_name_is_component(text)
         }
         "arrow_function" | "function_expression" => {
             // Check enclosing variable_declarator for a PascalCase id.
-            let Some(parent) = node.parent() else { return false };
+            let Some(parent) = node.parent() else {
+                return false;
+            };
             if parent.kind() != "variable_declarator" {
                 return false;
             }
-            let Some(name) = parent.child_by_field_name("name") else { return false };
-            let Ok(text) = name.utf8_text(source) else { return false };
+            let Some(name) = parent.child_by_field_name("name") else {
+                return false;
+            };
+            let Ok(text) = name.utf8_text(source) else {
+                return false;
+            };
             function_name_is_component(text)
         }
         _ => false,
@@ -70,9 +78,10 @@ fn count_boolean_variants(pattern: tree_sitter::Node<'_>, source: &[u8]) -> usiz
         };
         let Some(n) = name_node else { continue };
         if let Ok(text) = n.utf8_text(source)
-            && looks_like_variant_prop(text) {
-                count += 1;
-            }
+            && looks_like_variant_prop(text)
+        {
+            count += 1;
+        }
     }
     count
 }

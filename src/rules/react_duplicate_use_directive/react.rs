@@ -29,7 +29,7 @@ crate::ast_check! { on ["program"] => |node, _source, ctx, diagnostics|
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rules::file_ctx::{FileDirectives, FileCtx};
+    use crate::rules::file_ctx::{FileCtx, FileDirectives};
 
     fn both_directives() -> FileCtx {
         FileCtx {

@@ -126,9 +126,10 @@ fn collect_functions(
             let count = params.named_child_count();
             for i in 0..count {
                 if let Some(param) = params.named_child(i)
-                    && let Some(name) = extract_param_name(param, source) {
-                        names.push(name);
-                    }
+                    && let Some(name) = extract_param_name(param, source)
+                {
+                    names.push(name);
+                }
             }
             names.sort();
             names.dedup();

@@ -77,11 +77,7 @@ fn type_name_is(generic: &tree_sitter::Node, name: &str, source: &[u8]) -> bool 
 
 /// True if the first type argument inside `type_arguments` is a
 /// `generic_type` whose base type identifier matches `name`.
-fn first_type_arg_is(
-    type_arguments: &tree_sitter::Node,
-    name: &str,
-    source: &[u8],
-) -> bool {
+fn first_type_arg_is(type_arguments: &tree_sitter::Node, name: &str, source: &[u8]) -> bool {
     let mut cursor = type_arguments.walk();
     for child in type_arguments.named_children(&mut cursor) {
         if child.kind() == "generic_type" && type_name_is(&child, name, source) {
@@ -94,14 +90,9 @@ fn first_type_arg_is(
 #[cfg(test)]
 mod tests {
     use super::*;
-    
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
-
-
         crate::rules::test_helpers::run_rust(source, &Check)
-
-
     }
 
     #[test]

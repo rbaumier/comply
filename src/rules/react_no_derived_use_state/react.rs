@@ -65,10 +65,7 @@ fn extract_prop_names_from_params<'a>(
     out
 }
 
-fn find_component_prop_names<'a>(
-    node: tree_sitter::Node<'a>,
-    source: &'a [u8],
-) -> Vec<&'a str> {
+fn find_component_prop_names<'a>(node: tree_sitter::Node<'a>, source: &'a [u8]) -> Vec<&'a str> {
     let mut ancestor = node.parent();
     while let Some(a) = ancestor {
         match a.kind() {
@@ -114,8 +111,12 @@ fn is_use_state_call(node: tree_sitter::Node, source: &[u8]) -> bool {
     match callee.kind() {
         "identifier" => callee.utf8_text(source).ok() == Some("useState"),
         "member_expression" => {
-            let obj = callee.child_by_field_name("object").and_then(|o| o.utf8_text(source).ok());
-            let prop = callee.child_by_field_name("property").and_then(|p| p.utf8_text(source).ok());
+            let obj = callee
+                .child_by_field_name("object")
+                .and_then(|o| o.utf8_text(source).ok());
+            let prop = callee
+                .child_by_field_name("property")
+                .and_then(|p| p.utf8_text(source).ok());
             obj == Some("React") && prop == Some("useState")
         }
         _ => false,
@@ -197,41 +198,53 @@ function Card({ initialValue: value }) {
 
     #[test]
     fn allows_non_prop_initializer() {
-        assert!(run(r#"
+        assert!(
+            run(r#"
 function UserCard({ name }) {
     const [count, setCount] = useState(0);
     return <div>{name} {count}</div>;
 }
-"#).is_empty());
+"#)
+            .is_empty()
+        );
     }
 
     #[test]
     fn allows_function_call_initializer() {
-        assert!(run(r#"
+        assert!(
+            run(r#"
 function UserCard({ name }) {
     const [display, setDisplay] = useState(formatName(name));
     return <div>{display}</div>;
 }
-"#).is_empty());
+"#)
+            .is_empty()
+        );
     }
 
     #[test]
     fn allows_non_component_function() {
-        assert!(run(r#"
+        assert!(
+            run(r#"
 function useCustomHook(value) {
     const [v, setV] = useState(value);
     return v;
 }
-"#).is_empty());
+"#)
+            .is_empty()
+        );
     }
 
     #[test]
     fn allows_undestructured_props() {
-        assert!(run(r#"
+        assert!(
+            run(r#"
 function UserCard(props) {
     const [name, setName] = useState(props.name);
     return <div>{name}</div>;
 }
-"#).is_empty());
+"#)
+            .is_empty()
+        );
     }
 }

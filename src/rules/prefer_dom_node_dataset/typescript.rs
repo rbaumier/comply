@@ -2,12 +2,21 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-const METHODS: &[&str] = &["setAttribute", "getAttribute", "removeAttribute", "hasAttribute"];
+const METHODS: &[&str] = &[
+    "setAttribute",
+    "getAttribute",
+    "removeAttribute",
+    "hasAttribute",
+];
 
 /// Check if the first argument of a call is a string starting with `data-`.
 fn first_arg_is_data_attr(node: tree_sitter::Node, source: &[u8]) -> bool {
-    let Some(args) = node.child_by_field_name("arguments") else { return false };
-    let Some(first) = args.named_child(0) else { return false };
+    let Some(args) = node.child_by_field_name("arguments") else {
+        return false;
+    };
+    let Some(first) = args.named_child(0) else {
+        return false;
+    };
     if first.kind() != "string" {
         return false;
     }

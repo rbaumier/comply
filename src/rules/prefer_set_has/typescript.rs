@@ -34,12 +34,17 @@ fn collect_const_arrays<'a>(
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
             if child.kind() == "variable_declarator" {
-                let Some(name_node) = child.child_by_field_name("name") else { continue };
-                let Some(value_node) = child.child_by_field_name("value") else { continue };
+                let Some(name_node) = child.child_by_field_name("name") else {
+                    continue;
+                };
+                let Some(value_node) = child.child_by_field_name("value") else {
+                    continue;
+                };
                 if value_node.kind() == "array"
-                    && let Ok(name) = name_node.utf8_text(source) {
-                        names.insert(name.to_owned());
-                    }
+                    && let Ok(name) = name_node.utf8_text(source)
+                {
+                    names.insert(name.to_owned());
+                }
             }
         }
         return;
@@ -60,16 +65,17 @@ fn find_includes_calls(
 ) {
     if node.kind() == "call_expression"
         && let Some(func) = node.child_by_field_name("function")
-            && func.kind() == "member_expression" {
-                let obj = func.child_by_field_name("object");
-                let prop = func.child_by_field_name("property");
-                if let (Some(obj_node), Some(prop_node)) = (obj, prop) {
-                    let prop_text = prop_node.utf8_text(source).unwrap_or("");
-                    if prop_text == "includes" {
-                        let obj_text = obj_node.utf8_text(source).unwrap_or("");
-                        if array_names.contains(obj_text) {
-                            let pos = node.start_position();
-                            diagnostics.push(Diagnostic {
+        && func.kind() == "member_expression"
+    {
+        let obj = func.child_by_field_name("object");
+        let prop = func.child_by_field_name("property");
+        if let (Some(obj_node), Some(prop_node)) = (obj, prop) {
+            let prop_text = prop_node.utf8_text(source).unwrap_or("");
+            if prop_text == "includes" {
+                let obj_text = obj_node.utf8_text(source).unwrap_or("");
+                if array_names.contains(obj_text) {
+                    let pos = node.start_position();
+                    diagnostics.push(Diagnostic {
                                 path: std::sync::Arc::clone(&ctx.path_arc),
                                 line: pos.row + 1,
                                 column: pos.column + 1,
@@ -80,10 +86,10 @@ fn find_includes_calls(
                                 severity: Severity::Warning,
                                 span: None,
                             });
-                        }
-                    }
                 }
             }
+        }
+    }
 
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {

@@ -6,8 +6,12 @@ const NON_INTERACTIVE: &[&str] = &["div", "span", "p", "section"];
 
 /// Check if a tabIndex attribute has a value other than -1.
 fn is_nonnegative_one_tabindex(attr: tree_sitter::Node, source: &[u8]) -> bool {
-    let Some(val) = crate::rules::jsx::jsx_attribute_value(attr) else { return true };
-    let Ok(text) = val.utf8_text(source) else { return true };
+    let Some(val) = crate::rules::jsx::jsx_attribute_value(attr) else {
+        return true;
+    };
+    let Ok(text) = val.utf8_text(source) else {
+        return true;
+    };
     // {-1} or "-1" are OK
     text != "{-1}" && text != "\"-1\""
 }

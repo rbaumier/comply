@@ -2,7 +2,9 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
-use crate::rules::vue_template_helpers::{attr_value, extract_elements, has_attr, has_text_content, is_vue_file};
+use crate::rules::vue_template_helpers::{
+    attr_value, extract_elements, has_attr, has_text_content, is_vue_file,
+};
 
 const INTERACTIVE: &[&str] = &["button", "input", "select", "textarea"];
 
@@ -20,16 +22,15 @@ impl TextCheck for Check {
                 continue;
             }
             // <input type="hidden"> is exempt
-            if elem.tag == "input"
-                && attr_value(elem.attrs, "type") == Some("hidden")
-            {
+            if elem.tag == "input" && attr_value(elem.attrs, "type") == Some("hidden") {
                 continue;
             }
             if has_attr(elem.attrs, "aria-label") || has_attr(elem.attrs, "aria-labelledby") {
                 continue;
             }
             // Buttons with text content are OK
-            if elem.tag == "button" && !elem.self_closing
+            if elem.tag == "button"
+                && !elem.self_closing
                 && has_text_content(ctx.source, elem.line - 1, "button")
             {
                 continue;

@@ -43,19 +43,27 @@ fn is_test_file(path: &std::path::Path) -> bool {
 /// True if the call expression's callee is a test definition (`it(...)`,
 /// `test(...)`, `it.each(...)(...)`, `test.each(...)(...)`).
 fn is_test_call(call: tree_sitter::Node, source: &[u8]) -> bool {
-    let Some(callee) = call.child_by_field_name("function") else { return false };
+    let Some(callee) = call.child_by_field_name("function") else {
+        return false;
+    };
     match callee.kind() {
         "identifier" => {
-            let Ok(text) = callee.utf8_text(source) else { return false };
+            let Ok(text) = callee.utf8_text(source) else {
+                return false;
+            };
             TEST_CALLEES.contains(&text)
         }
         "member_expression" => {
             // `it.skip(...)`, `test.only(...)` — leftmost identifier is the test fn.
-            let Some(object) = callee.child_by_field_name("object") else { return false };
+            let Some(object) = callee.child_by_field_name("object") else {
+                return false;
+            };
             if object.kind() != "identifier" {
                 return false;
             }
-            let Ok(text) = object.utf8_text(source) else { return false };
+            let Ok(text) = object.utf8_text(source) else {
+                return false;
+            };
             TEST_CALLEES.contains(&text)
         }
         "call_expression" => {

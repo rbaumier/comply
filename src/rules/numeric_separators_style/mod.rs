@@ -3,14 +3,13 @@
 mod typescript;
 
 use crate::diagnostic::Severity;
-use crate::rules::meta::RuleMeta;
 use crate::rules::RuleDef;
+use crate::rules::meta::RuleMeta;
 
 pub const META: RuleMeta = RuleMeta {
     id: "numeric-separators-style",
     description: "Enforce the style of numeric separators by correctly grouping digits.",
-    remediation:
-        "Add underscores to group digits: `1000000` → `1_000_000`, `0xFF00FF` → `0xFF_00_FF`.",
+    remediation: "Add underscores to group digits: `1000000` → `1_000_000`, `0xFF00FF` → `0xFF_00_FF`.",
     severity: Severity::Warning,
     doc_url: None,
     categories: &["unicorn"],

@@ -1,11 +1,11 @@
 //! no-for-loop — prefer `for-of` over classic indexed `for` loops.
 
-mod typescript;
 mod rust;
+mod typescript;
 
 use crate::diagnostic::Severity;
-use crate::rules::meta::RuleMeta;
 use crate::rules::RuleDef;
+use crate::rules::meta::RuleMeta;
 
 pub const META: RuleMeta = RuleMeta {
     id: "no-for-loop",

@@ -8,7 +8,7 @@ const CONTROL_FLOW_KINDS: &[&str] = &[
     "else_clause",
     "for_statement",
     "for_in_statement",
-    "for_of_statement" ,
+    "for_of_statement",
     "while_statement",
     "do_statement",
     "switch_case",

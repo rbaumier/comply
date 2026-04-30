@@ -176,7 +176,8 @@ mod tests {
 
     #[test]
     fn ignores_files_without_next_import() {
-        let src = "function redirect(_: string) {}\nfunction f() { try { redirect('/x'); } catch {} }";
+        let src =
+            "function redirect(_: string) {}\nfunction f() { try { redirect('/x'); } catch {} }";
         assert!(run(src).is_empty());
     }
 }

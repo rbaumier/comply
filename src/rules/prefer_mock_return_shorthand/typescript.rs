@@ -120,10 +120,7 @@ mod tests {
 
     #[test]
     fn flags_arrow_block_body_single_return() {
-        assert_eq!(
-            run("fn.mockImplementation(() => { return 42; });").len(),
-            1
-        );
+        assert_eq!(run("fn.mockImplementation(() => { return 42; });").len(), 1);
     }
 
     #[test]
@@ -136,10 +133,7 @@ mod tests {
 
     #[test]
     fn flags_arrow_returning_object() {
-        assert_eq!(
-            run("fn.mockImplementation(() => ({ id: 1 }));").len(),
-            1
-        );
+        assert_eq!(run("fn.mockImplementation(() => ({ id: 1 }));").len(), 1);
     }
 
     // ---- allows correct usage ----
@@ -157,8 +151,7 @@ mod tests {
 
     #[test]
     fn allows_implementation_with_multiple_statements() {
-        let src =
-            "fn.mockImplementation(() => { const x = compute(); return x + 1; });";
+        let src = "fn.mockImplementation(() => { const x = compute(); return x + 1; });";
         assert!(run(src).is_empty());
     }
 
@@ -170,10 +163,7 @@ mod tests {
 
     #[test]
     fn skips_promise_reject_body() {
-        assert!(
-            run("fn.mockImplementation(() => Promise.reject(new Error('x')));")
-                .is_empty()
-        );
+        assert!(run("fn.mockImplementation(() => Promise.reject(new Error('x')));").is_empty());
     }
 
     #[test]

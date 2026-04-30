@@ -97,8 +97,6 @@ mod tests {
 
     #[test]
     fn allows_primitive_key() {
-        assert!(
-            run("useQuery({ queryKey: ['todos', id, 42], queryFn: f });").is_empty()
-        );
+        assert!(run("useQuery({ queryKey: ['todos', id, 42], queryFn: f });").is_empty());
     }
 }

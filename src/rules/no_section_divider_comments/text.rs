@@ -20,7 +20,9 @@ pub struct Check;
 
 impl TextCheck for Check {
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
-        let min_run = ctx.config.threshold("no-section-divider-comments", "min_run");
+        let min_run = ctx
+            .config
+            .threshold("no-section-divider-comments", "min_run");
         let mut diagnostics = Vec::new();
         for (idx, line) in ctx.source.lines().enumerate() {
             if !is_section_divider(line, min_run) {

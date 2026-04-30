@@ -8,7 +8,9 @@ fn signature_name<'a>(node: tree_sitter::Node<'a>, source: &[u8]) -> Option<Stri
     match node.kind() {
         "function_signature" | "function_declaration" => {
             let name = node.child_by_field_name("name")?;
-            std::str::from_utf8(&source[name.byte_range()]).ok().map(str::to_string)
+            std::str::from_utf8(&source[name.byte_range()])
+                .ok()
+                .map(str::to_string)
         }
         _ => None,
     }
@@ -40,7 +42,11 @@ fn type_specificity_score(ty: tree_sitter::Node<'_>, source: &[u8]) -> u32 {
         "predefined_type" => {
             let text = std::str::from_utf8(&source[ty.byte_range()]).unwrap_or("");
             // `any` / `unknown` are widening — most general.
-            if text == "any" || text == "unknown" { 1000 } else { 10 }
+            if text == "any" || text == "unknown" {
+                1000
+            } else {
+                10
+            }
         }
         "union_type" => {
             // tree-sitter-typescript builds unions right-associatively, so
@@ -53,7 +59,9 @@ fn type_specificity_score(ty: tree_sitter::Node<'_>, source: &[u8]) -> u32 {
 }
 
 fn count_union_leaves(ty: tree_sitter::Node<'_>) -> u32 {
-    if ty.kind() != "union_type" { return 1; }
+    if ty.kind() != "union_type" {
+        return 1;
+    }
     let mut cursor = ty.walk();
     let mut total = 0;
     for c in ty.named_children(&mut cursor) {
@@ -66,11 +74,15 @@ fn signature_param_types<'a>(
     sig: tree_sitter::Node<'a>,
     _source: &'a [u8],
 ) -> Vec<Option<tree_sitter::Node<'a>>> {
-    let Some(params) = sig.child_by_field_name("parameters") else { return Vec::new(); };
+    let Some(params) = sig.child_by_field_name("parameters") else {
+        return Vec::new();
+    };
     let mut cursor = params.walk();
     let mut out = Vec::new();
     for p in params.named_children(&mut cursor) {
-        if p.kind() != "required_parameter" && p.kind() != "optional_parameter" { continue; }
+        if p.kind() != "required_parameter" && p.kind() != "optional_parameter" {
+            continue;
+        }
         // Find the `type_annotation` child, then its first named child (the type).
         let mut child_cursor = p.walk();
         let ann = p
@@ -91,14 +103,22 @@ fn earlier_param_types_more_general(
 ) -> bool {
     let ta = signature_param_types(a, source);
     let tb = signature_param_types(b, source);
-    if ta.len() != tb.len() || ta.is_empty() { return false; }
+    if ta.len() != tb.len() || ta.is_empty() {
+        return false;
+    }
     let mut a_more_general = false;
     for (ax, bx) in ta.iter().zip(tb.iter()) {
-        let (Some(ax), Some(bx)) = (ax, bx) else { return false; };
+        let (Some(ax), Some(bx)) = (ax, bx) else {
+            return false;
+        };
         let sa = type_specificity_score(*ax, source);
         let sb = type_specificity_score(*bx, source);
-        if sa < sb { return false; } // earlier is already more specific somewhere
-        if sa > sb { a_more_general = true; }
+        if sa < sb {
+            return false;
+        } // earlier is already more specific somewhere
+        if sa > sb {
+            a_more_general = true;
+        }
     }
     a_more_general
 }

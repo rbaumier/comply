@@ -77,8 +77,7 @@ mod tests {
 
     #[test]
     fn flags_lowercase() {
-        let src =
-            "with recursive r as (select id from t) select * from r;";
+        let src = "with recursive r as (select id from t) select * from r;";
         assert_eq!(run(src).len(), 1);
     }
 }

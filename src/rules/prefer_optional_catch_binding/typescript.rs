@@ -15,10 +15,11 @@ fn is_identifier_used_in(node: tree_sitter::Node, name: &str, source: &[u8]) -> 
         let n = cursor.node();
         if n.kind() == "identifier"
             && let Ok(text) = n.utf8_text(source)
-                && text == name {
-                    found = true;
-                    break;
-                }
+            && text == name
+        {
+            found = true;
+            break;
+        }
 
         if cursor.goto_first_child() {
             continue;

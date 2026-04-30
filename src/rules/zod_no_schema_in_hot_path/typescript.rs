@@ -14,38 +14,52 @@ use tree_sitter::Node;
 use crate::diagnostic::{Diagnostic, Severity};
 
 fn starts_uppercase(name: &str) -> bool {
-    name.chars().next().map(|c| c.is_ascii_uppercase()).unwrap_or(false)
+    name.chars()
+        .next()
+        .map(|c| c.is_ascii_uppercase())
+        .unwrap_or(false)
 }
 
 fn function_name<'a>(func: Node<'a>, source: &'a [u8]) -> Option<String> {
     // function_declaration name field.
     if let Some(n) = func.child_by_field_name("name")
-        && let Ok(t) = n.utf8_text(source) {
-            return Some(t.to_string());
-        }
+        && let Ok(t) = n.utf8_text(source)
+    {
+        return Some(t.to_string());
+    }
     // arrow function: parent is variable_declarator with a name field.
     if let Some(parent) = func.parent()
         && parent.kind() == "variable_declarator"
-            && let Some(n) = parent.child_by_field_name("name")
-                && let Ok(t) = n.utf8_text(source) {
-                    return Some(t.to_string());
-                }
+        && let Some(n) = parent.child_by_field_name("name")
+        && let Ok(t) = n.utf8_text(source)
+    {
+        return Some(t.to_string());
+    }
     None
 }
 
 fn looks_like_handler<'a>(func: Node<'a>, source: &'a [u8]) -> bool {
-    let Some(params) = func.child_by_field_name("parameters") else { return false };
-    let Ok(text) = params.utf8_text(source) else { return false };
+    let Some(params) = func.child_by_field_name("parameters") else {
+        return false;
+    };
+    let Ok(text) = params.utf8_text(source) else {
+        return false;
+    };
     // Cheap textual check on the parameter list.
-    text.contains("req") || text.contains("request") || text.contains("ctx")
-        || text.contains("res") || text.contains("response")
+    text.contains("req")
+        || text.contains("request")
+        || text.contains("ctx")
+        || text.contains("res")
+        || text.contains("response")
 }
 
 fn is_hot_scope<'a>(func: Node<'a>, source: &'a [u8]) -> bool {
     if let Some(name) = function_name(func, source)
-        && starts_uppercase(&name) && name != "Check" {
-            return true;
-        }
+        && starts_uppercase(&name)
+        && name != "Check"
+    {
+        return true;
+    }
     looks_like_handler(func, source)
 }
 

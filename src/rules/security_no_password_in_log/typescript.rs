@@ -91,12 +91,16 @@ fn mentions_sensitive(args: &str) -> bool {
 fn is_ci_setup_script(path: &std::path::Path) -> bool {
     let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
     let lower = stem.to_ascii_lowercase();
-    lower.starts_with("ci-") || lower.starts_with("ci_")
-        || lower.ends_with("-setup") || lower.ends_with("_setup")
+    lower.starts_with("ci-")
+        || lower.starts_with("ci_")
+        || lower.ends_with("-setup")
+        || lower.ends_with("_setup")
 }
 
 impl TextCheck for Check {
-    fn prefilter(&self) -> Option<&'static [&'static str]> { Some(&["password", "secret", "token", "apiKey", "api_key"]) }
+    fn prefilter(&self) -> Option<&'static [&'static str]> {
+        Some(&["password", "secret", "token", "apiKey", "api_key"])
+    }
 
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
         if is_ci_setup_script(ctx.path) {

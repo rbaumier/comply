@@ -6,9 +6,8 @@
 //! both backends in one edit.
 
 const BANNED_VERBS: &[&str] = &[
-    "create", "get", "update", "delete", "remove", "list", "fetch", "find",
-    "add", "set", "modify", "edit", "save", "load", "cancel", "refund",
-    "submit", "approve", "reject", "archive",
+    "create", "get", "update", "delete", "remove", "list", "fetch", "find", "add", "set", "modify",
+    "edit", "save", "load", "cancel", "refund", "submit", "approve", "reject", "archive",
 ];
 
 const URL_NEEDLES: &[&str] = &["/api/", "/v1/", "/v2/"];
@@ -27,7 +26,9 @@ pub fn contains_verb_url(text: &str) -> Option<&'static str> {
         let mut start = 0;
         while let Some(idx) = inner[start..].find(verb) {
             let absolute = start + idx;
-            let prev = absolute.checked_sub(1).and_then(|i| inner.as_bytes().get(i));
+            let prev = absolute
+                .checked_sub(1)
+                .and_then(|i| inner.as_bytes().get(i));
             if prev != Some(&b'/') {
                 start = absolute + vlen;
                 continue;

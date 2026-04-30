@@ -58,9 +58,7 @@ impl TextCheck for Check {
             line: 1,
             column: 1,
             rule_id: "filename-naming-convention".into(),
-            message: format!(
-                "Filename `{file_name}` does not match kebab-case convention."
-            ),
+            message: format!("Filename `{file_name}` does not match kebab-case convention."),
             severity: Severity::Warning,
             span: None,
         }]

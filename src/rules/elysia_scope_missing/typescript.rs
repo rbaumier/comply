@@ -7,7 +7,13 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-const HOOK_METHODS: &[&str] = &["onBeforeHandle", "onAfterHandle", "onError", "onRequest", "onTransform"];
+const HOOK_METHODS: &[&str] = &[
+    "onBeforeHandle",
+    "onAfterHandle",
+    "onError",
+    "onRequest",
+    "onTransform",
+];
 
 fn is_root_app_file(source: &str, path: &std::path::Path) -> bool {
     if source.contains(".listen(") {
@@ -108,7 +114,8 @@ mod tests {
 
     #[test]
     fn ignores_non_exported_app() {
-        let src = "import { Elysia } from 'elysia';\nconst app = new Elysia().onBeforeHandle(() => {});";
+        let src =
+            "import { Elysia } from 'elysia';\nconst app = new Elysia().onBeforeHandle(() => {});";
         assert!(crate::rules::test_helpers::run_ts(src, &Check).is_empty());
     }
 
@@ -130,13 +137,15 @@ mod tests {
         // `onError` / `onRequest` here aren't plugin hooks.
         let src = "import { Elysia } from 'elysia';\nexport const createApp = () => new Elysia().onError(() => {}).onRequest(() => {});";
         assert!(
-            run_ts_with_project_and_path(src, &Check, &project, Path::new("src/create-app.ts")).is_empty()
+            run_ts_with_project_and_path(src, &Check, &project, Path::new("src/create-app.ts"))
+                .is_empty()
         );
         assert!(
             run_ts_with_project_and_path(src, &Check, &project, Path::new("src/app.ts")).is_empty()
         );
         assert!(
-            run_ts_with_project_and_path(src, &Check, &project, Path::new("src/server.ts")).is_empty()
+            run_ts_with_project_and_path(src, &Check, &project, Path::new("src/server.ts"))
+                .is_empty()
         );
     }
 }

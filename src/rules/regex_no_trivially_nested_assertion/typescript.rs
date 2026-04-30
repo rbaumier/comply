@@ -17,7 +17,8 @@ fn find_trivially_nested(pattern: &str) -> Vec<usize> {
     let mut i = 0;
 
     while i + 4 < len {
-        if bytes[i] == b'(' && bytes[i + 1] == b'?'
+        if bytes[i] == b'('
+            && bytes[i + 1] == b'?'
             && let Some(kind) = get_lookaround_kind(bytes, i)
         {
             // Scan inside for the same kind of assertion.

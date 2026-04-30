@@ -34,7 +34,11 @@ fn is_locale_filename(path: &Path) -> bool {
     false
 }
 
-fn extract_key_placeholders(value: &Value, prefix: &str, result: &mut HashMap<String, Vec<String>>) {
+fn extract_key_placeholders(
+    value: &Value,
+    prefix: &str,
+    result: &mut HashMap<String, Vec<String>>,
+) {
     match value {
         Value::Object(map) => {
             for (key, val) in map {
@@ -111,8 +115,14 @@ fn find_mismatches(
         let current_set: HashSet<&String> = current.iter().collect();
         let base_set: HashSet<&String> = base.iter().collect();
 
-        let missing: Vec<String> = base_set.difference(&current_set).map(|s| (*s).clone()).collect();
-        let extra: Vec<String> = current_set.difference(&base_set).map(|s| (*s).clone()).collect();
+        let missing: Vec<String> = base_set
+            .difference(&current_set)
+            .map(|s| (*s).clone())
+            .collect();
+        let extra: Vec<String> = current_set
+            .difference(&base_set)
+            .map(|s| (*s).clone())
+            .collect();
 
         if !missing.is_empty() || !extra.is_empty() {
             let line = find_line_for_key(source, key);
@@ -271,8 +281,14 @@ mod tests {
     #[test]
     fn allows_identical_placeholders() {
         let dir = setup_locales(&[
-            ("en.json", r#"{"greeting": "Hello {name}, you have {count} messages"}"#),
-            ("fr.json", r#"{"greeting": "Bonjour {name}, vous avez {count} messages"}"#),
+            (
+                "en.json",
+                r#"{"greeting": "Hello {name}, you have {count} messages"}"#,
+            ),
+            (
+                "fr.json",
+                r#"{"greeting": "Bonjour {name}, vous avez {count} messages"}"#,
+            ),
         ]);
 
         let diags = check_file(&dir, "fr.json");
@@ -304,8 +320,14 @@ mod tests {
     #[test]
     fn handles_plural_placeholders() {
         let dir = setup_locales(&[
-            ("en.json", r#"{"items": "{count, plural, one {# item} other {# items}}"}"#),
-            ("fr.json", r#"{"items": "{nombre, plural, one {# item} other {# items}}"}"#),
+            (
+                "en.json",
+                r#"{"items": "{count, plural, one {# item} other {# items}}"}"#,
+            ),
+            (
+                "fr.json",
+                r#"{"items": "{nombre, plural, one {# item} other {# items}}"}"#,
+            ),
         ]);
 
         let diags = check_file(&dir, "fr.json");

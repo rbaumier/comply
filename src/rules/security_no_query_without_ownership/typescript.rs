@@ -68,7 +68,10 @@ fn is_in_route_handler(node: tree_sitter::Node<'_>, source: &[u8]) -> bool {
         if parent.kind() == "function_declaration"
             && let Some(name) = parent.child_by_field_name("name")
             && let Ok(text) = name.utf8_text(source)
-            && matches!(text, "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD" | "OPTIONS")
+            && matches!(
+                text,
+                "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD" | "OPTIONS"
+            )
             && let Some(grandparent) = parent.parent()
             && grandparent.kind() == "export_statement"
         {
@@ -76,10 +79,7 @@ fn is_in_route_handler(node: tree_sitter::Node<'_>, source: &[u8]) -> bool {
         }
         if matches!(
             parent.kind(),
-            "function_declaration"
-                | "function_expression"
-                | "arrow_function"
-                | "method_definition"
+            "function_declaration" | "function_expression" | "arrow_function" | "method_definition"
         ) && function_has_request_param(parent, source)
         {
             return true;
@@ -90,12 +90,19 @@ fn is_in_route_handler(node: tree_sitter::Node<'_>, source: &[u8]) -> bool {
 }
 
 fn function_has_request_param(func: tree_sitter::Node<'_>, source: &[u8]) -> bool {
-    let Some(params) = func.child_by_field_name("parameters") else { return false };
+    let Some(params) = func.child_by_field_name("parameters") else {
+        return false;
+    };
     let mut cursor = params.walk();
     for param in params.named_children(&mut cursor) {
         // param can be `required_parameter`, `identifier`, `formal_parameter`...
-        let Ok(text) = param.utf8_text(source) else { continue };
-        let first = text.split(|c: char| !c.is_ascii_alphanumeric() && c != '_').next().unwrap_or("");
+        let Ok(text) = param.utf8_text(source) else {
+            continue;
+        };
+        let first = text
+            .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+            .next()
+            .unwrap_or("");
         if matches!(first, "req" | "request" | "ctx" | "context") {
             return true;
         }

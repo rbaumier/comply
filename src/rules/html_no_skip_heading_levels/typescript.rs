@@ -33,7 +33,9 @@ struct HeadingCollector<'a> {
 
 impl<'a> HeadingCollector<'a> {
     fn new() -> Self {
-        Self { headings: Vec::new() }
+        Self {
+            headings: Vec::new(),
+        }
     }
 
     fn collect(&mut self, node: tree_sitter::Node<'a>, source: &'a [u8]) {
@@ -134,7 +136,9 @@ mod tests {
     #[test]
     fn allows_going_back_up() {
         // h1 -> h2 -> h3 -> h2 -> h3 is fine
-        assert!(run(r#"const x = <><h1>A</h1><h2>B</h2><h3>C</h3><h2>D</h2><h3>E</h3></>;"#).is_empty());
+        assert!(
+            run(r#"const x = <><h1>A</h1><h2>B</h2><h3>C</h3><h2>D</h2><h3>E</h3></>;"#).is_empty()
+        );
     }
 
     #[test]

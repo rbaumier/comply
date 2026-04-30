@@ -35,10 +35,7 @@ mod tests {
 
     #[test]
     fn flags_unparenthesized_ternary_spread() {
-        assert_eq!(
-            run_on("const arr = [...condition ? ['a'] : []];").len(),
-            1
-        );
+        assert_eq!(run_on("const arr = [...condition ? ['a'] : []];").len(), 1);
     }
 
     #[test]
@@ -48,10 +45,7 @@ mod tests {
 
     #[test]
     fn flags_complex_condition() {
-        assert_eq!(
-            run_on("const arr = [...a && b ? [1] : []];").len(),
-            1
-        );
+        assert_eq!(run_on("const arr = [...a && b ? [1] : []];").len(), 1);
     }
 
     #[test]

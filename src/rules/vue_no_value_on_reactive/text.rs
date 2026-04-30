@@ -75,13 +75,15 @@ mod tests {
 
     #[test]
     fn flags_value_on_reactive() {
-        let sfc = "<script setup>\nconst state = reactive({ n: 0 })\nconsole.log(state.value)\n</script>";
+        let sfc =
+            "<script setup>\nconst state = reactive({ n: 0 })\nconsole.log(state.value)\n</script>";
         assert_eq!(run(sfc).len(), 1);
     }
 
     #[test]
     fn allows_direct_key_access() {
-        let sfc = "<script setup>\nconst state = reactive({ n: 0 })\nconsole.log(state.n)\n</script>";
+        let sfc =
+            "<script setup>\nconst state = reactive({ n: 0 })\nconsole.log(state.n)\n</script>";
         assert!(run(sfc).is_empty());
     }
 

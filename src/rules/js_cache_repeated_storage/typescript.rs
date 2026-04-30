@@ -24,8 +24,7 @@ fn collect_getitem_calls<'a>(
                 if STORAGE_OBJECTS.contains(&obj) && prop == "getItem" {
                     if let Some(args) = node.child_by_field_name("arguments") {
                         let mut cursor = args.walk();
-                        if let Some(first_arg) = args.children(&mut cursor).find(|c| c.is_named())
-                        {
+                        if let Some(first_arg) = args.children(&mut cursor).find(|c| c.is_named()) {
                             if first_arg.kind() == "string" || first_arg.kind() == "template_string"
                             {
                                 let raw = first_arg.utf8_text(source).ok().unwrap_or("");
@@ -114,22 +113,26 @@ function load() {
 
     #[test]
     fn allows_different_keys() {
-        assert!(run(r#"
+        assert!(
+            run(r#"
 function load() {
     const a = localStorage.getItem("token");
     const b = localStorage.getItem("user");
 }
 "#)
-        .is_empty());
+            .is_empty()
+        );
     }
 
     #[test]
     fn allows_single_call() {
-        assert!(run(r#"
+        assert!(
+            run(r#"
 function load() {
     const a = localStorage.getItem("token");
 }
 "#)
-        .is_empty());
+            .is_empty()
+        );
     }
 }

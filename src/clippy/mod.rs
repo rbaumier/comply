@@ -177,15 +177,13 @@ fn is_known_clippy_lint(rule_id: &str) -> bool {
 /// Severity becomes the lint level: `Error` → `-D` (deny, fails the run),
 /// `Warning` → `-W`. We don't use `-A` here because the rule registry
 /// only collects lints we *want* to enable.
-fn build_lint_args(
-    bindings: &[(&'static str, &'static RuleMeta, Severity)],
-) -> Vec<String> {
+fn build_lint_args(bindings: &[(&'static str, &'static RuleMeta, Severity)]) -> Vec<String> {
     bindings
         .iter()
         .map(|(lint, _, sev)| {
             let level = match sev {
                 Severity::Error => "W", // We use -W not -D so the comply driver
-                                        // controls the final exit code, not clippy.
+                // controls the final exit code, not clippy.
                 Severity::Warning => "W",
             };
             format!("-{level}{lint}")
@@ -310,8 +308,12 @@ fn parse_clippy_jsonl(
         if envelope.reason != "compiler-message" {
             continue;
         }
-        let Some(diag) = envelope.message else { continue };
-        let Some(code) = diag.code.as_ref() else { continue };
+        let Some(diag) = envelope.message else {
+            continue;
+        };
+        let Some(code) = diag.code.as_ref() else {
+            continue;
+        };
 
         // Decide how to surface this lint:
         //   - bound to a comply rule via remap → use the comply meta
@@ -322,7 +324,9 @@ fn parse_clippy_jsonl(
             continue;
         }
 
-        let Some(span) = diag.spans.iter().find(|s| s.is_primary) else { continue };
+        let Some(span) = diag.spans.iter().find(|s| s.is_primary) else {
+            continue;
+        };
 
         // Cargo emits file_name relative to the workspace root. Resolve
         // it against that root, then canonicalize so it can match against
@@ -415,7 +419,8 @@ mod tests {
             description: "no unwrap",
             remediation: "use ?",
             severity: Severity::Error,
-            doc_url: None, categories: &[],
+            doc_url: None,
+            categories: &[],
         };
         let mut remap: HashMap<String, &'static RuleMeta> = HashMap::new();
         remap.insert("clippy::unwrap_used".to_string(), &META);
@@ -440,7 +445,8 @@ mod tests {
             description: "no unwrap",
             remediation: "use ?",
             severity: Severity::Error,
-            doc_url: None, categories: &[],
+            doc_url: None,
+            categories: &[],
         };
         let mut remap: HashMap<String, &'static RuleMeta> = HashMap::new();
         remap.insert("clippy::unwrap_used".to_string(), &META);

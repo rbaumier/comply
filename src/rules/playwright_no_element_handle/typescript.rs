@@ -48,8 +48,8 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
     use crate::rules::backend::{AstCheck, CheckCtx};
+    use std::path::Path;
 
     fn run(path: &str, source: &str) -> Vec<Diagnostic> {
         let full = format!("{source}\n// @playwright/test");

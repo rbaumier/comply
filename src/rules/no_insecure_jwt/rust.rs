@@ -64,10 +64,7 @@ mod tests {
 
     #[test]
     fn flags_hs256_in_jwt_context() {
-        assert_eq!(
-            run_on(r#"fn f() { let jwt_alg = "HS256"; }"#).len(),
-            1,
-        );
+        assert_eq!(run_on(r#"fn f() { let jwt_alg = "HS256"; }"#).len(), 1,);
     }
 
     #[test]

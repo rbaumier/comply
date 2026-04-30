@@ -16,8 +16,18 @@ use crate::rules::backend::{CheckCtx, TextCheck};
 pub struct Check;
 
 const OPTIONS_MARKERS: &[&str] = &[
-    "data()", "data ()", "methods:", "methods :", "computed:", "computed :",
-    "watch:", "watch :", "mounted()", "mounted ()", "created()", "created ()",
+    "data()",
+    "data ()",
+    "methods:",
+    "methods :",
+    "computed:",
+    "computed :",
+    "watch:",
+    "watch :",
+    "mounted()",
+    "mounted ()",
+    "created()",
+    "created ()",
 ];
 
 impl TextCheck for Check {

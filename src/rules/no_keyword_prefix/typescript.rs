@@ -40,9 +40,10 @@ crate::ast_check! { on ["identifier"] => |node, source, ctx, diagnostics|
 fn find_keyword_prefix(name: &str) -> Option<&'static str> {
     for &prefix in DISALLOWED_PREFIXES {
         if let Some(rest) = name.strip_prefix(prefix)
-            && rest.starts_with(|c: char| c.is_ascii_uppercase()) {
-                return Some(prefix);
-            }
+            && rest.starts_with(|c: char| c.is_ascii_uppercase())
+        {
+            return Some(prefix);
+        }
     }
     None
 }

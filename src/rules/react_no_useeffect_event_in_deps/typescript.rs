@@ -16,15 +16,23 @@ fn collect_event_names(source: &str) -> Vec<String> {
         // Match `const NAME = useEffectEvent(`
         let trimmed = line.trim_start();
         for kw in ["const ", "let ", "var "] {
-            if !trimmed.starts_with(kw) { continue; }
+            if !trimmed.starts_with(kw) {
+                continue;
+            }
             let after = &trimmed[kw.len()..];
-            let Some(eq_idx) = after.find('=') else { continue };
+            let Some(eq_idx) = after.find('=') else {
+                continue;
+            };
             let name = after[..eq_idx].trim().trim_end_matches(':');
             // Strip type annotations: `name: T`.
             let name = name.split(':').next().unwrap_or("").trim();
             let rhs = after[eq_idx + 1..].trim_start();
             if rhs.starts_with("useEffectEvent(") {
-                if !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$') {
+                if !name.is_empty()
+                    && name
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$')
+                {
                     names.push(name.to_string());
                 }
             }
@@ -39,10 +47,13 @@ fn find_matching_bracket(bytes: &[u8], start: usize, open: u8, close: u8) -> Opt
     let mut i = start;
     while i < bytes.len() {
         let b = bytes[i];
-        if b == open { depth += 1; }
-        else if b == close {
+        if b == open {
+            depth += 1;
+        } else if b == close {
             depth -= 1;
-            if depth == 0 { return Some(i); }
+            if depth == 0 {
+                return Some(i);
+            }
         }
         i += 1;
     }
@@ -56,14 +67,18 @@ impl TextCheck for Check {
 
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
         let names = collect_event_names(ctx.source);
-        if names.is_empty() { return Vec::new(); }
+        if names.is_empty() {
+            return Vec::new();
+        }
         let mut diagnostics = Vec::new();
         let bytes = ctx.source.as_bytes();
         let mut from = 0;
         while let Some(rel) = ctx.source[from..].find("useEffect(") {
             let abs = from + rel;
             let paren = abs + "useEffect".len();
-            let Some(close) = find_matching_bracket(bytes, paren, b'(', b')') else { break };
+            let Some(close) = find_matching_bracket(bytes, paren, b'(', b')') else {
+                break;
+            };
             let body = &ctx.source[paren + 1..close];
             // Find the deps array — the LAST `[...]` block in the call.
             let mut deps: Option<&str> = None;
@@ -120,7 +135,8 @@ mod tests {
 
     #[test]
     fn flags_event_in_deps() {
-        let src = "const onTick = useEffectEvent(() => {});\nuseEffect(() => { onTick(); }, [onTick]);";
+        let src =
+            "const onTick = useEffectEvent(() => {});\nuseEffect(() => { onTick(); }, [onTick]);";
         assert_eq!(run(src).len(), 1);
     }
 

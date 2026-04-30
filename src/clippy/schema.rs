@@ -10,8 +10,8 @@
 //! stable enough to depend on but verbose, so we use `IgnoredAny` for
 //! the fields we don't need.
 
-use serde::de::IgnoredAny;
 use serde::Deserialize;
+use serde::de::IgnoredAny;
 
 /// External wire format mirror — see comply:rust-serde-deny-unknown-fields.
 /// Top-level cargo message envelope. We only deserialize the `reason`

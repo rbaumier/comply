@@ -161,7 +161,8 @@ const x = <form onSubmit={(e) => {
 
     #[test]
     fn allows_short_param_name() {
-        let src = r#"const x = <form onSubmit={(e) => { e.preventDefault(); submit(e); }}>ok</form>;"#;
+        let src =
+            r#"const x = <form onSubmit={(e) => { e.preventDefault(); submit(e); }}>ok</form>;"#;
         assert!(run_on(src).is_empty());
     }
 

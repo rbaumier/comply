@@ -132,10 +132,7 @@ mod tests {
 
     #[test]
     fn allows_domain_importing_domain() {
-        let diags = run_with_path(
-            "src/domain/order.ts",
-            "import { User } from './user';",
-        );
+        let diags = run_with_path("src/domain/order.ts", "import { User } from './user';");
         assert!(diags.is_empty());
     }
 

@@ -46,7 +46,9 @@ impl TextCheck for Check {
                         line: elem.line,
                         column: 1,
                         rule_id: "a11y-anchor-is-valid".into(),
-                        message: "Anchor has `href=\"javascript:\"` — use a `<button>` or a real URL.".into(),
+                        message:
+                            "Anchor has `href=\"javascript:\"` — use a `<button>` or a real URL."
+                                .into(),
                         severity: Severity::Error,
                         span: None,
                     });

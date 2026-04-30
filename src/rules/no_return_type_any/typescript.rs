@@ -13,15 +13,17 @@ use tree_sitter::Node;
 /// type argument).
 fn resolves_to_any(node: Node, source: &[u8]) -> bool {
     match node.kind() {
-        "predefined_type" => {
-            std::str::from_utf8(&source[node.byte_range()]).unwrap_or("") == "any"
-        }
+        "predefined_type" => std::str::from_utf8(&source[node.byte_range()]).unwrap_or("") == "any",
         "generic_type" => {
-            let Some(name) = node.child_by_field_name("name") else { return false };
+            let Some(name) = node.child_by_field_name("name") else {
+                return false;
+            };
             if std::str::from_utf8(&source[name.byte_range()]).unwrap_or("") != "Promise" {
                 return false;
             }
-            let Some(args) = node.child_by_field_name("type_arguments") else { return false };
+            let Some(args) = node.child_by_field_name("type_arguments") else {
+                return false;
+            };
             let mut cursor = args.walk();
             args.named_children(&mut cursor)
                 .any(|c| resolves_to_any(c, source))

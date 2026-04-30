@@ -145,7 +145,10 @@ function outer() {
     }
 }
 "#;
-    assert!(run_rs(rs).is_empty(), "Rust: callable boundary not resetting");
+    assert!(
+        run_rs(rs).is_empty(),
+        "Rust: callable boundary not resetting"
+    );
     assert!(run_ts(ts).is_empty(), "TS: callable boundary not resetting");
 }
 

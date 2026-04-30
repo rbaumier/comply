@@ -8,7 +8,7 @@ impl TextCheck for Check {
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
         for (idx, line) in ctx.source.lines().enumerate() {
-    let line_upper = line.to_ascii_uppercase();
+            let line_upper = line.to_ascii_uppercase();
             if line_upper.contains("AS ENUM") {
                 diagnostics.push(Diagnostic {
                     path: std::sync::Arc::clone(&ctx.path_arc),
@@ -25,7 +25,6 @@ impl TextCheck for Check {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -37,7 +36,10 @@ mod tests {
 
     #[test]
     fn flags() {
-        assert_eq!(run("CREATE TYPE status AS ENUM ('active', 'inactive');").len(), 1);
+        assert_eq!(
+            run("CREATE TYPE status AS ENUM ('active', 'inactive');").len(),
+            1
+        );
     }
 
     #[test]

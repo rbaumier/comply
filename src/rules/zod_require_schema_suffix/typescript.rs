@@ -122,9 +122,7 @@ mod tests {
 
     #[test]
     fn allows_export_with_schema_suffix() {
-        assert!(
-            run_on("export const UserSchema = z.object({ id: z.string() });").is_empty()
-        );
+        assert!(run_on("export const UserSchema = z.object({ id: z.string() });").is_empty());
     }
 
     #[test]

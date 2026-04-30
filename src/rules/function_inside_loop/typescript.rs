@@ -1,6 +1,11 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
-const LOOP_KINDS: &[&str] = &["for_statement", "for_in_statement", "while_statement", "do_statement"];
+const LOOP_KINDS: &[&str] = &[
+    "for_statement",
+    "for_in_statement",
+    "while_statement",
+    "do_statement",
+];
 
 crate::ast_check! { on ["function_declaration", "function_expression", "arrow_function"] => |node, source, ctx, diagnostics|
     // Check for function/arrow inside loop body
@@ -34,16 +39,24 @@ crate::ast_check! { on ["function_declaration", "function_expression", "arrow_fu
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn run(code: &str) -> Vec<Diagnostic> { crate::rules::test_helpers::run_ts(code, &Check) }
+    fn run(code: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_ts(code, &Check)
+    }
 
     #[test]
     fn flags_function_in_for() {
-        assert_eq!(run("for (let i = 0; i < 10; i++) { function foo() {} }").len(), 1);
+        assert_eq!(
+            run("for (let i = 0; i < 10; i++) { function foo() {} }").len(),
+            1
+        );
     }
 
     #[test]
     fn flags_arrow_in_for() {
-        assert_eq!(run("for (let i = 0; i < 10; i++) { const fn = () => i; }").len(), 1);
+        assert_eq!(
+            run("for (let i = 0; i < 10; i++) { const fn = () => i; }").len(),
+            1
+        );
     }
 
     #[test]

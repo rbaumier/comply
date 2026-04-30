@@ -80,11 +80,13 @@ fn hash_str(s: &str) -> u64 {
 /// shared default empty index (which `is_empty()` detects), never reaching
 /// this cache.
 #[allow(clippy::type_complexity)]
-static CROSS_FILE_CACHE: OnceLock<Mutex<HashMap<usize, std::sync::Arc<HashMap<u64, Vec<FunctionLocation>>>>>> =
-    OnceLock::new();
+static CROSS_FILE_CACHE: OnceLock<
+    Mutex<HashMap<usize, std::sync::Arc<HashMap<u64, Vec<FunctionLocation>>>>>,
+> = OnceLock::new();
 
 #[allow(clippy::type_complexity)]
-fn cross_file_cache() -> &'static Mutex<HashMap<usize, std::sync::Arc<HashMap<u64, Vec<FunctionLocation>>>>> {
+fn cross_file_cache()
+-> &'static Mutex<HashMap<usize, std::sync::Arc<HashMap<u64, Vec<FunctionLocation>>>>> {
     CROSS_FILE_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
@@ -94,7 +96,9 @@ fn cross_file_cache() -> &'static Mutex<HashMap<usize, std::sync::Arc<HashMap<u6
 /// the engine's parser across a flat fan-out without a bigger refactor.
 fn cross_file_index(index: &ImportIndex) -> std::sync::Arc<HashMap<u64, Vec<FunctionLocation>>> {
     let key = std::ptr::from_ref::<ImportIndex>(index) as usize;
-    let mut cache = cross_file_cache().lock().expect("cross-file cache poisoned");
+    let mut cache = cross_file_cache()
+        .lock()
+        .expect("cross-file cache poisoned");
     if let Some(hit) = cache.get(&key) {
         return std::sync::Arc::clone(hit);
     }
@@ -108,7 +112,9 @@ fn build_cross_file_index(index: &ImportIndex) -> HashMap<u64, Vec<FunctionLocat
     let mut by_hash: HashMap<u64, Vec<FunctionLocation>> = HashMap::new();
     let mut parser = Parser::new();
     for path in index.indexed_paths() {
-        let Ok(source) = std::fs::read_to_string(path) else { continue };
+        let Ok(source) = std::fs::read_to_string(path) else {
+            continue;
+        };
         let grammar: tree_sitter::Language = if path
             .extension()
             .and_then(|e| e.to_str())
@@ -121,12 +127,16 @@ fn build_cross_file_index(index: &ImportIndex) -> HashMap<u64, Vec<FunctionLocat
         if parser.set_language(&grammar).is_err() {
             continue;
         }
-        let Some(tree) = parser.parse(source.as_bytes(), None) else { continue };
+        let Some(tree) = parser.parse(source.as_bytes(), None) else {
+            continue;
+        };
         let mut collected: Vec<(String, usize, String)> = Vec::new();
         let root = tree.root_node();
         let count = root.named_child_count();
         for i in 0..count {
-            let Some(child) = root.named_child(i) else { continue };
+            let Some(child) = root.named_child(i) else {
+                continue;
+            };
             collect_functions(child, source.as_bytes(), &mut collected);
         }
         for (name, line, normalized) in collected {
@@ -161,13 +171,21 @@ fn collect_functions(node: Node, source: &[u8], out: &mut Vec<(String, usize, St
             // `const foo = () => { … }` or `const foo = function(){ … }`
             let count = node.named_child_count();
             for i in 0..count {
-                let Some(declarator) = node.named_child(i) else { continue };
+                let Some(declarator) = node.named_child(i) else {
+                    continue;
+                };
                 if declarator.kind() != "variable_declarator" {
                     continue;
                 }
-                let Some(name_node) = declarator.child_by_field_name("name") else { continue };
-                let Ok(name) = name_node.utf8_text(source) else { continue };
-                let Some(value) = declarator.child_by_field_name("value") else { continue };
+                let Some(name_node) = declarator.child_by_field_name("name") else {
+                    continue;
+                };
+                let Ok(name) = name_node.utf8_text(source) else {
+                    continue;
+                };
+                let Some(value) = declarator.child_by_field_name("value") else {
+                    continue;
+                };
                 let body_node = match value.kind() {
                     "arrow_function" | "function" => value.child_by_field_name("body"),
                     _ => None,
@@ -208,7 +226,11 @@ fn extract_function_info(node: Node, source: &[u8]) -> Option<(String, usize, St
 /// Render the "duplicate group" message shared by every site. Marks the
 /// current file's entry with `[this file]` so the user knows which line
 /// the diagnostic is anchored on.
-fn format_group_message(group: &[FunctionLocation], current_file: &Path, current_line: usize) -> String {
+fn format_group_message(
+    group: &[FunctionLocation],
+    current_file: &Path,
+    current_line: usize,
+) -> String {
     let mut msg = format!("Duplicate function body ({} occurrences):", group.len());
     for loc in group {
         let marker = if loc.path == current_file && loc.line == current_line {

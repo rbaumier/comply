@@ -6,8 +6,18 @@ use crate::rules::vue_template_helpers::{attr_value, extract_elements, is_vue_fi
 
 const INTERACTIVE_ELEMENTS: &[&str] = &["button", "a", "input", "select", "textarea"];
 const NON_INTERACTIVE_ROLES: &[&str] = &[
-    "article", "banner", "complementary", "contentinfo", "document",
-    "img", "list", "listitem", "note", "presentation", "none", "heading",
+    "article",
+    "banner",
+    "complementary",
+    "contentinfo",
+    "document",
+    "img",
+    "list",
+    "listitem",
+    "note",
+    "presentation",
+    "none",
+    "heading",
 ];
 
 #[derive(Debug)]
@@ -31,7 +41,9 @@ impl TextCheck for Check {
                     line: elem.line,
                     column: 1,
                     rule_id: "a11y-no-interactive-element-to-noninteractive-role".into(),
-                    message: format!("Interactive element should not have non-interactive `role=\"{role}\"`."),
+                    message: format!(
+                        "Interactive element should not have non-interactive `role=\"{role}\"`."
+                    ),
                     severity: Severity::Warning,
                     span: None,
                 });

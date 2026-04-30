@@ -41,7 +41,8 @@ mod tests {
     }
     #[test]
     fn flags_await_in_gen() {
-        let src = "const r = Result.gen(async function* () { const v = await fetch('/'); return v; });";
+        let src =
+            "const r = Result.gen(async function* () { const v = await fetch('/'); return v; });";
         assert_eq!(run(src).len(), 1);
     }
     #[test]

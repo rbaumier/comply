@@ -7,20 +7,46 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
 const DEPRECATED_REQUIRES: &[(&str, &str)] = &[
-    ("domain", "The `domain` module is deprecated — use structured error handling instead."),
-    ("punycode", "The `punycode` module is deprecated — use the userland `punycode` package."),
+    (
+        "domain",
+        "The `domain` module is deprecated — use structured error handling instead.",
+    ),
+    (
+        "punycode",
+        "The `punycode` module is deprecated — use the userland `punycode` package.",
+    ),
 ];
 
 const DEPRECATED_MEMBER_CALLS: &[(&str, &str, &str)] = &[
-    ("fs", "exists", "Use `fs.existsSync()`, `fs.stat()`, or `fs.access()` instead of `fs.exists()`."),
+    (
+        "fs",
+        "exists",
+        "Use `fs.existsSync()`, `fs.stat()`, or `fs.access()` instead of `fs.exists()`.",
+    ),
     ("url", "parse", "Use `new URL()` instead of `url.parse()`."),
-    ("util", "isArray", "Use `Array.isArray()` instead of `util.isArray()`."),
-    ("util", "pump", "Use `stream.pipeline()` or `.pipe()` instead of `util.pump()`."),
+    (
+        "util",
+        "isArray",
+        "Use `Array.isArray()` instead of `util.isArray()`.",
+    ),
+    (
+        "util",
+        "pump",
+        "Use `stream.pipeline()` or `.pipe()` instead of `util.pump()`.",
+    ),
 ];
 
 const DEPRECATED_MEMBER_ACCESS: &[(&str, &str, &str)] = &[
-    ("querystring", "escape", "The `querystring` module is deprecated — use `URLSearchParams` instead."),
-    ("process.env", "NODE_DEBUG", "Use the `util.debuglog()` API instead of reading `process.env.NODE_DEBUG` directly."),
+    (
+        "querystring",
+        "escape",
+        "The `querystring` module is deprecated — use `URLSearchParams` instead.",
+    ),
+    (
+        "process.env",
+        "NODE_DEBUG",
+        "Use the `util.debuglog()` API instead of reading `process.env.NODE_DEBUG` directly.",
+    ),
 ];
 
 crate::ast_check! { on ["new_expression", "call_expression", "member_expression"] => |node, source, ctx, diagnostics|

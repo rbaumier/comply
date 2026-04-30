@@ -19,8 +19,7 @@ use crate::rules::backend::{AstCheck, CheckCtx};
 // ("did the scan land on its target?"). Forcing `is_in_string` etc.
 // adds syllables without information.
 const VALID_PREFIXES: &[&str] = &[
-    "is_", "has_", "should_", "can_", "will_", "did_", "was_",
-    "in_", "seen_", "found_",
+    "is_", "has_", "should_", "can_", "will_", "did_", "was_", "in_", "seen_", "found_",
 ];
 const NEGATIVE_SUBSTRINGS: &[&str] = &["_not_", "isnt_", "cannot_", "shouldnt_"];
 
@@ -118,14 +117,9 @@ fn classify_name(name: &str) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
-
-
         crate::rules::test_helpers::run_rust(source, &Check)
-
-
     }
 
     #[test]

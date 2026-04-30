@@ -28,19 +28,27 @@ impl AstCheck for Check {
         let max_comment_tokens = ctx
             .config
             .threshold("comment-paraphrases-code", "max_comment_tokens");
-        let overlap_threshold = ctx
-            .config
-            .float("comment-paraphrases-code", "overlap_threshold") as f32;
+        let overlap_threshold =
+            ctx.config
+                .float("comment-paraphrases-code", "overlap_threshold") as f32;
         let source = ctx.source.as_bytes();
-        let Some(name_node) = node.child_by_field_name("name") else { return };
-        let Ok(name) = name_node.utf8_text(source) else { return };
+        let Some(name_node) = node.child_by_field_name("name") else {
+            return;
+        };
+        let Ok(name) = name_node.utf8_text(source) else {
+            return;
+        };
 
         // Find preceding comment sibling.
-        let Some(prev) = node.prev_named_sibling() else { return };
+        let Some(prev) = node.prev_named_sibling() else {
+            return;
+        };
         if prev.kind() != "line_comment" && prev.kind() != "block_comment" {
             return;
         }
-        let Ok(comment_text) = prev.utf8_text(source) else { return };
+        let Ok(comment_text) = prev.utf8_text(source) else {
+            return;
+        };
         // Skip doc comments (/// or //!).
         if comment_text.starts_with("///") || comment_text.starts_with("//!") {
             return;

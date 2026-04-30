@@ -49,9 +49,10 @@ fn is_allowed_context(node: tree_sitter::Node) -> bool {
             "subscript_expression" => {
                 // Check if this number is the index (second child).
                 if let Some(index) = parent.child_by_field_name("index")
-                    && index.id() == node.id() {
-                        return true;
-                    }
+                    && index.id() == node.id()
+                {
+                    return true;
+                }
             }
             _ => {}
         }

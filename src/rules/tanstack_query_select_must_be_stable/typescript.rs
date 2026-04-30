@@ -73,8 +73,7 @@ fn find_offenses(source: &str) -> Vec<usize> {
             // `arg =>` — single identifier.
             let mut k = 0;
             let tb = trimmed.as_bytes();
-            while k < tb.len()
-                && (tb[k].is_ascii_alphanumeric() || tb[k] == b'_' || tb[k] == b'$')
+            while k < tb.len() && (tb[k].is_ascii_alphanumeric() || tb[k] == b'_' || tb[k] == b'$')
             {
                 k += 1;
             }

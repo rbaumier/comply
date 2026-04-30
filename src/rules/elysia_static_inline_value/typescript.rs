@@ -2,7 +2,9 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-const ROUTE_METHODS: &[&str] = &["get", "post", "put", "patch", "delete", "all", "head", "options"];
+const ROUTE_METHODS: &[&str] = &[
+    "get", "post", "put", "patch", "delete", "all", "head", "options",
+];
 
 fn is_string_literal(node: tree_sitter::Node) -> bool {
     let kind = node.kind();

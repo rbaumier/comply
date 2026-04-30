@@ -32,8 +32,12 @@ crate::ast_check! { prefilter = ["apiVersion"] => |node, source, ctx, diagnostic
 /// True when the pair's value is a block/flow mapping containing at least
 /// one `block_mapping_pair` child.
 fn has_any_child_pair(pair: tree_sitter::Node, _source: &[u8]) -> bool {
-    let Some(value) = y::pair_value_node(pair) else { return false; };
-    let Some(mapping) = y::as_mapping(value) else { return false; };
+    let Some(value) = y::pair_value_node(pair) else {
+        return false;
+    };
+    let Some(mapping) = y::as_mapping(value) else {
+        return false;
+    };
     let mut cursor = mapping.walk();
     mapping
         .named_children(&mut cursor)
@@ -51,7 +55,8 @@ mod tests {
 
     #[test]
     fn flags_data_populated() {
-        let yaml = "apiVersion: v1\nkind: Secret\nmetadata:\n  name: s\ndata:\n  password: aHVudGVyMg==";
+        let yaml =
+            "apiVersion: v1\nkind: Secret\nmetadata:\n  name: s\ndata:\n  password: aHVudGVyMg==";
         assert_eq!(run(yaml).len(), 1);
     }
 

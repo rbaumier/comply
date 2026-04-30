@@ -57,7 +57,8 @@ crate::ast_check! { |node, source, ctx, diagnostics|
 /// return-type slot in tree-sitter-typescript.
 fn has_return_type(node: tree_sitter::Node) -> bool {
     let mut cursor = node.walk();
-    node.children(&mut cursor).any(|c| c.kind() == "type_annotation")
+    node.children(&mut cursor)
+        .any(|c| c.kind() == "type_annotation")
 }
 
 fn is_setter(node: tree_sitter::Node, source: &[u8]) -> bool {

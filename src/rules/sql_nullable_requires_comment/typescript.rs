@@ -33,9 +33,7 @@ impl AstCheck for Check {
                 line: pos.row + 1 + offset,
                 column: 1,
                 rule_id: super::META.id.into(),
-                message:
-                    "Nullable column has no comment explaining why NULL is allowed."
-                        .into(),
+                message: "Nullable column has no comment explaining why NULL is allowed.".into(),
                 severity: Severity::Warning,
                 span: None,
             });

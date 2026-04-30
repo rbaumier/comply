@@ -112,7 +112,9 @@ fn if_let_is_err(cond: &tree_sitter::Node, source: &[u8]) -> bool {
     if cond.kind() != "let_condition" {
         return false;
     }
-    let Some(pattern) = cond.child_by_field_name("pattern") else { return false };
+    let Some(pattern) = cond.child_by_field_name("pattern") else {
+        return false;
+    };
     pattern_is_err(&pattern, source)
 }
 

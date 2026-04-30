@@ -28,7 +28,9 @@ pub fn register() -> RuleDef {
 /// True when the value of `pair` is a sequence containing the scalar `"*"`.
 /// Handles both flow (`[X, "*"]`) and block (`- "*"`) list styles.
 pub(super) fn list_contains_star(pair: tree_sitter::Node, source: &[u8]) -> bool {
-    let Some(value) = y::pair_value_node(pair) else { return false; };
+    let Some(value) = y::pair_value_node(pair) else {
+        return false;
+    };
     contains_star(value, source)
 }
 

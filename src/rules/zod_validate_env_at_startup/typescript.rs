@@ -23,8 +23,7 @@ fn file_uses_zod(source: &str) -> bool {
 /// Return `true` if the file already validates `process.env` via a Zod
 /// schema call (`.parse(process.env)` or `.safeParse(process.env)`).
 fn file_validates_env(source: &str) -> bool {
-    source.contains(".parse(process.env)")
-        || source.contains(".safeParse(process.env)")
+    source.contains(".parse(process.env)") || source.contains(".safeParse(process.env)")
 }
 
 crate::ast_check! { on ["member_expression"] prefilter = ["process.env"] => |node, source, ctx, diagnostics|

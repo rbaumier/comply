@@ -57,22 +57,34 @@ mod tests {
 
     #[test]
     fn flags_sslv2() {
-        assert_eq!(run_on(r#"const opts = { secureProtocol: 'SSLv2' };"#).len(), 1);
+        assert_eq!(
+            run_on(r#"const opts = { secureProtocol: 'SSLv2' };"#).len(),
+            1
+        );
     }
 
     #[test]
     fn flags_sslv3() {
-        assert_eq!(run_on(r#"const opts = { secureProtocol: 'SSLv3' };"#).len(), 1);
+        assert_eq!(
+            run_on(r#"const opts = { secureProtocol: 'SSLv3' };"#).len(),
+            1
+        );
     }
 
     #[test]
     fn flags_tls10() {
-        assert_eq!(run_on(r#"tls.connect({ secureProtocol: 'TLSv1.0' });"#).len(), 1);
+        assert_eq!(
+            run_on(r#"tls.connect({ secureProtocol: 'TLSv1.0' });"#).len(),
+            1
+        );
     }
 
     #[test]
     fn flags_tls11() {
-        assert_eq!(run_on(r#"tls.connect({ secureProtocol: 'TLSv1.1' });"#).len(), 1);
+        assert_eq!(
+            run_on(r#"tls.connect({ secureProtocol: 'TLSv1.1' });"#).len(),
+            1
+        );
     }
 
     #[test]

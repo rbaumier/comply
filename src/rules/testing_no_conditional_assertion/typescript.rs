@@ -11,19 +11,22 @@ use crate::diagnostic::{Diagnostic, Severity};
 /// Is `func` a bare `expect` identifier (top-level `expect(x).toBe(...)`
 /// resolves via the inner `expect(x)` call — that's what we flag)?
 fn is_bare_expect_call(node: tree_sitter::Node, source: &[u8]) -> bool {
-    if node.kind() != "call_expression" { return false; }
-    let Some(func) = node.child_by_field_name("function") else { return false; };
-    if func.kind() != "identifier" { return false; }
+    if node.kind() != "call_expression" {
+        return false;
+    }
+    let Some(func) = node.child_by_field_name("function") else {
+        return false;
+    };
+    if func.kind() != "identifier" {
+        return false;
+    }
     func.utf8_text(source).unwrap_or("") == "expect"
 }
 
 /// Walk ancestors looking for (a) an if_statement this node is inside the
 /// `consequence`/`alternative` of, and (b) a `test(...)` / `it(...)` call
 /// wrapping the whole thing. Both must be present.
-fn enclosing_if_and_test(
-    mut node: tree_sitter::Node,
-    source: &[u8],
-) -> (bool, bool) {
+fn enclosing_if_and_test(mut node: tree_sitter::Node, source: &[u8]) -> (bool, bool) {
     let mut in_if_body = false;
     let mut in_test = false;
     while let Some(parent) = node.parent() {
@@ -35,13 +38,19 @@ fn enclosing_if_and_test(
                 in_if_body = true;
             }
         }
-        if !in_test && parent.kind() == "call_expression"
+        if !in_test
+            && parent.kind() == "call_expression"
             && let Some(func) = parent.child_by_field_name("function")
-                && func.kind() == "identifier" {
-                    let n = func.utf8_text(source).unwrap_or("");
-                    if matches!(n, "test" | "it") { in_test = true; }
-                }
-        if in_if_body && in_test { return (true, true); }
+            && func.kind() == "identifier"
+        {
+            let n = func.utf8_text(source).unwrap_or("");
+            if matches!(n, "test" | "it") {
+                in_test = true;
+            }
+        }
+        if in_if_body && in_test {
+            return (true, true);
+        }
         node = parent;
     }
     (in_if_body, in_test)

@@ -2,7 +2,13 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-const SSR_GLOBALS: &[&str] = &["window", "document", "localStorage", "sessionStorage", "navigator"];
+const SSR_GLOBALS: &[&str] = &[
+    "window",
+    "document",
+    "localStorage",
+    "sessionStorage",
+    "navigator",
+];
 
 fn script_setup_range(source: &str) -> Option<(usize, usize)> {
     for (i, _) in source.match_indices("<script") {

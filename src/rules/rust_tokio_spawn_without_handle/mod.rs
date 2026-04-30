@@ -13,8 +13,8 @@
 mod rust;
 
 use crate::diagnostic::Severity;
-use crate::rules::meta::RuleMeta;
 use crate::rules::RuleDef;
+use crate::rules::meta::RuleMeta;
 
 pub const META: RuleMeta = RuleMeta {
     id: "rust-tokio-spawn-without-handle",
@@ -26,6 +26,7 @@ pub const META: RuleMeta = RuleMeta {
     severity: Severity::Warning,
     doc_url: None,
     categories: &["rust"],
-};pub fn register() -> RuleDef {
+};
+pub fn register() -> RuleDef {
     crate::register_rust_only!(META, rust)
 }

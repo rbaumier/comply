@@ -2,9 +2,13 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
-use crate::rules::vue_template_helpers::{collect_attr_names, extract_elements, has_attr, is_vue_file};
+use crate::rules::vue_template_helpers::{
+    collect_attr_names, extract_elements, has_attr, is_vue_file,
+};
 
-const UNSUPPORTED: &[&str] = &["meta", "html", "script", "style", "head", "title", "link", "base"];
+const UNSUPPORTED: &[&str] = &[
+    "meta", "html", "script", "style", "head", "title", "link", "base",
+];
 
 #[derive(Debug)]
 pub struct Check;
@@ -20,8 +24,8 @@ impl TextCheck for Check {
                 continue;
             }
             let names = collect_attr_names(elem.attrs);
-            let has_aria_or_role = names.iter().any(|n| n.starts_with("aria-"))
-                || has_attr(elem.attrs, "role");
+            let has_aria_or_role =
+                names.iter().any(|n| n.starts_with("aria-")) || has_attr(elem.attrs, "role");
             if has_aria_or_role {
                 diagnostics.push(Diagnostic {
                     path: std::sync::Arc::clone(&ctx.path_arc),

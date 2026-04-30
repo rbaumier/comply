@@ -12,9 +12,9 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
 const TINY_SIZE_TOKENS: &[&str] = &[
-    "h-0", "h-1", "h-2", "h-3", "h-4", "h-5", "h-6", "h-7", "h-8", "h-9", "h-10",
-    "w-0", "w-1", "w-2", "w-3", "w-4", "w-5", "w-6", "w-7", "w-8", "w-9", "w-10",
-    "size-0", "size-1", "size-2", "size-3", "size-4", "size-5", "size-6", "size-7", "size-8", "size-9", "size-10",
+    "h-0", "h-1", "h-2", "h-3", "h-4", "h-5", "h-6", "h-7", "h-8", "h-9", "h-10", "w-0", "w-1",
+    "w-2", "w-3", "w-4", "w-5", "w-6", "w-7", "w-8", "w-9", "w-10", "size-0", "size-1", "size-2",
+    "size-3", "size-4", "size-5", "size-6", "size-7", "size-8", "size-9", "size-10",
 ];
 
 const INTERACTIVE_TAGS: &[&str] = &["button", "a", "input"];

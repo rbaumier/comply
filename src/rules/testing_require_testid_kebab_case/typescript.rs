@@ -15,10 +15,17 @@ fn unquote(raw: &str) -> &str {
 /// A value is kebab-case if it contains only [a-z0-9-], has no leading/
 /// trailing/double hyphen, and is non-empty.
 fn is_kebab_case(s: &str) -> bool {
-    if s.is_empty() { return false; }
-    if s.starts_with('-') || s.ends_with('-') { return false; }
-    if s.contains("--") { return false; }
-    s.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+    if s.is_empty() {
+        return false;
+    }
+    if s.starts_with('-') || s.ends_with('-') {
+        return false;
+    }
+    if s.contains("--") {
+        return false;
+    }
+    s.chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
 }
 
 crate::ast_check! { on ["jsx_attribute"] prefilter = ["data-testid"] => |node, source, ctx, diagnostics|
@@ -80,18 +87,12 @@ mod tests {
 
     #[test]
     fn flags_snake_case_testid() {
-        assert_eq!(
-            run("const x = <div data-testid=\"user_card\" />;").len(),
-            1
-        );
+        assert_eq!(run("const x = <div data-testid=\"user_card\" />;").len(), 1);
     }
 
     #[test]
     fn flags_pascal_case_data_test() {
-        assert_eq!(
-            run("const x = <div data-test=\"UserCard\" />;").len(),
-            1
-        );
+        assert_eq!(run("const x = <div data-test=\"UserCard\" />;").len(), 1);
     }
 
     #[test]

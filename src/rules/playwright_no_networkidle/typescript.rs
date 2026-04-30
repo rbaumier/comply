@@ -58,8 +58,8 @@ crate::ast_check! { prefilter = ["networkidle"] => |node, source, ctx, diagnosti
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
     use crate::rules::backend::{AstCheck, CheckCtx};
+    use std::path::Path;
 
     fn run(path: &str, source: &str) -> Vec<Diagnostic> {
         let full = format!("{source}\n// @playwright/test");
@@ -83,10 +83,7 @@ mod tests {
 
     #[test]
     fn flags_networkidle_single_quotes() {
-        let d = run(
-            "nav.spec.ts",
-            "await page.waitForLoadState('networkidle');",
-        );
+        let d = run("nav.spec.ts", "await page.waitForLoadState('networkidle');");
         assert_eq!(d.len(), 1);
     }
 

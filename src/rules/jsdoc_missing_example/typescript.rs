@@ -96,14 +96,9 @@ fn extract_exported_name<'a>(export: tree_sitter::Node, source: &'a [u8]) -> Opt
 #[cfg(test)]
 mod tests {
     use super::*;
-    
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
-
-
         crate::rules::test_helpers::run_ts(source, &Check)
-
-
     }
 
     #[test]

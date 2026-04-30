@@ -8,23 +8,33 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
 fn catch_body_is_empty(catch_clause: tree_sitter::Node, source: &[u8]) -> bool {
-    let Some(body) = catch_clause.child_by_field_name("body") else { return false; };
-    if body.kind() != "statement_block" { return false; }
-    if body.named_child_count() != 0 { return false; }
+    let Some(body) = catch_clause.child_by_field_name("body") else {
+        return false;
+    };
+    if body.kind() != "statement_block" {
+        return false;
+    }
+    if body.named_child_count() != 0 {
+        return false;
+    }
     // If the block text contains any non-whitespace-non-brace char, treat as non-empty
     // (catches `{ /* tolerated */ }`). Otherwise it's truly empty.
     let text = body.utf8_text(source).unwrap_or("");
-    text.chars().all(|c| c.is_whitespace() || c == '{' || c == '}')
+    text.chars()
+        .all(|c| c.is_whitespace() || c == '{' || c == '}')
 }
 
 fn inside_test_callback(mut node: tree_sitter::Node, source: &[u8]) -> bool {
     while let Some(parent) = node.parent() {
         if parent.kind() == "call_expression"
             && let Some(func) = parent.child_by_field_name("function")
-                && func.kind() == "identifier" {
-                    let n = func.utf8_text(source).unwrap_or("");
-                    if matches!(n, "test" | "it") { return true; }
-                }
+            && func.kind() == "identifier"
+        {
+            let n = func.utf8_text(source).unwrap_or("");
+            if matches!(n, "test" | "it") {
+                return true;
+            }
+        }
         node = parent;
     }
     false

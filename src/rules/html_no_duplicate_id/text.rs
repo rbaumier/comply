@@ -93,7 +93,8 @@ mod tests {
 
     #[test]
     fn flags_duplicate_id() {
-        let source = "<template>\n  <div id=\"foo\"></div>\n  <span id=\"foo\"></span>\n</template>";
+        let source =
+            "<template>\n  <div id=\"foo\"></div>\n  <span id=\"foo\"></span>\n</template>";
         let diags = run(source);
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("foo"));
@@ -101,7 +102,8 @@ mod tests {
 
     #[test]
     fn allows_unique_ids() {
-        let source = "<template>\n  <div id=\"foo\"></div>\n  <span id=\"bar\"></span>\n</template>";
+        let source =
+            "<template>\n  <div id=\"foo\"></div>\n  <span id=\"bar\"></span>\n</template>";
         assert!(run(source).is_empty());
     }
 
@@ -114,13 +116,15 @@ mod tests {
     #[test]
     fn ignores_dynamic_id_binding() {
         // `:id` and `v-bind:id` are dynamic — can't compare at lint time.
-        let source = "<template>\n  <div :id=\"foo\"></div>\n  <span v-bind:id=\"foo\"></span>\n</template>";
+        let source =
+            "<template>\n  <div :id=\"foo\"></div>\n  <span v-bind:id=\"foo\"></span>\n</template>";
         assert!(run(source).is_empty());
     }
 
     #[test]
     fn ignores_non_vue_file() {
-        let source = "<template>\n  <div id=\"foo\"></div>\n  <span id=\"foo\"></span>\n</template>";
+        let source =
+            "<template>\n  <div id=\"foo\"></div>\n  <span id=\"foo\"></span>\n</template>";
         assert!(run_named("component.tsx", source).is_empty());
     }
 

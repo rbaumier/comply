@@ -44,9 +44,9 @@ mod shared_tests;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
+use crate::rules::RuleDef;
 use crate::rules::backend::Backend;
 use crate::rules::meta::RuleMeta;
-use crate::rules::RuleDef;
 
 pub const META: RuleMeta = RuleMeta {
     id: "no-clear-text-protocol",
@@ -62,9 +62,18 @@ pub fn register() -> RuleDef {
     RuleDef {
         meta: META,
         backends: vec![
-            (Language::TypeScript, Backend::TreeSitter(Box::new(typescript::Check))),
-            (Language::JavaScript, Backend::TreeSitter(Box::new(typescript::Check))),
-            (Language::Tsx, Backend::TreeSitter(Box::new(typescript::Check))),
+            (
+                Language::TypeScript,
+                Backend::TreeSitter(Box::new(typescript::Check)),
+            ),
+            (
+                Language::JavaScript,
+                Backend::TreeSitter(Box::new(typescript::Check)),
+            ),
+            (
+                Language::Tsx,
+                Backend::TreeSitter(Box::new(typescript::Check)),
+            ),
             (Language::Rust, Backend::TreeSitter(Box::new(rust::Check))),
             (Language::Vue, Backend::TreeSitter(Box::new(vue::Check))),
         ],
@@ -73,11 +82,7 @@ pub fn register() -> RuleDef {
 
 const CLEAR_TEXT_PREFIXES: &[&str] = &["http://", "ftp://", "telnet://"];
 
-const DEV_PREFIXES: &[&str] = &[
-    "http://localhost",
-    "http://127.0.0.1",
-    "http://0.0.0.0",
-];
+const DEV_PREFIXES: &[&str] = &["http://localhost", "http://127.0.0.1", "http://0.0.0.0"];
 
 /// True if `content` is a clear-text URL with an actual host
 /// (strictly longer than the bare protocol prefix) and not a dev-
@@ -91,7 +96,8 @@ pub(super) fn is_clear_text_url(content: &str) -> Option<&'static str> {
                 return None;
             }
             let host = &trimmed[prefix.len()..];
-            let host_end = host.find(|c: char| c == '/' || c == ':' || c == '?' || c == '#')
+            let host_end = host
+                .find(|c: char| c == '/' || c == ':' || c == '?' || c == '#')
                 .unwrap_or(host.len());
             let hostname = &host[..host_end];
             if hostname.len() <= 1 {
@@ -158,10 +164,7 @@ mod helper_tests {
 
     #[test]
     fn flags_ftp_url() {
-        assert_eq!(
-            is_clear_text_url("\"ftp://files.acme.io\""),
-            Some("ftp://")
-        );
+        assert_eq!(is_clear_text_url("\"ftp://files.acme.io\""), Some("ftp://"));
     }
 
     #[test]

@@ -8,7 +8,9 @@ use crate::rules::backend::{CheckCtx, TextCheck};
 pub struct Check;
 
 fn is_prisma_file(source: &str) -> bool {
-    source.contains("@prisma/client") || source.contains("PrismaClient") || source.contains("prisma.")
+    source.contains("@prisma/client")
+        || source.contains("PrismaClient")
+        || source.contains("prisma.")
 }
 
 /// Find every `.findMany(` call and report it if its argument object does

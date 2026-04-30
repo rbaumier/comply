@@ -21,25 +21,37 @@ impl TextCheck for Check {
             // Look for v-for with an index variable and :key using that index
             let attrs = elem.attrs;
             // Extract v-for value
-            let Some(vfor_start) = attrs.find("v-for=\"") else { continue };
+            let Some(vfor_start) = attrs.find("v-for=\"") else {
+                continue;
+            };
             let vfor_rest = &attrs[vfor_start + 7..];
-            let Some(vfor_end) = vfor_rest.find('"') else { continue };
+            let Some(vfor_end) = vfor_rest.find('"') else {
+                continue;
+            };
             let vfor_val = &vfor_rest[..vfor_end];
 
             // Extract the index variable: (item, index) or (item, index, i)
             // Pattern: (var, indexVar) in ...
-            let Some(paren_start) = vfor_val.find('(') else { continue };
-            let Some(paren_end) = vfor_val.find(')') else { continue };
+            let Some(paren_start) = vfor_val.find('(') else {
+                continue;
+            };
+            let Some(paren_end) = vfor_val.find(')') else {
+                continue;
+            };
             let params = &vfor_val[paren_start + 1..paren_end];
             let parts: Vec<&str> = params.split(',').map(|s| s.trim()).collect();
-            let Some(index_var) = parts.get(1) else { continue };
+            let Some(index_var) = parts.get(1) else {
+                continue;
+            };
             let index_var = index_var.trim();
 
             // Check if :key uses the index variable
             // Look on the same line and nearby lines
             let line_idx = elem.line - 1;
             for offset in 0..3 {
-                if line_idx + offset >= lines.len() { break; }
+                if line_idx + offset >= lines.len() {
+                    break;
+                }
                 let line = lines[line_idx + offset];
                 let key_pattern = format!(":key=\"{index_var}\"");
                 if line.contains(&key_pattern) {

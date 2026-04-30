@@ -20,24 +20,25 @@ fn is_inside_test_or_hook(node: tree_sitter::Node, source: &[u8]) -> bool {
             "arrow_function" | "function_expression" | "function" => {
                 if let Some(pp) = p.parent()
                     && pp.kind() == "arguments"
-                        && let Some(call) = pp.parent()
-                            && call.kind() == "call_expression"
-                                && let Some(callee) = call.child_by_field_name("function") {
-                                    let name = match callee.kind() {
-                                        "identifier" => callee.utf8_text(source).unwrap_or(""),
-                                        "member_expression" => {
-                                            if let Some(obj) = callee.child_by_field_name("object") {
-                                                obj.utf8_text(source).unwrap_or("")
-                                            } else {
-                                                ""
-                                            }
-                                        }
-                                        _ => "",
-                                    };
-                                    if TEST_FNS.contains(&name) || HOOK_FNS.contains(&name) {
-                                        return true;
-                                    }
-                                }
+                    && let Some(call) = pp.parent()
+                    && call.kind() == "call_expression"
+                    && let Some(callee) = call.child_by_field_name("function")
+                {
+                    let name = match callee.kind() {
+                        "identifier" => callee.utf8_text(source).unwrap_or(""),
+                        "member_expression" => {
+                            if let Some(obj) = callee.child_by_field_name("object") {
+                                obj.utf8_text(source).unwrap_or("")
+                            } else {
+                                ""
+                            }
+                        }
+                        _ => "",
+                    };
+                    if TEST_FNS.contains(&name) || HOOK_FNS.contains(&name) {
+                        return true;
+                    }
+                }
             }
             _ => {}
         }
@@ -50,7 +51,9 @@ fn is_expect_call(node: tree_sitter::Node, source: &[u8]) -> bool {
     if node.kind() != "call_expression" {
         return false;
     }
-    let Some(callee) = node.child_by_field_name("function") else { return false };
+    let Some(callee) = node.child_by_field_name("function") else {
+        return false;
+    };
     // Direct expect(...)
     if callee.kind() == "identifier" && callee.utf8_text(source).unwrap_or("") == "expect" {
         return true;
@@ -58,9 +61,11 @@ fn is_expect_call(node: tree_sitter::Node, source: &[u8]) -> bool {
     // expect.soft(...) — member expression where object is the `expect` identifier
     if callee.kind() == "member_expression"
         && let Some(obj) = callee.child_by_field_name("object")
-            && obj.kind() == "identifier" && obj.utf8_text(source).unwrap_or("") == "expect" {
-                return true;
-            }
+        && obj.kind() == "identifier"
+        && obj.utf8_text(source).unwrap_or("") == "expect"
+    {
+        return true;
+    }
     false
 }
 

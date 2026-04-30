@@ -2,7 +2,9 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-const ROUTE_METHODS: &[&str] = &["get", "post", "put", "patch", "delete", "options", "head", "all"];
+const ROUTE_METHODS: &[&str] = &[
+    "get", "post", "put", "patch", "delete", "options", "head", "all",
+];
 
 fn segment_count(path: &str) -> usize {
     path.split('/').filter(|s| !s.is_empty()).count()

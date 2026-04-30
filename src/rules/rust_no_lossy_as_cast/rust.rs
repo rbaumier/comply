@@ -17,9 +17,7 @@ use crate::rules::backend::{AstCheck, CheckCtx};
 
 const KINDS: &[&str] = &["type_cast_expression"];
 
-const NARROWING_TARGETS: &[&str] = &[
-    "u8", "u16", "u32", "i8", "i16", "i32", "f32",
-];
+const NARROWING_TARGETS: &[&str] = &["u8", "u16", "u32", "i8", "i16", "i32", "f32"];
 
 #[derive(Debug)]
 pub struct Check;
@@ -72,14 +70,9 @@ impl AstCheck for Check {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
-
-
         crate::rules::test_helpers::run_rust(source, &Check)
-
-
     }
 
     #[test]

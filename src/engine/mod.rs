@@ -32,7 +32,7 @@ use crate::files::{Language, SourceFile};
 use crate::project::ProjectCtx;
 use crate::rules::backend::AstCheck;
 use crate::rules::file_ctx::FileCtx;
-use crate::rules::{self, backend::Backend, backend::CheckCtx, meta::RuleMeta, RuleDef};
+use crate::rules::{self, RuleDef, backend::Backend, backend::CheckCtx, meta::RuleMeta};
 
 /// Pre-computed per-language dispatch table. Built once in `lint_files`,
 /// shared read-only across all rayon workers.
@@ -172,7 +172,12 @@ pub fn lint_files_with_project(
     }
 
     // Pre-compute dispatch tables once per language instead of per-file.
-    let languages: Vec<Language> = files.iter().map(|f| f.language).collect::<std::collections::HashSet<_>>().into_iter().collect();
+    let languages: Vec<Language> = files
+        .iter()
+        .map(|f| f.language)
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
     let lang_dispatches: HashMap<Language, LangDispatch> = languages
         .into_iter()
         .map(|lang| (lang, LangDispatch::build(&rule_defs, lang)))
@@ -242,10 +247,7 @@ pub fn lint_in_memory(
 }
 
 /// Flatten `RuleDef[]` into `(meta, backend)` pairs that apply to `language`.
-fn collect_applicable(
-    rule_defs: &[RuleDef],
-    language: Language,
-) -> Vec<(&RuleMeta, &Backend)> {
+fn collect_applicable(rule_defs: &[RuleDef], language: Language) -> Vec<(&RuleMeta, &Backend)> {
     rule_defs
         .iter()
         .flat_map(|r| {

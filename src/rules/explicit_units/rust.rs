@@ -9,23 +9,34 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 
 const AMBIGUOUS_BASES: &[&str] = &[
-    "delay", "timeout", "interval", "duration", "elapsed", "age", "wait",
-    "size", "length", "distance", "offset", "width", "height", "limit",
-    "rate", "frequency", "threshold",
+    "delay",
+    "timeout",
+    "interval",
+    "duration",
+    "elapsed",
+    "age",
+    "wait",
+    "size",
+    "length",
+    "distance",
+    "offset",
+    "width",
+    "height",
+    "limit",
+    "rate",
+    "frequency",
+    "threshold",
 ];
 
 const KNOWN_SUFFIXES: &[&str] = &[
-    "_ms", "_sec", "_seconds", "_minutes", "_hours", "_days",
-    "_bytes", "_kb", "_mb", "_gb", "_kib", "_mib", "_gib",
-    "_px", "_em", "_rem", "_pct", "_percent",
-    "_rps", "_qps", "_hz", "_khz",
-    "_count",
+    "_ms", "_sec", "_seconds", "_minutes", "_hours", "_days", "_bytes", "_kb", "_mb", "_gb",
+    "_kib", "_mib", "_gib", "_px", "_em", "_rem", "_pct", "_percent", "_rps", "_qps", "_hz",
+    "_khz", "_count",
 ];
 
 const NUMERIC_TYPES: &[&str] = &[
-    "u8", "u16", "u32", "u64", "u128", "usize",
-    "i8", "i16", "i32", "i64", "i128", "isize",
-    "f32", "f64",
+    "u8", "u16", "u32", "u64", "u128", "usize", "i8", "i16", "i32", "i64", "i128", "isize", "f32",
+    "f64",
 ];
 
 #[derive(Debug)]
@@ -77,7 +88,10 @@ fn is_numeric(node: tree_sitter::Node, source: &[u8]) -> bool {
     for child in node.children(&mut cursor) {
         match child.kind() {
             "primitive_type" => {
-                if child.utf8_text(source).is_ok_and(|t| NUMERIC_TYPES.contains(&t)) {
+                if child
+                    .utf8_text(source)
+                    .is_ok_and(|t| NUMERIC_TYPES.contains(&t))
+                {
                     return true;
                 }
             }
@@ -102,7 +116,9 @@ fn matches_ambiguous_base(name: &str) -> Option<&'static str> {
     let lower = name.to_ascii_lowercase();
     AMBIGUOUS_BASES
         .iter()
-        .find(|&&base| lower == base || lower.starts_with(&format!("{base}_")) || lower.starts_with(base))
+        .find(|&&base| {
+            lower == base || lower.starts_with(&format!("{base}_")) || lower.starts_with(base)
+        })
         .copied()
 }
 
@@ -113,14 +129,9 @@ fn has_known_suffix(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
-
-
         crate::rules::test_helpers::run_rust(source, &Check)
-
-
     }
 
     #[test]

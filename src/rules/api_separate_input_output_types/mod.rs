@@ -7,14 +7,13 @@
 mod typescript;
 
 use crate::diagnostic::Severity;
-use crate::rules::meta::RuleMeta;
 use crate::rules::RuleDef;
+use crate::rules::meta::RuleMeta;
 
 pub const META: RuleMeta = RuleMeta {
     id: "api-separate-input-output-types",
     description: "The same type must not serve as both request input and response output.",
-    remediation:
-        "Split into separate input (CreateXInput) and output (XResponse) types. Server-managed fields (id, createdAt, updatedAt) belong only in the output shape.",
+    remediation: "Split into separate input (CreateXInput) and output (XResponse) types. Server-managed fields (id, createdAt, updatedAt) belong only in the output shape.",
     severity: Severity::Warning,
     doc_url: None,
     categories: &["api-design"],

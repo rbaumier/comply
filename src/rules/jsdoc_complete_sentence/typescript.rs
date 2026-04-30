@@ -66,32 +66,37 @@ impl AstCheck for Check {
         // First line must start with a capital letter.
         let (first_text, first_offset) = &description_lines[0];
         if let Some(ch) = first_text.chars().next()
-            && ch.is_alphabetic() && !ch.is_uppercase() {
-                diagnostics.push(Diagnostic {
-                    path: std::sync::Arc::clone(&ctx.path_arc),
-                    line: comment_start_row + first_offset + 1,
-                    column: 1,
-                    rule_id: "jsdoc-complete-sentence".into(),
-                    message: "JSDoc description must start with a capital letter.".into(),
-                    severity: Severity::Warning,
-                    span: None,
-                });
-            }
+            && ch.is_alphabetic()
+            && !ch.is_uppercase()
+        {
+            diagnostics.push(Diagnostic {
+                path: std::sync::Arc::clone(&ctx.path_arc),
+                line: comment_start_row + first_offset + 1,
+                column: 1,
+                rule_id: "jsdoc-complete-sentence".into(),
+                message: "JSDoc description must start with a capital letter.".into(),
+                severity: Severity::Warning,
+                span: None,
+            });
+        }
 
         // Last line must end with punctuation.
         let (last_text, last_offset) = &description_lines[description_lines.len() - 1];
         if let Some(ch) = last_text.trim_end().chars().last()
-            && ch != '.' && ch != '!' && ch != '?' {
-                diagnostics.push(Diagnostic {
-                    path: std::sync::Arc::clone(&ctx.path_arc),
-                    line: comment_start_row + last_offset + 1,
-                    column: 1,
-                    rule_id: "jsdoc-complete-sentence".into(),
-                    message: "JSDoc description must end with `.`, `!`, or `?`.".into(),
-                    severity: Severity::Warning,
-                    span: None,
-                });
-            }
+            && ch != '.'
+            && ch != '!'
+            && ch != '?'
+        {
+            diagnostics.push(Diagnostic {
+                path: std::sync::Arc::clone(&ctx.path_arc),
+                line: comment_start_row + last_offset + 1,
+                column: 1,
+                rule_id: "jsdoc-complete-sentence".into(),
+                message: "JSDoc description must end with `.`, `!`, or `?`.".into(),
+                severity: Severity::Warning,
+                span: None,
+            });
+        }
     }
 }
 

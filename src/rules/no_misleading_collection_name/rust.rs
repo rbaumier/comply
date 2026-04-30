@@ -65,13 +65,23 @@ impl AstCheck for Check {
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let source = ctx.source.as_bytes();
-        let Some(pat) = node.child_by_field_name("pattern") else { return };
-        let Ok(name) = pat.utf8_text(source) else { return };
+        let Some(pat) = node.child_by_field_name("pattern") else {
+            return;
+        };
+        let Ok(name) = pat.utf8_text(source) else {
+            return;
+        };
         // Strip `mut ` prefix.
         let name = name.strip_prefix("mut ").unwrap_or(name).trim();
-        let Some(claimed) = name_suffix_shape(name) else { return };
-        let Some(value) = node.child_by_field_name("value") else { return };
-        let Some(actual) = initializer_shape(value, source) else { return };
+        let Some(claimed) = name_suffix_shape(name) else {
+            return;
+        };
+        let Some(value) = node.child_by_field_name("value") else {
+            return;
+        };
+        let Some(actual) = initializer_shape(value, source) else {
+            return;
+        };
         if claimed == actual {
             return;
         }

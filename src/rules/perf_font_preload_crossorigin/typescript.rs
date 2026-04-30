@@ -71,7 +71,8 @@ mod tests {
     #[test]
     fn flags_missing_crossorigin_only() {
         assert_eq!(
-            run(r#"const x = <link rel="preload" as="font" type="font/woff2" href="/f.woff2" />;"#).len(),
+            run(r#"const x = <link rel="preload" as="font" type="font/woff2" href="/f.woff2" />;"#)
+                .len(),
             1
         );
     }

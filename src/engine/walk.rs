@@ -30,33 +30,32 @@ pub(super) fn run_multiplexed_walk(
     // of allocating fresh Vecs — `Vec::resize_with(n, default)` keeps
     // existing capacity and only re-runs the closure for new slots.
     worker.enabled.clear();
-    worker.enabled.extend(
-        ld.multiplexed
-            .iter()
-            .zip(&ld.multiplexed_prefilters)
-            .map(|((meta, _), pf)| {
-                config.is_rule_enabled(meta.id, path)
-                    && pf
-                        .as_ref()
-                        .is_none_or(|f| super::source_matches_prefilter(source, f))
-            }),
-    );
+    worker
+        .enabled
+        .extend(
+            ld.multiplexed
+                .iter()
+                .zip(&ld.multiplexed_prefilters)
+                .map(|((meta, _), pf)| {
+                    config.is_rule_enabled(meta.id, path)
+                        && pf
+                            .as_ref()
+                            .is_none_or(|f| super::source_matches_prefilter(source, f))
+                }),
+        );
 
     // Old states from a previous file may linger in the Vec — drop
     // them before resizing. (resize_with would keep the old Box's.)
     worker.states.clear();
-    worker.states.extend(
-        ld.multiplexed
-            .iter()
-            .enumerate()
-            .map(|(i, (_, check))| {
-                if worker.enabled[i] {
-                    check.create_state()
-                } else {
-                    None
-                }
-            }),
-    );
+    worker
+        .states
+        .extend(ld.multiplexed.iter().enumerate().map(|(i, (_, check))| {
+            if worker.enabled[i] {
+                check.create_state()
+            } else {
+                None
+            }
+        }));
 
     // Reuse the per-rule diag Vecs — clear each but keep capacity.
     if worker.per_rule_diags.len() < n {
@@ -79,12 +78,7 @@ pub(super) fn run_multiplexed_walk(
                     continue;
                 }
                 let (_, check) = &ld.multiplexed[i];
-                check.visit_node(
-                    node,
-                    ctx,
-                    states[i].as_deref_mut(),
-                    &mut per_rule_diags[i],
-                );
+                check.visit_node(node, ctx, states[i].as_deref_mut(), &mut per_rule_diags[i]);
             }
         }
     });

@@ -38,15 +38,21 @@ fn is_anonymous_component(node: tree_sitter::Node) -> bool {
 /// True if `call` is `React.memo(...)` or `React.forwardRef(...)`, or the
 /// bare `memo(...)` / `forwardRef(...)` forms.
 fn is_react_wrapper_call(call: tree_sitter::Node, source: &[u8]) -> bool {
-    let Some(func) = call.child_by_field_name("function") else { return false };
+    let Some(func) = call.child_by_field_name("function") else {
+        return false;
+    };
     match func.kind() {
         "identifier" => {
             let name = &source[func.byte_range()];
             name == b"memo" || name == b"forwardRef"
         }
         "member_expression" => {
-            let Some(object) = func.child_by_field_name("object") else { return false };
-            let Some(property) = func.child_by_field_name("property") else { return false };
+            let Some(object) = func.child_by_field_name("object") else {
+                return false;
+            };
+            let Some(property) = func.child_by_field_name("property") else {
+                return false;
+            };
             if &source[object.byte_range()] != b"React" {
                 return false;
             }

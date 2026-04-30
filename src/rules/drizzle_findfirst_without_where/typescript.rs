@@ -7,14 +7,20 @@ fn callee_is_findfirst(callee: tree_sitter::Node<'_>, source: &[u8]) -> bool {
     if callee.kind() != "member_expression" {
         return false;
     }
-    let Some(prop) = callee.child_by_field_name("property") else { return false };
+    let Some(prop) = callee.child_by_field_name("property") else {
+        return false;
+    };
     if prop.utf8_text(source).unwrap_or("") != "findFirst" {
         return false;
     }
     // Object should look like `db.query.<table>` to keep this Drizzle-specific.
-    let Some(object) = callee.child_by_field_name("object") else { return false };
+    let Some(object) = callee.child_by_field_name("object") else {
+        return false;
+    };
     let obj_text = object.utf8_text(source).unwrap_or("");
-    obj_text.starts_with("db.query.") || obj_text.starts_with("tx.query.") || obj_text.starts_with("trx.query.")
+    obj_text.starts_with("db.query.")
+        || obj_text.starts_with("tx.query.")
+        || obj_text.starts_with("trx.query.")
 }
 
 crate::ast_check! { on ["call_expression"] prefilter = ["findFirst"] => |node, source, ctx, diagnostics|

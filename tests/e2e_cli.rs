@@ -16,7 +16,11 @@ fn exit_code_zero_on_clean_file() {
          export const GREETING = \"hello\";\n",
     );
     // Colocated test file so the colocated-tests rule doesn't fire.
-    std::fs::write(path.with_file_name("clean.test.ts"), "test('ok', () => {});\n").unwrap();
+    std::fs::write(
+        path.with_file_name("clean.test.ts"),
+        "test('ok', () => {});\n",
+    )
+    .unwrap();
     Command::cargo_bin("comply")
         .unwrap()
         .arg(&path)
@@ -56,7 +60,9 @@ fn comply_ignore_without_justification_is_flagged() {
         .unwrap()
         .arg(&path)
         .assert()
-        .stdout(predicate::str::contains("comply-ignore-missing-justification"));
+        .stdout(predicate::str::contains(
+            "comply-ignore-missing-justification",
+        ));
 }
 
 #[test]

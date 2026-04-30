@@ -47,7 +47,12 @@ pub fn parse(path: &Path, line: &str, line_num: usize) -> Option<LineParse> {
 
     let bad_ignore = if parsed.justification.is_empty() {
         let col = prefix.chars().count();
-        Some(make_bad_ignore_diagnostic(path, line_num, col, &parsed.rule_id))
+        Some(make_bad_ignore_diagnostic(
+            path,
+            line_num,
+            col,
+            &parsed.rule_id,
+        ))
     } else {
         None
     };
@@ -113,23 +118,48 @@ mod tests {
 
     #[test]
     fn trailing_marker_targets_current_line() {
-        let lp =
-            parse(Path::new("t.ts"), "throw err; // comply-ignore: no-throw — legacy", 5).unwrap();
+        let lp = parse(
+            Path::new("t.ts"),
+            "throw err; // comply-ignore: no-throw — legacy",
+            5,
+        )
+        .unwrap();
         assert_eq!(lp.target_line, 5);
     }
 
     #[test]
     fn marker_inside_double_quoted_string_is_ignored() {
-        assert!(parse(Path::new("t.ts"), "let s = \"// comply-ignore: no-throw — x\";", 1).is_none());
+        assert!(
+            parse(
+                Path::new("t.ts"),
+                "let s = \"// comply-ignore: no-throw — x\";",
+                1
+            )
+            .is_none()
+        );
     }
 
     #[test]
     fn marker_inside_single_quoted_string_is_ignored() {
-        assert!(parse(Path::new("t.ts"), "let s = '// comply-ignore: no-throw — x';", 1).is_none());
+        assert!(
+            parse(
+                Path::new("t.ts"),
+                "let s = '// comply-ignore: no-throw — x';",
+                1
+            )
+            .is_none()
+        );
     }
 
     #[test]
     fn marker_inside_backtick_template_is_ignored() {
-        assert!(parse(Path::new("t.ts"), "let s = `// comply-ignore: no-throw — x`;", 1).is_none());
+        assert!(
+            parse(
+                Path::new("t.ts"),
+                "let s = `// comply-ignore: no-throw — x`;",
+                1
+            )
+            .is_none()
+        );
     }
 }

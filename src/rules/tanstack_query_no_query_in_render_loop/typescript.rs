@@ -111,7 +111,8 @@ mod tests {
 
     #[test]
     fn flags_use_query_in_map() {
-        let src = "items.map((id) => { const q = useQuery({ queryKey: ['x', id] }); return q.data; })";
+        let src =
+            "items.map((id) => { const q = useQuery({ queryKey: ['x', id] }); return q.data; })";
         assert_eq!(run(src).len(), 1);
     }
 

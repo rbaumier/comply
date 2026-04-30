@@ -3,8 +3,8 @@
 mod typescript;
 
 use crate::diagnostic::Severity;
-use crate::rules::meta::RuleMeta;
 use crate::rules::RuleDef;
+use crate::rules::meta::RuleMeta;
 
 pub const META: RuleMeta = RuleMeta {
     id: "playwright-no-useless-not",
@@ -13,7 +13,9 @@ pub const META: RuleMeta = RuleMeta {
                   `toBeHidden` instead of `not.toBeVisible`, \
                   `toBeDisabled` instead of `not.toBeEnabled`.",
     severity: Severity::Warning,
-    doc_url: Some("https://github.com/playwright-community/eslint-plugin-playwright/blob/main/docs/rules/no-useless-not.md"),
+    doc_url: Some(
+        "https://github.com/playwright-community/eslint-plugin-playwright/blob/main/docs/rules/no-useless-not.md",
+    ),
     categories: &["testing"],
 };
 

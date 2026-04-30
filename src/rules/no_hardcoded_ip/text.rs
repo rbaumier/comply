@@ -54,20 +54,25 @@ const ALLOWED: &[&str] = &["127.0.0.1", "0.0.0.0", "255.255.255.255"];
 
 fn is_cidr_notation(line: &str, ip_end: usize) -> bool {
     let bytes = line.as_bytes();
-    ip_end < bytes.len() && bytes[ip_end] == b'/'
+    ip_end < bytes.len()
+        && bytes[ip_end] == b'/'
         && bytes.get(ip_end + 1).is_some_and(|b| b.is_ascii_digit())
 }
 
 fn is_svg_path_data(line: &str) -> bool {
     let trimmed = line.trim();
-    trimmed.starts_with("d=\"") || trimmed.starts_with("d='")
-        || trimmed.contains(" d=\"") || trimmed.contains(" d='")
+    trimmed.starts_with("d=\"")
+        || trimmed.starts_with("d='")
+        || trimmed.contains(" d=\"")
+        || trimmed.contains(" d='")
 }
 
 fn is_in_comment(line: &str) -> bool {
     let trimmed = line.trim_start();
-    trimmed.starts_with("//") || trimmed.starts_with("///")
-        || trimmed.starts_with("* ") || trimmed.starts_with("*\t")
+    trimmed.starts_with("//")
+        || trimmed.starts_with("///")
+        || trimmed.starts_with("* ")
+        || trimmed.starts_with("*\t")
         || trimmed.starts_with("/**")
 }
 

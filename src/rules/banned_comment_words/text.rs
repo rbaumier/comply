@@ -69,8 +69,8 @@ fn contains_word_boundary(haystack: &str, word: &str) -> bool {
     while i + needle.len() <= bytes.len() {
         if &bytes[i..i + needle.len()] == needle {
             let prev_ok = i == 0 || !bytes[i - 1].is_ascii_alphabetic();
-            let next_ok = i + needle.len() == bytes.len()
-                || !bytes[i + needle.len()].is_ascii_alphabetic();
+            let next_ok =
+                i + needle.len() == bytes.len() || !bytes[i + needle.len()].is_ascii_alphabetic();
             if prev_ok && next_ok {
                 return true;
             }

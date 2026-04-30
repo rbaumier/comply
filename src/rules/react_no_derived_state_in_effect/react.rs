@@ -82,9 +82,7 @@ mod tests {
 
     #[test]
     fn allows_multi_statement_effect() {
-        assert!(
-            run("useEffect(() => { const x = a + b; setFull(x); log(x) }, [a, b])").is_empty()
-        );
+        assert!(run("useEffect(() => { const x = a + b; setFull(x); log(x) }, [a, b])").is_empty());
     }
 
     #[test]

@@ -47,7 +47,9 @@ fn find_pair_value<'a>(
 ) -> Option<tree_sitter::Node<'a>> {
     let mut cursor = object.walk();
     for child in object.named_children(&mut cursor) {
-        if child.kind() != "pair" { continue; }
+        if child.kind() != "pair" {
+            continue;
+        }
         let key = child.child_by_field_name("key")?;
         let raw = key.utf8_text(source).ok()?;
         if raw.trim_matches(|c| c == '"' || c == '\'') == needle {
@@ -75,10 +77,16 @@ fn body_looks_dependent(query_fn: tree_sitter::Node<'_>, _source: &[u8]) -> bool
 
     let mut found = false;
     walk_subtree(body, &mut |n| {
-        if found { return; }
+        if found {
+            return;
+        }
         match n.kind() {
-            "optional_chain" => { found = true; }
-            "non_null_expression" => { found = true; }
+            "optional_chain" => {
+                found = true;
+            }
+            "non_null_expression" => {
+                found = true;
+            }
             _ => {}
         }
         // tree-sitter-typescript exposes `a?.b` as a `member_expression`
@@ -87,7 +95,10 @@ fn body_looks_dependent(query_fn: tree_sitter::Node<'_>, _source: &[u8]) -> bool
         if n.kind() == "member_expression" {
             let mut c = n.walk();
             for ch in n.children(&mut c) {
-                if ch.kind() == "optional_chain" { found = true; break; }
+                if ch.kind() == "optional_chain" {
+                    found = true;
+                    break;
+                }
             }
         }
     });
@@ -99,11 +110,19 @@ fn walk_subtree<F: FnMut(tree_sitter::Node<'_>)>(root: tree_sitter::Node<'_>, vi
     let mut cursor = root.walk();
     loop {
         visit(cursor.node());
-        if cursor.goto_first_child() { continue; }
+        if cursor.goto_first_child() {
+            continue;
+        }
         loop {
-            if cursor.node().id() == root_id { return; }
-            if cursor.goto_next_sibling() { break; }
-            if !cursor.goto_parent() { return; }
+            if cursor.node().id() == root_id {
+                return;
+            }
+            if cursor.goto_next_sibling() {
+                break;
+            }
+            if !cursor.goto_parent() {
+                return;
+            }
         }
     }
 }
@@ -118,7 +137,8 @@ mod tests {
 
     #[test]
     fn flags_optional_chain_without_enabled() {
-        let src = "useQuery({ queryKey: ['u', user?.id], queryFn: () => fetch('/u/' + user?.id) });";
+        let src =
+            "useQuery({ queryKey: ['u', user?.id], queryFn: () => fetch('/u/' + user?.id) });";
         assert_eq!(run(src).len(), 1);
     }
 

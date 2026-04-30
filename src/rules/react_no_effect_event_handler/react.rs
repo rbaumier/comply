@@ -16,10 +16,13 @@ fn is_effect_hook(node: tree_sitter::Node, source: &[u8]) -> bool {
             name == "useEffect" || name == "useLayoutEffect"
         }
         "member_expression" => {
-            let obj = callee.child_by_field_name("object").and_then(|o| o.utf8_text(source).ok());
-            let prop = callee.child_by_field_name("property").and_then(|p| p.utf8_text(source).ok());
-            obj == Some("React")
-                && matches!(prop, Some("useEffect") | Some("useLayoutEffect"))
+            let obj = callee
+                .child_by_field_name("object")
+                .and_then(|o| o.utf8_text(source).ok());
+            let prop = callee
+                .child_by_field_name("property")
+                .and_then(|p| p.utf8_text(source).ok());
+            obj == Some("React") && matches!(prop, Some("useEffect") | Some("useLayoutEffect"))
         }
         _ => false,
     }
@@ -113,91 +116,118 @@ mod tests {
 
     #[test]
     fn flags_if_dep_pattern() {
-        assert_eq!(run(r#"
+        assert_eq!(
+            run(r#"
 function App() {
     const [submitted, setSubmitted] = useState(false);
     useEffect(() => {
         if (submitted) { navigate('/success'); }
     }, [submitted]);
 }
-"#).len(), 1);
+"#)
+            .len(),
+            1
+        );
     }
 
     #[test]
     fn flags_layout_effect() {
-        assert_eq!(run(r#"
+        assert_eq!(
+            run(r#"
 function App() {
     useLayoutEffect(() => {
         if (ready) { doSomething(); }
     }, [ready]);
 }
-"#).len(), 1);
+"#)
+            .len(),
+            1
+        );
     }
 
     #[test]
     fn allows_empty_deps() {
-        assert!(run(r#"
+        assert!(
+            run(r#"
 function App() {
     useEffect(() => {
         if (submitted) { doSomething(); }
     }, []);
 }
-"#).is_empty());
+"#)
+            .is_empty()
+        );
     }
 
     #[test]
     fn allows_multi_statement_body() {
-        assert!(run(r#"
+        assert!(
+            run(r#"
 function App() {
     useEffect(() => {
         console.log('effect');
         if (submitted) { navigate('/'); }
     }, [submitted]);
 }
-"#).is_empty());
+"#)
+            .is_empty()
+        );
     }
 
     #[test]
     fn allows_non_dep_condition() {
-        assert!(run(r#"
+        assert!(
+            run(r#"
 function App() {
     useEffect(() => {
         if (otherVar) { doSomething(); }
     }, [submitted]);
 }
-"#).is_empty());
+"#)
+            .is_empty()
+        );
     }
 
     #[test]
     fn allows_no_deps_array() {
-        assert!(run(r#"
+        assert!(
+            run(r#"
 function App() {
     useEffect(() => {
         if (x) { doSomething(); }
     });
 }
-"#).is_empty());
+"#)
+            .is_empty()
+        );
     }
 
     #[test]
     fn allows_non_if_body() {
-        assert!(run(r#"
+        assert!(
+            run(r#"
 function App() {
     useEffect(() => {
         fetchData(dep);
     }, [dep]);
 }
-"#).is_empty());
+"#)
+            .is_empty()
+        );
     }
 
     #[test]
     fn flags_react_dot_use_effect() {
-        assert_eq!(run(r#"
+        assert_eq!(
+            run(r#"
 function App() {
     React.useEffect(() => {
         if (submitted) { navigate('/success'); }
     }, [submitted]);
 }
-"#).len(), 1);
+"#)
+            .len(),
+            1
+        );
     }
 }

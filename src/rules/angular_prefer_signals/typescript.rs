@@ -11,7 +11,9 @@ fn is_angular_component(source: &str) -> bool {
 }
 
 impl TextCheck for Check {
-    fn prefilter(&self) -> Option<&'static [&'static str]> { Some(&["@Component"]) }
+    fn prefilter(&self) -> Option<&'static [&'static str]> {
+        Some(&["@Component"])
+    }
 
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
         if !is_angular_component(ctx.source) {
@@ -21,7 +23,10 @@ impl TextCheck for Check {
         for (idx, line) in ctx.source.lines().enumerate() {
             // Skip comments / imports.
             let trimmed = line.trim_start();
-            if trimmed.starts_with("//") || trimmed.starts_with("import ") || trimmed.starts_with("*") {
+            if trimmed.starts_with("//")
+                || trimmed.starts_with("import ")
+                || trimmed.starts_with("*")
+            {
                 continue;
             }
             if let Some(col) = line.find("new BehaviorSubject") {

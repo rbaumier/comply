@@ -70,9 +70,7 @@ fn script_block_from_element<'src>(
     let mut cursor = node.walk();
     let children: Vec<_> = node.children(&mut cursor).collect();
     let is_setup = children.iter().any(|c| {
-        c.kind() == "start_tag"
-            && c.utf8_text(source_bytes)
-                .is_ok_and(|t| t.contains("setup"))
+        c.kind() == "start_tag" && c.utf8_text(source_bytes).is_ok_and(|t| t.contains("setup"))
     });
     let raw = children.into_iter().find(|c| c.kind() == "raw_text")?;
     let text = raw.utf8_text(source_bytes).ok()?;

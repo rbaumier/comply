@@ -209,14 +209,22 @@ fn comply_to_lsp_diagnostic(d: &ComplyDiagnostic) -> LspDiagnostic {
     let column = u32::try_from(d.column.saturating_sub(1)).unwrap_or(u32::MAX);
     LspDiagnostic {
         range: Range {
-            start: Position { line, character: column },
-            end: Position { line, character: column + 1 },
+            start: Position {
+                line,
+                character: column,
+            },
+            end: Position {
+                line,
+                character: column + 1,
+            },
         },
         severity: Some(match d.severity {
             Severity::Error => DiagnosticSeverity::ERROR,
             Severity::Warning => DiagnosticSeverity::WARNING,
         }),
-        code: Some(tower_lsp::lsp_types::NumberOrString::String(d.rule_id.clone().into_owned())),
+        code: Some(tower_lsp::lsp_types::NumberOrString::String(
+            d.rule_id.clone().into_owned(),
+        )),
         source: Some("comply".to_string()),
         message: d.message.clone(),
         ..LspDiagnostic::default()

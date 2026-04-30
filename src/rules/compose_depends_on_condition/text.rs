@@ -12,7 +12,9 @@ fn looks_like_compose(path: &std::path::Path, source: &str) -> bool {
     if name.contains("compose") {
         return true;
     }
-    source.lines().any(|l| l == "services:" || l.starts_with("services:"))
+    source
+        .lines()
+        .any(|l| l == "services:" || l.starts_with("services:"))
 }
 
 /// `depends_on` is short-form when it's a flow sequence (`[db]`) or a block
@@ -79,7 +81,8 @@ mod tests {
 
     #[test]
     fn allows_long_form() {
-        let src = "services:\n  api:\n    depends_on:\n      db:\n        condition: service_healthy\n";
+        let src =
+            "services:\n  api:\n    depends_on:\n      db:\n        condition: service_healthy\n";
         assert!(run(src).is_empty());
     }
 }

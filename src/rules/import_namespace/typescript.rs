@@ -182,7 +182,10 @@ mod tests {
     #[test]
     fn allows_existing_member() {
         let (_dir, project, paths) = setup_project(&[
-            ("utils.ts", "export const add = (a: number, b: number) => a + b;"),
+            (
+                "utils.ts",
+                "export const add = (a: number, b: number) => a + b;",
+            ),
             (
                 "app.ts",
                 "import * as utils from './utils';\nutils.add(1, 2);",
@@ -197,10 +200,7 @@ mod tests {
     fn skips_star_reexport() {
         let (_dir, project, paths) = setup_project(&[
             ("base.ts", "export const x = 1;"),
-            (
-                "utils.ts",
-                "export * from './base';\nexport const add = 1;",
-            ),
+            ("utils.ts", "export * from './base';\nexport const add = 1;"),
             (
                 "app.ts",
                 "import * as utils from './utils';\nutils.anything();",

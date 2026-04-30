@@ -56,12 +56,18 @@ mod tests {
 
     #[test]
     fn flags_provide_string_key() {
-        assert_eq!(run("<script setup>\nprovide('user', user)\n</script>").len(), 1);
+        assert_eq!(
+            run("<script setup>\nprovide('user', user)\n</script>").len(),
+            1
+        );
     }
 
     #[test]
     fn flags_inject_string_key() {
-        assert_eq!(run("<script setup>\nconst u = inject('user')\n</script>").len(), 1);
+        assert_eq!(
+            run("<script setup>\nconst u = inject('user')\n</script>").len(),
+            1
+        );
     }
 
     #[test]

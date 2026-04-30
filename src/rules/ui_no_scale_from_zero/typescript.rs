@@ -5,12 +5,24 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
 fn is_in_style_jsx_attribute(node: tree_sitter::Node, source: &[u8]) -> bool {
-    let Some(obj) = node.parent() else { return false };
-    if obj.kind() != "object" { return false; }
-    let Some(jsx_expr) = obj.parent() else { return false };
-    if jsx_expr.kind() != "jsx_expression" { return false; }
-    let Some(jsx_attr) = jsx_expr.parent() else { return false };
-    if jsx_attr.kind() != "jsx_attribute" { return false; }
+    let Some(obj) = node.parent() else {
+        return false;
+    };
+    if obj.kind() != "object" {
+        return false;
+    }
+    let Some(jsx_expr) = obj.parent() else {
+        return false;
+    };
+    if jsx_expr.kind() != "jsx_expression" {
+        return false;
+    }
+    let Some(jsx_attr) = jsx_expr.parent() else {
+        return false;
+    };
+    if jsx_attr.kind() != "jsx_attribute" {
+        return false;
+    }
     crate::rules::jsx::jsx_attribute_name(jsx_attr, source) == Some("style")
 }
 
@@ -25,7 +37,11 @@ fn references_scale_zero(value: &str) -> bool {
         let inner = rest[..end].trim();
         // All comma-separated args must parse to zero.
         let args: Vec<&str> = inner.split(',').map(str::trim).collect();
-        if !args.is_empty() && args.iter().all(|a| a.parse::<f64>().is_ok_and(|n| n == 0.0)) {
+        if !args.is_empty()
+            && args
+                .iter()
+                .all(|a| a.parse::<f64>().is_ok_and(|n| n == 0.0))
+        {
             return true;
         }
     }
@@ -106,9 +122,7 @@ mod tests {
 
     #[test]
     fn allows_translate() {
-        assert!(
-            run(r#"<div style={{ transform: 'translateX(0)' }} />"#).is_empty()
-        );
+        assert!(run(r#"<div style={{ transform: 'translateX(0)' }} />"#).is_empty());
     }
 
     #[test]

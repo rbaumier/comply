@@ -54,27 +54,25 @@ crate::ast_check! { on ["source_file"] => |node, source, ctx, diagnostics|
 }
 
 /// Recursively collect struct field sets from the AST.
-fn collect_structs(
-    node: tree_sitter::Node,
-    source: &[u8],
-    out: &mut Vec<(usize, Vec<String>)>,
-) {
+fn collect_structs(node: tree_sitter::Node, source: &[u8], out: &mut Vec<(usize, Vec<String>)>) {
     if node.kind() == "struct_item" {
         // Look for field_declaration_list child.
         let mut names: Vec<String> = Vec::new();
         let child_count = node.named_child_count();
         for i in 0..child_count {
             if let Some(child) = node.named_child(i)
-                && child.kind() == "field_declaration_list" {
-                    let field_count = child.named_child_count();
-                    for j in 0..field_count {
-                        if let Some(field) = child.named_child(j)
-                            && field.kind() == "field_declaration"
-                            && let Some(name_node) = field.child_by_field_name("name")
-                            && let Ok(name) = name_node.utf8_text(source) {
-                                names.push(name.to_string());
-                        }
+                && child.kind() == "field_declaration_list"
+            {
+                let field_count = child.named_child_count();
+                for j in 0..field_count {
+                    if let Some(field) = child.named_child(j)
+                        && field.kind() == "field_declaration"
+                        && let Some(name_node) = field.child_by_field_name("name")
+                        && let Ok(name) = name_node.utf8_text(source)
+                    {
+                        names.push(name.to_string());
                     }
+                }
             }
         }
         names.sort();

@@ -15,8 +15,7 @@ impl TextCheck for Check {
         let mut diagnostics = Vec::new();
         for elem in extract_elements(ctx.source) {
             // Vue uses @click or v-on:click
-            let has_click = has_attr(elem.attrs, "@click")
-                || has_attr(elem.attrs, "v-on:click");
+            let has_click = has_attr(elem.attrs, "@click") || has_attr(elem.attrs, "v-on:click");
             if !has_click {
                 continue;
             }
@@ -59,7 +58,8 @@ mod tests {
 
     #[test]
     fn allows_with_keydown() {
-        let source = "<template>\n  <div @click=\"handler\" @keydown=\"handler\">Click</div>\n</template>";
+        let source =
+            "<template>\n  <div @click=\"handler\" @keydown=\"handler\">Click</div>\n</template>";
         assert!(run(source).is_empty());
     }
 }

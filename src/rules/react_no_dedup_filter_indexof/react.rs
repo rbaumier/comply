@@ -8,11 +8,12 @@ use crate::diagnostic::{Diagnostic, Severity};
 fn body_contains_indexof(node: tree_sitter::Node<'_>, source: &[u8]) -> bool {
     if node.kind() == "call_expression"
         && let Some(callee) = node.child_by_field_name("function")
-            && callee.kind() == "member_expression"
-                && let Some(prop) = callee.child_by_field_name("property")
-                    && prop.utf8_text(source).ok() == Some("indexOf") {
-                        return true;
-                    }
+        && callee.kind() == "member_expression"
+        && let Some(prop) = callee.child_by_field_name("property")
+        && prop.utf8_text(source).ok() == Some("indexOf")
+    {
+        return true;
+    }
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         if body_contains_indexof(child, source) {

@@ -22,7 +22,11 @@ fn is_return_in_test_callback(node: tree_sitter::Node, source: &[u8]) -> bool {
     let mut cur = node.parent();
     while let Some(p) = cur {
         match p.kind() {
-            "arrow_function" | "function_expression" | "function" | "function_declaration" | "method_definition" => {
+            "arrow_function"
+            | "function_expression"
+            | "function"
+            | "function_declaration"
+            | "method_definition" => {
                 // First enclosing function found. Check that this function is
                 // an argument to a test(...)/it(...) call.
                 let Some(call) = p.parent().and_then(|args| {

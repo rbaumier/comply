@@ -126,70 +126,94 @@ mod tests {
 
     #[test]
     fn flags_new_query_client_in_component() {
-        assert_eq!(run(r#"
+        assert_eq!(
+            run(r#"
 function App() {
     const client = new QueryClient();
     return <Provider client={client} />;
 }
-"#).len(), 1);
+"#)
+            .len(),
+            1
+        );
     }
 
     #[test]
     fn flags_new_query_client_in_arrow_component() {
-        assert_eq!(run(r#"
+        assert_eq!(
+            run(r#"
 const App = () => {
     const client = new QueryClient();
     return <Provider client={client} />;
 };
-"#).len(), 1);
+"#)
+            .len(),
+            1
+        );
     }
 
     #[test]
     fn flags_inline_new_query_client() {
-        assert_eq!(run(r#"
+        assert_eq!(
+            run(r#"
 function App() {
     return <Provider client={new QueryClient()} />;
 }
-"#).len(), 1);
+"#)
+            .len(),
+            1
+        );
     }
 
     #[test]
     fn allows_module_level() {
-        assert!(run(r#"
+        assert!(
+            run(r#"
 const queryClient = new QueryClient();
 function App() {
     return <Provider client={queryClient} />;
 }
-"#).is_empty());
+"#)
+            .is_empty()
+        );
     }
 
     #[test]
     fn allows_use_state_lazy_init() {
-        assert!(run(r#"
+        assert!(
+            run(r#"
 function App() {
     const [client] = useState(() => new QueryClient());
     return <Provider client={client} />;
 }
-"#).is_empty());
+"#)
+            .is_empty()
+        );
     }
 
     #[test]
     fn allows_use_ref() {
-        assert!(run(r#"
+        assert!(
+            run(r#"
 function App() {
     const clientRef = useRef(new QueryClient());
     return <Provider client={clientRef.current} />;
 }
-"#).is_empty());
+"#)
+            .is_empty()
+        );
     }
 
     #[test]
     fn allows_in_lowercase_function() {
         // Helper / hook, not a component.
-        assert!(run(r#"
+        assert!(
+            run(r#"
 function makeClient() {
     return new QueryClient();
 }
-"#).is_empty());
+"#)
+            .is_empty()
+        );
     }
 }

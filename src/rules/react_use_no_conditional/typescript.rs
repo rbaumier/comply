@@ -16,10 +16,19 @@ const CONDITIONAL_KINDS: &[&str] = &[
 ];
 
 fn is_use_call(node: tree_sitter::Node, source: &[u8]) -> bool {
-    if node.kind() != "call_expression" { return false; }
-    let Some(callee) = node.child_by_field_name("function") else { return false };
-    if callee.kind() != "identifier" { return false; }
-    callee.utf8_text(source).map(|t| t == "use").unwrap_or(false)
+    if node.kind() != "call_expression" {
+        return false;
+    }
+    let Some(callee) = node.child_by_field_name("function") else {
+        return false;
+    };
+    if callee.kind() != "identifier" {
+        return false;
+    }
+    callee
+        .utf8_text(source)
+        .map(|t| t == "use")
+        .unwrap_or(false)
 }
 
 fn is_inside_conditional(node: tree_sitter::Node) -> bool {

@@ -113,6 +113,9 @@ mod tests {
     #[test]
     fn flags_function_param_console() {
         // Same story for params.
-        assert_eq!(run_on("function f(console: any) { return console; }").len(), 1);
+        assert_eq!(
+            run_on("function f(console: any) { return console; }").len(),
+            1
+        );
     }
 }

@@ -137,20 +137,14 @@ mod tests {
     #[test]
     fn allows_complete_audit_entry() {
         assert!(
-            run_on(
-                "auditLog({ userId: u.id, action: 'login', timestamp: Date.now() })"
-            )
-            .is_empty()
+            run_on("auditLog({ userId: u.id, action: 'login', timestamp: Date.now() })").is_empty()
         );
     }
 
     #[test]
     fn accepts_actor_id_alias() {
         assert!(
-            run_on(
-                "auditLog({ actorId: u.id, event: 'login', createdAt: Date.now() })"
-            )
-            .is_empty()
+            run_on("auditLog({ actorId: u.id, event: 'login', createdAt: Date.now() })").is_empty()
         );
     }
 

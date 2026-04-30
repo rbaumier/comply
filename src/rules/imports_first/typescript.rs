@@ -56,7 +56,9 @@ crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
 fn is_directive_prologue(node: &tree_sitter::Node<'_>, _source: &[u8]) -> bool {
     let mut cursor = node.walk();
     let mut named = node.named_children(&mut cursor);
-    let Some(first) = named.next() else { return false };
+    let Some(first) = named.next() else {
+        return false;
+    };
     if named.next().is_some() {
         return false;
     }

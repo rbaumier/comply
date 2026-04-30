@@ -11,9 +11,15 @@ use crate::diagnostic::{Diagnostic, Severity};
 
 /// Is `func` a `test.concurrent` / `it.concurrent` / `describe.concurrent` callee?
 fn is_concurrent_callee(func: tree_sitter::Node, source: &[u8]) -> bool {
-    if func.kind() != "member_expression" { return false; }
-    let Some(obj) = func.child_by_field_name("object") else { return false; };
-    let Some(prop) = func.child_by_field_name("property") else { return false; };
+    if func.kind() != "member_expression" {
+        return false;
+    }
+    let Some(obj) = func.child_by_field_name("object") else {
+        return false;
+    };
+    let Some(prop) = func.child_by_field_name("property") else {
+        return false;
+    };
     let obj_txt = obj.utf8_text(source).unwrap_or("");
     let prop_txt = prop.utf8_text(source).unwrap_or("");
     matches!(obj_txt, "test" | "it") && prop_txt == "concurrent"
@@ -21,14 +27,22 @@ fn is_concurrent_callee(func: tree_sitter::Node, source: &[u8]) -> bool {
 
 /// Check whether the first parameter of a function/arrow destructures `expect`.
 fn first_param_destructures_expect(fn_node: tree_sitter::Node, source: &[u8]) -> bool {
-    let Some(params) = fn_node.child_by_field_name("parameters") else { return false; };
-    let Some(first) = params.named_child(0) else { return false; };
+    let Some(params) = fn_node.child_by_field_name("parameters") else {
+        return false;
+    };
+    let Some(first) = params.named_child(0) else {
+        return false;
+    };
     // Expect either `object_pattern` (arrow) or `required_parameter` wrapping one.
     let pattern = match first.kind() {
         "object_pattern" => first,
         "required_parameter" | "optional_parameter" => {
-            let Some(inner) = first.child_by_field_name("pattern") else { return false; };
-            if inner.kind() != "object_pattern" { return false; }
+            let Some(inner) = first.child_by_field_name("pattern") else {
+                return false;
+            };
+            if inner.kind() != "object_pattern" {
+                return false;
+            }
             inner
         }
         _ => return false,
@@ -39,12 +53,16 @@ fn first_param_destructures_expect(fn_node: tree_sitter::Node, source: &[u8]) ->
         let name = if child.kind() == "shorthand_property_identifier_pattern" {
             child.utf8_text(source).unwrap_or("")
         } else if child.kind() == "pair_pattern" {
-            let Some(key) = child.child_by_field_name("key") else { continue; };
+            let Some(key) = child.child_by_field_name("key") else {
+                continue;
+            };
             key.utf8_text(source).unwrap_or("")
         } else {
             continue;
         };
-        if name == "expect" { return true; }
+        if name == "expect" {
+            return true;
+        }
     }
     false
 }
@@ -101,9 +119,7 @@ mod tests {
 
     #[test]
     fn allows_concurrent_with_destructured_expect() {
-        assert!(
-            run("test.concurrent('adds', ({ expect }) => { expect(1).toBe(1); });").is_empty()
-        );
+        assert!(run("test.concurrent('adds', ({ expect }) => { expect(1).toBe(1); });").is_empty());
     }
 
     #[test]

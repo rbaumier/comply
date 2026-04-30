@@ -23,7 +23,8 @@ impl TextCheck for Check {
                     line: elem.line,
                     column: 1,
                     rule_id: "a11y-label-has-associated-control".into(),
-                    message: "`<label>` is missing `for` — associate it with a form control.".into(),
+                    message: "`<label>` is missing `for` — associate it with a form control."
+                        .into(),
                     severity: Severity::Warning,
                     span: None,
                 });

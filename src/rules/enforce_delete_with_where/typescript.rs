@@ -126,26 +126,19 @@ mod tests {
 
     #[test]
     fn flags_delete_with_returning_but_no_where() {
-        assert_eq!(
-            run_on("await db.delete(usersTable).returning()").len(),
-            1
-        );
+        assert_eq!(run_on("await db.delete(usersTable).returning()").len(), 1);
     }
 
     #[test]
     fn allows_delete_with_where() {
-        assert!(
-            run_on("await db.delete(usersTable).where(eq(usersTable.id, 1))").is_empty()
-        );
+        assert!(run_on("await db.delete(usersTable).where(eq(usersTable.id, 1))").is_empty());
     }
 
     #[test]
     fn allows_delete_with_where_and_returning() {
         assert!(
-            run_on(
-                "await db.delete(usersTable).where(eq(usersTable.id, 1)).returning()"
-            )
-            .is_empty()
+            run_on("await db.delete(usersTable).where(eq(usersTable.id, 1)).returning()")
+                .is_empty()
         );
     }
 

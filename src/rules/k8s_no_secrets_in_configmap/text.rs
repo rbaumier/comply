@@ -67,7 +67,8 @@ mod tests {
 
     #[test]
     fn flags_password_key() {
-        let yaml = "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: cm\ndata:\n  DB_PASSWORD: hunter2";
+        let yaml =
+            "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: cm\ndata:\n  DB_PASSWORD: hunter2";
         assert_eq!(run(yaml).len(), 1);
     }
 

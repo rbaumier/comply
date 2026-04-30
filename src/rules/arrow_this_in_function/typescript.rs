@@ -78,24 +78,17 @@ mod tests {
 
     #[test]
     fn allows_arrow_inside_class_method() {
-        assert!(
-            run_on("class Foo { bar() { return () => this.x; } }").is_empty()
-        );
+        assert!(run_on("class Foo { bar() { return () => this.x; } }").is_empty());
     }
 
     #[test]
     fn allows_arrow_inside_function_declaration() {
-        assert!(
-            run_on("function foo() { return () => this; }").is_empty()
-        );
+        assert!(run_on("function foo() { return () => this; }").is_empty());
     }
 
     #[test]
     fn allows_arrow_inside_function_expression() {
-        assert!(
-            run_on("const o = { m: function () { return () => this; } };")
-                .is_empty()
-        );
+        assert!(run_on("const o = { m: function () { return () => this; } };").is_empty());
     }
 
     #[test]

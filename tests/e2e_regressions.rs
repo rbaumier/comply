@@ -38,7 +38,8 @@ fn jsx_files_use_tsx_grammar() {
     // Round 2: split Language::Tsx so .jsx/.tsx use LANGUAGE_TSX. Without
     // this, JSX expressions parse as ERROR nodes — either missing real
     // violations or emitting phantoms.
-    let source = "export const App = () => <div onClick={() => { const x = a ? b ? 1 : 2 : 3; }}>x</div>;\n";
+    let source =
+        "export const App = () => <div onClick={() => { const x = a ? b ? 1 : 2 : 3; }}>x</div>;\n";
     let (_dir, path) = write_ts_file("app.jsx", source);
     Command::cargo_bin("comply")
         .unwrap()
@@ -63,7 +64,8 @@ fn banned_identifiers_does_not_flag_document_or_database() {
 #[test]
 fn trailing_comply_ignore_suppresses_current_line() {
     // Round 5: same-line trailing markers suppress the current line.
-    let source = "export const x = a ? b ? 1 : 2 : 3; // comply-ignore: no-nested-ternary — boundary\n";
+    let source =
+        "export const x = a ? b ? 1 : 2 : 3; // comply-ignore: no-nested-ternary — boundary\n";
     let (_dir, path) = write_ts_file("trailing.ts", source);
     Command::cargo_bin("comply")
         .unwrap()

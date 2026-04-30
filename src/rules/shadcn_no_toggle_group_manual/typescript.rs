@@ -10,27 +10,29 @@ use crate::diagnostic::{Diagnostic, Severity};
 fn returned_jsx<'a>(fn_node: tree_sitter::Node<'a>) -> Option<tree_sitter::Node<'a>> {
     // Arrow with expression body: `x => <Button .../>`
     if fn_node.kind() == "arrow_function"
-        && let Some(body) = fn_node.child_by_field_name("body") {
-            match body.kind() {
-                "jsx_element" | "jsx_self_closing_element" => return Some(body),
-                "parenthesized_expression" => {
-                    let mut cursor = body.walk();
-                    for c in body.children(&mut cursor) {
-                        if c.kind() == "jsx_element" || c.kind() == "jsx_self_closing_element" {
-                            return Some(c);
-                        }
+        && let Some(body) = fn_node.child_by_field_name("body")
+    {
+        match body.kind() {
+            "jsx_element" | "jsx_self_closing_element" => return Some(body),
+            "parenthesized_expression" => {
+                let mut cursor = body.walk();
+                for c in body.children(&mut cursor) {
+                    if c.kind() == "jsx_element" || c.kind() == "jsx_self_closing_element" {
+                        return Some(c);
                     }
                 }
-                "statement_block" => {
-                    return find_returned_jsx_in_block(body);
-                }
-                _ => {}
             }
+            "statement_block" => {
+                return find_returned_jsx_in_block(body);
+            }
+            _ => {}
         }
+    }
     if (fn_node.kind() == "function_expression" || fn_node.kind() == "function_declaration")
-        && let Some(body) = fn_node.child_by_field_name("body") {
-            return find_returned_jsx_in_block(body);
-        }
+        && let Some(body) = fn_node.child_by_field_name("body")
+    {
+        return find_returned_jsx_in_block(body);
+    }
     None
 }
 

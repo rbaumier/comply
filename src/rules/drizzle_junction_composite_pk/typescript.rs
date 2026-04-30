@@ -16,9 +16,7 @@ fn callee_name<'a>(node: &tree_sitter::Node<'a>, src: &'a [u8]) -> Option<&'a st
 
 /// Given the `arguments` node, return the object argument (the columns
 /// definition) — typically the second argument.
-fn columns_object<'a>(
-    args: tree_sitter::Node<'a>,
-) -> Option<tree_sitter::Node<'a>> {
+fn columns_object<'a>(args: tree_sitter::Node<'a>) -> Option<tree_sitter::Node<'a>> {
     let mut cursor = args.walk();
     let mut objects: Vec<tree_sitter::Node<'_>> = Vec::new();
     for c in args.children(&mut cursor) {
@@ -91,7 +89,8 @@ mod tests {
 
     #[test]
     fn ignores_non_junction() {
-        let src = "const t = pgTable('users', { id: serial('id').primaryKey(), name: text('name') })";
+        let src =
+            "const t = pgTable('users', { id: serial('id').primaryKey(), name: text('name') })";
         assert!(run(src).is_empty());
     }
 }

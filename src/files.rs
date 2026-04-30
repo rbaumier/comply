@@ -7,7 +7,7 @@
 //! - Each file is classified by extension into a Language; unknown
 //!   extensions are silently skipped.
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use ignore::WalkBuilder;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -91,8 +91,10 @@ impl Language {
     /// the buffer is in scope before running the lint pass.
     pub fn from_path(path: &Path) -> Option<Self> {
         let name = path.file_name()?.to_str()?;
-        if name.ends_with(".d.ts") || name.ends_with(".d.mts")
-            || name.ends_with(".d.cts") || name.ends_with(".d.tsx")
+        if name.ends_with(".d.ts")
+            || name.ends_with(".d.mts")
+            || name.ends_with(".d.cts")
+            || name.ends_with(".d.tsx")
         {
             return None;
         }
@@ -236,8 +238,10 @@ fn parse_git_output(stdout: &[u8]) -> Result<Vec<SourceFile>> {
 /// Returns None for unsupported extensions (silently skipped).
 fn classify(path: &Path) -> Option<SourceFile> {
     if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-        if name.ends_with(".d.ts") || name.ends_with(".d.mts")
-            || name.ends_with(".d.cts") || name.ends_with(".d.tsx")
+        if name.ends_with(".d.ts")
+            || name.ends_with(".d.mts")
+            || name.ends_with(".d.cts")
+            || name.ends_with(".d.tsx")
         {
             return None;
         }

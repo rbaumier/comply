@@ -45,13 +45,21 @@ crate::ast_check! { on ["call_expression"] prefilter = ["z.union", "zod.union"] 
 /// `z.literal("...")` or `zod.literal("...")` with a single string
 /// literal argument.
 fn is_z_literal_string(node: tree_sitter::Node, source: &[u8]) -> bool {
-    if node.kind() != "call_expression" { return false; }
+    if node.kind() != "call_expression" {
+        return false;
+    }
     let Some(name) = crate::rules::call_expression::call_function_name(node, source) else {
         return false;
     };
-    if name != "z.literal" && name != "zod.literal" { return false; }
-    let Some(args) = node.child_by_field_name("arguments") else { return false; };
-    if args.named_child_count() != 1 { return false; }
+    if name != "z.literal" && name != "zod.literal" {
+        return false;
+    }
+    let Some(args) = node.child_by_field_name("arguments") else {
+        return false;
+    };
+    if args.named_child_count() != 1 {
+        return false;
+    }
     let arg = args.named_child(0).unwrap();
     arg.kind() == "string"
 }
@@ -96,23 +104,17 @@ mod tests {
 
     #[test]
     fn allows_mixed_literal_types() {
-        assert!(
-            run("const s = z.union([z.literal('a'), z.literal(1)]);").is_empty()
-        );
+        assert!(run("const s = z.union([z.literal('a'), z.literal(1)]);").is_empty());
     }
 
     #[test]
     fn allows_union_with_non_literal_branch() {
-        assert!(
-            run("const s = z.union([z.literal('a'), z.string()]);").is_empty()
-        );
+        assert!(run("const s = z.union([z.literal('a'), z.string()]);").is_empty());
     }
 
     #[test]
     fn allows_union_of_number_literals() {
-        assert!(
-            run("const s = z.union([z.literal(1), z.literal(2)]);").is_empty()
-        );
+        assert!(run("const s = z.union([z.literal(1), z.literal(2)]);").is_empty());
     }
 
     #[test]

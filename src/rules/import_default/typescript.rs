@@ -109,10 +109,8 @@ mod tests {
 
     #[test]
     fn skips_bare_specifier() {
-        let (_dir, project, paths) = setup_project(&[(
-            "app.ts",
-            "import React from 'react';\nReact;",
-        )]);
+        let (_dir, project, paths) =
+            setup_project(&[("app.ts", "import React from 'react';\nReact;")]);
         let source = "import React from 'react';\nReact;";
         let diags = run_ts_with_project_and_path(source, &Check, &project, &paths[0]);
         assert!(diags.is_empty());

@@ -42,7 +42,9 @@ fn find_pair_value<'a>(
 ) -> Option<tree_sitter::Node<'a>> {
     let mut cursor = object.walk();
     for child in object.named_children(&mut cursor) {
-        if child.kind() != "pair" { continue; }
+        if child.kind() != "pair" {
+            continue;
+        }
         let key = child.child_by_field_name("key")?;
         let raw = key.utf8_text(source).ok()?;
         if raw.trim_matches(|c| c == '"' || c == '\'') == needle {
@@ -68,17 +70,38 @@ fn is_write_mutation(value: tree_sitter::Node<'_>, source: &[u8]) -> bool {
 
     let mut found = false;
     walk_subtree(body, &mut |n| {
-        if found { return; }
-        if n.kind() != "call_expression" { return; }
-        let Some(func) = n.child_by_field_name("function") else { return; };
-        if func.utf8_text(source).ok() != Some("fetch") { return; }
-        let Some(args) = n.child_by_field_name("arguments") else { return; };
-        let Some(opts) = args.named_child(1) else { return; };
-        if opts.kind() != "object" { return; }
-        let Some(method) = find_pair_value(opts, source, "method") else { return; };
-        let Ok(text) = method.utf8_text(source) else { return; };
+        if found {
+            return;
+        }
+        if n.kind() != "call_expression" {
+            return;
+        }
+        let Some(func) = n.child_by_field_name("function") else {
+            return;
+        };
+        if func.utf8_text(source).ok() != Some("fetch") {
+            return;
+        }
+        let Some(args) = n.child_by_field_name("arguments") else {
+            return;
+        };
+        let Some(opts) = args.named_child(1) else {
+            return;
+        };
+        if opts.kind() != "object" {
+            return;
+        }
+        let Some(method) = find_pair_value(opts, source, "method") else {
+            return;
+        };
+        let Ok(text) = method.utf8_text(source) else {
+            return;
+        };
         let trimmed = text.trim_matches(|c| c == '"' || c == '\'' || c == '`');
-        if matches!(trimmed.to_ascii_uppercase().as_str(), "POST" | "PUT" | "PATCH" | "DELETE") {
+        if matches!(
+            trimmed.to_ascii_uppercase().as_str(),
+            "POST" | "PUT" | "PATCH" | "DELETE"
+        ) {
             found = true;
         }
     });
@@ -98,10 +121,18 @@ fn handler_calls_cache_update(handler: tree_sitter::Node<'_>, source: &[u8]) -> 
 
     let mut found = false;
     walk_subtree(body, &mut |n| {
-        if found { return; }
-        if n.kind() != "call_expression" { return; }
-        let Some(func) = n.child_by_field_name("function") else { return; };
-        let Ok(text) = func.utf8_text(source) else { return; };
+        if found {
+            return;
+        }
+        if n.kind() != "call_expression" {
+            return;
+        }
+        let Some(func) = n.child_by_field_name("function") else {
+            return;
+        };
+        let Ok(text) = func.utf8_text(source) else {
+            return;
+        };
         if text.ends_with("invalidateQueries")
             || text.ends_with("setQueryData")
             || text.ends_with("refetchQueries")
@@ -118,11 +149,19 @@ fn walk_subtree<F: FnMut(tree_sitter::Node<'_>)>(root: tree_sitter::Node<'_>, vi
     let mut cursor = root.walk();
     loop {
         visit(cursor.node());
-        if cursor.goto_first_child() { continue; }
+        if cursor.goto_first_child() {
+            continue;
+        }
         loop {
-            if cursor.node().id() == root_id { return; }
-            if cursor.goto_next_sibling() { break; }
-            if !cursor.goto_parent() { return; }
+            if cursor.node().id() == root_id {
+                return;
+            }
+            if cursor.goto_next_sibling() {
+                break;
+            }
+            if !cursor.goto_parent() {
+                return;
+            }
         }
     }
 }

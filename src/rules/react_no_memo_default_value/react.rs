@@ -28,8 +28,10 @@ fn find_unstable_default<'a>(
     let params = fn_node.child_by_field_name("parameters")?;
     let mut stack: Vec<tree_sitter::Node> = vec![params];
     while let Some(current) = stack.pop() {
-        if matches!(current.kind(), "assignment_pattern" | "object_assignment_pattern")
-            && let Some(right) = current.child_by_field_name("right")
+        if matches!(
+            current.kind(),
+            "assignment_pattern" | "object_assignment_pattern"
+        ) && let Some(right) = current.child_by_field_name("right")
         {
             let kind = match right.kind() {
                 "array" => "array",
@@ -128,24 +130,33 @@ const X = memo(function Inner({ data = {} }) { return <div />; });
 
     #[test]
     fn allows_primitive_default() {
-        assert!(run(r#"
+        assert!(
+            run(r#"
 const Counter = memo(({ count = 0, label = 'x' }) => <div>{label}: {count}</div>);
-"#).is_empty());
+"#)
+            .is_empty()
+        );
     }
 
     #[test]
     fn allows_no_default() {
-        assert!(run(r#"
+        assert!(
+            run(r#"
 const List = memo(({ items }) => <ul>{items.map(i => <li>{i}</li>)}</ul>);
-"#).is_empty());
+"#)
+            .is_empty()
+        );
     }
 
     #[test]
     fn allows_non_memo_call() {
         // Only `memo` / `React.memo` is targeted; plain components are
         // covered by a different rule.
-        assert!(run(r#"
+        assert!(
+            run(r#"
 const List = wrap(({ items = [] }) => <ul />);
-"#).is_empty());
+"#)
+            .is_empty()
+        );
     }
 }

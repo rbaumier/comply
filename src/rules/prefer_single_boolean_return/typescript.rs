@@ -23,8 +23,12 @@ fn check_if_else(
     ctx: &crate::rules::backend::CheckCtx,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let Some(cons) = node.child_by_field_name("consequence") else { return };
-    let Some(alt) = node.child_by_field_name("alternative") else { return };
+    let Some(cons) = node.child_by_field_name("consequence") else {
+        return;
+    };
+    let Some(alt) = node.child_by_field_name("alternative") else {
+        return;
+    };
 
     // `alternative` is an `else_clause` wrapping the real body.
     let alt_body = unwrap_else(alt);
@@ -33,8 +37,12 @@ fn check_if_else(
         return;
     }
 
-    let Some(cons_bool) = extract_single_return_bool(cons, source) else { return };
-    let Some(alt_bool) = extract_single_return_bool(alt_body, source) else { return };
+    let Some(cons_bool) = extract_single_return_bool(cons, source) else {
+        return;
+    };
+    let Some(alt_bool) = extract_single_return_bool(alt_body, source) else {
+        return;
+    };
     if cons_bool == alt_bool {
         return;
     }
@@ -62,12 +70,18 @@ fn check_sibling_return(
         if first.child_by_field_name("alternative").is_some() {
             continue;
         }
-        let Some(cons) = first.child_by_field_name("consequence") else { continue };
-        let Some(first_bool) = extract_single_return_bool(cons, source) else { continue };
+        let Some(cons) = first.child_by_field_name("consequence") else {
+            continue;
+        };
+        let Some(first_bool) = extract_single_return_bool(cons, source) else {
+            continue;
+        };
         if second.kind() != "return_statement" {
             continue;
         }
-        let Some(second_bool) = return_bool_value(second, source) else { continue };
+        let Some(second_bool) = return_bool_value(second, source) else {
+            continue;
+        };
         if first_bool == second_bool {
             continue;
         }
@@ -86,7 +100,8 @@ fn push_diag(
         line: pos.row + 1,
         column: pos.column + 1,
         rule_id: "prefer-single-boolean-return".into(),
-        message: "`if (cond) return <bool>; else return <bool>;` — return the condition directly.".into(),
+        message: "`if (cond) return <bool>; else return <bool>;` — return the condition directly."
+            .into(),
         severity: Severity::Warning,
         span: Some((node.byte_range().start, node.byte_range().len())),
     });

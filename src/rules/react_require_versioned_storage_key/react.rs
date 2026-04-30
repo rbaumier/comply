@@ -3,18 +3,24 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
 fn is_localstorage_setitem(call: tree_sitter::Node<'_>, source: &[u8]) -> bool {
-    let Some(callee) = call.child_by_field_name("function") else { return false };
+    let Some(callee) = call.child_by_field_name("function") else {
+        return false;
+    };
     if callee.kind() != "member_expression" {
         return false;
     }
-    let Some(object) = callee.child_by_field_name("object") else { return false };
+    let Some(object) = callee.child_by_field_name("object") else {
+        return false;
+    };
     if object.kind() != "identifier" {
         return false;
     }
     if object.utf8_text(source).ok() != Some("localStorage") {
         return false;
     }
-    let Some(prop) = callee.child_by_field_name("property") else { return false };
+    let Some(prop) = callee.child_by_field_name("property") else {
+        return false;
+    };
     prop.utf8_text(source).ok() == Some("setItem")
 }
 
@@ -37,7 +43,9 @@ fn first_string_literal<'a>(
 
 fn has_version_suffix(key: &str) -> bool {
     // `...:vN` where N is one or more digits.
-    let Some(idx) = key.rfind(":v") else { return false };
+    let Some(idx) = key.rfind(":v") else {
+        return false;
+    };
     let suffix = &key[idx + 2..];
     !suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_digit())
 }

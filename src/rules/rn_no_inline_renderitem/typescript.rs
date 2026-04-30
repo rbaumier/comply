@@ -3,7 +3,11 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
 const RN_LIST_COMPONENTS: &[&str] = &[
-    "FlatList", "SectionList", "FlashList", "VirtualizedList", "SwipeListView",
+    "FlatList",
+    "SectionList",
+    "FlashList",
+    "VirtualizedList",
+    "SwipeListView",
 ];
 
 fn is_rn_list_component(node: tree_sitter::Node, source: &[u8]) -> bool {

@@ -30,7 +30,9 @@ pub fn is_sensitive_identifier(name: &str) -> bool {
         .filter(|c| *c != '_')
         .flat_map(|c| c.to_lowercase())
         .collect();
-    SENSITIVE_WORDS.iter().any(|word| normalized.ends_with(word))
+    SENSITIVE_WORDS
+        .iter()
+        .any(|word| normalized.ends_with(word))
 }
 
 #[cfg(test)]

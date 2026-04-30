@@ -55,7 +55,9 @@ fn has_sensitive_identifier(args: &tree_sitter::Node, source: &[u8]) -> bool {
                 let mut tc = child.walk();
                 for part in child.children(&mut tc) {
                     if part.kind() == "template_substitution" {
-                        let Ok(text) = part.utf8_text(source) else { continue };
+                        let Ok(text) = part.utf8_text(source) else {
+                            continue;
+                        };
                         let lower = text.to_ascii_lowercase();
                         if SENSITIVE_WORDS.iter().any(|w| lower.contains(w)) {
                             return true;
@@ -64,7 +66,9 @@ fn has_sensitive_identifier(args: &tree_sitter::Node, source: &[u8]) -> bool {
                 }
             }
             _ => {
-                let Ok(text) = child.utf8_text(source) else { continue };
+                let Ok(text) = child.utf8_text(source) else {
+                    continue;
+                };
                 let lower = text.to_ascii_lowercase();
                 if SENSITIVE_WORDS.iter().any(|w| lower.contains(w)) {
                     return true;
@@ -79,10 +83,18 @@ fn is_logging_callee(node: &tree_sitter::Node, source: &[u8]) -> bool {
     if node.kind() != "member_expression" {
         return false;
     }
-    let Some(obj) = node.child_by_field_name("object") else { return false };
-    let Some(prop) = node.child_by_field_name("property") else { return false };
-    let Ok(obj_text) = obj.utf8_text(source) else { return false };
-    let Ok(prop_text) = prop.utf8_text(source) else { return false };
+    let Some(obj) = node.child_by_field_name("object") else {
+        return false;
+    };
+    let Some(prop) = node.child_by_field_name("property") else {
+        return false;
+    };
+    let Ok(obj_text) = obj.utf8_text(source) else {
+        return false;
+    };
+    let Ok(prop_text) = prop.utf8_text(source) else {
+        return false;
+    };
 
     // console.log/info/warn/error/debug
     if obj_text == "console" && CONSOLE_METHODS.contains(&prop_text) {

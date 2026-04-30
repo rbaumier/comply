@@ -36,8 +36,12 @@ enum Op {
 
 fn is_layout_read(node: tree_sitter::Node<'_>, source: &[u8]) -> bool {
     if node.kind() == "member_expression" {
-        let Some(prop) = node.child_by_field_name("property") else { return false };
-        let Ok(name) = prop.utf8_text(source) else { return false };
+        let Some(prop) = node.child_by_field_name("property") else {
+            return false;
+        };
+        let Ok(name) = prop.utf8_text(source) else {
+            return false;
+        };
         return LAYOUT_READ_PROPS.contains(&name);
     }
     false
@@ -48,15 +52,21 @@ fn is_style_write(node: tree_sitter::Node<'_>, source: &[u8]) -> bool {
     if node.kind() != "assignment_expression" {
         return false;
     }
-    let Some(left) = node.child_by_field_name("left") else { return false };
+    let Some(left) = node.child_by_field_name("left") else {
+        return false;
+    };
     if left.kind() != "member_expression" {
         return false;
     }
-    let Some(object) = left.child_by_field_name("object") else { return false };
+    let Some(object) = left.child_by_field_name("object") else {
+        return false;
+    };
     if object.kind() != "member_expression" {
         return false;
     }
-    let Some(inner_prop) = object.child_by_field_name("property") else { return false };
+    let Some(inner_prop) = object.child_by_field_name("property") else {
+        return false;
+    };
     inner_prop.utf8_text(source).ok() == Some("style")
 }
 

@@ -46,9 +46,9 @@ impl AstCheck for Check {
         };
         // Find the single closure argument.
         let mut cursor = args.walk();
-        let closure = args.named_children(&mut cursor).find(|c| {
-            matches!(c.kind(), "closure_expression")
-        });
+        let closure = args
+            .named_children(&mut cursor)
+            .find(|c| matches!(c.kind(), "closure_expression"));
         let Some(closure) = closure else {
             return;
         };
@@ -133,13 +133,15 @@ mod tests {
 
     #[test]
     fn flags_map_with_clone_closure() {
-        let source = "fn f(v: Vec<String>) { let _: Vec<_> = v.iter().map(|x| x.clone()).collect(); }";
+        let source =
+            "fn f(v: Vec<String>) { let _: Vec<_> = v.iter().map(|x| x.clone()).collect(); }";
         assert_eq!(run_on(source).len(), 1);
     }
 
     #[test]
     fn flags_map_with_block_clone_closure() {
-        let source = "fn f(v: Vec<String>) { let _: Vec<_> = v.iter().map(|x| { x.clone() }).collect(); }";
+        let source =
+            "fn f(v: Vec<String>) { let _: Vec<_> = v.iter().map(|x| { x.clone() }).collect(); }";
         assert_eq!(run_on(source).len(), 1);
     }
 
@@ -158,7 +160,8 @@ mod tests {
     #[test]
     fn allows_map_with_field_clone() {
         // `.map(|x| x.field.clone())` is not the same — receiver isn't the param.
-        let source = "fn f(v: Vec<S>) { let _: Vec<_> = v.iter().map(|x| x.field.clone()).collect(); }";
+        let source =
+            "fn f(v: Vec<S>) { let _: Vec<_> = v.iter().map(|x| x.field.clone()).collect(); }";
         assert!(run_on(source).is_empty());
     }
 }

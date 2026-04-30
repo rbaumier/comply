@@ -13,10 +13,23 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
 const MUTATING_ARRAY_METHODS: &[&str] = &[
-    "push", "pop", "shift", "unshift", "splice", "sort", "reverse", "fill", "copyWithin",
+    "push",
+    "pop",
+    "shift",
+    "unshift",
+    "splice",
+    "sort",
+    "reverse",
+    "fill",
+    "copyWithin",
 ];
 
-const OBJECT_MUTATOR_FUNCTIONS: &[&str] = &["assign", "defineProperty", "defineProperties", "setPrototypeOf"];
+const OBJECT_MUTATOR_FUNCTIONS: &[&str] = &[
+    "assign",
+    "defineProperty",
+    "defineProperties",
+    "setPrototypeOf",
+];
 
 /// Walk down the LHS of an assignment to find the root identifier of
 /// a member/subscript chain. Returns `None` if the LHS is a plain
@@ -77,7 +90,9 @@ fn is_const_decl_of(node: tree_sitter::Node, source: &[u8], name: &str) -> bool 
     if node.kind() != "lexical_declaration" {
         return false;
     }
-    let Some(kw) = node.child(0) else { return false };
+    let Some(kw) = node.child(0) else {
+        return false;
+    };
     if kw.utf8_text(source).unwrap_or("") != "const" {
         return false;
     }
@@ -88,7 +103,9 @@ fn is_const_decl_of(node: tree_sitter::Node, source: &[u8], name: &str) -> bool 
         if decl.kind() != "variable_declarator" {
             continue;
         }
-        let Some(pat) = decl.child_by_field_name("name") else { continue };
+        let Some(pat) = decl.child_by_field_name("name") else {
+            continue;
+        };
         if pattern_binds(pat, source, name) {
             return true;
         }
@@ -120,9 +137,7 @@ fn report(
         path,
         node,
         "no-mutation",
-        format!(
-            "{kind} `{root}` (declared with `const`) — build a new value instead of mutating."
-        ),
+        format!("{kind} `{root}` (declared with `const`) — build a new value instead of mutating."),
         Severity::Warning,
     ));
 }
@@ -289,7 +304,10 @@ mod tests {
 
     #[test]
     fn flags_nested_array_push() {
-        assert_eq!(run_on("const obj = { items: [] }; obj.items.push(1);").len(), 1);
+        assert_eq!(
+            run_on("const obj = { items: [] }; obj.items.push(1);").len(),
+            1
+        );
     }
 
     // === Update expressions ===
@@ -315,20 +333,31 @@ mod tests {
 
     #[test]
     fn flags_object_assign_on_const() {
-        assert_eq!(run_on("const obj = {}; Object.assign(obj, { a: 1 });").len(), 1);
+        assert_eq!(
+            run_on("const obj = {}; Object.assign(obj, { a: 1 });").len(),
+            1
+        );
     }
 
     #[test]
     fn flags_object_define_property_on_const() {
-        assert_eq!(run_on("const obj = {}; Object.defineProperty(obj, 'a', { value: 1 });").len(), 1);
+        assert_eq!(
+            run_on("const obj = {}; Object.defineProperty(obj, 'a', { value: 1 });").len(),
+            1
+        );
     }
 
     // === Allowed patterns ===
 
     #[test]
     fn allows_ref_current_assignment() {
-        assert!(run_on("const timerRef = useRef(null); timerRef.current = setTimeout(() => {}, 100);").is_empty());
-        assert!(run_on("const newKeyRef = useRef(null); newKeyRef.current = data?.key;").is_empty());
+        assert!(
+            run_on("const timerRef = useRef(null); timerRef.current = setTimeout(() => {}, 100);")
+                .is_empty()
+        );
+        assert!(
+            run_on("const newKeyRef = useRef(null); newKeyRef.current = data?.key;").is_empty()
+        );
     }
 
     #[test]
@@ -370,6 +399,8 @@ mod tests {
 
     #[test]
     fn allows_object_assign_to_new_object() {
-        assert!(run_on("const obj = {}; const next = Object.assign({}, obj, { a: 1 });").is_empty());
+        assert!(
+            run_on("const obj = {}; const next = Object.assign({}, obj, { a: 1 });").is_empty()
+        );
     }
 }

@@ -27,25 +27,109 @@ pub struct ClippyArg {
 }
 
 pub const CLIPPY_THRESHOLD_LINTS: &[ClippyArg] = &[
-    ClippyArg { lint: "clippy::too_many_lines", clippy_toml_key: "too-many-lines-threshold", kind: ArgKind::Int },
-    ClippyArg { lint: "clippy::too_many_arguments", clippy_toml_key: "too-many-arguments-threshold", kind: ArgKind::Int },
-    ClippyArg { lint: "clippy::large_enum_variant", clippy_toml_key: "enum-variant-size-threshold", kind: ArgKind::Int },
-    ClippyArg { lint: "clippy::large_stack_arrays", clippy_toml_key: "stack-size-threshold", kind: ArgKind::Int },
-    ClippyArg { lint: "clippy::large_stack_frames", clippy_toml_key: "stack-size-threshold", kind: ArgKind::Int },
-    ClippyArg { lint: "clippy::large_types_passed_by_value", clippy_toml_key: "pass-by-value-size-limit", kind: ArgKind::Int },
-    ClippyArg { lint: "clippy::cognitive_complexity", clippy_toml_key: "cognitive-complexity-threshold", kind: ArgKind::Int },
-    ClippyArg { lint: "clippy::excessive_nesting", clippy_toml_key: "excessive-nesting-threshold", kind: ArgKind::Int },
-    ClippyArg { lint: "clippy::min_ident_chars", clippy_toml_key: "min-ident-chars-threshold", kind: ArgKind::Int },
-    ClippyArg { lint: "clippy::single_char_lifetime_names", clippy_toml_key: "single-char-binding-names-threshold", kind: ArgKind::Int },
-    ClippyArg { lint: "clippy::struct_excessive_bools", clippy_toml_key: "max-struct-bools", kind: ArgKind::Int },
-    ClippyArg { lint: "clippy::fn_params_excessive_bools", clippy_toml_key: "max-fn-params-bools", kind: ArgKind::Int },
-    ClippyArg { lint: "clippy::trivial_copy_pass_by_ref", clippy_toml_key: "trivial-copy-size-limit", kind: ArgKind::Int },
-    ClippyArg { lint: "clippy::type_complexity", clippy_toml_key: "type-complexity-threshold", kind: ArgKind::Int },
-    ClippyArg { lint: "clippy::unreadable_literal", clippy_toml_key: "unreadable-literal-lint-fractions", kind: ArgKind::Int },
-    ClippyArg { lint: "clippy::vec_box", clippy_toml_key: "vec-box-size-threshold", kind: ArgKind::Int },
-    ClippyArg { lint: "clippy::verbose_bit_mask", clippy_toml_key: "verbose-bit-mask-threshold", kind: ArgKind::Int },
-    ClippyArg { lint: "clippy::missing_docs_in_private_items", clippy_toml_key: "missing-docs-in-crate-items", kind: ArgKind::Int },
-    ClippyArg { lint: "clippy::disallowed_names", clippy_toml_key: "disallowed-names", kind: ArgKind::Array },
-    ClippyArg { lint: "clippy::doc_markdown", clippy_toml_key: "doc-valid-idents", kind: ArgKind::Array },
-    ClippyArg { lint: "clippy::min_ident_chars", clippy_toml_key: "allowed-idents-below-min-chars", kind: ArgKind::Array },
+    ClippyArg {
+        lint: "clippy::too_many_lines",
+        clippy_toml_key: "too-many-lines-threshold",
+        kind: ArgKind::Int,
+    },
+    ClippyArg {
+        lint: "clippy::too_many_arguments",
+        clippy_toml_key: "too-many-arguments-threshold",
+        kind: ArgKind::Int,
+    },
+    ClippyArg {
+        lint: "clippy::large_enum_variant",
+        clippy_toml_key: "enum-variant-size-threshold",
+        kind: ArgKind::Int,
+    },
+    ClippyArg {
+        lint: "clippy::large_stack_arrays",
+        clippy_toml_key: "stack-size-threshold",
+        kind: ArgKind::Int,
+    },
+    ClippyArg {
+        lint: "clippy::large_stack_frames",
+        clippy_toml_key: "stack-size-threshold",
+        kind: ArgKind::Int,
+    },
+    ClippyArg {
+        lint: "clippy::large_types_passed_by_value",
+        clippy_toml_key: "pass-by-value-size-limit",
+        kind: ArgKind::Int,
+    },
+    ClippyArg {
+        lint: "clippy::cognitive_complexity",
+        clippy_toml_key: "cognitive-complexity-threshold",
+        kind: ArgKind::Int,
+    },
+    ClippyArg {
+        lint: "clippy::excessive_nesting",
+        clippy_toml_key: "excessive-nesting-threshold",
+        kind: ArgKind::Int,
+    },
+    ClippyArg {
+        lint: "clippy::min_ident_chars",
+        clippy_toml_key: "min-ident-chars-threshold",
+        kind: ArgKind::Int,
+    },
+    ClippyArg {
+        lint: "clippy::single_char_lifetime_names",
+        clippy_toml_key: "single-char-binding-names-threshold",
+        kind: ArgKind::Int,
+    },
+    ClippyArg {
+        lint: "clippy::struct_excessive_bools",
+        clippy_toml_key: "max-struct-bools",
+        kind: ArgKind::Int,
+    },
+    ClippyArg {
+        lint: "clippy::fn_params_excessive_bools",
+        clippy_toml_key: "max-fn-params-bools",
+        kind: ArgKind::Int,
+    },
+    ClippyArg {
+        lint: "clippy::trivial_copy_pass_by_ref",
+        clippy_toml_key: "trivial-copy-size-limit",
+        kind: ArgKind::Int,
+    },
+    ClippyArg {
+        lint: "clippy::type_complexity",
+        clippy_toml_key: "type-complexity-threshold",
+        kind: ArgKind::Int,
+    },
+    ClippyArg {
+        lint: "clippy::unreadable_literal",
+        clippy_toml_key: "unreadable-literal-lint-fractions",
+        kind: ArgKind::Int,
+    },
+    ClippyArg {
+        lint: "clippy::vec_box",
+        clippy_toml_key: "vec-box-size-threshold",
+        kind: ArgKind::Int,
+    },
+    ClippyArg {
+        lint: "clippy::verbose_bit_mask",
+        clippy_toml_key: "verbose-bit-mask-threshold",
+        kind: ArgKind::Int,
+    },
+    ClippyArg {
+        lint: "clippy::missing_docs_in_private_items",
+        clippy_toml_key: "missing-docs-in-crate-items",
+        kind: ArgKind::Int,
+    },
+    ClippyArg {
+        lint: "clippy::disallowed_names",
+        clippy_toml_key: "disallowed-names",
+        kind: ArgKind::Array,
+    },
+    ClippyArg {
+        lint: "clippy::doc_markdown",
+        clippy_toml_key: "doc-valid-idents",
+        kind: ArgKind::Array,
+    },
+    ClippyArg {
+        lint: "clippy::min_ident_chars",
+        clippy_toml_key: "allowed-idents-below-min-chars",
+        kind: ArgKind::Array,
+    },
 ];

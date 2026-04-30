@@ -73,7 +73,9 @@ mod tests {
         parser
             .set_language(&tree_sitter_typescript::LANGUAGE_TSX.into())
             .expect("grammar should load");
-        let tree = parser.parse(source, None).expect("parser should produce a tree");
+        let tree = parser
+            .parse(source, None)
+            .expect("parser should produce a tree");
         Check.check(&CheckCtx::for_test(Path::new(fake_path), source), &tree)
     }
 

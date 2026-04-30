@@ -98,27 +98,83 @@ fn parse_lints(text: &str) -> BTreeMap<String, &'static str> {
 const THRESHOLD_LINTS: &[(&str, &str, &str)] = &[
     // Numeric thresholds
     ("clippy::too_many_lines", "too-many-lines-threshold", "Int"),
-    ("clippy::too_many_arguments", "too-many-arguments-threshold", "Int"),
-    ("clippy::large_enum_variant", "enum-variant-size-threshold", "Int"),
+    (
+        "clippy::too_many_arguments",
+        "too-many-arguments-threshold",
+        "Int",
+    ),
+    (
+        "clippy::large_enum_variant",
+        "enum-variant-size-threshold",
+        "Int",
+    ),
     ("clippy::large_stack_arrays", "stack-size-threshold", "Int"),
     ("clippy::large_stack_frames", "stack-size-threshold", "Int"),
-    ("clippy::large_types_passed_by_value", "pass-by-value-size-limit", "Int"),
-    ("clippy::cognitive_complexity", "cognitive-complexity-threshold", "Int"),
-    ("clippy::excessive_nesting", "excessive-nesting-threshold", "Int"),
-    ("clippy::min_ident_chars", "min-ident-chars-threshold", "Int"),
-    ("clippy::single_char_lifetime_names", "single-char-binding-names-threshold", "Int"),
+    (
+        "clippy::large_types_passed_by_value",
+        "pass-by-value-size-limit",
+        "Int",
+    ),
+    (
+        "clippy::cognitive_complexity",
+        "cognitive-complexity-threshold",
+        "Int",
+    ),
+    (
+        "clippy::excessive_nesting",
+        "excessive-nesting-threshold",
+        "Int",
+    ),
+    (
+        "clippy::min_ident_chars",
+        "min-ident-chars-threshold",
+        "Int",
+    ),
+    (
+        "clippy::single_char_lifetime_names",
+        "single-char-binding-names-threshold",
+        "Int",
+    ),
     ("clippy::struct_excessive_bools", "max-struct-bools", "Int"),
-    ("clippy::fn_params_excessive_bools", "max-fn-params-bools", "Int"),
-    ("clippy::trivial_copy_pass_by_ref", "trivial-copy-size-limit", "Int"),
-    ("clippy::type_complexity", "type-complexity-threshold", "Int"),
-    ("clippy::unreadable_literal", "unreadable-literal-lint-fractions", "Int"),
+    (
+        "clippy::fn_params_excessive_bools",
+        "max-fn-params-bools",
+        "Int",
+    ),
+    (
+        "clippy::trivial_copy_pass_by_ref",
+        "trivial-copy-size-limit",
+        "Int",
+    ),
+    (
+        "clippy::type_complexity",
+        "type-complexity-threshold",
+        "Int",
+    ),
+    (
+        "clippy::unreadable_literal",
+        "unreadable-literal-lint-fractions",
+        "Int",
+    ),
     ("clippy::vec_box", "vec-box-size-threshold", "Int"),
-    ("clippy::verbose_bit_mask", "verbose-bit-mask-threshold", "Int"),
-    ("clippy::missing_docs_in_private_items", "missing-docs-in-crate-items", "Int"),
+    (
+        "clippy::verbose_bit_mask",
+        "verbose-bit-mask-threshold",
+        "Int",
+    ),
+    (
+        "clippy::missing_docs_in_private_items",
+        "missing-docs-in-crate-items",
+        "Int",
+    ),
     // Array thresholds (allowlists)
     ("clippy::disallowed_names", "disallowed-names", "Array"),
     ("clippy::doc_markdown", "doc-valid-idents", "Array"),
-    ("clippy::min_ident_chars", "allowed-idents-below-min-chars", "Array"),
+    (
+        "clippy::min_ident_chars",
+        "allowed-idents-below-min-chars",
+        "Array",
+    ),
 ];
 
 // Step 3: render the Rust files.
@@ -185,9 +241,7 @@ pub const CLIPPY_THRESHOLD_LINTS: &[ClippyArg] = &[
 fn render_all_lints(lints: &BTreeMap<String, &'static str>) -> String {
     let mut out = String::from(ALL_LINTS_PROLOGUE);
     for (name, level) in lints {
-        out.push_str(&format!(
-            "    (\"{name}\", ClippyDefaultLevel::{level}),\n"
-        ));
+        out.push_str(&format!("    (\"{name}\", ClippyDefaultLevel::{level}),\n"));
     }
     out.push_str("];\n");
     out
@@ -210,8 +264,7 @@ fn repo_root_from_invocation() -> anyhow::Result<PathBuf> {
     // The script is normally invoked via `cargo run --bin regen-clippy-lints`
     // from the repo root, so the cwd is already correct. We still
     // verify by checking for `Cargo.toml` and `src/clippy`.
-    let cwd = env::current_dir()
-        .map_err(|e| anyhow::anyhow!("failed to read current_dir: {e}"))?;
+    let cwd = env::current_dir().map_err(|e| anyhow::anyhow!("failed to read current_dir: {e}"))?;
     if !cwd.join("Cargo.toml").is_file() || !cwd.join("src/clippy").is_dir() {
         anyhow::bail!(
             "expected to run from comply repo root (got {})",
@@ -280,10 +333,7 @@ mod tests {
             lints.get("clippy::absurd_extreme_comparisons").copied(),
             Some("Deny")
         );
-        assert_eq!(
-            lints.get("clippy::needless_borrow").copied(),
-            Some("Warn")
-        );
+        assert_eq!(lints.get("clippy::needless_borrow").copied(), Some("Warn"));
         assert_eq!(
             lints.get("clippy::indexing_slicing").copied(),
             Some("Allow")

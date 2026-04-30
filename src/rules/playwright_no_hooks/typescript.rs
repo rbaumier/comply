@@ -141,4 +141,17 @@ beforeEach(() => { reset(); });
             "must not flag when file does not import @playwright/test: {d:?}"
         );
     }
+
+    #[test]
+    fn ignores_playwright_import_when_project_is_not_playwright() {
+        let src = r#"
+import { test } from "@playwright/test";
+beforeEach(() => { reset(); });
+"#;
+        let d = crate::rules::test_helpers::run_ts_with_path(src, &Check, "app.test.ts");
+        assert!(
+            d.is_empty(),
+            "framework-scoped rule must be silent without detected Playwright"
+        );
+    }
 }

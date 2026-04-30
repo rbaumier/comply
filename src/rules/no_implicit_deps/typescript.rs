@@ -180,7 +180,9 @@ mod tests {
         parser
             .set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into())
             .expect("grammar should load");
-        parser.parse(source, None).expect("parser should produce a tree")
+        parser
+            .parse(source, None)
+            .expect("parser should produce a tree")
     }
 
     /// Build a temp project with an optional package.json body and an

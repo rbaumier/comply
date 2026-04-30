@@ -30,7 +30,10 @@ mod tests {
 
     #[test]
     fn flags_tailwind_base() {
-        assert_eq!(run("@tailwind base;\n@tailwind components;\n@tailwind utilities;").len(), 3);
+        assert_eq!(
+            run("@tailwind base;\n@tailwind components;\n@tailwind utilities;").len(),
+            3
+        );
     }
 
     #[test]

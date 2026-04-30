@@ -42,22 +42,31 @@ crate::ast_check! { on ["jsx_opening_element", "jsx_self_closing_element"] prefi
 /// and collect its `pair` keys.
 fn extract_object_keys(attr: tree_sitter::Node, source: &[u8]) -> BTreeSet<String> {
     let mut keys = BTreeSet::new();
-    let Some(value) = crate::rules::jsx::jsx_attribute_value(attr) else { return keys; };
+    let Some(value) = crate::rules::jsx::jsx_attribute_value(attr) else {
+        return keys;
+    };
     let object = find_object(value);
-    let Some(obj) = object else { return keys; };
+    let Some(obj) = object else {
+        return keys;
+    };
     let mut cursor = obj.walk();
     for child in obj.children(&mut cursor) {
-        if child.kind() != "pair" { continue; }
+        if child.kind() != "pair" {
+            continue;
+        }
         if let Some(key) = child.child_by_field_name("key")
-            && let Ok(text) = key.utf8_text(source) {
-                keys.insert(text.trim_matches(|c| c == '"' || c == '\'').to_string());
-            }
+            && let Ok(text) = key.utf8_text(source)
+        {
+            keys.insert(text.trim_matches(|c| c == '"' || c == '\'').to_string());
+        }
     }
     keys
 }
 
 fn find_object(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
-    if node.kind() == "object" { return Some(node); }
+    if node.kind() == "object" {
+        return Some(node);
+    }
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         if let Some(found) = find_object(child) {

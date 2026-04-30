@@ -4,10 +4,22 @@ use crate::diagnostic::{Diagnostic, Severity};
 
 /// (literal_prefix, method, call_method, constructor, replacement)
 const OBJECT_PATTERNS: &[(&str, &str, &str)] = &[
-    ("hasOwnProperty", "Object", "Object.prototype.hasOwnProperty"),
+    (
+        "hasOwnProperty",
+        "Object",
+        "Object.prototype.hasOwnProperty",
+    ),
     ("isPrototypeOf", "Object", "Object.prototype.isPrototypeOf"),
-    ("propertyIsEnumerable", "Object", "Object.prototype.propertyIsEnumerable"),
-    ("toLocaleString", "Object", "Object.prototype.toLocaleString"),
+    (
+        "propertyIsEnumerable",
+        "Object",
+        "Object.prototype.propertyIsEnumerable",
+    ),
+    (
+        "toLocaleString",
+        "Object",
+        "Object.prototype.toLocaleString",
+    ),
     ("toString", "Object", "Object.prototype.toString"),
     ("valueOf", "Object", "Object.prototype.valueOf"),
 ];

@@ -24,8 +24,7 @@ impl crate::rules::backend::AstCheck for Check {
         let source_type = source_type_for_path(ctx.path);
         with_semantic(ctx.source, source_type, |semantic| {
             let scoping = semantic.scoping();
-            let defined: HashSet<String> =
-                scoping.symbol_names().map(|s| s.to_string()).collect();
+            let defined: HashSet<String> = scoping.symbol_names().map(|s| s.to_string()).collect();
 
             let mut diagnostics = Vec::new();
             for node in semantic.nodes().iter() {

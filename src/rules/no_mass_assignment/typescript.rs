@@ -22,7 +22,9 @@ fn object_spreads_user_input(node: tree_sitter::Node, source: &[u8]) -> bool {
         if child.kind() != "spread_element" {
             continue;
         }
-        let Ok(text) = child.utf8_text(source) else { continue };
+        let Ok(text) = child.utf8_text(source) else {
+            continue;
+        };
         let trimmed: String = text.chars().filter(|c| !c.is_whitespace()).collect();
         if USER_SPREAD_NEEDLES.iter().any(|n| trimmed.contains(n)) {
             return true;

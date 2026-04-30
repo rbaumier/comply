@@ -46,8 +46,12 @@ fn is_length_or_size(node: &tree_sitter::Node, source: &[u8]) -> bool {
     if node.kind() != "member_expression" {
         return false;
     }
-    let Some(prop) = node.child_by_field_name("property") else { return false };
-    let Ok(name) = prop.utf8_text(source) else { return false };
+    let Some(prop) = node.child_by_field_name("property") else {
+        return false;
+    };
+    let Ok(name) = prop.utf8_text(source) else {
+        return false;
+    };
     name == "length" || name == "size"
 }
 

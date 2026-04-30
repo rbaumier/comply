@@ -76,12 +76,18 @@ mod tests {
 
     #[test]
     fn flags_href_javascript() {
-        assert_eq!(run_on(r#"const x = <a href="javascript:void(0)">Click</a>;"#).len(), 1);
+        assert_eq!(
+            run_on(r#"const x = <a href="javascript:void(0)">Click</a>;"#).len(),
+            1
+        );
     }
 
     #[test]
     fn flags_missing_href() {
-        assert_eq!(run_on(r#"const x = <a onClick={handler}>Click</a>;"#).len(), 1);
+        assert_eq!(
+            run_on(r#"const x = <a onClick={handler}>Click</a>;"#).len(),
+            1
+        );
     }
 
     #[test]

@@ -78,8 +78,14 @@ impl PackageJson {
     pub fn parse(raw: &str) -> Option<Self> {
         let json: Value = serde_json::from_str(raw).ok()?;
         Some(PackageJson {
-            name: json.get("name").and_then(|node| node.as_str()).map(String::from),
-            version: json.get("version").and_then(|node| node.as_str()).map(String::from),
+            name: json
+                .get("name")
+                .and_then(|node| node.as_str())
+                .map(String::from),
+            version: json
+                .get("version")
+                .and_then(|node| node.as_str())
+                .map(String::from),
             module_type: match json.get("type").and_then(|node| node.as_str()) {
                 Some("module") => ModuleType::Module,
                 _ => ModuleType::CommonJs,
@@ -93,7 +99,11 @@ impl PackageJson {
             workspaces: json
                 .get("workspaces")
                 .and_then(|node| node.as_array())
-                .map(|arr| arr.iter().filter_map(|node| node.as_str().map(String::from)).collect())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|node| node.as_str().map(String::from))
+                        .collect()
+                })
                 .unwrap_or_default(),
         })
     }
@@ -517,7 +527,12 @@ impl ProjectCtx {
     /// result by manifest directory. Returns the same `Arc` on repeated
     /// lookups against any file under the same manifest.
     pub fn nearest_package_json(&self, path: &Path) -> Option<Arc<PackageJson>> {
-        nearest(&self.package_json_cache, path, "package.json", PackageJson::parse)
+        nearest(
+            &self.package_json_cache,
+            path,
+            "package.json",
+            PackageJson::parse,
+        )
     }
 
     /// Walk up from `path` to the nearest `tsconfig.json`, cache by manifest
@@ -554,7 +569,9 @@ impl ProjectCtx {
 /// Resolve workspace glob patterns to actual package directories.
 /// Returns the list of workspace root directories found on disk.
 fn resolve_workspace_roots(project_root: Option<&Path>, pkg: &PackageJson) -> Vec<PathBuf> {
-    let Some(root) = project_root else { return Vec::new() };
+    let Some(root) = project_root else {
+        return Vec::new();
+    };
     if pkg.workspaces.is_empty() {
         return Vec::new();
     }
@@ -798,7 +815,10 @@ mod tests {
         let ctx = ProjectCtx::empty();
         let first = ctx.nearest_package_json(&nested.join("t.ts")).unwrap();
         let second = ctx.nearest_package_json(&nested.join("other.ts")).unwrap();
-        assert!(Arc::ptr_eq(&first, &second), "sibling files should share the same cached Arc");
+        assert!(
+            Arc::ptr_eq(&first, &second),
+            "sibling files should share the same cached Arc"
+        );
         assert_eq!(first.name.as_deref(), Some("x"));
     }
 
@@ -806,9 +826,7 @@ mod tests {
     fn nearest_returns_none_when_missing() {
         let dir = TempDir::new().unwrap();
         let ctx = ProjectCtx::empty();
-        assert!(ctx
-            .nearest_package_json(&dir.path().join("t.ts"))
-            .is_none());
+        assert!(ctx.nearest_package_json(&dir.path().join("t.ts")).is_none());
     }
 
     #[test]
@@ -834,10 +852,7 @@ mod tests {
         std::fs::write(foo.join("package.json"), r#"{"name":"@scope/foo"}"#).unwrap();
         std::fs::write(bar.join("package.json"), r#"{"name":"@scope/bar"}"#).unwrap();
 
-        let pkg = PackageJson::parse(
-            r#"{"name":"root","workspaces":["packages/*"]}"#,
-        )
-        .unwrap();
+        let pkg = PackageJson::parse(r#"{"name":"root","workspaces":["packages/*"]}"#).unwrap();
         let roots = resolve_workspace_roots(Some(dir.path()), &pkg);
         assert_eq!(roots.len(), 2);
 
@@ -847,7 +862,10 @@ mod tests {
         };
         let mut names = ctx.workspace_package_names();
         names.sort();
-        assert_eq!(names, vec!["@scope/bar".to_string(), "@scope/foo".to_string()]);
+        assert_eq!(
+            names,
+            vec!["@scope/bar".to_string(), "@scope/foo".to_string()]
+        );
     }
 
     #[test]

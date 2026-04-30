@@ -8,11 +8,15 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
 fn is_member_call(call: tree_sitter::Node<'_>, method: &str, source: &[u8]) -> bool {
-    let Some(callee) = call.child_by_field_name("function") else { return false };
+    let Some(callee) = call.child_by_field_name("function") else {
+        return false;
+    };
     if callee.kind() != "member_expression" {
         return false;
     }
-    let Some(prop) = callee.child_by_field_name("property") else { return false };
+    let Some(prop) = callee.child_by_field_name("property") else {
+        return false;
+    };
     prop.utf8_text(source).ok() == Some(method)
 }
 
@@ -21,10 +25,7 @@ fn is_member_call(call: tree_sitter::Node<'_>, method: &str, source: &[u8]) -> b
 /// identifier as the find/filter receiver.
 ///
 /// Returns `Some(())` when we should flag, `None` to ignore.
-fn flagged_inside_loop_or_map<'a>(
-    call: tree_sitter::Node<'a>,
-    source: &[u8],
-) -> bool {
+fn flagged_inside_loop_or_map<'a>(call: tree_sitter::Node<'a>, source: &[u8]) -> bool {
     let receiver_root = receiver_root_identifier(call, source);
     let mut node = call;
     while let Some(parent) = node.parent() {

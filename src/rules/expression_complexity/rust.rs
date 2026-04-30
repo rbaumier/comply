@@ -19,7 +19,11 @@ fn count_operators(line: &str) -> usize {
     let mut i = 0;
 
     let trimmed = line.trim();
-    if trimmed.starts_with("//") || trimmed.starts_with("///") || trimmed.starts_with("/*") || trimmed.starts_with('*') {
+    if trimmed.starts_with("//")
+        || trimmed.starts_with("///")
+        || trimmed.starts_with("/*")
+        || trimmed.starts_with('*')
+    {
         return 0;
     }
 

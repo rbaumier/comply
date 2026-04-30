@@ -7,7 +7,10 @@ fn extract_tz(args: &str) -> Option<&str> {
     let rest = &args[idx + "timezone".len()..];
     // skip whitespace and `:` or `=`.
     let rest = rest.trim_start();
-    let rest = rest.strip_prefix(':').or_else(|| rest.strip_prefix('='))?.trim_start();
+    let rest = rest
+        .strip_prefix(':')
+        .or_else(|| rest.strip_prefix('='))?
+        .trim_start();
     let quote = rest.chars().next()?;
     if quote != '\'' && quote != '"' && quote != '`' {
         return None;

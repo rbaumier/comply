@@ -1,14 +1,14 @@
 //! ts-explicit-module-boundary-types backend — flag exported functions
-//! whose parameters or return type are inferred.
+//! whose parameters are inferred.
 //!
 //! Detection: find any `export_statement`, then look at the exported
-//! entity. If it is a function_declaration, check its params + return type.
+//! entity. If it is a function_declaration, check its params.
 //! If it is a `lexical_declaration` binding an arrow_function /
 //! function_expression, check that too.
 //!
-//! Class members are not covered by this rule — use
-//! `ts-explicit-function-return-type` or `ts-explicit-member-accessibility`
-//! for class surface.
+//! Return types are intentionally left to `ts-explicit-function-return-type`
+//! so enabling both rules does not produce duplicate diagnostics on exported
+//! functions.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -61,7 +61,9 @@ fn check_lexical_declaration(
         if child.kind() != "variable_declarator" {
             continue;
         }
-        let Some(value) = child.child_by_field_name("value") else { continue };
+        let Some(value) = child.child_by_field_name("value") else {
+            continue;
+        };
         if value.kind() == "arrow_function" || value.kind() == "function_expression" {
             check_function_node(value, source, ctx, diagnostics);
         }
@@ -78,23 +80,6 @@ fn check_function_node(
         .child_by_field_name("name")
         .and_then(|n| n.utf8_text(source).ok())
         .unwrap_or("<anonymous>");
-    let pos = func.start_position();
-
-    // Return type check — direct `type_annotation` child of the function.
-    if !has_return_type(func) {
-        diagnostics.push(Diagnostic {
-            path: std::sync::Arc::clone(&ctx.path_arc),
-            line: pos.row + 1,
-            column: pos.column + 1,
-            rule_id: "ts-explicit-module-boundary-types".into(),
-            message: format!(
-                "Exported function '{name}' is missing a return type annotation."
-            ),
-            severity: Severity::Warning,
-            span: None,
-        });
-    }
-
     // Parameter types — walk `parameters` looking for untyped params.
     if let Some(params) = func.child_by_field_name("parameters") {
         let mut pcursor = params.walk();
@@ -117,12 +102,6 @@ fn check_function_node(
             }
         }
     }
-}
-
-fn has_return_type(func: tree_sitter::Node) -> bool {
-    let mut cursor = func.walk();
-    func.children(&mut cursor)
-        .any(|c| c.kind() == "type_annotation")
 }
 
 fn param_has_type(param: tree_sitter::Node) -> bool {
@@ -151,10 +130,12 @@ mod tests {
     }
 
     #[test]
-    fn flags_missing_return_type() {
+    fn allows_missing_return_type_to_dedicated_rule() {
         let diags = run_on("export function foo(a: number) { return a; }");
-        assert_eq!(diags.len(), 1);
-        assert!(diags[0].message.contains("return type"));
+        assert!(
+            diags.is_empty(),
+            "return types are owned by ts-explicit-function-return-type"
+        );
     }
 
     #[test]
@@ -177,8 +158,8 @@ mod tests {
     #[test]
     fn flags_exported_arrow_without_types() {
         let diags = run_on("export const foo = (a) => a;");
-        // Missing return type + missing param type = 2 diagnostics.
-        assert_eq!(diags.len(), 2);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("parameter"));
     }
 
     #[test]

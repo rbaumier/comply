@@ -44,8 +44,7 @@ impl crate::rules::backend::AstCheck for Check {
                 let name = scoping.symbol_name(symbol_id);
                 for decl_id in iter {
                     let span = nodes.kind(decl_id).span();
-                    let (line, column) =
-                        byte_offset_to_line_col(ctx.source, span.start as usize);
+                    let (line, column) = byte_offset_to_line_col(ctx.source, span.start as usize);
                     diagnostics.push(Diagnostic {
                         path: std::sync::Arc::clone(&ctx.path_arc),
                         line,

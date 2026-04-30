@@ -12,8 +12,12 @@ use crate::rules::jsx::{jsx_attribute_name, jsx_element_tag_name};
 fn has_label_attr(opening: tree_sitter::Node, source: &[u8]) -> bool {
     let mut cursor = opening.walk();
     for child in opening.children(&mut cursor) {
-        if child.kind() != "jsx_attribute" { continue; }
-        let Some(name) = jsx_attribute_name(child, source) else { continue; };
+        if child.kind() != "jsx_attribute" {
+            continue;
+        }
+        let Some(name) = jsx_attribute_name(child, source) else {
+            continue;
+        };
         if matches!(name, "aria-label" | "aria-labelledby" | "title") {
             return true;
         }
@@ -22,9 +26,7 @@ fn has_label_attr(opening: tree_sitter::Node, source: &[u8]) -> bool {
 }
 
 fn is_icon_tag(tag: &str) -> bool {
-    tag == "svg"
-        || tag.ends_with("Icon")
-        || tag.ends_with("Svg")
+    tag == "svg" || tag.ends_with("Icon") || tag.ends_with("Svg")
 }
 
 fn child_provides_text(child: tree_sitter::Node, source: &[u8]) -> bool {
@@ -39,14 +41,18 @@ fn child_provides_text(child: tree_sitter::Node, source: &[u8]) -> bool {
         }
         "jsx_element" => {
             // Find opening element to inspect tag.
-            let Some(opening) = child.child(0) else { return true };
+            let Some(opening) = child.child(0) else {
+                return true;
+            };
             let tag = jsx_element_tag_name(opening, source);
             if tag.is_some_and(is_icon_tag) {
                 // Scan inner children for text.
                 let mut cursor = child.walk();
                 for c in child.children(&mut cursor) {
                     if matches!(c.kind(), "jsx_text")
-                        && c.utf8_text(source).map(|s| !s.trim().is_empty()).unwrap_or(false)
+                        && c.utf8_text(source)
+                            .map(|s| !s.trim().is_empty())
+                            .unwrap_or(false)
                     {
                         return true;
                     }

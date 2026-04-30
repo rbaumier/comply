@@ -55,13 +55,12 @@ fn check_body(
         return;
     }
     // Must have a return type
-    let has_return = member.child_by_field_name("return_type").is_some()
-        || {
-            let mut mc = member.walk();
-            member
-                .named_children(&mut mc)
-                .any(|c| c.kind() == "type_annotation")
-        };
+    let has_return = member.child_by_field_name("return_type").is_some() || {
+        let mut mc = member.walk();
+        member
+            .named_children(&mut mc)
+            .any(|c| c.kind() == "type_annotation")
+    };
     if !has_return {
         return;
     }
@@ -71,9 +70,7 @@ fn check_body(
         line: pos.row + 1,
         column: pos.column + 1,
         rule_id: "ts-prefer-function-type".into(),
-        message: format!(
-            "{label} only has a call signature — use a function type instead."
-        ),
+        message: format!("{label} only has a call signature — use a function type instead."),
         severity: Severity::Warning,
         span: None,
     });

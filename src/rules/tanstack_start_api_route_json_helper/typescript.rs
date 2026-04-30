@@ -22,10 +22,18 @@ crate::ast_check! { on ["new_expression"] prefilter = ["JSON.stringify"] => |nod
 }
 
 fn first_arg_is_json_stringify(args: tree_sitter::Node<'_>, source: &[u8]) -> bool {
-    let Some(first) = args.named_child(0) else { return false; };
-    if first.kind() != "call_expression" { return false; }
-    let Some(callee) = first.child_by_field_name("function") else { return false; };
-    let Ok(name) = callee.utf8_text(source) else { return false; };
+    let Some(first) = args.named_child(0) else {
+        return false;
+    };
+    if first.kind() != "call_expression" {
+        return false;
+    }
+    let Some(callee) = first.child_by_field_name("function") else {
+        return false;
+    };
+    let Ok(name) = callee.utf8_text(source) else {
+        return false;
+    };
     name == "JSON.stringify"
 }
 
@@ -39,7 +47,10 @@ mod tests {
 
     #[test]
     fn flags_new_response_json_stringify() {
-        assert_eq!(run("return new Response(JSON.stringify({ ok: true }));").len(), 1);
+        assert_eq!(
+            run("return new Response(JSON.stringify({ ok: true }));").len(),
+            1
+        );
     }
 
     #[test]

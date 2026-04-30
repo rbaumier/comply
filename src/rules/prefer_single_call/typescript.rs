@@ -57,23 +57,25 @@ fn scan_siblings(
                 .find(|c| c.kind() == "call_expression");
 
             if let Some(call_node) = call
-                && let Some(key) = extract_call_key(call_node, source) {
-                    if let Some(ref pk) = prev_key
-                        && *pk == key {
-                            let pos = call_node.start_position();
-                            diagnostics.push(Diagnostic {
-                                path: std::sync::Arc::clone(&ctx.path_arc),
-                                line: pos.row + 1,
-                                column: pos.column + 1,
-                                rule_id: "prefer-single-call".into(),
-                                message: format!("Combine consecutive `{key}()` calls into one."),
-                                severity: Severity::Warning,
-                                span: None,
-                            });
-                        }
-                    prev_key = Some(key);
-                    continue;
+                && let Some(key) = extract_call_key(call_node, source)
+            {
+                if let Some(ref pk) = prev_key
+                    && *pk == key
+                {
+                    let pos = call_node.start_position();
+                    diagnostics.push(Diagnostic {
+                        path: std::sync::Arc::clone(&ctx.path_arc),
+                        line: pos.row + 1,
+                        column: pos.column + 1,
+                        rule_id: "prefer-single-call".into(),
+                        message: format!("Combine consecutive `{key}()` calls into one."),
+                        severity: Severity::Warning,
+                        span: None,
+                    });
                 }
+                prev_key = Some(key);
+                continue;
+            }
         }
 
         // Non-matching statement breaks the chain

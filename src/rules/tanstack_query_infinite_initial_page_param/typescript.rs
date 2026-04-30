@@ -35,9 +35,15 @@ crate::ast_check! { on ["call_expression"] prefilter = ["initialPageParam"] => |
 fn object_has_key(object: tree_sitter::Node<'_>, source: &[u8], needle: &str) -> bool {
     let mut cursor = object.walk();
     for child in object.named_children(&mut cursor) {
-        if child.kind() != "pair" { continue; }
-        let Some(key) = child.child_by_field_name("key") else { continue; };
-        let Ok(raw) = key.utf8_text(source) else { continue; };
+        if child.kind() != "pair" {
+            continue;
+        }
+        let Some(key) = child.child_by_field_name("key") else {
+            continue;
+        };
+        let Ok(raw) = key.utf8_text(source) else {
+            continue;
+        };
         if raw.trim_matches(|c| c == '"' || c == '\'') == needle {
             return true;
         }

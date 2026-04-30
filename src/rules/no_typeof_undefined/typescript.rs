@@ -65,26 +65,22 @@ mod tests {
 
     #[test]
     fn flags_typeof_member_expression() {
-        let d = crate::rules::test_helpers::run_ts(
-            "if (typeof obj.foo === 'undefined') {}", &Check,
-        );
+        let d =
+            crate::rules::test_helpers::run_ts("if (typeof obj.foo === 'undefined') {}", &Check);
         assert_eq!(d.len(), 1);
         assert_eq!(d[0].rule_id, "no-typeof-undefined");
     }
 
     #[test]
     fn flags_typeof_member_expression_double_quotes() {
-        let d = crate::rules::test_helpers::run_ts(
-            r#"if (typeof obj.foo === "undefined") {}"#, &Check,
-        );
+        let d =
+            crate::rules::test_helpers::run_ts(r#"if (typeof obj.foo === "undefined") {}"#, &Check);
         assert_eq!(d.len(), 1);
     }
 
     #[test]
     fn flags_typeof_subscript_expression() {
-        let d = crate::rules::test_helpers::run_ts(
-            "if (typeof arr[0] === 'undefined') {}", &Check,
-        );
+        let d = crate::rules::test_helpers::run_ts("if (typeof arr[0] === 'undefined') {}", &Check);
         assert_eq!(d.len(), 1);
     }
 
@@ -92,25 +88,19 @@ mod tests {
     fn allows_typeof_bare_identifier() {
         // `x` may not be declared — `x === undefined` would throw.
         // `typeof x === 'undefined'` is the only safe check.
-        let d = crate::rules::test_helpers::run_ts(
-            "if (typeof x === 'undefined') {}", &Check,
-        );
+        let d = crate::rules::test_helpers::run_ts("if (typeof x === 'undefined') {}", &Check);
         assert!(d.is_empty());
     }
 
     #[test]
     fn allows_direct_undefined_comparison() {
-        let d = crate::rules::test_helpers::run_ts(
-            "if (x === undefined) {}", &Check,
-        );
+        let d = crate::rules::test_helpers::run_ts("if (x === undefined) {}", &Check);
         assert!(d.is_empty());
     }
 
     #[test]
     fn allows_typeof_for_other_types() {
-        let d = crate::rules::test_helpers::run_ts(
-            "if (typeof x === 'string') {}", &Check,
-        );
+        let d = crate::rules::test_helpers::run_ts("if (typeof x === 'string') {}", &Check);
         assert!(d.is_empty());
     }
 }

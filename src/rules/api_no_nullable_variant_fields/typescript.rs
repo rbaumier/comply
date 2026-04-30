@@ -132,9 +132,7 @@ mod tests {
         // REVIEW regression: two related optional fields are enough —
         // `status: "cancelled"` + `cancelReason?` + `cancelledAt?` is the
         // canonical conditional-fields smell.
-        let d = run(
-            "interface Order { id: string; cancelReason?: string; cancelledAt?: string }",
-        );
+        let d = run("interface Order { id: string; cancelReason?: string; cancelledAt?: string }");
         assert_eq!(d.len(), 1);
         assert!(d[0].message.contains("canc"));
     }
@@ -149,18 +147,20 @@ mod tests {
 
     #[test]
     fn allows_optional_fields_without_shared_prefix() {
-        assert!(run(
-            "interface User { id: string; name?: string; email?: string; phone?: string }"
-        )
-        .is_empty());
+        assert!(
+            run("interface User { id: string; name?: string; email?: string; phone?: string }")
+                .is_empty()
+        );
     }
 
     #[test]
     fn allows_required_fields_sharing_prefix() {
-        assert!(run(
-            "interface Order { cancelReason: string; cancelledAt: string; cancelledBy: string }"
-        )
-        .is_empty());
+        assert!(
+            run(
+                "interface Order { cancelReason: string; cancelledAt: string; cancelledBy: string }"
+            )
+            .is_empty()
+        );
     }
 
     #[test]

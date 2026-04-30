@@ -28,9 +28,7 @@ fn pattern_can_match_empty(pattern: &str) -> bool {
             if j > 0 && pbytes[j - 1] == b'\\' {
                 continue;
             }
-            if j > 0
-                && (pbytes[j - 1] == b'*' || pbytes[j - 1] == b'+' || pbytes[j - 1] == b'?')
-            {
+            if j > 0 && (pbytes[j - 1] == b'*' || pbytes[j - 1] == b'+' || pbytes[j - 1] == b'?') {
                 continue;
             }
             if j + 1 < pbytes.len() && pbytes[j + 1] == b':' {

@@ -78,7 +78,8 @@ mod tests {
 
     #[test]
     fn allows_memoized_value() {
-        let src = r#"const x = <MyContext.Provider value={memoizedValue}>child</MyContext.Provider>;"#;
+        let src =
+            r#"const x = <MyContext.Provider value={memoizedValue}>child</MyContext.Provider>;"#;
         assert!(run(src).is_empty());
     }
 

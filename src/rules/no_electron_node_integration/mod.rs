@@ -1,13 +1,12 @@
 mod typescript;
 
 use crate::diagnostic::Severity;
-use crate::rules::meta::RuleMeta;
 use crate::rules::RuleDef;
+use crate::rules::meta::RuleMeta;
 
 pub const META: RuleMeta = RuleMeta {
     id: "no-electron-node-integration",
-    description:
-        "`nodeIntegration` in Electron `BrowserWindow`/`BrowserView` exposes Node APIs to renderer \
+    description: "`nodeIntegration` in Electron `BrowserWindow`/`BrowserView` exposes Node APIs to renderer \
          content and breaks the sandbox.",
     remediation: "Don't enable nodeIntegration in Electron renderer processes",
     severity: Severity::Error,

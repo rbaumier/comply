@@ -297,9 +297,44 @@ crate::ast_check! { |node, source, ctx, diagnostics|
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::Config;
+    use crate::files::{Language, SourceFile};
+    use crate::project::ProjectCtx;
+    use crate::rules::backend::{AstCheck, CheckCtx};
+    use std::fs;
+    use tempfile::TempDir;
 
     fn run(source: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_tsx(source, &Check)
+    }
+
+    fn run_with_package(package_json: &str, source: &str) -> (TempDir, Vec<Diagnostic>) {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("package.json"), package_json).unwrap();
+        let path = dir.path().join("src/app.tsx");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, source).unwrap();
+
+        let source_file = SourceFile {
+            path: path.clone(),
+            language: Language::Tsx,
+        };
+        let refs = vec![&source_file];
+        let project = ProjectCtx::load(&refs, &Config::default());
+        let canon = fs::canonicalize(&path).unwrap();
+
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&tree_sitter_typescript::LANGUAGE_TSX.into())
+            .expect("grammar should load");
+        let tree = parser
+            .parse(source, None)
+            .expect("parser should produce a tree");
+        let diags = Check.check(
+            &CheckCtx::for_test_with_project(&canon, source, &project),
+            &tree,
+        );
+        (dir, diags)
     }
 
     #[test]
@@ -340,5 +375,15 @@ mod tests {
     #[test]
     fn ignores_unknown_classes() {
         assert!(run(r#"const x = <div className="flex custom-thing p-2" />;"#).is_empty());
+    }
+
+    #[test]
+    fn skips_when_prettier_tailwind_plugin_is_installed() {
+        let pkg = r#"{"devDependencies":{"prettier-plugin-tailwindcss":"0.6.0"}}"#;
+        let (_dir, diags) = run_with_package(pkg, r#"const x = <div className="p-2 flex" />;"#);
+        assert!(
+            diags.is_empty(),
+            "prettier-plugin-tailwindcss owns class ordering: {diags:?}"
+        );
     }
 }

@@ -14,9 +14,14 @@ fn unwrap_expr<'a>(node: Node<'a>) -> Node<'a> {
     let mut cur = node;
     loop {
         match cur.kind() {
-            "parenthesized_expression" | "as_expression" | "satisfies_expression"
-            | "type_assertion" | "non_null_expression" => {
-                let Some(inner) = cur.named_child(0) else { return cur };
+            "parenthesized_expression"
+            | "as_expression"
+            | "satisfies_expression"
+            | "type_assertion"
+            | "non_null_expression" => {
+                let Some(inner) = cur.named_child(0) else {
+                    return cur;
+                };
                 cur = inner;
             }
             _ => return cur,
@@ -59,14 +64,26 @@ fn is_fresh_array(node: Node<'_>, source: &[u8]) -> bool {
     match node.kind() {
         "array" => true,
         "call_expression" => {
-            let Some(fun) = node.child_by_field_name("function") else { return false };
+            let Some(fun) = node.child_by_field_name("function") else {
+                return false;
+            };
             match fun.kind() {
                 "member_expression" => {
-                    let Some(prop) = fun.child_by_field_name("property") else { return false };
+                    let Some(prop) = fun.child_by_field_name("property") else {
+                        return false;
+                    };
                     matches!(
                         prop.utf8_text(source).unwrap_or(""),
-                        "slice" | "filter" | "map" | "concat" | "flat" | "flatMap"
-                            | "toSorted" | "toReversed" | "toSpliced" | "with"
+                        "slice"
+                            | "filter"
+                            | "map"
+                            | "concat"
+                            | "flat"
+                            | "flatMap"
+                            | "toSorted"
+                            | "toReversed"
+                            | "toSpliced"
+                            | "with"
                     )
                 }
                 _ => false,

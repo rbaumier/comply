@@ -15,8 +15,8 @@
 mod typescript;
 
 use crate::diagnostic::Severity;
-use crate::rules::meta::RuleMeta;
 use crate::rules::RuleDef;
+use crate::rules::meta::RuleMeta;
 
 pub const META: RuleMeta = RuleMeta {
     id: "no-side-effects-in-initialization",
@@ -24,9 +24,7 @@ pub const META: RuleMeta = RuleMeta {
                   scope prevent tree-shaking.",
     remediation: "Avoid side effects at module top-level for tree-shaking",
     severity: Severity::Warning,
-    doc_url: Some(
-        "https://github.com/lukastaegert/eslint-plugin-tree-shaking",
-    ),
+    doc_url: Some("https://github.com/lukastaegert/eslint-plugin-tree-shaking"),
     categories: &["code-quality"],
 };
 

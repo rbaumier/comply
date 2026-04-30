@@ -20,7 +20,9 @@ impl TextCheck for Check {
                     line: elem.line,
                     column: 1,
                     rule_id: "a11y-no-access-key".into(),
-                    message: "Avoid `accesskey` — it conflicts with screen reader keyboard shortcuts.".into(),
+                    message:
+                        "Avoid `accesskey` — it conflicts with screen reader keyboard shortcuts."
+                            .into(),
                     severity: Severity::Warning,
                     span: None,
                 });

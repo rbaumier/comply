@@ -7,8 +7,8 @@ use crate::diagnostic::{Diagnostic, Severity};
 const ALLOWED: &[&str] = &["0", "1", "2", "-1", "0.0", "1.0", "2.0", "0.", "1.", "2."];
 
 const SUFFIXES: &[&str] = &[
-    "usize", "isize", "u8", "u16", "u32", "u64", "u128",
-    "i8", "i16", "i32", "i64", "i128", "f32", "f64",
+    "usize", "isize", "u8", "u16", "u32", "u64", "u128", "i8", "i16", "i32", "i64", "i128", "f32",
+    "f64",
 ];
 
 fn strip_suffix(text: &str) -> &str {

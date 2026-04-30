@@ -3,8 +3,7 @@ use crate::rules::jsx::{jsx_attribute_name, jsx_attribute_string_value};
 
 /// Base (variant-stripped) utility that starts an animation or transition.
 fn is_animation_base(base: &str) -> bool {
-    (base == "transition" || base.starts_with("transition-"))
-        && base != "transition-none"
+    (base == "transition" || base.starts_with("transition-")) && base != "transition-none"
         || base == "animate-spin"
         || base == "animate-ping"
         || base == "animate-pulse"
@@ -58,12 +57,19 @@ mod tests {
 
     #[test]
     fn flags_transition_without_motion_reduce() {
-        assert_eq!(run(r#"export const A = () => <div className="transition-colors duration-300" />;"#).len(), 1);
+        assert_eq!(
+            run(r#"export const A = () => <div className="transition-colors duration-300" />;"#)
+                .len(),
+            1
+        );
     }
 
     #[test]
     fn flags_animate_spin_without_motion_reduce() {
-        assert_eq!(run(r#"export const A = () => <div className="animate-spin" />;"#).len(), 1);
+        assert_eq!(
+            run(r#"export const A = () => <div className="animate-spin" />;"#).len(),
+            1
+        );
     }
 
     #[test]

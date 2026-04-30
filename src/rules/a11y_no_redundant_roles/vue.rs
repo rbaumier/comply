@@ -5,11 +5,21 @@ use crate::rules::backend::{CheckCtx, TextCheck};
 use crate::rules::vue_template_helpers::{attr_value, extract_elements, is_vue_file};
 
 const REDUNDANT_PAIRS: &[(&str, &str)] = &[
-    ("button", "button"), ("nav", "navigation"), ("img", "img"),
-    ("input", "textbox"), ("h1", "heading"), ("h2", "heading"),
-    ("h3", "heading"), ("h4", "heading"), ("h5", "heading"),
-    ("h6", "heading"), ("ul", "list"), ("ol", "list"),
-    ("li", "listitem"), ("table", "table"), ("form", "form"),
+    ("button", "button"),
+    ("nav", "navigation"),
+    ("img", "img"),
+    ("input", "textbox"),
+    ("h1", "heading"),
+    ("h2", "heading"),
+    ("h3", "heading"),
+    ("h4", "heading"),
+    ("h5", "heading"),
+    ("h6", "heading"),
+    ("ul", "list"),
+    ("ol", "list"),
+    ("li", "listitem"),
+    ("table", "table"),
+    ("form", "form"),
 ];
 
 #[derive(Debug)]

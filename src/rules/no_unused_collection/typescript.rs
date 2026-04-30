@@ -34,26 +34,36 @@ fn is_collection_initializer(value: tree_sitter::Node, source: &[u8]) -> bool {
 /// True when `id_node` is the `object` part of `<id>.<method>(...)` and
 /// `<method>` is a known mutation method.
 fn is_write_usage(id_node: tree_sitter::Node, source: &[u8]) -> bool {
-    let Some(parent) = id_node.parent() else { return false };
+    let Some(parent) = id_node.parent() else {
+        return false;
+    };
     if parent.kind() != "member_expression" {
         return false;
     }
     // Identifier must be the *object*, not the property — otherwise `foo.push`
     // accessing a property named the same as our collection would be misread.
-    let Some(obj) = parent.child_by_field_name("object") else { return false };
+    let Some(obj) = parent.child_by_field_name("object") else {
+        return false;
+    };
     if obj.id() != id_node.id() {
         return false;
     }
-    let Some(grand) = parent.parent() else { return false };
+    let Some(grand) = parent.parent() else {
+        return false;
+    };
     if grand.kind() != "call_expression" {
         return false;
     }
     // Ensure the member_expression is the *callee*, not an argument.
-    let Some(callee) = grand.child_by_field_name("function") else { return false };
+    let Some(callee) = grand.child_by_field_name("function") else {
+        return false;
+    };
     if callee.id() != parent.id() {
         return false;
     }
-    let Some(prop) = parent.child_by_field_name("property") else { return false };
+    let Some(prop) = parent.child_by_field_name("property") else {
+        return false;
+    };
     let method = prop.utf8_text(source).unwrap_or("");
     WRITE_METHODS.contains(&method)
 }

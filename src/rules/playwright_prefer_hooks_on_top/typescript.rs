@@ -19,9 +19,7 @@ fn get_call_name<'a>(node: tree_sitter::Node<'a>, source: &'a [u8]) -> Option<&'
     let callee = node.child_by_field_name("function")?;
     match callee.kind() {
         "identifier" => callee.utf8_text(source).ok(),
-        "member_expression" => {
-            callee.child_by_field_name("object")?.utf8_text(source).ok()
-        }
+        "member_expression" => callee.child_by_field_name("object")?.utf8_text(source).ok(),
         _ => None,
     }
 }
@@ -36,46 +34,50 @@ fn check_block(
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         if child.kind() == "expression_statement"
-            && let Some(expr) = child.named_child(0) {
-                if let Some(name) = get_call_name(expr, source) {
-                    if TEST_FNS.contains(&name) {
-                        seen_test = true;
-                    } else if HOOKS.contains(&name) && seen_test {
-                        let pos = expr.start_position();
-                        diagnostics.push(Diagnostic {
-                            path: std::sync::Arc::clone(&ctx.path_arc),
-                            line: pos.row + 1,
-                            column: pos.column + 1,
-                            rule_id: "playwright-prefer-hooks-on-top".into(),
-                            message: "Hooks should come before test cases.".into(),
-                            severity: Severity::Warning,
-                            span: None,
-                        });
+            && let Some(expr) = child.named_child(0)
+        {
+            if let Some(name) = get_call_name(expr, source) {
+                if TEST_FNS.contains(&name) {
+                    seen_test = true;
+                } else if HOOKS.contains(&name) && seen_test {
+                    let pos = expr.start_position();
+                    diagnostics.push(Diagnostic {
+                        path: std::sync::Arc::clone(&ctx.path_arc),
+                        line: pos.row + 1,
+                        column: pos.column + 1,
+                        rule_id: "playwright-prefer-hooks-on-top".into(),
+                        message: "Hooks should come before test cases.".into(),
+                        severity: Severity::Warning,
+                        span: None,
+                    });
+                }
+            }
+            // Recurse into describe callbacks.
+            if expr.kind() == "call_expression"
+                && let Some(callee) = expr.child_by_field_name("function")
+            {
+                let is_describe = match callee.kind() {
+                    "identifier" => callee.utf8_text(source).unwrap_or("") == "describe",
+                    "member_expression" => {
+                        callee
+                            .child_by_field_name("object")
+                            .and_then(|o| o.utf8_text(source).ok())
+                            .unwrap_or("")
+                            == "describe"
+                    }
+                    _ => false,
+                };
+                if is_describe && let Some(args) = expr.child_by_field_name("arguments") {
+                    let ac = args.named_child_count();
+                    if ac > 0
+                        && let Some(cb) = args.named_child(ac - 1)
+                        && let Some(body) = cb.child_by_field_name("body")
+                    {
+                        check_block(body, source, ctx, diagnostics);
                     }
                 }
-                // Recurse into describe callbacks.
-                if expr.kind() == "call_expression"
-                    && let Some(callee) = expr.child_by_field_name("function") {
-                        let is_describe = match callee.kind() {
-                            "identifier" => callee.utf8_text(source).unwrap_or("") == "describe",
-                            "member_expression" => {
-                                callee.child_by_field_name("object")
-                                    .and_then(|o| o.utf8_text(source).ok())
-                                    .unwrap_or("") == "describe"
-                            }
-                            _ => false,
-                        };
-                        if is_describe
-                            && let Some(args) = expr.child_by_field_name("arguments") {
-                                let ac = args.named_child_count();
-                                if ac > 0
-                                    && let Some(cb) = args.named_child(ac - 1)
-                                        && let Some(body) = cb.child_by_field_name("body") {
-                                            check_block(body, source, ctx, diagnostics);
-                                        }
-                            }
-                    }
             }
+        }
     }
 }
 

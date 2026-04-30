@@ -58,7 +58,8 @@ mod tests {
 
     #[test]
     fn flags_complex_regex() {
-        let complex = r#"const re = /^(a+|b*|c?)(d{2,3})(e|f|g|h)(i+|j*)(k?|l{1})(m|n|o)(p+|q*)(r?)/;"#;
+        let complex =
+            r#"const re = /^(a+|b*|c?)(d{2,3})(e|f|g|h)(i+|j*)(k?|l{1})(m|n|o)(p+|q*)(r?)/;"#;
         assert_eq!(run_on(complex).len(), 1);
     }
 

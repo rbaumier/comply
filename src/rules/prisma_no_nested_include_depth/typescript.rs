@@ -10,7 +10,9 @@ pub struct Check;
 const MAX_DEPTH: usize = 3;
 
 fn is_prisma_file(source: &str) -> bool {
-    source.contains("@prisma/client") || source.contains("PrismaClient") || source.contains("prisma.")
+    source.contains("@prisma/client")
+        || source.contains("PrismaClient")
+        || source.contains("prisma.")
 }
 
 /// Walk `source` brace-by-brace, tracking how many `include:` keys are
@@ -191,7 +193,8 @@ await prisma.user.findMany({ include: { posts: true } });
 
     #[test]
     fn ignores_non_prisma_files() {
-        let src = "const x = { include: { a: { include: { b: { include: { c: { include: 1 } } } } } } };";
+        let src =
+            "const x = { include: { a: { include: { b: { include: { c: { include: 1 } } } } } } };";
         assert!(run(src).is_empty());
     }
 }

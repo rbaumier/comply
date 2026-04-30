@@ -2,7 +2,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::sql_helpers::{is_sql_string, RUST_STRING_KINDS};
+use crate::rules::sql_helpers::{RUST_STRING_KINDS, is_sql_string};
 
 #[derive(Debug)]
 pub struct Check;
@@ -60,7 +60,8 @@ mod tests {
 
     #[test]
     fn flags_raw_string_literal_sql() {
-        let src = r###"fn f() { let q = r#"SELECT * FROM logs WHERE event_at BETWEEN $1 AND $2"#; }"###;
+        let src =
+            r###"fn f() { let q = r#"SELECT * FROM logs WHERE event_at BETWEEN $1 AND $2"#; }"###;
         assert_eq!(run(src).len(), 1);
     }
 

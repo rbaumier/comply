@@ -2,7 +2,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::sql_helpers::{is_sql_ddl, RUST_STRING_KINDS};
+use crate::rules::sql_helpers::{RUST_STRING_KINDS, is_sql_ddl};
 
 #[derive(Debug)]
 pub struct Check;
@@ -56,7 +56,8 @@ mod tests {
 
     #[test]
     fn allows_key_suffix() {
-        let src = r#"fn f() { let m = "ALTER TABLE t ADD CONSTRAINT user_email_key UNIQUE (email)"; }"#;
+        let src =
+            r#"fn f() { let m = "ALTER TABLE t ADD CONSTRAINT user_email_key UNIQUE (email)"; }"#;
         assert!(run(src).is_empty());
     }
 }

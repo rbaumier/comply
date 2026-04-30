@@ -107,7 +107,10 @@ mod tests {
 
     #[test]
     fn flags_document_write() {
-        assert_eq!(run_on("document.write('<script>alert(1)</script>');").len(), 1);
+        assert_eq!(
+            run_on("document.write('<script>alert(1)</script>');").len(),
+            1
+        );
     }
 
     #[test]

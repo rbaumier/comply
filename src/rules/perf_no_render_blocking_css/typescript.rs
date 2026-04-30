@@ -60,8 +60,6 @@ mod tests {
 
     #[test]
     fn ignores_non_stylesheet_link() {
-        assert!(
-            run(r#"const x = <link rel="preload" as="style" href="/a.css" />;"#).is_empty()
-        );
+        assert!(run(r#"const x = <link rel="preload" as="style" href="/a.css" />;"#).is_empty());
     }
 }

@@ -94,7 +94,9 @@ mod tests {
         parser
             .set_language(&tree_sitter_rust::LANGUAGE.into())
             .expect("grammar should load");
-        let tree = parser.parse(source, None).expect("parser should produce a tree");
+        let tree = parser
+            .parse(source, None)
+            .expect("parser should produce a tree");
         Check.check(&ctx, &tree)
     }
 

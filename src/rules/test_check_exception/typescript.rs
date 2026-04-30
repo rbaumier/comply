@@ -62,10 +62,8 @@ mod tests {
             .set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into())
             .unwrap();
         let tree = parser.parse(source, None).unwrap();
-        let ctx = crate::rules::backend::CheckCtx::for_test(
-            std::path::Path::new("foo.test.ts"),
-            source,
-        );
+        let ctx =
+            crate::rules::backend::CheckCtx::for_test(std::path::Path::new("foo.test.ts"), source);
         <Check as crate::rules::backend::AstCheck>::check(&Check, &ctx, &tree)
     }
 
@@ -88,10 +86,7 @@ mod tests {
     #[test]
     fn ignores_non_test_files() {
         // Use run_ts which defaults to "t.ts" (not a test file)
-        let d = crate::rules::test_helpers::run_ts(
-            "expect(() => doThing()).toThrow();",
-            &Check,
-        );
+        let d = crate::rules::test_helpers::run_ts("expect(() => doThing()).toThrow();", &Check);
         assert!(d.is_empty());
     }
 }

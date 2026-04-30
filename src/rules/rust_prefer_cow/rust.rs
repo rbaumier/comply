@@ -69,7 +69,10 @@ mod tests {
 
     #[test]
     fn flags_pub_fn_with_owned_string() {
-        assert_eq!(run("pub fn greet(name: String) -> String { name }").len(), 1);
+        assert_eq!(
+            run("pub fn greet(name: String) -> String { name }").len(),
+            1
+        );
     }
 
     #[test]
@@ -97,9 +100,7 @@ mod tests {
 
     #[test]
     fn allows_cow_param() {
-        assert!(
-            run("pub fn greet(name: Cow<'_, str>) -> String { name.into_owned() }").is_empty()
-        );
+        assert!(run("pub fn greet(name: Cow<'_, str>) -> String { name.into_owned() }").is_empty());
     }
 
     #[test]

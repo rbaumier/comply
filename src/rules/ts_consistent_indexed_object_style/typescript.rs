@@ -52,18 +52,16 @@ fn extract_index_key_type<'a>(node: &tree_sitter::Node<'a>, source: &'a [u8]) ->
     for child in node.named_children(&mut cursor) {
         // Look for the formal parameter: `key: string`
         if (child.kind() == "identifier" || child.kind() == "required_parameter")
-            && let Some(type_ann) = child.child_by_field_name("type") {
-                let text = std::str::from_utf8(&source[type_ann.byte_range()]).ok()?;
-                return Some(text.trim().trim_start_matches(':').trim());
-            }
+            && let Some(type_ann) = child.child_by_field_name("type")
+        {
+            let text = std::str::from_utf8(&source[type_ann.byte_range()]).ok()?;
+            return Some(text.trim().trim_start_matches(':').trim());
+        }
     }
     None
 }
 
-fn extract_index_value_type<'a>(
-    node: &tree_sitter::Node<'a>,
-    source: &'a [u8],
-) -> Option<&'a str> {
+fn extract_index_value_type<'a>(node: &tree_sitter::Node<'a>, source: &'a [u8]) -> Option<&'a str> {
     // The index_signature has a type_annotation for the value type.
     let type_ann = node.child_by_field_name("type")?;
     let text = std::str::from_utf8(&source[type_ann.byte_range()]).ok()?;

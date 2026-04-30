@@ -54,7 +54,10 @@ fn scan_workspace(workspace: &Path) -> Result<Vec<Diagnostic>> {
         .arg(workspace.join("Cargo.toml"))
         .output()
         .with_context(|| {
-            format!("failed to invoke `cargo modules orphans` in {}", workspace.display())
+            format!(
+                "failed to invoke `cargo modules orphans` in {}",
+                workspace.display()
+            )
         })?;
     // cargo-modules writes its rustc-style warnings to STDOUT (not stderr,
     // contrary to most cargo subcommands) and exits non-zero when orphans
@@ -74,7 +77,9 @@ fn parse_orphans(text: &str, workspace: &Path) -> Vec<Diagnostic> {
             continue;
         };
         // The line shape is: ` 'name' at <path>`. We pull both segments.
-        let Some(at_pos) = rest.find(" at ") else { continue };
+        let Some(at_pos) = rest.find(" at ") else {
+            continue;
+        };
         // cargo-modules formats the module name with backticks: `name`.
         // Strip both backticks AND apostrophes so the diagnostic message
         // doesn't render as `` `name` ``.

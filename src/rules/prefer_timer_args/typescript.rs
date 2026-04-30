@@ -36,7 +36,9 @@ crate::ast_check! { on ["call_expression"] prefilter = ["setTimeout", "setInterv
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn run(code: &str) -> Vec<Diagnostic> { crate::rules::test_helpers::run_ts(code, &Check) }
+    fn run(code: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_ts(code, &Check)
+    }
 
     #[test]
     fn flags_arrow_wrapper() {

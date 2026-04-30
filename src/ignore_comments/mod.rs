@@ -143,7 +143,11 @@ mod tests {
     #[test]
     fn parse_extracts_above_line_suppression() {
         let r = parse_ignores(Path::new("t.ts"), "// comply-ignore: no-throw — ok\nx;");
-        assert!(r.suppressions.get(&2).is_some_and(|s| s.contains("no-throw")));
+        assert!(
+            r.suppressions
+                .get(&2)
+                .is_some_and(|s| s.contains("no-throw"))
+        );
         assert!(r.bad_ignores.is_empty());
     }
 
@@ -153,7 +157,11 @@ mod tests {
             Path::new("t.ts"),
             "throw err; // comply-ignore: no-throw — legacy\n",
         );
-        assert!(r.suppressions.get(&1).is_some_and(|s| s.contains("no-throw")));
+        assert!(
+            r.suppressions
+                .get(&1)
+                .is_some_and(|s| s.contains("no-throw"))
+        );
     }
 
     #[test]

@@ -59,7 +59,9 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn run(s: &str) -> Vec<Diagnostic> { crate::rules::test_helpers::run_ts(s, &Check) }
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_ts(s, &Check)
+    }
 
     #[test]
     fn flags_missing_domain() {

@@ -58,7 +58,8 @@ mod tests {
 
     #[test]
     fn allows_prepare_with_placeholder() {
-        let src = "const q = db.select().from(u).where(eq(u.id, sql.placeholder('id'))).prepare('q')";
+        let src =
+            "const q = db.select().from(u).where(eq(u.id, sql.placeholder('id'))).prepare('q')";
         assert!(run(src).is_empty());
     }
 

@@ -83,7 +83,8 @@ mod tests {
 
     #[test]
     fn flags_broken_state_call() {
-        let src = "import { Elysia } from 'elysia';\nconst app = new Elysia();\napp.state('count', 0);";
+        let src =
+            "import { Elysia } from 'elysia';\nconst app = new Elysia();\napp.state('count', 0);";
         assert_eq!(run_on(src).len(), 1);
     }
 

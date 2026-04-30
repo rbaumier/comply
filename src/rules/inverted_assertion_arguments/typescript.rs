@@ -88,10 +88,12 @@ mod tests {
 
     // Use a test file path for test context.
     fn run_test_file(source: &str) -> Vec<Diagnostic> {
-        use std::path::Path;
         use crate::rules::backend::{AstCheck, CheckCtx};
+        use std::path::Path;
         let mut parser = tree_sitter::Parser::new();
-        parser.set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()).unwrap();
+        parser
+            .set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into())
+            .unwrap();
         let tree = parser.parse(source, None).unwrap();
         Check.check(&CheckCtx::for_test(Path::new("foo.test.ts"), source), &tree)
     }

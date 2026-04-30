@@ -8,7 +8,9 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::file_ctx::RscContext;
 
 fn first_token_is_async(node: tree_sitter::Node, source: &[u8]) -> bool {
-    let Ok(text) = node.utf8_text(source) else { return false };
+    let Ok(text) = node.utf8_text(source) else {
+        return false;
+    };
     text.trim_start().starts_with("async ")
 }
 

@@ -124,11 +124,7 @@ mod tests {
 
     #[test]
     fn ignores_no_marker_no_import() {
-        let d = run_ts_with_path(
-            "it.skip('login', () => {});",
-            &Check,
-            "tests/login.ts",
-        );
+        let d = run_ts_with_path("it.skip('login', () => {});", &Check, "tests/login.ts");
         assert!(d.is_empty());
     }
 }

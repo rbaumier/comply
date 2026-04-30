@@ -15,7 +15,16 @@ use crate::oxc_helpers::{source_type_for_path, with_semantic};
 use crate::rules::backend::CheckCtx;
 
 const BUILTINS: &[&str] = &[
-    "Array", "Object", "String", "Map", "Set", "Promise", "JSON", "Math", "undefined", "NaN",
+    "Array",
+    "Object",
+    "String",
+    "Map",
+    "Set",
+    "Promise",
+    "JSON",
+    "Math",
+    "undefined",
+    "NaN",
     "Infinity",
 ];
 

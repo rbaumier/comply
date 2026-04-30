@@ -5,7 +5,11 @@ use crate::diagnostic::{Diagnostic, Severity};
 
 const FONT_HOSTS: &[&str] = &["fonts.googleapis.com", "fonts.gstatic.com"];
 
-fn get_jsx_attribute_string<'a>(element: tree_sitter::Node<'a>, source: &'a [u8], attr_name: &str) -> Option<&'a str> {
+fn get_jsx_attribute_string<'a>(
+    element: tree_sitter::Node<'a>,
+    source: &'a [u8],
+    attr_name: &str,
+) -> Option<&'a str> {
     let mut cursor = element.walk();
     element.children(&mut cursor).find_map(|child| {
         if child.kind() != "jsx_attribute" {
@@ -64,7 +68,8 @@ mod tests {
 
     #[test]
     fn flags_stylesheet_link() {
-        let diags = run(r#"function App() { return <link rel="stylesheet" href="/styles.css" />; }"#);
+        let diags =
+            run(r#"function App() { return <link rel="stylesheet" href="/styles.css" />; }"#);
         assert_eq!(diags.len(), 1);
     }
 
@@ -76,7 +81,8 @@ mod tests {
 
     #[test]
     fn flags_stylesheet_link_in_opening_tag() {
-        let diags = run(r#"function App() { return <link rel="stylesheet" href="/a.css"></link>; }"#);
+        let diags =
+            run(r#"function App() { return <link rel="stylesheet" href="/a.css"></link>; }"#);
         assert_eq!(diags.len(), 1);
     }
 
@@ -93,6 +99,8 @@ mod tests {
 
     #[test]
     fn ignores_other_tags() {
-        assert!(run(r#"function App() { return <a rel="stylesheet" href="/x.css">x</a>; }"#).is_empty());
+        assert!(
+            run(r#"function App() { return <a rel="stylesheet" href="/x.css">x</a>; }"#).is_empty()
+        );
     }
 }

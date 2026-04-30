@@ -45,7 +45,9 @@ fn is_tagged_error(expr: Node<'_>, source: &[u8]) -> bool {
     if expr.kind() != "new_expression" {
         return false;
     }
-    let Some(constructor) = expr.child_by_field_name("constructor") else { return false; };
+    let Some(constructor) = expr.child_by_field_name("constructor") else {
+        return false;
+    };
     let name = constructor.utf8_text(source).unwrap_or("");
     name != "Error" && name.ends_with("Error")
 }
@@ -123,7 +125,8 @@ mod tests {
     }
     #[test]
     fn flags_error_call_without_new() {
-        let src = "const r = Result.tryPromise({ try: () => fetch('/'), catch: (e) => Error('boom') });";
+        let src =
+            "const r = Result.tryPromise({ try: () => fetch('/'), catch: (e) => Error('boom') });";
         assert_eq!(run(src).len(), 1);
     }
     #[test]

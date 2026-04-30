@@ -2,7 +2,7 @@
 
 use crate::diagnostic::Severity;
 use crate::rules::meta::RuleMeta;
-use crate::rules::{oxlint_and_clippy, oxlint_delegate, RuleDef, TS_FAMILY};
+use crate::rules::{RuleDef, TS_FAMILY, oxlint_and_clippy, oxlint_delegate};
 
 pub fn register_all() -> Vec<RuleDef> {
     vec![
@@ -38,7 +38,8 @@ fn entry(id: &'static str, oxlint_key: &'static str, remediation: &'static str) 
             description: "oxc native lint — opinionated perf/correctness checks.",
             remediation,
             severity: Severity::Error,
-            doc_url: None, categories: &["typescript"],
+            doc_url: None,
+            categories: &["typescript"],
         },
         oxlint_key,
         TS_FAMILY,
@@ -57,7 +58,8 @@ fn entry_with_clippy(
             description: "oxc native lint — opinionated perf/correctness checks.",
             remediation,
             severity: Severity::Error,
-            doc_url: None, categories: &["typescript"],
+            doc_url: None,
+            categories: &["typescript"],
         },
         oxlint_key,
         clippy_lint,

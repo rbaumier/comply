@@ -46,15 +46,20 @@ crate::ast_check! { prefilter = ["queryFn"] => |node, source, ctx, diagnostics|
 /// True when the arrow's first parameter is an object pattern binding
 /// a `signal` property.
 fn destructures_signal(arrow: tree_sitter::Node<'_>, source: &[u8]) -> bool {
-    let Some(params) = arrow.child_by_field_name("parameters") else { return false; };
+    let Some(params) = arrow.child_by_field_name("parameters") else {
+        return false;
+    };
     let mut cursor = params.walk();
     for param in params.named_children(&mut cursor) {
-        let target = if param.kind() == "required_parameter" || param.kind() == "optional_parameter" {
+        let target = if param.kind() == "required_parameter" || param.kind() == "optional_parameter"
+        {
             param.child_by_field_name("pattern").unwrap_or(param)
         } else {
             param
         };
-        if target.kind() != "object_pattern" { continue; }
+        if target.kind() != "object_pattern" {
+            continue;
+        }
         let mut c2 = target.walk();
         for field in target.named_children(&mut c2) {
             let name = match field.kind() {
@@ -64,7 +69,9 @@ fn destructures_signal(arrow: tree_sitter::Node<'_>, source: &[u8]) -> bool {
                     .and_then(|k| k.utf8_text(source).ok()),
                 _ => None,
             };
-            if name == Some("signal") { return true; }
+            if name == Some("signal") {
+                return true;
+            }
         }
     }
     false
@@ -76,7 +83,9 @@ fn single_identifier_param<'a>(arrow: tree_sitter::Node<'_>, source: &'a [u8]) -
     let params = arrow.child_by_field_name("parameters")?;
     let mut cursor = params.walk();
     let named: Vec<_> = params.named_children(&mut cursor).collect();
-    if named.len() != 1 { return None; }
+    if named.len() != 1 {
+        return None;
+    }
     let param = named[0];
     let target = if param.kind() == "required_parameter" || param.kind() == "optional_parameter" {
         param.child_by_field_name("pattern").unwrap_or(param)
@@ -95,25 +104,45 @@ fn single_identifier_param<'a>(arrow: tree_sitter::Node<'_>, source: &'a [u8]) -
 fn has_bad_fetch_for_ctx(body: tree_sitter::Node<'_>, source: &[u8], ctx_name: &str) -> bool {
     let mut found = false;
     walk_subtree(body, &mut |n| {
-        if found { return; }
-        if n.kind() != "call_expression" { return; }
-        let Some(func) = n.child_by_field_name("function") else { return; };
-        if func.utf8_text(source).ok() != Some("fetch") { return; }
-        let Some(args) = n.child_by_field_name("arguments") else { return; };
+        if found {
+            return;
+        }
+        if n.kind() != "call_expression" {
+            return;
+        }
+        let Some(func) = n.child_by_field_name("function") else {
+            return;
+        };
+        if func.utf8_text(source).ok() != Some("fetch") {
+            return;
+        }
+        let Some(args) = n.child_by_field_name("arguments") else {
+            return;
+        };
         let opts = args.named_child(1);
         match opts {
-            None => { found = true; }
+            None => {
+                found = true;
+            }
             Some(opt) if opt.kind() == "object" => {
                 let mut c = opt.walk();
                 let mut has_signal = false;
                 for child in opt.named_children(&mut c) {
                     if child.kind() == "pair" {
-                        let Some(k) = child.child_by_field_name("key") else { continue; };
-                        let Ok(raw) = k.utf8_text(source) else { continue; };
+                        let Some(k) = child.child_by_field_name("key") else {
+                            continue;
+                        };
+                        let Ok(raw) = k.utf8_text(source) else {
+                            continue;
+                        };
                         if raw.trim_matches(|c| c == '"' || c == '\'') == "signal" {
                             // Check value references ctx_name.signal
-                            let Some(v) = child.child_by_field_name("value") else { continue; };
-                            let Ok(val) = v.utf8_text(source) else { continue; };
+                            let Some(v) = child.child_by_field_name("value") else {
+                                continue;
+                            };
+                            let Ok(val) = v.utf8_text(source) else {
+                                continue;
+                            };
                             let expected = format!("{}.signal", ctx_name);
                             if val == expected {
                                 has_signal = true;
@@ -122,7 +151,9 @@ fn has_bad_fetch_for_ctx(body: tree_sitter::Node<'_>, source: &[u8], ctx_name: &
                         }
                     }
                 }
-                if !has_signal { found = true; }
+                if !has_signal {
+                    found = true;
+                }
             }
             Some(_) => {
                 // Spread / variable — can't be sure; don't flag.
@@ -137,22 +168,38 @@ fn has_bad_fetch_for_ctx(body: tree_sitter::Node<'_>, source: &[u8], ctx_name: &
 fn has_bad_fetch(body: tree_sitter::Node<'_>, source: &[u8]) -> bool {
     let mut found = false;
     walk_subtree(body, &mut |n| {
-        if found { return; }
-        if n.kind() != "call_expression" { return; }
-        let Some(func) = n.child_by_field_name("function") else { return; };
-        if func.utf8_text(source).ok() != Some("fetch") { return; }
-        let Some(args) = n.child_by_field_name("arguments") else { return; };
+        if found {
+            return;
+        }
+        if n.kind() != "call_expression" {
+            return;
+        }
+        let Some(func) = n.child_by_field_name("function") else {
+            return;
+        };
+        if func.utf8_text(source).ok() != Some("fetch") {
+            return;
+        }
+        let Some(args) = n.child_by_field_name("arguments") else {
+            return;
+        };
         let opts = args.named_child(1);
         match opts {
-            None => { found = true; }
+            None => {
+                found = true;
+            }
             Some(opt) if opt.kind() == "object" => {
                 let mut c = opt.walk();
                 let mut has_signal = false;
                 for child in opt.named_children(&mut c) {
                     match child.kind() {
                         "pair" => {
-                            let Some(k) = child.child_by_field_name("key") else { continue; };
-                            let Ok(raw) = k.utf8_text(source) else { continue; };
+                            let Some(k) = child.child_by_field_name("key") else {
+                                continue;
+                            };
+                            let Ok(raw) = k.utf8_text(source) else {
+                                continue;
+                            };
                             if raw.trim_matches(|c| c == '"' || c == '\'') == "signal" {
                                 has_signal = true;
                                 break;
@@ -167,7 +214,9 @@ fn has_bad_fetch(body: tree_sitter::Node<'_>, source: &[u8]) -> bool {
                         _ => {}
                     }
                 }
-                if !has_signal { found = true; }
+                if !has_signal {
+                    found = true;
+                }
             }
             Some(_) => {
                 // Spread / variable — we can't be sure; don't flag to avoid FPs.
@@ -182,11 +231,19 @@ fn walk_subtree<F: FnMut(tree_sitter::Node<'_>)>(root: tree_sitter::Node<'_>, vi
     let mut cursor = root.walk();
     loop {
         visit(cursor.node());
-        if cursor.goto_first_child() { continue; }
+        if cursor.goto_first_child() {
+            continue;
+        }
         loop {
-            if cursor.node().id() == root_id { return; }
-            if cursor.goto_next_sibling() { break; }
-            if !cursor.goto_parent() { return; }
+            if cursor.node().id() == root_id {
+                return;
+            }
+            if cursor.goto_next_sibling() {
+                break;
+            }
+            if !cursor.goto_parent() {
+                return;
+            }
         }
     }
 }
@@ -213,7 +270,8 @@ mod tests {
 
     #[test]
     fn allows_fetch_with_signal() {
-        let src = "useQuery({ queryKey: ['x'], queryFn: ({ signal }) => fetch('/api', { signal }) });";
+        let src =
+            "useQuery({ queryKey: ['x'], queryFn: ({ signal }) => fetch('/api', { signal }) });";
         assert!(run(src).is_empty());
     }
 

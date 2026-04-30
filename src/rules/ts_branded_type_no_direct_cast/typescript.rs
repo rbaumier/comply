@@ -19,11 +19,12 @@ fn enclosing_function_name(node: tree_sitter::Node, source: &[u8]) -> Option<Str
     while let Some(p) = probe {
         let kind = p.kind();
         if (kind == "function_declaration" || kind == "method_definition")
-            && let Some(name) = p.child_by_field_name("name") {
-                return std::str::from_utf8(&source[name.byte_range()])
-                    .ok()
-                    .map(str::to_string);
-            }
+            && let Some(name) = p.child_by_field_name("name")
+        {
+            return std::str::from_utf8(&source[name.byte_range()])
+                .ok()
+                .map(str::to_string);
+        }
         if kind == "variable_declarator"
             && let Some(name) = p.child_by_field_name("name")
         {

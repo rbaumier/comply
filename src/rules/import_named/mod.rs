@@ -1,7 +1,7 @@
 mod typescript;
 use crate::diagnostic::Severity;
-use crate::rules::meta::RuleMeta;
 use crate::rules::RuleDef;
+use crate::rules::meta::RuleMeta;
 
 pub const META: RuleMeta = RuleMeta {
     id: "import-named",
@@ -9,7 +9,9 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Check that the imported name is actually exported by the source module, \
                   or correct the import name.",
     severity: Severity::Warning,
-    doc_url: Some("https://github.com/import-js/eslint-plugin-import/blob/main/docs/rules/named.md"),
+    doc_url: Some(
+        "https://github.com/import-js/eslint-plugin-import/blob/main/docs/rules/named.md",
+    ),
     categories: &["imports"],
 };
 

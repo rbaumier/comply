@@ -8,8 +8,11 @@ impl TextCheck for Check {
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
         for (idx, line) in ctx.source.lines().enumerate() {
-
-            if line.contains("LIKE '%") || line.contains("like '%") || line.contains("LIKE \"%") || line.contains("like \"%") {
+            if line.contains("LIKE '%")
+                || line.contains("like '%")
+                || line.contains("LIKE \"%")
+                || line.contains("like \"%")
+            {
                 diagnostics.push(Diagnostic {
                     path: std::sync::Arc::clone(&ctx.path_arc),
                     line: idx + 1,
@@ -24,7 +27,6 @@ impl TextCheck for Check {
         diagnostics
     }
 }
-
 
 #[cfg(test)]
 mod tests {
