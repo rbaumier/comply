@@ -1,10 +1,13 @@
-//! no-useless-intersection AST backend — intersection containing `any` or `unknown`.
+//! no-useless-intersection AST backend — intersection containing `unknown` or `never`.
 //!
 //! Walks `intersection_type` nodes and flags those whose direct members include
-//! a `predefined_type` matching `any` or `unknown`. tree-sitter parses
+//! a `predefined_type` matching `unknown` or `never`. tree-sitter parses
 //! `A & B & C` as a left-recursive `intersection_type(intersection_type(A, B), C)`,
 //! so we only need to inspect each `intersection_type` node's own children
 //! (any nested intersection is already its own visit).
+//!
+//! `& any` is intentionally excluded: removing it changes `Foo & any` (= `any`)
+//! into `Foo`, which is a stricter type — not an equivalent simplification.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
@@ -16,7 +19,7 @@ crate::ast_check! { on ["intersection_type"] => |node, source, ctx, diagnostics|
             continue;
         }
         let text = std::str::from_utf8(&source[child.byte_range()]).unwrap_or("");
-        if text == "any" || text == "unknown" {
+        if text == "unknown" || text == "never" {
             found = true;
             break;
         }
@@ -32,7 +35,7 @@ crate::ast_check! { on ["intersection_type"] => |node, source, ctx, diagnostics|
         line: pos.row + 1,
         column: pos.column + 1,
         rule_id: "no-useless-intersection".into(),
-        message: "Intersection with `any` or `unknown` is useless — remove it.".into(),
+        message: "Intersection with `unknown` or `never` is useless — simplify it.".into(),
         severity: Severity::Warning,
         span: None,
     });
@@ -47,18 +50,29 @@ mod tests {
     }
 
     #[test]
-    fn flags_intersection_with_any() {
-        assert_eq!(run_on("type X = Foo & any;").len(), 1);
-    }
-
-    #[test]
     fn flags_intersection_with_unknown() {
         assert_eq!(run_on("type X = Foo & unknown;").len(), 1);
     }
 
     #[test]
-    fn flags_any_on_left() {
-        assert_eq!(run_on("type X = any & Foo;").len(), 1);
+    fn flags_unknown_on_left() {
+        assert_eq!(run_on("type X = unknown & Foo;").len(), 1);
+    }
+
+    #[test]
+    fn flags_intersection_with_never() {
+        assert_eq!(run_on("type X = Foo & never;").len(), 1);
+    }
+
+    #[test]
+    fn allows_intersection_with_any() {
+        // `Foo & any` = `any`; removing `& any` would narrow the type to `Foo`.
+        assert!(run_on("type X = Foo & any;").is_empty());
+    }
+
+    #[test]
+    fn allows_any_on_left() {
+        assert!(run_on("type X = any & Foo;").is_empty());
     }
 
     #[test]

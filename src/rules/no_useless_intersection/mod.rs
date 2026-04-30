@@ -9,8 +9,8 @@ use crate::rules::{RuleDef, TS_FAMILY};
 
 pub const META: RuleMeta = RuleMeta {
     id: "no-useless-intersection",
-    description: "Intersecting with `any` or `unknown` is useless — `& any` produces `any`, `& unknown` is a no-op.",
-    remediation: "Remove the `& any` or `& unknown` from the intersection.",
+    description: "Intersecting with `unknown` or `never` is useless — `& unknown` is a no-op, `& never` collapses to `never`.",
+    remediation: "Remove `& unknown` (no-op) or simplify `Foo & never` to `never`.",
     severity: Severity::Warning,
     doc_url: None,
     categories: &["typescript"],
