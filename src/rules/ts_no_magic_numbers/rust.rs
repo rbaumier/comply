@@ -4,7 +4,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-const ALLOWED: &[&str] = &["0", "1", "2", "-1"];
+const ALLOWED: &[&str] = &["0", "1", "2", "-1", "0.0", "1.0", "2.0", "0.", "1.", "2."];
 
 const SUFFIXES: &[&str] = &[
     "usize", "isize", "u8", "u16", "u32", "u64", "u128",
@@ -119,5 +119,14 @@ mod tests {
     fn flags_magic_with_suffix() {
         assert_eq!(run_on("fn f() -> usize { 42usize }").len(), 1);
         assert_eq!(run_on("fn f() -> f64 { 3.14f64 }").len(), 1);
+    }
+
+    #[test]
+    fn allows_float_equivalents_of_allowed_integers() {
+        assert!(run_on("fn f() -> f32 { 0.0 }").is_empty());
+        assert!(run_on("fn f() -> f64 { 1.0 }").is_empty());
+        assert!(run_on("fn f() -> f32 { 2.0 }").is_empty());
+        assert!(run_on("fn f() -> f32 { 0. }").is_empty());
+        assert!(run_on("fn f() -> f32 { 1. }").is_empty());
     }
 }

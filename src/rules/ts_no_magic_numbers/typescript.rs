@@ -14,7 +14,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 /// embedded in string literals (e.g. Tailwind classes like `"p-4"`)
 /// are already ignored because this check only visits `number` AST
 /// nodes, never string contents.
-const ALLOWED: &[&str] = &["-1", "0", "1"];
+const ALLOWED: &[&str] = &["-1", "0", "1", "0.0", "1.0"];
 
 fn is_allowed_context(node: tree_sitter::Node) -> bool {
     let mut current = node.parent();
