@@ -14,6 +14,9 @@ pub fn handle_event(app: &mut App) -> Result<bool> {
         };
 
         if key.kind != KeyEventKind::Press {
+            if !event::poll(std::time::Duration::from_millis(0))? {
+                break;
+            }
             continue;
         }
 
@@ -25,7 +28,7 @@ pub fn handle_event(app: &mut App) -> Result<bool> {
         }
 
         if app.should_quit {
-            return Ok(false);
+            return Ok(true);
         }
 
         if !event::poll(std::time::Duration::from_millis(0))? {
@@ -33,7 +36,7 @@ pub fn handle_event(app: &mut App) -> Result<bool> {
         }
     }
 
-    Ok(false)
+    Ok(true)
 }
 
 fn handle_normal_mode(app: &mut App, key: KeyEvent) {

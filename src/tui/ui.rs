@@ -176,7 +176,7 @@ fn draw_preview(frame: &mut Frame, app: &mut App, area: Rect) {
             let gutter_width = context_lines.last().map_or(1, |(ln, _)| digit_count(*ln));
             let mut lines: Vec<Line<'_>> = Vec::new();
 
-            for (i, &(ln, src)) in context_lines.iter().enumerate() {
+            for &(ln, src) in context_lines.iter() {
                 let is_target = ln == diag_line;
                 let gutter_style = if is_target {
                     sev_style
@@ -188,8 +188,8 @@ fn draw_preview(frame: &mut Frame, app: &mut App, area: Rect) {
                     Span::styled(format!("{:>w$} ", ln, w = gutter_width), gutter_style),
                     Span::styled(format!("{} ", marker), gutter_style),
                 ];
-                if let Some(hl) = app.highlight_cache.get(&index) {
-                    if let Some(spans_for_line) = hl.get(i) {
+                if let Some(file_hl) = app.highlight_cache.get(&path) {
+                    if let Some(spans_for_line) = file_hl.get(ln.wrapping_sub(1)) {
                         for (color, text) in spans_for_line {
                             let fg = if is_target {
                                 *color
@@ -421,7 +421,10 @@ fn build_caret_line(diag: &Diagnostic, source_line: &str) -> (String, String) {
 
     let span_end_byte = match diag.span {
         Some((_, byte_len)) => byte_len.min(suffix.len()),
-        None => suffix.len(),
+        None => {
+            let first_char_len = suffix.chars().next().map_or(1, |c| c.len_utf8());
+            first_char_len
+        }
     };
     let boundary = floor_char_boundary(suffix, span_end_byte.max(1));
     if boundary == 0 {

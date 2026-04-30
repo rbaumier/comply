@@ -48,7 +48,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use clap::Parser;
-use cli::{Cli, Command, ConfigAction};
+use cli::{Cli, Command, ConfigAction, ScanMode};
 use config::Config;
 use diagnostic::Diagnostic;
 use files::{Language, SourceFile};
@@ -344,7 +344,13 @@ fn lint_project(cli: &Cli) -> Result<bool> {
                     (std::sync::Arc::from(p), content)
                 })
                 .collect();
-            tui::run(after_suppressions, sources, config.theme())?;
+            let display_root = match &mode {
+                ScanMode::All(path) => {
+                    if path.is_file() { path.parent().unwrap_or(path).to_path_buf() } else { path.clone() }
+                }
+                _ => std::env::current_dir().unwrap_or_default(),
+            };
+            tui::run(after_suppressions, sources, display_root, config.theme())?;
         } else {
             println!("comply: all clear");
         }

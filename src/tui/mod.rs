@@ -11,7 +11,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use crossterm::execute;
 use crossterm::terminal::{
-    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
 use ratatui::prelude::*;
 
@@ -24,11 +24,17 @@ fn restore_terminal() {
     let _ = execute!(io::stdout(), LeaveAlternateScreen);
 }
 
-pub fn run(diagnostics: Vec<Diagnostic>, sources: HashMap<Arc<Path>, String>, theme: Option<&str>) -> Result<()> {
+pub fn run(
+    diagnostics: Vec<Diagnostic>,
+    sources: HashMap<Arc<Path>, String>,
+    display_root: std::path::PathBuf,
+    theme: Option<&str>,
+) -> Result<()> {
     if let Some(name) = theme {
         highlight::set_theme(name);
     }
-    let mut app = App::new(diagnostics, sources);
+    highlight::preload();
+    let mut app = App::new(diagnostics, sources, display_root);
 
     let original_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {

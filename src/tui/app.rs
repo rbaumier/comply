@@ -71,7 +71,7 @@ pub struct App {
     pub total_diagnostic_count: usize,
     pub filtered_diagnostic_count: usize,
 
-    pub highlight_cache: Option<(usize, Vec<Vec<(ratatui::style::Color, String)>>)>,
+    pub highlight_cache: HashMap<Arc<Path>, Vec<Vec<(ratatui::style::Color, String)>>>,
 }
 
 fn build_line_offsets(source: &str) -> Vec<(usize, usize)> {
@@ -94,11 +94,7 @@ fn build_line_offsets(source: &str) -> Vec<(usize, usize)> {
     offsets
 }
 
-fn get_line<'a>(
-    source: &'a str,
-    offsets: &[(usize, usize)],
-    line: usize,
-) -> Option<&'a str> {
+fn get_line<'a>(source: &'a str, offsets: &[(usize, usize)], line: usize) -> Option<&'a str> {
     let (start, end) = *offsets.get(line.checked_sub(1)?)?;
     source.get(start..end)
 }
@@ -144,7 +140,11 @@ fn build_editor_args(
 }
 
 impl App {
-    pub fn new(diagnostics: Vec<Diagnostic>, sources: HashMap<Arc<Path>, String>) -> Self {
+    pub fn new(
+        diagnostics: Vec<Diagnostic>,
+        sources: HashMap<Arc<Path>, String>,
+        display_root: PathBuf,
+    ) -> Self {
         let line_offsets: HashMap<Arc<Path>, Vec<(usize, usize)>> = sources
             .iter()
             .map(|(p, s)| (p.clone(), build_line_offsets(s)))
@@ -156,7 +156,10 @@ impl App {
 
         for (idx, diag) in diagnostics.iter().enumerate() {
             by_file.entry(diag.path.clone()).or_default().push(idx);
-            by_rule.entry(diag.rule_id.to_string()).or_default().push(idx);
+            by_rule
+                .entry(diag.rule_id.to_string())
+                .or_default()
+                .push(idx);
             let src_line = sources
                 .get(&diag.path)
                 .and_then(|s| {
@@ -165,8 +168,14 @@ impl App {
                 })
                 .unwrap_or("");
             haystacks.push(
-                format!("{} {} {} {}", diag.path.display(), diag.rule_id, diag.message, src_line)
-                    .to_lowercase(),
+                format!(
+                    "{} {} {} {}",
+                    diag.path.display(),
+                    diag.rule_id,
+                    diag.message,
+                    src_line
+                )
+                .to_lowercase(),
             );
         }
 
@@ -181,14 +190,16 @@ impl App {
         }
 
         let total = diagnostics.len();
+        let cwd_canonical =
+            std::fs::canonicalize(&display_root).unwrap_or_else(|_| display_root.clone());
 
         let mut app = Self {
             diagnostics,
             sources,
             line_offsets,
             haystacks,
-            cwd: std::env::current_dir().unwrap_or_default(),
-            cwd_canonical: std::env::current_dir().and_then(std::fs::canonicalize).unwrap_or_default(),
+            cwd: display_root,
+            cwd_canonical,
             view_mode: ViewMode::All,
             by_file,
             by_rule,
@@ -205,7 +216,7 @@ impl App {
             group_summaries: HashMap::new(),
             total_diagnostic_count: total,
             filtered_diagnostic_count: total,
-            highlight_cache: None,
+            highlight_cache: HashMap::new(),
         };
         app.rebuild();
         app
@@ -219,19 +230,28 @@ impl App {
             .to_string()
     }
 
-    pub fn ensure_highlights(&mut self, diag_index: usize) {
-        if self.highlight_cache.as_ref().map(|(idx, _)| *idx) == Some(diag_index) {
+    pub fn ensure_file_highlights(&mut self, path: &Arc<Path>) {
+        if self.highlight_cache.contains_key(path) {
             return;
         }
-        let diag = &self.diagnostics[diag_index];
-        let path = diag.path.clone();
-        let center = diag.line;
-        let lines = self.source_lines(&path, center, 15);
+        if self.highlight_cache.len() >= 64 {
+            self.highlight_cache.clear();
+        }
+        let source = match self.sources.get(path) {
+            Some(s) if !s.is_empty() => s,
+            _ => return,
+        };
+        let lines: Vec<(usize, &str)> = source.lines().enumerate().map(|(i, l)| (i + 1, l)).collect();
         let result = super::highlight::highlight_lines(path.as_ref(), &lines);
-        self.highlight_cache = Some((diag_index, result));
+        self.highlight_cache.insert(path.clone(), result);
     }
 
-    pub fn source_lines(&self, path: &Arc<Path>, center: usize, context: usize) -> Vec<(usize, &str)> {
+    pub fn source_lines(
+        &self,
+        path: &Arc<Path>,
+        center: usize,
+        context: usize,
+    ) -> Vec<(usize, &str)> {
         let source = match self.sources.get(path) {
             Some(s) if !s.is_empty() => s,
             _ => return Vec::new(),
@@ -243,9 +263,7 @@ impl App {
         let start = center.saturating_sub(context).max(1);
         let end = (center + context).min(offsets.len());
         (start..=end)
-            .filter_map(|ln| {
-                get_line(source, offsets, ln).map(|s| (ln, s))
-            })
+            .filter_map(|ln| get_line(source, offsets, ln).map(|s| (ln, s)))
             .collect()
     }
 
@@ -257,18 +275,19 @@ impl App {
             Row::Group { key, .. } => key.clone(),
             _ => return None,
         };
-        let summary = self.group_summaries.get(&key).map(|s| (s.total, s.errors, s.warnings));
+        let summary = self
+            .group_summaries
+            .get(&key)
+            .map(|s| (s.total, s.errors, s.warnings));
         let indices: &[usize] = match self.view_mode {
             ViewMode::All => unreachable!(),
-            ViewMode::ByFile => {
-                self.by_file.iter()
-                    .find(|(p, _)| self.display_path(p) == key)
-                    .map(|(_, v)| v.as_slice())
-                    .unwrap_or(&[])
-            }
-            ViewMode::ByRule => {
-                self.by_rule.get(&key).map(|v| v.as_slice()).unwrap_or(&[])
-            }
+            ViewMode::ByFile => self
+                .by_file
+                .iter()
+                .find(|(p, _)| self.display_path(p) == key)
+                .map(|(_, v)| v.as_slice())
+                .unwrap_or(&[]),
+            ViewMode::ByRule => self.by_rule.get(&key).map(|v| v.as_slice()).unwrap_or(&[]),
         };
         let children: Vec<String> = indices
             .iter()
@@ -280,8 +299,12 @@ impl App {
                 let d = &self.diagnostics[i];
                 match self.view_mode {
                     ViewMode::All => unreachable!(),
-                    ViewMode::ByFile => format!("{}:{} [{}] {}", d.line, d.column, d.rule_id, d.message),
-                    ViewMode::ByRule => format!("{}:{}:{} {}", d.path.display(), d.line, d.column, d.message),
+                    ViewMode::ByFile => {
+                        format!("{}:{} [{}] {}", d.line, d.column, d.rule_id, d.message)
+                    }
+                    ViewMode::ByRule => {
+                        format!("{}:{}:{} {}", d.path.display(), d.line, d.column, d.message)
+                    }
                 }
             })
             .collect();
@@ -289,20 +312,36 @@ impl App {
     }
 
     pub fn run<B: Backend>(&mut self, terminal: &mut Terminal<B>) -> Result<()> {
+        self.ensure_current_highlights();
+        terminal.draw(|frame| ui::draw(frame, self))?;
         loop {
-            if self.needs_redraw {
-                terminal.clear()?;
-                self.needs_redraw = false;
-            }
-            terminal.draw(|frame| ui::draw(frame, self))?;
-            if event::handle_event(self)? {
-                break;
-            }
+            let had_input = event::handle_event(self)?;
             if self.should_quit {
                 break;
             }
+            if had_input || self.needs_redraw {
+                if self.needs_redraw {
+                    terminal.clear()?;
+                    self.needs_redraw = false;
+                }
+                terminal.draw(|frame| ui::draw(frame, self))?;
+            } else if self.ensure_current_highlights() {
+                terminal.draw(|frame| ui::draw(frame, self))?;
+            }
         }
         Ok(())
+    }
+
+    fn ensure_current_highlights(&mut self) -> bool {
+        let cursor = self.cursor.min(self.visible_rows.len().saturating_sub(1));
+        if let Some(Row::Diag { index }) = self.visible_rows.get(cursor) {
+            let path = self.diagnostics[*index].path.clone();
+            if !self.highlight_cache.contains_key(&path) {
+                self.ensure_file_highlights(&path);
+                return true;
+            }
+        }
+        false
     }
 
     fn rebuild(&mut self) {
@@ -320,7 +359,10 @@ impl App {
             indices.sort_by(|&a, &b| {
                 let da = &self.diagnostics[a];
                 let db = &self.diagnostics[b];
-                da.path.cmp(&db.path).then(da.line.cmp(&db.line)).then(da.column.cmp(&db.column))
+                da.path
+                    .cmp(&db.path)
+                    .then(da.line.cmp(&db.line))
+                    .then(da.column.cmp(&db.column))
             });
             filtered_count = indices.len();
             for i in indices {
@@ -446,12 +488,10 @@ impl App {
                 if let Some(key) = parent_key {
                     self.expanded_groups.remove(&key);
                     self.rebuild();
-                    if let Some(pos) =
-                        self.visible_rows.iter().position(|r| match r {
-                            Row::Group { key: k, .. } => k == &key,
-                            _ => false,
-                        })
-                    {
+                    if let Some(pos) = self.visible_rows.iter().position(|r| match r {
+                        Row::Group { key: k, .. } => k == &key,
+                        _ => false,
+                    }) {
                         self.cursor = pos;
                     }
                 }
@@ -581,28 +621,26 @@ impl App {
             .unwrap_or(cmd);
 
         let mut editor_args: Vec<String> = extra_args.iter().map(|s| s.to_string()).collect();
-        let is_gui = build_editor_args(basename, diag.line, diag.column, &path_str, &mut editor_args);
+        let is_gui = build_editor_args(
+            basename,
+            diag.line,
+            diag.column,
+            &path_str,
+            &mut editor_args,
+        );
 
         if is_gui {
-            let _ = ProcessCommand::new(cmd)
-                .args(&editor_args)
-                .spawn();
+            let _ = ProcessCommand::new(cmd).args(&editor_args).spawn();
         } else {
             let _ = crossterm::terminal::disable_raw_mode();
-            let _ = crossterm::execute!(
-                std::io::stdout(),
-                crossterm::terminal::LeaveAlternateScreen,
-            );
+            let _ =
+                crossterm::execute!(std::io::stdout(), crossterm::terminal::LeaveAlternateScreen,);
 
-            let _ = ProcessCommand::new(cmd)
-                .args(&editor_args)
-                .status();
+            let _ = ProcessCommand::new(cmd).args(&editor_args).status();
 
             let _ = crossterm::terminal::enable_raw_mode();
-            let _ = crossterm::execute!(
-                std::io::stdout(),
-                crossterm::terminal::EnterAlternateScreen,
-            );
+            let _ =
+                crossterm::execute!(std::io::stdout(), crossterm::terminal::EnterAlternateScreen,);
             self.needs_redraw = true;
         }
     }
