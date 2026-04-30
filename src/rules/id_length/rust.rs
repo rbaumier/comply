@@ -47,6 +47,12 @@ impl AstCheck for Check {
         if is_sort_pair_param(node, source_bytes) {
             return;
         }
+        if is_closure_param(node) {
+            return;
+        }
+        if is_fmt_param(node, source_bytes) {
+            return;
+        }
         let pos = node.start_position();
         diagnostics.push(Diagnostic {
             path: std::sync::Arc::clone(&ctx.path_arc),
@@ -125,6 +131,39 @@ fn is_sort_pair_param(node: tree_sitter::Node, source: &[u8]) -> bool {
     param_names.len() == 2 && param_names.contains(&"a") && param_names.contains(&"b")
 }
 
+fn is_closure_param(node: tree_sitter::Node) -> bool {
+    let Some(parent) = node.parent() else {
+        return false;
+    };
+    if parent.kind() == "closure_parameters" {
+        return true;
+    }
+    if parent.kind() == "parameter" {
+        if let Some(gp) = parent.parent() {
+            return gp.kind() == "closure_parameters";
+        }
+    }
+    false
+}
+
+fn is_fmt_param(node: tree_sitter::Node, source: &[u8]) -> bool {
+    let Some(parent) = node.parent() else {
+        return false;
+    };
+    if parent.kind() != "parameter" {
+        return false;
+    }
+    let Some(params) = parent.parent() else {
+        return false;
+    };
+    let Some(func) = params.parent() else {
+        return false;
+    };
+    func.child_by_field_name("name")
+        .and_then(|n| n.utf8_text(source).ok())
+        .is_some_and(|name| name == "fmt")
+}
+
 fn field_matches(parent: tree_sitter::Node, field: &str, node: tree_sitter::Node) -> bool {
     parent
         .child_by_field_name(field)
@@ -171,11 +210,6 @@ mod tests {
     }
 
     #[test]
-    fn flags_closure_params() {
-        assert!(!run_on("fn main() { vec![1].iter().map(|x| x + 1); }").is_empty());
-    }
-
-    #[test]
     fn flags_for_loop_var() {
         assert!(!run_on("fn main() { for i in 0..10 { println!(\"{}\", i); } }").is_empty());
     }
@@ -218,6 +252,21 @@ mod tests {
         let diags = run_on("const N: u32 = 1;");
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("`N`"));
+    }
+
+    #[test]
+    fn allows_closure_params() {
+        assert!(run_on("fn main() { vec![1].iter().map(|x| x + 1); }").is_empty());
+    }
+
+    #[test]
+    fn allows_closure_error_param() {
+        assert!(run_on("fn main() { result.map_err(|e| e.to_string()); }").is_empty());
+    }
+
+    #[test]
+    fn allows_fmt_param() {
+        assert!(run_on("impl Display for S { fn fmt(&self, f: &mut Formatter) -> fmt::Result { Ok(()) } }").is_empty());
     }
 
     #[test]

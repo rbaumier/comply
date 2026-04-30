@@ -52,6 +52,12 @@ fn find_ipv4(s: &str, start: usize) -> Option<(usize, String)> {
 
 const ALLOWED: &[&str] = &["127.0.0.1", "0.0.0.0", "255.255.255.255"];
 
+fn is_documentation_ip(ip: &str) -> bool {
+    ip.starts_with("192.0.2.")
+        || ip.starts_with("198.51.100.")
+        || ip.starts_with("203.0.113.")
+}
+
 fn is_cidr_notation(line: &str, ip_end: usize) -> bool {
     let bytes = line.as_bytes();
     ip_end < bytes.len()
@@ -89,7 +95,7 @@ impl TextCheck for Check {
             let mut pos = 0;
             while let Some((next, ip)) = find_ipv4(line, pos) {
                 pos = next;
-                if ALLOWED.contains(&ip.as_str()) {
+                if ALLOWED.contains(&ip.as_str()) || is_documentation_ip(&ip) {
                     continue;
                 }
                 if is_cidr_notation(line, next) {
@@ -154,6 +160,13 @@ mod tests {
     #[test]
     fn allows_doc_comment_example() {
         assert!(run(r#"/// e.g. "192.168.1.1" is a local IP"#).is_empty());
+    }
+
+    #[test]
+    fn allows_rfc5737_documentation_ips() {
+        assert!(run(r#"let h = "192.0.2.60";"#).is_empty());
+        assert!(run(r#"let h = "198.51.100.1";"#).is_empty());
+        assert!(run(r#"let h = "203.0.113.43";"#).is_empty());
     }
 
     #[test]

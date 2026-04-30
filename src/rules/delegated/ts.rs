@@ -39,14 +39,6 @@ pub fn register_all() -> Vec<RuleDef> {
              used as a type. This lets the bundler elide the import entirely.",
         ),
         entry(
-            "typescript/no-non-null-assertion",
-            "typescript/no-non-null-assertion",
-            Severity::Error,
-            "The `!` non-null assertion hides potential runtime errors.",
-            "Replace `foo!` with an explicit null check or narrow the type \
-             via a type guard. `!` silently bypasses the type system.",
-        ),
-        entry(
             "typescript/prefer-as-const",
             "typescript/prefer-as-const",
             Severity::Error,

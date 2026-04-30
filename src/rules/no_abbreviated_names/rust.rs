@@ -20,7 +20,8 @@ const BANNED_ABBREVIATIONS: &[(&str, &str)] = &[
     ("pwd", "password"),
     ("cnt", "count"),
     ("desc", "description"),
-    ("addr", "address"),
+    // `addr` is intentionally NOT on the list — `std::net::SocketAddr`,
+    // `peer_addr()`, `local_addr()`, `bind_addr` are all standard Rust API.
     // `tmp` is intentionally NOT on the list — `std::env::temp_dir()`
     // and `tempfile::NamedTempFile::new()?.path()` are idiomatic Rust
     // and the `tmp` binding name follows std convention.
