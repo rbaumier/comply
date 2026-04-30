@@ -24,18 +24,22 @@ crate::ast_check! { on ["generic_type"] => |node, source, ctx, diagnostics|
     let base = type_text.rsplit("::").next().unwrap_or("");
     if base != "Mutex" && base != "RwLock" { return; }
 
-    // Walk ancestors: if any enclosing `generic_type` is a known sharing
-    // wrapper, the Mutex is thread-shared by construction.
     let mut cur = node.parent();
     while let Some(ancestor) = cur {
-        if ancestor.kind() == "generic_type"
-            && let Some(atype) = ancestor.child_by_field_name("type")
-            && let Ok(atext) = atype.utf8_text(source)
-        {
-            let abase = atext.rsplit("::").next().unwrap_or("");
-            if SHARING_WRAPPERS.contains(&abase) {
-                return;
+        match ancestor.kind() {
+            "generic_type" => {
+                if let Some(atype) = ancestor.child_by_field_name("type")
+                    && let Ok(atext) = atype.utf8_text(source)
+                {
+                    let abase = atext.rsplit("::").next().unwrap_or("");
+                    if SHARING_WRAPPERS.contains(&abase) {
+                        return;
+                    }
+                }
             }
+            "field_declaration" | "field_declaration_list" => return,
+            "static_item" | "const_item" => return,
+            _ => {}
         }
         cur = ancestor.parent();
     }
@@ -62,18 +66,23 @@ mod tests {
     }
 
     #[test]
-    fn flags_bare_mutex_field() {
-        assert_eq!(run("struct S { state: Mutex<u32> }").len(), 1);
+    fn allows_mutex_in_struct_field() {
+        assert!(run("struct S { state: Mutex<u32> }").is_empty());
     }
 
     #[test]
-    fn flags_std_sync_mutex() {
-        assert_eq!(run("struct S { state: std::sync::Mutex<u32> }").len(), 1);
+    fn allows_std_sync_mutex_in_struct() {
+        assert!(run("struct S { state: std::sync::Mutex<u32> }").is_empty());
     }
 
     #[test]
-    fn flags_bare_rwlock() {
-        assert_eq!(run("struct S { map: RwLock<HashMap<u32, u32>> }").len(), 1);
+    fn allows_rwlock_in_struct_field() {
+        assert!(run("struct S { map: RwLock<HashMap<u32, u32>> }").is_empty());
+    }
+
+    #[test]
+    fn flags_bare_local_mutex() {
+        assert_eq!(run("fn f() { let m: Mutex<u32> = Mutex::new(0); }").len(), 1);
     }
 
     #[test]

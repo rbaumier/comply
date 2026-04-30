@@ -19,7 +19,15 @@ use crate::rules::backend::{AstCheck, CheckCtx};
 // ("did the scan land on its target?"). Forcing `is_in_string` etc.
 // adds syllables without information.
 const VALID_PREFIXES: &[&str] = &[
-    "is_", "has_", "should_", "can_", "will_", "did_", "was_", "in_", "seen_", "found_",
+    "is_", "has_", "should_", "can_", "will_", "did_", "was_", "had_", "in_", "seen_", "found_",
+];
+
+const IDIOMATIC_NAMES: &[&str] = &[
+    "done", "success", "ok", "valid", "ready", "closed", "connected",
+    "available", "empty", "alive", "enabled", "active", "matched",
+    "called", "polled", "changed", "updated", "exists", "loaded",
+    "running", "finished", "completed", "started", "stopped",
+    "pending", "stall", "eof",
 ];
 const NEGATIVE_SUBSTRINGS: &[&str] = &["_not_", "isnt_", "cannot_", "shouldnt_"];
 
@@ -111,6 +119,9 @@ fn classify_name(name: &str) -> Option<&'static str> {
             return None;
         }
     }
+    if IDIOMATIC_NAMES.contains(&name) {
+        return None;
+    }
     Some("is missing a predicate prefix")
 }
 
@@ -134,19 +145,19 @@ mod tests {
 
     #[test]
     fn flags_missing_prefix_with_annotation() {
-        let diags = run_on("fn f() { let ready: bool = true; }");
+        let diags = run_on("fn f() { let retry: bool = true; }");
         assert_eq!(diags.len(), 1);
-        assert!(diags[0].message.contains("'ready'"));
+        assert!(diags[0].message.contains("'retry'"));
     }
 
     #[test]
     fn flags_inferred_boolean() {
-        assert_eq!(run_on("fn f() { let ready = true; }").len(), 1);
+        assert_eq!(run_on("fn f() { let retry = true; }").len(), 1);
     }
 
     #[test]
     fn flags_param_without_prefix() {
-        let diags = run_on("fn f(ready: bool) {}");
+        let diags = run_on("fn f(retry: bool) {}");
         assert_eq!(diags.len(), 1);
     }
 
@@ -161,6 +172,26 @@ mod tests {
             let source = format!("fn f() {{ let {name}: bool = true; }}");
             assert!(run_on(&source).is_empty(), "'{name}' should be allowed");
         }
+    }
+
+    #[test]
+    fn allows_had_prefix() {
+        assert!(run_on("fn f() { let had_error: bool = false; }").is_empty());
+    }
+
+    #[test]
+    fn allows_idiomatic_done() {
+        assert!(run_on("fn f() { let done: bool = false; }").is_empty());
+    }
+
+    #[test]
+    fn allows_idiomatic_success() {
+        assert!(run_on("fn f() { let success = true; }").is_empty());
+    }
+
+    #[test]
+    fn allows_idiomatic_polled() {
+        assert!(run_on("fn f() { let polled: bool = false; }").is_empty());
     }
 
     #[test]

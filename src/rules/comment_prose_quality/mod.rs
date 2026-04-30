@@ -101,43 +101,59 @@ pub(crate) fn lint_comment_nodes(
         let Ok(raw) = node.utf8_text(source) else {
             continue;
         };
+        let is_doc_comment = raw.starts_with("///")
+            || raw.starts_with("//!")
+            || raw.starts_with("/**");
         let start_row = node.start_position().row;
+        let mut in_code_block = false;
         for (offset, line) in raw.lines().enumerate() {
             let line_no = start_row + offset + 1;
             let text = strip_marker(line);
-            let lower = text.to_lowercase();
+            let trimmed = text.trim();
 
-            // Weasel words.
-            for &weasel in WEASEL_WORDS {
-                if contains_word(&lower, weasel) {
-                    diagnostics.push(Diagnostic {
-                        path: std::sync::Arc::clone(&ctx.path_arc),
-                        line: line_no,
-                        column: 1,
-                        rule_id: META.id.into(),
-                        message: format!("Weasel word `{weasel}` in comment — be specific."),
-                        severity: Severity::Warning,
-                        span: None,
-                    });
-                    break;
-                }
+            if trimmed.starts_with("```") {
+                in_code_block = !in_code_block;
+                continue;
+            }
+            if in_code_block || (is_doc_comment && trimmed.starts_with("    ")) {
+                continue;
             }
 
-            // Passive voice.
-            for &passive in PASSIVE_PATTERNS {
-                if lower.contains(passive) {
-                    diagnostics.push(Diagnostic {
-                        path: std::sync::Arc::clone(&ctx.path_arc),
-                        line: line_no,
-                        column: 1,
-                        rule_id: META.id.into(),
-                        message: format!(
-                            "Passive voice `{passive}` in comment — use active voice."
-                        ),
-                        severity: Severity::Warning,
-                        span: None,
-                    });
-                    break;
+            let lower = text.to_lowercase();
+
+            if !is_doc_comment {
+                // Weasel words — only in inline comments, not doc comments.
+                for &weasel in WEASEL_WORDS {
+                    if contains_word(&lower, weasel) {
+                        diagnostics.push(Diagnostic {
+                            path: std::sync::Arc::clone(&ctx.path_arc),
+                            line: line_no,
+                            column: 1,
+                            rule_id: META.id.into(),
+                            message: format!("Weasel word `{weasel}` in comment — be specific."),
+                            severity: Severity::Warning,
+                            span: None,
+                        });
+                        break;
+                    }
+                }
+
+                // Passive voice — only in inline comments.
+                for &passive in PASSIVE_PATTERNS {
+                    if lower.contains(passive) {
+                        diagnostics.push(Diagnostic {
+                            path: std::sync::Arc::clone(&ctx.path_arc),
+                            line: line_no,
+                            column: 1,
+                            rule_id: META.id.into(),
+                            message: format!(
+                                "Passive voice `{passive}` in comment — use active voice."
+                            ),
+                            severity: Severity::Warning,
+                            span: None,
+                        });
+                        break;
+                    }
                 }
             }
 

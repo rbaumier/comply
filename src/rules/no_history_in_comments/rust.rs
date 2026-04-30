@@ -20,14 +20,40 @@ mod tests {
     }
 
     #[test]
-    fn flags_previously_rust() {
+    fn flags_previously_used() {
         let src = "// previously used HashMap\nfn f() {}";
         assert_eq!(run(src).len(), 1);
     }
 
     #[test]
-    fn allows_neutral_comment_rust() {
-        let src = "// caches results\nfn f() {}";
-        assert!(run(src).is_empty());
+    fn flags_was_refactored() {
+        let src = "// was refactored from a Vec\nfn f() {}";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_rewritten() {
+        let src = "// rewritten in v3\nfn f() {}";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_neutral_comment() {
+        assert!(run("// caches results\nfn f() {}").is_empty());
+    }
+
+    #[test]
+    fn allows_descriptive_was() {
+        assert!(run("// whether it was the initial value\nfn f() {}").is_empty());
+    }
+
+    #[test]
+    fn allows_doc_comments() {
+        assert!(run("/// Return to the previously set panic hook\nfn f() {}").is_empty());
+    }
+
+    #[test]
+    fn allows_doc_comment_with_was() {
+        assert!(run("/// Track which source stream the value was received from\nfn f() {}").is_empty());
     }
 }

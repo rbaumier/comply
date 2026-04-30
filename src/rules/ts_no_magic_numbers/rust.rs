@@ -4,7 +4,11 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-const ALLOWED: &[&str] = &["0", "1", "2", "-1", "0.0", "1.0", "2.0", "0.", "1.", "2."];
+const ALLOWED: &[&str] = &[
+    "-1", "0", "1", "2", "3", "4", "8", "16", "32", "64", "128", "256", "512", "1024",
+    "0.0", "0.5", "1.0", "2.0", "0.", "1.", "2.",
+    "0x00", "0xff", "0xFF", "0x0f", "0x0F",
+];
 
 const SUFFIXES: &[&str] = &[
     "usize", "isize", "u8", "u16", "u32", "u64", "u128", "i8", "i16", "i32", "i64", "i128", "f32",
@@ -26,21 +30,32 @@ fn is_allowed(text: &str) -> bool {
     ALLOWED.contains(&n)
 }
 
-fn is_in_skip_context(node: tree_sitter::Node) -> bool {
+fn is_in_skip_context(node: tree_sitter::Node, source: &[u8]) -> bool {
     let mut cur = node.parent();
     let mut depth = 0;
     while let Some(parent) = cur {
         match parent.kind() {
-            // `const FOO: u32 = 42;` / `static BAR: u32 = 42;` — literal is being named.
             "const_item" | "static_item" => {
                 if depth <= 2 {
                     return true;
                 }
             }
-            // Array repeat / type-level number (`[u8; 4]`).
             "array_type" | "const_block" => return true,
-            // Enum discriminant `Foo = 42`.
             "enum_variant" => return true,
+            "let_declaration" => return true,
+            "match_pattern" | "match_arm" => return true,
+            "range_expression" => return true,
+            "macro_invocation" => return true,
+            "token_tree" => return true,
+            "attribute_item" | "attribute" => return true,
+            "binary_expression" => {
+                if let Some(op) = parent.child_by_field_name("operator") {
+                    let op_text = op.utf8_text(source).unwrap_or("");
+                    if matches!(op_text, "<<" | ">>" | "&" | "|" | "^") {
+                        return true;
+                    }
+                }
+            }
             _ => {}
         }
         cur = parent.parent();
@@ -57,7 +72,7 @@ crate::ast_check! { on ["integer_literal", "float_literal"] => |node, source, ct
     if is_allowed(text) {
         return;
     }
-    if is_in_skip_context(node) {
+    if is_in_skip_context(node, source) {
         return;
     }
 
@@ -129,5 +144,43 @@ mod tests {
         assert!(run_on("fn f() -> f32 { 2.0 }").is_empty());
         assert!(run_on("fn f() -> f32 { 0. }").is_empty());
         assert!(run_on("fn f() -> f32 { 1. }").is_empty());
+    }
+
+    #[test]
+    fn allows_let_binding() {
+        assert!(run_on("fn f() { let limit = 3600; }").is_empty());
+    }
+
+    #[test]
+    fn allows_match_arm() {
+        assert!(run_on("fn f(x: u32) { match x { 42 => {}, _ => {} } }").is_empty());
+    }
+
+    #[test]
+    fn allows_bit_operations() {
+        assert!(run_on("fn f(x: u32) -> u32 { x << 3 }").is_empty());
+        assert!(run_on("fn f(x: u32) -> u32 { x & 0xFF }").is_empty());
+    }
+
+    #[test]
+    fn allows_range_expression() {
+        assert!(run_on("fn f() { for i in 0..100 {} }").is_empty());
+    }
+
+    #[test]
+    fn allows_macro_invocations() {
+        assert!(run_on("fn f() { assert_eq!(x, 42); }").is_empty());
+        assert!(run_on("fn f() { vec![0; 64]; }").is_empty());
+    }
+
+    #[test]
+    fn allows_common_powers_of_two() {
+        assert!(run_on("fn f(x: u32) -> bool { x >= 32 }").is_empty());
+        assert!(run_on("fn f() -> usize { 1024 }").is_empty());
+    }
+
+    #[test]
+    fn allows_attribute_numbers() {
+        assert!(run_on("#[repr(align(16))]\nstruct Foo { x: u8 }").is_empty());
     }
 }

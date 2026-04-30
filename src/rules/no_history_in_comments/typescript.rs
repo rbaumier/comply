@@ -20,7 +20,7 @@ mod tests {
     }
 
     #[test]
-    fn flags_previously() {
+    fn flags_previously_used() {
         assert_eq!(run("// previously used a Map here").len(), 1);
     }
 
@@ -30,7 +30,22 @@ mod tests {
     }
 
     #[test]
+    fn flags_was_replaced() {
+        assert_eq!(run("// was replaced with a Set").len(), 1);
+    }
+
+    #[test]
     fn allows_neutral_comment() {
         assert!(run("// caches results for 5 minutes").is_empty());
+    }
+
+    #[test]
+    fn allows_descriptive_was() {
+        assert!(run("// check if the value was provided").is_empty());
+    }
+
+    #[test]
+    fn allows_jsdoc_with_was() {
+        assert!(run("/** Returns whether the item was found */").is_empty());
     }
 }

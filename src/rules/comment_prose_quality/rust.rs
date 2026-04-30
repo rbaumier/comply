@@ -42,6 +42,30 @@ mod tests {
     }
 
     #[test]
+    fn allows_weasel_in_doc_comment() {
+        let src = "/// Handles many concurrent connections.\nfn f() {}";
+        assert!(run(src).iter().all(|d| !d.message.contains("Weasel")));
+    }
+
+    #[test]
+    fn allows_passive_in_doc_comment() {
+        let src = "/// The buffer is used to store data.\nfn f() {}";
+        assert!(run(src).iter().all(|d| !d.message.contains("Passive")));
+    }
+
+    #[test]
+    fn flags_weasel_in_inline_comment() {
+        let src = "// This is basically a wrapper.\nfn f() {}";
+        assert!(run(src).iter().any(|d| d.message.contains("Weasel")));
+    }
+
+    #[test]
+    fn allows_doc_code_block() {
+        let src = "/// ```\n/// }\n/// }\n/// ```\nfn f() {}";
+        assert!(run(src).iter().all(|d| !d.message.contains("Lexical")));
+    }
+
+    #[test]
     fn allows_rustdoc_heading_echo() {
         let src = "/// # Panics\n/// Panics if the buffer is empty.\nfn f() {}";
         assert!(

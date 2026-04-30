@@ -18,14 +18,38 @@ pub fn register() -> RuleDef {
     crate::register_ts_family_with_rust!(META, typescript, rust)
 }
 
-const HISTORY_WORDS: &[&str] = &["was", "previously", "refactored", "rewritten"];
+const HISTORY_PHRASES: &[&str] = &[
+    "was changed",
+    "was modified",
+    "was removed",
+    "was deleted",
+    "was replaced",
+    "was refactored",
+    "was rewritten",
+    "was moved",
+    "was renamed",
+    "was updated",
+    "was converted",
+    "was migrated",
+    "previously used",
+    "previously called",
+    "previously stored",
+    "previously named",
+    "previously returned",
+    "previously implemented",
+];
 
-/// True if a comment's lowercased text contains a history-narrating word as a
-/// standalone token. Matching at word boundaries avoids false positives on
-/// `waste`, `iteratively`, and similar.
+const HISTORY_WORDS_ALWAYS: &[&str] = &["refactored", "rewritten"];
+
 pub(crate) fn mentions_history(raw: &str) -> bool {
+    if raw.starts_with("///") || raw.starts_with("//!") || raw.starts_with("/**") {
+        return false;
+    }
     let lower = raw.to_lowercase();
+    if HISTORY_PHRASES.iter().any(|p| lower.contains(p)) {
+        return true;
+    }
     lower
         .split(|c: char| !c.is_ascii_alphanumeric())
-        .any(|word| HISTORY_WORDS.contains(&word))
+        .any(|word| HISTORY_WORDS_ALWAYS.contains(&word))
 }
