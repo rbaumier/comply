@@ -77,6 +77,18 @@ fn is_node_builtin(specifier: &str) -> bool {
     NODE_BUILTINS.contains(&root) || RUNTIME_BUILTINS.contains(&root)
 }
 
+const VIRTUAL_PREFIXES: &[&str] = &[
+    "virtual:",
+    "@theme/",
+    "@docusaurus/",
+    "@internal/",
+    "~react-pages",
+];
+
+fn is_virtual_module(spec: &str) -> bool {
+    VIRTUAL_PREFIXES.iter().any(|p| spec.starts_with(p))
+}
+
 fn is_bare_specifier(spec: &str) -> bool {
     !spec.starts_with('.')
         && !spec.starts_with('/')
@@ -147,12 +159,25 @@ crate::ast_check! { on ["import_statement"] => |node, source, ctx, diagnostics|
     if is_node_builtin(spec) {
         return;
     }
+    if is_virtual_module(spec) {
+        return;
+    }
     if matches_alias(spec, &alias_prefixes) {
         return;
     }
     let root = root_package_name(spec);
     if pkg.has_dep_or_engine(root) {
         return;
+    }
+    // Workspace fallback: check workspace package names and the root
+    // package.json when the nearest manifest doesn't list the dep.
+    if ctx.project.workspace_package_names().iter().any(|n| n == root) {
+        return;
+    }
+    if let Some(root_pkg) = &ctx.project.package_json {
+        if root_pkg.has_dep_or_engine(root) {
+            return;
+        }
     }
     let pos = node.start_position();
     diagnostics.push(Diagnostic {
@@ -418,6 +443,24 @@ mod tests {
             "import { app } from 'electron';",
         );
         assert!(diags.is_empty(), "expected no diagnostics, got {diags:?}");
+    }
+
+    #[test]
+    fn ignores_virtual_module_prefixes() {
+        for spec in &[
+            "virtual:my-plugin",
+            "@theme/Layout",
+            "@docusaurus/preset-classic",
+            "@internal/shared",
+        ] {
+            let src = format!("import x from '{spec}';");
+            let (_d, diags) = run_in_project(
+                Some(r#"{ "dependencies": {} }"#),
+                None,
+                &src,
+            );
+            assert!(diags.is_empty(), "virtual module `{spec}` should be skipped, got {diags:?}");
+        }
     }
 
     #[test]

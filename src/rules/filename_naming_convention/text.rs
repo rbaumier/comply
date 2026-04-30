@@ -35,14 +35,23 @@ fn is_composable_name(stem: &str) -> bool {
     stem.starts_with("use") && stem.len() > 3 && stem.as_bytes()[3].is_ascii_uppercase()
 }
 
+fn is_pascal_case(stem: &str) -> bool {
+    if stem.is_empty() { return false; }
+    let bytes = stem.as_bytes();
+    if !bytes[0].is_ascii_uppercase() { return false; }
+    bytes.iter().all(|&b| b.is_ascii_alphanumeric())
+}
+
+fn is_ts_or_jsx_file(path: &std::path::Path) -> bool {
+    let s = path.to_string_lossy();
+    s.ends_with(".ts") || s.ends_with(".tsx") || s.ends_with(".js") || s.ends_with(".jsx")
+}
+
 impl TextCheck for Check {
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
         let Some(file_name) = ctx.path.file_name().and_then(|s| s.to_str()) else {
             return Vec::new();
         };
-        // Use the portion before the first `.` as the stem so that multi-part
-        // extensions like `.d.ts`, `.test.ts`, `.spec.tsx` don't contaminate
-        // the name check.
         let stem = file_name.split('.').next().unwrap_or(file_name);
         if stem.is_empty() {
             return Vec::new();
@@ -53,12 +62,15 @@ impl TextCheck for Check {
         if is_composable_name(stem) {
             return Vec::new();
         }
+        if is_ts_or_jsx_file(ctx.path) && is_pascal_case(stem) {
+            return Vec::new();
+        }
         vec![Diagnostic {
             path: std::sync::Arc::clone(&ctx.path_arc),
             line: 1,
             column: 1,
             rule_id: "filename-naming-convention".into(),
-            message: format!("Filename `{file_name}` does not match kebab-case convention."),
+            message: format!("Filename `{file_name}` does not match naming convention."),
             severity: Severity::Warning,
             span: None,
         }]
@@ -90,13 +102,18 @@ mod tests {
     }
 
     #[test]
-    fn flags_camel_case() {
+    fn flags_camel_case_ts() {
         assert_eq!(run("src/userProfile.ts").len(), 1);
     }
 
     #[test]
-    fn flags_pascal_case() {
-        assert_eq!(run("src/UserProfile.ts").len(), 1);
+    fn allows_pascal_case_tsx() {
+        assert!(run("src/UserProfile.tsx").is_empty());
+    }
+
+    #[test]
+    fn allows_pascal_case_ts() {
+        assert!(run("src/UserProfile.ts").is_empty());
     }
 
     #[test]

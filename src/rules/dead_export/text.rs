@@ -41,6 +41,13 @@ fn is_in_ui_library(path: &Path) -> bool {
     UI_LIBRARY_DIRS.iter().any(|seg| normalised.contains(seg))
 }
 
+const FIXTURE_DIRS: &[&str] = &["__testfixtures__", "__fixtures__", "fixtures", "test-fixtures"];
+
+fn is_in_fixture_dir(path: &Path) -> bool {
+    let normalised = path.to_string_lossy().replace('\\', "/");
+    FIXTURE_DIRS.iter().any(|seg| normalised.contains(seg))
+}
+
 /// True if the source carries a `@generated` marker in its leading comments.
 /// Only scans the first 2KB to keep the cost bounded; generators always emit
 /// the marker at the top of the file.
@@ -70,6 +77,12 @@ impl TextCheck for Check {
             return Vec::new();
         }
         if is_generated(ctx.source) {
+            return Vec::new();
+        }
+        if is_in_fixture_dir(ctx.path) {
+            return Vec::new();
+        }
+        if ctx.project.nearest_package_json(ctx.path).is_some_and(|pkg| pkg.is_library) {
             return Vec::new();
         }
 

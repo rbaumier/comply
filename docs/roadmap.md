@@ -1,5 +1,11 @@
 # Roadmap — Comply False Positives (Amadeo audit)
 
+## Review notes
+
+- 2026-04-30 — Toutes les issues `done` listées dans cette roadmap ont été revues avec leur fiche `docs/issues` quand elle existe.
+- Les fiches manquantes `ISS-004` et `ISS-006` ont été créées pour que les entrées `done` de la roadmap aient une trace dans `docs/issues`.
+- Les fiches `ISS-059` à `ISS-062` sont explicitement marquées résolues dans `docs/issues` et sont maintenant reprises dans la roadmap.
+
 ## Batch 1 — Framework detection & graph (high impact)
 
 | ID | Title | Type | Status | Severity | Blocked by | Estimation |
@@ -23,47 +29,56 @@
 | ID | Title | Type | Status | Severity | Blocked by | Estimation |
 |---|---|---|---|---|---|---|
 | ISS-009 | tailwind-classnames-order doublon avec prettier plugin | enhancement | done | low | — | S |
-| ISS-010 | react-jsx-no-jsx-as-prop + règles pédantiques shadcn/Radix | enhancement | done | low | — | M |
+| ISS-010 | react-jsx-no-jsx-as-prop : patterns shadcn/Radix | enhancement | done | low | — | M |
+
+## Batch 3b — Recettage post-merge worktree-fp-hunting
+
+| ID | Title | Type | Status | Severity | Blocked by | Estimation |
+|---|---|---|---|---|---|---|
+| ISS-059 | ts-no-extraneous-class : classes décorées | bug | done | high | — | S |
+| ISS-060 | Classification fichiers : .d.tsx et .d.cts non skippés | bug | done | medium | — | S |
+| ISS-061 | TUI : panic possible sur highlight_cache index out-of-bounds | bug | done | high | — | S |
+| ISS-062 | playwright-no-page-pause : gating incohérent sur tests non-Playwright | bug | done | medium | — | S |
 
 ## Batch 4 — Rust cross-fire & scope fixes (tokio audit)
 
 | ID | Title | Type | Status | Severity | Blocked by | Estimation |
 |---|---|---|---|---|---|---|
-| ISS-063 | ts-no-magic-numbers fire sur fichiers Rust | bug | open | high | — | S |
-| ISS-064 | ts-no-loop-func fire sur closures Rust | bug | open | high | — | S |
-| ISS-065 | no-history-in-comments FP sur "was"/"previously" descriptif | bug | open | high | — | M |
-| ISS-066 | comment-prose-quality sur code examples dans doc comments | bug | open | high | — | M |
-| ISS-067 | inverted-assertion-arguments FP sur Rust assert_eq! | bug | open | medium | — | S |
-| ISS-068 | boolean-naming FP sur noms idiomatiques Rust | enhancement | open | medium | — | S |
-| ISS-069 | rust-no-mutex-in-single-threaded heuristique trop simpliste | bug | open | medium | — | M |
+| ISS-063 | ts-no-magic-numbers fire sur fichiers Rust | bug | done | high | — | S |
+| ISS-064 | ts-no-loop-func fire sur closures Rust | bug | done | high | — | S |
+| ISS-065 | no-history-in-comments FP sur "was"/"previously" descriptif | bug | done | high | — | M |
+| ISS-066 | comment-prose-quality sur code examples dans doc comments | bug | done | high | — | M |
+| ISS-067 | inverted-assertion-arguments FP sur Rust assert_eq! | bug | done | medium | — | S |
+| ISS-068 | boolean-naming FP sur noms idiomatiques Rust | enhancement | done | medium | — | S |
+| ISS-069 | rust-no-mutex-in-single-threaded heuristique trop simpliste | bug | done | medium | — | M |
 
 ## Batch 5 — Nouvelles règles Rust
 
 | ID | Title | Type | Status | Severity | Blocked by | Estimation |
 |---|---|---|---|---|---|---|
-| ISS-070 | rust-no-allow-without-reason : #[allow] sans justification | feature | open | medium | — | M |
-| ISS-071 | rust-prefer-arc-clone : Arc::clone(&x) vs x.clone() | feature | open | low | — | M |
+| ISS-070 | rust-no-allow-without-reason : #[allow] sans justification | feature | done | medium | — | M | medium | — | M |
+| ISS-071 | rust-prefer-arc-clone : Arc::clone(&x) vs x.clone() | feature | done | low | — | M | low | — | M |
 
 ## Batch 6 — TS test-awareness & crash fix (zustand + trpc audit)
 
 | ID | Title | Type | Status | Severity | Blocked by | Estimation |
 |---|---|---|---|---|---|---|
-| ISS-072 | api-response-envelope-consistency crash sur emoji UTF-8 | bug | open | critical | — | S |
-| ISS-073 | testing-no-undefined-mock-var FP sur spy-only mocks | bug | open | medium | — | M |
-| ISS-074 | no-undefined-argument FP dans les matchers d'assertion | bug | open | medium | — | S |
-| ISS-075 | unused-component-prop FP sur fichiers type-test | bug | open | medium | — | S |
-| ISS-076 | no-property-mutation trop strict dans les tests | bug | open | medium | — | M |
-| ISS-077 | consistent-function-scoping FP dans callbacks de test | enhancement | open | low | — | S |
+| ISS-072 | api-response-envelope-consistency crash sur emoji UTF-8 | bug | done | critical | — | S | critical | — | S |
+| ISS-073 | testing-no-undefined-mock-var FP sur spy-only mocks | bug | done | medium | — | M | medium | — | M |
+| ISS-074 | no-undefined-argument FP dans les matchers d'assertion | bug | done | medium | — | S | medium | — | S |
+| ISS-075 | unused-component-prop FP sur fichiers type-test | bug | done | medium | — | S | medium | — | S |
+| ISS-076 | no-property-mutation trop strict dans les tests | bug | done | medium | — | M | medium | — | M |
+| ISS-077 | consistent-function-scoping FP dans callbacks de test | enhancement | done | low | — | S | low | — | S |
 
 ## Batch 7 — Library & monorepo awareness (redux-toolkit audit)
 
 | ID | Title | Type | Status | Severity | Blocked by | Estimation |
 |---|---|---|---|---|---|---|
-| ISS-078 | dead-export/unused-file FP sur API publique de bibliothèque | bug | open | high | — | L |
-| ISS-079 | no-implicit-deps ne résout pas les workspace deps (monorepo) | bug | open | high | — | M |
-| ISS-080 | filename-naming-convention impose kebab-case sur composants React | bug | open | medium | — | S |
-| ISS-081 | exports-last FP sur inline export const/function | bug | open | medium | — | S |
-| ISS-082 | file-extension-in-import FP quand bundler détecté | bug | open | medium | — | M |
+| ISS-078 | dead-export/unused-file FP sur API publique de bibliothèque | bug | done | high | — | L |
+| ISS-079 | no-implicit-deps ne résout pas les workspace deps (monorepo) | bug | done | high | — | M |
+| ISS-080 | filename-naming-convention impose kebab-case sur composants React | bug | done | medium | — | S |
+| ISS-081 | exports-last FP sur inline export const/function | bug | done | medium | — | S |
+| ISS-082 | file-extension-in-import FP quand bundler détecté | bug | done | medium | — | M |
 
 ## Batch 8 — Data-processing & Cargo workspace awareness (polars audit)
 

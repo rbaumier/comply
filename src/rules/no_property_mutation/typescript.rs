@@ -14,6 +14,39 @@ fn root_object_name<'a>(node: tree_sitter::Node<'a>, source: &'a [u8]) -> Option
 }
 
 const TEST_GLOBALS: &[&str] = &["console", "window", "global", "globalThis", "process"];
+const TEST_HOOKS: &[&str] = &["beforeEach", "afterEach", "beforeAll", "afterAll"];
+
+fn is_test_setup_mutation(
+    node: tree_sitter::Node,
+    mutated: tree_sitter::Node,
+    source: &[u8],
+    ctx: &crate::rules::backend::CheckCtx,
+) -> bool {
+    if !ctx.file.path_segments.in_test_dir {
+        return false;
+    }
+    if root_object_name(mutated, source).is_some_and(|name| TEST_GLOBALS.contains(&name)) {
+        return true;
+    }
+    is_inside_test_hook(node, source)
+}
+
+fn is_inside_test_hook(node: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut cur = node.parent();
+    while let Some(parent) = cur {
+        if parent.kind() == "call_expression"
+            && let Some(function) = parent.child_by_field_name("function")
+        {
+            let callee = function.utf8_text(source).unwrap_or("");
+            let name = callee.rsplit('.').next().unwrap_or(callee);
+            if TEST_HOOKS.contains(&name) {
+                return true;
+            }
+        }
+        cur = parent.parent();
+    }
+    false
+}
 
 crate::ast_check! { on ["assignment_expression", "augmented_assignment_expression", "update_expression", "unary_expression"] => |node, source, ctx, diagnostics|
 match node.kind() {
@@ -28,7 +61,7 @@ match node.kind() {
                 .unwrap_or("");
             if obj_text == "module" || obj_text == "exports" { return; }
 
-            if ctx.file.path_segments.in_test_dir && TEST_GLOBALS.contains(&obj_text) { return; }
+            if is_test_setup_mutation(node, left, source, ctx) { return; }
 
             // Allow: ref.current = ... (React useRef pattern)
             let prop_text = left.child_by_field_name("property")
@@ -57,6 +90,7 @@ match node.kind() {
         "update_expression" => {
             let Some(arg) = node.named_child(0) else { return; };
             if !matches!(arg.kind(), "member_expression" | "subscript_expression") { return; }
+            if is_test_setup_mutation(node, arg, source, ctx) { return; }
 
             let pos = node.start_position();
             diagnostics.push(Diagnostic {
@@ -78,6 +112,7 @@ match node.kind() {
 
             let Some(arg) = node.child_by_field_name("argument") else { return; };
             if !matches!(arg.kind(), "member_expression" | "subscript_expression") { return; }
+            if is_test_setup_mutation(node, arg, source, ctx) { return; }
 
             let pos = node.start_position();
             diagnostics.push(Diagnostic {
@@ -99,6 +134,15 @@ mod tests {
     use super::*;
     fn run(code: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_ts(code, &Check)
+    }
+
+    fn run_test(code: &str) -> Vec<Diagnostic> {
+        use crate::rules::file_ctx::{FileCtx, PathSegments};
+        let file = FileCtx {
+            path_segments: PathSegments { in_test_dir: true, ..Default::default() },
+            ..Default::default()
+        };
+        crate::rules::test_helpers::run_ts_with_file_ctx(code, &Check, &file)
     }
 
     #[test]
@@ -170,5 +214,23 @@ mod tests {
     #[test]
     fn still_flags_non_set_mutations() {
         assert_eq!(run("response.statusText = 'OK'").len(), 1);
+    }
+
+    #[test]
+    fn allows_test_global_mutations() {
+        assert!(run_test("console.error = vi.fn();").is_empty());
+        assert!(run_test("window.localStorage = mockStorage;").is_empty());
+        assert!(run_test("globalThis.fetch = vi.fn();").is_empty());
+    }
+
+    #[test]
+    fn allows_mutations_inside_test_hooks() {
+        let src = "beforeEach(() => { store.state = initialState; });";
+        assert!(run_test(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_regular_test_mutations() {
+        assert_eq!(run_test("store.state = nextState;").len(), 1);
     }
 }

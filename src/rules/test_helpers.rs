@@ -95,6 +95,21 @@ pub fn run_tsx(source: &str, check: &dyn AstCheck) -> Vec<Diagnostic> {
     )
 }
 
+#[must_use]
+pub fn run_ts_with_file_ctx(
+    source: &str,
+    check: &dyn AstCheck,
+    file: &FileCtx,
+) -> Vec<Diagnostic> {
+    run_with_grammar_and_file(
+        source,
+        check,
+        tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+        "t.ts",
+        file,
+    )
+}
+
 /// TSX variant that lets the test supply a pre-built `FileCtx`. Use when
 /// the rule consumes `ctx.file.*` (RSC classification, directives,
 /// path segments).

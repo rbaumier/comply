@@ -30,6 +30,10 @@ impl TextCheck for Check {
             return Vec::new();
         }
 
+        if ctx.project.nearest_package_json(ctx.path).is_some_and(|pkg| pkg.is_library) {
+            return Vec::new();
+        }
+
         let entry_points = detect_entry_points(index, ctx.project);
         if entry_points.is_empty() {
             return Vec::new();
@@ -49,6 +53,7 @@ impl TextCheck for Check {
                 || is_config_file(path)
                 || is_test_file(path)
                 || is_in_ui_library(path)
+                || is_in_fixture_dir(path)
             {
                 continue;
             }
@@ -122,6 +127,14 @@ fn is_test_file(path: &Path) -> bool {
 fn is_in_ui_library(path: &Path) -> bool {
     let path_str = path.to_str().unwrap_or("");
     path_str.contains("/components/ui/") || path_str.contains("/lib/ui/")
+}
+
+fn is_in_fixture_dir(path: &Path) -> bool {
+    let path_str = path.to_str().unwrap_or("");
+    path_str.contains("__testfixtures__")
+        || path_str.contains("__fixtures__")
+        || path_str.contains("/fixtures/")
+        || path_str.contains("/test-fixtures/")
 }
 
 #[cfg(test)]

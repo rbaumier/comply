@@ -29,7 +29,9 @@ pub struct Check;
 
 impl crate::rules::backend::AstCheck for Check {
     fn check(&self, ctx: &CheckCtx, _tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
-        if ctx.file.path_segments.in_test_dir { return Vec::new(); }
+        if ctx.file.path_segments.in_test_dir {
+            return Vec::new();
+        }
         let source_type = source_type_for_path(ctx.path);
         with_semantic(ctx.source, source_type, |semantic| {
             let scoping = semantic.scoping();
@@ -274,6 +276,10 @@ mod tests {
         crate::rules::test_helpers::run_ts(source, &Check)
     }
 
+    fn run_on_path(source: &str, path: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_ts_with_path(source, &Check, path)
+    }
+
     #[test]
     fn flags_nested_function_without_capture() {
         let src = "function outer() {\n  const x = 1;\n  function helper(a: number) { return a * 2; }\n  return helper(x);\n}\n";
@@ -352,5 +358,18 @@ mod tests {
         // `b`'s body.
         let src = "function a() {\n  const x = 1;\n  function b() {\n    function c() { return x; }\n    return c();\n  }\n  return b();\n}\n";
         assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn skips_test_files() {
+        use crate::rules::file_ctx::{FileCtx, PathSegments};
+        let src =
+            "function outer() {\n  function helper(a: number) { return a * 2; }\n  return helper(3);\n}";
+        let file = FileCtx {
+            path_segments: PathSegments { in_test_dir: true, ..Default::default() },
+            ..Default::default()
+        };
+        let diags = crate::rules::test_helpers::run_ts_with_file_ctx(src, &Check, &file);
+        assert!(diags.is_empty());
     }
 }

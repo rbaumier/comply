@@ -72,6 +72,9 @@ pub struct PackageJson {
     /// True if `browserslist` is present at any form (array, object, string).
     pub has_browserslist: bool,
     pub workspaces: Vec<String>,
+    /// True if the package declares `main`, `exports`, or `module` — indicators
+    /// that it's an npm library whose exports are consumed externally.
+    pub is_library: bool,
 }
 
 impl PackageJson {
@@ -96,6 +99,9 @@ impl PackageJson {
             optional_dependencies: parse_dep_map(&json, "optionalDependencies"),
             engines: parse_dep_map(&json, "engines"),
             has_browserslist: json.get("browserslist").is_some(),
+            is_library: json.get("main").is_some()
+                || json.get("exports").is_some()
+                || json.get("module").is_some(),
             workspaces: json
                 .get("workspaces")
                 .and_then(|node| node.as_array())

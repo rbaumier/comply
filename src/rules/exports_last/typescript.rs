@@ -9,21 +9,28 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
+fn is_reexport(node: tree_sitter::Node) -> bool {
+    if node.kind() != "export_statement" { return false; }
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if child.kind() == "export_clause" {
+            return true;
+        }
+    }
+    false
+}
+
 crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
     let _ = source;
-    // Collect named top-level children, dropping `comment` nodes — they
-    // are statement-shaped in tree-sitter (named children of `program`)
-    // but conceptually trailing/leading commentary should not break the
-    // "exports at the end" requirement.
     let mut cursor = node.walk();
     let children: Vec<_> = node
         .named_children(&mut cursor)
         .filter(|c| c.kind() != "comment")
         .collect();
 
-    // Find the index of the first non-export statement that appears AFTER any
-    // export. Any export whose index is less than the last non-export index
-    // is misplaced.
+    let has_reexports = children.iter().any(|c| is_reexport(*c));
+    if !has_reexports { return; }
+
     let last_non_export_idx = children
         .iter()
         .enumerate()
@@ -35,12 +42,12 @@ crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
 
     for (i, child) in children.iter().enumerate() {
         if i >= last_non_export_idx { break; }
-        if child.kind() != "export_statement" { continue; }
+        if !is_reexport(*child) { continue; }
         diagnostics.push(Diagnostic::at_node(
             ctx.path,
             child,
             super::META.id,
-            "Export statement is not at the end of the file.".into(),
+            "Re-export statement is not at the end of the file.".into(),
             Severity::Warning,
         ));
     }
@@ -55,16 +62,27 @@ mod tests {
     }
 
     #[test]
-    fn flags_export_before_code() {
+    fn allows_inline_export_before_code() {
         let src = "export const x = 1;\nconst y = 2;\n";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_reexport_before_code() {
+        let src = "export { x };\nconst y = 2;\n";
         let diags = run(src);
         assert_eq!(diags.len(), 1);
-        assert_eq!(diags[0].line, 1);
     }
 
     #[test]
     fn allows_all_exports_at_end() {
         let src = "const y = 2;\nexport const x = 1;\nexport const z = 3;\n";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_inline_exports_only() {
+        let src = "export function a() {}\nconst b = 1;\nexport function c() {}\n";
         assert!(run(src).is_empty());
     }
 
