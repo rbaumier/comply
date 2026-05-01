@@ -6,7 +6,6 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 
 const PAIRS: &[(&str, &str)] = &[
-    ("get_", "set_"),
     ("set_", "get_"),
     ("add_", "remove_"),
     ("remove_", "add_"),
@@ -157,5 +156,19 @@ mod tests {
     fn skips_mut_functions() {
         let src = "pub fn get_conditions_mut() {}\n";
         assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_getter_without_setter() {
+        let src = "pub fn get_name() -> &str {}\npub fn get_id() -> usize {}\n";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_setter_without_getter() {
+        let src = "pub fn set_name(n: &str) {}\n";
+        let d = run_on(src);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("get_name"));
     }
 }
