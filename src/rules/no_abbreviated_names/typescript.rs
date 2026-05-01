@@ -45,6 +45,7 @@ impl AstCheck for Check {
         _state: Option<&mut dyn std::any::Any>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
+        let allowed = ctx.config.string_list("no-abbreviated-names", "allowed");
         let source_bytes = ctx.source.as_bytes();
         let Ok(name) = node.utf8_text(source_bytes) else {
             return;
@@ -52,6 +53,9 @@ impl AstCheck for Check {
         let Some((abbr, full)) = matches_banned(name) else {
             return;
         };
+        if allowed.iter().any(|a| a == abbr) {
+            return;
+        }
         let pos = node.start_position();
         diagnostics.push(Diagnostic {
             path: std::sync::Arc::clone(&ctx.path_arc),

@@ -58,6 +58,21 @@ fn is_documentation_ip(ip: &str) -> bool {
         || ip.starts_with("203.0.113.")
 }
 
+fn is_version_like(line: &str, ip_end: usize, ip_len: usize) -> bool {
+    let bytes = line.as_bytes();
+    let ip_start = ip_end - ip_len;
+    if ip_start > 0 && (bytes[ip_start - 1] == b'v' || bytes[ip_start - 1] == b'V') {
+        return true;
+    }
+    if ip_end < bytes.len()
+        && bytes[ip_end] == b'-'
+        && bytes.get(ip_end + 1).is_some_and(|b| b.is_ascii_alphabetic())
+    {
+        return true;
+    }
+    false
+}
+
 fn is_cidr_notation(line: &str, ip_end: usize) -> bool {
     let bytes = line.as_bytes();
     ip_end < bytes.len()
@@ -96,6 +111,9 @@ impl TextCheck for Check {
             while let Some((next, ip)) = find_ipv4(line, pos) {
                 pos = next;
                 if ALLOWED.contains(&ip.as_str()) || is_documentation_ip(&ip) {
+                    continue;
+                }
+                if is_version_like(line, next, ip.len()) {
                     continue;
                 }
                 if is_cidr_notation(line, next) {
@@ -172,5 +190,15 @@ mod tests {
     #[test]
     fn allows_broadcast() {
         assert!(run(r#"const mask = "255.255.255.255";"#).is_empty());
+    }
+
+    #[test]
+    fn allows_version_with_v_prefix() {
+        assert!(run(r#"let ver = "v3.1.2.0";"#).is_empty());
+    }
+
+    #[test]
+    fn allows_version_with_dash_suffix() {
+        assert!(run(r#"let s = "Zulu 8.40.0.25-CA-linux64";"#).is_empty());
     }
 }

@@ -58,6 +58,9 @@ max = 3
 [rules.nested-control-flow]
 max = 3
 
+[rules.no-abbreviated-names]
+allowed = []
+
 [rules.id-length]
 min = 2
 # Uncomment to allowlist identifiers that are conventional at <2 chars:

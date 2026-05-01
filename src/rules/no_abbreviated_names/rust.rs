@@ -20,11 +20,7 @@ const BANNED_ABBREVIATIONS: &[(&str, &str)] = &[
     ("pwd", "password"),
     ("cnt", "count"),
     ("desc", "description"),
-    // `addr` is intentionally NOT on the list — `std::net::SocketAddr`,
-    // `peer_addr()`, `local_addr()`, `bind_addr` are all standard Rust API.
-    // `tmp` is intentionally NOT on the list — `std::env::temp_dir()`
-    // and `tempfile::NamedTempFile::new()?.path()` are idiomatic Rust
-    // and the `tmp` binding name follows std convention.
+    ("addr", "address"),
 ];
 
 #[derive(Debug)]
@@ -42,8 +38,8 @@ impl AstCheck for Check {
         _state: Option<&mut dyn std::any::Any>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
+        let allowed = ctx.config.string_list("no-abbreviated-names", "allowed");
         let source_bytes = ctx.source.as_bytes();
-        // Only flag at declaration sites.
         let Some(parent) = node.parent() else {
             return;
         };
@@ -59,6 +55,9 @@ impl AstCheck for Check {
         let Some((abbr, full)) = matches_banned(name) else {
             return;
         };
+        if allowed.iter().any(|a| a == abbr) {
+            return;
+        }
         let pos = node.start_position();
         diagnostics.push(Diagnostic {
             path: std::sync::Arc::clone(&ctx.path_arc),
