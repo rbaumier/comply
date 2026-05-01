@@ -106,6 +106,9 @@ impl AstCheck for Check {
                         break;
                     }
                     let expected = format!("{counterpart_pfx}{suffix}");
+                    if pfx == "set_" && names.iter().any(|n| *n == suffix) {
+                        break;
+                    }
                     if !names.iter().any(|n| *n == expected) {
                         diagnostics.push(Diagnostic {
                             path: std::sync::Arc::clone(&ctx.path_arc),
@@ -170,5 +173,11 @@ mod tests {
         let d = run_on(src);
         assert_eq!(d.len(), 1);
         assert!(d[0].message.contains("get_name"));
+    }
+
+    #[test]
+    fn allows_setter_with_bare_getter() {
+        let src = "pub fn opacity(&self) -> f32 {}\npub fn set_opacity(&mut self, v: f32) {}\n";
+        assert!(run_on(src).is_empty());
     }
 }
