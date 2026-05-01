@@ -336,3 +336,19 @@ Note : les ~192 `f` restant sur tokio sont des **function params** de higher-ord
 | `symmetric-pairs` (get→set removed) | clap | 84 | 4 | -80 |
 | `symmetric-pairs` (get→set removed) | starship | 57 | 10 | -47 |
 | **Total session 7** | | | | **~554** |
+
+### Projets scannés (pas de nouveau FP pattern) :
+- axum (435 diags) — id-length, rust-no-allow-without-reason dominants
+- serde (1704) — id-length, rust-impl-debug dominants
+- zustand (542 après fix) — clean
+- jotai (1238 après fix) — clean
+- swr (2125) — no-explicit-any, no-unsafe-* (oxlint TS rules sur JS)
+- trpc (4225) — file-extension-in-import, no-generic-names
+- drizzle-orm (26014) — ts-explicit-member-accessibility, use-type-alias (TPs)
+- ripgrep (1785) — id-length, rust-assert-eq-with-bool-literal (TP)
+- hyper (803) — id-length, rust-no-unwrap
+- clap (906 après fix) — boolean-naming (strict by design)
+- just (768) — standard distribution
+- bat (566) — boolean-naming, number-literal-case
+- zoxide (126) — boolean-naming (strict by design)
+- date-fns (17733) — regex-no-useless-flag (2704 TPs), avoid-importing-barrel-files
