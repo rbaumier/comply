@@ -155,6 +155,7 @@ pub struct Tsconfig {
     pub paths: BTreeMap<String, Vec<String>>,
     pub base_url: Option<PathBuf>,
     pub module: Option<String>,
+    pub module_resolution: Option<String>,
     pub strict: bool,
     pub jsx: Option<String>,
 }
@@ -190,6 +191,10 @@ impl Tsconfig {
                 .map(PathBuf::from),
             module: co
                 .and_then(|x| x.get("module"))
+                .and_then(|s| s.as_str())
+                .map(String::from),
+            module_resolution: co
+                .and_then(|x| x.get("moduleResolution"))
                 .and_then(|s| s.as_str())
                 .map(String::from),
             strict: co
@@ -291,6 +296,10 @@ fn parse_tsconfig_value(json: &Value) -> Tsconfig {
             .and_then(|x| x.get("module"))
             .and_then(|s| s.as_str())
             .map(String::from),
+        module_resolution: co
+            .and_then(|x| x.get("moduleResolution"))
+            .and_then(|s| s.as_str())
+            .map(String::from),
         strict: co
             .and_then(|x| x.get("strict"))
             .and_then(|b| b.as_bool())
@@ -302,11 +311,11 @@ fn parse_tsconfig_value(json: &Value) -> Tsconfig {
     }
 }
 
-/// Overlay `child` onto `parent`. Scalars (`base_url`, `module`, `jsx`) are
-/// taken from the child when present; `paths` are merged key-by-key so
-/// parent-only aliases survive. `strict` defaults to false in
-/// `parse_tsconfig_value`, which means a child that omits the flag inherits
-/// the parent's value here.
+/// Overlay `child` onto `parent`. Scalars (`base_url`, `module`,
+/// `module_resolution`, `jsx`) are taken from the child when present; `paths`
+/// are merged key-by-key so parent-only aliases survive. `strict` defaults to
+/// false in `parse_tsconfig_value`, which means a child that omits the flag
+/// inherits the parent's value here.
 fn merge_tsconfig(parent: Tsconfig, child: Tsconfig) -> Tsconfig {
     let mut paths = parent.paths;
     for (k, v) in child.paths {
@@ -316,6 +325,7 @@ fn merge_tsconfig(parent: Tsconfig, child: Tsconfig) -> Tsconfig {
         paths,
         base_url: child.base_url.or(parent.base_url),
         module: child.module.or(parent.module),
+        module_resolution: child.module_resolution.or(parent.module_resolution),
         strict: child.strict || parent.strict,
         jsx: child.jsx.or(parent.jsx),
     }

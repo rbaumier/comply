@@ -23,6 +23,7 @@ const KNOWN_EXTENSIONS: &[&str] = &[
 const BUNDLER_DEPS: &[&str] = &[
     "vite",
     "webpack",
+    "next",
     "esbuild",
     "parcel",
     "rollup",
@@ -34,6 +35,27 @@ const BUNDLER_DEPS: &[&str] = &[
     "bun",
     "@swc/core",
     "tsup",
+];
+
+const BUNDLER_CONFIG_FILES: &[&str] = &[
+    "vite.config.ts",
+    "vite.config.js",
+    "vite.config.mts",
+    "vite.config.mjs",
+    "vite.config.cts",
+    "vite.config.cjs",
+    "webpack.config.ts",
+    "webpack.config.js",
+    "webpack.config.mts",
+    "webpack.config.mjs",
+    "webpack.config.cts",
+    "webpack.config.cjs",
+    "next.config.ts",
+    "next.config.js",
+    "next.config.mjs",
+    "next.config.cjs",
+    "turbopack.config.ts",
+    "turbopack.config.js",
 ];
 
 fn has_known_extension(spec: &str) -> bool {
@@ -52,10 +74,27 @@ fn is_relative(spec: &str) -> bool {
 /// extensionless imports natively. Walks up to the nearest `package.json` and
 /// checks every dep section.
 fn project_uses_bundler(ctx: &crate::rules::backend::CheckCtx) -> bool {
-    let Some(pkg) = ctx.project.nearest_package_json(ctx.path) else {
-        return false;
-    };
-    BUNDLER_DEPS.iter().any(|dep| pkg.has_dep_or_engine(dep))
+    if let Some(pkg) = ctx.project.nearest_package_json(ctx.path)
+        && (BUNDLER_DEPS.iter().any(|dep| pkg.has_dep_or_engine(dep))
+            || pkg.all_deps().any(|dep| dep.starts_with("@vitejs/")))
+    {
+        return true;
+    }
+    has_bundler_config(ctx.path)
+}
+
+fn has_bundler_config(path: &std::path::Path) -> bool {
+    let mut dir = path.parent();
+    while let Some(d) = dir {
+        if BUNDLER_CONFIG_FILES
+            .iter()
+            .any(|name| d.join(name).is_file())
+        {
+            return true;
+        }
+        dir = d.parent();
+    }
+    false
 }
 
 /// True when `tsconfig.json` declares `moduleResolution: "bundler"` (or any
@@ -66,7 +105,7 @@ fn tsconfig_uses_bundler_resolution(ctx: &crate::rules::backend::CheckCtx) -> bo
     let Some(ts) = ctx.project.nearest_tsconfig(ctx.path) else {
         return false;
     };
-    ts.module
+    ts.module_resolution
         .as_deref()
         .is_some_and(|m| m.eq_ignore_ascii_case("bundler"))
 }
@@ -140,6 +179,24 @@ mod tests {
         if let Some(tc) = tsconfig_json {
             fs::write(dir.path().join("tsconfig.json"), tc).unwrap();
         }
+        let file_path = dir.path().join("src/server.ts");
+        fs::create_dir_all(file_path.parent().unwrap()).unwrap();
+        fs::write(&file_path, source).unwrap();
+        let lang = Language::from_path(&file_path).unwrap();
+        let source_file = SourceFile {
+            path: file_path.clone(),
+            language: lang,
+        };
+        let refs = vec![&source_file];
+        let config = Config::default();
+        let project = ProjectCtx::load(&refs, &config);
+        let canon = fs::canonicalize(&file_path).unwrap();
+        run_ts_with_project_and_path(source, &Check, &project, &canon)
+    }
+
+    fn run_with_config_file(config_file: &str, source: &str) -> Vec<Diagnostic> {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join(config_file), "").unwrap();
         let file_path = dir.path().join("src/server.ts");
         fs::create_dir_all(file_path.parent().unwrap()).unwrap();
         fs::write(&file_path, source).unwrap();
@@ -263,12 +320,41 @@ mod tests {
     }
 
     #[test]
+    fn skips_when_vite_config_present() {
+        let d = run_with_config_file("vite.config.ts", "import { foo } from './utils';");
+        assert!(
+            d.is_empty(),
+            "vite config resolves extensionless imports: {d:?}"
+        );
+    }
+
+    #[test]
+    fn skips_when_next_config_present() {
+        let d = run_with_config_file("next.config.js", "import { foo } from './utils';");
+        assert!(
+            d.is_empty(),
+            "next config resolves extensionless imports: {d:?}"
+        );
+    }
+
+    #[test]
     fn skips_when_tsconfig_module_resolution_bundler() {
-        let tsc = r#"{"compilerOptions":{"module":"bundler"}}"#;
+        let tsc = r#"{"compilerOptions":{"moduleResolution":"bundler"}}"#;
         let d = run_with_project(None, Some(tsc), "import { foo } from './utils';");
         assert!(
             d.is_empty(),
             "tsconfig moduleResolution=bundler should skip: {d:?}"
+        );
+    }
+
+    #[test]
+    fn does_not_skip_when_only_module_is_bundler() {
+        let tsc = r#"{"compilerOptions":{"module":"bundler"}}"#;
+        let d = run_with_project(None, Some(tsc), "import { foo } from './utils';");
+        assert_eq!(
+            d.len(),
+            1,
+            "compilerOptions.module is not the moduleResolution setting"
         );
     }
 

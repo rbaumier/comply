@@ -36,9 +36,24 @@ fn is_composable_name(stem: &str) -> bool {
 }
 
 fn is_pascal_case(stem: &str) -> bool {
-    if stem.is_empty() { return false; }
+    if stem.is_empty() {
+        return false;
+    }
     let bytes = stem.as_bytes();
-    if !bytes[0].is_ascii_uppercase() { return false; }
+    if !bytes[0].is_ascii_uppercase() {
+        return false;
+    }
+    bytes.iter().all(|&b| b.is_ascii_alphanumeric())
+}
+
+fn is_camel_case(stem: &str) -> bool {
+    if stem.is_empty() {
+        return false;
+    }
+    let bytes = stem.as_bytes();
+    if !bytes[0].is_ascii_lowercase() {
+        return false;
+    }
     bytes.iter().all(|&b| b.is_ascii_alphanumeric())
 }
 
@@ -62,7 +77,7 @@ impl TextCheck for Check {
         if is_composable_name(stem) {
             return Vec::new();
         }
-        if is_ts_or_jsx_file(ctx.path) && is_pascal_case(stem) {
+        if is_ts_or_jsx_file(ctx.path) && (is_pascal_case(stem) || is_camel_case(stem)) {
             return Vec::new();
         }
         vec![Diagnostic {
@@ -102,8 +117,13 @@ mod tests {
     }
 
     #[test]
-    fn flags_camel_case_ts() {
-        assert_eq!(run("src/userProfile.ts").len(), 1);
+    fn allows_camel_case_ts() {
+        assert!(run("src/userProfile.ts").is_empty());
+    }
+
+    #[test]
+    fn allows_camel_case_js() {
+        assert!(run("src/dynamicMiddleware.js").is_empty());
     }
 
     #[test]
@@ -142,7 +162,7 @@ mod tests {
     }
 
     #[test]
-    fn flags_non_composable_camel_case() {
-        assert_eq!(run("src/externalLinks.ts").len(), 1);
+    fn allows_non_composable_camel_case() {
+        assert!(run("src/externalLinks.ts").is_empty());
     }
 }

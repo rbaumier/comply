@@ -6,7 +6,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 const KINDS: &[&str] = &["enum_item"];
 
@@ -57,16 +57,76 @@ impl AstCheck for Check {
 }
 
 fn is_internal_crate(path: &Path) -> bool {
+    let Some(manifest) = nearest_manifest(path) else {
+        return false;
+    };
+    let Ok(content) = std::fs::read_to_string(&manifest) else {
+        return false;
+    };
+    let Ok(value) = content.parse::<toml::Value>() else {
+        return false;
+    };
+
+    if !value.get("package").is_some_and(toml::Value::is_table) {
+        return true;
+    }
+    if publish_is_disabled(&value) {
+        return true;
+    }
+
+    let Some(workspace_manifest) = nearest_workspace_manifest(path, &manifest) else {
+        return false;
+    };
+    if workspace_manifest == manifest {
+        return false;
+    }
+
+    !publish_is_explicitly_enabled(&value)
+}
+
+fn nearest_manifest(path: &Path) -> Option<PathBuf> {
     let mut dir = path.parent();
     while let Some(d) = dir {
         let cargo_toml = d.join("Cargo.toml");
-        if let Ok(content) = std::fs::read_to_string(&cargo_toml) {
-            return content.contains("publish = false")
-                || content.contains("publish = []");
+        if cargo_toml.is_file() {
+            return Some(cargo_toml);
         }
         dir = d.parent();
     }
-    false
+    None
+}
+
+fn nearest_workspace_manifest(path: &Path, nearest: &Path) -> Option<PathBuf> {
+    let mut dir = path.parent();
+    while let Some(d) = dir {
+        let cargo_toml = d.join("Cargo.toml");
+        if cargo_toml != nearest
+            && let Ok(content) = std::fs::read_to_string(&cargo_toml)
+            && let Ok(value) = content.parse::<toml::Value>()
+            && value.get("workspace").is_some_and(toml::Value::is_table)
+        {
+            return Some(cargo_toml);
+        }
+        dir = d.parent();
+    }
+    None
+}
+
+fn publish_is_disabled(value: &toml::Value) -> bool {
+    let Some(publish) = value.get("package").and_then(|p| p.get("publish")) else {
+        return false;
+    };
+    publish.as_bool() == Some(false) || publish.as_array().is_some_and(|items| items.is_empty())
+}
+
+fn publish_is_explicitly_enabled(value: &toml::Value) -> bool {
+    let Some(publish) = value.get("package").and_then(|p| p.get("publish")) else {
+        return false;
+    };
+    publish.as_bool() == Some(true)
+        || publish
+            .as_array()
+            .is_some_and(|registries| !registries.is_empty())
 }
 
 fn is_pub(item: tree_sitter::Node, source: &[u8]) -> bool {
@@ -110,6 +170,8 @@ fn has_non_exhaustive(item: tree_sitter::Node, source: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use tempfile::TempDir;
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_rust(source, &Check)
@@ -139,5 +201,74 @@ mod tests {
     #[test]
     fn does_not_flag_pub_super_enum() {
         assert!(run_on("pub(super) enum Status { Ok, Err }").is_empty());
+    }
+
+    #[test]
+    fn treats_publish_false_crate_as_internal() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"internal\"\nversion = \"0.1.0\"\npublish = false\n",
+        )
+        .unwrap();
+
+        assert!(is_internal_crate(&dir.path().join("src/lib.rs")));
+    }
+
+    #[test]
+    fn treats_workspace_member_without_publish_true_as_internal() {
+        let dir = TempDir::new().unwrap();
+        let member = dir.path().join("crates/internal");
+        fs::create_dir_all(&member).unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"crates/internal\"]\n",
+        )
+        .unwrap();
+        fs::write(
+            member.join("Cargo.toml"),
+            "[package]\nname = \"internal\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+
+        assert!(is_internal_crate(&member.join("src/lib.rs")));
+    }
+
+    #[test]
+    fn treats_workspace_member_with_publish_true_as_public() {
+        let dir = TempDir::new().unwrap();
+        let member = dir.path().join("crates/public-api");
+        fs::create_dir_all(&member).unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"crates/public-api\"]\n",
+        )
+        .unwrap();
+        fs::write(
+            member.join("Cargo.toml"),
+            "[package]\nname = \"public-api\"\nversion = \"0.1.0\"\npublish = true\n",
+        )
+        .unwrap();
+
+        assert!(!is_internal_crate(&member.join("src/lib.rs")));
+    }
+
+    #[test]
+    fn treats_workspace_member_with_publish_registry_as_public() {
+        let dir = TempDir::new().unwrap();
+        let member = dir.path().join("crates/public-api");
+        fs::create_dir_all(&member).unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"crates/public-api\"]\n",
+        )
+        .unwrap();
+        fs::write(
+            member.join("Cargo.toml"),
+            "[package]\nname = \"public-api\"\nversion = \"0.1.0\"\npublish = [\"crates-io\"]\n",
+        )
+        .unwrap();
+
+        assert!(!is_internal_crate(&member.join("src/lib.rs")));
     }
 }

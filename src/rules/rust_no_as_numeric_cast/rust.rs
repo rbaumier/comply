@@ -1,11 +1,10 @@
 //! rust-no-as-numeric-cast backend.
 //!
 //! Walks `type_cast_expression` nodes (the `expr as Type` syntax) and
-//! flags any cast whose destination type is a numeric primitive. This
-//! is deliberately stricter than `rust-no-lossy-as-cast`: even casts
-//! that are trivially safe at the type level (e.g. `u8 as u64`) are
-//! reported, because `From::from` documents the widening intent and
-//! keeps future refactors honest.
+//! flags casts whose destination type is a numeric primitive and whose
+//! source/target pair can silently narrow, wrap, or lose precision.
+//! Widening integer casts with the same signedness are allowed when the
+//! source type is locally obvious.
 //!
 //! Tests are exempted — fuzz / numeric scaffolding inside `#[test]`
 //! functions or `#[cfg(test)]` modules doesn't need this discipline.
@@ -18,15 +17,23 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::rust_helpers::is_in_test_context;
 
-const NUMERIC_TARGETS: &[&str] = &[
-    "u8", "u16", "u32", "u64", "u128", "i8", "i16", "i32", "i64", "i128", "usize", "isize", "f32",
-    "f64",
-];
-
 const KINDS: &[&str] = &["type_cast_expression"];
 
 #[derive(Debug)]
 pub struct Check;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum NumericKind {
+    Unsigned,
+    Signed,
+    Float,
+}
+
+#[derive(Clone, Copy)]
+struct NumericType {
+    kind: NumericKind,
+    bits: u16,
+}
 
 impl AstCheck for Check {
     fn interested_kinds(&self) -> Option<&'static [&'static str]> {
@@ -48,9 +55,9 @@ impl AstCheck for Check {
             return;
         };
         let target = target_raw.trim();
-        if !NUMERIC_TARGETS.contains(&target) {
+        let Some(target_type) = numeric_type(target) else {
             return;
-        }
+        };
         if target == "usize" || target == "isize" {
             return;
         }
@@ -58,6 +65,11 @@ impl AstCheck for Check {
             return;
         }
         if is_literal_cast(node, source_bytes) {
+            return;
+        }
+        if let Some(source_type) = source_numeric_type(node, source_bytes)
+            && !is_dangerous_cast(source_type, target_type)
+        {
             return;
         }
         let pos = node.start_position();
@@ -69,13 +81,103 @@ impl AstCheck for Check {
             message: format!(
                 "`as {target}` masks overflow + precision semantics. Use \
                  `{target}::from(x)` for widening-safe casts or \
-                 `{target}::try_from(x)?` for narrowing. Even on widening, \
-                 `From` makes the conversion explicit and greppable."
+                 `{target}::try_from(x)?` for fallible narrowing."
             ),
             severity: Severity::Warning,
             span: None,
         });
     }
+}
+
+fn numeric_type(type_text: &str) -> Option<NumericType> {
+    let (kind, bits) = match type_text.trim() {
+        "u8" => (NumericKind::Unsigned, 8),
+        "u16" => (NumericKind::Unsigned, 16),
+        "u32" => (NumericKind::Unsigned, 32),
+        "u64" => (NumericKind::Unsigned, 64),
+        "u128" => (NumericKind::Unsigned, 128),
+        "usize" => (NumericKind::Unsigned, usize::BITS as u16),
+        "i8" => (NumericKind::Signed, 8),
+        "i16" => (NumericKind::Signed, 16),
+        "i32" => (NumericKind::Signed, 32),
+        "i64" => (NumericKind::Signed, 64),
+        "i128" => (NumericKind::Signed, 128),
+        "isize" => (NumericKind::Signed, usize::BITS as u16),
+        "f32" => (NumericKind::Float, 32),
+        "f64" => (NumericKind::Float, 64),
+        _ => return None,
+    };
+    Some(NumericType { kind, bits })
+}
+
+fn is_dangerous_cast(source: NumericType, target: NumericType) -> bool {
+    if source.kind == target.kind && source.kind != NumericKind::Float {
+        return target.bits < source.bits;
+    }
+    true
+}
+
+fn source_numeric_type(node: tree_sitter::Node, source: &[u8]) -> Option<NumericType> {
+    let value = node.child_by_field_name("value")?;
+    if value.kind() != "identifier" {
+        return None;
+    }
+    let name = value.utf8_text(source).ok()?;
+    let type_text = find_identifier_type(node, name, source)?;
+    numeric_type(&type_text)
+}
+
+fn find_identifier_type(node: tree_sitter::Node, name: &str, source: &[u8]) -> Option<String> {
+    let mut current = Some(node);
+    while let Some(n) = current {
+        if matches!(
+            n.kind(),
+            "function_item" | "closure_expression" | "block" | "source_file"
+        ) && let Some(found) = find_binding_type_before(n, node.start_byte(), name, source)
+        {
+            return Some(found);
+        }
+        current = n.parent();
+    }
+    None
+}
+
+fn find_binding_type_before(
+    node: tree_sitter::Node,
+    limit: usize,
+    name: &str,
+    source: &[u8],
+) -> Option<String> {
+    if node.start_byte() >= limit {
+        return None;
+    }
+    if matches!(node.kind(), "parameter" | "let_declaration")
+        && let Some(pattern) = node.child_by_field_name("pattern")
+        && pattern_contains_identifier(pattern, name, source)
+        && let Some(type_node) = node.child_by_field_name("type")
+        && let Ok(type_text) = type_node.utf8_text(source)
+    {
+        return Some(type_text.trim().to_string());
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if let Some(found) = find_binding_type_before(child, limit, name, source) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+fn pattern_contains_identifier(pattern: tree_sitter::Node, name: &str, source: &[u8]) -> bool {
+    if pattern.kind() == "identifier" {
+        return pattern.utf8_text(source).is_ok_and(|text| text == name);
+    }
+
+    let mut cursor = pattern.walk();
+    pattern
+        .children(&mut cursor)
+        .any(|child| pattern_contains_identifier(child, name, source))
 }
 
 fn is_literal_cast(node: tree_sitter::Node, source: &[u8]) -> bool {
@@ -97,8 +199,13 @@ mod tests {
     }
 
     #[test]
-    fn flags_widening_u8_to_u64() {
-        assert_eq!(run_on("fn f(x: u8) -> u64 { x as u64 }").len(), 1);
+    fn allows_widening_u8_to_u64() {
+        assert!(run_on("fn f(x: u8) -> u64 { x as u64 }").is_empty());
+    }
+
+    #[test]
+    fn allows_widening_i32_to_i64() {
+        assert!(run_on("fn f(x: i32) -> i64 { x as i64 }").is_empty());
     }
 
     #[test]
@@ -109,6 +216,16 @@ mod tests {
     #[test]
     fn flags_float_cast() {
         assert_eq!(run_on("fn f(x: i32) -> f64 { x as f64 }").len(), 1);
+    }
+
+    #[test]
+    fn flags_signed_to_unsigned() {
+        assert_eq!(run_on("fn f(x: i32) -> u32 { x as u32 }").len(), 1);
+    }
+
+    #[test]
+    fn flags_unknown_source_type_conservatively() {
+        assert_eq!(run_on("fn f(x: MyInt) -> u64 { x as u64 }").len(), 1);
     }
 
     #[test]

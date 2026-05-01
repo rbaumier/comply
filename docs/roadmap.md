@@ -56,19 +56,19 @@
 
 | ID | Title | Type | Status | Severity | Blocked by | Estimation |
 |---|---|---|---|---|---|---|
-| ISS-070 | rust-no-allow-without-reason : #[allow] sans justification | feature | done | medium | — | M | medium | — | M |
-| ISS-071 | rust-prefer-arc-clone : Arc::clone(&x) vs x.clone() | feature | done | low | — | M | low | — | M |
+| ISS-070 | rust-no-allow-without-reason : #[allow] sans justification | feature | done | medium | — | M |
+| ISS-071 | rust-prefer-arc-clone : Arc::clone(&x) vs x.clone() | feature | done | low | — | M |
 
 ## Batch 6 — TS test-awareness & crash fix (zustand + trpc audit)
 
 | ID | Title | Type | Status | Severity | Blocked by | Estimation |
 |---|---|---|---|---|---|---|
-| ISS-072 | api-response-envelope-consistency crash sur emoji UTF-8 | bug | done | critical | — | S | critical | — | S |
-| ISS-073 | testing-no-undefined-mock-var FP sur spy-only mocks | bug | done | medium | — | M | medium | — | M |
-| ISS-074 | no-undefined-argument FP dans les matchers d'assertion | bug | done | medium | — | S | medium | — | S |
-| ISS-075 | unused-component-prop FP sur fichiers type-test | bug | done | medium | — | S | medium | — | S |
-| ISS-076 | no-property-mutation trop strict dans les tests | bug | done | medium | — | M | medium | — | M |
-| ISS-077 | consistent-function-scoping FP dans callbacks de test | enhancement | done | low | — | S | low | — | S |
+| ISS-072 | api-response-envelope-consistency crash sur emoji UTF-8 | bug | done | critical | — | S |
+| ISS-073 | testing-no-undefined-mock-var FP sur spy-only mocks | bug | done | medium | — | M |
+| ISS-074 | no-undefined-argument FP dans les matchers d'assertion | bug | done | medium | — | S |
+| ISS-075 | unused-component-prop FP sur fichiers type-test | bug | done | medium | — | S |
+| ISS-076 | no-property-mutation trop strict dans les tests | bug | done | medium | — | M |
+| ISS-077 | consistent-function-scoping FP dans callbacks de test | enhancement | done | low | — | S |
 
 ## Batch 7 — Library & monorepo awareness (redux-toolkit audit)
 
