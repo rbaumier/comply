@@ -6,7 +6,6 @@ pub struct Check;
 
 /// Symmetric prefix pairs: (prefix, expected counterpart prefix).
 const PAIRS: &[(&str, &str)] = &[
-    ("get", "set"),
     ("set", "get"),
     ("add", "remove"),
     ("remove", "add"),
@@ -153,7 +152,9 @@ impl TextCheck for Check {
                     .map(|(_, c)| *c)
                     .collect();
 
-                // Check if any counterpart exists
+                if counterparts.is_empty() {
+                    continue;
+                }
                 let has_pair = counterparts.iter().any(|cp| {
                     let expected = format!("{cp}{suffix}");
                     names.contains(&expected.as_str())

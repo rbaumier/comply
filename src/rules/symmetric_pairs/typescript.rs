@@ -9,7 +9,6 @@ use crate::diagnostic::{Diagnostic, Severity};
 
 /// Symmetric prefix pairs: (prefix, expected counterpart prefix).
 const PAIRS: &[(&str, &str)] = &[
-    ("get", "set"),
     ("set", "get"),
     ("add", "remove"),
     ("remove", "add"),
@@ -76,6 +75,9 @@ crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
                 .map(|(_, c)| *c)
                 .collect();
 
+            if counterparts.is_empty() {
+                continue;
+            }
             let has_pair = counterparts.iter().any(|cp| {
                 let expected = format!("{cp}{suffix}");
                 names.contains(&expected.as_str())
@@ -112,16 +114,15 @@ mod tests {
     }
 
     #[test]
-    fn flags_get_without_set() {
-        let d = run_on("export function getFoo() {}");
-        assert_eq!(d.len(), 1);
-        assert!(d[0].message.contains("setFoo"));
+    fn allows_getter_without_setter() {
+        assert!(run_on("export function getFoo() {}").is_empty());
     }
 
     #[test]
-    fn allows_get_with_set() {
-        let src = "export function getFoo() {}\nexport function setFoo() {}";
-        assert!(run_on(src).is_empty());
+    fn flags_setter_without_getter() {
+        let d = run_on("export function setFoo() {}");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("getFoo"));
     }
 
     #[test]
