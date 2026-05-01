@@ -84,10 +84,10 @@ pub(super) fn collect_diagnostics(
     if ctx.file.path_segments.in_test_dir {
         return Vec::new();
     }
-    let min_length = ctx.config.threshold("no-duplicate-string", "min_length");
+    let min_length = ctx.config.threshold("no-duplicate-string", "min_length", ctx.lang);
     let min_occurrences = ctx
         .config
-        .threshold("no-duplicate-string", "min_occurrences");
+        .threshold("no-duplicate-string", "min_occurrences", ctx.lang);
 
     let source_bytes = ctx.source.as_bytes();
     let is_rust = kinds.iter().any(|k| *k == "string_literal");

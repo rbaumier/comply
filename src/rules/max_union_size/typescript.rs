@@ -30,7 +30,7 @@ crate::ast_check! { on ["union_type"] => |node, source, ctx, diagnostics|
         return;
     }
 
-    let max = ctx.config.threshold("max-union-size", "max");
+    let max = ctx.config.threshold("max-union-size", "max", ctx.lang);
     let count = count_union_members(node) as usize;
 
     if count > max {

@@ -27,7 +27,7 @@ crate::ast_check! { on ["call_expression"] prefilter = ["toMatchInlineSnapshot",
         return;
     }
 
-    let max = ctx.config.threshold("no-large-snapshots", "max_lines");
+    let max = ctx.config.threshold("no-large-snapshots", "max_lines", ctx.lang);
     let start = first.start_position().row;
     let end = first.end_position().row;
     let line_count = end.saturating_sub(start) + 1;

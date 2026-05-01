@@ -76,7 +76,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
     }
     let Some(callback) = args.named_child(arg_count - 1) else { return };
 
-    let max_expects = ctx.config.threshold("playwright-max-expects", "max");
+    let max_expects = ctx.config.threshold("playwright-max-expects", "max", ctx.lang);
     let count = count_expects(callback, source);
     if count > max_expects {
         let pos = node.start_position();

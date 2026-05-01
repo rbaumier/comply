@@ -27,10 +27,10 @@ impl AstCheck for Check {
     ) {
         let max_comment_tokens = ctx
             .config
-            .threshold("comment-paraphrases-code", "max_comment_tokens");
+            .threshold("comment-paraphrases-code", "max_comment_tokens", ctx.lang);
         let overlap_threshold =
             ctx.config
-                .float("comment-paraphrases-code", "overlap_threshold") as f32;
+                .float("comment-paraphrases-code", "overlap_threshold", ctx.lang) as f32;
         let source = ctx.source.as_bytes();
         let Some(name_node) = node.child_by_field_name("name") else {
             return;

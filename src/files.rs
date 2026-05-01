@@ -76,6 +76,26 @@ pub enum Language {
 }
 
 impl Language {
+    /// Short suffix used as the language qualifier in per-language config
+    /// keys, e.g. `[rules."id-length.ts"]`. Matches the canonical file
+    /// extension for the language.
+    pub fn config_suffix(self) -> &'static str {
+        match self {
+            Language::TypeScript => "ts",
+            Language::Tsx => "tsx",
+            Language::JavaScript => "js",
+            Language::Rust => "rs",
+            Language::Vue => "vue",
+            Language::Toml => "toml",
+            Language::Json => "json",
+            Language::Css => "css",
+            Language::Yaml => "yaml",
+            Language::Dockerfile => "dockerfile",
+            Language::Sql => "sql",
+            Language::GraphQl => "graphql",
+        }
+    }
+
     /// True if the language is a TypeScript/JavaScript variant — used by the
     /// orchestrator to dispatch to oxlint.
     pub fn is_typescript_family(self) -> bool {

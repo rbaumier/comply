@@ -38,7 +38,7 @@ impl AstCheck for Check {
         _state: Option<&mut dyn std::any::Any>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
-        let allowed = ctx.config.string_list("no-abbreviated-names", "allowed");
+        let allowed = ctx.config.string_list("no-abbreviated-names", "allowed", ctx.lang);
         let source_bytes = ctx.source.as_bytes();
         let Some(parent) = node.parent() else {
             return;

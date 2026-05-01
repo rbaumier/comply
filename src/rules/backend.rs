@@ -24,6 +24,7 @@ use crate::config::Config;
 #[cfg(test)]
 use crate::config::default_static_config;
 use crate::diagnostic::Diagnostic;
+use crate::files::Language;
 use crate::project::ProjectCtx;
 use crate::rules::file_ctx::FileCtx;
 use std::path::Path;
@@ -47,6 +48,7 @@ pub struct CheckCtx<'a> {
     pub config: &'a Config,
     pub project: &'a ProjectCtx,
     pub file: &'a FileCtx,
+    pub lang: Language,
 }
 
 impl<'a> CheckCtx<'a> {
@@ -57,6 +59,7 @@ impl<'a> CheckCtx<'a> {
     /// themselves, they don't require a pre-loaded root.
     #[cfg(test)]
     pub fn for_test(path: &'a Path, source: &'a str) -> Self {
+        let lang = Language::from_path(path).unwrap_or(Language::TypeScript);
         Self {
             path,
             path_arc: Arc::from(path),
@@ -64,6 +67,7 @@ impl<'a> CheckCtx<'a> {
             config: default_static_config(),
             project: crate::project::default_static_project_ctx(),
             file: crate::rules::file_ctx::default_static_file_ctx(),
+            lang,
         }
     }
 
@@ -73,6 +77,7 @@ impl<'a> CheckCtx<'a> {
     #[cfg(test)]
     #[allow(dead_code)] // Chantier #2+ rules adopt this as they migrate.
     pub fn for_test_with_project(path: &'a Path, source: &'a str, project: &'a ProjectCtx) -> Self {
+        let lang = Language::from_path(path).unwrap_or(Language::TypeScript);
         Self {
             path,
             path_arc: Arc::from(path),
@@ -80,6 +85,7 @@ impl<'a> CheckCtx<'a> {
             config: default_static_config(),
             project,
             file: crate::rules::file_ctx::default_static_file_ctx(),
+            lang,
         }
     }
 
@@ -91,6 +97,7 @@ impl<'a> CheckCtx<'a> {
         source: &'a str,
         file: &'a crate::rules::file_ctx::FileCtx,
     ) -> Self {
+        let lang = Language::from_path(path).unwrap_or(Language::TypeScript);
         Self {
             path,
             path_arc: Arc::from(path),
@@ -98,6 +105,7 @@ impl<'a> CheckCtx<'a> {
             config: default_static_config(),
             project: crate::project::default_static_project_ctx(),
             file,
+            lang,
         }
     }
 
@@ -110,6 +118,7 @@ impl<'a> CheckCtx<'a> {
         project: &'a ProjectCtx,
         file: &'a crate::rules::file_ctx::FileCtx,
     ) -> Self {
+        let lang = Language::from_path(path).unwrap_or(Language::TypeScript);
         Self {
             path,
             path_arc: Arc::from(path),
@@ -117,6 +126,7 @@ impl<'a> CheckCtx<'a> {
             config: default_static_config(),
             project,
             file,
+            lang,
         }
     }
 }

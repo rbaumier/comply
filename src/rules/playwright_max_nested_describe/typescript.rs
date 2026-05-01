@@ -77,7 +77,7 @@ crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
     }
 
     // Only trigger on the root program node to avoid double counting.
-    let max_depth = ctx.config.threshold("playwright-max-nested-describe", "max");
+    let max_depth = ctx.config.threshold("playwright-max-nested-describe", "max", ctx.lang);
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         check_describe_depth(child, source, 0, max_depth, ctx, diagnostics);

@@ -16,10 +16,10 @@ impl AstCheck for Check {
         if blocks.is_empty() {
             return Vec::new();
         }
-        let min_length = ctx.config.threshold("no-duplicate-string", "min_length");
+        let min_length = ctx.config.threshold("no-duplicate-string", "min_length", ctx.lang);
         let min_occurrences = ctx
             .config
-            .threshold("no-duplicate-string", "min_occurrences");
+            .threshold("no-duplicate-string", "min_occurrences", ctx.lang);
         // Count occurrences across ALL <script> blocks of this SFC so
         // a string used in both the regular `<script>` and in
         // `<script setup>` counts as two.

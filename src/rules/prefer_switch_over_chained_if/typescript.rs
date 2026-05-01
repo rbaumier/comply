@@ -34,7 +34,7 @@ impl AstCheck for Check {
     ) {
         let min_arms = ctx
             .config
-            .threshold("prefer-switch-over-chained-if", "min_arms");
+            .threshold("prefer-switch-over-chained-if", "min_arms", ctx.lang);
         // Only count chain roots — skip nested if-statements that are
         // themselves the else-branch of another if.
         if is_else_branch(node) {

@@ -38,8 +38,8 @@ impl TextCheck for Check {
             return Vec::new();
         }
 
-        let threshold_percent = ctx.config.threshold(RULE_ID, "threshold_percent");
-        let min_importers = ctx.config.threshold(RULE_ID, "min_importers");
+        let threshold_percent = ctx.config.threshold(RULE_ID, "threshold_percent", ctx.lang);
+        let min_importers = ctx.config.threshold(RULE_ID, "min_importers", ctx.lang);
 
         let canon = std::fs::canonicalize(ctx.path).unwrap_or_else(|_| ctx.path.to_path_buf());
         let importers = index.get_importers(&canon);
@@ -114,7 +114,7 @@ mod tests {
             source: &source,
             config: &config,
             project: &project,
-            file: &file_ctx,
+            file: &file_ctx, lang: crate::files::Language::TypeScript,
         };
         let diags = Check.check(&ctx);
         (dir, diags)

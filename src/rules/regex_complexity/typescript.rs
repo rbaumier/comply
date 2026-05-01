@@ -32,7 +32,7 @@ fn complexity_score(pattern: &str) -> usize {
 
 crate::ast_check! { |node, source, ctx, diagnostics|
     let Some((pattern, _flags)) = pattern_and_flags(&node, source) else { return };
-    let threshold = ctx.config.threshold("regex-complexity", "max");
+    let threshold = ctx.config.threshold("regex-complexity", "max", ctx.lang);
     let score = complexity_score(pattern);
     if score <= threshold {
         return;

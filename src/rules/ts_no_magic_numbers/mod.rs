@@ -1,6 +1,5 @@
-//! no-magic-numbers — disallow magic numbers.
+//! no-magic-numbers — disallow magic numbers in TS/JS.
 
-mod rust;
 mod typescript;
 
 use crate::diagnostic::Severity;
@@ -9,7 +8,7 @@ use crate::rules::meta::RuleMeta;
 
 pub const META: RuleMeta = RuleMeta {
     id: "no-magic-numbers",
-    description: "Magic numbers make code harder to understand — use named constants instead.",
+    description: "Magic numbers in TS/JS make code harder to understand — use named constants instead.",
     remediation: "Extract the number into a named `const`. TS enums, numeric literal types, `readonly` properties, and common values (0, 1, -1) are allowed.",
     severity: Severity::Warning,
     doc_url: Some("https://typescript-eslint.io/rules/no-magic-numbers"),
@@ -17,5 +16,5 @@ pub const META: RuleMeta = RuleMeta {
 };
 
 pub fn register() -> RuleDef {
-    crate::register_ts_family_with_rust!(META, typescript, rust)
+    crate::register_ts_family!(META, typescript)
 }

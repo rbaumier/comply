@@ -10,7 +10,7 @@ use std::collections::HashSet;
 use crate::diagnostic::{Diagnostic, Severity};
 
 crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
-    let max = ctx.config.threshold("max-dependencies", "max");
+    let max = ctx.config.threshold("max-dependencies", "max", ctx.lang);
     let mut seen: HashSet<String> = HashSet::new();
     let mut last_import_line: usize = 1;
 

@@ -36,9 +36,13 @@ pub fn default_static_config() -> &'static Config {
 
 use anyhow::{Context, Result};
 use globset::{Glob, GlobSet, GlobSetBuilder};
+use rustc_hash::FxHashMap;
 use std::path::{Path, PathBuf};
 
 use crate::diagnostic::Severity;
+use crate::files::Language;
+
+type LangConfigMap = FxHashMap<String, FxHashMap<Language, FxHashMap<String, toml::Value>>>;
 
 /// File name we look for. Always lowercase, never `.comply.toml`
 /// (no dot prefix) so it shows up in default file listings.
@@ -54,6 +58,10 @@ pub struct Config {
     /// matcher's i-th glob fires for a path.
     glob_matcher: GlobSet,
     disable_lists: Vec<Vec<String>>,
+    /// Per-language config extracted from qualified rule keys like
+    /// `[rules."id-length.ts"]` or `[rules."id-length.{ts,rs}"]`.
+    /// Keyed by `base_rule_id -> Language -> key -> value`.
+    lang_config: LangConfigMap,
 }
 
 impl Config {
@@ -141,8 +149,8 @@ impl Config {
     /// A fallback argument would silently diverge from the TOML the
     /// day one side gets updated and the other doesn't.
     #[must_use]
-    pub fn threshold(&self, rule_id: &str, key: &str) -> usize {
-        let value = self.extra_value(rule_id, key);
+    pub fn threshold(&self, rule_id: &str, key: &str, lang: Language) -> usize {
+        let value = self.extra_value(rule_id, key, lang);
         let Some(n) = value.as_integer().and_then(|n| usize::try_from(n).ok()) else {
             panic!(
                 "config key `[rules.\"{rule_id}\"] {key}` must be a \
@@ -159,8 +167,8 @@ impl Config {
     /// Panics with a clear message when the key is absent — same
     /// contract as `threshold`: defaults.toml is authoritative.
     #[must_use]
-    pub fn float(&self, rule_id: &str, key: &str) -> f64 {
-        let value = self.extra_value(rule_id, key);
+    pub fn float(&self, rule_id: &str, key: &str, lang: Language) -> f64 {
+        let value = self.extra_value(rule_id, key, lang);
         if let Some(f) = value.as_float() {
             return f;
         }
@@ -173,7 +181,15 @@ impl Config {
     /// Shared lookup for `threshold` / `float`. Panics with a
     /// uniform "missing key" message so the two public APIs don't
     /// duplicate the same boilerplate.
-    fn extra_value(&self, rule_id: &str, key: &str) -> &toml::Value {
+    fn extra_value(&self, rule_id: &str, key: &str, lang: Language) -> &toml::Value {
+        if let Some(value) = self
+            .lang_config
+            .get(rule_id)
+            .and_then(|by_lang| by_lang.get(&lang))
+            .and_then(|extras| extras.get(key))
+        {
+            return value;
+        }
         let Some(value) = self.raw.rules.get(rule_id).and_then(|r| r.extra.get(key)) else {
             panic!(
                 "config key `[rules.\"{rule_id}\"] {key}` is missing — \
@@ -189,11 +205,19 @@ impl Config {
     /// same way. Used by rules that match against a user-configured
     /// pattern list (e.g. `ts-no-restricted-imports`).
     #[must_use]
-    pub fn string_list(&self, rule_id: &str, key: &str) -> Vec<String> {
-        self.raw
-            .rules
+    pub fn string_list(&self, rule_id: &str, key: &str, lang: Language) -> Vec<String> {
+        let value = self
+            .lang_config
             .get(rule_id)
-            .and_then(|r| r.extra.get(key))
+            .and_then(|by_lang| by_lang.get(&lang))
+            .and_then(|extras| extras.get(key))
+            .or_else(|| {
+                self.raw
+                    .rules
+                    .get(rule_id)
+                    .and_then(|r| r.extra.get(key))
+            });
+        value
             .and_then(toml::Value::as_array)
             .map(|arr| {
                 arr.iter()
@@ -203,7 +227,7 @@ impl Config {
             .unwrap_or_default()
     }
 
-    fn from_raw(raw: ComplyToml) -> Result<Self> {
+    fn from_raw(mut raw: ComplyToml) -> Result<Self> {
         let mut builder = GlobSetBuilder::new();
         let mut disable_lists: Vec<Vec<String>> = Vec::new();
         for (pattern, override_cfg) in &raw.overrides {
@@ -215,12 +239,73 @@ impl Config {
         let glob_matcher = builder
             .build()
             .context("failed to compile [overrides] globs")?;
+
+        let lang_config = build_lang_config(&mut raw)?;
+
         Ok(Self {
             raw,
             glob_matcher,
             disable_lists,
+            lang_config,
         })
     }
+}
+
+const ALL_LANGUAGES: [Language; 12] = [
+    Language::TypeScript,
+    Language::Tsx,
+    Language::JavaScript,
+    Language::Rust,
+    Language::Vue,
+    Language::Toml,
+    Language::Json,
+    Language::Css,
+    Language::Yaml,
+    Language::Dockerfile,
+    Language::Sql,
+    Language::GraphQl,
+];
+
+/// Extract language-qualified rule keys (e.g. `"id-length.ts"`,
+/// `"id-length.{ts,rs}"`, `"id-length.ts*"`) from `raw.rules` and
+/// return them as a lookup table keyed by `(base_rule_id, Language)`.
+/// Matched keys are removed from `raw.rules` so they don't pollute
+/// `iter_rules()`.
+fn build_lang_config(raw: &mut ComplyToml) -> Result<LangConfigMap> {
+    let mut lang_config: LangConfigMap = FxHashMap::default();
+    let mut qualified_keys: Vec<String> = Vec::new();
+
+    for (key, rule_cfg) in raw.rules.iter() {
+        let Some(dot_pos) = key.rfind('.') else {
+            continue;
+        };
+        let base_id = &key[..dot_pos];
+        let suffix = &key[dot_pos + 1..];
+        let glob = Glob::new(suffix)
+            .with_context(|| format!("invalid lang glob in [rules.\"{key}\"]"))?;
+        let matcher = glob.compile_matcher();
+        let mut matched_any = false;
+        for &lang in &ALL_LANGUAGES {
+            if matcher.is_match(lang.config_suffix()) {
+                lang_config
+                    .entry(base_id.to_string())
+                    .or_default()
+                    .entry(lang)
+                    .or_default()
+                    .extend(rule_cfg.extra.iter().map(|(k, v)| (k.clone(), v.clone())));
+                matched_any = true;
+            }
+        }
+        if matched_any {
+            qualified_keys.push(key.clone());
+        }
+    }
+
+    for key in &qualified_keys {
+        raw.rules.remove(key);
+    }
+
+    Ok(lang_config)
 }
 
 /// Walk up from `start` looking for `comply.toml`. Returns the absolute
@@ -338,21 +423,21 @@ mod tests {
     #[test]
     fn default_config_returns_known_thresholds() {
         let cfg = Config::default();
-        assert_eq!(cfg.threshold("max-function-lines", "max"), 30);
-        assert_eq!(cfg.threshold("max-file-lines", "max"), 200);
+        assert_eq!(cfg.threshold("max-function-lines", "max", Language::TypeScript), 30);
+        assert_eq!(cfg.threshold("max-file-lines", "max", Language::TypeScript), 200);
     }
 
     #[test]
     #[should_panic(expected = "is missing")]
     fn threshold_panics_when_key_missing() {
         let cfg = Config::default();
-        let _ = cfg.threshold("does-not-exist", "max");
+        let _ = cfg.threshold("does-not-exist", "max", Language::TypeScript);
     }
 
     #[test]
     fn string_list_returns_empty_when_unconfigured() {
         let cfg = Config::default();
-        assert!(cfg.string_list("does-not-exist", "patterns").is_empty());
+        assert!(cfg.string_list("does-not-exist", "patterns", Language::TypeScript).is_empty());
     }
 
     #[test]
@@ -368,7 +453,7 @@ mod tests {
         )
         .unwrap();
         let cfg = Config::load_from(tmp.path()).unwrap();
-        let list = cfg.string_list("ts-no-restricted-imports", "patterns");
+        let list = cfg.string_list("ts-no-restricted-imports", "patterns", Language::TypeScript);
         assert_eq!(list, vec!["@banned/*", "legacy"]);
     }
 
@@ -385,9 +470,9 @@ mod tests {
         )
         .unwrap();
         let cfg = Config::load_from(tmp.path()).unwrap();
-        assert_eq!(cfg.threshold("max-function-lines", "max"), 80);
+        assert_eq!(cfg.threshold("max-function-lines", "max", Language::TypeScript), 80);
         // Other defaults still intact.
-        assert_eq!(cfg.threshold("max-file-lines", "max"), 200);
+        assert_eq!(cfg.threshold("max-file-lines", "max", Language::TypeScript), 200);
     }
 
     #[test]
@@ -452,7 +537,7 @@ mod tests {
         let cfg = Config::load_from(tmp.path()).unwrap();
         // The default for max-function-lines is 30, regardless of
         // whether we walked into a real workspace.
-        let _ = cfg.threshold("max-function-lines", "max");
+        let _ = cfg.threshold("max-function-lines", "max", Language::TypeScript);
     }
 
     #[test]
@@ -462,5 +547,87 @@ mod tests {
         // dotted form, so we expect `[rules.max-function-lines]`.
         assert!(text.contains("[rules.max-function-lines]"));
         assert!(text.contains("max ="));
+    }
+
+    #[test]
+    fn lang_qualified_key_overrides_base() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(
+            tmp.path().join("comply.toml"),
+            r#"
+            [rules."max-function-lines.ts"]
+            max = 50
+            "#,
+        )
+        .unwrap();
+        let cfg = Config::load_from(tmp.path()).unwrap();
+        assert_eq!(cfg.threshold("max-function-lines", "max", Language::TypeScript), 50);
+        assert_eq!(cfg.threshold("max-function-lines", "max", Language::Rust), 30);
+    }
+
+    #[test]
+    fn lang_brace_expansion_matches_multiple() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(
+            tmp.path().join("comply.toml"),
+            r#"
+            [rules."max-function-lines.{ts,rs}"]
+            max = 60
+            "#,
+        )
+        .unwrap();
+        let cfg = Config::load_from(tmp.path()).unwrap();
+        assert_eq!(cfg.threshold("max-function-lines", "max", Language::TypeScript), 60);
+        assert_eq!(cfg.threshold("max-function-lines", "max", Language::Rust), 60);
+        assert_eq!(cfg.threshold("max-function-lines", "max", Language::Sql), 30);
+    }
+
+    #[test]
+    fn lang_glob_star_matches_prefix() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(
+            tmp.path().join("comply.toml"),
+            r#"
+            [rules."max-function-lines.ts*"]
+            max = 40
+            "#,
+        )
+        .unwrap();
+        let cfg = Config::load_from(tmp.path()).unwrap();
+        assert_eq!(cfg.threshold("max-function-lines", "max", Language::TypeScript), 40);
+        assert_eq!(cfg.threshold("max-function-lines", "max", Language::Tsx), 40);
+        assert_eq!(cfg.threshold("max-function-lines", "max", Language::Rust), 30);
+    }
+
+    #[test]
+    fn lang_qualified_key_falls_through_for_missing_keys() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(
+            tmp.path().join("comply.toml"),
+            r#"
+            [rules."id-length.rs"]
+            min = 3
+            "#,
+        )
+        .unwrap();
+        let cfg = Config::load_from(tmp.path()).unwrap();
+        assert_eq!(cfg.threshold("id-length", "min", Language::Rust), 3);
+        let exceptions = cfg.string_list("id-length", "exceptions", Language::Rust);
+        assert_eq!(exceptions, vec!["_", "t", "T"]);
+    }
+
+    #[test]
+    fn lang_qualified_key_removed_from_iter_rules() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(
+            tmp.path().join("comply.toml"),
+            r#"
+            [rules."max-function-lines.ts"]
+            max = 50
+            "#,
+        )
+        .unwrap();
+        let cfg = Config::load_from(tmp.path()).unwrap();
+        assert!(cfg.iter_rules().all(|(id, _)| id == "max-function-lines" || !id.contains(".ts")));
     }
 }

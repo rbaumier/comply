@@ -28,7 +28,7 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     let arr = args.named_child(0).unwrap();
     if arr.kind() != "array" { return; }
 
-    let max = ctx.config.threshold("drizzle-chunk-large-batch-insert", "max");
+    let max = ctx.config.threshold("drizzle-chunk-large-batch-insert", "max", ctx.lang);
     let count = arr.named_child_count();
     if count <= max { return; }
 

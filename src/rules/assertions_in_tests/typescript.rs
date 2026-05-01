@@ -23,6 +23,7 @@ fn has_assertion(node: tree_sitter::Node, source: &[u8]) -> bool {
                 || text.contains("assert")
                 || text.contains(".plan(")
                 || text.contains(".waitFor")
+                || is_testing_library_query(text)
             {
                 return true;
             }
@@ -47,6 +48,19 @@ fn has_assertion(node: tree_sitter::Node, source: &[u8]) -> bool {
         }
     }
     false
+}
+
+const TESTING_LIBRARY_QUERIES: &[&str] = &[
+    "getByText", "getByRole", "getByTestId", "getByLabelText",
+    "getByPlaceholderText", "getByAltText", "getByTitle", "getByDisplayValue",
+    "findByText", "findByRole", "findByTestId", "findByLabelText",
+    "findByPlaceholderText", "findByAltText", "findByTitle", "findByDisplayValue",
+    "getAllByText", "getAllByRole", "getAllByTestId",
+    "findAllByText", "findAllByRole", "findAllByTestId",
+];
+
+fn is_testing_library_query(text: &str) -> bool {
+    TESTING_LIBRARY_QUERIES.iter().any(|q| text.contains(q))
 }
 
 fn is_nested_function_boundary(node: tree_sitter::Node) -> bool {

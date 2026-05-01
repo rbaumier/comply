@@ -52,7 +52,7 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
         return;
     }
 
-    let max = ctx.config.threshold("max-call-chain-depth", "max");
+    let max = ctx.config.threshold("max-call-chain-depth", "max", ctx.lang);
     let depth = count_nested_calls(node);
 
     if depth > max {

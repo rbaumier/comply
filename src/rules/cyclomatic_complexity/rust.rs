@@ -23,7 +23,7 @@ crate::ast_check! { on ["function_item"] => |node, source, ctx, diagnostics|
         .and_then(|n| n.utf8_text(source).ok())
         .unwrap_or("<anonymous>");
 
-    let threshold = ctx.config.threshold("cyclomatic-complexity", "max");
+    let threshold = ctx.config.threshold("cyclomatic-complexity", "max", ctx.lang);
     let complexity = 1 + count_complexity(node, source);
 
     if complexity > threshold {

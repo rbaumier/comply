@@ -38,7 +38,7 @@ fn specifier_matches(specifier: &str, pattern: &str) -> bool {
 crate::ast_check! { on ["import_statement"] => |node, source, ctx, diagnostics|
     let patterns = ctx
         .config
-        .string_list("ts-no-restricted-imports", "patterns");
+        .string_list("ts-no-restricted-imports", "patterns", ctx.lang);
     if patterns.is_empty() {
         return;
     }
@@ -118,6 +118,7 @@ mod tests {
             config: &cfg,
             project: crate::project::default_static_project_ctx(),
             file: crate::rules::file_ctx::default_static_file_ctx(),
+            lang: crate::files::Language::TypeScript,
         };
         Check.check(&ctx, &tree)
     }

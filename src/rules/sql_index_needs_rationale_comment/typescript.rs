@@ -30,10 +30,10 @@ impl AstCheck for Check {
     ) {
         let min_rationale_words = ctx
             .config
-            .threshold("sql-index-needs-rationale-comment", "min_rationale_words");
+            .threshold("sql-index-needs-rationale-comment", "min_rationale_words", ctx.lang);
         let lookback_lines = ctx
             .config
-            .threshold("sql-index-needs-rationale-comment", "lookback_lines");
+            .threshold("sql-index-needs-rationale-comment", "lookback_lines", ctx.lang);
         let source_bytes = ctx.source.as_bytes();
         let Ok(raw) = node.utf8_text(source_bytes) else {
             return;

@@ -7,7 +7,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 
 crate::ast_check! { on ["comment"] => |node, source, ctx, diagnostics|
     let Ok(text) = node.utf8_text(source) else { return; };
-    let min_run = ctx.config.threshold("no-section-divider-comments", "min_run");
+    let min_run = ctx.config.threshold("no-section-divider-comments", "min_run", ctx.lang);
     if !super::is_section_divider_text(text, min_run) { return; }
     diagnostics.push(Diagnostic::at_node(
         ctx.path,

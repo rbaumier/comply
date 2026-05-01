@@ -70,7 +70,7 @@ impl AstCheck for Check {
         state: Option<&mut dyn std::any::Any>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
-        let max_depth = ctx.config.threshold("nested-control-flow", "max");
+        let max_depth = ctx.config.threshold("nested-control-flow", "max", ctx.lang);
         let flagged_lines = state
             .unwrap()
             .downcast_mut::<std::collections::HashSet<usize>>()

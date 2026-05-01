@@ -305,6 +305,7 @@ fn dispatch_with_lang(
         config,
         project,
         file: &file_ctx,
+        lang: file.language,
     };
     let mut diagnostics = Vec::new();
 

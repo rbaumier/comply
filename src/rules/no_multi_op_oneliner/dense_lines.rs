@@ -58,10 +58,10 @@ pub fn scan_dense_lines(
     target_kinds: &[&str],
     comment_kinds: &[&str],
 ) -> Vec<Diagnostic> {
-    let min_ops = ctx.config.threshold("no-multi-op-oneliner", "min_ops");
+    let min_ops = ctx.config.threshold("no-multi-op-oneliner", "min_ops", ctx.lang);
     let min_line_length = ctx
         .config
-        .threshold("no-multi-op-oneliner", "min_line_length");
+        .threshold("no-multi-op-oneliner", "min_line_length", ctx.lang);
 
     let line_offsets = compute_line_offsets(ctx.source);
     let comment_ranges = collect_comment_ranges(tree, comment_kinds);

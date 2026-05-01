@@ -24,9 +24,9 @@ impl AstCheck for Check {
         _state: Option<&mut dyn std::any::Any>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
-        let min = ctx.config.threshold("id-length", "min");
-        let exceptions = ctx.config.string_list("id-length", "exceptions");
-        let patterns = compile_patterns(&ctx.config.string_list("id-length", "exception_patterns"));
+        let min = ctx.config.threshold("id-length", "min", ctx.lang);
+        let exceptions = ctx.config.string_list("id-length", "exceptions", ctx.lang);
+        let patterns = compile_patterns(&ctx.config.string_list("id-length", "exception_patterns", ctx.lang));
 
         let source_bytes = ctx.source.as_bytes();
         if !is_rust_binding_name(node) {

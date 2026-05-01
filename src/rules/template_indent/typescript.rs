@@ -17,7 +17,7 @@ crate::ast_check! { on ["template_string"] => |node, source, ctx, diagnostics|
     let body = raw.strip_prefix('`').and_then(|s| s.strip_suffix('`'));
     let Some(body) = body else { return; };
     if !body.contains('\n') { return; }
-    let min_indent = ctx.config.threshold("template-indent", "min_indent");
+    let min_indent = ctx.config.threshold("template-indent", "min_indent", ctx.lang);
     let Some(indent) = common_leading_whitespace(body) else { return; };
     if indent < min_indent { return; }
     let pos = node.start_position();

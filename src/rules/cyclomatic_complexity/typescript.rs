@@ -41,7 +41,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         .and_then(|n| n.utf8_text(source).ok())
         .unwrap_or("<anonymous>");
 
-    let threshold = ctx.config.threshold("cyclomatic-complexity", "max");
+    let threshold = ctx.config.threshold("cyclomatic-complexity", "max", ctx.lang);
     // Count complexity: 1 base path + branching nodes.
     let complexity = 1 + count_complexity(node, source);
 

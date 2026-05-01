@@ -27,7 +27,7 @@ impl AstCheck for Check {
         let source_bytes = ctx.source.as_bytes();
         let max_elements = ctx
             .config
-            .threshold("rust-no-large-tuple-return", "max_elements");
+            .threshold("rust-no-large-tuple-return", "max_elements", ctx.lang);
         let Some(ret_type) = node.child_by_field_name("return_type") else {
             return;
         };

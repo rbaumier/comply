@@ -17,10 +17,10 @@ impl TextCheck for Check {
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
         let min_rationale_words = ctx
             .config
-            .threshold("sql-index-needs-rationale-comment", "min_rationale_words");
+            .threshold("sql-index-needs-rationale-comment", "min_rationale_words", ctx.lang);
         let lookback_lines = ctx
             .config
-            .threshold("sql-index-needs-rationale-comment", "lookback_lines");
+            .threshold("sql-index-needs-rationale-comment", "lookback_lines", ctx.lang);
         check_string_content(
             ctx.source,
             0,

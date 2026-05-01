@@ -46,7 +46,7 @@ fn count_operators(line: &str) -> usize {
 
 impl AstCheck for Check {
     fn check(&self, ctx: &CheckCtx, _tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
-        let max_ops = ctx.config.threshold("expression-complexity", "max_ops");
+        let max_ops = ctx.config.threshold("expression-complexity", "max_ops", ctx.lang);
         let mut diagnostics = Vec::new();
         for (idx, line) in ctx.source.lines().enumerate() {
             if count_operators(line) >= max_ops {

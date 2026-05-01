@@ -113,7 +113,7 @@ mod tests {
             source: &source,
             config: &config,
             project: &project,
-            file: &file_ctx,
+            file: &file_ctx, lang: crate::files::Language::TypeScript,
         };
         let diags = Check.check(&ctx);
         (dir, diags)

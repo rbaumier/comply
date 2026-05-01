@@ -214,9 +214,9 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         return;
     }
 
-    let max_volume = ctx.config.threshold("halstead-complexity", "max_volume") as f64;
-    let max_difficulty = ctx.config.threshold("halstead-complexity", "max_difficulty") as f64;
-    let max_effort = ctx.config.threshold("halstead-complexity", "max_effort") as f64;
+    let max_volume = ctx.config.threshold("halstead-complexity", "max_volume", ctx.lang) as f64;
+    let max_difficulty = ctx.config.threshold("halstead-complexity", "max_difficulty", ctx.lang) as f64;
+    let max_effort = ctx.config.threshold("halstead-complexity", "max_effort", ctx.lang) as f64;
 
     let m = compute_metrics(body, source);
 

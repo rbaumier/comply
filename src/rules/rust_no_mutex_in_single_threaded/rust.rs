@@ -103,15 +103,19 @@ fn contains_identifier(text: &str, name: &str) -> bool {
     let mut start = 0;
     while let Some(offset) = text[start..].find(name) {
         let abs = start + offset;
-        let before_ok = abs == 0 || !text.as_bytes()[abs - 1].is_ascii_alphanumeric();
+        let before_ok = abs == 0 || !is_ident_byte(text.as_bytes()[abs - 1]);
         let after = abs + name.len();
-        let after_ok = after >= text.len() || !text.as_bytes()[after].is_ascii_alphanumeric();
+        let after_ok = after >= text.len() || !is_ident_byte(text.as_bytes()[after]);
         if before_ok && after_ok {
             return true;
         }
         start = abs + name.len();
     }
     false
+}
+
+fn is_ident_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || byte == b'_'
 }
 
 #[cfg(test)]

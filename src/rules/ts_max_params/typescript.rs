@@ -18,7 +18,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         return;
     }
 
-    let max_params = ctx.config.threshold("ts-max-params", "max");
+    let max_params = ctx.config.threshold("ts-max-params", "max", ctx.lang);
 
     let Some(params) = node.child_by_field_name("parameters") else {
         return;
