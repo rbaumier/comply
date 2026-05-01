@@ -289,3 +289,48 @@ Note : les ~192 `f` restant sur tokio sont des **function params** de higher-ord
 | `no-bitwise-in-boolean` (bitmask tests) | crossbeam | 35 | 0 | -35 |
 | `symmetric-pairs` (get/get_mut pattern) | bevy_ecs | 298 | 226 | -72 |
 | **Total estimé** | | | | **~979+** |
+
+---
+
+## Session 7 — 2026-05-01
+
+### 1. `unused-component-prop` — PascalCase filter
+
+**Problème** : La règle flaggait toutes les fonctions avec un paramètre typé comme des composants React. Sur slate (bibliothèque d'édition de texte, pas du React), 206 FP sur des fonctions comme `ancestors(editor, options)`.
+
+**Fix** : Ajout de `is_in_component_function()` qui vérifie que la fonction enclosante est PascalCase (convention React). Utilise `ancestor_kinds` pour remonter l'AST et checker `Function.id` ou `VariableDeclarator.id`.
+
+**Impact** : slate 206 → 0, solid ~86 → 0
+
+### 2. `ts-no-unused-vars` — skip type-only contexts
+
+**Problème** : Paramètres dans des signatures de types (`type Fn = (key: string) => void`) flaggés comme "unused". Ce sont des noms documentaires, pas des variables runtime. 106 FP sur zustand, 110 sur jotai.
+
+**Fix** : Skip les symboles déclarés dans `TSTypeAliasDeclaration`, `TSInterfaceDeclaration`, `TSModuleDeclaration`, ou `TSFunctionType` via `ancestor_kinds`.
+
+**Impact** : zustand 106 → 0, jotai 110 → 0
+
+### 3. `no-hardcoded-ip` — détection de versions
+
+**Problème** : Numéros de version (`v3.1.2.0`, `8.40.0.25-CA`) détectés comme des IPs.
+
+**Fix** : `is_version_like()` — skip si précédé de `v`/`V` ou suivi de `-` + alpha.
+
+**Impact** : starship 19 → 14 (5 FP éliminés, les 14 restants sont des IPs légitimes ou versions ambiguës)
+
+### 4. `no-abbreviated-names` — config `allowed`
+
+**Problème** : `pwd` = "password" ou "print working directory" selon le contexte. `addr` = "address" ou API std Rust. Hardcoder les exemptions ne scale pas.
+
+**Fix** : Ajout de `[rules.no-abbreviated-names] allowed = []` dans defaults.toml. Les deux backends lisent cette liste et skip les abréviations configurées. `addr` et `pwd` remis dans la liste bannie, exemptables via config.
+
+### Bilan session 7
+
+| Règle | Projet | Avant | Après | FP éliminés |
+|---|---|---|---|---|
+| `unused-component-prop` (PascalCase) | slate | 206 | 0 | -206 |
+| `ts-no-unused-vars` (type contexts) | zustand | 106 | 0 | -106 |
+| `ts-no-unused-vars` (type contexts) | jotai | 110 | 0 | -110 |
+| `no-hardcoded-ip` (versions) | starship | 19 | 14 | -5 |
+| `no-abbreviated-names` (config allowed) | — | — | — | configurable |
+| **Total session 7** | | | | **~427** |
