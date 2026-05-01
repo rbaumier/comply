@@ -9,8 +9,6 @@ use crate::rules::backend::{AstCheck, CheckCtx};
 #[derive(Debug)]
 pub struct Check;
 
-const THRESHOLD: usize = 4;
-
 #[allow(clippy::if_same_then_else)]
 fn count_operators(line: &str) -> usize {
     let mut count = 0;
@@ -44,16 +42,17 @@ fn count_operators(line: &str) -> usize {
 
 impl AstCheck for Check {
     fn check(&self, ctx: &CheckCtx, _tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
+        let threshold = ctx.config.threshold("expression-complexity", "max_ops", ctx.lang);
         let mut diagnostics = Vec::new();
         for (idx, line) in ctx.source.lines().enumerate() {
-            if count_operators(line) >= THRESHOLD {
+            if count_operators(line) >= threshold {
                 diagnostics.push(Diagnostic {
                     path: std::sync::Arc::clone(&ctx.path_arc),
                     line: idx + 1,
                     column: 1,
                     rule_id: "expression-complexity".into(),
                     message: format!(
-                        "Expression has {THRESHOLD}+ logical operators \u{2014} \
+                        "Expression has {threshold}+ logical operators \u{2014} \
                          extract to named variables."
                     ),
                     severity: Severity::Warning,

@@ -219,6 +219,92 @@ disabled = true
 [rules.node-prefer-stream-pipeline]
 
 # ---------------------------------------------------------------
+# Barrel / import hygiene.
+# ---------------------------------------------------------------
+
+[rules.avoid-barrel-files]
+min_reexports = 3
+
+# ---------------------------------------------------------------
+# Function / component size.
+# ---------------------------------------------------------------
+
+[rules.react-no-giant-component]
+max = 300
+
+[rules.no-identical-functions]
+min_body_lines = 4
+min_normalized_chars = 51
+
+[rules.no-small-switch]
+min_cases = 3
+
+# ---------------------------------------------------------------
+# UI / CSS thresholds.
+# ---------------------------------------------------------------
+
+[rules.ui-no-z-index-9999]
+max = 100
+
+[rules.ui-no-inline-exhaustive-style]
+max_properties = 8
+
+[rules.ui-no-large-animated-blur]
+max_blur_px = 20.0
+
+[rules.ui-no-long-transition-duration]
+max_duration_ms = 1000.0
+max_duration_s = 1.0
+
+[rules.ui-no-tiny-text]
+min_font_size_px = 12.0
+
+[rules.ui-no-wide-letter-spacing]
+max_letter_spacing_em = 0.05
+
+# ---------------------------------------------------------------
+# React thresholds.
+# ---------------------------------------------------------------
+
+[rules.react-prefer-use-reducer]
+max_state_calls = 4
+
+[rules.react-require-content-visibility]
+min_nodes = 20
+
+# ---------------------------------------------------------------
+# Framework-specific thresholds.
+# ---------------------------------------------------------------
+
+[rules.prisma-no-nested-include-depth]
+max_depth = 3
+
+[rules.ts-no-large-string-union]
+max = 50
+
+[rules.better-result-prefer-matcherror-exhaustive]
+min_tags = 3
+
+[rules.perf-img-fetchpriority-high]
+hero_pixel_threshold = 600
+
+[rules.tanstack-start-loader-stale-time]
+min_stale_time_ms = 5000
+
+[rules.tanstack-start-session-secret-min-length]
+min_length = 32
+
+# ---------------------------------------------------------------
+# i18n / Kubernetes thresholds.
+# ---------------------------------------------------------------
+
+[rules.i18n-max-key-depth]
+max_depth = 3
+
+[rules.k8s-hpa-min-three-replicas]
+min_replicas = 3
+
+# ---------------------------------------------------------------
 # Security — no thresholds, same rationale.
 # ---------------------------------------------------------------
 

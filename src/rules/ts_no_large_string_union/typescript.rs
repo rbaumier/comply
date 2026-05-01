@@ -2,8 +2,6 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-const THRESHOLD: usize = 50;
-
 crate::ast_check! { on ["union_type"] => |node, source, ctx, diagnostics|
     let _ = source;
     // Avoid double-flagging nested unions — only emit on the outermost.
@@ -26,14 +24,15 @@ crate::ast_check! { on ["union_type"] => |node, source, ctx, diagnostics|
         total
     }
 
+    let max = ctx.config.threshold("ts-no-large-string-union", "max", ctx.lang);
     let count = count_literals(node);
 
-    if count > THRESHOLD {
+    if count > max {
         diagnostics.push(Diagnostic::at_node(
             ctx.path,
             &node,
             super::META.id,
-            format!("String-literal union has {count} members (>{THRESHOLD}); consider a branded string or enum."),
+            format!("String-literal union has {count} members (>{max}); consider a branded string or enum."),
             Severity::Warning,
         ));
     }

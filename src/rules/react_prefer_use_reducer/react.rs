@@ -3,8 +3,6 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-const USE_STATE_THRESHOLD: usize = 4;
-
 fn component_name<'a>(node: tree_sitter::Node<'a>, source: &'a [u8]) -> Option<&'a str> {
     match node.kind() {
         "function_declaration" => {
@@ -80,9 +78,10 @@ crate::ast_check! { on ["function_declaration", "arrow_function"] => |node, sour
         return;
     }
 
+    let max_state_calls = ctx.config.threshold("react-prefer-use-reducer", "max_state_calls", ctx.lang);
     let count = count_use_state(body, source);
 
-    if count < USE_STATE_THRESHOLD {
+    if count < max_state_calls {
         return;
     }
 

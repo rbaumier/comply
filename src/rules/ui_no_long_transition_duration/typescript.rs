@@ -3,23 +3,20 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-const MS_THRESHOLD: f64 = 1000.0;
-const S_THRESHOLD: f64 = 1.0;
-
 /// Parse a CSS duration literal. Returns the value in milliseconds when the
 /// duration exceeds the configured threshold, or `None` otherwise.
-fn parse_excessive_duration(raw: &str) -> Option<f64> {
+fn parse_excessive_duration(raw: &str, max_ms: f64, max_s: f64) -> Option<f64> {
     let cleaned = raw.trim_matches(|c| c == '"' || c == '\'').trim();
     if let Some(stripped) = cleaned.strip_suffix("ms") {
         let num = stripped.trim().parse::<f64>().ok()?;
-        if num > MS_THRESHOLD {
+        if num > max_ms {
             return Some(num);
         }
         return None;
     }
     if let Some(stripped) = cleaned.strip_suffix('s') {
         let num = stripped.trim().parse::<f64>().ok()?;
-        if num > S_THRESHOLD {
+        if num > max_s {
             return Some(num * 1000.0);
         }
     }
@@ -65,7 +62,9 @@ crate::ast_check! { on ["pair"] prefilter = ["transitionDuration", "animationDur
         return;
     }
     let Ok(raw) = value.utf8_text(source) else { return };
-    let Some(ms) = parse_excessive_duration(raw) else { return };
+    let max_ms = ctx.config.float("ui-no-long-transition-duration", "max_duration_ms", ctx.lang);
+    let max_s = ctx.config.float("ui-no-long-transition-duration", "max_duration_s", ctx.lang);
+    let Some(ms) = parse_excessive_duration(raw, max_ms, max_s) else { return };
 
     diagnostics.push(Diagnostic {
         path: std::sync::Arc::clone(&ctx.path_arc),

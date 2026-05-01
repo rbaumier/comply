@@ -12,8 +12,6 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-const THRESHOLD: usize = 20;
-
 fn in_jsx_expression(mut node: tree_sitter::Node<'_>) -> bool {
     while let Some(parent) = node.parent() {
         if parent.kind() == "jsx_expression" {
@@ -46,14 +44,14 @@ fn enclosing_virtualizer_tag(mut node: tree_sitter::Node<'_>, source: &[u8]) -> 
 /// True when the receiver is a literal array or `Array.from({ length: N })`
 /// that we can prove is *small* (under the threshold). Used to short-circuit
 /// the "unknown-receiver returning JSX" branch on toy examples.
-fn is_known_small_array_source(recv: tree_sitter::Node<'_>, source: &[u8]) -> bool {
+fn is_known_small_array_source(recv: tree_sitter::Node<'_>, source: &[u8], min_nodes: usize) -> bool {
     if recv.kind() == "array" {
         let mut cursor = recv.walk();
         let count = recv
             .named_children(&mut cursor)
             .filter(|c| c.kind() != "comment")
             .count();
-        return count < THRESHOLD;
+        return count < min_nodes;
     }
     if recv.kind() == "call_expression" {
         let Some(callee) = recv.child_by_field_name("function") else {
@@ -81,7 +79,7 @@ fn is_known_small_array_source(recv: tree_sitter::Node<'_>, source: &[u8]) -> bo
                 let after = tail[colon + 1..].trim();
                 let digits: String = after.chars().take_while(|c| c.is_ascii_digit()).collect();
                 if let Ok(n) = digits.parse::<usize>() {
-                    return n < THRESHOLD;
+                    return n < min_nodes;
                 }
             }
         }
@@ -89,14 +87,14 @@ fn is_known_small_array_source(recv: tree_sitter::Node<'_>, source: &[u8]) -> bo
     false
 }
 
-fn large_array_source(recv: tree_sitter::Node<'_>, source: &[u8]) -> bool {
+fn large_array_source(recv: tree_sitter::Node<'_>, source: &[u8], min_nodes: usize) -> bool {
     if recv.kind() == "array" {
         let mut cursor = recv.walk();
         let count = recv
             .named_children(&mut cursor)
             .filter(|c| c.kind() != "comment")
             .count();
-        return count >= THRESHOLD;
+        return count >= min_nodes;
     }
     if recv.kind() == "call_expression" {
         // `Array.from({ length: N })` pattern.
@@ -126,7 +124,7 @@ fn large_array_source(recv: tree_sitter::Node<'_>, source: &[u8]) -> bool {
                 let after = tail[colon + 1..].trim();
                 let digits: String = after.chars().take_while(|c| c.is_ascii_digit()).collect();
                 if let Ok(n) = digits.parse::<usize>() {
-                    return n >= THRESHOLD;
+                    return n >= min_nodes;
                 }
             }
         }
@@ -161,7 +159,7 @@ fn callback_returns_jsx(cb: tree_sitter::Node<'_>) -> bool {
 }
 
 crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
-    let _ = ctx;
+    let min_nodes = ctx.config.threshold("react-require-content-visibility", "min_nodes", ctx.lang);
     let Some(callee) = node.child_by_field_name("function") else { return };
     if callee.kind() != "member_expression" {
         return;
@@ -174,10 +172,10 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
         return;
     }
     let Some(recv) = callee.child_by_field_name("object") else { return };
-    let known_large = large_array_source(recv, source);
+    let known_large = large_array_source(recv, source, min_nodes);
     // If the receiver is a *known small* literal array or `Array.from({ length: <small> })`,
     // there's no risk worth flagging.
-    if !known_large && is_known_small_array_source(recv, source) {
+    if !known_large && is_known_small_array_source(recv, source, min_nodes) {
         return;
     }
     if enclosing_virtualizer_tag(node, source) {
@@ -202,7 +200,7 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     }
     let msg = if known_large {
         format!(
-            "Large list rendered with `.map()` (>= {THRESHOLD} items) in JSX without \
+            "Large list rendered with `.map()` (>= {min_nodes} items) in JSX without \
              virtualization or `contentVisibility: 'auto'` — paints every off-screen row."
         )
     } else {

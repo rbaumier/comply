@@ -3,8 +3,6 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-const LETTER_SPACING_EM_THRESHOLD: f64 = 0.05;
-
 fn parse_em(raw: &str) -> Option<f64> {
     let cleaned = raw.trim_matches(|c| c == '"' || c == '\'').trim();
     let stripped = cleaned.strip_suffix("em")?;
@@ -56,7 +54,8 @@ crate::ast_check! { on ["pair"] prefilter = ["letterSpacing"] => |node, source, 
     let Ok(raw) = value.utf8_text(source) else { return };
     let Some(num) = parse_em(raw) else { return };
 
-    if num <= LETTER_SPACING_EM_THRESHOLD {
+    let max_spacing = ctx.config.float("ui-no-wide-letter-spacing", "max_letter_spacing_em", ctx.lang);
+    if num <= max_spacing {
         return;
     }
 
@@ -66,7 +65,7 @@ crate::ast_check! { on ["pair"] prefilter = ["letterSpacing"] => |node, source, 
         column: node.start_position().column + 1,
         rule_id: super::META.id.into(),
         message: format!(
-            "`letterSpacing: {raw}` — values above {LETTER_SPACING_EM_THRESHOLD}em hurt \
+            "`letterSpacing: {raw}` — values above {max_spacing}em hurt \
              readability."
         ),
         severity: Severity::Warning,

@@ -14,7 +14,8 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
         .or_else(|| raw.strip_prefix('\'').and_then(|s| s.strip_suffix('\'')))
         .unwrap_or(raw);
     let dot_count = inner.chars().filter(|c| *c == '.').count();
-    if dot_count < 3 { return; }
+    let max_depth = ctx.config.threshold("i18n-max-key-depth", "max_depth", ctx.lang);
+    if dot_count < max_depth { return; }
     diagnostics.push(Diagnostic::at_node(
         ctx.path,
         &first,

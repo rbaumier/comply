@@ -7,8 +7,6 @@ use crate::rules::backend::{CheckCtx, TextCheck};
 #[derive(Debug)]
 pub struct Check;
 
-const MAX_DEPTH: usize = 3;
-
 fn is_prisma_file(source: &str) -> bool {
     source.contains("@prisma/client")
         || source.contains("PrismaClient")
@@ -18,7 +16,7 @@ fn is_prisma_file(source: &str) -> bool {
 /// Walk `source` brace-by-brace, tracking how many `include:` keys are
 /// "open" on the brace stack at any point. If a new `include:` appears
 /// while `MAX_DEPTH` are already open, that's a violation.
-fn find_violations(source: &str) -> Vec<(usize, usize, usize)> {
+fn find_violations(source: &str, max_depth: usize) -> Vec<(usize, usize, usize)> {
     let mut out = Vec::new();
     let bytes = source.as_bytes();
     // Stack holds `true` for braces opened immediately after `include:`.
@@ -37,7 +35,7 @@ fn find_violations(source: &str) -> Vec<(usize, usize, usize)> {
                     || look_back.ends_with("'include':");
                 if is_include {
                     let depth = stack.iter().filter(|&&b| b).count() + 1;
-                    if depth > MAX_DEPTH {
+                    if depth > max_depth {
                         let (line, col) = byte_to_line_col(source, i);
                         out.push((line, col, depth));
                     }
@@ -115,7 +113,8 @@ impl TextCheck for Check {
         if !is_prisma_file(ctx.source) {
             return Vec::new();
         }
-        find_violations(ctx.source)
+        let max_depth = ctx.config.threshold("prisma-no-nested-include-depth", "max_depth", ctx.lang);
+        find_violations(ctx.source, max_depth)
             .into_iter()
             .map(|(line, column, depth)| Diagnostic {
                 path: std::sync::Arc::clone(&ctx.path_arc),
@@ -123,7 +122,7 @@ impl TextCheck for Check {
                 column,
                 rule_id: super::META.id.into(),
                 message: format!(
-                    "`include:` is nested {depth} levels deep — keep nesting at or below {MAX_DEPTH} to avoid huge join queries."
+                    "`include:` is nested {depth} levels deep — keep nesting at or below {max_depth} to avoid huge join queries."
                 ),
                 severity: Severity::Warning,
                 span: None,

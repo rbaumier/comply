@@ -2,8 +2,6 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-const INLINE_STYLE_PROPERTY_THRESHOLD: usize = 8;
-
 crate::ast_check! { on ["jsx_attribute"] => |node, source, ctx, diagnostics|
     let Some(attr_name) = crate::rules::jsx::jsx_attribute_name(node, source) else { return };
     if attr_name != "style" {
@@ -30,7 +28,8 @@ crate::ast_check! { on ["jsx_attribute"] => |node, source, ctx, diagnostics|
         .filter(|c| c.kind() == "pair" || c.kind() == "shorthand_property_identifier")
         .count();
 
-    if prop_count <= INLINE_STYLE_PROPERTY_THRESHOLD {
+    let max_properties = ctx.config.threshold("ui-no-inline-exhaustive-style", "max_properties", ctx.lang);
+    if prop_count <= max_properties {
         return;
     }
 

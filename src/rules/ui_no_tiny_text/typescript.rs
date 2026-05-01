@@ -4,8 +4,6 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-const FONT_SIZE_THRESHOLD: f64 = 12.0;
-
 fn is_in_style_jsx_attribute(node: tree_sitter::Node, source: &[u8]) -> bool {
     let Some(obj) = node.parent() else {
         return false;
@@ -47,7 +45,8 @@ crate::ast_check! { on ["pair"] prefilter = ["fontSize"] => |node, source, ctx, 
     let Ok(num_str) = value.utf8_text(source) else { return };
     let Ok(num) = num_str.parse::<f64>() else { return };
 
-    if num >= FONT_SIZE_THRESHOLD {
+    let min_font = ctx.config.float("ui-no-tiny-text", "min_font_size_px", ctx.lang);
+    if num >= min_font {
         return;
     }
 
@@ -57,7 +56,7 @@ crate::ast_check! { on ["pair"] prefilter = ["fontSize"] => |node, source, ctx, 
         column: node.start_position().column + 1,
         rule_id: super::META.id.into(),
         message: format!(
-            "`fontSize: {num_str}` — values below {FONT_SIZE_THRESHOLD}px are too small for \
+            "`fontSize: {num_str}` — values below {min_font}px are too small for \
              comfortable reading."
         ),
         severity: Severity::Warning,

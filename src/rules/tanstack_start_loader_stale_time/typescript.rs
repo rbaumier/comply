@@ -5,8 +5,6 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-const MIN_STALE_TIME_MS: u64 = 5000;
-
 /// Read the literal numeric value of a tree-sitter `number` node, or
 /// `None` if the node is not a parseable integer literal.
 fn number_literal_value(node: tree_sitter::Node<'_>, source: &[u8]) -> Option<u64> {
@@ -58,17 +56,18 @@ crate::ast_check! { on ["call_expression"] prefilter = ["ensureQueryData"] => |n
     let Some(first_arg) = first_arg else { return };
     if first_arg.kind() != "object" { return; }
 
+    let min_stale_time = ctx.config.threshold("tanstack-start-loader-stale-time", "min_stale_time_ms", ctx.lang) as u64;
     match find_stale_time(first_arg, source) {
         Some((_pair, value)) => {
             if let Some(n) = number_literal_value(value, source)
-                && n < MIN_STALE_TIME_MS
+                && n < min_stale_time
             {
                 diagnostics.push(Diagnostic::at_node(
                     ctx.path,
                     &node,
                     super::META.id,
                     format!(
-                        "`staleTime: {n}` is below {MIN_STALE_TIME_MS}ms — loader data will refetch during navigation."
+                        "`staleTime: {n}` is below {min_stale_time}ms — loader data will refetch during navigation."
                     ),
                     Severity::Warning,
                 ));
@@ -80,7 +79,7 @@ crate::ast_check! { on ["call_expression"] prefilter = ["ensureQueryData"] => |n
                 &node,
                 super::META.id,
                 format!(
-                    "`ensureQueryData` call is missing `staleTime` — set it to at least {MIN_STALE_TIME_MS}ms to avoid refetches during navigation."
+                    "`ensureQueryData` call is missing `staleTime` — set it to at least {min_stale_time}ms to avoid refetches during navigation."
                 ),
                 Severity::Warning,
             ));

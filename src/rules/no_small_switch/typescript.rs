@@ -18,7 +18,8 @@ crate::ast_check! { on ["switch_statement"] => |node, source, ctx, diagnostics|
         }
     }
 
-    if case_count < 3 {
+    let min_cases = ctx.config.threshold("no-small-switch", "min_cases", ctx.lang);
+    if case_count < min_cases {
         diagnostics.push(Diagnostic::at_node(
             ctx.path,
             &node,

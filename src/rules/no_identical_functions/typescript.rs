@@ -33,14 +33,6 @@ use tree_sitter::{Node, Parser};
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::project::import_index::ImportIndex;
 
-/// Minimum number of lines in a body before it's a candidate for duplicate
-/// detection. Anything shorter is almost guaranteed to be a coincidence.
-const MIN_BODY_LINES: usize = 4;
-
-/// Minimum number of characters in the normalized body. Guards against
-/// four short identical lines still hashing to the same value.
-const MIN_NORMALIZED_CHARS: usize = 51;
-
 /// One function participating in a duplicate group. Stored in the
 /// process-wide cross-file index so every file in the group can reference
 /// every other.
@@ -61,8 +53,8 @@ fn normalize_body(text: &str) -> String {
         .join("\n")
 }
 
-fn body_meets_threshold(raw: &str, normalized: &str) -> bool {
-    raw.lines().count() >= MIN_BODY_LINES && normalized.len() >= MIN_NORMALIZED_CHARS
+fn body_meets_threshold(raw: &str, normalized: &str, min_body_lines: usize, min_normalized_chars: usize) -> bool {
+    raw.lines().count() >= min_body_lines && normalized.len() >= min_normalized_chars
 }
 
 fn hash_str(s: &str) -> u64 {
@@ -94,7 +86,7 @@ fn cross_file_cache()
 /// body across the indexed file set. Re-parses each file with its own
 /// local parser — `tree_sitter::Parser` is `!Sync`, so we can't reuse
 /// the engine's parser across a flat fan-out without a bigger refactor.
-fn cross_file_index(index: &ImportIndex) -> std::sync::Arc<HashMap<u64, Vec<FunctionLocation>>> {
+fn cross_file_index(index: &ImportIndex, min_body_lines: usize, min_normalized_chars: usize) -> std::sync::Arc<HashMap<u64, Vec<FunctionLocation>>> {
     let key = std::ptr::from_ref::<ImportIndex>(index) as usize;
     let mut cache = cross_file_cache()
         .lock()
@@ -102,13 +94,13 @@ fn cross_file_index(index: &ImportIndex) -> std::sync::Arc<HashMap<u64, Vec<Func
     if let Some(hit) = cache.get(&key) {
         return std::sync::Arc::clone(hit);
     }
-    let built = build_cross_file_index(index);
+    let built = build_cross_file_index(index, min_body_lines, min_normalized_chars);
     let arc = std::sync::Arc::new(built);
     cache.insert(key, std::sync::Arc::clone(&arc));
     arc
 }
 
-fn build_cross_file_index(index: &ImportIndex) -> HashMap<u64, Vec<FunctionLocation>> {
+fn build_cross_file_index(index: &ImportIndex, min_body_lines: usize, min_normalized_chars: usize) -> HashMap<u64, Vec<FunctionLocation>> {
     let mut by_hash: HashMap<u64, Vec<FunctionLocation>> = HashMap::new();
     let mut parser = Parser::new();
     for path in index.indexed_paths() {
@@ -137,7 +129,7 @@ fn build_cross_file_index(index: &ImportIndex) -> HashMap<u64, Vec<FunctionLocat
             let Some(child) = root.named_child(i) else {
                 continue;
             };
-            collect_functions(child, source.as_bytes(), &mut collected);
+            collect_functions(child, source.as_bytes(), &mut collected, min_body_lines, min_normalized_chars);
         }
         for (name, line, normalized) in collected {
             let h = hash_str(&normalized);
@@ -157,12 +149,12 @@ fn build_cross_file_index(index: &ImportIndex) -> HashMap<u64, Vec<FunctionLocat
 /// index builder. Walks function declarations and `const x = () => { … }`
 /// / `const x = function(){}` bindings, applies the two thresholds, and
 /// pushes `(name, line, normalized_body)` triples.
-fn collect_functions(node: Node, source: &[u8], out: &mut Vec<(String, usize, String)>) {
+fn collect_functions(node: Node, source: &[u8], out: &mut Vec<(String, usize, String)>, min_body_lines: usize, min_normalized_chars: usize) {
     match node.kind() {
         "function_declaration" => {
             if let Some((name, line, body)) = extract_function_info(node, source) {
                 let normalized = normalize_body(&body);
-                if body_meets_threshold(&body, &normalized) {
+                if body_meets_threshold(&body, &normalized, min_body_lines, min_normalized_chars) {
                     out.push((name, line, normalized));
                 }
             }
@@ -194,7 +186,7 @@ fn collect_functions(node: Node, source: &[u8], out: &mut Vec<(String, usize, St
                     && let Ok(body_text) = body_n.utf8_text(source)
                 {
                     let normalized = normalize_body(body_text);
-                    if body_meets_threshold(body_text, &normalized) {
+                    if body_meets_threshold(body_text, &normalized, min_body_lines, min_normalized_chars) {
                         let line = name_node.start_position().row + 1;
                         out.push((name.to_string(), line, normalized));
                     }
@@ -206,7 +198,7 @@ fn collect_functions(node: Node, source: &[u8], out: &mut Vec<(String, usize, St
             let count = node.named_child_count();
             for i in 0..count {
                 if let Some(child) = node.named_child(i) {
-                    collect_functions(child, source, out);
+                    collect_functions(child, source, out, min_body_lines, min_normalized_chars);
                 }
             }
         }
@@ -252,13 +244,15 @@ fn format_group_message(
 
 crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
     let import_index = ctx.project.import_index();
+    let min_body_lines = ctx.config.threshold("no-identical-functions", "min_body_lines", ctx.lang);
+    let min_normalized_chars = ctx.config.threshold("no-identical-functions", "min_normalized_chars", ctx.lang);
 
     // Collect this file's functions once — both paths reuse the same list.
     let mut local_functions: Vec<(String, usize, String)> = Vec::new();
     let child_count = node.named_child_count();
     for i in 0..child_count {
         let Some(child) = node.named_child(i) else { continue };
-        collect_functions(child, source, &mut local_functions);
+        collect_functions(child, source, &mut local_functions, min_body_lines, min_normalized_chars);
     }
 
     if import_index.is_empty() {
@@ -294,7 +288,7 @@ crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
     // full group. De-duplicate on `(hash, line)` so a function that
     // appears twice in the group (shouldn't, but guard anyway) doesn't
     // fire twice.
-    let global = cross_file_index(import_index);
+    let global = cross_file_index(import_index, min_body_lines, min_normalized_chars);
     let mut fired: HashSet<(u64, usize)> = HashSet::new();
     for (_name, line, normalized) in &local_functions {
         let h = hash_str(normalized);

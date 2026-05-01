@@ -2,8 +2,6 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-const GIANT_COMPONENT_LINE_THRESHOLD: usize = 300;
-
 fn subtree_has_jsx(node: tree_sitter::Node) -> bool {
     match node.kind() {
         "jsx_element" | "jsx_self_closing_element" | "jsx_fragment" => true,
@@ -49,11 +47,13 @@ crate::ast_check! { on ["function_declaration", "arrow_function"] => |node, sour
         return;
     }
 
+    let max = ctx.config.threshold("react-no-giant-component", "max", ctx.lang);
+
     let start_line = node.start_position().row;
     let end_line = node.end_position().row;
     let line_count = end_line - start_line + 1;
 
-    if line_count <= GIANT_COMPONENT_LINE_THRESHOLD {
+    if line_count <= max {
         return;
     }
 

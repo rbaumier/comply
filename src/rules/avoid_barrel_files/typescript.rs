@@ -12,8 +12,6 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 
-const BARREL_THRESHOLD: usize = 3;
-
 #[derive(Debug)]
 pub struct Check;
 
@@ -23,6 +21,8 @@ impl AstCheck for Check {
         if root.kind() != "program" {
             return Vec::new();
         }
+
+        let barrel_threshold = ctx.config.threshold("avoid-barrel-files", "min_reexports", ctx.lang);
 
         let mut reexport_count = 0usize;
         let mut cursor = root.walk();
@@ -43,7 +43,7 @@ impl AstCheck for Check {
             }
         }
 
-        if reexport_count < BARREL_THRESHOLD {
+        if reexport_count < barrel_threshold {
             return Vec::new();
         }
 

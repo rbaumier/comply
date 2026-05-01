@@ -4,8 +4,6 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-const BLUR_THRESHOLD_PX: f64 = 20.0;
-
 fn is_in_style_jsx_attribute(node: tree_sitter::Node, source: &[u8]) -> bool {
     let Some(obj) = node.parent() else {
         return false;
@@ -63,7 +61,8 @@ crate::ast_check! { on ["pair"] prefilter = ["backdropFilter"] => |node, source,
     let value = value_raw.trim_matches(|c| c == '"' || c == '\'');
 
     let Some(radius) = max_blur_px(value) else { return };
-    if radius <= BLUR_THRESHOLD_PX {
+    let max_blur = ctx.config.float("ui-no-large-animated-blur", "max_blur_px", ctx.lang);
+    if radius <= max_blur {
         return;
     }
 
@@ -73,7 +72,7 @@ crate::ast_check! { on ["pair"] prefilter = ["backdropFilter"] => |node, source,
         column: node.start_position().column + 1,
         rule_id: super::META.id.into(),
         message: format!(
-            "`blur({radius}px)` exceeds {BLUR_THRESHOLD_PX}px — cost escalates with radius and \
+            "`blur({radius}px)` exceeds {max_blur}px — cost escalates with radius and \
              layer size, can exhaust GPU memory on mobile."
         ),
         severity: Severity::Warning,

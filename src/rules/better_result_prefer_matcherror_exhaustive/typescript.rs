@@ -1,10 +1,5 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
-/// Threshold above which `matchErrorPartial` is considered "almost exhaustive"
-/// and the developer should likely use `matchError` instead. Below this, the
-/// partial match is probably intentional.
-const MIN_TAGS_TO_SUGGEST_EXHAUSTIVE: usize = 3;
-
 crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     let Some(callee) = node.child_by_field_name("function") else { return; };
     if callee.kind() != "member_expression" {
@@ -18,6 +13,7 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     // Without type info we can't know whether the union is fully enumerated.
     // Conservative heuristic: only flag when the match object enumerates
     // 3+ tags, suggesting the developer has covered most/all cases.
+    let min_tags = ctx.config.threshold("better-result-prefer-matcherror-exhaustive", "min_tags", ctx.lang);
     let Some(args) = node.child_by_field_name("arguments") else { return; };
     let mut cursor = args.walk();
     let Some(obj) = args.children(&mut cursor).find(|c| c.kind() == "object") else { return; };
@@ -26,7 +22,7 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
         .children(&mut ocursor)
         .filter(|c| c.kind() == "pair" || c.kind() == "method_definition")
         .count();
-    if tag_count < MIN_TAGS_TO_SUGGEST_EXHAUSTIVE {
+    if tag_count < min_tags {
         return;
     }
 

@@ -2,8 +2,6 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-const Z_INDEX_THRESHOLD: i64 = 100;
-
 fn is_in_style_jsx_attribute(node: tree_sitter::Node, source: &[u8]) -> bool {
     let Some(obj) = node.parent() else {
         return false;
@@ -44,7 +42,8 @@ crate::ast_check! { on ["pair"] prefilter = ["zIndex"] => |node, source, ctx, di
     let Ok(num_str) = value.utf8_text(source) else { return };
     let Ok(num) = num_str.parse::<i64>() else { return };
 
-    if num <= Z_INDEX_THRESHOLD {
+    let max_z = ctx.config.threshold("ui-no-z-index-9999", "max", ctx.lang) as i64;
+    if num <= max_z {
         return;
     }
 
@@ -54,7 +53,7 @@ crate::ast_check! { on ["pair"] prefilter = ["zIndex"] => |node, source, ctx, di
         column: node.start_position().column + 1,
         rule_id: super::META.id.into(),
         message: format!(
-            "`zIndex: {num}` — values above {Z_INDEX_THRESHOLD} indicate a z-index arms race."
+            "`zIndex: {num}` — values above {max_z} indicate a z-index arms race."
         ),
         severity: Severity::Warning,
         span: None,

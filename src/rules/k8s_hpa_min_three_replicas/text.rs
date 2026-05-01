@@ -17,14 +17,15 @@ crate::ast_check! { prefilter = ["apiVersion"] => |node, source, ctx, diagnostic
     let Some(spec) = y::descend_mapping(node, source, &["spec"]) else { return; };
     let Some(pair) = y::find_pair(spec, source, "minReplicas") else { return; };
     let Some(value) = y::pair_scalar_value(pair, source) else { return; };
+    let min_replicas = ctx.config.threshold("k8s-hpa-min-three-replicas", "min_replicas", ctx.lang);
     if let Ok(n) = value.parse::<i64>()
-        && n < 3
+        && n < min_replicas as i64
     {
         diagnostics.push(Diagnostic::at_node(
             ctx.path,
             &pair,
             super::META.id,
-            format!("HPA minReplicas must be >= 3 (found {n})."),
+            format!("HPA minReplicas must be >= {min_replicas} (found {n})."),
             Severity::Warning,
         ));
     }

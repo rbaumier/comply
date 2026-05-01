@@ -5,11 +5,6 @@ use crate::rules::jsx::{
     jsx_attribute_name, jsx_attribute_string_value, jsx_attribute_value, jsx_element_tag_name,
 };
 
-/// Threshold (in pixels) above which an image is considered "hero-sized"
-/// and should declare `fetchpriority="high"`. 600px covers typical hero
-/// banners while skipping avatars/thumbnails.
-const HERO_PIXEL_THRESHOLD: u32 = 600;
-
 fn parse_dim(val: &str) -> Option<u32> {
     // strip trailing unit ("px") and whitespace
     let trimmed = val.trim().trim_end_matches("px").trim();
@@ -86,8 +81,9 @@ crate::ast_check! { on ["jsx_self_closing_element", "jsx_opening_element"] prefi
     }
 
     // Case 2: hero-sized img without fetchpriority="high"
-    let is_hero = width.is_some_and(|w| w >= HERO_PIXEL_THRESHOLD)
-        || height.is_some_and(|h| h >= HERO_PIXEL_THRESHOLD);
+    let hero_threshold = ctx.config.threshold("perf-img-fetchpriority-high", "hero_pixel_threshold", ctx.lang) as u32;
+    let is_hero = width.is_some_and(|w| w >= hero_threshold)
+        || height.is_some_and(|h| h >= hero_threshold);
     if is_hero && fetchpriority.as_deref() != Some("high") {
         diagnostics.push(Diagnostic::at_node(
             ctx.path,

@@ -4,8 +4,6 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-const MIN_LEN: usize = 32;
-
 crate::ast_check! { on ["call_expression"] prefilter = ["useSession"] => |node, source, ctx, diagnostics|
     let Some(callee) = node.child_by_field_name("function") else { return; };
     let Ok(callee_text) = callee.utf8_text(source) else { return; };
@@ -18,9 +16,10 @@ crate::ast_check! { on ["call_expression"] prefilter = ["useSession"] => |node, 
     if !matches!(password_value.kind(), "string" | "template_string") {
         return;
     }
+    let min_len = ctx.config.threshold("tanstack-start-session-secret-min-length", "min_length", ctx.lang);
     let Ok(text) = password_value.utf8_text(source) else { return; };
     let inner_len = text.trim_matches(|c| c == '"' || c == '\'' || c == '`').chars().count();
-    if inner_len >= MIN_LEN { return; }
+    if inner_len >= min_len { return; }
 
     diagnostics.push(Diagnostic::at_node(
         ctx.path,
@@ -28,7 +27,7 @@ crate::ast_check! { on ["call_expression"] prefilter = ["useSession"] => |node, 
         super::META.id,
         format!(
             "`useSession` password literal is only {inner_len} chars; must be \
-             at least {MIN_LEN}. Prefer reading from an env var."
+             at least {min_len}. Prefer reading from an env var."
         ),
         Severity::Warning,
     ));
