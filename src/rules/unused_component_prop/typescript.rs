@@ -3,6 +3,8 @@ use std::collections::{HashMap, HashSet};
 use oxc_ast::AstKind;
 use oxc_ast::ast::{BindingPattern, PropertyKey, TSSignature, TSType, TSTypeName};
 
+use oxc_semantic::NodeId;
+
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::{source_type_for_path, with_semantic};
 use crate::rules::backend::CheckCtx;
@@ -10,17 +12,19 @@ use crate::rules::backend::CheckCtx;
 #[derive(Debug)]
 pub struct Check;
 
-fn is_type_test_file(path: &std::path::Path) -> bool {
+fn is_type_test_file(path: &std::path::Path, source: &str) -> bool {
     let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
     name.contains("types.test")
         || name.contains(".type-test")
         || name.ends_with(".d.ts")
         || name.ends_with(".d.tsx")
+        || source.contains("@vitest-environment")
+        || source.contains("@ts-check")
 }
 
 impl crate::rules::backend::AstCheck for Check {
     fn check(&self, ctx: &CheckCtx, _tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
-        if is_type_test_file(ctx.path) {
+        if is_type_test_file(ctx.path, ctx.source) {
             return Vec::new();
         }
         let source_type = source_type_for_path(ctx.path);
@@ -60,6 +64,10 @@ impl crate::rules::backend::AstCheck for Check {
                     AstKind::FormalParameter(p) => p,
                     _ => continue,
                 };
+
+                if !is_in_component_function(nodes, node.id()) {
+                    continue;
+                }
 
                 let declared_props = match resolve_props(param, &prop_types) {
                     Some(p) => p,
@@ -115,6 +123,28 @@ impl crate::rules::backend::AstCheck for Check {
 struct PropInfo {
     name: String,
     span_start: usize,
+}
+
+fn is_in_component_function(nodes: &oxc_semantic::AstNodes, node_id: NodeId) -> bool {
+    for kind in nodes.ancestor_kinds(node_id).skip(1) {
+        match kind {
+            AstKind::Function(f) => {
+                if let Some(id) = &f.id {
+                    return id.name.as_str().starts_with(char::is_uppercase);
+                }
+            }
+            AstKind::ArrowFunctionExpression(_) => {}
+            AstKind::VariableDeclarator(decl) => {
+                if let BindingPattern::BindingIdentifier(ident) = &decl.id {
+                    return ident.name.as_str().starts_with(char::is_uppercase);
+                }
+                return false;
+            }
+            AstKind::Program(_) => return false,
+            _ => {}
+        }
+    }
+    false
 }
 
 fn collect_ts_signature_props(sigs: &[TSSignature]) -> Vec<PropInfo> {
@@ -375,14 +405,52 @@ function App(props: Props) {
     }
 
     #[test]
-    fn allows_non_props_parameter() {
+    fn skips_non_component_function() {
         let src = r#"
 function helper({ a }: { a: number; b: string }) {
   return a;
 }
 "#;
-        // Non-component functions also get checked (inline type)
-        let d = run_on(src);
-        assert_eq!(d.len(), 1);
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn skips_non_component_interface() {
+        let src = r#"
+interface EditorOptions {
+  at: Location;
+  match: NodeMatch;
+  mode: MaximizeMode;
+  voids: boolean;
+}
+function ancestors(editor: Editor, options: EditorOptions) {
+  return editor.at;
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn skips_type_test_files() {
+        let src = r#"
+interface Props { num: number; numGet: () => number; }
+function App({ num }: Props) {
+  return num;
+}
+"#;
+        let d = crate::rules::test_helpers::run_ts_with_path(src, &Check, "src/types.test.tsx");
+        assert!(d.is_empty());
+    }
+
+    #[test]
+    fn skips_ts_check_type_test_context() {
+        let src = r#"
+// @ts-check
+interface Props { num: number; numGet: () => number; }
+function App({ num }: Props) {
+  return num;
+}
+"#;
+        assert!(run_on(src).is_empty());
     }
 }

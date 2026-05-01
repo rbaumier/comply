@@ -52,6 +52,19 @@ impl crate::rules::backend::AstCheck for Check {
                     continue;
                 }
 
+                let in_type_decl = nodes.ancestor_kinds(decl_node).any(|k| {
+                    matches!(
+                        k,
+                        AstKind::TSTypeAliasDeclaration(_)
+                            | AstKind::TSInterfaceDeclaration(_)
+                            | AstKind::TSModuleDeclaration(_)
+                            | AstKind::TSFunctionType(_)
+                    )
+                });
+                if in_type_decl {
+                    continue;
+                }
+
                 let span = scoping.symbol_span(symbol_id);
                 let (line, column) = byte_offset_to_line_col(ctx.source, span.start as usize);
                 diagnostics.push(Diagnostic {
@@ -144,5 +157,45 @@ mod tests {
         let d = run_on("import { foo } from './x'; console.log('hello');");
         assert_eq!(d.len(), 1, "imported `foo` is never used");
         assert!(d[0].message.contains("`foo`"));
+    }
+
+    #[test]
+    fn skips_params_in_type_alias() {
+        let src = r#"
+type JsonReplacer = (key: string, value: unknown) => unknown;
+export const x: JsonReplacer = (k, v) => v;
+"#;
+        let d = run_on(src);
+        assert!(
+            !d.iter().any(|d| d.message.contains("`key`") || d.message.contains("`value`")),
+            "params in type signatures are not runtime vars"
+        );
+    }
+
+    #[test]
+    fn skips_params_in_interface_method() {
+        let src = r#"
+interface Store {
+  subscribe(listener: () => void): () => void;
+}
+export function createStore(): Store { return null as any; }
+"#;
+        let d = run_on(src);
+        assert!(
+            !d.iter().any(|d| d.message.contains("`listener`")),
+            "interface method params are not runtime vars"
+        );
+    }
+
+    #[test]
+    fn skips_type_params_in_declare_module() {
+        let src = r#"
+declare module '../vanilla' {
+  interface StoreMutators<S, A> {
+    ['test']: S;
+  }
+}
+"#;
+        assert!(run_on(src).is_empty());
     }
 }
