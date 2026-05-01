@@ -333,4 +333,6 @@ Note : les ~192 `f` restant sur tokio sont des **function params** de higher-ord
 | `ts-no-unused-vars` (type contexts) | jotai | 110 | 0 | -110 |
 | `no-hardcoded-ip` (versions) | starship | 19 | 14 | -5 |
 | `no-abbreviated-names` (config allowed) | — | — | — | configurable |
-| **Total session 7** | | | | **~427** |
+| `symmetric-pairs` (get→set removed) | clap | 84 | 4 | -80 |
+| `symmetric-pairs` (get→set removed) | starship | 57 | 10 | -47 |
+| **Total session 7** | | | | **~554** |
