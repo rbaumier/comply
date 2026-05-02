@@ -12,9 +12,11 @@
 //!    Oxlint/Clippy/Tsc contribute their rule-id to external tools and
 //!    their diagnostics are remapped post-hoc.
 
+mod oxc_walk;
 mod prefilter;
 mod walk;
 
+use oxc_walk::run_oxc_checks;
 use prefilter::{PrefilterFinders, build_finders, source_matches_prefilter};
 use walk::{run_legacy_checks, run_multiplexed_walk};
 
@@ -380,6 +382,28 @@ fn dispatch_with_lang(
             }
         }
         diagnostics.extend(produced);
+    }
+
+    // oxc-based rules -- parse once with oxc_parser if any Oxc backend is
+    // enabled for this file.
+    let needs_oxc = !ld.oxc_rules.is_empty()
+        && ld
+            .oxc_rules
+            .iter()
+            .zip(&ld.oxc_prefilters)
+            .any(|((meta, _), pf)| {
+                config.is_rule_enabled(meta.id, path)
+                    && !should_skip_test_fixture_rule(meta, &file_ctx)
+                    && !should_skip_relaxed_directory_rule(meta, path)
+                    && pf
+                        .as_ref()
+                        .is_none_or(|f| source_matches_prefilter(source, f))
+            });
+
+    if needs_oxc {
+        crate::oxc_helpers::with_oxc_parse(source, path, |semantic| {
+            run_oxc_checks(ld, semantic, &ctx, source, path, config, &mut diagnostics);
+        });
     }
 
     if let Some(ref t) = tree {

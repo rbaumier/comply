@@ -41,3 +41,19 @@ where
     let semantic = SemanticBuilder::new().build(&parse_ret.program).semantic;
     f(&semantic)
 }
+
+/// Parse `source` with oxc_parser using the source type inferred from `path`,
+/// build semantic analysis, then hand the `Semantic` to `f`. The allocator
+/// and AST are dropped after `f` returns.
+///
+/// Used by the engine hot path for `Backend::Oxc` dispatch.
+pub fn with_oxc_parse<F, R>(source: &str, path: &Path, f: F) -> R
+where
+    F: for<'a> FnOnce(&'a Semantic<'a>) -> R,
+{
+    let source_type = source_type_for_path(path);
+    let allocator = Allocator::default();
+    let parse_ret = Parser::new(&allocator, source, source_type).parse();
+    let semantic = SemanticBuilder::new().build(&parse_ret.program).semantic;
+    f(&semantic)
+}
