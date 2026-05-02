@@ -39,6 +39,7 @@
 //! `failure`, …) is flagged.
 
 mod oxc_typescript;
+mod oxc_vue;
 mod typescript;
 mod vue;
 
@@ -99,7 +100,7 @@ pub fn register() -> RuleDef {
                 Language::Tsx,
                 Backend::Oxc(Box::new(oxc_typescript::Check)),
             ),
-            (Language::Vue, Backend::TreeSitter(Box::new(vue::Check))),
+            (Language::Vue, Backend::TreeSitter(Box::new(oxc_vue::Check))),
         ],
     }
 }
