@@ -1,0 +1,12 @@
+[detection]
+dependencies = ["drizzle-orm"]
+
+[entry_points]
+dirs = []
+files = ["drizzle.config.ts", "drizzle.config.js"]
+
+[magic_exports]
+names = []
+
+[tooling_deps]
+names = ["drizzle-kit", "drizzle-zod"]

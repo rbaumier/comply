@@ -1,0 +1,12 @@
+[detection]
+dependencies = ["@tanstack/react-query", "@tanstack/vue-query", "@tanstack/solid-query"]
+
+[entry_points]
+dirs = []
+files = []
+
+[magic_exports]
+names = []
+
+[tooling_deps]
+names = []
