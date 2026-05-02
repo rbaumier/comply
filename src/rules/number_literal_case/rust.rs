@@ -2,29 +2,38 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-/// The canonical form: lowercase prefix/exponent, uppercase hex digits.
+/// Flag only mixed-case hex digits (e.g. `0xfF`). All-uppercase (`0xFF`)
+/// and all-lowercase (`0xff`) are both valid Rust conventions.
+/// Never touch the type suffix (`u8`, `i32`) — it must be lowercase.
 fn canonical(raw: &str) -> Option<String> {
     if raw.len() < 2 {
         return None;
     }
 
     let prefix_lower = raw[..2].to_lowercase();
-    let fixed = match prefix_lower.as_str() {
+    match prefix_lower.as_str() {
         "0x" => {
-            let digits = &raw[2..];
-            format!("0x{}", digits.to_uppercase())
+            let after = &raw[2..];
+            let hex_end = after
+                .find(|c: char| !c.is_ascii_hexdigit() && c != '_')
+                .unwrap_or(after.len());
+            let hex = &after[..hex_end];
+
+            let has_upper = hex.chars().any(|c| c.is_ascii_uppercase());
+            let has_lower = hex.chars().any(|c| c.is_ascii_lowercase());
+            if !(has_upper && has_lower) {
+                return None;
+            }
+            let suffix = &after[hex_end..];
+            let fixed = format!("0x{}{suffix}", hex.to_uppercase());
+            if fixed == raw { None } else { Some(fixed) }
         }
         "0b" | "0o" => {
-            format!("{}{}", prefix_lower, &raw[2..])
+            let fixed = format!("{}{}", prefix_lower, &raw[2..]);
+            if fixed == raw { None } else { Some(fixed) }
         }
-        _ => {
-            // Rust doesn't have JS-style exponent notation for integer literals,
-            // but scientific notation exists in float contexts. Skip if no match.
-            return None;
-        }
-    };
-
-    if fixed == raw { None } else { Some(fixed) }
+        _ => None,
+    }
 }
 
 crate::ast_check! { on ["integer_literal"] => |node, source, ctx, diagnostics|
@@ -52,10 +61,8 @@ mod tests {
     use crate::rules::test_helpers::run_rust;
 
     #[test]
-    fn flags_lowercase_hex_digits() {
-        let d = run_rust("fn f() { let x = 0xff; }", &Check);
-        assert_eq!(d.len(), 1);
-        assert!(d[0].message.contains("0xFF"));
+    fn allows_all_lowercase_hex() {
+        assert!(run_rust("fn f() { let x = 0xff; }", &Check).is_empty());
     }
 
     #[test]
@@ -66,8 +73,20 @@ mod tests {
     }
 
     #[test]
-    fn allows_correct_hex() {
+    fn allows_all_uppercase_hex() {
         assert!(run_rust("fn f() { let x = 0xFF; }", &Check).is_empty());
+    }
+
+    #[test]
+    fn allows_lowercase_hex_with_type_suffix() {
+        assert!(run_rust("fn f() { let x = 0xffu8; }", &Check).is_empty());
+    }
+
+    #[test]
+    fn flags_mixed_hex_preserves_suffix() {
+        let d = run_rust("fn f() { let x = 0xfFu8; }", &Check);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("0xFFu8"));
     }
 
     #[test]

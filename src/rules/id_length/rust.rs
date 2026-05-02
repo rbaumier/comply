@@ -53,6 +53,9 @@ impl AstCheck for Check {
         if is_fmt_param(node, source_bytes) {
             return;
         }
+        if is_conventional_short_binding(node, name) {
+            return;
+        }
         let pos = node.start_position();
         diagnostics.push(Diagnostic {
             path: std::sync::Arc::clone(&ctx.path_arc),
@@ -164,6 +167,28 @@ fn is_fmt_param(node: tree_sitter::Node, source: &[u8]) -> bool {
         .is_some_and(|name| name == "fmt")
 }
 
+/// Single-letter names idiomatic in Rust: loop indices, counts, math
+/// coordinates, key/value pairs, error/string/file handles.
+const CONVENTIONAL_RUST_NAMES: &[&str] = &[
+    "i", "j", "k", "n", "x", "y", "z", "s", "f", "v", "e", "w", "r",
+    "a", "b", "c", "d", "m", "p", "h",
+];
+
+/// Allow conventional single-letter names in let bindings, for-loop
+/// variables, and function parameters — idiomatic Rust.
+fn is_conventional_short_binding(node: tree_sitter::Node, name: &str) -> bool {
+    if !CONVENTIONAL_RUST_NAMES.contains(&name) {
+        return false;
+    }
+    let Some(parent) = node.parent() else {
+        return false;
+    };
+    matches!(
+        parent.kind(),
+        "let_declaration" | "parameter" | "for_expression"
+    )
+}
+
 fn field_matches(parent: tree_sitter::Node, field: &str, node: tree_sitter::Node) -> bool {
     parent
         .child_by_field_name(field)
@@ -190,9 +215,17 @@ mod tests {
     }
 
     #[test]
-    fn flags_short_function_parameter() {
+    fn flags_short_function_name_and_param() {
+        // `g` = function name (not conventional context), `q` = param (not conventional name)
         let diags = run_on("fn g(q: u32) -> u32 { q }");
         assert_eq!(diags.len(), 2);
+    }
+
+    #[test]
+    fn allows_conventional_function_parameter() {
+        // `n` is conventional in a parameter position
+        let diags = run_on("fn process(n: usize) -> usize { n }");
+        assert!(diags.is_empty());
     }
 
     #[test]
@@ -202,16 +235,21 @@ mod tests {
     }
 
     #[test]
-    fn flags_single_letter_names() {
-        assert!(!run_on("fn main() { let f = File::open(\"x\"); }").is_empty());
-        assert!(!run_on("fn main() { let s = String::new(); }").is_empty());
-        assert!(!run_on("fn main() { let v = Vec::new(); }").is_empty());
-        assert!(!run_on("fn main() { let n = 42; }").is_empty());
+    fn allows_conventional_single_letter_let_bindings() {
+        assert!(run_on("fn main() { let f = File::open(\"x\"); }").is_empty());
+        assert!(run_on("fn main() { let s = String::new(); }").is_empty());
+        assert!(run_on("fn main() { let v = Vec::new(); }").is_empty());
+        assert!(run_on("fn main() { let n = 42; }").is_empty());
     }
 
     #[test]
-    fn flags_for_loop_var() {
-        assert!(!run_on("fn main() { for i in 0..10 { println!(\"{}\", i); } }").is_empty());
+    fn allows_conventional_for_loop_var() {
+        assert!(run_on("fn main() { for i in 0..10 { println!(\"{}\", i); } }").is_empty());
+    }
+
+    #[test]
+    fn flags_unconventional_single_letter_let() {
+        assert!(!run_on("fn main() { let q = 1; }").is_empty());
     }
 
     #[test]
@@ -225,16 +263,15 @@ mod tests {
     }
 
     #[test]
-    fn flags_a_alone() {
+    fn allows_conventional_param_alone() {
         let diags = run_on("fn process(a: i32) -> i32 { a }");
-        assert!(diags.iter().any(|d| d.message.contains("`a`")));
+        assert!(diags.is_empty());
     }
 
     #[test]
-    fn flags_ab_with_third_param() {
+    fn allows_conventional_params_multiple() {
         let diags = run_on("fn process(a: i32, b: i32, c: i32) -> i32 { a + b + c }");
-        assert!(diags.iter().any(|d| d.message.contains("`a`")));
-        assert!(diags.iter().any(|d| d.message.contains("`b`")));
+        assert!(diags.is_empty());
     }
 
     #[test]
