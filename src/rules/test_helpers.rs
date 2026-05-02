@@ -345,3 +345,55 @@ fn run_with_grammar_and_file(
         &tree,
     )
 }
+
+// ── oxc helpers ──────────────────────────────────────────────────────
+
+use crate::rules::backend::OxcCheck;
+use oxc_allocator::Allocator;
+use oxc_parser::Parser as OxcParser;
+use oxc_semantic::SemanticBuilder;
+use oxc_span::SourceType;
+
+/// Run an `OxcCheck` against `source` parsed as TypeScript (`.ts`).
+#[must_use]
+pub fn run_oxc_ts(source: &str, check: &dyn OxcCheck) -> Vec<Diagnostic> {
+    run_oxc_with_source_type(source, check, SourceType::ts(), "t.ts")
+}
+
+/// Run an `OxcCheck` against `source` parsed as TSX (`.tsx`).
+#[must_use]
+pub fn run_oxc_tsx(source: &str, check: &dyn OxcCheck) -> Vec<Diagnostic> {
+    run_oxc_with_source_type(source, check, SourceType::tsx(), "t.tsx")
+}
+
+/// Run an `OxcCheck` against `source` parsed as JavaScript (`.js`).
+#[must_use]
+pub fn run_oxc_js(source: &str, check: &dyn OxcCheck) -> Vec<Diagnostic> {
+    run_oxc_with_source_type(source, check, SourceType::mjs(), "t.js")
+}
+
+fn run_oxc_with_source_type(
+    source: &str,
+    check: &dyn OxcCheck,
+    source_type: SourceType,
+    fake_path: &str,
+) -> Vec<Diagnostic> {
+    let allocator = Allocator::default();
+    let parse_ret = OxcParser::new(&allocator, source, source_type).parse();
+    let semantic = SemanticBuilder::new().build(&parse_ret.program).semantic;
+    let ctx = CheckCtx::for_test(Path::new(fake_path), source);
+
+    let kinds = check.interested_kinds();
+    if kinds.is_empty() {
+        return check.run_on_semantic(&semantic, &ctx);
+    }
+
+    let mut diagnostics = Vec::new();
+    for node in semantic.nodes().iter() {
+        let ty = node.kind().ty();
+        if kinds.contains(&ty) {
+            check.run(node, &ctx, &semantic, &mut diagnostics);
+        }
+    }
+    diagnostics
+}
