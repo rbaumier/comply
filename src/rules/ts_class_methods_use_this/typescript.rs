@@ -33,6 +33,53 @@ fn contains_this(node: tree_sitter::Node) -> bool {
     false
 }
 
+fn has_decorator_child(node: tree_sitter::Node) -> bool {
+    let mut cursor = node.walk();
+    node.named_children(&mut cursor)
+        .any(|child| child.kind() == "decorator")
+}
+
+fn method_has_decorator(method: tree_sitter::Node) -> bool {
+    if has_decorator_child(method) {
+        return true;
+    }
+    let Some(parent) = method.parent() else {
+        return false;
+    };
+    let mut cursor = parent.walk();
+    let mut decorator_before_current = false;
+    for child in parent.named_children(&mut cursor) {
+        if child.kind() == "decorator" {
+            decorator_before_current = true;
+            continue;
+        }
+        if child.start_byte() == method.start_byte() && child.end_byte() == method.end_byte() {
+            return decorator_before_current;
+        }
+        decorator_before_current = false;
+    }
+    false
+}
+
+fn method_is_in_decorated_class(method: tree_sitter::Node) -> bool {
+    let Some(class_body) = method.parent() else {
+        return false;
+    };
+    if class_body.kind() != "class_body" {
+        return false;
+    }
+    let Some(class_node) = class_body.parent() else {
+        return false;
+    };
+    if !matches!(class_node.kind(), "class_declaration" | "class") {
+        return false;
+    }
+    if has_decorator_child(class_node) {
+        return true;
+    }
+    class_node.parent().is_some_and(has_decorator_child)
+}
+
 crate::ast_check! { on ["method_definition"] => |node, source, ctx, diagnostics|
     // Must be inside a class body.
     let Some(parent) = node.parent() else { return };
@@ -54,6 +101,10 @@ crate::ast_check! { on ["method_definition"] => |node, source, ctx, diagnostics|
         .and_then(|n| std::str::from_utf8(&source[n.byte_range()]).ok())
         .unwrap_or("");
     if name == "constructor" {
+        return;
+    }
+
+    if method_has_decorator(node) || method_is_in_decorated_class(node) {
         return;
     }
 
@@ -110,5 +161,17 @@ mod tests {
     #[test]
     fn allows_constructor() {
         assert!(run_on("class Foo { constructor() { const x = 1; } }").is_empty());
+    }
+
+    #[test]
+    fn allows_decorated_method_without_this() {
+        let src = "class Foo { @Get() bar() { return 1; } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_methods_in_decorated_class_without_this() {
+        let src = "@Controller()\nexport class Foo { bar() { return 1; } }";
+        assert!(run_on(src).is_empty());
     }
 }

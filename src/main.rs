@@ -53,9 +53,11 @@ use config::Config;
 use diagnostic::Diagnostic;
 use files::{Language, SourceFile};
 
+const RAYON_WORKER_STACK_SIZE_BYTES: usize = 32 * 1024 * 1024;
+
 fn main() -> ExitCode {
     rayon::ThreadPoolBuilder::new()
-        .stack_size(16 * 1024 * 1024)
+        .stack_size(RAYON_WORKER_STACK_SIZE_BYTES)
         .build_global()
         .ok();
     match run() {
@@ -68,6 +70,16 @@ fn main() -> ExitCode {
             );
             ExitCode::from(2)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rayon_worker_stack_size_covers_deep_project_walks() {
+        assert!(RAYON_WORKER_STACK_SIZE_BYTES >= 32 * 1024 * 1024);
     }
 }
 
@@ -309,7 +321,8 @@ fn lint_project(cli: &Cli) -> Result<bool> {
         eprintln!("comply: ran {runs} fixer(s); re-linting");
     }
 
-    let diagnostics = collect_all_diagnostics(&discovered, &config, &mut timings)?;
+    let diagnostics =
+        collect_all_diagnostics(&discovered, &config, &mut timings, cli.no_external_tools)?;
 
     let t_post = Instant::now();
     let after_overrides = apply_config_filters(diagnostics, &config);
@@ -593,7 +606,7 @@ fn lint_typescript(
             return (Ok(Vec::new()), Duration::ZERO);
         }
         let t = Instant::now();
-        (oxlint::lint_files(ts_files, config), t.elapsed())
+        (oxlint::lint_files(ts_files, config, project), t.elapsed())
     };
     let engine_phase = || -> PhaseOut {
         let t = Instant::now();

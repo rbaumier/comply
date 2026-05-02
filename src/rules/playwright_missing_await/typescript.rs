@@ -130,7 +130,7 @@ fn is_pw_object(node: tree_sitter::Node, source: &[u8]) -> bool {
 }
 
 crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
-    if !source.windows(16).any(|w| w == b"@playwright/test") {
+    if !crate::rules::playwright::is_playwright_context(ctx) {
         return;
     }
     if is_inside_await(node) {

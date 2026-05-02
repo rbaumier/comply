@@ -202,4 +202,10 @@ mod tests {
         let src = "const v = Schema.parse(input).foo;";
         assert!(run(src).is_empty());
     }
+
+    #[test]
+    fn no_crash_on_georgian_before_safeparse_window() {
+        let src = "// ქართული ტექსტი\nconst r = Schema.safeParse(input);\nconst v = r.data;";
+        assert_eq!(run(src).len(), 1);
+    }
 }

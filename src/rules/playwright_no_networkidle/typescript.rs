@@ -13,7 +13,7 @@ crate::ast_check! { prefilter = ["networkidle"] => |node, source, ctx, diagnosti
     if !is_test_file(ctx.path) {
         return;
     }
-    if !source.windows(16).any(|w| w == b"@playwright/test") {
+    if !crate::rules::playwright::is_playwright_context(ctx) {
         return;
     }
 
@@ -62,7 +62,7 @@ mod tests {
     use std::path::Path;
 
     fn run(path: &str, source: &str) -> Vec<Diagnostic> {
-        let full = format!("{source}\n// @playwright/test");
+        let full = format!("import {{ test, expect }} from \"@playwright/test\";\n{source}");
         let mut parser = tree_sitter::Parser::new();
         parser
             .set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into())

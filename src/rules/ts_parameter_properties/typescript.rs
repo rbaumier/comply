@@ -7,6 +7,31 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
+fn has_decorator_child(node: tree_sitter::Node) -> bool {
+    let mut cursor = node.walk();
+    node.named_children(&mut cursor)
+        .any(|child| child.kind() == "decorator")
+}
+
+fn decorated_class_for_constructor(constructor: tree_sitter::Node) -> bool {
+    let Some(class_body) = constructor.parent() else {
+        return false;
+    };
+    if class_body.kind() != "class_body" {
+        return false;
+    }
+    let Some(class_node) = class_body.parent() else {
+        return false;
+    };
+    if !matches!(class_node.kind(), "class_declaration" | "class") {
+        return false;
+    }
+    if has_decorator_child(class_node) {
+        return true;
+    }
+    class_node.parent().is_some_and(has_decorator_child)
+}
+
 crate::ast_check! { on ["required_parameter"] => |node, source, ctx, diagnostics|
     // Must be inside a constructor's formal_parameters
     let Some(parent) = node.parent() else {
@@ -29,6 +54,9 @@ crate::ast_check! { on ["required_parameter"] => |node, source, ctx, diagnostics
         false
     };
     if !is_constructor {
+        return;
+    }
+    if decorated_class_for_constructor(grandparent) {
         return;
     }
     // Check for accessibility modifier or readonly
@@ -87,5 +115,17 @@ mod tests {
     #[test]
     fn allows_normal_parameter() {
         assert!(run_on("class Foo { constructor(name: string) {} }").is_empty());
+    }
+
+    #[test]
+    fn allows_parameter_property_in_decorated_class() {
+        let src = "@Injectable()\nclass Foo { constructor(private readonly service: Service) {} }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_parameter_property_in_exported_decorated_class() {
+        let src = "@Controller()\nexport class Foo { constructor(private readonly service: Service) {} }";
+        assert!(run_on(src).is_empty());
     }
 }

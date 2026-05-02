@@ -11,7 +11,7 @@ crate::ast_check! { on ["comment"] prefilter = ["/**"] => |node, source, ctx, di
         return;
     }
 
-    let mut has_tag = false;
+    let mut tags: Vec<&str> = Vec::new();
     let mut has_description = false;
 
     for line in text.lines() {
@@ -28,13 +28,19 @@ crate::ast_check! { on ["comment"] prefilter = ["/**"] => |node, source, ctx, di
         }
 
         if content.starts_with('@') {
-            has_tag = true;
+            if let Some(tag) = content
+                .trim_start_matches('@')
+                .split_whitespace()
+                .next()
+            {
+                tags.push(tag);
+            }
         } else {
             has_description = true;
         }
     }
 
-    if has_tag && !has_description {
+    if !tags.is_empty() && !has_description && !tags.iter().all(|tag| is_type_only_tag(tag)) {
         let pos = node.start_position();
         diagnostics.push(Diagnostic {
             path: std::sync::Arc::clone(&ctx.path_arc),
@@ -48,6 +54,27 @@ crate::ast_check! { on ["comment"] prefilter = ["/**"] => |node, source, ctx, di
     }
 }
 
+fn is_type_only_tag(tag: &str) -> bool {
+    matches!(
+        tag,
+        "type"
+            | "param"
+            | "arg"
+            | "argument"
+            | "returns"
+            | "return"
+            | "template"
+            | "typedef"
+            | "callback"
+            | "property"
+            | "prop"
+            | "this"
+            | "implements"
+            | "extends"
+            | "satisfies"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -57,7 +84,7 @@ mod tests {
     }
 
     #[test]
-    fn flags_tags_only_jsdoc() {
+    fn allows_param_return_type_signature() {
         let source = r#"
 /**
  * @param x - the input
@@ -65,9 +92,16 @@ mod tests {
  */
 function foo(x: number): number { return x; }
 "#;
-        let d = run_on(source);
-        assert_eq!(d.len(), 1);
-        assert!(d[0].message.contains("only tags"));
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_type_only_jsdoc_annotation() {
+        let source = r#"
+/** @type {import('@sveltejs/kit').Config} */
+const config = {};
+"#;
+        assert!(run_on(source).is_empty());
     }
 
     #[test]

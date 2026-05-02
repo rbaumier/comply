@@ -24,14 +24,18 @@ use rustc_hash::FxHashMap;
 use std::path::Path;
 use std::process::Command;
 use std::sync::OnceLock;
+use std::time::Duration;
+use wait_timeout::ChildExt;
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::files::SourceFile;
+use crate::project::ProjectCtx;
 use crate::rules::meta::RuleMeta;
 use schema::{OxlintDiag, OxlintOutput, OxlintSeverity};
 
 /// Max files per oxlint invocation. Conservative chunk size to avoid ARG_MAX.
 const FILES_PER_BATCH: usize = 500;
+const OXLINT_BATCH_TIMEOUT: Duration = Duration::from_secs(45);
 
 /// Check if oxlint binary is on PATH. Result is cached for the process lifetime.
 pub fn is_available() -> bool {
@@ -50,15 +54,88 @@ pub fn is_available() -> bool {
 pub fn lint_files(
     files: &[&SourceFile],
     config: &crate::config::Config,
+    project: &ProjectCtx,
 ) -> Result<Vec<Diagnostic>> {
     if files.is_empty() {
         return Ok(vec![]);
     }
-    let mut bindings = crate::rules::collect_oxlint_bindings();
-    bindings.extend(crate::rules::collect_tsgolint_bindings());
-    if bindings.is_empty() {
+    let oxlint_bindings = crate::rules::collect_oxlint_bindings();
+    let tsgolint_bindings = crate::rules::collect_tsgolint_bindings();
+    if oxlint_bindings.is_empty() && tsgolint_bindings.is_empty() {
         return Ok(vec![]);
     }
+    let (module_aware_oxlint, standard_oxlint): (Vec<_>, Vec<_>) = oxlint_bindings
+        .into_iter()
+        .partition(|(key, _, _)| is_require_import_rule(key));
+    let (module_aware_tsgolint, standard_tsgolint): (Vec<_>, Vec<_>) = tsgolint_bindings
+        .into_iter()
+        .partition(|(key, _, _)| is_require_import_rule(key));
+
+    let mut all = Vec::new();
+    if !standard_oxlint.is_empty() {
+        all.extend(lint_files_with_bindings(files, config, &standard_oxlint)?);
+    }
+
+    let type_aware = type_aware_files(files);
+    if !type_aware.is_empty() && !standard_tsgolint.is_empty() {
+        all.extend(lint_files_with_bindings(
+            &type_aware,
+            config,
+            &standard_tsgolint,
+        )?);
+    }
+
+    let esm = es_module_files(files, project);
+    if !esm.is_empty() && !module_aware_oxlint.is_empty() {
+        all.extend(lint_files_with_bindings(
+            &esm,
+            config,
+            &module_aware_oxlint,
+        )?);
+    }
+
+    let type_aware_esm = type_aware_files(&esm);
+    if !type_aware_esm.is_empty() && !module_aware_tsgolint.is_empty() {
+        all.extend(lint_files_with_bindings(
+            &type_aware_esm,
+            config,
+            &module_aware_tsgolint,
+        )?);
+    }
+
+    Ok(all)
+}
+
+fn is_require_import_rule(key: &str) -> bool {
+    matches!(key, "typescript/no-require-imports" | "no-require-imports")
+}
+
+fn es_module_files<'a>(files: &[&'a SourceFile], project: &ProjectCtx) -> Vec<&'a SourceFile> {
+    files
+        .iter()
+        .copied()
+        .filter(|file| crate::rules::module_system::is_es_module_context(&file.path, project))
+        .collect()
+}
+
+fn type_aware_files<'a>(files: &[&'a SourceFile]) -> Vec<&'a SourceFile> {
+    files
+        .iter()
+        .copied()
+        .filter(|file| {
+            matches!(
+                file.language,
+                crate::files::Language::TypeScript | crate::files::Language::Tsx
+            )
+        })
+        .collect()
+}
+
+fn lint_files_with_bindings(
+    files: &[&SourceFile],
+    config: &crate::config::Config,
+    bindings: &[(&'static str, &'static RuleMeta, Severity)],
+) -> Result<Vec<Diagnostic>> {
     let rule_entries: Vec<crate::oxlint_config::RuleEntry> = bindings
         .iter()
         .map(|(key, _, sev)| (*key, *sev, options::for_rule(key, config)))
@@ -91,9 +168,30 @@ fn invoke_oxlint(
         cmd.arg(&f.path);
     }
 
-    let output = cmd
-        .output()
+    let mut child = cmd
+        .spawn()
         .context("failed to invoke oxlint — install it with: npm install -g oxlint")?;
+    let Some(status) = child
+        .wait_timeout(OXLINT_BATCH_TIMEOUT)
+        .context("failed to wait for oxlint")?
+    else {
+        let _ = child.kill();
+        let _ = child.wait();
+        eprintln!(
+            "comply: oxlint timed out after {}s on {} file(s); continuing with partial results",
+            OXLINT_BATCH_TIMEOUT.as_secs(),
+            files.len()
+        );
+        return Ok(std::process::Output {
+            status: timeout_exit_status(),
+            stdout: b"{\"diagnostics\":[]}".to_vec(),
+            stderr: Vec::new(),
+        });
+    };
+    let output = child
+        .wait_with_output()
+        .context("failed to collect oxlint output")?;
+    debug_assert_eq!(output.status, status);
 
     // oxlint exits 1 when violations are found — that is normal, not an error.
     if !output.status.success() && output.status.code() != Some(1) {
@@ -104,6 +202,18 @@ fn invoke_oxlint(
         );
     }
     Ok(output)
+}
+
+#[cfg(unix)]
+fn timeout_exit_status() -> std::process::ExitStatus {
+    use std::os::unix::process::ExitStatusExt;
+    std::process::ExitStatus::from_raw(0)
+}
+
+#[cfg(windows)]
+fn timeout_exit_status() -> std::process::ExitStatus {
+    use std::os::windows::process::ExitStatusExt;
+    std::process::ExitStatus::from_raw(0)
 }
 
 /// Parse oxlint JSON output bytes into unified Diagnostic structs.
@@ -176,5 +286,62 @@ mod tests {
         let json = br#"{ "diagnostics": [] }"#;
         let result = parse_json_bytes(json, b"", &remap).expect("must parse");
         assert!(result.is_empty());
+    }
+
+    #[test]
+    fn type_aware_files_exclude_plain_javascript() {
+        let js = SourceFile {
+            path: "fastify.js".into(),
+            language: crate::files::Language::JavaScript,
+        };
+        let mjs = SourceFile {
+            path: "plugin.mjs".into(),
+            language: crate::files::Language::JavaScript,
+        };
+        let ts = SourceFile {
+            path: "server.ts".into(),
+            language: crate::files::Language::TypeScript,
+        };
+        let tsx = SourceFile {
+            path: "view.tsx".into(),
+            language: crate::files::Language::Tsx,
+        };
+        let files = [&js, &mjs, &ts, &tsx];
+
+        let type_aware = type_aware_files(&files);
+
+        assert_eq!(type_aware.len(), 2);
+        assert!(type_aware.iter().any(|file| file.path.ends_with("server.ts")));
+        assert!(type_aware.iter().any(|file| file.path.ends_with("view.tsx")));
+    }
+
+    #[test]
+    fn es_module_files_respect_extensions_and_package_type() {
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(dir.path().join("package.json"), r#"{"type":"module"}"#).unwrap();
+        let module_js = SourceFile {
+            path: dir.path().join("src").join("module.js"),
+            language: crate::files::Language::JavaScript,
+        };
+        let mjs = SourceFile {
+            path: dir.path().join("standalone.mjs"),
+            language: crate::files::Language::JavaScript,
+        };
+        let cjs = SourceFile {
+            path: dir.path().join("legacy.cjs"),
+            language: crate::files::Language::JavaScript,
+        };
+        let outside_js = SourceFile {
+            path: dir.path().with_file_name("outside.js"),
+            language: crate::files::Language::JavaScript,
+        };
+        let project = crate::project::ProjectCtx::empty();
+        let files = [&module_js, &mjs, &cjs, &outside_js];
+
+        let esm = es_module_files(&files, &project);
+
+        assert_eq!(esm.len(), 2);
+        assert!(esm.iter().any(|file| file.path.ends_with("module.js")));
+        assert!(esm.iter().any(|file| file.path.ends_with("standalone.mjs")));
     }
 }

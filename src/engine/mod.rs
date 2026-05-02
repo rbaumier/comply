@@ -20,10 +20,11 @@ use walk::{run_legacy_checks, run_multiplexed_walk};
 
 use anyhow::{Context, Result};
 use rayon::prelude::*;
-use rustc_hash::FxHashMap;
-use std::collections::HashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::io::Read;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tree_sitter::Parser;
 
 use crate::config::Config;
@@ -33,6 +34,9 @@ use crate::project::ProjectCtx;
 use crate::rules::backend::AstCheck;
 use crate::rules::file_ctx::FileCtx;
 use crate::rules::{self, RuleDef, backend::Backend, backend::CheckCtx, meta::RuleMeta};
+
+const LARGE_PROJECT_FILE_COUNT: usize = 1_000;
+const ENGINE_LARGE_PROJECT_BUDGET: Duration = Duration::from_secs(55);
 
 /// Pre-computed per-language dispatch table. Built once in `lint_files`,
 /// shared read-only across all rayon workers.
@@ -175,21 +179,30 @@ pub fn lint_files_with_project(
     let languages: Vec<Language> = files
         .iter()
         .map(|f| f.language)
-        .collect::<std::collections::HashSet<_>>()
+        .collect::<FxHashSet<_>>()
         .into_iter()
         .collect();
-    let lang_dispatches: HashMap<Language, LangDispatch> = languages
+    let lang_dispatches: FxHashMap<Language, LangDispatch> = languages
         .into_iter()
         .map(|lang| (lang, LangDispatch::build(&rule_defs, lang)))
         .collect();
 
+    let deadline = (files.len() > LARGE_PROJECT_FILE_COUNT)
+        .then(|| Instant::now() + ENGINE_LARGE_PROJECT_BUDGET);
+    let timed_out = AtomicBool::new(false);
     let mut diagnostics: Vec<Diagnostic> = files
         .par_iter()
         .map_init(WorkerState::new, |worker, file| {
+            if let Some(deadline) = deadline
+                && Instant::now() > deadline
+            {
+                timed_out.store(true, Ordering::Relaxed);
+                return Vec::new();
+            }
             let Some(ld) = lang_dispatches.get(&file.language) else {
                 return Vec::new();
             };
-            match lint_one_file_with_dispatch(file, ld, worker, config, &project) {
+            match lint_one_file_with_dispatch(file, ld, worker, config, project) {
                 Ok(file_diags) => file_diags,
                 Err(e) => {
                     eprintln!("comply: skipping {}: {e:#}", file.path.display());
@@ -199,6 +212,14 @@ pub fn lint_files_with_project(
         })
         .flatten()
         .collect();
+
+    if timed_out.load(Ordering::Relaxed) {
+        eprintln!(
+            "comply: engine budget reached after {}s on {} file(s); continuing with partial results",
+            ENGINE_LARGE_PROJECT_BUDGET.as_secs(),
+            files.len()
+        );
+    }
 
     diagnostics.retain(|d| !is_self_reference(d));
     Ok(diagnostics)
@@ -286,6 +307,8 @@ fn dispatch_with_lang(
         .any(|((meta, b), pf)| match b {
             Backend::TreeSitter(_) => {
                 config.is_rule_enabled(meta.id, path)
+                    && !should_skip_test_fixture_rule(meta, &file_ctx)
+                    && !should_skip_relaxed_directory_rule(meta, path)
                     && pf
                         .as_ref()
                         .is_none_or(|f| source_matches_prefilter(source, f))
@@ -311,6 +334,12 @@ fn dispatch_with_lang(
 
     for (&(meta, ref backend), pf) in ld.applicable.iter().zip(&ld.applicable_prefilters) {
         if !config.is_rule_enabled(meta.id, path) {
+            continue;
+        }
+        if should_skip_test_fixture_rule(meta, &file_ctx) {
+            continue;
+        }
+        if should_skip_relaxed_directory_rule(meta, path) {
             continue;
         }
         let mut produced = match backend {
@@ -344,6 +373,41 @@ fn dispatch_with_lang(
     }
 
     diagnostics
+}
+
+pub(super) fn should_skip_test_fixture_rule(meta: &RuleMeta, file: &FileCtx) -> bool {
+    if !file.path_segments.in_test_dir {
+        return false;
+    }
+
+    meta.categories
+        .iter()
+        .any(|category| matches!(*category, "a11y" | "accessibility" | "tailwind" | "ui" | "html"))
+        || matches!(meta.id, "react-button-has-type")
+}
+
+pub(super) fn should_skip_relaxed_directory_rule(meta: &RuleMeta, path: &std::path::Path) -> bool {
+    if !is_relaxed_directory(path) {
+        return false;
+    }
+
+    meta.categories
+        .iter()
+        .any(|category| matches!(*category, "api" | "rust" | "security"))
+        || matches!(
+            meta.id,
+            "rust-anyhow-context-on-question-mark" | "rust-serde-deny-unknown-fields"
+        )
+}
+
+fn is_relaxed_directory(path: &std::path::Path) -> bool {
+    let normalized = path.to_string_lossy().replace('\\', "/");
+    normalized.starts_with("examples/")
+        || normalized.starts_with("benches/")
+        || normalized.starts_with("fixtures/")
+        || normalized.contains("/examples/")
+        || normalized.contains("/benches/")
+        || normalized.contains("/fixtures/")
 }
 
 /// Dispatch each backend variant to produce diagnostics.
@@ -397,4 +461,87 @@ fn is_self_reference(d: &Diagnostic) -> bool {
     let alt_needle = format!("src\\rules\\{dir_fragment}\\");
     let path_str = d.path.to_string_lossy();
     path_str.contains(&needle) || path_str.contains(&alt_needle)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use crate::config::default_static_config;
+    use crate::engine::lint_in_memory;
+    use crate::files::Language;
+
+    #[test]
+    fn skips_ui_a11y_tailwind_fixture_rules_in_test_files() {
+        let source = r#"
+export function Fixture() {
+  return <button className="z-[9999]" onClick={() => {}}>click</button>;
+}
+"#;
+        let diagnostics = lint_in_memory(
+            Path::new("test/use-swr-key.test.tsx"),
+            Language::Tsx,
+            source,
+            default_static_config(),
+            None,
+        );
+        let skipped_rule_ids = [
+            "a11y-click-events-have-key-events",
+            "html-require-button-type",
+            "react-button-has-type",
+            "tailwind-require-focus-ring",
+            "tailwind-no-arbitrary-z-index",
+        ];
+
+        assert!(
+            diagnostics
+                .iter()
+                .all(|diagnostic| !skipped_rule_ids.contains(&diagnostic.rule_id.as_ref())),
+            "expected fixture-only rules to stay silent in tests, got: {diagnostics:?}",
+        );
+    }
+
+    #[test]
+    fn skips_relaxed_directory_rules_in_examples() {
+        let source = r#"fn load() -> anyhow::Result<String> {
+    let s = std::fs::read_to_string("x")?;
+    Ok(s)
+}"#;
+        let diagnostics = lint_in_memory(
+            Path::new("examples/jwt/src/main.rs"),
+            Language::Rust,
+            source,
+            default_static_config(),
+            None,
+        );
+
+        assert!(
+            diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.rule_id != "rust-anyhow-context-on-question-mark"),
+            "expected relaxed examples to suppress anyhow context lint, got: {diagnostics:?}",
+        );
+    }
+
+    #[test]
+    fn skips_relaxed_directory_api_rules_in_benches() {
+        let source = r#"use axum::Router;
+fn handler() {
+    panic!("bench setup failed");
+}"#;
+        let diagnostics = lint_in_memory(
+            Path::new("benches/benches.rs"),
+            Language::Rust,
+            source,
+            default_static_config(),
+            None,
+        );
+
+        assert!(
+            diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.rule_id != "structured-api-error"),
+            "expected relaxed benches to suppress API rules, got: {diagnostics:?}",
+        );
+    }
 }

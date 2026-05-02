@@ -109,6 +109,9 @@ fn is_pure_initializer(node: tree_sitter::Node, source: &[u8]) -> bool {
     if node.kind() == "call_expression" && is_hoisted_test_api(node, source) {
         return true;
     }
+    if is_commonjs_import(node, source) {
+        return true;
+    }
     match node.kind() {
         "string"
         | "number"
@@ -157,6 +160,27 @@ fn is_pure_initializer(node: tree_sitter::Node, source: &[u8]) -> bool {
     }
 }
 
+fn is_commonjs_import(node: tree_sitter::Node, source: &[u8]) -> bool {
+    if node.kind() != "call_expression" {
+        return false;
+    }
+    let Some(callee) = node.child_by_field_name("function") else {
+        return false;
+    };
+    if callee.kind() != "identifier" || callee.utf8_text(source).unwrap_or("") != "require" {
+        return false;
+    }
+    let Some(args) = node.child_by_field_name("arguments") else {
+        return false;
+    };
+    let mut cur = args.walk();
+    let mut named = args.named_children(&mut cur);
+    let Some(first) = named.next() else {
+        return false;
+    };
+    first.kind() == "string" && named.next().is_none()
+}
+
 /// Every declarator in a `const`/`let`/`var` statement must have a
 /// pure initializer (or none at all).
 fn declaration_is_pure(decl: tree_sitter::Node, source: &[u8]) -> bool {
@@ -203,6 +227,9 @@ fn top_level_is_allowed(stmt: tree_sitter::Node, source: &[u8]) -> bool {
             let Some(expr) = stmt.named_child(0) else {
                 return false;
             };
+            if expr.kind() == "string" {
+                return true;
+            }
             if expr.kind() != "call_expression" {
                 return false;
             }
@@ -316,6 +343,19 @@ describe("x", () => {
 });
 "#;
         assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_commonjs_require_imports_at_top_level() {
+        let src = r#"
+'use strict'
+const { test } = require('node:test');
+const { Readable } = require('node:stream');
+const Fastify = require('..');
+
+test('works', () => {});
+"#;
+        assert!(run_on(src).is_empty());
     }
 
     #[test]

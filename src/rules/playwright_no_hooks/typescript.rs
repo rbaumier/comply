@@ -9,15 +9,6 @@ fn is_test_file(path: &std::path::Path) -> bool {
     TEST_MARKERS.iter().any(|m| s.contains(m))
 }
 
-/// Only Playwright specs are subject to this rule. A file qualifies if it
-/// imports/requires from `@playwright/test`. Vitest / Jest / Mocha specs
-/// rely on `beforeEach`/`afterEach` hooks legitimately, so we must not
-/// flag them even when the project as a whole declares Playwright as a
-/// framework.
-fn imports_playwright(source: &str) -> bool {
-    source.contains("@playwright/test")
-}
-
 const HOOKS: &[&str] = &["beforeAll", "beforeEach", "afterAll", "afterEach"];
 
 crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
@@ -25,7 +16,7 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     if !is_test_file(ctx.path) {
         return;
     }
-    if !imports_playwright(ctx.source) {
+    if !crate::rules::playwright::imports_playwright_test(ctx.source) {
         return;
     }
     let Some(callee) = node.child_by_field_name("function") else { return };

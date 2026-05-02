@@ -10,7 +10,20 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
+fn is_test_path(path: &std::path::Path) -> bool {
+    let s = path.to_string_lossy();
+    s.contains(".test.")
+        || s.contains(".spec.")
+        || s.contains("__tests__")
+        || s.contains("/tests/")
+        || s.contains("\\tests\\")
+}
+
 crate::ast_check! { on ["variable_declarator"] => |node, source, ctx, diagnostics|
+    if ctx.file.path_segments.in_test_dir || is_test_path(ctx.path) {
+        return;
+    }
+
     let Some(name_node) = node.child_by_field_name("name") else { return };
     if name_node.kind() != "identifier" {
         return;
@@ -124,5 +137,18 @@ mod tests {
     fn allows_pascal_arrow_without_jsx() {
         let src = "const MyThing = () => someValue;";
         assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_inline_test_component() {
+        let src = "it('works', () => { const Component = () => <div />; render(<Component />); });";
+        let d = crate::rules::test_helpers::run_tsx_with_project_file_and_path(
+            src,
+            &Check,
+            crate::project::default_static_project_ctx(),
+            crate::rules::file_ctx::default_static_file_ctx(),
+            "component.test.tsx",
+        );
+        assert!(d.is_empty());
     }
 }

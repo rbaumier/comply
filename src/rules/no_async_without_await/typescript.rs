@@ -20,6 +20,15 @@ const FUNCTION_KINDS: &[&str] = &[
     "generator_function_declaration",
 ];
 
+fn is_test_path(path: &std::path::Path) -> bool {
+    let s = path.to_string_lossy();
+    s.contains(".test.")
+        || s.contains(".spec.")
+        || s.contains("__tests__")
+        || s.contains("/tests/")
+        || s.contains("\\tests\\")
+}
+
 fn is_async_function(node: tree_sitter::Node, source: &[u8]) -> bool {
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
@@ -28,6 +37,62 @@ fn is_async_function(node: tree_sitter::Node, source: &[u8]) -> bool {
         }
     }
     false
+}
+
+fn has_promise_return_type(node: tree_sitter::Node, source: &[u8]) -> bool {
+    node.child_by_field_name("return_type")
+        .and_then(|return_type| return_type.utf8_text(source).ok())
+        .is_some_and(|text| text.contains("Promise<") || text.contains("PromiseLike<"))
+}
+
+fn has_decorator_child(node: tree_sitter::Node) -> bool {
+    let mut cursor = node.walk();
+    node.named_children(&mut cursor)
+        .any(|child| child.kind() == "decorator")
+}
+
+fn method_has_decorator(method: tree_sitter::Node) -> bool {
+    if has_decorator_child(method) {
+        return true;
+    }
+    let Some(parent) = method.parent() else {
+        return false;
+    };
+    let mut cursor = parent.walk();
+    let mut decorator_before_current = false;
+    for child in parent.named_children(&mut cursor) {
+        if child.kind() == "decorator" {
+            decorator_before_current = true;
+            continue;
+        }
+        if child.start_byte() == method.start_byte() && child.end_byte() == method.end_byte() {
+            return decorator_before_current;
+        }
+        decorator_before_current = false;
+    }
+    false
+}
+
+fn method_is_in_decorated_class(method: tree_sitter::Node) -> bool {
+    if method.kind() != "method_definition" {
+        return false;
+    }
+    let Some(class_body) = method.parent() else {
+        return false;
+    };
+    if class_body.kind() != "class_body" {
+        return false;
+    }
+    let Some(class_node) = class_body.parent() else {
+        return false;
+    };
+    if !matches!(class_node.kind(), "class_declaration" | "class") {
+        return false;
+    }
+    if has_decorator_child(class_node) {
+        return true;
+    }
+    class_node.parent().is_some_and(has_decorator_child)
 }
 
 /// Scan the function body for `await_expression` / `yield` of a promise,
@@ -87,7 +152,16 @@ impl AstCheck for Check {
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let source = ctx.source.as_bytes();
+        if ctx.file.path_segments.in_test_dir || is_test_path(ctx.path) {
+            return;
+        }
         if !is_async_function(node, source) {
+            return;
+        }
+        if has_promise_return_type(node, source) {
+            return;
+        }
+        if method_has_decorator(node) || method_is_in_decorated_class(node) {
             return;
         }
         let Some(body) = node.child_by_field_name("body") else {
@@ -158,5 +232,30 @@ mod tests {
         // Outer has no await of its own; inner async fn does.
         let d = run_on("async function outer() { async function inner() { await x(); } }");
         assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn allows_async_function_with_explicit_promise_contract() {
+        let src = "async function handler(): Promise<void> { return; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_async_method_in_decorated_class() {
+        let src = "@Controller()\nclass C { async onModuleInit(): Promise<void> { return; } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_decorated_async_method() {
+        let src = "class C { @GrpcMethod('Math') async sum() { return 1; } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_async_without_await_in_test_file() {
+        let src = "it('works', async () => { return request(server).expect(200); });";
+        let d = crate::rules::test_helpers::run_ts_with_path(src, &Check, "handler.test.ts");
+        assert!(d.is_empty());
     }
 }

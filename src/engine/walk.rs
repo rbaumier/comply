@@ -38,6 +38,8 @@ pub(super) fn run_multiplexed_walk(
                 .zip(&ld.multiplexed_prefilters)
                 .map(|((meta, _), pf)| {
                     config.is_rule_enabled(meta.id, path)
+                        && !super::should_skip_test_fixture_rule(meta, ctx.file)
+                        && !super::should_skip_relaxed_directory_rule(meta, path)
                         && pf
                             .as_ref()
                             .is_none_or(|f| super::source_matches_prefilter(source, f))
@@ -93,7 +95,7 @@ pub(super) fn run_multiplexed_walk(
                 d.severity = sev;
             }
         }
-        diagnostics.extend(per_rule_diags[i].drain(..));
+        diagnostics.append(&mut per_rule_diags[i]);
     }
 }
 
@@ -110,6 +112,12 @@ pub(super) fn run_legacy_checks(
 ) {
     for ((meta, check), pf) in ld.legacy.iter().zip(&ld.legacy_prefilters) {
         if !config.is_rule_enabled(meta.id, path) {
+            continue;
+        }
+        if super::should_skip_test_fixture_rule(meta, ctx.file) {
+            continue;
+        }
+        if super::should_skip_relaxed_directory_rule(meta, path) {
             continue;
         }
         if let Some(f) = pf

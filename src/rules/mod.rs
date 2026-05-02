@@ -28,6 +28,8 @@ pub mod arrow_this_in_function;
 pub mod backend;
 pub mod ban_dependencies;
 pub mod banned_comment_words;
+pub mod module_system;
+pub mod playwright;
 pub mod better_auth_client_framework_import;
 pub mod better_auth_drizzle_useplural;
 pub mod better_auth_email_verification_handler;

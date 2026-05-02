@@ -25,7 +25,7 @@ const IO_METHODS: &[&str] = &[
 ];
 
 /// Callee bases that indicate I/O clients.
-const IO_BASES: &[&str] = &["reqwest", "sqlx", "hyper", "http", "client"];
+const IO_BASES: &[&str] = &["reqwest", "sqlx", "hyper", "http"];
 
 const KINDS: &[&str] = &["await_expression"];
 
@@ -44,7 +44,7 @@ impl AstCheck for Check {
         _state: Option<&mut dyn std::any::Any>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
-        if ctx.file.path_segments.in_test_dir {
+        if ctx.file.path_segments.in_test_dir || is_test_path(ctx.path) {
             return;
         }
         if ctx.path.to_string_lossy().contains("/examples/") {
@@ -79,6 +79,17 @@ impl AstCheck for Check {
             span: None,
         });
     }
+}
+
+fn is_test_path(path: &std::path::Path) -> bool {
+    let lower = path.to_string_lossy().replace('\\', "/");
+    lower.starts_with("tests/")
+        || lower.starts_with("test/")
+        || lower.contains("/tests/")
+        || lower.contains("/test/")
+        || lower.contains("/__tests__/")
+        || lower.contains(".test.")
+        || lower.contains(".spec.")
 }
 
 fn is_io_call(node: tree_sitter::Node, source: &[u8]) -> bool {
@@ -127,6 +138,10 @@ mod tests {
         crate::rules::test_helpers::run_rust(source, &Check)
     }
 
+    fn run_on_path(source: &str, path: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rust_with_path(source, &Check, path)
+    }
+
     #[test]
     fn flags_bare_reqwest_get() {
         let source = "async fn f() { let r = reqwest::get(url).await; }";
@@ -149,6 +164,18 @@ mod tests {
     fn flags_bare_sqlx_query() {
         let source = "async fn f() { sqlx::query(\"SELECT *\").execute(&pool).await; }";
         assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn allows_generic_client_get() {
+        let source = "async fn f() { let res = client.get(\"/\").await; }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_io_await_in_test_files() {
+        let source = "async fn f() { let r = reqwest::get(url).await; }";
+        assert!(run_on_path(source, "tests/client.rs").is_empty());
     }
 
     #[test]

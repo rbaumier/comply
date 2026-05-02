@@ -258,6 +258,29 @@ test("page loads", async ({ page }) => {
     }
 
     #[test]
+    fn allows_testing_library_screen_queries() {
+        let src = r#"
+it("finds rendered copy", async () => {
+  renderWithConfig(Page);
+  screen.getByText('data:');
+  await screen.findByText('data:short request');
+});
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_testing_library_destructured_queries() {
+        let src = r#"
+it("finds rendered copy", () => {
+  const { getByRole } = render(Page);
+  getByRole('button');
+});
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
     fn ignores_assertion_inside_nested_function() {
         let src = r#"
 test("does work", () => {

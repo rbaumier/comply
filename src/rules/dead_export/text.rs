@@ -361,6 +361,16 @@ mod tests {
     }
 
     #[test]
+    fn no_crash_on_multibyte_generated_scan() {
+        let files: Vec<(&str, &str)> = vec![
+            ("tax.ts", "// مثال عربي\nexport function computeTax() {}"),
+            ("app.ts", "export const z = 1;"),
+        ];
+        let (_dir, diags) = run_on_project(&files, "tax.ts");
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
     fn still_flags_components_outside_ui_dir() {
         let files: Vec<(&str, &str)> = vec![
             (

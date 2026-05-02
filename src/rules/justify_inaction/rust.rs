@@ -5,9 +5,10 @@
 //!
 //! - `if_expression.consequence` — empty `if cond { }`.
 //! - `else_clause`'s `block` child — empty `else { }`.
-//! - `match_arm.value` when the value is an empty `block` — the
-//!   canonical "silent ignore" pattern `None => {}` / `Err(_) => {}` /
-//!   `_ => {}`.
+//! - `match_arm.value` when the value is an empty `block` AND the
+//!   pattern is a wildcard `_` or an error-ignoring `Err(…)`.
+//!   Named variant no-ops (`Progress::None => {}`) are exempt
+//!   because the variant name documents the intent.
 //! - `for_expression.body` / `while_expression.body` /
 //!   `loop_expression.body` — empty loop body.
 //!
@@ -24,6 +25,36 @@ use crate::diagnostic::{Diagnostic, Severity};
 
 fn block_is_empty(node: tree_sitter::Node) -> bool {
     node.kind() == "block" && node.named_child_count() == 0
+}
+
+fn match_arm_needs_justification(arm: tree_sitter::Node, source: &[u8]) -> bool {
+    let Some(pattern) = arm.child_by_field_name("pattern") else {
+        return true;
+    };
+    pattern_needs_justification(pattern, source)
+}
+
+fn pattern_needs_justification(node: tree_sitter::Node, source: &[u8]) -> bool {
+    match node.kind() {
+        "wildcard_pattern" => return true,
+        "match_pattern" | "or_pattern" => {
+            let mut cursor = node.walk();
+            for child in node.named_children(&mut cursor) {
+                if pattern_needs_justification(child, source) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        "tuple_struct_pattern" => {
+            if let Ok(text) = node.utf8_text(source) {
+                return text.starts_with("Err(") || text.contains("::Err(");
+            }
+            return false;
+        }
+        _ => {}
+    }
+    matches!(node.utf8_text(source), Ok("_"))
 }
 
 fn loop_name(kind: &str) -> &'static str {
@@ -67,8 +98,6 @@ match node.kind() {
             }
         }
         "else_clause" => {
-            // `else_clause` either wraps a `block` (plain else) or an
-            // `if_expression` (else-if). We only care about plain else.
             let mut cursor = node.walk();
             for child in node.named_children(&mut cursor) {
                 if child.kind() == "block" {
@@ -79,7 +108,9 @@ match node.kind() {
         }
         "match_arm" => {
             if let Some(value) = node.child_by_field_name("value") {
-                flag_empty(node, value, "match arm", ctx, diagnostics);
+                if block_is_empty(value) && match_arm_needs_justification(node, _source) {
+                    flag_empty(node, value, "match arm", ctx, diagnostics);
+                }
             }
         }
         "for_expression" | "while_expression" | "loop_expression" => {
@@ -99,7 +130,7 @@ mod tests {
         crate::rules::test_helpers::run_rust(source, &Check)
     }
 
-    // ── if / else ────────────────────────────────────────────────
+    // -- if / else --
 
     #[test]
     fn flags_empty_if() {
@@ -132,17 +163,28 @@ mod tests {
 
     #[test]
     fn does_not_flag_else_if_chain() {
-        // `else if` wraps an if_expression, not an empty block.
         let src = "fn f(x: i32) { if x == 1 { a(); } else if x == 2 { b(); } }";
         assert!(run_on(src).is_empty());
     }
 
-    // ── match arms ───────────────────────────────────────────────
+    // -- match arms --
 
     #[test]
-    fn flags_empty_none_arm() {
+    fn allows_empty_named_variant_arm() {
         let src = "fn f(x: Option<u8>) { match x { Some(v) => go(v), None => {} } }";
-        assert_eq!(run_on(src).len(), 1);
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_empty_scoped_variant_arm() {
+        let src = "fn f(x: u8) { match x { Progress::Active(v) => go(v), Progress::None => {} } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_empty_literal_arm() {
+        let src = "fn f(x: u8) { match x { 0 => {}, 1 => go() } }";
+        assert!(run_on(src).is_empty());
     }
 
     #[test]
@@ -175,11 +217,10 @@ fn f(x: Option<u8>) {
     #[test]
     fn allows_non_empty_match_arm() {
         let src = "fn f(x: u8) { match x { 0 => {}, _ => go() } }";
-        // First arm is empty → flagged. Second has a call.
-        assert_eq!(run_on(src).len(), 1);
+        assert!(run_on(src).is_empty());
     }
 
-    // ── loops ────────────────────────────────────────────────────
+    // -- loops --
 
     #[test]
     fn flags_empty_while() {
@@ -202,11 +243,10 @@ fn f(x: Option<u8>) {
         assert!(run_on(src).is_empty());
     }
 
-    // ── scope exclusions ─────────────────────────────────────────
+    // -- scope exclusions --
 
     #[test]
     fn does_not_flag_empty_fn_body() {
-        // Marker / stub fn — out of scope.
         assert!(run_on("fn stub() {}").is_empty());
     }
 
@@ -218,7 +258,6 @@ fn f(x: Option<u8>) {
 
     #[test]
     fn does_not_flag_unit_match_arm() {
-        // `None => ()` is a unit expression, not a block — out of scope.
         let src = "fn f(x: Option<u8>) { match x { Some(v) => go(v), None => () } }";
         assert!(run_on(src).is_empty());
     }

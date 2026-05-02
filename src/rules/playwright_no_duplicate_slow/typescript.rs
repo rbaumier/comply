@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use crate::diagnostic::{Diagnostic, Severity};
 
 crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
-    if !source.windows(16).any(|w| w == b"@playwright/test") {
+    if !crate::rules::playwright::is_playwright_context(ctx) {
         return;
     }
     // scope node id → list of `test.slow()` call_expression nodes inside it
@@ -117,8 +117,8 @@ mod tests {
     fn run_on(source: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_ts(
             &format!(
-                "{source}
-// @playwright/test"
+                "import {{ test, expect }} from \"@playwright/test\";
+{source}"
             ),
             &Check,
         )

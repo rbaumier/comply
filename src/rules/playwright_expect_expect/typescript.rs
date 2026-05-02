@@ -69,7 +69,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
     if !is_test_file(ctx.path) {
         return;
     }
-    if !source.windows(16).any(|w| w == b"@playwright/test") {
+    if !crate::rules::playwright::is_playwright_context(ctx) {
         return;
     }
 
@@ -133,6 +133,19 @@ mod tests {
     fn skips_non_playwright_test_file() {
         let d = run_ts_with_path(
             "test('should work', () => { const x = 1; });",
+            &Check,
+            "login.test.ts",
+        );
+        assert!(d.is_empty());
+    }
+
+    #[test]
+    fn skips_non_playwright_file_with_marker_in_string() {
+        let d = run_ts_with_path(
+            r#"
+const packageName = "@playwright/test";
+test('should work', () => { const x = 1; });
+"#,
             &Check,
             "login.test.ts",
         );

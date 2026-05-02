@@ -3,6 +3,10 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
 crate::ast_check! { prefilter = ["require", "module.exports"] => |node, source, ctx, diagnostics|
+    if !crate::rules::module_system::is_es_module_context(ctx.path, ctx.project) {
+        return;
+    }
+
     let kind = node.kind();
 
     // Flag `require(...)` calls.
@@ -50,7 +54,17 @@ mod tests {
     use super::*;
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_ts(source, &Check)
+        crate::rules::test_helpers::run_ts_with_path(source, &Check, "module.mjs")
+    }
+
+    fn run_on_path(source: &str, path: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_ts_with_path(source, &Check, path)
+    }
+
+    #[test]
+    fn allows_require_when_package_type_is_absent() {
+        let d = run_on_path("const x = require('fs');", "server.js");
+        assert!(d.is_empty());
     }
 
     #[test]

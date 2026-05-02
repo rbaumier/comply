@@ -33,6 +33,9 @@ impl TextCheck for Check {
             return Vec::new();
         };
         let stem = file_name.split('.').next().unwrap_or(file_name);
+        if super::is_sveltekit_route_file(file_name) {
+            return Vec::new();
+        }
         if stem.is_empty() || is_pascal_case(stem) {
             return Vec::new();
         }
@@ -72,6 +75,11 @@ mod tests {
     #[test]
     fn allows_multi_word_pascal() {
         assert!(run("src/components/Hook0CardHeader.vue").is_empty());
+    }
+
+    #[test]
+    fn allows_sveltekit_page_component() {
+        assert!(run("src/routes/users/+page.svelte").is_empty());
     }
 
     #[test]

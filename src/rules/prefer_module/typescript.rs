@@ -9,8 +9,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
 crate::ast_check! { |node, source, ctx, diagnostics|
-    // Skip .cjs files — CommonJS is expected there.
-    if ctx.path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("cjs")) {
+    if !crate::rules::module_system::is_es_module_context(ctx.path, ctx.project) {
         return;
     }
 
@@ -108,7 +107,23 @@ mod tests {
     use super::*;
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_ts(source, &Check)
+        crate::rules::test_helpers::run_ts_with_path(source, &Check, "module.mjs")
+    }
+
+    fn run_on_path(source: &str, path: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_ts_with_path(source, &Check, path)
+    }
+
+    #[test]
+    fn allows_commonjs_when_package_type_is_absent() {
+        let d = run_on_path(
+            r#"
+            const fs = require("fs");
+            module.exports = fs;
+            "#,
+            "server.js",
+        );
+        assert!(d.is_empty());
     }
 
     #[test]

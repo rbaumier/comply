@@ -71,6 +71,9 @@ impl TextCheck for Check {
         if stem.is_empty() {
             return Vec::new();
         }
+        if super::is_sveltekit_route_file(file_name) {
+            return Vec::new();
+        }
         if is_kebab_case(stem) {
             return Vec::new();
         }
@@ -139,6 +142,11 @@ mod tests {
     #[test]
     fn flags_snake_case() {
         assert_eq!(run("src/user_profile.ts").len(), 1);
+    }
+
+    #[test]
+    fn allows_sveltekit_route_module() {
+        assert!(run("src/routes/users/+page.server.ts").is_empty());
     }
 
     #[test]

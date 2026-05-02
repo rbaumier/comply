@@ -9,7 +9,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
 crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
-    if !source.windows(16).any(|w| w == b"@playwright/test") {
+    if !crate::rules::playwright::is_playwright_context(ctx) {
         return;
     }
     if !is_test_slow_unconditional(node, source) {
@@ -57,7 +57,7 @@ mod tests {
     use super::*;
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
-        let full = format!("{source}\n// @playwright/test");
+        let full = format!("import {{ test, expect }} from \"@playwright/test\";\n{source}");
         crate::rules::test_helpers::run_ts(&full, &Check)
     }
 

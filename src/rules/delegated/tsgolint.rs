@@ -482,12 +482,6 @@ pub fn register_all() -> Vec<RuleDef> {
             "Replace getter with readonly property.",
         ),
         entry(
-            "parameter-properties",
-            "parameter-properties",
-            "Use `constructor(public x: T)` for concise initialization.",
-            "Use parameter property syntax.",
-        ),
-        entry(
             "unified-signatures",
             "unified-signatures",
             "Overloads can be unified into a single signature.",

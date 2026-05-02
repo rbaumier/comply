@@ -32,27 +32,30 @@ fn is_test_call(node: tree_sitter::Node, source: &[u8]) -> bool {
 
 fn count_expects(node: tree_sitter::Node, source: &[u8]) -> usize {
     let mut count = 0;
-    if node.kind() == "call_expression"
-        && let Some(callee) = node.child_by_field_name("function")
-    {
-        let text = match callee.kind() {
-            "identifier" => callee.utf8_text(source).unwrap_or(""),
-            "member_expression" => {
-                if let Some(obj) = callee.child_by_field_name("object") {
-                    obj.utf8_text(source).unwrap_or("")
-                } else {
-                    ""
+    let mut stack = vec![node];
+
+    while let Some(current) = stack.pop() {
+        if current.kind() == "call_expression"
+            && let Some(callee) = current.child_by_field_name("function")
+        {
+            let text = match callee.kind() {
+                "identifier" => callee.utf8_text(source).unwrap_or(""),
+                "member_expression" => {
+                    if let Some(obj) = callee.child_by_field_name("object") {
+                        obj.utf8_text(source).unwrap_or("")
+                    } else {
+                        ""
+                    }
                 }
+                _ => "",
+            };
+            if text == "expect" {
+                count += 1;
             }
-            _ => "",
-        };
-        if text == "expect" {
-            count += 1;
         }
-    }
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        count += count_expects(child, source);
+
+        let mut cursor = current.walk();
+        stack.extend(current.children(&mut cursor));
     }
     count
 }
@@ -61,7 +64,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
     if !is_test_file(ctx.path) {
         return;
     }
-    if !source.windows(16).any(|w| w == b"@playwright/test") {
+    if !crate::rules::playwright::is_playwright_context(ctx) {
         return;
     }
 
@@ -128,6 +131,23 @@ mod tests {
             expect(5).toBe(5);
         });";
         let d = run_ts(src);
+        assert!(d.is_empty());
+    }
+
+    #[test]
+    fn handles_deeply_nested_test_body() {
+        let mut src = String::from("test('deep', () => {");
+        for _ in 0..600 {
+            src.push_str("if (true) {");
+        }
+        src.push_str("expect(1).toBe(1);");
+        for _ in 0..600 {
+            src.push('}');
+        }
+        src.push_str("});");
+
+        let d = run_ts(&src);
+
         assert!(d.is_empty());
     }
 }

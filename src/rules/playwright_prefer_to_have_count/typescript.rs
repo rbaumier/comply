@@ -36,7 +36,7 @@ fn is_await_count(node: tree_sitter::Node, source: &[u8]) -> bool {
 }
 
 crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
-    if !source.windows(16).any(|w| w == b"@playwright/test") {
+    if !crate::rules::playwright::is_playwright_context(ctx) {
         return;
     }
     // We hook on the outer call: expect(await locator.count()).toBe(n)
@@ -89,7 +89,7 @@ mod tests {
     use crate::rules::test_helpers::run_ts;
 
     fn pw(s: &str) -> String {
-        format!("{s}\n// @playwright/test")
+        format!("import {{ test, expect }} from \"@playwright/test\";\n{s}")
     }
 
     #[test]

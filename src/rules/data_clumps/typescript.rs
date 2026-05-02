@@ -20,6 +20,11 @@ const FUNCTION_KINDS: &[&str] = &[
     "generator_function",
 ];
 
+const FRAMEWORK_CALLBACK_METHODS: &[&str] = &[
+    "register", "addHook", "route", "get", "post", "put", "patch", "delete", "head", "options",
+    "all",
+];
+
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 enum FnLocation {
     Local(usize),
@@ -27,6 +32,10 @@ enum FnLocation {
 }
 
 crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
+    if ctx.file.path_segments.in_test_dir || is_test_path(ctx.path) {
+        return;
+    }
+
     let mut fn_params: Vec<(FnLocation, Vec<String>)> = Vec::new();
     collect_functions(node, source, &mut fn_params);
 
@@ -110,6 +119,16 @@ crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
     }
 }
 
+fn is_test_path(path: &std::path::Path) -> bool {
+    let lower = path.to_string_lossy().replace('\\', "/");
+    lower.contains("/tests/")
+        || lower.contains("/test/")
+        || lower.contains("/fixtures/")
+        || lower.contains("/__tests__/")
+        || lower.contains(".test.")
+        || lower.contains(".spec.")
+}
+
 /// Recursively collect function parameter sets from the AST.
 fn collect_functions(
     node: tree_sitter::Node,
@@ -117,6 +136,10 @@ fn collect_functions(
     out: &mut Vec<(FnLocation, Vec<String>)>,
 ) {
     if FUNCTION_KINDS.contains(&node.kind()) {
+        if is_framework_callback(node, source) {
+            return;
+        }
+
         let params_node = node
             .child_by_field_name("parameters")
             .or_else(|| node.child_by_field_name("formal_parameters"));
@@ -147,6 +170,36 @@ fn collect_functions(
                 break;
             }
         }
+    }
+}
+
+fn is_framework_callback(node: tree_sitter::Node, source: &[u8]) -> bool {
+    let Some(parent) = node.parent() else {
+        return false;
+    };
+    if parent.kind() != "arguments" {
+        return false;
+    }
+    let Some(call) = parent.parent() else {
+        return false;
+    };
+    if call.kind() != "call_expression" {
+        return false;
+    }
+    let Some(callee) = call.child_by_field_name("function") else {
+        return false;
+    };
+    callee_name(callee, source).is_some_and(|name| FRAMEWORK_CALLBACK_METHODS.contains(&name))
+}
+
+fn callee_name<'a>(callee: tree_sitter::Node, source: &'a [u8]) -> Option<&'a str> {
+    match callee.kind() {
+        "identifier" => callee.utf8_text(source).ok(),
+        "member_expression" => callee
+            .child_by_field_name("property")?
+            .utf8_text(source)
+            .ok(),
+        _ => None,
     }
 }
 
@@ -202,6 +255,10 @@ mod tests {
         crate::rules::test_helpers::run_ts(source, &Check)
     }
 
+    fn run_on_path(source: &str, path: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_ts_with_path(source, &Check, path)
+    }
+
     #[test]
     fn flags_repeated_param_group() {
         let src = r#"
@@ -209,6 +266,28 @@ function createUser(name: string, email: string, age: number) {}
 function updateUser(name: string, email: string, age: number) {}
 "#;
         assert_eq!(run_on(src).len(), 2);
+    }
+
+    #[test]
+    fn allows_fastify_register_callback_signature() {
+        let src = r#"
+fastify.register((instance, opts, done) => {
+  done();
+});
+app.register((instance, opts, done) => {
+  done();
+});
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_repeated_param_groups_in_test_files() {
+        let src = r#"
+function arrangeUser(req: Request, reply: Reply, done: Done) {}
+function arrangeAccount(req: Request, reply: Reply, done: Done) {}
+"#;
+        assert!(run_on_path(src, "plugin.test.ts").is_empty());
     }
 
     #[test]

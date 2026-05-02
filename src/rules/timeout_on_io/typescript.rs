@@ -36,6 +36,10 @@ impl AstCheck for Check {
         _state: Option<&mut dyn std::any::Any>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
+        if ctx.file.path_segments.in_test_dir || is_test_path(ctx.path) {
+            return;
+        }
+
         let source_bytes = ctx.source.as_bytes();
         let Some(call) = inner_call(node) else {
             return;
@@ -62,6 +66,17 @@ impl AstCheck for Check {
             span: None,
         });
     }
+}
+
+fn is_test_path(path: &std::path::Path) -> bool {
+    let lower = path.to_string_lossy().replace('\\', "/");
+    lower.starts_with("tests/")
+        || lower.starts_with("test/")
+        || lower.contains("/tests/")
+        || lower.contains("/test/")
+        || lower.contains("/__tests__/")
+        || lower.contains(".test.")
+        || lower.contains(".spec.")
 }
 
 /// If the await wraps a call_expression, return it.
@@ -136,6 +151,10 @@ mod tests {
         crate::rules::test_helpers::run_ts(source, &Check)
     }
 
+    fn run_on_path(source: &str, path: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_ts_with_path(source, &Check, path)
+    }
+
     #[test]
     fn flags_bare_fetch() {
         assert_eq!(run_on("async function f() { await fetch(url); }").len(), 1);
@@ -160,6 +179,11 @@ mod tests {
             run_on("async function f() { await db.query('SELECT *'); }").len(),
             1
         );
+    }
+
+    #[test]
+    fn allows_io_await_in_test_files() {
+        assert!(run_on_path("async function f() { await fetch(url); }", "foo.test.ts").is_empty());
     }
 
     #[test]

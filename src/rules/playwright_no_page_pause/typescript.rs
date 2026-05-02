@@ -3,7 +3,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
 crate::ast_check! { on ["call_expression"] prefilter = ["pause"] => |node, source, ctx, diagnostics|
-    if !source.windows(16).any(|w| w == b"@playwright/test") {
+    if !crate::rules::playwright::is_playwright_context(ctx) {
         return;
     }
     let Some(callee) = node.child_by_field_name("function") else { return };

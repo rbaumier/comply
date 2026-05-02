@@ -19,6 +19,20 @@ pub const META: RuleMeta = RuleMeta {
     categories: &["code-quality"],
 };
 
+fn is_sveltekit_route_file(file_name: &str) -> bool {
+    let Some(rest) = file_name.strip_prefix('+') else {
+        return false;
+    };
+    let parts: Vec<&str> = rest.split('.').collect();
+    match parts.as_slice() {
+        ["page" | "layout" | "error", "svelte"] => true,
+        ["page" | "layout", "js" | "ts"] => true,
+        ["page" | "layout", "server", "js" | "ts"] => true,
+        ["server", "js" | "ts"] => true,
+        _ => false,
+    }
+}
+
 pub fn register() -> RuleDef {
     RuleDef {
         meta: META,

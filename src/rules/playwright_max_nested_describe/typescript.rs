@@ -72,7 +72,7 @@ crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
     if !is_test_file(ctx.path) {
         return;
     }
-    if !source.windows(16).any(|w| w == b"@playwright/test") {
+    if !crate::rules::playwright::is_playwright_context(ctx) {
         return;
     }
 
