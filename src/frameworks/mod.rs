@@ -76,6 +76,7 @@ const RAW: &[(&str, &str)] = &[
     ("hono", include_str!("hono.toml")),
     ("xstate", include_str!("xstate.toml")),
     ("zod", include_str!("zod.toml")),
+    ("i18n", include_str!("i18n.toml")),
 ];
 
 fn registry() -> &'static [FrameworkDef] {

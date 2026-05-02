@@ -10,6 +10,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 
 crate::ast_check! { on ["function_item"] => |node, source, ctx, diagnostics|
     if !is_pub(node, source) { return; }
+    if is_async(node, source) { return; }
 
     let ret = match node.child_by_field_name("return_type") {
         Some(r) => r,
@@ -39,6 +40,16 @@ fn is_pub(item: tree_sitter::Node, source: &[u8]) -> bool {
             && let Ok(text) = child.utf8_text(source)
             && text.starts_with("pub")
         {
+            return true;
+        }
+    }
+    false
+}
+
+fn is_async(item: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut cursor = item.walk();
+    for child in item.children(&mut cursor) {
+        if child.utf8_text(source).unwrap_or("") == "async" {
             return true;
         }
     }
@@ -78,5 +89,20 @@ mod tests {
     #[test]
     fn allows_non_result_return() {
         assert!(run("pub fn name() -> String { String::new() }").is_empty());
+    }
+
+    #[test]
+    fn allows_async_fn_returning_result() {
+        assert!(
+            run("pub async fn connect() -> Result<String, Error> { Ok(String::new()) }")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn flags_sync_fn_even_with_async_sibling() {
+        let d = run("pub async fn a() -> Result<(), E> { Ok(()) }\npub fn b() -> Result<(), E> { Ok(()) }");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("#[must_use]"));
     }
 }

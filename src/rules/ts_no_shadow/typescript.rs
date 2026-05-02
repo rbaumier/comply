@@ -28,6 +28,9 @@ impl crate::rules::backend::AstCheck for Check {
                     continue;
                 };
                 let name = scoping.symbol_name(symbol_id);
+                if is_single_uppercase(name) {
+                    continue;
+                }
                 let ident = oxc_str::Ident::from(name);
                 if scoping.find_binding(parent_scope, ident).is_some() {
                     let span = scoping.symbol_span(symbol_id);
@@ -47,6 +50,10 @@ impl crate::rules::backend::AstCheck for Check {
             diagnostics
         })
     }
+}
+
+fn is_single_uppercase(name: &str) -> bool {
+    name.len() == 1 && name.as_bytes()[0].is_ascii_uppercase()
 }
 
 fn byte_offset_to_line_col(source: &str, byte_offset: usize) -> (usize, usize) {
@@ -108,5 +115,11 @@ mod tests {
     fn flags_catch_parameter_shadow() {
         let d = run_on("const e = 1; try { foo(); } catch (e) { console.log(e); }");
         assert_eq!(d.len(), 1, "catch param `e` shadows outer `e`");
+    }
+
+    #[test]
+    fn allows_single_uppercase_type_param_shadow() {
+        let d = run_on("function f<A>(a: A) { function g<A>(b: A) { return b; } return g(a); }");
+        assert!(d.is_empty());
     }
 }

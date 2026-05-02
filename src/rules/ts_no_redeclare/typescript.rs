@@ -16,6 +16,7 @@
 //! in the same block was missed when the for-statement was nested).
 //! Using oxc's symbol model removes that whole class of bugs.
 
+use oxc_ast::AstKind;
 use oxc_span::GetSpan;
 
 use crate::diagnostic::{Diagnostic, Severity};
@@ -34,15 +35,20 @@ impl crate::rules::backend::AstCheck for Check {
             let mut diagnostics = Vec::new();
 
             for symbol_id in scoping.symbol_ids() {
-                // `symbol_declarations` returns every declaration node bound to
-                // a symbol; the first is the original, anything after it is a
-                // redeclaration we should flag.
-                let mut iter = scoping.symbol_declarations(symbol_id);
-                if iter.next().is_none() {
+                let decl_ids: Vec<_> = scoping.symbol_declarations(symbol_id).collect();
+                if decl_ids.len() <= 1 {
                     continue;
                 }
+
+                let all_functions = decl_ids.iter().all(|&id| {
+                    matches!(nodes.kind(id), AstKind::Function(_))
+                });
+                if all_functions {
+                    continue;
+                }
+
                 let name = scoping.symbol_name(symbol_id);
-                for decl_id in iter {
+                for &decl_id in &decl_ids[1..] {
                     let span = nodes.kind(decl_id).span();
                     let (line, column) = byte_offset_to_line_col(ctx.source, span.start as usize);
                     diagnostics.push(Diagnostic {
@@ -101,11 +107,15 @@ mod tests {
     }
 
     #[test]
-    fn flags_duplicate_function_declaration() {
-        // Two `function foo` at the same scope is a redeclaration that
-        // the previous walker missed (it only inspected
-        // variable_declarator nodes).
+    fn allows_function_overloads() {
+        let d = run_on("function foo(a: string): string;\nfunction foo(a: number): number;\nfunction foo(a: any): any { return a; }");
+        assert!(d.is_empty());
+    }
+
+    #[test]
+    fn allows_duplicate_function_declarations() {
+        // Two function declarations = valid TS overload pattern
         let d = run_on("function foo() {} function foo() {}");
-        assert_eq!(d.len(), 1);
+        assert!(d.is_empty());
     }
 }

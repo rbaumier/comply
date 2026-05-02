@@ -1,0 +1,12 @@
+[detection]
+dependencies = ["react-i18next", "next-intl", "i18next", "react-intl", "vue-i18n", "lingui", "@lingui/core"]
+
+[entry_points]
+dirs = []
+files = []
+
+[magic_exports]
+names = []
+
+[tooling_deps]
+names = []

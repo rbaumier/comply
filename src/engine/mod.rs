@@ -388,6 +388,7 @@ fn should_skip_framework_scoped_rule(meta: &RuleMeta, project: &ProjectCtx) -> b
         "xstate" => !project.has_framework("xstate"),
         "angular" => !project.has_framework("angular"),
         "nextjs" => !project.has_framework("nextjs"),
+        "i18n" => !project.has_framework("i18n"),
         "tanstack" | "tanstack-start" | "tanstack-query" => {
             !project.has_framework("tanstack-query")
                 && !project.has_framework("tanstack-router")
