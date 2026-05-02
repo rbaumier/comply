@@ -38,6 +38,7 @@
 //! Everything else (`e`, `err`, `ex`, `exception`, `caughtException`,
 //! `failure`, …) is flagged.
 
+mod oxc_typescript;
 mod typescript;
 mod vue;
 
@@ -88,15 +89,15 @@ pub fn register() -> RuleDef {
         backends: vec![
             (
                 Language::TypeScript,
-                Backend::TreeSitter(Box::new(typescript::Check)),
+                Backend::Oxc(Box::new(oxc_typescript::Check)),
             ),
             (
                 Language::JavaScript,
-                Backend::TreeSitter(Box::new(typescript::Check)),
+                Backend::Oxc(Box::new(oxc_typescript::Check)),
             ),
             (
                 Language::Tsx,
-                Backend::TreeSitter(Box::new(typescript::Check)),
+                Backend::Oxc(Box::new(oxc_typescript::Check)),
             ),
             (Language::Vue, Backend::TreeSitter(Box::new(vue::Check))),
         ],
