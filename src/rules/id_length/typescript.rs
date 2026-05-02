@@ -50,6 +50,9 @@ impl AstCheck for Check {
         if patterns.iter().any(|p| p.is_match(name)) {
             return;
         }
+        if is_conventional_short_binding(node, name) {
+            return;
+        }
         let pos = node.start_position();
         diagnostics.push(Diagnostic {
             path: std::sync::Arc::clone(&ctx.path_arc),
@@ -104,6 +107,38 @@ fn is_binding_name(node: tree_sitter::Node) -> bool {
     }
 }
 
+/// Single-letter names conventional in JS/TS: loop indices, callback
+/// params, event/error handlers, generic type names.
+const CONVENTIONAL_TS_NAMES: &[&str] = &[
+    "i", "j", "k", "n", "x", "y", "z", "e", "v", "s", "f", "a", "b",
+    "c", "d", "r", "m", "p", "w", "h", "g",
+];
+
+/// Allow conventional single-letter names in parameters, for-loop vars,
+/// and variable declarations. Also allow single uppercase letters
+/// (generic type parameter naming convention).
+fn is_conventional_short_binding(node: tree_sitter::Node, name: &str) -> bool {
+    if name.len() == 1 && name.chars().next().unwrap().is_ascii_uppercase() {
+        return true;
+    }
+    if !CONVENTIONAL_TS_NAMES.contains(&name) {
+        return false;
+    }
+    // Destructuring: `const { x } = obj` — node itself is the binding
+    if node.kind() == "shorthand_property_identifier_pattern" {
+        return true;
+    }
+    let Some(parent) = node.parent() else {
+        return false;
+    };
+    matches!(
+        parent.kind(),
+        "required_parameter"
+            | "optional_parameter"
+            | "variable_declarator"
+    )
+}
+
 /// True if `parent.child_by_field_name(field)` is the same AST node as
 /// `node` (same byte range + same parent → same node identity).
 fn field_matches(parent: tree_sitter::Node, field: &str, node: tree_sitter::Node) -> bool {
@@ -129,13 +164,16 @@ mod tests {
     }
 
     #[test]
-    fn flags_short_const() {
-        // Uses `x` rather than `t` — `t` is in the default exceptions
-        // list (shipped for react-i18next's useTranslation()).
-        let diags = run_on("const x = 1;");
+    fn allows_conventional_const() {
+        // `x` is a conventional single-letter name in a variable_declarator
+        assert!(run_on("const x = 1;").is_empty());
+    }
+
+    #[test]
+    fn flags_unconventional_const() {
+        let diags = run_on("const q = 1;");
         assert_eq!(diags.len(), 1);
-        assert!(diags[0].message.contains("`x`"));
-        assert!(diags[0].message.contains("< 2"));
+        assert!(diags[0].message.contains("`q`"));
     }
 
     #[test]
@@ -150,11 +188,16 @@ mod tests {
     }
 
     #[test]
-    fn flags_short_function_parameter() {
-        let diags = run_on("function fn(x: number) { return x; }");
-        // `fn` is 2 chars → passes (>=2). Only `x` fails.
+    fn allows_conventional_function_parameter() {
+        // `x` is conventional in a parameter
+        assert!(run_on("function fn(x: number) { return x; }").is_empty());
+    }
+
+    #[test]
+    fn flags_unconventional_function_parameter() {
+        let diags = run_on("function fn(q: number) { return q; }");
         assert_eq!(diags.len(), 1);
-        assert!(diags[0].message.contains("`x`"));
+        assert!(diags[0].message.contains("`q`"));
     }
 
     #[test]
@@ -165,11 +208,15 @@ mod tests {
     }
 
     #[test]
-    fn flags_short_destructuring_binding() {
-        // `x` rather than `t` — `t` is exempt by default.
-        let diags = run_on("const { x } = someObj;");
+    fn allows_conventional_destructuring_binding() {
+        assert!(run_on("const { x } = someObj;").is_empty());
+    }
+
+    #[test]
+    fn flags_unconventional_destructuring_binding() {
+        let diags = run_on("const { q } = someObj;");
         assert_eq!(diags.len(), 1);
-        assert!(diags[0].message.contains("`x`"));
+        assert!(diags[0].message.contains("`q`"));
     }
 
     #[test]
@@ -180,46 +227,36 @@ mod tests {
     }
 
     #[test]
-    fn flags_short_class_name() {
-        let diags = run_on("class X {}");
-        assert_eq!(diags.len(), 1);
-        assert!(diags[0].message.contains("`X`"));
+    fn allows_single_uppercase_class_name() {
+        // Single uppercase letter = conventional generic-style naming
+        assert!(run_on("class X {}").is_empty());
     }
 
     #[test]
-    fn flags_short_interface_name() {
-        // `U` rather than `T` — `T` is in defaults exceptions.
-        let diags = run_on("interface U {}");
-        assert_eq!(diags.len(), 1);
-        assert!(diags[0].message.contains("`U`"));
+    fn allows_single_uppercase_interface_name() {
+        assert!(run_on("interface U {}").is_empty());
     }
 
     #[test]
-    fn flags_short_type_alias() {
-        let diags = run_on("type U = number;");
-        assert_eq!(diags.len(), 1);
-        assert!(diags[0].message.contains("`U`"));
+    fn allows_single_uppercase_type_alias() {
+        assert!(run_on("type U = number;").is_empty());
     }
 
     #[test]
-    fn tsx_flags_short_component_prop_destructuring() {
-        // Use `D` as component name (not `C` which passes at 1-char
-        // min but here min=2). `x` as destructured prop (not `t`).
-        let diags = run_tsx("const D = ({ x }: { x: string }) => <div>{x}</div>;");
-        let names: Vec<&str> = diags.iter().map(|d| d.message.as_str()).collect();
-        assert!(names.iter().any(|m| m.contains("`D`")));
-        assert!(names.iter().any(|m| m.contains("`x`")));
+    fn tsx_allows_conventional_component_names() {
+        // `D` single uppercase = allowed, `x` conventional = allowed
+        assert!(run_tsx("const D = ({ x }: { x: string }) => <div>{x}</div>;").is_empty());
     }
 
     #[test]
-    fn flags_callback_arrow_params() {
-        assert!(!run_on("arr.map((x) => x + 1);").is_empty());
-        assert!(!run_on("arr.forEach((v, i) => console.log(v, i));").is_empty());
+    fn allows_conventional_callback_arrow_params() {
+        assert!(run_on("arr.map((x) => x + 1);").is_empty());
+        assert!(run_on("arr.forEach((v, i) => console.log(v, i));").is_empty());
     }
 
     #[test]
-    fn flags_for_loop_variable() {
-        assert!(!run_on("for (let i = 0; i < 10; i++) {}").is_empty());
+    fn allows_conventional_for_loop_variable() {
+        assert!(run_on("for (let i = 0; i < 10; i++) {}").is_empty());
     }
 
     #[test]
@@ -229,9 +266,8 @@ mod tests {
 
     #[test]
     fn message_names_the_identifier() {
-        let diags = run_on("const abc = 1;\nconst x = 2;");
-        // `abc` is 3 chars, passes min 2. Only `x` fails.
+        let diags = run_on("const abc = 1;\nconst q = 2;");
         assert_eq!(diags.len(), 1);
-        assert_eq!(diags[0].message, "Identifier `x` is too short (< 2).");
+        assert_eq!(diags[0].message, "Identifier `q` is too short (< 2).");
     }
 }
