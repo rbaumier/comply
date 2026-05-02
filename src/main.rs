@@ -314,7 +314,7 @@ fn lint_project(cli: &Cli) -> Result<bool> {
     // the editors finish, comply re-reads the files via the normal
     // pipeline so the user sees what's left — typically the
     // architectural diagnostics no fixer can address.
-    if cli.fix {
+    if cli.fix && !cli.comply_only {
         let t_fix = Instant::now();
         let runs = fix::apply_fixes(&discovered, &config)?;
         timings.fix = t_fix.elapsed();
@@ -322,7 +322,7 @@ fn lint_project(cli: &Cli) -> Result<bool> {
     }
 
     let diagnostics =
-        collect_all_diagnostics(&discovered, &config, &mut timings, cli.no_external_tools)?;
+        collect_all_diagnostics(&discovered, &config, &mut timings, cli.comply_only)?;
 
     let t_post = Instant::now();
     let after_overrides = apply_config_filters(diagnostics, &config);
@@ -386,6 +386,7 @@ fn collect_all_diagnostics(
     discovered: &[SourceFile],
     config: &Config,
     timings: &mut Timings,
+    is_comply_only: bool,
 ) -> Result<Vec<Diagnostic>> {
     let by_lang = partition_by_language(discovered);
     let mut diagnostics = Vec::with_capacity(discovered.len());
@@ -396,10 +397,22 @@ fn collect_all_diagnostics(
     let project = std::sync::Arc::new(crate::project::ProjectCtx::load(&all_refs, config));
 
     if !by_lang.ts.is_empty() {
-        diagnostics.extend(lint_typescript(&by_lang.ts, config, &project, timings)?);
+        diagnostics.extend(lint_typescript(
+            &by_lang.ts,
+            config,
+            &project,
+            timings,
+            is_comply_only,
+        )?);
     }
     if !by_lang.rs.is_empty() {
-        diagnostics.extend(lint_rust(&by_lang.rs, config, &project, timings)?);
+        diagnostics.extend(lint_rust(
+            &by_lang.rs,
+            config,
+            &project,
+            timings,
+            is_comply_only,
+        )?);
     }
     if !by_lang.vue.is_empty() {
         let t = Instant::now();
@@ -452,31 +465,31 @@ fn lint_rust(
     config: &Config,
     project: &std::sync::Arc<crate::project::ProjectCtx>,
     timings: &mut Timings,
+    is_comply_only: bool,
 ) -> Result<Vec<Diagnostic>> {
-    // Phase availability is cached in OnceLock inside each module, so
-    // these is_available() calls are ~free and safe to call outside the
-    // parallel region.
-    let clippy_avail = clippy::is_available();
-    let shear_avail = cargo_shear::is_available();
-    let modules_avail = cargo_modules::is_available();
+    let clippy_available = !is_comply_only && clippy::is_available();
+    let shear_available = !is_comply_only && cargo_shear::is_available();
+    let modules_available = !is_comply_only && cargo_modules::is_available();
 
-    if !clippy_avail {
-        eprintln!(
-            "comply: cargo clippy not found — skipping clippy-backed rules. \
-             Install with: rustup component add clippy"
-        );
-    }
-    if !shear_avail {
-        eprintln!(
-            "comply: cargo shear not found — skipping unused-dependency rule. \
-             Install with: cargo install cargo-shear"
-        );
-    }
-    if !modules_avail {
-        eprintln!(
-            "comply: cargo modules not found — skipping orphan-module rule. \
-             Install with: cargo install cargo-modules"
-        );
+    if !is_comply_only {
+        if !clippy_available {
+            eprintln!(
+                "comply: cargo clippy not found — skipping clippy-backed rules. \
+                 Install with: rustup component add clippy"
+            );
+        }
+        if !shear_available {
+            eprintln!(
+                "comply: cargo shear not found — skipping unused-dependency rule. \
+                 Install with: cargo install cargo-shear"
+            );
+        }
+        if !modules_available {
+            eprintln!(
+                "comply: cargo modules not found — skipping orphan-module rule. \
+                 Install with: cargo install cargo-modules"
+            );
+        }
     }
 
     // All four phases below are independent: they read the same input
@@ -495,21 +508,21 @@ fn lint_rust(
     type PhaseOut = (Result<Vec<Diagnostic>>, Duration);
 
     let clippy_phase = || -> PhaseOut {
-        if !clippy_avail {
+        if !clippy_available {
             return (Ok(Vec::new()), Duration::ZERO);
         }
         let t = Instant::now();
         (clippy::lint_files(rs_files, config), t.elapsed())
     };
     let shear_phase = || -> PhaseOut {
-        if !shear_avail {
+        if !shear_available {
             return (Ok(Vec::new()), Duration::ZERO);
         }
         let t = Instant::now();
         (cargo_shear::lint_files(rs_files), t.elapsed())
     };
     let modules_phase = || -> PhaseOut {
-        if !modules_avail {
+        if !modules_available {
             return (Ok(Vec::new()), Duration::ZERO);
         }
         let t = Instant::now();
@@ -588,10 +601,11 @@ fn lint_typescript(
     config: &Config,
     project: &std::sync::Arc<crate::project::ProjectCtx>,
     timings: &mut Timings,
+    is_comply_only: bool,
 ) -> Result<Vec<Diagnostic>> {
-    let oxlint_avail = oxlint::is_available();
+    let oxlint_available = !is_comply_only && oxlint::is_available();
 
-    if !oxlint_avail {
+    if !is_comply_only && !oxlint_available {
         eprintln!(
             "comply: oxlint not found — skipping oxlint rules. \
              Install with: npm install -g oxlint oxlint-tsgolint"
@@ -602,7 +616,7 @@ fn lint_typescript(
 
     let project2 = std::sync::Arc::clone(project);
     let oxlint_phase = || -> PhaseOut {
-        if !oxlint_avail {
+        if !oxlint_available {
             return (Ok(Vec::new()), Duration::ZERO);
         }
         let t = Instant::now();

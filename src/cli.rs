@@ -69,6 +69,11 @@ pub struct Cli {
     #[arg(long, conflicts_with_all = ["should_emit_json", "fix"])]
     pub tui: bool,
 
+    /// Run only the in-process tree-sitter rules, skipping all external
+    /// tool subprocesses (oxlint, clippy, cargo-shear, cargo-modules).
+    #[arg(long)]
+    pub comply_only: bool,
+
     /// Path to lint (default: current directory).
     pub path: Option<PathBuf>,
 }
@@ -190,6 +195,7 @@ mod tests {
             fix: false,
             timings: false,
             tui: false,
+            comply_only: false,
             path: None,
         }
     }
