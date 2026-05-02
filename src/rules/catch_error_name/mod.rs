@@ -40,7 +40,9 @@
 
 mod oxc_typescript;
 mod oxc_vue;
+#[cfg(test)]
 mod typescript;
+#[cfg(test)]
 mod vue;
 
 #[cfg(test)]

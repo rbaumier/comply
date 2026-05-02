@@ -2,6 +2,7 @@
 
 mod oxc_typescript;
 mod rust;
+#[cfg(test)]
 mod typescript;
 
 use crate::diagnostic::Severity;

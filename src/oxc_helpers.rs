@@ -53,6 +53,9 @@ pub fn byte_offset_to_line_col(source: &str, byte_offset: usize) -> (usize, usiz
         if i >= byte_offset {
             break;
         }
+        if c == '\r' {
+            continue;
+        }
         if c == '\n' {
             line += 1;
             col = 1;
