@@ -607,6 +607,7 @@ pub mod vue_scoped_styles_preferred;
 pub mod vue_self_closing_comp;
 pub mod vue_setup_store_return_all;
 pub mod vue_sfc;
+pub mod vue_sfc_oxc;
 pub mod vue_shallowref_for_primitives;
 pub mod vue_template_helpers;
 pub mod vue_typed_define_props_emits;
