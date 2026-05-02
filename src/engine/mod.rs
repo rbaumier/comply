@@ -32,6 +32,7 @@ use crate::diagnostic::Diagnostic;
 use crate::files::{Language, SourceFile};
 use crate::project::ProjectCtx;
 use crate::rules::backend::AstCheck;
+use crate::rules::backend::OxcCheck;
 use crate::rules::file_ctx::FileCtx;
 use crate::rules::{self, RuleDef, backend::Backend, backend::CheckCtx, meta::RuleMeta};
 
@@ -56,6 +57,8 @@ struct LangDispatch<'a> {
     legacy_prefilters: Vec<Option<PrefilterFinders>>,
     dispatch: FxHashMap<u16, Vec<usize>>,
     interesting: Vec<bool>,
+    oxc_rules: Vec<(&'a RuleMeta, &'a dyn OxcCheck)>,
+    oxc_prefilters: Vec<Option<PrefilterFinders>>,
 }
 
 impl<'a> LangDispatch<'a> {
@@ -67,6 +70,7 @@ impl<'a> LangDispatch<'a> {
             .map(|(_, backend)| match backend {
                 Backend::TreeSitter(c) => c.prefilter().map(build_finders),
                 Backend::Text(c) => c.prefilter().map(build_finders),
+                Backend::Oxc(c) => c.prefilter().map(build_finders),
                 _ => None,
             })
             .collect();
@@ -85,6 +89,16 @@ impl<'a> LangDispatch<'a> {
                     legacy.push((meta, check));
                     legacy_prefilters.push(pf);
                 }
+            }
+        }
+        let mut oxc_rules: Vec<(&'a RuleMeta, &'a dyn OxcCheck)> = Vec::new();
+        let mut oxc_prefilters: Vec<Option<PrefilterFinders>> = Vec::new();
+        for &(meta, ref backend) in &applicable {
+            if let Backend::Oxc(check) = backend {
+                let check: &dyn OxcCheck = &**check;
+                let pf = check.prefilter().map(build_finders);
+                oxc_rules.push((meta, check));
+                oxc_prefilters.push(pf);
             }
         }
         let ts_lang = crate::parsing::ts_language_for(language);
@@ -120,6 +134,8 @@ impl<'a> LangDispatch<'a> {
             legacy_prefilters,
             dispatch,
             interesting,
+            oxc_rules,
+            oxc_prefilters,
         }
     }
 }
@@ -356,7 +372,7 @@ fn dispatch_with_lang(
             | Backend::Clippy { .. }
             | Backend::Tsc { .. }
             | Backend::Tsgolint { .. } => Vec::new(),
-            Backend::TreeSitter(_) => continue,
+            Backend::TreeSitter(_) | Backend::Oxc(_) => continue,
         };
         if let Some(sev) = config.severity_for(meta.id) {
             for d in &mut produced {

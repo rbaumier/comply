@@ -186,6 +186,53 @@ pub trait AstCheck: Send + Sync {
     }
 }
 
+/// Re-export so rules don't need to depend on oxc_ast directly.
+pub use oxc_ast::AstKind;
+pub use oxc_ast::AstType;
+
+/// oxc-based AST check. Rules implement either `run` (per-node dispatch
+/// via `interested_kinds`) or `run_on_semantic` (full-program analysis).
+///
+/// Unlike `AstCheck`, there is no `create_state`/`finish` lifecycle.
+/// `AstNodes` iteration is linear — stateful rules use `run_on_semantic`.
+pub trait OxcCheck: Send + Sync {
+    /// Which `AstType` variants this rule cares about. The engine builds
+    /// a dispatch table from these — only matching nodes are passed to
+    /// `run`. `AstType` is `#[repr(u8)]` so lookup is O(1).
+    ///
+    /// Return an empty slice to opt out of per-node dispatch (use
+    /// `run_on_semantic` instead).
+    fn interested_kinds(&self) -> &'static [AstType] {
+        &[]
+    }
+
+    /// Optional SIMD prefilter — same semantics as `AstCheck::prefilter`.
+    fn prefilter(&self) -> Option<&'static [&'static str]> {
+        None
+    }
+
+    /// Called once per matching `AstNode`. Most rules implement this.
+    fn run<'a>(
+        &self,
+        _node: &oxc_semantic::AstNode<'a>,
+        _ctx: &CheckCtx,
+        _semantic: &'a oxc_semantic::Semantic<'a>,
+        _diagnostics: &mut Vec<Diagnostic>,
+    ) {
+    }
+
+    /// Called once per file with the full `Semantic`. Use for rules that
+    /// need cross-node analysis (scope walking, symbol enumeration).
+    /// Default: no-op.
+    fn run_on_semantic<'a>(
+        &self,
+        _semantic: &'a oxc_semantic::Semantic<'a>,
+        _ctx: &CheckCtx,
+    ) -> Vec<Diagnostic> {
+        Vec::new()
+    }
+}
+
 /// A text-only check — no AST needed.
 pub trait TextCheck: Send + Sync {
     /// Optional list of literal substrings the rule needs in the source.
@@ -225,6 +272,8 @@ pub enum Backend {
     /// Delegate to a tsgolint rule (type-aware linting via typescript-go).
     /// Only runs when --with-types is passed.
     Tsgolint { rule: &'static str },
+    /// In-process oxc AST walk — native Rust, no FFI.
+    Oxc(Box<dyn OxcCheck>),
 }
 
 impl std::fmt::Debug for Backend {
@@ -236,6 +285,7 @@ impl std::fmt::Debug for Backend {
             Self::Clippy { lint } => write!(f, "Backend::Clippy {{ lint: {lint:?} }}"),
             Self::Tsc { codes } => write!(f, "Backend::Tsc {{ codes: {codes:?} }}"),
             Self::Tsgolint { rule } => write!(f, "Backend::Tsgolint {{ rule: {rule:?} }}"),
+            Self::Oxc(_) => f.write_str("Backend::Oxc(<dyn OxcCheck>)"),
         }
     }
 }
@@ -274,5 +324,18 @@ mod backend_tests {
     #[test]
     fn ast_check_can_override_prefilter() {
         assert_eq!(AstWithPrefilter.prefilter(), Some(&["foo", "bar"][..]));
+    }
+
+    struct DefaultOxc;
+    impl OxcCheck for DefaultOxc {}
+
+    #[test]
+    fn oxc_check_default_prefilter_is_none() {
+        assert!(DefaultOxc.prefilter().is_none());
+    }
+
+    #[test]
+    fn oxc_check_default_interested_kinds_empty() {
+        assert!(DefaultOxc.interested_kinds().is_empty());
     }
 }
