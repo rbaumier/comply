@@ -31,6 +31,9 @@ impl AstCheck for Check {
         _state: Option<&mut dyn std::any::Any>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
+        if inside_unsafe_fn(node, ctx.source.as_bytes()) {
+            return;
+        }
         if has_safety_comment_above(node, ctx.source) {
             return;
         }
@@ -49,6 +52,22 @@ impl AstCheck for Check {
             span: None,
         });
     }
+}
+
+fn inside_unsafe_fn(node: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut cur = node.parent();
+    while let Some(p) = cur {
+        if p.kind() == "function_item" {
+            let body_start = p
+                .child_by_field_name("body")
+                .map(|b| b.start_byte())
+                .unwrap_or(p.end_byte());
+            let sig = &source[p.start_byte()..body_start];
+            return sig.windows(6).any(|w| w == b"unsafe");
+        }
+        cur = p.parent();
+    }
+    false
 }
 
 /// True if the line directly above the unsafe block contains a
@@ -71,7 +90,7 @@ fn has_safety_comment_above(node: tree_sitter::Node, source: &str) -> bool {
             continue;
         }
         if trimmed.starts_with("//") || trimmed.starts_with("/*") {
-            if trimmed.contains("SAFETY:") || trimmed.contains("Safety:") {
+            if trimmed.contains("SAFETY:") || trimmed.contains("Safety:") || trimmed.contains("# Safety") {
                 return true;
             }
             continue;
@@ -117,7 +136,31 @@ mod tests {
 
     #[test]
     fn does_not_flag_unsafe_fn_declaration() {
-        // `unsafe fn foo()` is not a block — we only care about `unsafe { }`.
         assert!(run_on("unsafe fn f() {}").is_empty());
+    }
+
+    #[test]
+    fn allows_unsafe_block_inside_unsafe_fn() {
+        let source = "unsafe fn f(p: *const u8) -> u8 { unsafe { *p } }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_rustdoc_safety_heading() {
+        let source = "fn f(p: *const u8) {\n\
+                      /// # Safety\n\
+                      /// p must be valid\n\
+                      unsafe { let _ = *p; }\n\
+                      }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_lowercase_safety_comment() {
+        let source = "fn f(p: *const u8) {\n\
+                      // Safety: p checked above\n\
+                      unsafe { let _ = *p; }\n\
+                      }";
+        assert!(run_on(source).is_empty());
     }
 }

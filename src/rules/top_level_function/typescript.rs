@@ -30,10 +30,7 @@ crate::ast_check! { on ["variable_declarator"] => |node, source, ctx, diagnostic
     let Some(outer) = decl.parent() else { return };
     let top_container = match outer.kind() {
         "program" => outer,
-        "export_statement" => {
-            let Some(gp) = outer.parent() else { return };
-            gp
-        }
+        "export_statement" => return,
         _ => return,
     };
     if top_container.kind() != "program" {
@@ -84,9 +81,8 @@ mod tests {
     }
 
     #[test]
-    fn flags_exported_top_level_arrow() {
-        let diags = run_on("export const foo = () => 42;");
-        assert_eq!(diags.len(), 1);
+    fn allows_exported_top_level_arrow() {
+        assert!(run_on("export const foo = () => 42;").is_empty());
     }
 
     #[test]

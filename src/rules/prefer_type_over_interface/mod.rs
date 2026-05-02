@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
                   Types support unions, intersections, mapped types, and \
                   conditional types. Keep `interface` only when you need \
                   `extends` or declaration merging.",
-    severity: Severity::Error,
+    severity: Severity::Warning,
     doc_url: None,
     categories: &["typescript"],
 };
