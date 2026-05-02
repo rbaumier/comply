@@ -61,6 +61,7 @@ struct LangDispatch<'a> {
     interesting: Vec<bool>,
     oxc_rules: Vec<(&'a RuleMeta, &'a dyn OxcCheck)>,
     oxc_prefilters: Vec<Option<PrefilterFinders>>,
+    has_ts_rules: bool,
 }
 
 impl<'a> LangDispatch<'a> {
@@ -127,6 +128,7 @@ impl<'a> LangDispatch<'a> {
         for &kid in dispatch.keys() {
             interesting[kid as usize] = true;
         }
+        let has_ts_rules = !multiplexed.is_empty() || !legacy.is_empty();
         Self {
             applicable,
             applicable_prefilters,
@@ -138,6 +140,7 @@ impl<'a> LangDispatch<'a> {
             interesting,
             oxc_rules,
             oxc_prefilters,
+            has_ts_rules,
         }
     }
 }
@@ -319,21 +322,22 @@ fn dispatch_with_lang(
         return Vec::new();
     }
 
-    let needs_ast = ld
-        .applicable
-        .iter()
-        .zip(&ld.applicable_prefilters)
-        .any(|((meta, b), pf)| match b {
-            Backend::TreeSitter(_) => {
-                config.is_rule_enabled(meta.id, path)
-                    && !should_skip_test_fixture_rule(meta, &file_ctx)
-                    && !should_skip_relaxed_directory_rule(meta, path)
-                    && pf
-                        .as_ref()
-                        .is_none_or(|f| source_matches_prefilter(source, f))
-            }
-            _ => false,
-        });
+    let needs_ast = ld.has_ts_rules
+        && ld
+            .applicable
+            .iter()
+            .zip(&ld.applicable_prefilters)
+            .any(|((meta, b), pf)| match b {
+                Backend::TreeSitter(_) => {
+                    config.is_rule_enabled(meta.id, path)
+                        && !should_skip_test_fixture_rule(meta, &file_ctx)
+                        && !should_skip_relaxed_directory_rule(meta, path)
+                        && pf
+                            .as_ref()
+                            .is_none_or(|f| source_matches_prefilter(source, f))
+                }
+                _ => false,
+            });
     let tree = if needs_ast {
         crate::parsing::parse_with_grammar(&mut worker.parser, file.language, source.as_bytes())
     } else {
