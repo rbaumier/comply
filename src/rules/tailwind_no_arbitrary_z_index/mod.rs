@@ -1,3 +1,5 @@
+mod oxc_typescript;
+
 mod typescript;
 
 use crate::diagnostic::Severity;
@@ -15,17 +17,34 @@ pub const META: RuleMeta = RuleMeta {
     categories: &["tailwind"],
 };
 
+/// True when the class string contains a `z-[N…]` token whose first inner
+/// character is an ASCII digit.
+pub(crate) fn has_arbitrary_numeric_z(s: &str) -> bool {
+    for token in s.split_whitespace() {
+        if let Some(rest) = token.strip_prefix("z-[")
+            && rest.starts_with(|c: char| c.is_ascii_digit())
+        {
+            return true;
+        }
+    }
+    false
+}
+
 pub fn register() -> RuleDef {
     RuleDef {
         meta: META,
         backends: vec![
             (
                 Language::TypeScript,
-                Backend::TreeSitter(Box::new(typescript::Check)),
+                Backend::Oxc(Box::new(oxc_typescript::Check)),
             ),
             (
                 Language::Tsx,
-                Backend::TreeSitter(Box::new(typescript::Check)),
+                Backend::Oxc(Box::new(oxc_typescript::Check)),
+            ),
+            (
+                Language::JavaScript,
+                Backend::Oxc(Box::new(oxc_typescript::Check)),
             ),
             (
                 Language::Vue,

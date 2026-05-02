@@ -1,3 +1,5 @@
+mod oxc_typescript;
+
 mod typescript;
 
 use crate::diagnostic::Severity;
@@ -15,17 +17,30 @@ pub const META: RuleMeta = RuleMeta {
     categories: &["tailwind"],
 };
 
+/// True when `s` contains a `!` immediately followed by an ASCII lowercase
+/// letter — the Tailwind important-modifier shape (`!text-red-500`).
+pub(crate) fn has_important_class(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    bytes
+        .windows(2)
+        .any(|w| w[0] == b'!' && w[1].is_ascii_lowercase())
+}
+
 pub fn register() -> RuleDef {
     RuleDef {
         meta: META,
         backends: vec![
             (
                 Language::TypeScript,
-                Backend::TreeSitter(Box::new(typescript::Check)),
+                Backend::Oxc(Box::new(oxc_typescript::Check)),
             ),
             (
                 Language::Tsx,
-                Backend::TreeSitter(Box::new(typescript::Check)),
+                Backend::Oxc(Box::new(oxc_typescript::Check)),
+            ),
+            (
+                Language::JavaScript,
+                Backend::Oxc(Box::new(oxc_typescript::Check)),
             ),
             (
                 Language::Vue,

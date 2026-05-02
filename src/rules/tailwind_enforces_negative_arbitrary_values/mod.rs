@@ -1,3 +1,5 @@
+mod oxc_typescript;
+
 mod typescript;
 
 use crate::diagnostic::Severity;
@@ -15,21 +17,48 @@ pub const META: RuleMeta = RuleMeta {
     categories: &["tailwind"],
 };
 
+pub(crate) const NEGATABLE_PROPS: &[&str] = &[
+    "top", "bottom", "left", "right",
+    "m", "mt", "mb", "ml", "mr", "mx", "my",
+    "p", "pt", "pb", "pl", "pr", "px", "py",
+    "inset", "translate", "rotate", "skew", "scale",
+];
+
+/// Returns `true` if `token` matches the shape `-<prop>-[<value>…]` where
+/// `<prop>` is in `NEGATABLE_PROPS` and `<value>` does NOT itself start
+/// with `-`.
+pub(crate) fn is_negative_prefix_arbitrary(token: &str) -> bool {
+    let Some(rest) = token.strip_prefix('-') else {
+        return false;
+    };
+    for prop in NEGATABLE_PROPS {
+        let needle = format!("{prop}-[");
+        if let Some(after_bracket) = rest.strip_prefix(&needle)
+            && !after_bracket.is_empty()
+            && !after_bracket.starts_with('-')
+            && after_bracket.contains(']')
+        {
+            return true;
+        }
+    }
+    false
+}
+
 pub fn register() -> RuleDef {
     RuleDef {
         meta: META,
         backends: vec![
             (
                 Language::TypeScript,
-                Backend::TreeSitter(Box::new(typescript::Check)),
+                Backend::Oxc(Box::new(oxc_typescript::Check)),
             ),
             (
                 Language::Tsx,
-                Backend::TreeSitter(Box::new(typescript::Check)),
+                Backend::Oxc(Box::new(oxc_typescript::Check)),
             ),
             (
                 Language::JavaScript,
-                Backend::TreeSitter(Box::new(typescript::Check)),
+                Backend::Oxc(Box::new(oxc_typescript::Check)),
             ),
             (
                 Language::Vue,
