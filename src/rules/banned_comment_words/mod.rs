@@ -6,8 +6,10 @@
 //! it needs `simply`, it's not simple." Strip the filler and either delete
 //! the comment or rewrite it to explain the actual subtlety.
 
+mod oxc_typescript;
 mod rust;
 mod text;
+#[cfg(test)]
 mod typescript;
 
 use crate::diagnostic::Severity;
@@ -69,15 +71,15 @@ pub fn register() -> RuleDef {
         backends: vec![
             (
                 Language::TypeScript,
-                Backend::TreeSitter(Box::new(typescript::Check)),
+                Backend::Oxc(Box::new(oxc_typescript::Check)),
             ),
             (
                 Language::Tsx,
-                Backend::TreeSitter(Box::new(typescript::Check)),
+                Backend::Oxc(Box::new(oxc_typescript::Check)),
             ),
             (
                 Language::JavaScript,
-                Backend::TreeSitter(Box::new(typescript::Check)),
+                Backend::Oxc(Box::new(oxc_typescript::Check)),
             ),
             (Language::Rust, Backend::TreeSitter(Box::new(rust::Check))),
             (Language::Vue, Backend::Text(Box::new(text::Check))),
