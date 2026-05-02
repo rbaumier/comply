@@ -372,6 +372,12 @@ pub fn run_oxc_js(source: &str, check: &dyn OxcCheck) -> Vec<Diagnostic> {
     run_oxc_with_source_type(source, check, SourceType::mjs(), "t.js")
 }
 
+/// Run an `OxcCheck` against `source` parsed as TypeScript with a custom path.
+#[must_use]
+pub fn run_oxc_ts_with_path(source: &str, check: &dyn OxcCheck, fake_path: &str) -> Vec<Diagnostic> {
+    run_oxc_with_source_type(source, check, SourceType::ts(), fake_path)
+}
+
 fn run_oxc_with_source_type(
     source: &str,
     check: &dyn OxcCheck,
