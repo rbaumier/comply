@@ -24,37 +24,47 @@ impl AstCheck for Check {
         let source_bytes = ctx.source.as_bytes();
         let root = tree.root_node();
 
-        // Count function_signature nodes by name at program level.
-        let mut counts: HashMap<String, Vec<tree_sitter::Node>> = HashMap::new();
+        let mut signatures: HashMap<String, Vec<tree_sitter::Node>> = HashMap::new();
+        let mut implementations: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut cursor = root.walk();
         for child in root.children(&mut cursor) {
-            // `export_statement` wraps the actual declaration — peek inside.
-            let signature = match child.kind() {
-                "function_signature" => child,
+            let (kind, inner) = match child.kind() {
+                "function_signature" | "function_declaration" => (child.kind(), child),
                 "export_statement" => {
                     let mut ec = child.walk();
-                    let inner = child
-                        .children(&mut ec)
-                        .find(|c| c.kind() == "function_signature");
-                    match inner {
-                        Some(n) => n,
+                    let found = child.children(&mut ec).find(|c| {
+                        c.kind() == "function_signature" || c.kind() == "function_declaration"
+                    });
+                    match found {
+                        Some(n) => (n.kind(), n),
                         None => continue,
                     }
                 }
                 _ => continue,
             };
-            let Some(name) = signature
+            let Some(name) = inner
                 .child_by_field_name("name")
                 .and_then(|n| n.utf8_text(source_bytes).ok())
             else {
                 continue;
             };
-            counts.entry(name.to_string()).or_default().push(signature);
+            match kind {
+                "function_signature" => {
+                    signatures.entry(name.to_string()).or_default().push(inner);
+                }
+                "function_declaration" => {
+                    implementations.insert(name.to_string());
+                }
+                _ => {}
+            }
         }
 
         let mut diagnostics = Vec::new();
-        for (name, nodes) in counts {
+        for (name, nodes) in signatures {
             if nodes.len() < 2 {
+                continue;
+            }
+            if implementations.contains(&name) {
                 continue;
             }
             for node in nodes {
@@ -87,13 +97,21 @@ mod tests {
     }
 
     #[test]
-    fn flags_overloaded_function() {
+    fn allows_overloads_with_implementation() {
         let source = "
 function foo(x: number): string;
 function foo(x: string): number;
 function foo(x: number | string): string | number { return x as any; }
 ";
-        // Two overload signatures → 2 diagnostics.
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_ambient_overloads_without_implementation() {
+        let source = "
+function foo(x: number): string;
+function foo(x: string): number;
+";
         assert_eq!(run_on(source).len(), 2);
     }
 

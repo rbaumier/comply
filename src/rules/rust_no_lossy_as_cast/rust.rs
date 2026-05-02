@@ -45,10 +45,12 @@ impl AstCheck for Check {
         if !NARROWING_TARGETS.contains(&target) {
             return;
         }
-        // Avoid false positive on widening when the source is also small.
-        // We can't easily infer source types from a single AST node, so
-        // accept the false positive — `try_into()` / `From::from()` are
-        // both better than `as` even for "safe" casts.
+        let row = node.start_position().row;
+        if let Some(line) = ctx.source.lines().nth(row) {
+            if line.contains("//") {
+                return;
+            }
+        }
         let pos = node.start_position();
         diagnostics.push(Diagnostic {
             path: std::sync::Arc::clone(&ctx.path_arc),
@@ -93,5 +95,10 @@ mod tests {
     #[test]
     fn allows_widening_to_i64() {
         assert!(run_on("fn f(x: i32) -> i64 { x as i64 }").is_empty());
+    }
+
+    #[test]
+    fn allows_cast_with_inline_comment() {
+        assert!(run_on("fn f(x: u64) -> u32 { x as u32 // bounded by MAX_REG }").is_empty());
     }
 }
