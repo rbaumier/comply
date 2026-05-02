@@ -36,10 +36,10 @@ fn match_arm_needs_justification(arm: tree_sitter::Node, source: &[u8]) -> bool 
 
 fn pattern_needs_justification(node: tree_sitter::Node, source: &[u8]) -> bool {
     match node.kind() {
-        "wildcard_pattern" => return true,
+        "_" | "wildcard_pattern" => return true,
         "match_pattern" | "or_pattern" => {
             let mut cursor = node.walk();
-            for child in node.named_children(&mut cursor) {
+            for child in node.children(&mut cursor) {
                 if pattern_needs_justification(child, source) {
                     return true;
                 }
