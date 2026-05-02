@@ -59,8 +59,9 @@ struct LangDispatch<'a> {
 }
 
 impl<'a> LangDispatch<'a> {
-    fn build(rule_defs: &'a [RuleDef], language: Language) -> Self {
-        let applicable = collect_applicable(rule_defs, language);
+    fn build(rule_defs: &'a [RuleDef], language: Language, project: &ProjectCtx) -> Self {
+        let mut applicable = collect_applicable(rule_defs, language);
+        applicable.retain(|(meta, _)| !should_skip_framework_scoped_rule(meta, project));
         let applicable_prefilters: Vec<Option<PrefilterFinders>> = applicable
             .iter()
             .map(|(_, backend)| match backend {
@@ -184,7 +185,7 @@ pub fn lint_files_with_project(
         .collect();
     let lang_dispatches: FxHashMap<Language, LangDispatch> = languages
         .into_iter()
-        .map(|lang| (lang, LangDispatch::build(&rule_defs, lang)))
+        .map(|lang| (lang, LangDispatch::build(&rule_defs, lang, &project)))
         .collect();
 
     let deadline = (files.len() > LARGE_PROJECT_FILE_COUNT)
@@ -296,7 +297,7 @@ fn dispatch_with_lang(
     let path = &file.path;
 
     let file_ctx = FileCtx::build(path, source, file.language, project);
-    if file_ctx.is_generated || file_ctx.is_minified {
+    if file_ctx.is_generated || file_ctx.is_minified || file_ctx.path_segments.is_vendored {
         return Vec::new();
     }
 
@@ -375,6 +376,26 @@ fn dispatch_with_lang(
     diagnostics
 }
 
+fn should_skip_framework_scoped_rule(meta: &RuleMeta, project: &ProjectCtx) -> bool {
+    meta.categories.iter().any(|cat| match *cat {
+        "elysia" => !project.has_framework("elysia"),
+        "drizzle" => !project.has_framework("drizzle"),
+        "zod" => !project.has_framework("zod"),
+        "better-result" => !project.has_framework("better-result"),
+        "better-auth" => !project.has_framework("better-auth"),
+        "shadcn" => !project.has_framework("shadcn"),
+        "hono" => !project.has_framework("hono"),
+        "xstate" => !project.has_framework("xstate"),
+        "angular" => !project.has_framework("angular"),
+        "nextjs" => !project.has_framework("nextjs"),
+        "tanstack" | "tanstack-start" | "tanstack-query" => {
+            !project.has_framework("tanstack-query")
+                && !project.has_framework("tanstack-router")
+        }
+        _ => false,
+    })
+}
+
 pub(super) fn should_skip_test_fixture_rule(meta: &RuleMeta, file: &FileCtx) -> bool {
     if !file.path_segments.in_test_dir {
         return false;
@@ -422,7 +443,7 @@ fn dispatch_backends(
     project: &ProjectCtx,
 ) -> Vec<Diagnostic> {
     let rule_defs = rules::all_rule_defs();
-    let ld = LangDispatch::build(&rule_defs, file.language);
+    let ld = LangDispatch::build(&rule_defs, file.language, project);
     dispatch_with_lang(file, source, &ld, worker, config, project)
 }
 

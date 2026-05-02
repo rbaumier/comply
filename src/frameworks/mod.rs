@@ -68,6 +68,14 @@ const RAW: &[(&str, &str)] = &[
     ("react-native", include_str!("react-native.toml")),
     ("webpack", include_str!("webpack.toml")),
     ("mocha", include_str!("mocha.toml")),
+    ("drizzle", include_str!("drizzle.toml")),
+    ("better-result", include_str!("better-result.toml")),
+    ("better-auth", include_str!("better-auth.toml")),
+    ("tanstack-query", include_str!("tanstack-query.toml")),
+    ("angular", include_str!("angular.toml")),
+    ("hono", include_str!("hono.toml")),
+    ("xstate", include_str!("xstate.toml")),
+    ("zod", include_str!("zod.toml")),
 ];
 
 fn registry() -> &'static [FrameworkDef] {

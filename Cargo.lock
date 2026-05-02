@@ -365,6 +365,7 @@ dependencies = [
  "tree-sitter-vue-updated",
  "tree-sitter-yaml",
  "unicode-width 0.2.0",
+ "wait-timeout",
 ]
 
 [[package]]

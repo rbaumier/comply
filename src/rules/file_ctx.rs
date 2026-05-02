@@ -44,6 +44,7 @@ pub struct PathSegments {
     pub in_test_dir: bool,
     pub in_node_modules: bool,
     pub in_storybook: bool,
+    pub is_vendored: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -202,6 +203,21 @@ fn scan_minified(path: &Path, source: &str) -> bool {
     false
 }
 
+/// Vendored directory names — matched as exact path segments (between `/`
+/// delimiters) so that e.g. `vendor-service/` is NOT considered vendored.
+const VENDORED_SEGMENTS: &[&str] = &[
+    "vendor",
+    "vendors",
+    "vendored",
+    "external",
+    "third-party",
+    "third_party",
+];
+
+fn has_vendored_segment(normalized: &str) -> bool {
+    normalized.split('/').any(|seg| VENDORED_SEGMENTS.contains(&seg))
+}
+
 fn scan_path(path: &Path) -> PathSegments {
     let lower = path.to_string_lossy().replace('\\', "/");
     PathSegments {
@@ -229,6 +245,7 @@ fn scan_path(path: &Path) -> PathSegments {
             || lower == "test.jsx",
         in_node_modules: lower.contains("/node_modules/"),
         in_storybook: lower.contains(".stories."),
+        is_vendored: has_vendored_segment(&lower),
     }
 }
 
@@ -324,6 +341,35 @@ mod tests {
         assert!(scan_path(&PathBuf::from("src/foo.test.ts")).in_test_dir);
         assert!(scan_path(&PathBuf::from("src/foo.spec.ts")).in_test_dir);
         assert!(scan_path(&PathBuf::from("__tests__/foo.ts")).in_test_dir);
+    }
+
+    #[test]
+    fn vendored_exact_segments() {
+        assert!(scan_path(&PathBuf::from("lib/vendor/foo.js")).is_vendored);
+        assert!(scan_path(&PathBuf::from("lib/vendors/foo.js")).is_vendored);
+        assert!(scan_path(&PathBuf::from("lib/vendored/foo.js")).is_vendored);
+        assert!(scan_path(&PathBuf::from("server/core/static/external/base64.js")).is_vendored);
+        assert!(scan_path(&PathBuf::from("lib/third-party/confetti.js")).is_vendored);
+        assert!(scan_path(&PathBuf::from("lib/third_party/confetti.js")).is_vendored);
+    }
+
+    #[test]
+    fn vendored_at_path_root() {
+        assert!(scan_path(&PathBuf::from("vendor/foo.js")).is_vendored);
+        assert!(scan_path(&PathBuf::from("external/bar.css")).is_vendored);
+    }
+
+    #[test]
+    fn vendored_does_not_match_substrings() {
+        assert!(!scan_path(&PathBuf::from("vendor-service/api.ts")).is_vendored);
+        assert!(!scan_path(&PathBuf::from("src/my-vendor-lib/foo.ts")).is_vendored);
+        assert!(!scan_path(&PathBuf::from("src/externalize/foo.ts")).is_vendored);
+    }
+
+    #[test]
+    fn normal_files_not_vendored() {
+        assert!(!scan_path(&PathBuf::from("src/app.ts")).is_vendored);
+        assert!(!scan_path(&PathBuf::from("lib/utils.js")).is_vendored);
     }
 
     #[test]

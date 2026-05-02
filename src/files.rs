@@ -180,6 +180,12 @@ const EXCLUDED_DIRS: &[&str] = &[
     "plans",
     "documents",
     ".git",
+    "vendor",
+    "vendors",
+    "vendored",
+    "external",
+    "third-party",
+    "third_party",
 ];
 
 fn walk_directory(path: &Path) -> Result<Vec<SourceFile>> {
