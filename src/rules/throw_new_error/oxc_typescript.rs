@@ -1,0 +1,74 @@
+//! throw-new-error OXC backend — flag `Error(...)` calls without `new`.
+
+use crate::diagnostic::{Diagnostic, Severity};
+use crate::oxc_helpers::byte_offset_to_line_col;
+use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
+use oxc_ast::ast::Expression;
+use std::sync::Arc;
+
+pub struct Check;
+
+/// Matches PascalCase names ending in "Error": Error, TypeError, MyCustomError, etc.
+fn is_error_like(name: &str) -> bool {
+    if !name.ends_with("Error") || name.is_empty() {
+        return false;
+    }
+    name.starts_with(|c: char| c.is_ascii_uppercase())
+}
+
+impl OxcCheck for Check {
+    fn interested_kinds(&self) -> &'static [AstType] {
+        &[AstType::CallExpression]
+    }
+
+    fn run<'a>(
+        &self,
+        node: &oxc_semantic::AstNode<'a>,
+        ctx: &CheckCtx,
+        _semantic: &'a oxc_semantic::Semantic<'a>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
+        let AstKind::CallExpression(call) = node.kind() else {
+            return;
+        };
+
+        let callee_name = match &call.callee {
+            // Direct call: `Error('x')`
+            Expression::Identifier(id) => {
+                let name = id.name.as_str();
+                if !is_error_like(name) {
+                    return;
+                }
+                name
+            }
+            // Member access: `module.CustomError('x')`
+            Expression::StaticMemberExpression(member) => {
+                let name = member.property.name.as_str();
+                if !is_error_like(name) {
+                    return;
+                }
+                // Exclude Data.TaggedError (Effect library)
+                if let Expression::Identifier(obj) = &member.object {
+                    if obj.name.as_str() == "Data" && name == "TaggedError" {
+                        return;
+                    }
+                }
+                name
+            }
+            _ => return,
+        };
+
+        let _ = callee_name;
+
+        let (line, column) = byte_offset_to_line_col(ctx.source, call.span.start as usize);
+        diagnostics.push(Diagnostic {
+            path: Arc::clone(&ctx.path_arc),
+            line,
+            column,
+            rule_id: super::META.id.into(),
+            message: "Use `new` when creating an error.".into(),
+            severity: Severity::Warning,
+            span: None,
+        });
+    }
+}

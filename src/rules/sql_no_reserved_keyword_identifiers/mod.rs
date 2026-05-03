@@ -1,5 +1,7 @@
 //! sql-no-reserved-keyword-identifiers
 
+mod oxc_drizzle;
+#[cfg(test)]
 mod drizzle;
 mod rust;
 mod oxc_typescript;
@@ -31,7 +33,7 @@ pub fn register() -> RuleDef {
             ),
             (
                 Language::TypeScript,
-                Backend::TreeSitter(Box::new(drizzle::Check)),
+                Backend::Oxc(Box::new(oxc_drizzle::Check)),
             ),
             (
                 Language::JavaScript,

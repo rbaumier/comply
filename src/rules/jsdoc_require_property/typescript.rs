@@ -21,7 +21,7 @@ crate::ast_check! { on ["comment"] prefilter = ["/**"] => |node, source, ctx, di
         // We only complain when the typedef explicitly types an
         // object. `@typedef {string} Name` is a named primitive —
         // no properties expected.
-        if !types_object(&typedef.body) {
+        if !super::types_object(&typedef.body) {
             continue;
         }
         let has_property = tags
@@ -41,49 +41,6 @@ crate::ast_check! { on ["comment"] prefilter = ["/**"] => |node, source, ctx, di
             });
         }
     }
-}
-
-/// Does the `@typedef` body type it as an object? Matches `{Object}`,
-/// `{object}`, `{Object.<string,any>}`, and `{{ a: number }}`. If no
-/// type expression is given, assume object (common shorthand).
-fn types_object(body: &str) -> bool {
-    let trimmed = body.trim_start();
-    if !trimmed.starts_with('{') {
-        // `@typedef Name` with no type — treat as object.
-        return true;
-    }
-    let inner = extract_first_brace(trimmed).unwrap_or("");
-    let stripped = inner.trim();
-    // Inline object literal: `{{ ... }}` — the inner starts with `{`.
-    if stripped.starts_with('{') {
-        return true;
-    }
-    let head = stripped
-        .split(|c: char| !c.is_alphanumeric())
-        .next()
-        .unwrap_or("");
-    head.eq_ignore_ascii_case("object")
-}
-
-fn extract_first_brace(s: &str) -> Option<&str> {
-    if !s.starts_with('{') {
-        return None;
-    }
-    let bytes = s.as_bytes();
-    let mut depth = 0usize;
-    for (i, &b) in bytes.iter().enumerate() {
-        match b {
-            b'{' => depth += 1,
-            b'}' => {
-                depth -= 1;
-                if depth == 0 {
-                    return Some(&s[1..i]);
-                }
-            }
-            _ => {}
-        }
-    }
-    None
 }
 
 #[cfg(test)]

@@ -6,8 +6,10 @@
 //! `contains_ddl` only needs to identify DDL statements, not distinguish
 //! SQL from prose.
 
+mod oxc_typescript;
 mod rust;
 mod sql;
+#[cfg(test)]
 mod typescript;
 
 use crate::diagnostic::Severity;
@@ -27,10 +29,16 @@ pub const META: RuleMeta = RuleMeta {
 };
 
 pub fn register() -> RuleDef {
-    let mut def = crate::register_ts_family_with_rust!(META, typescript, rust);
-    def.backends
-        .push((Language::Sql, Backend::Text(Box::new(sql::Check))));
-    def
+    RuleDef {
+        meta: META,
+        backends: vec![
+            (Language::TypeScript, Backend::Oxc(Box::new(oxc_typescript::Check))),
+            (Language::JavaScript, Backend::Oxc(Box::new(oxc_typescript::Check))),
+            (Language::Tsx, Backend::Oxc(Box::new(oxc_typescript::Check))),
+            (Language::Rust, Backend::TreeSitter(Box::new(rust::Check))),
+            (Language::Sql, Backend::Text(Box::new(sql::Check))),
+        ],
+    }
 }
 
 pub(super) fn contains_ddl(text: &str) -> bool {

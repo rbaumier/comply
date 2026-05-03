@@ -1,7 +1,9 @@
 //! comment-paraphrases-code — flag comments that restate the code they sit on.
 
+mod oxc_typescript;
 mod rust;
 mod text;
+#[cfg(test)]
 mod typescript;
 
 use crate::diagnostic::Severity;
@@ -22,11 +24,14 @@ pub const META: RuleMeta = RuleMeta {
 };
 
 pub fn register() -> RuleDef {
-    let mut backends = crate::register_ts_family!(META, typescript).backends;
-    backends.push((Language::Rust, Backend::TreeSitter(Box::new(rust::Check))));
-    backends.push((Language::Vue, Backend::Text(Box::new(text::Check))));
     RuleDef {
         meta: META,
-        backends,
+        backends: vec![
+            (Language::TypeScript, Backend::Oxc(Box::new(oxc_typescript::Check))),
+            (Language::JavaScript, Backend::Oxc(Box::new(oxc_typescript::Check))),
+            (Language::Tsx, Backend::Oxc(Box::new(oxc_typescript::Check))),
+            (Language::Rust, Backend::TreeSitter(Box::new(rust::Check))),
+            (Language::Vue, Backend::Text(Box::new(text::Check))),
+        ],
     }
 }

@@ -62,7 +62,7 @@ fn lint_script_block(block: &ScriptBlock<'_>, ctx: &CheckCtx, diagnostics: &mut 
         if !super::has_code_shape(&body) {
             continue;
         }
-        if !super::typescript::parses_as_typescript_code(&body) {
+        if !super::parses_as_typescript_code(&body) {
             continue;
         }
         let first = group.first().copied().expect("group is non-empty");

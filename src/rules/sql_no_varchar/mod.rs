@@ -40,6 +40,8 @@
 //!
 //! - **TS / JS / TSX**, **Rust**, **Vue** (via `vue_sfc::extract_scripts`).
 
+mod oxc_drizzle;
+#[cfg(test)]
 mod drizzle;
 mod rust;
 mod sql_text;
@@ -79,7 +81,7 @@ pub fn register() -> RuleDef {
             ),
             (
                 Language::TypeScript,
-                Backend::TreeSitter(Box::new(drizzle::Check)),
+                Backend::Oxc(Box::new(oxc_drizzle::Check)),
             ),
             (
                 Language::JavaScript,

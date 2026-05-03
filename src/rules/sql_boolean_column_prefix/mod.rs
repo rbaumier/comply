@@ -1,9 +1,11 @@
 //! sql-boolean-column-prefix
 
-mod drizzle;
+mod oxc_drizzle;
 mod rust;
 mod sql;
 mod oxc_typescript;
+#[cfg(test)]
+mod drizzle;
 #[cfg(test)]
 mod typescript;
 
@@ -32,7 +34,7 @@ pub fn register() -> RuleDef {
             ),
             (
                 Language::TypeScript,
-                Backend::TreeSitter(Box::new(drizzle::Check)),
+                Backend::Oxc(Box::new(oxc_drizzle::Check)),
             ),
             (
                 Language::JavaScript,

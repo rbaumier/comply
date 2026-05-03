@@ -38,6 +38,8 @@
 //!   reuses the same string-walk logic. Diagnostic line/column are
 //!   translated back to Vue file coordinates.
 
+mod oxc_drizzle;
+#[cfg(test)]
 mod drizzle;
 mod rust;
 mod sql_text;
@@ -77,7 +79,7 @@ pub fn register() -> RuleDef {
             ),
             (
                 Language::TypeScript,
-                Backend::TreeSitter(Box::new(drizzle::Check)),
+                Backend::Oxc(Box::new(oxc_drizzle::Check)),
             ),
             (
                 Language::JavaScript,

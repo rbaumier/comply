@@ -1,5 +1,7 @@
 //! sql-no-is-deleted-boolean
 
+mod oxc_drizzle;
+#[cfg(test)]
 mod drizzle;
 mod rust;
 mod sql;
@@ -32,7 +34,7 @@ pub fn register() -> RuleDef {
             ),
             (
                 Language::TypeScript,
-                Backend::TreeSitter(Box::new(drizzle::Check)),
+                Backend::Oxc(Box::new(oxc_drizzle::Check)),
             ),
             (
                 Language::JavaScript,

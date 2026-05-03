@@ -1,27 +1,6 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
-fn is_malformed(inner: &str) -> bool {
-    if inner.is_empty() {
-        return false;
-    }
-    if inner.contains("..") || inner.ends_with('.') || inner.starts_with('.') {
-        return true;
-    }
-    // Empty segments inside (defense in depth — `..` already covers this).
-    if inner.split('.').any(str::is_empty) {
-        return true;
-    }
-    // Reject any character that isn't alphanumeric, dot, hyphen, or underscore.
-    // This catches slashes, spaces, punctuation, and other separators that
-    // can never resolve in a flat `auth.title`-style locale tree.
-    if inner
-        .chars()
-        .any(|c| !(c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_'))
-    {
-        return true;
-    }
-    false
-}
+use super::is_malformed;
 
 crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     let Some(func) = node.child_by_field_name("function") else { return };

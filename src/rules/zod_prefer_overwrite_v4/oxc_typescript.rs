@@ -1,0 +1,172 @@
+//! OxcCheck backend for zod-prefer-overwrite-v4.
+
+use crate::diagnostic::{Diagnostic, Severity};
+use crate::oxc_helpers::byte_offset_to_line_col;
+use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
+use oxc_ast::ast::{Argument, Expression, Statement};
+use oxc_span::GetSpan;
+use std::sync::Arc;
+
+pub struct Check;
+
+impl OxcCheck for Check {
+    fn interested_kinds(&self) -> &'static [AstType] {
+        &[AstType::CallExpression]
+    }
+
+    fn run<'a>(
+        &self,
+        node: &oxc_semantic::AstNode<'a>,
+        ctx: &CheckCtx,
+        _semantic: &'a oxc_semantic::Semantic<'a>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
+        let AstKind::CallExpression(call) = node.kind() else {
+            return;
+        };
+
+        // Callee must be `*.transform`
+        let Expression::StaticMemberExpression(member) = &call.callee else {
+            return;
+        };
+        if member.property.name.as_str() != "transform" {
+            return;
+        }
+
+        // Find the arrow function argument
+        let Some(arrow_arg) = call.arguments.first() else {
+            return;
+        };
+        let Argument::ArrowFunctionExpression(arrow) = arrow_arg else {
+            return;
+        };
+
+        // Extract single parameter name
+        let arrow_src =
+            &ctx.source[arrow.span.start as usize..arrow.span.end as usize];
+        let Some(param) = extract_single_param(arrow_src) else {
+            return;
+        };
+        let param = param.to_string();
+
+        let same_shape = if arrow.expression {
+            // Expression body
+            let body_src = if let Some(stmt) = arrow.body.statements.first() {
+                if let Statement::ExpressionStatement(es) = stmt {
+                    let start = es.expression.span().start as usize;
+                    let end = es.expression.span().end as usize;
+                    Some(&ctx.source[start..end])
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            body_src.is_some_and(|s| is_same_shape_expr(s, &param))
+        } else {
+            // Block body — look for a single return
+            let returns: Vec<&str> = arrow
+                .body
+                .statements
+                .iter()
+                .filter_map(|s| {
+                    if let Statement::ReturnStatement(ret) = s {
+                        ret.argument.as_ref().map(|e| {
+                            &ctx.source[e.span().start as usize..e.span().end as usize]
+                        })
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            returns.len() == 1 && is_same_shape_expr(returns[0], &param)
+        };
+
+        if !same_shape {
+            return;
+        }
+
+        let (line, column) = byte_offset_to_line_col(ctx.source, call.span.start as usize);
+        diagnostics.push(Diagnostic {
+            path: Arc::clone(&ctx.path_arc),
+            line,
+            column,
+            rule_id: super::META.id.into(),
+            message: "`.transform()` returns the same-shape value as its input — \
+                      use `.overwrite()` (Zod v4) to keep the input type intact."
+                .into(),
+            severity: Severity::Warning,
+            span: None,
+        });
+    }
+}
+
+fn extract_single_param(arrow_src: &str) -> Option<&str> {
+    let arrow_idx = arrow_src.find("=>")?;
+    let head = arrow_src[..arrow_idx].trim();
+    let head = head.strip_prefix("async").map(str::trim).unwrap_or(head);
+    if let Some(rest) = head.strip_prefix('(') {
+        let inner = rest.strip_suffix(')')?.trim();
+        if inner.is_empty() || inner.contains(',') {
+            return None;
+        }
+        let name = inner.split(':').next()?.trim();
+        if !is_ident(name) {
+            return None;
+        }
+        Some(name)
+    } else {
+        if is_ident(head) {
+            Some(head)
+        } else {
+            None
+        }
+    }
+}
+
+fn is_ident(s: &str) -> bool {
+    !s.is_empty()
+        && s.chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic() || c == '_' || c == '$')
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$')
+}
+
+fn is_same_shape_expr(expr_text: &str, param: &str) -> bool {
+    let t = expr_text.trim().trim_end_matches(';');
+    if t == param {
+        return true;
+    }
+    if let Some(rest) = t.strip_prefix(param) {
+        if rest.starts_with('.') {
+            return true;
+        }
+    }
+    for fun in [
+        "Math.round",
+        "Math.floor",
+        "Math.ceil",
+        "Math.abs",
+        "Math.trunc",
+    ] {
+        if t.starts_with(fun) && t.contains(param) {
+            return true;
+        }
+    }
+    if let Some(rest) = t.strip_prefix(param) {
+        let rest = rest.trim_start();
+        for op in ['+', '-', '*', '/'] {
+            if let Some(rhs) = rest.strip_prefix(op) {
+                let rhs = rhs.trim();
+                if !rhs.is_empty() && rhs.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+                    return true;
+                }
+            }
+        }
+        if rest.trim_start().starts_with("??") {
+            return true;
+        }
+    }
+    false
+}

@@ -1,0 +1,85 @@
+//! no-unenclosed-multiline-block OXC backend — flag braceless if/for/while
+//! with body on next line.
+
+use std::sync::Arc;
+
+use crate::diagnostic::{Diagnostic, Severity};
+use crate::oxc_helpers::byte_offset_to_line_col;
+use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
+use oxc_ast::ast::Statement;
+use oxc_span::GetSpan;
+
+pub struct Check;
+
+impl OxcCheck for Check {
+    fn interested_kinds(&self) -> &'static [AstType] {
+        &[
+            AstType::IfStatement,
+            AstType::ForStatement,
+            AstType::ForInStatement,
+            AstType::ForOfStatement,
+            AstType::WhileStatement,
+        ]
+    }
+
+    fn run<'a>(
+        &self,
+        node: &oxc_semantic::AstNode<'a>,
+        ctx: &CheckCtx,
+        _semantic: &'a oxc_semantic::Semantic<'a>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
+        let (keyword, stmt_start, body_span) = match node.kind() {
+            AstKind::IfStatement(stmt) => {
+                if matches!(&stmt.consequent, Statement::BlockStatement(_)) {
+                    return;
+                }
+                ("if", stmt.span.start, stmt.consequent.span())
+            }
+            AstKind::ForStatement(stmt) => {
+                if matches!(&stmt.body, Statement::BlockStatement(_)) {
+                    return;
+                }
+                ("for", stmt.span.start, stmt.body.span())
+            }
+            AstKind::ForInStatement(stmt) => {
+                if matches!(&stmt.body, Statement::BlockStatement(_)) {
+                    return;
+                }
+                ("for", stmt.span.start, stmt.body.span())
+            }
+            AstKind::ForOfStatement(stmt) => {
+                if matches!(&stmt.body, Statement::BlockStatement(_)) {
+                    return;
+                }
+                ("for", stmt.span.start, stmt.body.span())
+            }
+            AstKind::WhileStatement(stmt) => {
+                if matches!(&stmt.body, Statement::BlockStatement(_)) {
+                    return;
+                }
+                ("while", stmt.span.start, stmt.body.span())
+            }
+            _ => return,
+        };
+
+        let (stmt_line, _) = byte_offset_to_line_col(ctx.source, stmt_start as usize);
+        let (body_line, _) = byte_offset_to_line_col(ctx.source, body_span.start as usize);
+
+        if body_line > stmt_line {
+            let (line, column) = byte_offset_to_line_col(ctx.source, stmt_start as usize);
+            diagnostics.push(Diagnostic {
+                path: Arc::clone(&ctx.path_arc),
+                line,
+                column,
+                rule_id: super::META.id.into(),
+                message: format!(
+                    "`{}` body is on the next line without curly braces \u{2014} wrap it in `{{}}`.",
+                    keyword,
+                ),
+                severity: Severity::Error,
+                span: None,
+            });
+        }
+    }
+}
