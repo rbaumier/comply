@@ -28,10 +28,7 @@ pub fn source_type_for_path(path: &Path) -> SourceType {
     }
 }
 
-/// Parse `source` and run semantic analysis, then hand the resulting
-/// `Semantic` to `f`. Both the allocator and the AST are dropped after `f`
-/// returns, so callers must extract whatever they need (diagnostics, lists
-/// of names, …) into owned values inside the closure.
+#[cfg(test)]
 pub fn with_semantic<F, R>(source: &str, source_type: SourceType, f: F) -> R
 where
     F: for<'a> FnOnce(&'a Semantic<'a>) -> R,

@@ -101,6 +101,11 @@ pub(super) fn is_bare_specifier(spec: &str) -> bool {
         && !spec.starts_with("https://")
 }
 
+#[cfg(test)]
+pub(super) fn strip_quotes(s: &str) -> &str {
+    s.trim_matches(|c| c == '"' || c == '\'' || c == '`')
+}
+
 /// Collapse a bare specifier to the name that would appear in `package.json`.
 pub(super) fn root_package_name(spec: &str) -> &str {
     if let Some(rest) = spec.strip_prefix('@') {

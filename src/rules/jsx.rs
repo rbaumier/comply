@@ -59,10 +59,7 @@ pub fn jsx_attribute_string_value<'a>(
     Some(text.trim_matches(|c| c == '"' || c == '\''))
 }
 
-/// Get the tag name from a `jsx_self_closing_element` or `jsx_opening_element`.
-///
-/// In tree-sitter TSX, `child(0)` is `<`, not the tag name.
-/// The tag name is available via `child_by_field_name("name")`.
+#[cfg(test)]
 #[must_use]
 pub fn jsx_element_tag_name<'a>(node: tree_sitter::Node, source: &'a [u8]) -> Option<&'a str> {
     let kind = node.kind();

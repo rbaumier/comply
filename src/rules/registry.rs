@@ -1,86 +1,23 @@
 //! Registry helpers + the macros every rule's `register()` and
 //! `Check` impl call into.
 //!
-//! Three pieces:
+//! Two pieces:
 //!
-//! 1. **`RustBinding` enum** + **`build_ts_family_rule` / `build_rust_only_rule` helpers**
-//!    — collapse the boilerplate of constructing a `RuleDef` with its `backends` vec.
-//!    Without these the four `register_*!` macros below would be Rule-of-Three clones
-//!    of each other.
+//! 1. **`build_rust_only_rule`** helper — collapses the boilerplate of
+//!    constructing a `RuleDef` with its `backends` vec.
 //!
-//! 2. **`register_ts_family!` / `register_ts_family_with_rust!` /
-//!    `register_rust_only!` / `register_ts_family_with_clippy_marker!`** —
-//!    one-liner macros each rule's `mod.rs` calls instead of writing the
-//!    full `RuleDef { meta, backends: vec![...] }` shape.
-//!
-//! 3. **`ast_check!`** — wraps the imports, the `Check` struct, the
-//!    `impl AstCheck` block, and the `walk_tree(...)` dispatch that every
-//!    tree-sitter rule needs. The rule's body is the closure body inside
-//!    `walk_tree`, with `node`, `source`, `ctx`, and `diagnostics`
-//!    available as named bindings.
+//! 2. **`register_rust_only!`** / **`ast_check!`** macros — one-liner
+//!    macros each rule's `mod.rs` calls instead of writing the full
+//!    `RuleDef { meta, backends: vec![...] }` shape.
 //!
 //! Re-exported from `crate::rules` so the macros' `$crate::rules::*` paths
 //! resolve transparently.
 
-use crate::diagnostic::Diagnostic;
 use crate::files::Language;
 
 use super::RuleDef;
 use super::backend::{self, AstCheck, Backend};
 use super::meta::RuleMeta;
-
-/// Optional Rust binding for a TS-family rule. Used by `build_ts_family_rule`
-/// to decide whether to append a Rust backend after the TS/JS/TSX triple.
-#[non_exhaustive]
-pub enum RustBinding {
-    None,
-    /// In-process tree-sitter `Check`.
-    TreeSitter(Box<dyn AstCheck>),
-    /// Delegate to a clippy lint.
-    Clippy(&'static str),
-}
-
-// Manual `Debug` impl: `Box<dyn AstCheck>` doesn't implement Debug (the
-// trait isn't object-safe with a `Debug` bound), so we render the variant
-// label and elide the inner check. Enough for diagnostics + assert
-// failure messages, no Debug bound bleeds through to the trait.
-impl std::fmt::Debug for RustBinding {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::None => f.write_str("RustBinding::None"),
-            Self::TreeSitter(_) => f.write_str("RustBinding::TreeSitter(<dyn AstCheck>)"),
-            Self::Clippy(lint) => write!(f, "RustBinding::Clippy({lint:?})"),
-        }
-    }
-}
-
-/// Build a `RuleDef` for a TS-family rule (TypeScript + JavaScript + TSX
-/// share the same `Check`), with an optional Rust binding that's either a
-/// custom tree-sitter `Check` or a clippy delegation marker.
-#[must_use]
-pub fn build_ts_family_rule(
-    meta: RuleMeta,
-    ts_check: Box<dyn AstCheck>,
-    js_check: Box<dyn AstCheck>,
-    tsx_check: Box<dyn AstCheck>,
-    rust: RustBinding,
-) -> RuleDef {
-    let mut backends: Vec<(Language, Backend)> = vec![
-        (Language::TypeScript, Backend::TreeSitter(ts_check)),
-        (Language::JavaScript, Backend::TreeSitter(js_check)),
-        (Language::Tsx, Backend::TreeSitter(tsx_check)),
-    ];
-    match rust {
-        RustBinding::None => {}
-        RustBinding::TreeSitter(check) => {
-            backends.push((Language::Rust, Backend::TreeSitter(check)));
-        }
-        RustBinding::Clippy(lint) => {
-            backends.push((Language::Rust, Backend::Clippy { lint }));
-        }
-    }
-    RuleDef { meta, backends }
-}
 
 /// Build a `RuleDef` for a Rust-only rule.
 #[must_use]
@@ -96,59 +33,14 @@ pub fn build_rust_only_rule(meta: RuleMeta, check: Box<dyn AstCheck>) -> RuleDef
 // site, not here.
 #[allow(unused_imports)]
 const _: () = {
-    let _ = std::marker::PhantomData::<Diagnostic>;
     let _ = std::marker::PhantomData::<&dyn backend::AstCheck>;
 };
-
-/// `RuleDef` for a TS-only rule (TypeScript + JavaScript + TSX, no Rust).
-#[macro_export]
-macro_rules! register_ts_family {
-    ($meta:expr, $ts_mod:ident) => {
-        $crate::rules::build_ts_family_rule(
-            $meta,
-            Box::new($ts_mod::Check),
-            Box::new($ts_mod::Check),
-            Box::new($ts_mod::Check),
-            $crate::rules::RustBinding::None,
-        )
-    };
-}
-
-/// `RuleDef` for a TS-family rule that ALSO has a custom Rust tree-sitter
-/// `Check` in a sibling `rust` module.
-#[macro_export]
-macro_rules! register_ts_family_with_rust {
-    ($meta:expr, $ts_mod:ident, $rust_mod:ident) => {
-        $crate::rules::build_ts_family_rule(
-            $meta,
-            Box::new($ts_mod::Check),
-            Box::new($ts_mod::Check),
-            Box::new($ts_mod::Check),
-            $crate::rules::RustBinding::TreeSitter(Box::new($rust_mod::Check)),
-        )
-    };
-}
 
 /// `RuleDef` for a Rust-only rule.
 #[macro_export]
 macro_rules! register_rust_only {
     ($meta:expr, $rust_mod:ident) => {
         $crate::rules::build_rust_only_rule($meta, Box::new($rust_mod::Check))
-    };
-}
-
-/// `RuleDef` for a TS-family rule whose Rust side is covered by a clippy
-/// lint delegation rather than a custom check.
-#[macro_export]
-macro_rules! register_ts_family_with_clippy_marker {
-    ($meta:expr, $ts_mod:ident, $clippy_lint:expr) => {
-        $crate::rules::build_ts_family_rule(
-            $meta,
-            Box::new($ts_mod::Check),
-            Box::new($ts_mod::Check),
-            Box::new($ts_mod::Check),
-            $crate::rules::RustBinding::Clippy($clippy_lint),
-        )
     };
 }
 
@@ -168,19 +60,6 @@ macro_rules! register_ts_family_with_clippy_marker {
 ///     ));
 /// }
 /// ```
-///
-/// Prefer `Diagnostic::at_node` over a `Diagnostic { ... }` literal: it
-/// captures the node's byte range via `node.byte_range()` so the pretty
-/// renderer highlights the exact offending expression instead of falling
-/// back to whole-line highlighting. The literal form is still appropriate
-/// for delegated diagnostics (oxlint/clippy/knip/madge) where only
-/// `(line, column)` is available from external JSON output.
-///
-/// Without this macro, every rule's `typescript.rs` / `rust.rs` carried
-/// the same ~13-line preamble (imports + `pub struct Check;` + `impl
-/// AstCheck for Check { fn check { let source = ...; let mut diagnostics
-/// = ...; walk_tree(...) } }`), which jscpd correctly flagged as a
-/// Rule of Three duplication across ~50 files.
 #[macro_export]
 macro_rules! ast_check {
     (on [$($kind:expr),+ $(,)?] prefilter = [$($lit:expr),+ $(,)?] => |$node:ident, $source:ident, $ctx:ident, $diagnostics:ident| $($body:tt)*) => {

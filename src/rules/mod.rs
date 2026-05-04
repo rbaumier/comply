@@ -782,6 +782,7 @@ pub mod react_server_action_requires_auth;
 pub mod react_server_action_requires_validation;
 pub mod react_use_state_initializer_function;
 pub mod react_use_state_lazy_init;
+#[cfg(test)]
 pub mod regex_ast;
 pub mod regex_documented_with_semantics;
 pub mod rust_anyhow_context_on_question_mark;
@@ -838,6 +839,7 @@ pub mod rust_unsafe_impl_without_comment;
 pub mod rust_vec_with_capacity;
 #[cfg(test)]
 pub mod test_helpers;
+#[cfg(test)]
 pub mod test_methods;
 // eslint-plugin-react rules (native implementations).
 pub mod expression_complexity;

@@ -25,7 +25,6 @@
 
 mod oxc_typescript;
 mod rust;
-mod typescript;
 mod vue;
 
 #[cfg(test)]

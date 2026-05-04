@@ -3,7 +3,6 @@
 mod oxc_typescript;
 mod rust;
 mod text;
-mod typescript;
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::files::Language;
