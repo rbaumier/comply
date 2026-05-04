@@ -27,6 +27,7 @@ pub mod api_route_version_prefix;
 pub mod api_separate_input_output_types;
 pub mod api_validate_at_boundaries;
 pub mod arrow_this_in_function;
+pub mod async_await_only;
 pub mod backend;
 pub mod ban_dependencies;
 pub mod banned_comment_words;
@@ -124,6 +125,8 @@ pub mod css_outline_none_needs_focus;
 pub mod db_no_n_plus_one;
 pub mod db_no_string_concat_sql;
 pub mod delegated;
+pub mod deprecation_without_alternative;
+pub mod invariant_requires_message;
 pub mod dockerfile_absolute_workdir;
 pub mod dockerfile_add_for_archive_extract;
 pub mod dockerfile_apk_no_cache;
@@ -318,6 +321,7 @@ pub mod error_without_cause;
 pub mod exception_use_error_cause;
 pub mod explicit_units;
 pub mod file_ctx;
+pub mod file_size_limit;
 pub mod function_doc_banned_verbs;
 pub mod i18n_key_exists;
 pub mod i18n_key_requires_domain_prefix;
@@ -414,6 +418,7 @@ pub mod meta;
 pub mod migration_needs_lock_timeout;
 pub mod migration_needs_rollback;
 pub mod no_history_in_comments;
+pub mod no_http_import;
 pub mod no_shallow_passthrough_method;
 pub mod path_utils;
 pub mod perf_font_face_display_swap;
@@ -636,6 +641,8 @@ pub mod cognitive_complexity;
 pub mod display_name;
 pub mod generator_without_yield;
 pub mod god_module;
+pub mod god_object_field_count;
+pub mod mutex_over_atomic;
 pub mod halstead_complexity;
 pub mod jsdoc_needs_description;
 pub mod mysql_no_multiple_statements;
@@ -664,6 +671,7 @@ pub mod no_for_in_iterable;
 pub mod no_function_declaration_in_block;
 pub mod no_function_overloads;
 pub mod no_generic_names;
+pub mod no_get_prefix_rust;
 pub mod no_global_types_file;
 pub mod no_gratuitous_expression;
 pub mod no_hardcoded_ip;
@@ -673,6 +681,7 @@ pub mod no_identical_title;
 pub mod no_ignored_exceptions;
 pub mod no_indexof_equality;
 pub mod no_inline_function_event_listener;
+pub mod no_interface_prefix_i;
 pub mod no_inline_param_type;
 pub mod no_interpolation_in_snapshots;
 pub mod no_inverted_boolean_check;
@@ -774,6 +783,7 @@ pub mod react_server_action_requires_validation;
 pub mod react_use_state_initializer_function;
 pub mod react_use_state_lazy_init;
 pub mod regex_ast;
+pub mod regex_documented_with_semantics;
 pub mod rust_anyhow_context_on_question_mark;
 pub mod rust_arc_non_send_sync;
 pub mod rust_await_holding_lock;
@@ -938,6 +948,7 @@ pub mod tanstack_start_require_validate_search;
 pub mod tanstack_start_server_fn_file_convention;
 pub mod tanstack_start_server_fn_requires_auth;
 pub mod tanstack_start_server_fn_requires_validation;
+pub mod timeout_on_external_command;
 pub mod timeout_on_io;
 pub mod ui_no_dark_mode_glow;
 pub mod ui_no_disabled_zoom;
@@ -1183,6 +1194,7 @@ pub mod prefer_object_literal;
 pub mod prefer_promise_shorthand;
 pub mod prefer_regexp_exec;
 pub mod prefer_type_guard;
+pub mod pub_crate_by_default;
 pub mod public_static_readonly;
 pub mod pure_by_default;
 pub mod redundant_type_aliases;
@@ -1475,6 +1487,7 @@ pub mod switch_case_braces;
 pub mod switch_case_break_position;
 pub mod template_indent;
 pub mod text_encoding_identifier_case;
+pub mod todo_needs_issue_link;
 pub mod throw_error_values;
 pub mod throw_new_error;
 pub mod try_catch_json_parse;
@@ -1662,6 +1675,8 @@ pub mod zod_no_unknown_schema;
 pub mod zod_require_schema_suffix;
 pub mod zod_transform_requires_pipe;
 pub mod zod_validate_env_at_startup;
+pub mod screaming_snake_for_constants;
+pub mod workaround_reference;
 use crate::diagnostic::Severity;
 use crate::files::Language;
 use backend::Backend;
@@ -2680,6 +2695,21 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         switch_case_break_position::register(),
         template_indent::register(),
         text_encoding_identifier_case::register(),
+        todo_needs_issue_link::register(),
+        deprecation_without_alternative::register(),
+        invariant_requires_message::register(),
+        no_http_import::register(),
+        no_interface_prefix_i::register(),
+        workaround_reference::register(),
+        file_size_limit::register(),
+        mutex_over_atomic::register(),
+        god_object_field_count::register(),
+        regex_documented_with_semantics::register(),
+        screaming_snake_for_constants::register(),
+        no_get_prefix_rust::register(),
+        async_await_only::register(),
+        timeout_on_external_command::register(),
+        pub_crate_by_default::register(),
         throw_new_error::register(),
         // eslint-plugin-n (Node.js) rules.
         node_no_path_concat::register(),
