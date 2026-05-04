@@ -1,0 +1,83 @@
+use crate::diagnostic::Diagnostic;
+use crate::oxc_helpers::byte_offset_to_line_col;
+use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
+use oxc_ast::ast::Expression;
+use oxc_span::GetSpan;
+use std::sync::Arc;
+
+const TEST_BASES: &[&str] = &["test", "it", "describe"];
+
+pub struct Check;
+
+impl OxcCheck for Check {
+    fn interested_kinds(&self) -> &'static [AstType] {
+        &[AstType::CallExpression]
+    }
+
+    fn run<'a>(
+        &self,
+        node: &oxc_semantic::AstNode<'a>,
+        ctx: &CheckCtx,
+        _semantic: &'a oxc_semantic::Semantic<'a>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
+        let AstKind::CallExpression(call) = node.kind() else {
+            return;
+        };
+        let Expression::StaticMemberExpression(member) = &call.callee else {
+            return;
+        };
+        if member.property.name.as_str() != "only" {
+            return;
+        }
+        let Expression::Identifier(obj) = &member.object else {
+            return;
+        };
+        let base = obj.name.as_str();
+        if !TEST_BASES.contains(&base) {
+            return;
+        }
+        let (line, column) = byte_offset_to_line_col(ctx.source, call.span.start as usize);
+        diagnostics.push(Diagnostic {
+            path: Arc::clone(&ctx.path_arc),
+            line,
+            column,
+            rule_id: super::META.id.into(),
+            message: format!(
+                "`{base}.only` silently disables every other test in the suite \
+                 when committed. Remove `.only` before pushing.",
+            ),
+            severity: super::META.severity,
+            span: None,
+        });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+    #[test]
+    fn flags_test_only() {
+        assert_eq!(run_on("test.only('x', () => {});").len(), 1);
+    }
+
+    #[test]
+    fn flags_it_only() {
+        assert_eq!(run_on("it.only('x', () => {});").len(), 1);
+    }
+
+    #[test]
+    fn flags_describe_only() {
+        assert_eq!(run_on("describe.only('x', () => {});").len(), 1);
+    }
+
+    #[test]
+    fn allows_regular_test() {
+        assert!(run_on("test('x', () => {});").is_empty());
+    }
+}

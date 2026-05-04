@@ -1,5 +1,7 @@
 //! no-match-snapshot — reject snapshot-based assertions.
 
+mod oxc_typescript;
+#[cfg(test)]
 mod typescript;
 
 use crate::diagnostic::Severity;
@@ -24,7 +26,7 @@ pub fn register() -> RuleDef {
         meta: META,
         backends: TS_FAMILY
             .iter()
-            .map(|&lang| (lang, Backend::TreeSitter(Box::new(typescript::Check))))
+            .map(|&lang| (lang, Backend::Oxc(Box::new(oxc_typescript::Check))))
             .collect(),
     }
 }

@@ -85,25 +85,24 @@ pub(super) fn run_multiplexed_walk(
     let src_bytes = source.as_bytes();
 
     walk_tree_filtered(tree, &ld.interesting, |node| {
-        if let Some(indices) = ld.dispatch.get(&node.kind_id()) {
-            let range = node.byte_range();
-            let node_hay = &src_bytes[range];
-            for &i in indices {
-                if !enabled[i] {
-                    continue;
-                }
-                if node_pf[i]
-                    && !ld.multiplexed_prefilters[i]
-                        .as_ref()
-                        .unwrap()
-                        .iter()
-                        .any(|f| f.find(node_hay).is_some())
-                {
-                    continue;
-                }
-                let (_, check) = &ld.multiplexed[i];
-                check.visit_node(node, ctx, states[i].as_deref_mut(), &mut per_rule_diags[i]);
+        let indices = &ld.dispatch[node.kind_id() as usize];
+        let range = node.byte_range();
+        let node_hay = &src_bytes[range];
+        for &i in indices {
+            if !enabled[i] {
+                continue;
             }
+            if node_pf[i]
+                && !ld.multiplexed_prefilters[i]
+                    .as_ref()
+                    .unwrap()
+                    .iter()
+                    .any(|f| f.find(node_hay).is_some())
+            {
+                continue;
+            }
+            let (_, check) = &ld.multiplexed[i];
+            check.visit_node(node, ctx, states[i].as_deref_mut(), &mut per_rule_diags[i]);
         }
     });
 

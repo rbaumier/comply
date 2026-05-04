@@ -35,12 +35,29 @@ pub(super) fn run_oxc_checks(
         return;
     }
 
-    // Per-rule enabled flags (config + prefilter).
+    // File-level AstType bitset — one O(n) scan, 4 cache lines.
+    // Eliminates rules whose node types don't appear in this file.
+    let mut file_bitset = [0u64; 4];
+    for node in semantic.nodes().iter() {
+        let ty = node.kind().ty() as u8 as usize;
+        file_bitset[ty / 64] |= 1u64 << (ty % 64);
+    }
+
+    // Per-rule enabled flags (bitset + config + prefilter).
     let enabled: Vec<bool> = ld
         .oxc_rules
         .iter()
         .zip(&ld.oxc_prefilters)
-        .map(|((meta, _), pf)| {
+        .map(|((meta, check), pf)| {
+            let kinds = check.interested_kinds();
+            if !kinds.is_empty()
+                && !kinds.iter().any(|ty| {
+                    let t = *ty as u8 as usize;
+                    file_bitset[t / 64] & (1u64 << (t % 64)) != 0
+                })
+            {
+                return false;
+            }
             config.is_rule_enabled(meta.id, path)
                 && !super::should_skip_test_fixture_rule(meta, ctx.file)
                 && !super::should_skip_relaxed_directory_rule(meta, path)

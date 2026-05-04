@@ -41,6 +41,7 @@ use crate::rules::{self, RuleDef, backend::Backend, backend::CheckCtx, meta::Rul
 const LARGE_PROJECT_FILE_COUNT: usize = 1_000;
 const ENGINE_LARGE_PROJECT_BUDGET: Duration = Duration::from_secs(55);
 
+
 /// Pre-computed per-language dispatch table. Built once in `lint_files`,
 /// shared read-only across all rayon workers.
 ///
@@ -57,7 +58,7 @@ struct LangDispatch<'a> {
     multiplexed_prefilters: Vec<Option<PrefilterFinders>>,
     legacy: Vec<(&'a RuleMeta, &'a dyn AstCheck)>,
     legacy_prefilters: Vec<Option<PrefilterFinders>>,
-    dispatch: FxHashMap<u16, Vec<usize>>,
+    dispatch: Vec<Vec<usize>>,
     interesting: Vec<bool>,
     oxc_rules: Vec<(&'a RuleMeta, &'a dyn OxcCheck)>,
     oxc_prefilters: Vec<Option<PrefilterFinders>>,
@@ -105,29 +106,24 @@ impl<'a> LangDispatch<'a> {
             }
         }
         let ts_lang = crate::parsing::ts_language_for(language);
-        let mut dispatch: FxHashMap<u16, Vec<usize>> = FxHashMap::default();
-        let mut max_kind_id: u16 = 0;
+        let mut entries: Vec<(u16, usize)> = Vec::new();
         if let Some(ref tsl) = ts_lang {
             for (i, (_, check)) in multiplexed.iter().enumerate() {
                 for kind in check.interested_kinds().unwrap() {
                     let kid = tsl.id_for_node_kind(kind, true);
-                    // id_for_node_kind returns 0 for unknown kinds (= the ERROR
-                    // kind sentinel). Skip those — they'd cause every error
-                    // node to dispatch into rules that didn't ask for it.
                     if kid == 0 {
                         continue;
                     }
-                    if kid > max_kind_id {
-                        max_kind_id = kid;
-                    }
-                    dispatch.entry(kid).or_default().push(i);
+                    entries.push((kid, i));
                 }
             }
         }
-        let mut interesting = vec![false; max_kind_id as usize + 1];
-        for &kid in dispatch.keys() {
-            interesting[kid as usize] = true;
+        let max_kind_id = entries.iter().map(|(k, _)| *k).max().unwrap_or(0);
+        let mut dispatch: Vec<Vec<usize>> = vec![Vec::new(); max_kind_id as usize + 1];
+        for (kid, i) in entries {
+            dispatch[kid as usize].push(i);
         }
+        let interesting: Vec<bool> = dispatch.iter().map(|v| !v.is_empty()).collect();
         let has_ts_rules = !multiplexed.is_empty() || !legacy.is_empty();
         Self {
             applicable,
@@ -244,6 +240,7 @@ pub fn lint_files_with_project(
     }
 
     diagnostics.retain(|d| !is_self_reference(d));
+
     Ok(diagnostics)
 }
 
@@ -508,9 +505,6 @@ fn lint_one_file_with_dispatch(
     if ld.applicable.is_empty() {
         return Ok(vec![]);
     }
-    // Take the buffer out so we can hand a &str to dispatch_with_lang while
-    // still passing &mut worker. Put it back when done so the next file
-    // reuses the allocation.
     let source = std::mem::take(&mut worker.source_buf);
     let diagnostics = dispatch_with_lang(file, &source, ld, worker, config, project);
     worker.source_buf = source;

@@ -39,9 +39,11 @@
 //! shape for stubs, trait marker impls, React/Vue no-op callbacks,
 //! and similar, and flagging them would be pure noise.
 
+mod oxc_typescript;
 mod rust;
 #[cfg(test)]
 mod shared_tests;
+#[cfg(test)]
 mod typescript;
 mod vue;
 
@@ -62,7 +64,7 @@ pub const META: RuleMeta = RuleMeta {
 pub fn register() -> RuleDef {
     let mut backends: Vec<(Language, Backend)> = TS_FAMILY
         .iter()
-        .map(|&lang| (lang, Backend::TreeSitter(Box::new(typescript::Check))))
+        .map(|&lang| (lang, Backend::Oxc(Box::new(oxc_typescript::Check))))
         .collect();
     backends.push((Language::Rust, Backend::TreeSitter(Box::new(rust::Check))));
     backends.push((Language::Vue, Backend::TreeSitter(Box::new(vue::Check))));
