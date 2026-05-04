@@ -1,9 +1,13 @@
 //! react-jsx-pascal-case — enforce PascalCase for user-defined JSX components.
 
+mod oxc_typescript;
+#[cfg(test)]
 mod react;
 
 use crate::diagnostic::Severity;
+use crate::files::Language;
 use crate::rules::RuleDef;
+use crate::rules::backend::Backend;
 use crate::rules::meta::RuleMeta;
 
 pub const META: RuleMeta = RuleMeta {
@@ -19,7 +23,11 @@ pub const META: RuleMeta = RuleMeta {
 };
 
 pub fn register() -> RuleDef {
-    let backends = crate::register_ts_family!(META, react).backends;
+    let backends = vec![
+        (Language::TypeScript, Backend::Oxc(Box::new(oxc_typescript::Check))),
+        (Language::JavaScript, Backend::Oxc(Box::new(oxc_typescript::Check))),
+        (Language::Tsx, Backend::Oxc(Box::new(oxc_typescript::Check))),
+    ];
     RuleDef {
         meta: META,
         backends,

@@ -1,5 +1,7 @@
 //! a11y-role-has-required-aria-props
 
+mod oxc_typescript;
+#[cfg(test)]
 mod react;
 mod vue;
 
@@ -19,10 +21,13 @@ pub const META: RuleMeta = RuleMeta {
 };
 
 pub fn register() -> RuleDef {
-    let mut backends = crate::register_ts_family!(META, react).backends;
-    backends.push((Language::Vue, Backend::Text(Box::new(vue::Check))));
     RuleDef {
         meta: META,
-        backends,
+        backends: vec![
+            (Language::TypeScript, Backend::Oxc(Box::new(oxc_typescript::Check))),
+            (Language::JavaScript, Backend::Oxc(Box::new(oxc_typescript::Check))),
+            (Language::Tsx, Backend::Oxc(Box::new(oxc_typescript::Check))),
+            (Language::Vue, Backend::Text(Box::new(vue::Check))),
+        ],
     }
 }

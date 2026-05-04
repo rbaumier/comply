@@ -1,0 +1,277 @@
+//! react-no-setstate-without-updater OxcCheck backend.
+
+use crate::diagnostic::{Diagnostic, Severity};
+use crate::oxc_helpers::byte_offset_to_line_col;
+use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
+use oxc_ast::ast::Expression;
+use oxc_span::GetSpan;
+use std::sync::Arc;
+
+pub struct Check;
+
+/// Extract `(state_name, setter_name)` from a `useState` variable declarator.
+fn extract_usestate(decl: &oxc_ast::ast::VariableDeclarator) -> Option<(String, String)> {
+    let init = decl.init.as_ref()?;
+    let Expression::CallExpression(call) = init else {
+        return None;
+    };
+    let callee_name = match &call.callee {
+        Expression::Identifier(id) => {
+            if id.name != "useState" {
+                return None;
+            }
+            true
+        }
+        Expression::StaticMemberExpression(mem) => {
+            mem.property.name == "useState"
+        }
+        _ => return None,
+    };
+    if !callee_name {
+        return None;
+    }
+    let oxc_ast::ast::BindingPattern::ArrayPattern(arr) = &decl.id else {
+        return None;
+    };
+    let elems: Vec<_> = arr.elements.iter().flatten().collect();
+    if elems.len() < 2 {
+        return None;
+    }
+    let oxc_ast::ast::BindingPattern::BindingIdentifier(state_id) = &*elems[0] else {
+        return None;
+    };
+    let oxc_ast::ast::BindingPattern::BindingIdentifier(setter_id) = &*elems[1] else {
+        return None;
+    };
+    Some((state_id.name.to_string(), setter_id.name.to_string()))
+}
+
+/// Check if an expression references the given identifier name (recursively),
+/// but NOT inside arrow/function expressions.
+fn references_name(expr: &Expression, name: &str) -> bool {
+    match expr {
+        Expression::Identifier(id) => id.name == name,
+        Expression::ArrowFunctionExpression(_) | Expression::FunctionExpression(_) => false,
+        Expression::BinaryExpression(bin) => {
+            references_name(&bin.left, name) || references_name(&bin.right, name)
+        }
+        Expression::UnaryExpression(un) => references_name(&un.argument, name),
+        Expression::UpdateExpression(up) => {
+            if let oxc_ast::ast::SimpleAssignmentTarget::AssignmentTargetIdentifier(id) = &up.argument {
+                id.name == name
+            } else {
+                false
+            }
+        }
+        Expression::ConditionalExpression(cond) => {
+            references_name(&cond.test, name)
+                || references_name(&cond.consequent, name)
+                || references_name(&cond.alternate, name)
+        }
+        Expression::CallExpression(call) => {
+            references_name(&call.callee, name)
+                || call.arguments.iter().any(|arg| match arg {
+                    oxc_ast::ast::Argument::SpreadElement(s) => {
+                        references_name(&s.argument, name)
+                    }
+                    _ => {
+                        references_name(arg.to_expression(), name)
+                    }
+                })
+        }
+        Expression::ArrayExpression(arr) => arr.elements.iter().any(|el| match el {
+            oxc_ast::ast::ArrayExpressionElement::SpreadElement(s) => {
+                references_name(&s.argument, name)
+            }
+            oxc_ast::ast::ArrayExpressionElement::Elision(_) => false,
+            _ => references_name(el.to_expression(), name),
+        }),
+        Expression::ObjectExpression(obj) => obj.properties.iter().any(|prop| match prop {
+            oxc_ast::ast::ObjectPropertyKind::ObjectProperty(p) => {
+                references_name(&p.value, name)
+            }
+            oxc_ast::ast::ObjectPropertyKind::SpreadProperty(s) => {
+                references_name(&s.argument, name)
+            }
+        }),
+        Expression::StaticMemberExpression(mem) => references_name(&mem.object, name),
+        Expression::ComputedMemberExpression(mem) => {
+            references_name(&mem.object, name) || references_name(&mem.expression, name)
+        }
+        Expression::TemplateLiteral(tpl) => {
+            tpl.expressions.iter().any(|e| references_name(e, name))
+        }
+        Expression::LogicalExpression(log) => {
+            references_name(&log.left, name) || references_name(&log.right, name)
+        }
+        Expression::AssignmentExpression(assign) => references_name(&assign.right, name),
+        Expression::SequenceExpression(seq) => {
+            seq.expressions.iter().any(|e| references_name(e, name))
+        }
+        Expression::ParenthesizedExpression(p) => references_name(&p.expression, name),
+        Expression::TSAsExpression(ts) => references_name(&ts.expression, name),
+        Expression::TSNonNullExpression(ts) => references_name(&ts.expression, name),
+        _ => false,
+    }
+}
+
+impl OxcCheck for Check {
+    fn interested_kinds(&self) -> &'static [AstType] {
+        &[AstType::VariableDeclarator]
+    }
+
+    fn prefilter(&self) -> Option<&'static [&'static str]> {
+        Some(&["useState"])
+    }
+
+    fn run<'a>(
+        &self,
+        node: &oxc_semantic::AstNode<'a>,
+        ctx: &CheckCtx,
+        semantic: &'a oxc_semantic::Semantic<'a>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
+        let AstKind::VariableDeclarator(decl) = node.kind() else {
+            return;
+        };
+        let Some((state_name, setter_name)) = extract_usestate(decl) else {
+            return;
+        };
+
+        // Find the enclosing function body and scan for setter calls.
+        let mut current = node.id();
+        loop {
+            let parent_id = semantic.nodes().parent_id(current);
+            if parent_id == current {
+                return;
+            }
+            current = parent_id;
+            let parent_node = semantic.nodes().get_node(current);
+            match parent_node.kind() {
+                AstKind::Function(func) => {
+                    if let Some(body) = &func.body {
+                        scan_stmts_for_setter(
+                            &body.statements,
+                            &state_name,
+                            &setter_name,
+                            ctx,
+                            diagnostics,
+                        );
+                    }
+                    return;
+                }
+                AstKind::ArrowFunctionExpression(arrow) => {
+                    scan_stmts_for_setter(
+                        &arrow.body.statements,
+                        &state_name,
+                        &setter_name,
+                        ctx,
+                        diagnostics,
+                    );
+                    return;
+                }
+                _ => continue,
+            }
+        }
+    }
+}
+
+fn scan_stmts_for_setter(
+    stmts: &[oxc_ast::ast::Statement],
+    state_name: &str,
+    setter_name: &str,
+    ctx: &CheckCtx,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    for stmt in stmts {
+        scan_stmt_for_setter(stmt, state_name, setter_name, ctx, diagnostics);
+    }
+}
+
+fn scan_stmt_for_setter(
+    stmt: &oxc_ast::ast::Statement,
+    state_name: &str,
+    setter_name: &str,
+    ctx: &CheckCtx,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    match stmt {
+        oxc_ast::ast::Statement::ExpressionStatement(expr) => {
+            check_expr_for_setter(&expr.expression, state_name, setter_name, ctx, diagnostics);
+        }
+        oxc_ast::ast::Statement::VariableDeclaration(decl) => {
+            for d in &decl.declarations {
+                if let Some(init) = &d.init {
+                    check_expr_for_setter(init, state_name, setter_name, ctx, diagnostics);
+                }
+            }
+        }
+        oxc_ast::ast::Statement::ReturnStatement(ret) => {
+            if let Some(arg) = &ret.argument {
+                check_expr_for_setter(arg, state_name, setter_name, ctx, diagnostics);
+            }
+        }
+        oxc_ast::ast::Statement::IfStatement(if_stmt) => {
+            if let oxc_ast::ast::Statement::BlockStatement(block) = &if_stmt.consequent {
+                scan_stmts_for_setter(&block.body, state_name, setter_name, ctx, diagnostics);
+            }
+            if let Some(alt) = &if_stmt.alternate {
+                scan_stmt_for_setter(alt, state_name, setter_name, ctx, diagnostics);
+            }
+        }
+        oxc_ast::ast::Statement::BlockStatement(block) => {
+            scan_stmts_for_setter(&block.body, state_name, setter_name, ctx, diagnostics);
+        }
+        _ => {}
+    }
+}
+
+fn check_expr_for_setter(
+    expr: &Expression,
+    state_name: &str,
+    setter_name: &str,
+    ctx: &CheckCtx,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    match expr {
+        Expression::CallExpression(call) => {
+            if let Expression::Identifier(callee) = &call.callee {
+                if callee.name == setter_name && !call.arguments.is_empty() {
+                    let first_arg = &call.arguments[0];
+                    let arg_expr = first_arg.to_expression();
+                    // If the argument is an arrow/function, that's the correct updater form.
+                    if matches!(
+                        arg_expr,
+                        Expression::ArrowFunctionExpression(_)
+                            | Expression::FunctionExpression(_)
+                    ) {
+                        return;
+                    }
+                    if references_name(arg_expr, state_name) {
+                        let (line, column) =
+                            byte_offset_to_line_col(ctx.source, call.span.start as usize);
+                        diagnostics.push(Diagnostic {
+                            path: Arc::clone(&ctx.path_arc),
+                            line,
+                            column,
+                            rule_id: super::META.id.into(),
+                            message: format!(
+                                "`{setter_name}` called with an expression referencing `{state_name}` — \
+                                 use the functional updater: `{setter_name}(prev => ...)`."
+                            ),
+                            severity: Severity::Warning,
+                            span: None,
+                        });
+                    }
+                }
+            }
+        }
+        Expression::ArrowFunctionExpression(arrow) => {
+            // Walk into arrow bodies (event handlers like `() => setCount(count + 1)`)
+            for stmt in &arrow.body.statements {
+                scan_stmt_for_setter(stmt, state_name, setter_name, ctx, diagnostics);
+            }
+        }
+        _ => {}
+    }
+}
