@@ -1,10 +1,14 @@
 //! explicit-units — numeric names with ambiguous bases need a unit suffix.
 
+mod oxc_typescript;
 mod rust;
+#[cfg(test)]
 mod typescript;
 
 use crate::diagnostic::Severity;
+use crate::files::Language;
 use crate::rules::RuleDef;
+use crate::rules::backend::Backend;
 use crate::rules::meta::RuleMeta;
 
 pub const META: RuleMeta = RuleMeta {
@@ -18,5 +22,13 @@ pub const META: RuleMeta = RuleMeta {
     categories: &["naming"],
 };
 pub fn register() -> RuleDef {
-    crate::register_ts_family_with_rust!(META, typescript, rust)
+    RuleDef {
+        meta: META,
+        backends: vec![
+            (Language::TypeScript, Backend::Oxc(Box::new(oxc_typescript::Check))),
+            (Language::JavaScript, Backend::Oxc(Box::new(oxc_typescript::Check))),
+            (Language::Tsx, Backend::Oxc(Box::new(oxc_typescript::Check))),
+            (Language::Rust, Backend::TreeSitter(Box::new(rust::Check))),
+        ],
+    }
 }
