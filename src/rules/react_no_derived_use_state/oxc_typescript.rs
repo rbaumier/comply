@@ -4,7 +4,6 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{Argument, BindingPattern, Expression};
-use oxc_span::GetSpan;
 use std::sync::Arc;
 
 pub struct Check;
@@ -78,11 +77,10 @@ fn find_component_prop_names<'a>(
                     .ancestors(ancestor.id())
                     .nth(1)
                     .is_some_and(|p| {
-                        if let AstKind::VariableDeclarator(decl) = p.kind() {
-                            if let BindingPattern::BindingIdentifier(id) = &decl.id {
+                        if let AstKind::VariableDeclarator(decl) = p.kind()
+                            && let BindingPattern::BindingIdentifier(id) = &decl.id {
                                 return starts_with_uppercase(id.name.as_str());
                             }
-                        }
                         false
                     });
                 if !is_component {

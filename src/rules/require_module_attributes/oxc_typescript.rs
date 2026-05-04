@@ -29,7 +29,7 @@ impl OxcCheck for Check {
         _semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
-        let (with_clause, stmt_type, span) = match node.kind() {
+        let (with_clause, stmt_type, _span) = match node.kind() {
             AstKind::ImportDeclaration(decl) => {
                 (&decl.with_clause, "import", decl.span)
             }

@@ -106,8 +106,8 @@ fn has_top_level_data_key(body: &str) -> bool {
             b']' => depth_brack -= 1,
             _ => {}
         }
-        if depth_brace == 0 && depth_paren == 0 && depth_brack == 0 && body.is_char_boundary(i) {
-            if (i == 0
+        if depth_brace == 0 && depth_paren == 0 && depth_brack == 0 && body.is_char_boundary(i)
+            && (i == 0
                 || !bytes[i - 1].is_ascii_alphanumeric()
                     && bytes[i - 1] != b'_'
                     && bytes[i - 1] != b'$')
@@ -121,7 +121,6 @@ fn has_top_level_data_key(body: &str) -> bool {
                     }
                 }
             }
-        }
         i += 1;
     }
     false

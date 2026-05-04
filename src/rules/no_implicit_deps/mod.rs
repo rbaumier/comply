@@ -132,7 +132,3 @@ pub(super) fn matches_alias(spec: &str, alias_prefixes: &[String]) -> bool {
         false
     })
 }
-
-pub(super) fn strip_quotes(s: &str) -> &str {
-    s.trim_matches(|c| c == '"' || c == '\'' || c == '`')
-}

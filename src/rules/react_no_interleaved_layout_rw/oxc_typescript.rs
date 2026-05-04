@@ -84,13 +84,11 @@ fn collect_ops(
                 }
             }
             AstKind::AssignmentExpression(assign) => {
-                if let oxc_ast::ast::AssignmentTarget::StaticMemberExpression(left) = &assign.left {
-                    if let Expression::StaticMemberExpression(obj_member) = &left.object {
-                        if obj_member.property.name.as_str() == "style" {
+                if let oxc_ast::ast::AssignmentTarget::StaticMemberExpression(left) = &assign.left
+                    && let Expression::StaticMemberExpression(obj_member) = &left.object
+                        && obj_member.property.name.as_str() == "style" {
                             ops.push(Op::Write);
                         }
-                    }
-                }
             }
             _ => {}
         }

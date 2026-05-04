@@ -45,21 +45,19 @@ fn children_have_title(children: &oxc_allocator::Vec<'_, JSXChild<'_>>) -> bool 
         match child {
             JSXChild::Element(el) => {
                 let tag = jsx_opening_tag_name(&el.opening_element.name);
-                if let Some(ref t) = tag {
-                    if tag_matches(t, "SheetTitle", ".Title") {
+                if let Some(ref t) = tag
+                    && tag_matches(t, "SheetTitle", ".Title") {
                         return true;
                     }
-                }
                 if children_have_title(&el.children) {
                     return true;
                 }
             }
             JSXChild::ExpressionContainer(container) => {
-                if let Some(expr) = container.expression.as_expression() {
-                    if expr_has_title(expr) {
+                if let Some(expr) = container.expression.as_expression()
+                    && expr_has_title(expr) {
                         return true;
                     }
-                }
             }
             JSXChild::Fragment(frag) => {
                 if children_have_title(&frag.children) {
@@ -76,11 +74,10 @@ fn expr_has_title(expr: &oxc_ast::ast::Expression) -> bool {
     match expr {
         oxc_ast::ast::Expression::JSXElement(el) => {
             let tag = jsx_opening_tag_name(&el.opening_element.name);
-            if let Some(ref t) = tag {
-                if tag_matches(t, "SheetTitle", ".Title") {
+            if let Some(ref t) = tag
+                && tag_matches(t, "SheetTitle", ".Title") {
                     return true;
                 }
-            }
             children_have_title(&el.children)
         }
         oxc_ast::ast::Expression::ConditionalExpression(cond) => {

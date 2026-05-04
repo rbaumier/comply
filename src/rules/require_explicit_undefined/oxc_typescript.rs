@@ -45,11 +45,10 @@ impl OxcCheck for Check {
                     let parent_of_func = nodes.parent_id(cur_id);
                     if parent_of_func != cur_id {
                         let parent = nodes.get_node(parent_of_func);
-                        if let AstKind::MethodDefinition(method) = parent.kind() {
-                            if method.kind == MethodDefinitionKind::Constructor {
+                        if let AstKind::MethodDefinition(method) = parent.kind()
+                            && method.kind == MethodDefinitionKind::Constructor {
                                 return;
                             }
-                        }
                     }
                     Some(f.return_type.as_ref())
                 }

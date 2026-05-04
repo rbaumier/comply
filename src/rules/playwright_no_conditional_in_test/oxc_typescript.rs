@@ -42,11 +42,10 @@ fn is_inside_test_callback(
                     }
                     _ => None,
                 };
-                if let Some(n) = name {
-                    if TEST_FNS.contains(&n) {
+                if let Some(n) = name
+                    && TEST_FNS.contains(&n) {
                         return true;
                     }
-                }
                 found_function = false;
             }
             _ => {}

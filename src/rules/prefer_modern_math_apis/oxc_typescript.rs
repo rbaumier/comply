@@ -81,7 +81,7 @@ fn log_violation_message<'a>(
 }
 
 /// True if `expr` is `<expr> ** 2`.
-fn is_squared<'a>(expr: &'a Expression<'a>, source: &str) -> bool {
+fn is_squared<'a>(expr: &'a Expression<'a>, _source: &str) -> bool {
     let n = unwrap(expr);
     let Expression::BinaryExpression(bin) = n else {
         return false;
@@ -118,13 +118,12 @@ fn collect_plus_terms<'a, 'b>(
     out: &mut Vec<&'a Expression<'a>>,
 ) {
     let n = unwrap(expr);
-    if let Expression::BinaryExpression(bin) = n {
-        if bin.operator == BinaryOperator::Addition {
+    if let Expression::BinaryExpression(bin) = n
+        && bin.operator == BinaryOperator::Addition {
             collect_plus_terms(&bin.left, out);
             collect_plus_terms(&bin.right, out);
             return;
         }
-    }
     out.push(n);
 }
 

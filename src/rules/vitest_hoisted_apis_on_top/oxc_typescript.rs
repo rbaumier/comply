@@ -53,8 +53,7 @@ impl OxcCheck for Check {
                     Statement::ExpressionStatement(expr_stmt) => {
                         if let Some((prop_name, span)) =
                             vi_hoisted_call_info(&expr_stmt.expression)
-                        {
-                            if seen_import {
+                            && seen_import {
                                 let (line, column) =
                                     byte_offset_to_line_col(ctx.source, span.start as usize);
                                 diagnostics.push(Diagnostic {
@@ -69,7 +68,6 @@ impl OxcCheck for Check {
                                     span: None,
                                 });
                             }
-                        }
                     }
                     _ => {}
                 }

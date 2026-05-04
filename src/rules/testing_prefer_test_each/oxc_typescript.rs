@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use oxc_ast::AstKind;
 use oxc_ast::ast::{Expression, Statement};
-use oxc_span::GetSpan;
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -51,11 +50,10 @@ fn stmts_contain_test_call(stmts: &[Statement]) -> bool {
                 if stmt_contains_test_call(&if_stmt.consequent) {
                     return true;
                 }
-                if let Some(alt) = &if_stmt.alternate {
-                    if stmt_contains_test_call(alt) {
+                if let Some(alt) = &if_stmt.alternate
+                    && stmt_contains_test_call(alt) {
                         return true;
                     }
-                }
             }
             _ => {}
         }
@@ -140,11 +138,10 @@ impl OxcCheck for Check {
                         }
                     }
                     Expression::FunctionExpression(func) => {
-                        if let Some(body) = &func.body {
-                            if stmts_contain_test_call(&body.statements) {
+                        if let Some(body) = &func.body
+                            && stmts_contain_test_call(&body.statements) {
                                 push(diagnostics, ctx, call.span.start, "forEach");
                             }
-                        }
                     }
                     _ => {}
                 }

@@ -78,11 +78,10 @@ impl OxcCheck for Check {
                     }
                 }
                 "role" => {
-                    if let Some(oxc_ast::ast::JSXAttributeValue::StringLiteral(lit)) = &attr.value {
-                        if lit.value.as_str() == "button" {
+                    if let Some(oxc_ast::ast::JSXAttributeValue::StringLiteral(lit)) = &attr.value
+                        && lit.value.as_str() == "button" {
                             is_role_button = true;
                         }
-                    }
                 }
                 _ => {}
             }

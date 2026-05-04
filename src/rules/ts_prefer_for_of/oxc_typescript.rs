@@ -5,8 +5,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{
-    AssignmentOperator, BinaryOperator, Expression, ForStatementInit, SimpleAssignmentTarget,
-    UnaryOperator, UpdateOperator,
+    AssignmentOperator, BinaryOperator, Expression, ForStatementInit, SimpleAssignmentTarget, UpdateOperator,
 };
 use oxc_span::GetSpan;
 use std::sync::Arc;
@@ -110,7 +109,7 @@ impl OxcCheck for Check {
         }
 
         // 4. Check that in the body, the index var is only used as arr[i]
-        let Some(body) = &for_stmt.body.span().start.checked_sub(0) else {
+        let Some(_body) = &for_stmt.body.span().start.checked_sub(0) else {
             return;
         };
         let body_text = &ctx.source[for_stmt.body.span().start as usize..for_stmt.body.span().end as usize];

@@ -28,14 +28,13 @@ fn hook_name<'a>(call: &'a oxc_ast::ast::CallExpression<'a>) -> Option<&'a str> 
             }
         }
         Expression::StaticMemberExpression(member) => {
-            if let Expression::Identifier(obj) = &member.object {
-                if obj.name.as_str() == "React" {
+            if let Expression::Identifier(obj) = &member.object
+                && obj.name.as_str() == "React" {
                     let name = member.property.name.as_str();
                     if HOOKS.contains(&name) {
                         return Some(name);
                     }
                 }
-            }
             None
         }
         _ => None,

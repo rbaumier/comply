@@ -48,9 +48,9 @@ impl OxcCheck for Check {
                     }
                 }
                 AstKind::Class(class) => {
-                    if let Some(ref super_class) = class.super_class {
-                        if let Expression::Identifier(id) = super_class {
-                            if id.name.as_str() == "EventEmitter" {
+                    if let Some(ref super_class) = class.super_class
+                        && let Expression::Identifier(id) = super_class
+                            && id.name.as_str() == "EventEmitter" {
                                 let (line, column) =
                                     byte_offset_to_line_col(ctx.source, id.span.start as usize);
                                 diagnostics.push(Diagnostic {
@@ -63,8 +63,6 @@ impl OxcCheck for Check {
                                     span: None,
                                 });
                             }
-                        }
-                    }
                 }
                 _ => {}
             }

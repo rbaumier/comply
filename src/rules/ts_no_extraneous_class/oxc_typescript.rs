@@ -33,8 +33,8 @@ impl OxcCheck for Check {
             return;
         }
         // Also check parent for decorator (export @Decorator class Foo {}).
-        if let Some(parent) = semantic.nodes().ancestors(node.id()).nth(1) {
-            if let AstKind::ExportDefaultDeclaration(_) | AstKind::ExportNamedDeclaration(_) =
+        if let Some(parent) = semantic.nodes().ancestors(node.id()).nth(1)
+            && let AstKind::ExportDefaultDeclaration(_) | AstKind::ExportNamedDeclaration(_) =
                 parent.kind()
             {
                 // Check the source text before class for `@`.
@@ -48,12 +48,11 @@ impl OxcCheck for Check {
                             return;
                         }
                     }
-                    if before.lines().last().map_or(false, |l| l.trim_start().starts_with('@')) {
+                    if before.lines().last().is_some_and(|l| l.trim_start().starts_with('@')) {
                         return;
                     }
                 }
             }
-        }
 
         let body = &class.body;
         let members: Vec<_> = body

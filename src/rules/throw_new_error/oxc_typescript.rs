@@ -48,11 +48,10 @@ impl OxcCheck for Check {
                     return;
                 }
                 // Exclude Data.TaggedError (Effect library)
-                if let Expression::Identifier(obj) = &member.object {
-                    if obj.name.as_str() == "Data" && name == "TaggedError" {
+                if let Expression::Identifier(obj) = &member.object
+                    && obj.name.as_str() == "Data" && name == "TaggedError" {
                         return;
                     }
-                }
                 name
             }
             _ => return,

@@ -141,12 +141,11 @@ fn function_name_from_oxc<'a>(
     // Arrow assigned to variable_declarator: check parent.
     let nodes = semantic.nodes();
     let parent_id = nodes.parent_id(func_node_id);
-    if parent_id != func_node_id {
-        if let AstKind::VariableDeclarator(decl) = nodes.get_node(parent_id).kind() {
+    if parent_id != func_node_id
+        && let AstKind::VariableDeclarator(decl) = nodes.get_node(parent_id).kind() {
             let name = &source[decl.id.span().start as usize..decl.id.span().end as usize];
             return Some(name.to_string());
         }
-    }
     None
 }
 
@@ -165,11 +164,10 @@ fn is_hot_scope_oxc<'a>(
     semantic: &'a oxc_semantic::Semantic<'a>,
     source: &str,
 ) -> bool {
-    if let Some(name) = function_name_from_oxc(func, func_node_id, semantic, source) {
-        if starts_uppercase(&name) && name != "Check" {
+    if let Some(name) = function_name_from_oxc(func, func_node_id, semantic, source)
+        && starts_uppercase(&name) && name != "Check" {
             return true;
         }
-    }
     looks_like_handler_params(&func.params, source)
 }
 
@@ -186,14 +184,13 @@ fn is_hot_scope_arrow<'a>(
 
     // Check parent for variable name (arrow assigned to const).
     let parent_id = nodes.parent_id(arrow_node_id);
-    if parent_id != arrow_node_id {
-        if let AstKind::VariableDeclarator(decl) = nodes.get_node(parent_id).kind() {
+    if parent_id != arrow_node_id
+        && let AstKind::VariableDeclarator(decl) = nodes.get_node(parent_id).kind() {
             let name = &source[decl.id.span().start as usize..decl.id.span().end as usize];
             if starts_uppercase(name) && name != "Check" {
                 return true;
             }
         }
-    }
 
     looks_like_handler_params(&arrow_expr.params, source)
 }

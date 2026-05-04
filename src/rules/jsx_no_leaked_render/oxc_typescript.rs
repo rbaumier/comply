@@ -28,13 +28,11 @@ fn is_jsx(expr: &Expression) -> bool {
 
 /// True if the expression is a boolean coercion (`!!x`).
 fn is_double_bang(expr: &Expression) -> bool {
-    if let Expression::UnaryExpression(outer) = expr {
-        if outer.operator == oxc_ast::ast::UnaryOperator::LogicalNot {
-            if let Expression::UnaryExpression(inner) = &outer.argument {
+    if let Expression::UnaryExpression(outer) = expr
+        && outer.operator == oxc_ast::ast::UnaryOperator::LogicalNot
+            && let Expression::UnaryExpression(inner) = &outer.argument {
                 return inner.operator == oxc_ast::ast::UnaryOperator::LogicalNot;
             }
-        }
-    }
     false
 }
 
@@ -59,7 +57,7 @@ fn is_comparison(expr: &Expression) -> bool {
 }
 
 /// Get the source text for a span.
-fn span_text<'a>(source: &'a str, span: oxc_span::Span) -> &'a str {
+fn span_text(source: &str, span: oxc_span::Span) -> &str {
     &source[span.start as usize..span.end as usize]
 }
 

@@ -62,7 +62,7 @@ impl OxcCheck for Check {
             return;
         };
         let pattern = re.regex.pattern.text.as_str();
-        if !has_misleading_capture(pattern.as_ref()) {
+        if !has_misleading_capture(pattern) {
             return;
         }
         let (line, column) = byte_offset_to_line_col(ctx.source, re.span.start as usize);

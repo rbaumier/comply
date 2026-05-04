@@ -14,11 +14,10 @@ pub struct Check;
 fn contains_indexof(expr: &Expression) -> bool {
     match expr {
         Expression::CallExpression(call) => {
-            if let Expression::StaticMemberExpression(member) = &call.callee {
-                if member.property.name.as_str() == "indexOf" {
+            if let Expression::StaticMemberExpression(member) = &call.callee
+                && member.property.name.as_str() == "indexOf" {
                     return true;
                 }
-            }
             // Recurse into callee and arguments.
             if contains_indexof(&call.callee) {
                 return true;
@@ -68,13 +67,11 @@ fn callback_body_has_indexof(expr: &Expression) -> bool {
     match expr {
         Expression::ArrowFunctionExpression(arrow) => {
             // Concise body (expression).
-            if arrow.expression {
-                if let Some(stmt) = arrow.body.statements.first() {
-                    if let oxc_ast::ast::Statement::ExpressionStatement(es) = stmt {
+            if arrow.expression
+                && let Some(stmt) = arrow.body.statements.first()
+                    && let oxc_ast::ast::Statement::ExpressionStatement(es) = stmt {
                         return contains_indexof(&es.expression);
                     }
-                }
-            }
             // Block body — check all statements.
             for stmt in &arrow.body.statements {
                 if stmt_contains_indexof(stmt) {

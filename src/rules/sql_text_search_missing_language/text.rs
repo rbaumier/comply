@@ -22,8 +22,8 @@ impl TextCheck for Check {
             while pos < lower.len() {
                 if let Some((fname, offset)) = find_next_function(&lower, pos) {
                     let arg_start = offset + fname.len();
-                    if let Some(args) = extract_paren_body(&lower, arg_start) {
-                        if !has_language_first_arg(&args) {
+                    if let Some(args) = extract_paren_body(&lower, arg_start)
+                        && !has_language_first_arg(&args) {
                             diagnostics.push(Diagnostic {
                                 path: std::sync::Arc::clone(&ctx.path_arc),
                                 line: idx + 1,
@@ -34,7 +34,6 @@ impl TextCheck for Check {
                                 span: None,
                             });
                         }
-                    }
                     pos = arg_start;
                 } else {
                     break;

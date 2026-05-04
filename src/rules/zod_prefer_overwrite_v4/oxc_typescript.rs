@@ -138,11 +138,10 @@ fn is_same_shape_expr(expr_text: &str, param: &str) -> bool {
     if t == param {
         return true;
     }
-    if let Some(rest) = t.strip_prefix(param) {
-        if rest.starts_with('.') {
+    if let Some(rest) = t.strip_prefix(param)
+        && rest.starts_with('.') {
             return true;
         }
-    }
     for fun in [
         "Math.round",
         "Math.floor",

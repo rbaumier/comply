@@ -34,8 +34,8 @@ impl OxcCheck for Check {
                 return;
             }
             let text = &ctx.source[start..end];
-            if let Some(open) = text.find('{') {
-                if let Some(close_rel) = text[open..].find('}') {
+            if let Some(open) = text.find('{')
+                && let Some(close_rel) = text[open..].find('}') {
                     let between = &text[open + 1..open + close_rel];
                     if between.trim().is_empty() && specifiers.is_empty() {
                         let (line, column) = byte_offset_to_line_col(ctx.source, start);
@@ -50,7 +50,6 @@ impl OxcCheck for Check {
                         });
                     }
                 }
-            }
         }
     }
 }

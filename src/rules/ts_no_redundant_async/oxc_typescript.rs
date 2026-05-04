@@ -120,14 +120,13 @@ fn body_has_try(body: &FunctionBody) -> bool {
 fn count_awaits_in_body(body_span: oxc_span::Span, semantic: &oxc_semantic::Semantic) -> usize {
     let mut count = 0;
     for node in semantic.nodes().iter() {
-        if let AstKind::AwaitExpression(aw) = node.kind() {
-            if aw.span.start >= body_span.start && aw.span.end <= body_span.end {
+        if let AstKind::AwaitExpression(aw) = node.kind()
+            && aw.span.start >= body_span.start && aw.span.end <= body_span.end {
                 // Check it's not inside a nested function.
                 if !is_inside_nested_function(node, body_span, semantic) {
                     count += 1;
                 }
             }
-        }
     }
     count
 }

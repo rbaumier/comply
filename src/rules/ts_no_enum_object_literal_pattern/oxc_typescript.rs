@@ -5,7 +5,6 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{BindingPattern, Expression, TSType, VariableDeclarationKind};
-use oxc_span::GetSpan;
 use std::collections::HashSet;
 use std::sync::Arc;
 

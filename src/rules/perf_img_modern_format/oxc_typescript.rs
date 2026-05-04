@@ -22,11 +22,10 @@ fn jsx_tag_name<'a>(opening: &'a oxc_ast::ast::JSXOpeningElement<'a>) -> Option<
 
 fn is_inside_picture(node: &oxc_semantic::AstNode, semantic: &oxc_semantic::Semantic) -> bool {
     for ancestor in semantic.nodes().ancestors(node.id()) {
-        if let AstKind::JSXOpeningElement(opening) = ancestor.kind() {
-            if jsx_tag_name(opening) == Some("picture") {
+        if let AstKind::JSXOpeningElement(opening) = ancestor.kind()
+            && jsx_tag_name(opening) == Some("picture") {
                 return true;
             }
-        }
     }
     false
 }

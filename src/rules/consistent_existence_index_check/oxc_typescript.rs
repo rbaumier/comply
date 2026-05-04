@@ -32,13 +32,11 @@ fn is_zero(expr: &Expression) -> bool {
 }
 
 fn is_negative_one(expr: &Expression) -> bool {
-    if let Expression::UnaryExpression(u) = expr {
-        if u.operator == UnaryOperator::UnaryNegation {
-            if let Expression::NumericLiteral(n) = &u.argument {
+    if let Expression::UnaryExpression(u) = expr
+        && u.operator == UnaryOperator::UnaryNegation
+            && let Expression::NumericLiteral(n) = &u.argument {
                 return n.value == 1.0;
             }
-        }
-    }
     false
 }
 

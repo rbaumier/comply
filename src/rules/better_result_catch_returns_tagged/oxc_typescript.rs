@@ -13,12 +13,11 @@ pub struct Check;
 
 /// Check whether a returned expression is a tagged error (new XxxError(...) where Xxx != Error).
 fn is_tagged_error(expr: &Expression) -> bool {
-    if let Expression::NewExpression(new_expr) = expr {
-        if let Expression::Identifier(id) = &new_expr.callee {
+    if let Expression::NewExpression(new_expr) = expr
+        && let Expression::Identifier(id) = &new_expr.callee {
             let name = id.name.as_str();
             return name != "Error" && name.ends_with("Error");
         }
-    }
     false
 }
 

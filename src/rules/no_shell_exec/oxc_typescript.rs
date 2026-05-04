@@ -28,7 +28,7 @@ fn tail_matches_shell_fn(name: &str) -> bool {
 fn argument_uses_template_interpolation(arg: &Argument) -> bool {
     let expr = match arg {
         Argument::TemplateLiteral(tpl) => {
-            return tpl.expressions.len() > 0;
+            return !tpl.expressions.is_empty();
         }
         _ => {
             // Check inner expression for other Argument variants.
@@ -40,7 +40,7 @@ fn argument_uses_template_interpolation(arg: &Argument) -> bool {
         }
     };
     if let Expression::TemplateLiteral(tpl) = expr {
-        return tpl.expressions.len() > 0;
+        return !tpl.expressions.is_empty();
     }
     false
 }

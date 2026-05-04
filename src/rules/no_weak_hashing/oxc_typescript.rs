@@ -43,9 +43,9 @@ impl OxcCheck for Check {
 
         if is_create_hash {
             // Check first argument for weak algo.
-            if let Some(first_arg) = call.arguments.first() {
-                if let Some(expr) = first_arg.as_expression() {
-                    if let Expression::StringLiteral(s) = expr.without_parentheses() {
+            if let Some(first_arg) = call.arguments.first()
+                && let Some(expr) = first_arg.as_expression()
+                    && let Expression::StringLiteral(s) = expr.without_parentheses() {
                         let inner = s.value.to_ascii_lowercase();
                         if WEAK_ALGOS.contains(&inner.as_str()) {
                             let (line, col) =
@@ -64,8 +64,6 @@ impl OxcCheck for Check {
                             });
                         }
                     }
-                }
-            }
             return;
         }
 

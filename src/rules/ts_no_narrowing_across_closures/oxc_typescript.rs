@@ -9,7 +9,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{
-    Argument, BindingPattern, Expression, Statement,
+    BindingPattern, Expression, Statement,
 };
 use oxc_span::GetSpan;
 use std::sync::Arc;
@@ -56,11 +56,10 @@ fn has_local_const(stmts: &oxc_allocator::Vec<'_, Statement<'_>>, name: &str) ->
                 continue;
             }
             for decl in &vd.declarations {
-                if let BindingPattern::BindingIdentifier(id) = &decl.id {
-                    if id.name.as_str() == name {
+                if let BindingPattern::BindingIdentifier(id) = &decl.id
+                    && id.name.as_str() == name {
                         return true;
                     }
-                }
             }
         }
     }

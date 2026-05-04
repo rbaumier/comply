@@ -57,7 +57,7 @@ fn has_spread(props: &oxc_ast::ast::ObjectExpression) -> bool {
         .any(|p| matches!(p, ObjectPropertyKind::SpreadProperty(_)))
 }
 
-fn is_body_nullish(props: &oxc_ast::ast::ObjectExpression, source: &str) -> bool {
+fn is_body_nullish(props: &oxc_ast::ast::ObjectExpression, _source: &str) -> bool {
     for prop in &props.properties {
         let ObjectPropertyKind::ObjectProperty(p) = prop else {
             continue;

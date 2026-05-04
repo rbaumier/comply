@@ -54,8 +54,8 @@ impl OxcCheck for Check {
         }
 
         // Check for ^prefix pattern
-        if let Some(literal) = pattern.strip_prefix('^') {
-            if is_simple_string(literal) {
+        if let Some(literal) = pattern.strip_prefix('^')
+            && is_simple_string(literal) {
                 let (line, column) = byte_offset_to_line_col(ctx.source, call.span.start as usize);
                 diagnostics.push(Diagnostic {
                     path: Arc::clone(&ctx.path_arc),
@@ -68,11 +68,10 @@ impl OxcCheck for Check {
                 });
                 return;
             }
-        }
 
         // Check for suffix$ pattern
-        if let Some(literal) = pattern.strip_suffix('$') {
-            if is_simple_string(literal) {
+        if let Some(literal) = pattern.strip_suffix('$')
+            && is_simple_string(literal) {
                 let (line, column) = byte_offset_to_line_col(ctx.source, call.span.start as usize);
                 diagnostics.push(Diagnostic {
                     path: Arc::clone(&ctx.path_arc),
@@ -84,7 +83,6 @@ impl OxcCheck for Check {
                     span: None,
                 });
             }
-        }
     }
 }
 

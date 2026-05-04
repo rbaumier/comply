@@ -38,11 +38,10 @@ fn count_boolean_variants(pattern: &oxc_ast::ast::ObjectPattern) -> usize {
         } else {
             prop.key.static_name().map(|s| s.to_string())
         };
-        if let Some(ref n) = name_str {
-            if looks_like_variant_prop(n) {
+        if let Some(ref n) = name_str
+            && looks_like_variant_prop(n) {
                 count += 1;
             }
-        }
     }
     count
 }

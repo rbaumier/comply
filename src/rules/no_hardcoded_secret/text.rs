@@ -232,14 +232,14 @@ fn contains_password_in_url(line: &str) -> bool {
     let after = &line[proto_end + 3..];
     if let Some(colon) = after.find(':') {
         let rest = &after[colon + 1..];
-        if let Some(at) = rest.find('@') {
-            if at > 0 && !after[..colon].contains('/') {
+        if let Some(at) = rest.find('@')
+            && at > 0 && !after[..colon].contains('/') {
                 let credentials_and_host = &after[..colon
                     + 1
                     + at
                     + 1
                     + rest[at + 1..]
-                        .find(|c: char| c == ':' || c == '/')
+                        .find([':', '/'])
                         .unwrap_or(rest.len() - at - 1)];
                 if WELL_KNOWN_TEST_CREDENTIALS
                     .iter()
@@ -249,7 +249,6 @@ fn contains_password_in_url(line: &str) -> bool {
                 }
                 return true;
             }
-        }
     }
     false
 }

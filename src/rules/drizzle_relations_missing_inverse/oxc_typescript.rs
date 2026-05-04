@@ -25,11 +25,10 @@ fn declared_relation_tables(semantic: &oxc_semantic::Semantic<'_>) -> HashSet<St
         if callee.name.as_str() != "relations" {
             continue;
         }
-        if let Some(first) = call.arguments.first() {
-            if let Some(Expression::Identifier(id)) = first.as_expression() {
+        if let Some(first) = call.arguments.first()
+            && let Some(Expression::Identifier(id)) = first.as_expression() {
                 declared.insert(id.name.to_string());
             }
-        }
     }
     declared
 }

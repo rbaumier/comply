@@ -55,27 +55,24 @@ fn inside_component_body<'a>(
     for ancestor in semantic.nodes().ancestors(node.id()) {
         match ancestor.kind() {
             AstKind::Function(func) => {
-                if let Some(ref id) = func.id {
-                    if starts_with_uppercase(id.name.as_str()) {
+                if let Some(ref id) = func.id
+                    && starts_with_uppercase(id.name.as_str()) {
                         return true;
                     }
-                }
             }
             AstKind::VariableDeclarator(decl) => {
-                if let oxc_ast::ast::BindingPattern::BindingIdentifier(ident) = &decl.id {
-                    if starts_with_uppercase(ident.name.as_str()) {
+                if let oxc_ast::ast::BindingPattern::BindingIdentifier(ident) = &decl.id
+                    && starts_with_uppercase(ident.name.as_str()) {
                         // Only count if init is a function/arrow.
-                        if let Some(init) = &decl.init {
-                            if matches!(
+                        if let Some(init) = &decl.init
+                            && matches!(
                                 init.without_parentheses(),
                                 oxc_ast::ast::Expression::FunctionExpression(_)
                                     | oxc_ast::ast::Expression::ArrowFunctionExpression(_)
                             ) {
                                 return true;
                             }
-                        }
                     }
-                }
             }
             _ => {}
         }

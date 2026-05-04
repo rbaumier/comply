@@ -11,18 +11,15 @@ use std::sync::Arc;
 /// Walk children of a JSXElement looking for `<track kind="captions" />`.
 fn has_caption_track(children: &oxc_allocator::Vec<'_, JSXChild<'_>>) -> bool {
     for child in children.iter() {
-        match child {
-            JSXChild::Element(el) => {
-                // Check opening element
-                if is_track_with_captions(&el.opening_element) {
-                    return true;
-                }
-                // Recurse into children
-                if has_caption_track(&el.children) {
-                    return true;
-                }
+        if let JSXChild::Element(el) = child {
+            // Check opening element
+            if is_track_with_captions(&el.opening_element) {
+                return true;
             }
-            _ => {}
+            // Recurse into children
+            if has_caption_track(&el.children) {
+                return true;
+            }
         }
     }
     false
@@ -42,13 +39,11 @@ fn is_track_with_captions(opening: &oxc_ast::ast::JSXOpeningElement) -> bool {
         let JSXAttributeName::Identifier(name_ident) = &attr.name else {
             continue;
         };
-        if name_ident.name.as_str() == "kind" {
-            if let Some(JSXAttributeValue::StringLiteral(lit)) = &attr.value {
-                if lit.value.as_str() == "captions" {
+        if name_ident.name.as_str() == "kind"
+            && let Some(JSXAttributeValue::StringLiteral(lit)) = &attr.value
+                && lit.value.as_str() == "captions" {
                     return true;
                 }
-            }
-        }
     }
     false
 }

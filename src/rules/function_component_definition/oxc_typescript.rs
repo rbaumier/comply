@@ -31,11 +31,10 @@ fn contains_jsx(start: &oxc_semantic::AstNode, semantic: &oxc_semantic::Semantic
         _ => return false,
     };
     for node in semantic.nodes().iter() {
-        if let AstKind::JSXOpeningElement(el) = node.kind() {
-            if el.span.start >= start_span.start && el.span.end <= start_span.end {
+        if let AstKind::JSXOpeningElement(el) = node.kind()
+            && el.span.start >= start_span.start && el.span.end <= start_span.end {
                 return true;
             }
-        }
     }
     false
 }

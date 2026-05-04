@@ -58,11 +58,10 @@ impl OxcCheck for Check {
 
         // Check for `exit` attribute.
         let has_exit = opening.attributes.iter().any(|attr| {
-            if let JSXAttributeItem::Attribute(a) = attr {
-                if let oxc_ast::ast::JSXAttributeName::Identifier(name) = &a.name {
+            if let JSXAttributeItem::Attribute(a) = attr
+                && let oxc_ast::ast::JSXAttributeName::Identifier(name) = &a.name {
                     return name.name.as_str() == "exit";
                 }
-            }
             false
         });
         if has_exit {
@@ -72,14 +71,12 @@ impl OxcCheck for Check {
         // Walk ancestors looking for AnimatePresence.
         let mut inside_presence = false;
         for ancestor in semantic.nodes().ancestors(node.id()) {
-            if let AstKind::JSXOpeningElement(parent_opening) = ancestor.kind() {
-                if let Some(parent_tag) = jsx_tag_name(parent_opening) {
-                    if parent_tag == "AnimatePresence" {
+            if let AstKind::JSXOpeningElement(parent_opening) = ancestor.kind()
+                && let Some(parent_tag) = jsx_tag_name(parent_opening)
+                    && parent_tag == "AnimatePresence" {
                         inside_presence = true;
                         break;
                     }
-                }
-            }
         }
         if !inside_presence {
             return;

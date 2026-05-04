@@ -4,7 +4,6 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::Expression;
-use oxc_span::GetSpan;
 use std::sync::Arc;
 
 pub struct Check;
@@ -132,7 +131,7 @@ fn is_async_iife(call: &oxc_ast::ast::CallExpression) -> bool {
 fn has_top_level_async_function(
     name: &str,
     semantic: &oxc_semantic::Semantic,
-    source: &str,
+    _source: &str,
 ) -> bool {
     let nodes = semantic.nodes();
     for node in nodes.iter() {

@@ -22,11 +22,10 @@ fn style_object<'a>(
             continue;
         }
         // style={{ ... }} — the value is a JSXExpressionContainer wrapping an object
-        if let Some(JSXAttributeValue::ExpressionContainer(container)) = &attr.value {
-            if let oxc_ast::ast::JSXExpression::ObjectExpression(obj) = &container.expression {
+        if let Some(JSXAttributeValue::ExpressionContainer(container)) = &attr.value
+            && let oxc_ast::ast::JSXExpression::ObjectExpression(obj) = &container.expression {
                 return Some(obj);
             }
-        }
     }
     None
 }

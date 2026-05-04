@@ -12,7 +12,7 @@ fn is_test_file(path: &std::path::Path) -> bool {
     s.contains(".test.") || s.contains(".spec.") || s.contains("__tests__") || s.contains("_test.")
 }
 
-fn span_text<'a>(source: &'a str, span: oxc_span::Span) -> &'a str {
+fn span_text(source: &str, span: oxc_span::Span) -> &str {
     &source[span.start as usize..span.end as usize]
 }
 

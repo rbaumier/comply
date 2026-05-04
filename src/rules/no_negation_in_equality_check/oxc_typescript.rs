@@ -56,11 +56,10 @@ impl OxcCheck for Check {
         }
 
         // Exclude double-negation `!!x === y`.
-        if let Expression::UnaryExpression(inner) = &unary.argument {
-            if inner.operator == UnaryOperator::LogicalNot {
+        if let Expression::UnaryExpression(inner) = &unary.argument
+            && inner.operator == UnaryOperator::LogicalNot {
                 return;
             }
-        }
 
         let op = op_str(bin.operator);
         let neg_op = negate_op(bin.operator);

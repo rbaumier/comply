@@ -37,13 +37,12 @@ impl OxcCheck for Check {
         for node in semantic.nodes().iter() {
             match node.kind() {
                 AstKind::NewExpression(new_expr) => {
-                    if let Expression::Identifier(id) = &new_expr.callee {
-                        if id.name.as_str() == "Hono" && hono_line.is_none() {
+                    if let Expression::Identifier(id) = &new_expr.callee
+                        && id.name.as_str() == "Hono" && hono_line.is_none() {
                             let (line, _) =
                                 byte_offset_to_line_col(ctx.source, new_expr.span.start as usize);
                             hono_line = Some(line);
                         }
-                    }
                 }
                 AstKind::CallExpression(call) => {
                     if let Expression::StaticMemberExpression(member) = &call.callee {

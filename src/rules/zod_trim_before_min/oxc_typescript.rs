@@ -53,7 +53,7 @@ impl OxcCheck for Check {
         let Some(methods) = collect_chain(&member.object, ctx) else { return };
 
         // If `.trim()` appears anywhere in the chain (before `.min`), no warning.
-        if methods.iter().any(|m| *m == "trim") { return; }
+        if methods.contains(&"trim") { return; }
 
         let (line, column) = byte_offset_to_line_col(ctx.source, call.span.start as usize);
         diagnostics.push(Diagnostic {

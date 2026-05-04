@@ -58,7 +58,7 @@ impl OxcCheck for Check {
             };
 
             if named.contains(&imp.local_name) {
-                let (line, column) =
+                let (_line, _column) =
                     byte_offset_to_line_col(ctx.source, 0);
                 // Use the import's line directly — it comes from the import index.
                 diagnostics.push(Diagnostic {

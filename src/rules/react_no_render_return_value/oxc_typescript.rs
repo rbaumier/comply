@@ -40,11 +40,10 @@ impl OxcCheck for Check {
         }
 
         // A standalone statement is fine: `ReactDOM.render(...)` as a line.
-        if let Some(parent) = semantic.nodes().ancestors(node.id()).nth(1) {
-            if matches!(parent.kind(), AstKind::ExpressionStatement(_)) {
+        if let Some(parent) = semantic.nodes().ancestors(node.id()).nth(1)
+            && matches!(parent.kind(), AstKind::ExpressionStatement(_)) {
                 return;
             }
-        }
 
         let (line, column) =
             byte_offset_to_line_col(ctx.source, call.span.start as usize);

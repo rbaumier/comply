@@ -2,7 +2,6 @@ use crate::diagnostic::Diagnostic;
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{BinaryExpression, Expression};
-use oxc_span::GetSpan;
 use std::sync::Arc;
 
 use super::helpers::is_sensitive_identifier;
@@ -48,8 +47,8 @@ impl OxcCheck for Check {
         }
         // Skip confirmation-pattern comparisons: both operands are sensitive
         // identifiers and one contains a confirmation prefix/suffix.
-        if left_hit && right_hit && is_identifier(&bin.left) && is_identifier(&bin.right) {
-            if let (Some(l), Some(r)) = (&left_name, &right_name) {
+        if left_hit && right_hit && is_identifier(&bin.left) && is_identifier(&bin.right)
+            && let (Some(l), Some(r)) = (&left_name, &right_name) {
                 let combined = format!("{l}{r}");
                 let lower = combined.to_ascii_lowercase();
                 if lower.contains("confirm")
@@ -60,7 +59,6 @@ impl OxcCheck for Check {
                     return;
                 }
             }
-        }
         let (line, column) = byte_offset_to_line_col(ctx.source, bin.span.start as usize);
         diagnostics.push(Diagnostic {
             path: Arc::clone(&ctx.path_arc),

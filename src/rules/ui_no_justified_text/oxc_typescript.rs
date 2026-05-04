@@ -82,22 +82,19 @@ impl OxcCheck for Check {
                     continue;
                 };
                 if key_name == "textAlign" {
-                    if let Some(val) = string_value(&p.value) {
-                        if val == "justify" {
+                    if let Some(val) = string_value(&p.value)
+                        && val == "justify" {
                             text_align_justify_span = Some(p.span);
                         }
-                    }
-                } else if key_name == "hyphens" {
-                    if let Some(val) = string_value(&p.value) {
-                        if val == "auto" {
+                } else if key_name == "hyphens"
+                    && let Some(val) = string_value(&p.value)
+                        && val == "auto" {
                             has_hyphens_auto = true;
                         }
-                    }
-                }
             }
 
-            if let Some(span) = text_align_justify_span {
-                if !has_hyphens_auto {
+            if let Some(span) = text_align_justify_span
+                && !has_hyphens_auto {
                     let (line, column) =
                         byte_offset_to_line_col(ctx.source, span.start as usize);
                     diagnostics.push(Diagnostic {
@@ -112,7 +109,6 @@ impl OxcCheck for Check {
                         span: None,
                     });
                 }
-            }
         }
     }
 }

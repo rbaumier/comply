@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use oxc_ast::ast::{AssignmentTarget, Expression};
-use oxc_span::GetSpan;
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -64,26 +63,24 @@ impl OxcCheck for Check {
         match node.kind() {
             AstKind::CallExpression(call) => {
                 // vi.mock('axios') / jest.mock('node-fetch')
-                if let Some(obj) = member_call_obj_name(call, "mock") {
-                    if obj == "vi" || obj == "jest" {
+                if let Some(obj) = member_call_obj_name(call, "mock")
+                    && (obj == "vi" || obj == "jest") {
                         let Some(first_arg) = call.arguments.first() else {
                             return;
                         };
                         let Some(expr) = first_arg.as_expression() else {
                             return;
                         };
-                        if let Expression::StringLiteral(lit) = expr {
-                            if HTTP_CLIENT_MODULES.contains(&lit.value.as_str()) {
+                        if let Expression::StringLiteral(lit) = expr
+                            && HTTP_CLIENT_MODULES.contains(&lit.value.as_str()) {
                                 push(diagnostics, ctx, call.span.start);
                             }
-                        }
                         return;
                     }
-                }
 
                 // jest.spyOn(global, 'fetch') / vi.spyOn(globalThis, 'fetch')
-                if let Some(obj) = member_call_obj_name(call, "spyOn") {
-                    if obj == "jest" || obj == "vi" {
+                if let Some(obj) = member_call_obj_name(call, "spyOn")
+                    && (obj == "jest" || obj == "vi") {
                         let Some(first_arg) = call.arguments.first() else {
                             return;
                         };
@@ -102,13 +99,11 @@ impl OxcCheck for Check {
                         let Some(second_expr) = second_arg.as_expression() else {
                             return;
                         };
-                        if let Expression::StringLiteral(lit) = second_expr {
-                            if lit.value.as_str() == "fetch" {
+                        if let Expression::StringLiteral(lit) = second_expr
+                            && lit.value.as_str() == "fetch" {
                                 push(diagnostics, ctx, call.span.start);
                             }
-                        }
                     }
-                }
             }
             // global.fetch = vi.fn()  /  globalThis.fetch = jest.fn()
             AstKind::AssignmentExpression(assign) => {
@@ -127,11 +122,10 @@ impl OxcCheck for Check {
                 let Expression::CallExpression(right_call) = &assign.right else {
                     return;
                 };
-                if let Some(robj) = member_call_obj_name(right_call, "fn") {
-                    if robj == "vi" || robj == "jest" {
+                if let Some(robj) = member_call_obj_name(right_call, "fn")
+                    && (robj == "vi" || robj == "jest") {
                         push(diagnostics, ctx, assign.span.start);
                     }
-                }
             }
             _ => {}
         }

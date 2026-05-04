@@ -8,7 +8,6 @@ use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{
     Argument, BindingPattern, Expression, MethodDefinitionKind, Statement,
 };
-use oxc_span::GetSpan;
 use std::sync::Arc;
 
 #[derive(Debug)]

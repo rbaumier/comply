@@ -25,14 +25,13 @@ impl OxcCheck for Check {
         // 1. Collect function declarations with their parameter names
         let mut signatures: HashMap<String, Vec<String>> = HashMap::new();
         for node in semantic.nodes().iter() {
-            if let AstKind::Function(func) = node.kind() {
-                if let Some(ref id) = func.id {
+            if let AstKind::Function(func) = node.kind()
+                && let Some(ref id) = func.id {
                     let params = extract_param_names(func);
                     if !params.is_empty() {
                         signatures.insert(id.name.to_string(), params);
                     }
                 }
-            }
         }
 
         // 2. Merge exported function params from ImportIndex

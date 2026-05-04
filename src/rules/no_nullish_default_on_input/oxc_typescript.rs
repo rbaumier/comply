@@ -4,7 +4,6 @@ use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{
     BindingPattern, Expression, FormalParameter, LogicalExpression, LogicalOperator,
 };
-use oxc_span::GetSpan;
 use std::collections::HashSet;
 use std::sync::Arc;
 

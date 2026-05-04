@@ -66,7 +66,7 @@ crate::ast_check! { on ["macro_invocation"] => |node, source, ctx, diagnostics|
     let Ok(name) = macro_name_node.utf8_text(source) else { return };
 
     let Some(pattern) = classify_macro(name)
-        .or_else(|| classify_bare_macro(name, &ctx.source)) else { return };
+        .or_else(|| classify_bare_macro(name, ctx.source)) else { return };
 
     let pos = node.start_position();
     diagnostics.push(Diagnostic {

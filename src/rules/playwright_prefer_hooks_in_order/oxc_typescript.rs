@@ -95,8 +95,8 @@ fn check_hook_order_in_body(
 
         if let Some(name) = get_hook_name_from_callee(&call.callee) {
             let idx = hook_index(name).unwrap();
-            if let Some(prev) = prev_index {
-                if idx < prev {
+            if let Some(prev) = prev_index
+                && idx < prev {
                     let (line, column) =
                         byte_offset_to_line_col(ctx.source, call.span.start as usize);
                     diagnostics.push(Diagnostic {
@@ -112,7 +112,6 @@ fn check_hook_order_in_body(
                         span: None,
                     });
                 }
-            }
             prev_index = Some(idx);
         } else {
             prev_index = None;
@@ -173,8 +172,8 @@ fn check_program_stmts(
 
         if let Some(name) = get_hook_name_from_callee(&call.callee) {
             let idx = hook_index(name).unwrap();
-            if let Some(prev) = prev_index {
-                if idx < prev {
+            if let Some(prev) = prev_index
+                && idx < prev {
                     let (line, column) =
                         byte_offset_to_line_col(ctx.source, call.span.start as usize);
                     diagnostics.push(Diagnostic {
@@ -190,7 +189,6 @@ fn check_program_stmts(
                         span: None,
                     });
                 }
-            }
             prev_index = Some(idx);
         } else {
             prev_index = None;

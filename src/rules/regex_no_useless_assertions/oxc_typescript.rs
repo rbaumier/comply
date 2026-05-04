@@ -13,11 +13,10 @@ fn has_useless_dollar(pattern: &str) -> bool {
     for (i, &b) in bytes.iter().enumerate() {
         if b == b'$' && i + 1 < bytes.len() {
             let next = bytes[i + 1];
-            if next != b')' && next != b'|' {
-                if i == 0 || bytes[i - 1] != b'\\' {
+            if next != b')' && next != b'|'
+                && (i == 0 || bytes[i - 1] != b'\\') {
                     return true;
                 }
-            }
         }
     }
     false

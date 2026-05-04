@@ -28,7 +28,7 @@ impl OxcCheck for Check {
 
         for node in semantic.nodes().iter() {
             // Look for function declarations and arrow functions assigned to variables.
-            let (func_name, body_node_id) = match node.kind() {
+            let (func_name, _body_node_id) = match node.kind() {
                 AstKind::Function(func) => {
                     let Some(id) = &func.id else { continue };
                     let name = id.name.as_str().to_string();
@@ -44,7 +44,7 @@ impl OxcCheck for Check {
                     let Some(init) = &decl.init else { continue };
                     match init {
                         Expression::ArrowFunctionExpression(arrow) => {
-                            let Some(body) = &arrow.body.statements.first() else {
+                            let Some(_body) = &arrow.body.statements.first() else {
                                 continue;
                             };
                             // For arrow functions, we process the body directly.
@@ -109,11 +109,10 @@ fn collect_setters_oxc(
             continue;
         };
         // Second slot is the setter.
-        if let Some(Some(setter_pattern)) = arr.elements.get(1) {
-            if let BindingPattern::BindingIdentifier(setter_id) = setter_pattern {
+        if let Some(Some(setter_pattern)) = arr.elements.get(1)
+            && let BindingPattern::BindingIdentifier(setter_id) = setter_pattern {
                 setters.insert(setter_id.name.as_str().to_string());
             }
-        }
     }
 
     setters

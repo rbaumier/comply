@@ -54,21 +54,19 @@ impl OxcCheck for Check {
             match name_str {
                 "integrity" => has_integrity = true,
                 "src" | "href" => {
-                    if let Some(val) = extract_string_value(&attr.value) {
-                        if val.starts_with("https://")
+                    if let Some(val) = extract_string_value(&attr.value)
+                        && (val.starts_with("https://")
                             || val.starts_with("http://")
-                            || val.starts_with("//")
+                            || val.starts_with("//"))
                         {
                             external_url = Some(val);
                         }
-                    }
                 }
                 "rel" => {
-                    if let Some(val) = extract_string_value(&attr.value) {
-                        if val.eq_ignore_ascii_case("stylesheet") {
+                    if let Some(val) = extract_string_value(&attr.value)
+                        && val.eq_ignore_ascii_case("stylesheet") {
                             is_stylesheet_link = true;
                         }
-                    }
                 }
                 _ => {}
             }

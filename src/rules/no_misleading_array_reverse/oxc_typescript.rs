@@ -70,8 +70,8 @@ impl OxcCheck for Check {
                 }
             }
             AstKind::ReturnStatement(ret) => {
-                if let Some(arg) = &ret.argument {
-                    if is_mutating_call(arg, ctx.source) {
+                if let Some(arg) = &ret.argument
+                    && is_mutating_call(arg, ctx.source) {
                         let (line, column) =
                             byte_offset_to_line_col(ctx.source, arg.span().start as usize);
                         diagnostics.push(Diagnostic {
@@ -84,7 +84,6 @@ impl OxcCheck for Check {
                             span: None,
                         });
                     }
-                }
             }
             _ => {}
         }

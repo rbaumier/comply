@@ -1,7 +1,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{CheckCtx, OxcCheck};
-use oxc_ast::ast::{BindingPattern, Expression, Statement, VariableDeclarationKind};
+use oxc_ast::ast::{Expression, Statement, VariableDeclarationKind};
 use oxc_span::GetSpan;
 use std::sync::Arc;
 
@@ -33,13 +33,12 @@ fn scan_statements<'a>(stmts: &'a [Statement<'a>], source: &'a str, ctx: &CheckC
             let mut count = 1usize;
             let mut j = i + 1;
             while j < stmts.len() {
-                if let Some(next_obj) = extract_object_name(&stmts[j], source) {
-                    if next_obj == obj_name {
+                if let Some(next_obj) = extract_object_name(&stmts[j], source)
+                    && next_obj == obj_name {
                         count += 1;
                         j += 1;
                         continue;
                     }
-                }
                 break;
             }
             if count >= 2 {

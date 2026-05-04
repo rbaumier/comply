@@ -24,11 +24,10 @@ fn is_positive_tabindex(value: &JSXAttributeValue) -> bool {
             match &container.expression {
                 JSXExpression::NumericLiteral(num) => num.value > 0.0,
                 JSXExpression::UnaryExpression(un) => {
-                    if un.operator == oxc_ast::ast::UnaryOperator::UnaryNegation {
-                        if let oxc_ast::ast::Expression::NumericLiteral(num) = &un.argument {
+                    if un.operator == oxc_ast::ast::UnaryOperator::UnaryNegation
+                        && let oxc_ast::ast::Expression::NumericLiteral(num) = &un.argument {
                             return (-num.value) > 0.0;
                         }
-                    }
                     false
                 }
                 _ => false,

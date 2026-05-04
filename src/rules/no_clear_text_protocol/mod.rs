@@ -99,13 +99,13 @@ pub(super) fn is_clear_text_url(content: &str) -> Option<&'static str> {
             }
             let host = &trimmed[prefix.len()..];
             let host_end = host
-                .find(|c: char| c == '/' || c == ':' || c == '?' || c == '#')
+                .find(['/', ':', '?', '#'])
                 .unwrap_or(host.len());
             let hostname = &host[..host_end];
             if hostname.len() <= 1 {
                 return None;
             }
-            if DUMMY_HOSTS.iter().any(|h| hostname == *h) {
+            if DUMMY_HOSTS.contains(&hostname) {
                 return None;
             }
             return Some(prefix);

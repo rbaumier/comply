@@ -5,7 +5,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
-use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
+use crate::rules::backend::{AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::Statement;
 use std::sync::Arc;
 
@@ -58,7 +58,7 @@ impl OxcCheck for Check {
                 Statement::ExportNamedDeclaration(decl) if decl.source.is_some() => {}
                 Statement::ExportAllDeclaration(_) => {}
                 // Directives like "use strict" don't count as real code.
-                _ if is_directive(&stmt) => {}
+                _ if is_directive(stmt) => {}
                 // Empty statements (lone semicolons) are harmless.
                 Statement::EmptyStatement(_) => {}
                 _ => {

@@ -26,7 +26,7 @@ fn object_has_tag_literal(args: &oxc_ast::ast::CallExpression, source: &str) -> 
         };
         let key_text = &source[prop.key.span().start as usize..prop.key.span().end as usize];
         let normalized = key_text.trim_matches(|c: char| c == '"' || c == '\'');
-        if !TAG_KEYS.iter().any(|k| *k == normalized) {
+        if !TAG_KEYS.contains(&normalized) {
             continue;
         }
         // Value must be a call to z.literal(...)

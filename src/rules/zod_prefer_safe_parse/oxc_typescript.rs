@@ -53,11 +53,10 @@ impl OxcCheck for Check {
         }
 
         // Skip JSON.parse(...)
-        if let Expression::Identifier(id) = &member.object {
-            if id.name.as_str() == "JSON" {
+        if let Expression::Identifier(id) = &member.object
+            && id.name.as_str() == "JSON" {
                 return;
             }
-        }
 
         let (line, column) = byte_offset_to_line_col(ctx.source, call.span.start as usize);
         diagnostics.push(Diagnostic {

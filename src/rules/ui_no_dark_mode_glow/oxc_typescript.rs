@@ -48,11 +48,10 @@ fn is_dark_color_value(value: &str) -> bool {
     if v.eq_ignore_ascii_case("black") {
         return true;
     }
-    if let Some(hex) = v.strip_prefix('#') {
-        if let Some((r, g, b)) = parse_hex_rgb(hex) {
+    if let Some(hex) = v.strip_prefix('#')
+        && let Some((r, g, b)) = parse_hex_rgb(hex) {
             return perceived_lightness(r, g, b) < 0.15;
         }
-    }
     if let Some((r, g, b)) = parse_rgb_channels(&v.to_ascii_lowercase()) {
         return perceived_lightness(r, g, b) < 0.15;
     }
@@ -70,13 +69,11 @@ fn shadow_has_chroma(shadow: &str) -> bool {
     for (i, _) in lower.match_indices('#') {
         let rest = &lower[i + 1..];
         let hex_len = rest.chars().take_while(|c| c.is_ascii_hexdigit()).count();
-        if hex_len >= 3 {
-            if let Some((r, g, b)) = parse_hex_rgb(&rest[..hex_len]) {
-                if !is_grayscale_rgb(r, g, b) {
+        if hex_len >= 3
+            && let Some((r, g, b)) = parse_hex_rgb(&rest[..hex_len])
+                && !is_grayscale_rgb(r, g, b) {
                     return true;
                 }
-            }
-        }
     }
 
     for prefix in &["rgba(", "rgb("] {
@@ -85,17 +82,15 @@ fn shadow_has_chroma(shadow: &str) -> bool {
             if let Some(end) = rest.find(')') {
                 let inner = &rest[..end];
                 let parts: Vec<&str> = inner.split(',').collect();
-                if parts.len() >= 3 {
-                    if let (Ok(r), Ok(g), Ok(b)) = (
+                if parts.len() >= 3
+                    && let (Ok(r), Ok(g), Ok(b)) = (
                         parts[0].trim().parse::<u8>(),
                         parts[1].trim().parse::<u8>(),
                         parts[2].trim().parse::<u8>(),
-                    ) {
-                        if !is_grayscale_rgb(r, g, b) {
+                    )
+                        && !is_grayscale_rgb(r, g, b) {
                             return true;
                         }
-                    }
-                }
             }
         }
     }
@@ -116,7 +111,7 @@ impl OxcCheck for Check {
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        semantic: &'a oxc_semantic::Semantic<'a>,
+        _semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let AstKind::JSXOpeningElement(opening) = node.kind() else {
@@ -175,7 +170,7 @@ fn property_key_name<'a>(key: &'a PropertyKey<'a>) -> Option<&'a str> {
     }
 }
 
-fn string_value_of_expr<'a>(expr: &'a Expression<'a>, source: &str) -> Option<String> {
+fn string_value_of_expr<'a>(expr: &'a Expression<'a>, _source: &str) -> Option<String> {
     match expr {
         Expression::StringLiteral(lit) => Some(lit.value.to_string()),
         Expression::TemplateLiteral(tpl) if tpl.expressions.is_empty() && tpl.quasis.len() == 1 => {
@@ -196,11 +191,10 @@ fn has_dark_background(obj: &oxc_ast::ast::ObjectExpression, source: &str) -> bo
         if key != "backgroundColor" && key != "background" {
             continue;
         }
-        if let Some(val) = string_value_of_expr(&prop.value, source) {
-            if is_dark_color_value(&val) {
+        if let Some(val) = string_value_of_expr(&prop.value, source)
+            && is_dark_color_value(&val) {
                 return true;
             }
-        }
     }
     false
 }
@@ -216,11 +210,10 @@ fn has_colored_box_shadow(obj: &oxc_ast::ast::ObjectExpression, source: &str) ->
         if key != "boxShadow" {
             continue;
         }
-        if let Some(val) = string_value_of_expr(&prop.value, source) {
-            if shadow_has_chroma(&val) {
+        if let Some(val) = string_value_of_expr(&prop.value, source)
+            && shadow_has_chroma(&val) {
                 return true;
             }
-        }
     }
     false
 }

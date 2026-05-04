@@ -37,7 +37,7 @@ impl OxcCheck for Check {
             return;
         };
 
-        let export_start = export.span.start as u32;
+        let export_start = export.span.start;
 
         // Find a JSDoc comment preceding this export.
         let Some(jsdoc_text) = find_jsdoc_above(semantic, ctx.source, export_start) else {

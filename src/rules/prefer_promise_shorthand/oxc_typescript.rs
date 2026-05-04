@@ -20,11 +20,10 @@ fn get_param_name<'a>(params: &'a [FormalParameter<'a>], index: usize) -> Option
 
 /// Check if an expression is a call to an identifier with the given name.
 fn is_call_to(expr: &Expression, name: &str) -> bool {
-    if let Expression::CallExpression(call) = expr {
-        if let Expression::Identifier(id) = &call.callee {
+    if let Expression::CallExpression(call) = expr
+        && let Expression::Identifier(id) = &call.callee {
             return id.name.as_str() == name;
         }
-    }
     false
 }
 

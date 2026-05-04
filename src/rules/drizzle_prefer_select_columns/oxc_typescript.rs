@@ -73,11 +73,10 @@ fn chain_has_from<'a>(
     for ancestor in semantic.nodes().ancestors(node.id()) {
         match ancestor.kind() {
             AstKind::CallExpression(call) => {
-                if let Expression::StaticMemberExpression(m) = &call.callee {
-                    if m.property.name.as_str() == "from" {
+                if let Expression::StaticMemberExpression(m) = &call.callee
+                    && m.property.name.as_str() == "from" {
                         return true;
                     }
-                }
             }
             // Stop at statement boundaries.
             AstKind::ExportDefaultDeclaration(_)

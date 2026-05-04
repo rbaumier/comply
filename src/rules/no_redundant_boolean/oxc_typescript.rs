@@ -4,7 +4,6 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::*;
-use oxc_span::GetSpan;
 use std::sync::Arc;
 
 pub struct Check;
@@ -115,8 +114,8 @@ impl OxcCheck for Check {
 
                 // 3a. Explicit else branch.
                 if let Some(ref alt) = if_stmt.alternate {
-                    if let Some(alt_bool) = returns_bool(alt) {
-                        if cons_bool != alt_bool {
+                    if let Some(alt_bool) = returns_bool(alt)
+                        && cons_bool != alt_bool {
                             push_diag(
                                 diagnostics,
                                 ctx,
@@ -124,7 +123,6 @@ impl OxcCheck for Check {
                                 "Redundant if/else returning boolean literals — return the condition directly.",
                             );
                         }
-                    }
                     return;
                 }
 
@@ -145,8 +143,8 @@ impl OxcCheck for Check {
                     let mut found_self = false;
                     for stmt in stmts.iter() {
                         if found_self {
-                            if let Some(next_bool) = returns_bool(stmt) {
-                                if cons_bool != next_bool {
+                            if let Some(next_bool) = returns_bool(stmt)
+                                && cons_bool != next_bool {
                                     push_diag(
                                         diagnostics,
                                         ctx,
@@ -154,14 +152,12 @@ impl OxcCheck for Check {
                                         "Redundant if/else returning boolean literals — return the condition directly.",
                                     );
                                 }
-                            }
                             break;
                         }
-                        if let Statement::IfStatement(s) = stmt {
-                            if s.span == if_stmt.span {
+                        if let Statement::IfStatement(s) = stmt
+                            && s.span == if_stmt.span {
                                 found_self = true;
                             }
-                        }
                     }
                 }
             }

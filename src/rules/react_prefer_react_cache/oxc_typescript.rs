@@ -79,11 +79,10 @@ impl OxcCheck for Check {
 
         // Only flag at module scope
         let nodes = semantic.nodes();
-        if let Some(parent) = nodes.ancestors(node.id()).nth(1) {
-            if !matches!(parent.kind(), AstKind::Program(_)) {
+        if let Some(parent) = nodes.ancestors(node.id()).nth(1)
+            && !matches!(parent.kind(), AstKind::Program(_)) {
                 return;
             }
-        }
 
         match node.kind() {
             AstKind::ExportNamedDeclaration(export) => {

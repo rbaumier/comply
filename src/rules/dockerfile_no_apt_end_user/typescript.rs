@@ -15,7 +15,7 @@ const APT_VERBS: &[&str] = &[
 ];
 
 fn uses_apt_end_user(text: &str) -> bool {
-    for segment in text.split(|c: char| matches!(c, '\n' | ';' | '&' | '|')) {
+    for segment in text.split(['\n', ';', '&', '|']) {
         let mut tokens = segment.split_whitespace();
         let Some(first) = tokens.next() else {
             continue;

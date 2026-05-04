@@ -91,7 +91,7 @@ pub(super) fn collect_diagnostics(
         .threshold("no-duplicate-string", "min_occurrences", ctx.lang);
 
     let source_bytes = ctx.source.as_bytes();
-    let is_rust = kinds.iter().any(|k| *k == "string_literal");
+    let is_rust = kinds.contains(&"string_literal");
     let mut occurrences: HashMap<String, Vec<tree_sitter::Node>> = HashMap::new();
     for node in crate::rules::walker::collect_nodes_of_kinds(tree, kinds) {
         let Ok(raw) = node.utf8_text(source_bytes) else {
@@ -196,21 +196,18 @@ pub(super) fn should_ignore_string_node(node: tree_sitter::Node<'_>, source: &[u
             // string literal nested inside it (including the literal
             // itself) is the import path.
             "import_statement" | "export_statement" => {
-                if let Some(src) = parent.child_by_field_name("source") {
-                    if src.id() == node.id() || node_is_descendant(node, src) {
+                if let Some(src) = parent.child_by_field_name("source")
+                    && (src.id() == node.id() || node_is_descendant(node, src)) {
                         return true;
                     }
-                }
             }
             // `jsx_attribute` whose name is `className` or `class`.
             "jsx_attribute" => {
-                if let Some(name_node) = parent.child(0) {
-                    if let Ok(name) = name_node.utf8_text(source) {
-                        if name == "className" || name == "class" {
+                if let Some(name_node) = parent.child(0)
+                    && let Ok(name) = name_node.utf8_text(source)
+                        && (name == "className" || name == "class") {
                             return true;
                         }
-                    }
-                }
             }
             // Rust attributes — `#[cfg(feature = "x")]`, `#[serde(rename = "y")]`,
             // etc. — strings here are compile-time metadata that cannot be

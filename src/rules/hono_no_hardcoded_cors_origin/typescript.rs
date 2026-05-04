@@ -63,7 +63,7 @@ fn find_origin_literal(body: &str) -> Option<usize> {
             Some(b'[') => {
                 let arr = &body[value_start..];
                 if arr.starts_with('[')
-                    && arr[1..].trim_start().starts_with(|c| c == '"' || c == '\'')
+                    && arr[1..].trim_start().starts_with(['"', '\''])
                 {
                     return Some(value_start);
                 }

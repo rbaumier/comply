@@ -41,14 +41,13 @@ fn collect_server_fields<'a>(members: &'a [TSSignature<'a>]) -> Vec<&'a str> {
     members
         .iter()
         .filter_map(|sig| {
-            if let TSSignature::TSPropertySignature(prop) = sig {
-                if let oxc_ast::ast::PropertyKey::StaticIdentifier(ident) = &prop.key {
+            if let TSSignature::TSPropertySignature(prop) = sig
+                && let oxc_ast::ast::PropertyKey::StaticIdentifier(ident) = &prop.key {
                     let name = ident.name.as_str();
                     if SERVER_MANAGED_FIELDS.contains(&name) {
                         return Some(name);
                     }
                 }
-            }
             None
         })
         .collect()

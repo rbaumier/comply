@@ -75,11 +75,10 @@ fn is_inside_loop<'a>(
 
             // .forEach() / .map() etc. count as loops.
             AstKind::CallExpression(call) => {
-                if let Expression::StaticMemberExpression(member) = &call.callee {
-                    if ITERATOR_METHODS.contains(&member.property.name.as_str()) {
+                if let Expression::StaticMemberExpression(member) = &call.callee
+                    && ITERATOR_METHODS.contains(&member.property.name.as_str()) {
                         return true;
                     }
-                }
             }
 
             _ => {}

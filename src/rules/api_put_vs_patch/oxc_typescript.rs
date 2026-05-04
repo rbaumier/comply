@@ -92,7 +92,7 @@ fn contains_partial_in_type_annotation(text: &str) -> bool {
         let double_quotes = before.matches('"').count();
         let backticks = before.matches('`').count();
         // If any quote count is odd, we're inside a string
-        if single_quotes % 2 != 0 || double_quotes % 2 != 0 || backticks % 2 != 0 {
+        if !single_quotes.is_multiple_of(2) || !double_quotes.is_multiple_of(2) || !backticks.is_multiple_of(2) {
             continue;
         }
         // Check there's a `:` or `<` before it on the same nesting level

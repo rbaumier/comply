@@ -49,9 +49,9 @@ impl OxcCheck for Check {
         }
 
         let flagged = if is_string_literal(&bin.left) {
-            final_ident_name(&bin.right).is_some_and(|n| looks_numeric(n))
+            final_ident_name(&bin.right).is_some_and(looks_numeric)
         } else if is_string_literal(&bin.right) {
-            final_ident_name(&bin.left).is_some_and(|n| looks_numeric(n))
+            final_ident_name(&bin.left).is_some_and(looks_numeric)
         } else {
             false
         };

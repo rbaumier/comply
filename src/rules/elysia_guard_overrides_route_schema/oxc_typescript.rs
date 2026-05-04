@@ -17,25 +17,11 @@ const ROUTE_METHODS: &[&str] = &[
 /// Check if an object expression contains a `body:` property.
 fn object_has_body_key(args: &oxc_ast::ast::ObjectExpression) -> bool {
     for prop in &args.properties {
-        if let ObjectPropertyKind::ObjectProperty(p) = prop {
-            if let PropertyKey::StaticIdentifier(key) = &p.key {
-                if key.name.as_str() == "body" {
+        if let ObjectPropertyKind::ObjectProperty(p) = prop
+            && let PropertyKey::StaticIdentifier(key) = &p.key
+                && key.name.as_str() == "body" {
                     return true;
                 }
-            }
-        }
-    }
-    false
-}
-
-/// Check if call arguments contain a `body:` source text (fallback for complex args).
-fn args_source_has_body(source: &str, call: &oxc_ast::ast::CallExpression) -> bool {
-    for arg in &call.arguments {
-        let span = arg.span();
-        let text = &source[span.start as usize..span.end as usize];
-        if text.contains("body:") || text.contains("body :") {
-            return true;
-        }
     }
     false
 }

@@ -79,11 +79,10 @@ impl OxcCheck for Check {
                 // Skip parameterised queries.
                 let start = bin.span.start as usize;
                 let end = bin.span.end as usize;
-                if let Some(combined) = ctx.source.get(start..end) {
-                    if combined.contains("$1") || combined.contains("$2") {
+                if let Some(combined) = ctx.source.get(start..end)
+                    && (combined.contains("$1") || combined.contains("$2")) {
                         return;
                     }
-                }
                 let (line, column) = byte_offset_to_line_col(ctx.source, start);
                 diagnostics.push(Diagnostic {
                     path: Arc::clone(&ctx.path_arc),

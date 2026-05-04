@@ -150,7 +150,7 @@ fn declaration_is_pure(decl: &VariableDeclaration) -> bool {
     decl.declarations.iter().all(|d| {
         d.init
             .as_ref()
-            .map_or(true, |init| is_pure_initializer(init))
+            .is_none_or(|init| is_pure_initializer(init))
     })
 }
 

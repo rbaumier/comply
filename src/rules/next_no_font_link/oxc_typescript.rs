@@ -46,11 +46,10 @@ impl OxcCheck for Check {
             let JSXAttributeName::Identifier(name_ident) = &attr.name else {
                 continue;
             };
-            if name_ident.name.as_str() == "href" {
-                if let Some(JSXAttributeValue::StringLiteral(lit)) = &attr.value {
+            if name_ident.name.as_str() == "href"
+                && let Some(JSXAttributeValue::StringLiteral(lit)) = &attr.value {
                     href_value = Some(lit.value.as_str());
                 }
-            }
         }
 
         let Some(href) = href_value else { return };

@@ -21,11 +21,10 @@ crate::ast_check! { on ["call_expression"] prefilter = ["Regex::new"] => |node, 
         return;
     }
     if lines.get(row).is_some_and(|l| {
-        if let Some(rx) = l.find("Regex") {
-            if let Some(cm) = l.find("//") {
+        if let Some(rx) = l.find("Regex")
+            && let Some(cm) = l.find("//") {
                 return cm > rx;
             }
-        }
         false
     }) {
         return;

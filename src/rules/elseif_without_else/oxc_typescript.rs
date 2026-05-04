@@ -34,15 +34,12 @@ impl OxcCheck for Check {
             let parent_kind = nodes.get_node(parent_id).kind();
             if matches!(parent_kind, oxc_ast::AstKind::IfStatement(_)) {
                 // Check if we are in the alternate branch of the parent if.
-                if let oxc_ast::AstKind::IfStatement(parent_if) = parent_kind {
-                    if let Some(alt) = &parent_if.alternate {
-                        if let Statement::IfStatement(alt_if) = alt {
-                            if std::ptr::eq(alt_if.as_ref(), if_stmt) {
+                if let oxc_ast::AstKind::IfStatement(parent_if) = parent_kind
+                    && let Some(alt) = &parent_if.alternate
+                        && let Statement::IfStatement(alt_if) = alt
+                            && std::ptr::eq(alt_if.as_ref(), if_stmt) {
                                 return;
                             }
-                        }
-                    }
-                }
             }
         }
 

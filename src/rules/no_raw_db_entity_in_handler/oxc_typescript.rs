@@ -47,11 +47,10 @@ impl OxcCheck for Check {
 
 fn is_db_call(call: &oxc_ast::ast::CallExpression<'_>, source: &str) -> bool {
     // Direct calls like `knex("items")`
-    if let Expression::Identifier(id) = &call.callee {
-        if DB_PATTERNS.contains(&id.name.as_str()) {
+    if let Expression::Identifier(id) = &call.callee
+        && DB_PATTERNS.contains(&id.name.as_str()) {
             return true;
         }
-    }
     // Member calls: check full text for DB pattern + method combination
     let text = &source[call.span.start as usize..call.span.end as usize];
     for pat in DB_PATTERNS {
@@ -76,14 +75,13 @@ fn is_in_route_handler(
             break;
         }
         id = parent_id;
-        if let AstKind::CallExpression(call) = nodes.kind(id) {
-            if let Expression::StaticMemberExpression(member) = &call.callee {
+        if let AstKind::CallExpression(call) = nodes.kind(id)
+            && let Expression::StaticMemberExpression(member) = &call.callee {
                 let method = member.property.name.as_str();
                 if ROUTE_METHODS.contains(&method) {
                     return true;
                 }
             }
-        }
     }
     false
 }

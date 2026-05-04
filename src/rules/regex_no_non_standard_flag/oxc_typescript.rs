@@ -23,7 +23,7 @@ impl OxcCheck for Check {
     ) {
         let AstKind::RegExpLiteral(re) = node.kind() else { return };
 
-        let flags = re.regex.flags;
+        let _flags = re.regex.flags;
         // Get the raw text to check character-by-character for non-standard flags.
         // The typed `RegExpFlags` only has known flags; we need the raw source to
         // detect unknown characters.

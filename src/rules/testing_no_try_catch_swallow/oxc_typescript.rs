@@ -20,13 +20,11 @@ fn inside_test_callback<'a>(
     semantic: &'a oxc_semantic::Semantic<'a>,
 ) -> bool {
     for ancestor in semantic.nodes().ancestors(node.id()) {
-        if let AstKind::CallExpression(call) = ancestor.kind() {
-            if let Expression::Identifier(id) = &call.callee {
-                if matches!(id.name.as_str(), "test" | "it") {
+        if let AstKind::CallExpression(call) = ancestor.kind()
+            && let Expression::Identifier(id) = &call.callee
+                && matches!(id.name.as_str(), "test" | "it") {
                     return true;
                 }
-            }
-        }
     }
     false
 }

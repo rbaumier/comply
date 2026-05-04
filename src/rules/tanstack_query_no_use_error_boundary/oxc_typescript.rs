@@ -78,13 +78,11 @@ fn inside_hook<'a>(
         if parent_id == current_id {
             break;
         }
-        if let AstKind::CallExpression(call) = nodes.kind(parent_id) {
-            if let Expression::Identifier(ident) = &call.callee {
-                if HOOKS.contains(&ident.name.as_str()) {
+        if let AstKind::CallExpression(call) = nodes.kind(parent_id)
+            && let Expression::Identifier(ident) = &call.callee
+                && HOOKS.contains(&ident.name.as_str()) {
                     return true;
                 }
-            }
-        }
         current_id = parent_id;
     }
     false

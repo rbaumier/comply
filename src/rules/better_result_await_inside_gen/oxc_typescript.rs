@@ -53,17 +53,13 @@ fn is_inside_result_gen<'a>(
     semantic: &'a oxc_semantic::Semantic<'a>,
 ) -> bool {
     for ancestor in semantic.nodes().ancestors(node.id()) {
-        if let AstKind::CallExpression(call) = ancestor.kind() {
-            if let Expression::StaticMemberExpression(member) = &call.callee {
-                if member.property.name.as_str() == "gen" {
-                    if let Expression::Identifier(obj) = &member.object {
-                        if obj.name.as_str() == "Result" {
+        if let AstKind::CallExpression(call) = ancestor.kind()
+            && let Expression::StaticMemberExpression(member) = &call.callee
+                && member.property.name.as_str() == "gen"
+                    && let Expression::Identifier(obj) = &member.object
+                        && obj.name.as_str() == "Result" {
                             return true;
                         }
-                    }
-                }
-            }
-        }
     }
     false
 }

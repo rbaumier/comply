@@ -64,23 +64,16 @@ impl OxcCheck for Check {
         }
 
         // Check: new QueryClient({ defaultOptions: { queries: { retry: false } } })
-        if let Some(Argument::ObjectExpression(opts)) = new_expr.arguments.first() {
-            if let Some(Expression::ObjectExpression(defaults)) =
+        if let Some(Argument::ObjectExpression(opts)) = new_expr.arguments.first()
+            && let Some(Expression::ObjectExpression(defaults)) =
                 find_prop_value(&opts.properties, "defaultOptions")
-            {
-                if let Some(Expression::ObjectExpression(queries)) =
+                && let Some(Expression::ObjectExpression(queries)) =
                     find_prop_value(&defaults.properties, "queries")
-                {
-                    if let Some(Expression::BooleanLiteral(val)) =
+                    && let Some(Expression::BooleanLiteral(val)) =
                         find_prop_value(&queries.properties, "retry")
-                    {
-                        if !val.value {
+                        && !val.value {
                             return;
                         }
-                    }
-                }
-            }
-        }
 
         let (line, column) = byte_offset_to_line_col(ctx.source, new_expr.span.start as usize);
         diagnostics.push(Diagnostic {

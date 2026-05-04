@@ -2,7 +2,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
-use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
+use crate::rules::backend::{AstKind, CheckCtx, OxcCheck};
 use std::sync::Arc;
 
 use oxc_ast::ast::{Argument, Expression};
@@ -22,14 +22,12 @@ impl OxcCheck for Check {
         // First pass: check if the file already uses `queryOptions()`.
         let mut has_query_options = false;
         for node in semantic.nodes().iter() {
-            if let AstKind::CallExpression(call) = node.kind() {
-                if let Expression::Identifier(id) = &call.callee {
-                    if id.name.as_str() == "queryOptions" {
+            if let AstKind::CallExpression(call) = node.kind()
+                && let Expression::Identifier(id) = &call.callee
+                    && id.name.as_str() == "queryOptions" {
                         has_query_options = true;
                         break;
                     }
-                }
-            }
         }
 
         if has_query_options {
@@ -39,11 +37,11 @@ impl OxcCheck for Check {
         // Second pass: flag `useQuery({ ... })` with inline object.
         let mut diagnostics = Vec::new();
         for node in semantic.nodes().iter() {
-            if let AstKind::CallExpression(call) = node.kind() {
-                if let Expression::Identifier(id) = &call.callee {
-                    if id.name.as_str() == "useQuery" {
-                        if let Some(first) = call.arguments.first() {
-                            if matches!(first, Argument::ObjectExpression(_)) {
+            if let AstKind::CallExpression(call) = node.kind()
+                && let Expression::Identifier(id) = &call.callee
+                    && id.name.as_str() == "useQuery"
+                        && let Some(first) = call.arguments.first()
+                            && matches!(first, Argument::ObjectExpression(_)) {
                                 let (line, column) =
                                     byte_offset_to_line_col(ctx.source, call.span.start as usize);
                                 diagnostics.push(Diagnostic {
@@ -56,10 +54,6 @@ impl OxcCheck for Check {
                                     span: None,
                                 });
                             }
-                        }
-                    }
-                }
-            }
         }
         diagnostics
     }

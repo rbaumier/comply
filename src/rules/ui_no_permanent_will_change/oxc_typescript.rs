@@ -61,11 +61,10 @@ impl OxcCheck for Check {
                 }
 
                 // Allow "auto"
-                if let Expression::StringLiteral(s) = &p.value {
-                    if s.value == "auto" {
+                if let Expression::StringLiteral(s) = &p.value
+                    && s.value == "auto" {
                         continue;
                     }
-                }
 
                 let span = p.span;
                 let (line, column) = byte_offset_to_line_col(ctx.source, span.start as usize);

@@ -4,7 +4,6 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::Expression;
-use oxc_span::GetSpan;
 use std::sync::Arc;
 
 const STABLE_WRAPPERS: &[&str] = &["useState", "useRef", "useMemo", "useCallback"];
@@ -88,13 +87,11 @@ fn enclosing_component(
                     continue;
                 }
                 let gp = semantic.nodes().get_node(gp_id);
-                if let AstKind::VariableDeclarator(decl) = gp.kind() {
-                    if let oxc_ast::ast::BindingPattern::BindingIdentifier(id) = &decl.id {
-                        if id.name.starts_with(|c: char| c.is_ascii_uppercase()) {
+                if let AstKind::VariableDeclarator(decl) = gp.kind()
+                    && let oxc_ast::ast::BindingPattern::BindingIdentifier(id) = &decl.id
+                        && id.name.starts_with(|c: char| c.is_ascii_uppercase()) {
                             return Some(current);
                         }
-                    }
-                }
             }
             _ => {}
         }
@@ -132,11 +129,10 @@ fn inside_stable_wrapper(
                 }
                 _ => None,
             };
-            if let Some(n) = name {
-                if STABLE_WRAPPERS.contains(&n) {
+            if let Some(n) = name
+                && STABLE_WRAPPERS.contains(&n) {
                     return true;
                 }
-            }
         }
     }
 }

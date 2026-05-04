@@ -58,7 +58,7 @@ fn looks_like_icon(tag: &str) -> bool {
 
 fn child_has_offending_margin(
     opening: &oxc_ast::ast::JSXOpeningElement,
-    ctx: &CheckCtx,
+    _ctx: &CheckCtx,
 ) -> Option<u32> {
     for attr_item in &opening.attributes {
         let JSXAttributeItem::Attribute(attr) = attr_item else {
@@ -70,11 +70,10 @@ fn child_has_offending_margin(
         if name.name.as_str() != "className" {
             continue;
         }
-        if let Some(JSXAttributeValue::StringLiteral(s)) = &attr.value {
-            if has_margin_icon_class(s.value.as_str()) {
+        if let Some(JSXAttributeValue::StringLiteral(s)) = &attr.value
+            && has_margin_icon_class(s.value.as_str()) {
                 return Some(attr.span.start);
             }
-        }
     }
     None
 }

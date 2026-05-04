@@ -2,7 +2,6 @@ use crate::diagnostic::Diagnostic;
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{Argument, Expression, Statement};
-use oxc_span::GetSpan;
 use std::sync::Arc;
 
 const TEST_MARKERS: &[&str] = &[".test.", ".spec.", "__tests__", "_test."];
@@ -147,7 +146,6 @@ fn collect_control_flow_stmt<'a>(
         // For expression statements, check if it's a setup hook call.
         Statement::ExpressionStatement(expr_stmt) => {
             if is_setup_hook_call(&expr_stmt.expression) {
-                return;
             }
             // Check for arrow/function expressions inside — skip those.
             // No control flow to find in a plain expression statement.
@@ -172,11 +170,10 @@ fn collect_control_flow_stmt<'a>(
 }
 
 fn is_setup_hook_call(expr: &Expression) -> bool {
-    if let Expression::CallExpression(call) = expr {
-        if let Expression::Identifier(id) = &call.callee {
+    if let Expression::CallExpression(call) = expr
+        && let Expression::Identifier(id) = &call.callee {
             return SETUP_HOOKS.contains(&id.name.as_str());
         }
-    }
     false
 }
 

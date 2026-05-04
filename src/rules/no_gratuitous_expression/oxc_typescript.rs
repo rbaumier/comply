@@ -55,34 +55,31 @@ impl OxcCheck for Check {
     ) {
         match node.kind() {
             AstKind::IfStatement(if_stmt) => {
-                match &if_stmt.test {
-                    Expression::BooleanLiteral(lit) => {
-                        let msg = if lit.value {
-                            "Gratuitous expression: condition is always true."
-                        } else {
-                            "Gratuitous expression: condition is always false."
-                        };
-                        let (line, column) =
-                            byte_offset_to_line_col(ctx.source, if_stmt.span.start as usize);
-                        diagnostics.push(Diagnostic {
-                            path: Arc::clone(&ctx.path_arc),
-                            line,
-                            column,
-                            rule_id: super::META.id.into(),
-                            message: msg.into(),
-                            severity: Severity::Error,
-                            span: None,
-                        });
-                    }
-                    _ => {}
+                if let Expression::BooleanLiteral(lit) = &if_stmt.test {
+                    let msg = if lit.value {
+                        "Gratuitous expression: condition is always true."
+                    } else {
+                        "Gratuitous expression: condition is always false."
+                    };
+                    let (line, column) =
+                        byte_offset_to_line_col(ctx.source, if_stmt.span.start as usize);
+                    diagnostics.push(Diagnostic {
+                        path: Arc::clone(&ctx.path_arc),
+                        line,
+                        column,
+                        rule_id: super::META.id.into(),
+                        message: msg.into(),
+                        severity: Severity::Error,
+                        span: None,
+                    });
                 }
             }
             AstKind::LogicalExpression(logical) => {
                 // `&& false` → always false; `|| true` → always true
                 match logical.operator {
                     LogicalOperator::And => {
-                        if let Expression::BooleanLiteral(lit) = &logical.right {
-                            if !lit.value {
+                        if let Expression::BooleanLiteral(lit) = &logical.right
+                            && !lit.value {
                                 let (line, column) =
                                     byte_offset_to_line_col(ctx.source, logical.span.start as usize);
                                 diagnostics.push(Diagnostic {
@@ -95,11 +92,10 @@ impl OxcCheck for Check {
                                     span: None,
                                 });
                             }
-                        }
                     }
                     LogicalOperator::Or => {
-                        if let Expression::BooleanLiteral(lit) = &logical.right {
-                            if lit.value {
+                        if let Expression::BooleanLiteral(lit) = &logical.right
+                            && lit.value {
                                 let (line, column) =
                                     byte_offset_to_line_col(ctx.source, logical.span.start as usize);
                                 diagnostics.push(Diagnostic {
@@ -112,7 +108,6 @@ impl OxcCheck for Check {
                                     span: None,
                                 });
                             }
-                        }
                     }
                     _ => {}
                 }

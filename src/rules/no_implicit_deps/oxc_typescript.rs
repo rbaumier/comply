@@ -67,11 +67,10 @@ impl OxcCheck for Check {
         {
             return;
         }
-        if let Some(root_pkg) = &ctx.project.package_json {
-            if root_pkg.has_dep_or_engine(root) {
+        if let Some(root_pkg) = &ctx.project.package_json
+            && root_pkg.has_dep_or_engine(root) {
                 return;
             }
-        }
 
         let (line, column) =
             byte_offset_to_line_col(ctx.source, import.span.start as usize);

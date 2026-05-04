@@ -52,7 +52,7 @@ impl OxcCheck for Check {
         }
 
         // Has `.omit(...)` — check if `id` is included.
-        if !chain_text_has_omit_with_id(&chain_text) {
+        if !chain_text_has_omit_with_id(chain_text) {
             let (line, column) =
                 byte_offset_to_line_col(ctx.source, call.span.start as usize);
             diagnostics.push(Diagnostic {

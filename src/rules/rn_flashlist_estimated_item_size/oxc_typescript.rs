@@ -29,11 +29,10 @@ impl OxcCheck for Check {
             return;
         }
         let has_attr = el.attributes.iter().any(|attr| {
-            if let oxc_ast::ast::JSXAttributeItem::Attribute(a) = attr {
-                if let oxc_ast::ast::JSXAttributeName::Identifier(id) = &a.name {
+            if let oxc_ast::ast::JSXAttributeItem::Attribute(a) = attr
+                && let oxc_ast::ast::JSXAttributeName::Identifier(id) = &a.name {
                     return id.name.as_str() == "estimatedItemSize";
                 }
-            }
             false
         });
         if has_attr {

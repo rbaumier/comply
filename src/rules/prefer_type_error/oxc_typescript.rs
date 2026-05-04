@@ -4,7 +4,6 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{Expression, UnaryOperator};
-use oxc_span::GetSpan;
 use std::sync::Arc;
 
 /// Names of functions commonly used for type checking (on member expressions).
@@ -151,16 +150,14 @@ fn is_typechecking_expression(expr: &Expression) -> bool {
         Expression::BinaryExpression(binary) => {
             if binary.operator == oxc_ast::ast::BinaryOperator::Instanceof {
                 // Check right side — if it's an Error constructor, don't consider it a type check
-                if let Some(name) = identifier_name(&binary.right) {
-                    if is_error_constructor_name(name) {
+                if let Some(name) = identifier_name(&binary.right)
+                    && is_error_constructor_name(name) {
                         return false;
                     }
-                }
-                if let Expression::StaticMemberExpression(member) = &binary.right {
-                    if is_error_constructor_name(member.property.name.as_str()) {
+                if let Expression::StaticMemberExpression(member) = &binary.right
+                    && is_error_constructor_name(member.property.name.as_str()) {
                         return false;
                     }
-                }
                 return true;
             }
             is_typechecking_expression(&binary.left)

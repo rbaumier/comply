@@ -46,12 +46,12 @@ impl OxcCheck for Check {
         for node in semantic.nodes().iter() {
             let (type_params, params, return_type) = match node.kind() {
                 AstKind::Function(f) => (
-                    f.type_parameters.as_ref().map(|tp| &**tp),
+                    f.type_parameters.as_deref(),
                     f.params.span,
                     f.return_type.as_ref().map(|r| r.span),
                 ),
                 AstKind::ArrowFunctionExpression(f) => (
-                    f.type_parameters.as_ref().map(|tp| &**tp),
+                    f.type_parameters.as_deref(),
                     f.params.span,
                     f.return_type.as_ref().map(|r| r.span),
                 ),

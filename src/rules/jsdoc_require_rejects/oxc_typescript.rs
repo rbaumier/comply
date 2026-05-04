@@ -6,7 +6,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
-use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
+use crate::rules::backend::{AstType, CheckCtx, OxcCheck};
 use crate::rules::jsdoc_text_helpers::{find_jsdoc_blocks, following_code, has_tag, parse_tags};
 use std::sync::Arc;
 

@@ -4,7 +4,6 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{Expression, Statement};
-use oxc_span::GetSpan;
 use std::sync::Arc;
 
 pub struct Check;
@@ -190,16 +189,13 @@ impl OxcCheck for Check {
                 }
             }
             AstKind::ExportDefaultDeclaration(export) => {
-                match &export.declaration {
-                    oxc_ast::ast::ExportDefaultDeclarationKind::FunctionDeclaration(func) => {
-                        if !func.r#async {
-                            return;
-                        }
-                        if let Some(body) = &func.body {
-                            check_body(body, ctx, diagnostics);
-                        }
+                if let oxc_ast::ast::ExportDefaultDeclarationKind::FunctionDeclaration(func) = &export.declaration {
+                    if !func.r#async {
+                        return;
                     }
-                    _ => {}
+                    if let Some(body) = &func.body {
+                        check_body(body, ctx, diagnostics);
+                    }
                 }
             }
             _ => {}

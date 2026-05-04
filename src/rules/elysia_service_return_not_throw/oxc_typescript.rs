@@ -142,13 +142,11 @@ fn is_inside_lifecycle_hook(
                 let arg_parent = nodes.get_node(arg_parent_id);
 
                 // The function may be directly in a CallExpression's arguments
-                if let AstKind::CallExpression(call) = arg_parent.kind() {
-                    if let Some(method) = callee_method_name(call) {
-                        if LIFECYCLE_METHODS.contains(&method) {
+                if let AstKind::CallExpression(call) = arg_parent.kind()
+                    && let Some(method) = callee_method_name(call)
+                        && LIFECYCLE_METHODS.contains(&method) {
                             return true;
                         }
-                    }
-                }
 
                 return false;
             }

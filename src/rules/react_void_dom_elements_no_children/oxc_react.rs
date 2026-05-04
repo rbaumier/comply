@@ -4,7 +4,6 @@ use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{
     JSXAttributeItem, JSXAttributeName, JSXChild, JSXElementName, JSXExpression,
 };
-use oxc_span::GetSpan;
 use std::sync::Arc;
 
 const VOID_ELEMENTS: &[&str] = &[

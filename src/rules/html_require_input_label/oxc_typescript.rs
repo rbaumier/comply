@@ -2,7 +2,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
-use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
+use crate::rules::backend::{AstKind, CheckCtx, OxcCheck};
 use oxc_ast::ast::{JSXAttributeItem, JSXAttributeName, JSXAttributeValue, JSXElementName};
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -81,16 +81,14 @@ impl OxcCheck for Check {
             };
             let lower = el_name.to_lowercase();
             if lower == "label" {
-                if let Some(for_val) = get_attr_value(&opening.attributes, "htmlFor") {
-                    if !for_val.is_empty() {
+                if let Some(for_val) = get_attr_value(&opening.attributes, "htmlFor")
+                    && !for_val.is_empty() {
                         label_fors.insert(for_val);
                     }
-                }
-                if let Some(for_val) = get_attr_value(&opening.attributes, "for") {
-                    if !for_val.is_empty() {
+                if let Some(for_val) = get_attr_value(&opening.attributes, "for")
+                    && !for_val.is_empty() {
                         label_fors.insert(for_val);
                     }
-                }
             }
             if lower == "input" || lower == "select" || lower == "textarea" {
                 inputs.push(InputInfo {
@@ -131,20 +129,18 @@ impl OxcCheck for Check {
                 let parent = nodes.get_node(parent_id);
                 match parent.kind() {
                     AstKind::JSXOpeningElement(o) => {
-                        if let Some(n) = get_element_name(&o.name) {
-                            if n.to_lowercase() == "label" {
+                        if let Some(n) = get_element_name(&o.name)
+                            && n.to_lowercase() == "label" {
                                 is_in_label = true;
                                 break;
                             }
-                        }
                     }
                     AstKind::JSXElement(el) => {
-                        if let Some(n) = get_element_name(&el.opening_element.name) {
-                            if n.to_lowercase() == "label" {
+                        if let Some(n) = get_element_name(&el.opening_element.name)
+                            && n.to_lowercase() == "label" {
                                 is_in_label = true;
                                 break;
                             }
-                        }
                     }
                     _ => {}
                 }
@@ -155,11 +151,10 @@ impl OxcCheck for Check {
             }
 
             // Check if has id matching a label's htmlFor.
-            if let Some(id) = get_attr_value(attrs, "id") {
-                if !id.is_empty() && label_fors.contains(&id) {
+            if let Some(id) = get_attr_value(attrs, "id")
+                && !id.is_empty() && label_fors.contains(&id) {
                     continue;
                 }
-            }
 
             let (line, column) =
                 byte_offset_to_line_col(ctx.source, input.span_start as usize);

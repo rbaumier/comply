@@ -123,11 +123,10 @@ fn enclosing_function_info<'a>(
                     let gp_id = nodes.parent_id(parent_id);
                     if gp_id != parent_id {
                         let gp = nodes.get_node(gp_id);
-                        if let AstKind::VariableDeclarator(decl) = gp.kind() {
-                            if let BindingPattern::BindingIdentifier(id) = &decl.id {
+                        if let AstKind::VariableDeclarator(decl) = gp.kind()
+                            && let BindingPattern::BindingIdentifier(id) = &decl.id {
                                 return Some((Some(id.name.as_str().to_string()), parent));
                             }
-                        }
                     }
                 }
                 return Some((name, parent));
@@ -138,11 +137,10 @@ fn enclosing_function_info<'a>(
                 let gp_id = nodes.parent_id(parent_id);
                 if gp_id != parent_id {
                     let gp = nodes.get_node(gp_id);
-                    if let AstKind::VariableDeclarator(decl) = gp.kind() {
-                        if let BindingPattern::BindingIdentifier(id) = &decl.id {
+                    if let AstKind::VariableDeclarator(decl) = gp.kind()
+                        && let BindingPattern::BindingIdentifier(id) = &decl.id {
                             name = Some(id.name.as_str().to_string());
                         }
-                    }
                 }
                 return Some((name, parent));
             }
@@ -159,11 +157,10 @@ fn is_in_handler_context(
     semantic: &oxc_semantic::Semantic,
     source: &str,
 ) -> bool {
-    if let Some(n) = name {
-        if name_looks_like_handler(n) {
+    if let Some(n) = name
+        && name_looks_like_handler(n) {
             return true;
         }
-    }
 
     // Check parameters for request-like names/types
     match fn_node.kind() {
@@ -210,7 +207,7 @@ fn params_look_like_handler(params: &FormalParameters, source: &str) -> bool {
 fn is_inline_route_callback(
     fn_node: &oxc_semantic::AstNode,
     semantic: &oxc_semantic::Semantic,
-    source: &str,
+    _source: &str,
 ) -> bool {
     let nodes = semantic.nodes();
     let parent_id = nodes.parent_id(fn_node.id());

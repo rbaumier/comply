@@ -35,14 +35,12 @@ impl OxcCheck for Check {
         // First pass: check if any call expression calls a query hook.
         let mut has_hook = false;
         for node in semantic.nodes().iter() {
-            if let AstKind::CallExpression(call) = node.kind() {
-                if let Expression::Identifier(ident) = &call.callee {
-                    if HOOKS.contains(&ident.name.as_str()) {
+            if let AstKind::CallExpression(call) = node.kind()
+                && let Expression::Identifier(ident) = &call.callee
+                    && HOOKS.contains(&ident.name.as_str()) {
                         has_hook = true;
                         break;
                     }
-                }
-            }
         }
         if !has_hook {
             return Vec::new();

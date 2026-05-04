@@ -77,11 +77,10 @@ impl OxcCheck for Check {
             return;
         }
 
-        if let Some(fn_name) = enclosing_function_name(node, semantic, ctx.source) {
-            if is_validator_name(&fn_name) {
+        if let Some(fn_name) = enclosing_function_name(node, semantic, ctx.source)
+            && is_validator_name(&fn_name) {
                 return;
             }
-        }
 
         let (line, column) = byte_offset_to_line_col(ctx.source, as_expr.span.start as usize);
         diagnostics.push(Diagnostic {

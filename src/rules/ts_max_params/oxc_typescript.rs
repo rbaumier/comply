@@ -14,11 +14,10 @@ fn count_params(params: &oxc_ast::ast::FormalParameters) -> usize {
         .iter()
         .filter(|p| {
             // Skip TS `this` parameter
-            if let oxc_ast::ast::BindingPattern::BindingIdentifier(id) = &p.pattern {
-                if id.name.as_str() == "this" {
+            if let oxc_ast::ast::BindingPattern::BindingIdentifier(id) = &p.pattern
+                && id.name.as_str() == "this" {
                     return false;
                 }
-            }
             true
         })
         .count()

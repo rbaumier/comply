@@ -24,7 +24,7 @@ impl OxcCheck for Check {
                 continue;
             }
 
-            let prefix_start = if start >= 2 { start - 2 } else { 0 };
+            let prefix_start = start.saturating_sub(2);
             let with_prefix = &ctx.source[prefix_start..end];
             if !with_prefix.starts_with("/*") {
                 continue;

@@ -124,8 +124,8 @@ impl TextCheck for Check {
                 }
                 continue;
             }
-            if let Some(col) = find_samesite_none_header(line) {
-                if !header_has_secure_token(line) {
+            if let Some(col) = find_samesite_none_header(line)
+                && !header_has_secure_token(line) {
                     diagnostics.push(Diagnostic {
                         path: Arc::clone(&ctx.path_arc),
                         line: idx + 1,
@@ -138,7 +138,6 @@ impl TextCheck for Check {
                         span: None,
                     });
                 }
-            }
         }
         diagnostics
     }

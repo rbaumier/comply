@@ -46,11 +46,10 @@ impl AstCheck for Check {
             return;
         }
         let row = node.start_position().row;
-        if let Some(line) = ctx.source.lines().nth(row) {
-            if line.contains("//") {
+        if let Some(line) = ctx.source.lines().nth(row)
+            && line.contains("//") {
                 return;
             }
-        }
         let pos = node.start_position();
         diagnostics.push(Diagnostic {
             path: std::sync::Arc::clone(&ctx.path_arc),

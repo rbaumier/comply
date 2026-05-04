@@ -66,8 +66,8 @@ impl OxcCheck for Check {
                 let text2 = stmt_text(s2, ctx.source);
 
                 // Check bracket notation.
-                if let (Some(t1), Some(t2)) = (bracket_target(text1), bracket_target(text2)) {
-                    if t1 == t2 {
+                if let (Some(t1), Some(t2)) = (bracket_target(text1), bracket_target(text2))
+                    && t1 == t2 {
                         let (line, column) =
                             byte_offset_to_line_col(ctx.source, s2.span().start as usize);
                         diagnostics.push(Diagnostic {
@@ -84,11 +84,10 @@ impl OxcCheck for Check {
                         });
                         continue;
                     }
-                }
 
                 // Check .set() calls.
-                if let (Some(t1), Some(t2)) = (map_set_target(text1), map_set_target(text2)) {
-                    if t1 == t2 {
+                if let (Some(t1), Some(t2)) = (map_set_target(text1), map_set_target(text2))
+                    && t1 == t2 {
                         let (line, column) =
                             byte_offset_to_line_col(ctx.source, s2.span().start as usize);
                         diagnostics.push(Diagnostic {
@@ -101,7 +100,6 @@ impl OxcCheck for Check {
                             span: None,
                         });
                     }
-                }
             }
         }
 

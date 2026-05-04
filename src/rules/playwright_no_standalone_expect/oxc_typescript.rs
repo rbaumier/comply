@@ -65,11 +65,10 @@ fn is_inside_test_or_hook<'a>(
                             }
                             _ => None,
                         };
-                        if let Some(name) = callee_name {
-                            if TEST_FNS.contains(&name) || HOOK_FNS.contains(&name) {
+                        if let Some(name) = callee_name
+                            && (TEST_FNS.contains(&name) || HOOK_FNS.contains(&name)) {
                                 return true;
                             }
-                        }
                     }
                 }
             }

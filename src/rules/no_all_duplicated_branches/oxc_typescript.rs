@@ -31,15 +31,14 @@ impl OxcCheck for Check {
         let parent_id = nodes.parent_id(node.id());
         if parent_id != node.id() {
             let parent = nodes.get_node(parent_id);
-            if let AstKind::IfStatement(parent_if) = parent.kind() {
-                if parent_if
+            if let AstKind::IfStatement(parent_if) = parent.kind()
+                && parent_if
                     .alternate
                     .as_ref()
                     .is_some_and(|alt| alt.span() == node.kind().span())
                 {
                     return;
                 }
-            }
         }
 
         let source = ctx.source;

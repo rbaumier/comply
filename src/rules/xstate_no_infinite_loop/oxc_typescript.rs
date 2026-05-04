@@ -52,8 +52,8 @@ impl OxcCheck for Check {
             }
             Expression::ArrayExpression(arr) => {
                 for elem in &arr.elements {
-                    if let ArrayExpressionElement::ObjectExpression(obj) = elem {
-                        if is_infinite_obj(obj, ctx.source, enclosing.as_deref()) {
+                    if let ArrayExpressionElement::ObjectExpression(obj) = elem
+                        && is_infinite_obj(obj, ctx.source, enclosing.as_deref()) {
                             let (line, column) =
                                 byte_offset_to_line_col(ctx.source, obj.span.start as usize);
                             diagnostics.push(Diagnostic {
@@ -66,7 +66,6 @@ impl OxcCheck for Check {
                                 span: None,
                             });
                         }
-                    }
                 }
             }
             _ => {}
@@ -136,7 +135,7 @@ fn unquote_expr_value<'a>(expr: &'a Expression<'a>, source: &'a str) -> Option<&
 fn enclosing_state_name<'a>(
     node: &oxc_semantic::AstNode<'a>,
     semantic: &'a oxc_semantic::Semantic<'a>,
-    source: &str,
+    _source: &str,
 ) -> Option<String> {
     for ancestor in semantic.nodes().ancestors(node.id()) {
         let AstKind::ObjectProperty(prop) = ancestor.kind() else {
@@ -155,11 +154,10 @@ fn enclosing_state_name<'a>(
             continue;
         }
         let ggp = semantic.nodes().get_node(ggp_id);
-        if let AstKind::ObjectProperty(gp_prop) = ggp.kind() {
-            if property_key_name(&gp_prop.key).as_deref() == Some("states") {
+        if let AstKind::ObjectProperty(gp_prop) = ggp.kind()
+            && property_key_name(&gp_prop.key).as_deref() == Some("states") {
                 return Some(key);
             }
-        }
     }
     None
 }

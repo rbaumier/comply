@@ -64,13 +64,10 @@ fn identifier_bound_to_sort<'a>(
                         for declarator in &decl.declarations {
                             if let oxc_ast::ast::BindingPattern::BindingIdentifier(id) =
                                 &declarator.id
-                            {
-                                if id.name.as_str() == name {
-                                    if let Some(init) = &declarator.init {
+                                && id.name.as_str() == name
+                                    && let Some(init) = &declarator.init {
                                         return is_sort_call(init);
                                     }
-                                }
-                            }
                         }
                     }
                 }
@@ -82,13 +79,10 @@ fn identifier_bound_to_sort<'a>(
                         for declarator in &decl.declarations {
                             if let oxc_ast::ast::BindingPattern::BindingIdentifier(id) =
                                 &declarator.id
-                            {
-                                if id.name.as_str() == name {
-                                    if let Some(init) = &declarator.init {
+                                && id.name.as_str() == name
+                                    && let Some(init) = &declarator.init {
                                         return is_sort_call(init);
                                     }
-                                }
-                            }
                         }
                     }
                 }

@@ -45,10 +45,9 @@ impl OxcCheck for Check {
                 // member.object would be test.skip
                 if let oxc_ast::ast::Expression::StaticMemberExpression(inner) =
                     &member.object
-                {
-                    if inner.property.name.as_str() == "skip" {
-                        if let oxc_ast::ast::Expression::Identifier(obj) = &inner.object {
-                            if TEST_FNS.contains(&obj.name.as_str()) {
+                    && inner.property.name.as_str() == "skip"
+                        && let oxc_ast::ast::Expression::Identifier(obj) = &inner.object
+                            && TEST_FNS.contains(&obj.name.as_str()) {
                                 let (line, column) = byte_offset_to_line_col(
                                     ctx.source,
                                     call.span.start as usize,
@@ -64,13 +63,10 @@ impl OxcCheck for Check {
                                     span: None,
                                 });
                             }
-                        }
-                    }
-                }
                 return;
             }
-            if let oxc_ast::ast::Expression::Identifier(obj) = &member.object {
-                if TEST_FNS.contains(&obj.name.as_str()) {
+            if let oxc_ast::ast::Expression::Identifier(obj) = &member.object
+                && TEST_FNS.contains(&obj.name.as_str()) {
                     let (line, column) =
                         byte_offset_to_line_col(ctx.source, call.span.start as usize);
                     diagnostics.push(Diagnostic {
@@ -83,7 +79,6 @@ impl OxcCheck for Check {
                         span: None,
                     });
                 }
-            }
         }
     }
 }

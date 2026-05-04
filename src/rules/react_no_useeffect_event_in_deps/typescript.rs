@@ -27,15 +27,14 @@ fn collect_event_names(source: &str) -> Vec<String> {
             // Strip type annotations: `name: T`.
             let name = name.split(':').next().unwrap_or("").trim();
             let rhs = after[eq_idx + 1..].trim_start();
-            if rhs.starts_with("useEffectEvent(") {
-                if !name.is_empty()
+            if rhs.starts_with("useEffectEvent(")
+                && !name.is_empty()
                     && name
                         .chars()
                         .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$')
                 {
                     names.push(name.to_string());
                 }
-            }
         }
     }
     names
@@ -85,13 +84,12 @@ impl TextCheck for Check {
             let body_bytes = body.as_bytes();
             let mut i = 0;
             while i < body_bytes.len() {
-                if body_bytes[i] == b'[' {
-                    if let Some(end) = find_matching_bracket(body_bytes, i, b'[', b']') {
+                if body_bytes[i] == b'['
+                    && let Some(end) = find_matching_bracket(body_bytes, i, b'[', b']') {
                         deps = Some(&body[i + 1..end]);
                         i = end + 1;
                         continue;
                     }
-                }
                 i += 1;
             }
             let Some(deps) = deps else {

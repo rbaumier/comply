@@ -47,21 +47,19 @@ fn children_have_fallback(children: &oxc_allocator::Vec<'_, JSXChild<'_>>) -> bo
     for child in children.iter() {
         match child {
             JSXChild::Element(el) => {
-                if let Some(ref t) = jsx_tag_name(&el.opening_element.name) {
-                    if is_avatar_fallback(t) {
+                if let Some(ref t) = jsx_tag_name(&el.opening_element.name)
+                    && is_avatar_fallback(t) {
                         return true;
                     }
-                }
                 if children_have_fallback(&el.children) {
                     return true;
                 }
             }
             JSXChild::ExpressionContainer(container) => {
-                if let Some(expr) = container.expression.as_expression() {
-                    if expr_has_fallback(expr) {
+                if let Some(expr) = container.expression.as_expression()
+                    && expr_has_fallback(expr) {
                         return true;
                     }
-                }
             }
             JSXChild::Fragment(frag) => {
                 if children_have_fallback(&frag.children) {
@@ -77,11 +75,10 @@ fn children_have_fallback(children: &oxc_allocator::Vec<'_, JSXChild<'_>>) -> bo
 fn expr_has_fallback(expr: &oxc_ast::ast::Expression) -> bool {
     match expr {
         oxc_ast::ast::Expression::JSXElement(el) => {
-            if let Some(ref t) = jsx_tag_name(&el.opening_element.name) {
-                if is_avatar_fallback(t) {
+            if let Some(ref t) = jsx_tag_name(&el.opening_element.name)
+                && is_avatar_fallback(t) {
                     return true;
                 }
-            }
             children_have_fallback(&el.children)
         }
         oxc_ast::ast::Expression::ConditionalExpression(cond) => {

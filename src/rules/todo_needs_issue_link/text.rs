@@ -41,11 +41,10 @@ fn has_issue_ref(rest: &str) -> bool {
         let b = bytes[i];
 
         // `#\d+` — GitHub-style issue reference.
-        if b == b'#' {
-            if i + 1 < len && bytes[i + 1].is_ascii_digit() {
+        if b == b'#'
+            && i + 1 < len && bytes[i + 1].is_ascii_digit() {
                 return true;
             }
-        }
 
         // `https://` or `http://`
         if b == b'h' && rest[i..].starts_with("http://") || rest[i..].starts_with("https://") {
@@ -58,11 +57,10 @@ fn has_issue_ref(rest: &str) -> bool {
             while j < len && bytes[j].is_ascii_uppercase() {
                 j += 1;
             }
-            if j > i && j < len && bytes[j] == b'-' {
-                if j + 1 < len && bytes[j + 1].is_ascii_digit() {
+            if j > i && j < len && bytes[j] == b'-'
+                && j + 1 < len && bytes[j + 1].is_ascii_digit() {
                     return true;
                 }
-            }
         }
     }
 

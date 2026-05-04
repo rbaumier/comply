@@ -4,7 +4,6 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::*;
-use oxc_span::GetSpan;
 use std::sync::Arc;
 
 pub struct Check;
@@ -20,11 +19,10 @@ fn classify_name(name: &str) -> Option<&'static str> {
         return Some("is negatively phrased — use the positive form with `!`");
     }
     for &prefix in VALID_PREFIXES {
-        if let Some(rest) = name.strip_prefix(prefix) {
-            if rest.is_empty() || rest.chars().next().is_some_and(|c| c.is_ascii_uppercase()) {
+        if let Some(rest) = name.strip_prefix(prefix)
+            && (rest.is_empty() || rest.chars().next().is_some_and(|c| c.is_ascii_uppercase())) {
                 return None;
             }
-        }
     }
     Some("is missing a predicate prefix")
 }

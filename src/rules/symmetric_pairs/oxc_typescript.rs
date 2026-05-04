@@ -6,7 +6,6 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::*;
-use oxc_span::GetSpan;
 use std::sync::Arc;
 
 /// Symmetric prefix pairs: (prefix, expected counterpart prefix).
@@ -54,13 +53,10 @@ impl OxcCheck for Check {
             let Some(ref decl) = export.declaration else {
                 continue;
             };
-            match decl {
-                Declaration::FunctionDeclaration(f) => {
-                    if let Some(ref id) = f.id {
-                        exports.push((id.span.start, id.name.to_string()));
-                    }
+            if let Declaration::FunctionDeclaration(f) = decl {
+                if let Some(ref id) = f.id {
+                    exports.push((id.span.start, id.name.to_string()));
                 }
-                _ => {}
             }
         }
 

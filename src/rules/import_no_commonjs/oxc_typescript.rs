@@ -70,10 +70,10 @@ fn check_module_exports_in_expr(
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     // `module.exports = ...`
-    if let Expression::AssignmentExpression(assign) = expr {
-        if let oxc_ast::ast::AssignmentTarget::StaticMemberExpression(member) = &assign.left {
-            if let Expression::Identifier(obj) = &member.object {
-                if obj.name.as_str() == "module" && member.property.name.as_str() == "exports" {
+    if let Expression::AssignmentExpression(assign) = expr
+        && let oxc_ast::ast::AssignmentTarget::StaticMemberExpression(member) = &assign.left
+            && let Expression::Identifier(obj) = &member.object
+                && obj.name.as_str() == "module" && member.property.name.as_str() == "exports" {
                     let (line, column) = byte_offset_to_line_col(ctx.source, member.span.start as usize);
                     diagnostics.push(Diagnostic {
                         path: Arc::clone(&ctx.path_arc),
@@ -85,7 +85,4 @@ fn check_module_exports_in_expr(
                         span: None,
                     });
                 }
-            }
-        }
-    }
 }

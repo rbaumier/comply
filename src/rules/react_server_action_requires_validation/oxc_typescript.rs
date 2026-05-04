@@ -38,33 +38,30 @@ impl OxcCheck for Check {
         let mut diagnostics = Vec::new();
 
         for node in semantic.nodes().iter() {
-            match node.kind() {
-                AstKind::ExportNamedDeclaration(export) => {
-                    let Some(decl) = &export.declaration else {
-                        continue;
-                    };
-                    let oxc_ast::ast::Declaration::FunctionDeclaration(f) = decl else {
-                        continue;
-                    };
-                    if !f.r#async {
-                        continue;
-                    }
-                    if !has_params(f) {
-                        continue;
-                    }
-                    let (line, column) =
-                        byte_offset_to_line_col(ctx.source, f.span.start as usize);
-                    diagnostics.push(Diagnostic {
-                        path: Arc::clone(&ctx.path_arc),
-                        line,
-                        column,
-                        rule_id: super::META.id.into(),
-                        message: "Server Action with parameters must validate input with `.parse()` or `.safeParse()`.".into(),
-                        severity: Severity::Warning,
-                        span: None,
-                    });
+            if let AstKind::ExportNamedDeclaration(export) = node.kind() {
+                let Some(decl) = &export.declaration else {
+                    continue;
+                };
+                let oxc_ast::ast::Declaration::FunctionDeclaration(f) = decl else {
+                    continue;
+                };
+                if !f.r#async {
+                    continue;
                 }
-                _ => {}
+                if !has_params(f) {
+                    continue;
+                }
+                let (line, column) =
+                    byte_offset_to_line_col(ctx.source, f.span.start as usize);
+                diagnostics.push(Diagnostic {
+                    path: Arc::clone(&ctx.path_arc),
+                    line,
+                    column,
+                    rule_id: super::META.id.into(),
+                    message: "Server Action with parameters must validate input with `.parse()` or `.safeParse()`.".into(),
+                    severity: Severity::Warning,
+                    span: None,
+                });
             }
         }
 

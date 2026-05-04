@@ -56,7 +56,7 @@ impl OxcCheck for Check {
             other => {
                 let (line, column) =
                     byte_offset_to_line_col(ctx.source, other.span().start as usize);
-                let kind = format!("{:?}", other);
+                let _kind = format!("{:?}", other);
                 let kind_label = match other {
                     Expression::StringLiteral(_) => "string",
                     Expression::NumericLiteral(_) => "number",

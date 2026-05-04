@@ -28,32 +28,29 @@ impl OxcCheck for Check {
             match node.kind() {
                 // Class method: class Foo { valueOf() {} }
                 AstKind::MethodDefinition(method) => {
-                    if let PropertyKey::StaticIdentifier(id) = &method.key {
-                        if id.name == "valueOf" {
+                    if let PropertyKey::StaticIdentifier(id) = &method.key
+                        && id.name == "valueOf" {
                             push(&mut diagnostics, ctx, id.span);
                         }
-                    }
                 }
                 // Interface method signature: interface Foo { valueOf(): number }
                 AstKind::TSMethodSignature(sig) => {
-                    if let PropertyKey::StaticIdentifier(id) = &sig.key {
-                        if id.name == "valueOf" {
+                    if let PropertyKey::StaticIdentifier(id) = &sig.key
+                        && id.name == "valueOf" {
                             push(&mut diagnostics, ctx, id.span);
                         }
-                    }
                 }
                 // Interface/type property signature: interface Foo { valueOf: () => number }
                 AstKind::TSPropertySignature(sig) => {
-                    if let PropertyKey::StaticIdentifier(id) = &sig.key {
-                        if id.name == "valueOf" {
+                    if let PropertyKey::StaticIdentifier(id) = &sig.key
+                        && id.name == "valueOf" {
                             push(&mut diagnostics, ctx, id.span);
                         }
-                    }
                 }
                 // Object property: { valueOf: function() {} } or { valueOf: () => {} }
                 AstKind::ObjectProperty(prop) => {
-                    if let PropertyKey::StaticIdentifier(id) = &prop.key {
-                        if id.name == "valueOf" {
+                    if let PropertyKey::StaticIdentifier(id) = &prop.key
+                        && id.name == "valueOf" {
                             // Only flag if value is a function.
                             if prop.method
                                 || matches!(
@@ -65,15 +62,13 @@ impl OxcCheck for Check {
                                 push(&mut diagnostics, ctx, id.span);
                             }
                         }
-                    }
                 }
                 // Class field: class Foo { valueOf = () => 1 }
                 AstKind::PropertyDefinition(field) => {
-                    if let PropertyKey::StaticIdentifier(id) = &field.key {
-                        if id.name == "valueOf" {
+                    if let PropertyKey::StaticIdentifier(id) = &field.key
+                        && id.name == "valueOf" {
                             push(&mut diagnostics, ctx, id.span);
                         }
-                    }
                 }
                 _ => {}
             }

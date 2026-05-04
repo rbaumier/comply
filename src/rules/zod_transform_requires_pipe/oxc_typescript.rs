@@ -31,11 +31,10 @@ impl OxcCheck for Check {
         // Check if the parent is a member expression with property `pipe`
         // (i.e. `.transform(fn).pipe(...)`)
         let parent = semantic.nodes().parent_node(node.id());
-        if let AstKind::StaticMemberExpression(parent_member) = parent.kind() {
-            if parent_member.property.name.as_str() == "pipe" {
+        if let AstKind::StaticMemberExpression(parent_member) = parent.kind()
+            && parent_member.property.name.as_str() == "pipe" {
                 return;
             }
-        }
 
         let (line, column) = byte_offset_to_line_col(ctx.source, call.span.start as usize);
         diagnostics.push(Diagnostic {

@@ -56,11 +56,10 @@ impl OxcCheck for Check {
 
         // Skip nested: only flag the outermost `+` expression.
         let parent = semantic.nodes().parent_node(node.id());
-        if let AstKind::BinaryExpression(parent_bin) = parent.kind() {
-            if parent_bin.operator == BinaryOperator::Addition {
+        if let AstKind::BinaryExpression(parent_bin) = parent.kind()
+            && parent_bin.operator == BinaryOperator::Addition {
                 return;
             }
-        }
 
         let (line, column) = byte_offset_to_line_col(ctx.source, bin.span.start as usize);
         diagnostics.push(Diagnostic {

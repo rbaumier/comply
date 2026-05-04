@@ -78,14 +78,13 @@ impl OxcCheck for Check {
         // Handle dynamic import() which is ImportExpression, not CallExpression
         let mut diagnostics = Vec::new();
         for node in semantic.nodes().iter() {
-            if let AstKind::ImportExpression(import) = node.kind() {
-                if let oxc_ast::ast::Expression::StringLiteral(s) = &import.source {
+            if let AstKind::ImportExpression(import) = node.kind()
+                && let oxc_ast::ast::Expression::StringLiteral(s) = &import.source {
                     let spec = s.value.as_str();
                     if targets_dist(spec) {
                         emit(ctx, &mut diagnostics, spec, import.span.start as usize);
                     }
                 }
-            }
         }
         diagnostics
     }

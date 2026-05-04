@@ -4,7 +4,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{
-    AssignmentTarget, Expression, SimpleAssignmentTarget, VariableDeclarationKind,
+    AssignmentTarget, Expression, VariableDeclarationKind,
 };
 use std::sync::Arc;
 
@@ -76,12 +76,11 @@ impl OxcCheck for Check {
                     if id.name.as_str() != var_name {
                         continue;
                     }
-                    if let Some(ref init) = declarator.init {
-                        if is_array_init(init) {
+                    if let Some(ref init) = declarator.init
+                        && is_array_init(init) {
                             found_array_decl = true;
                             break;
                         }
-                    }
                 }
             }
             if found_array_decl {

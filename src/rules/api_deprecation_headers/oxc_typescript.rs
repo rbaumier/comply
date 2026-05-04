@@ -42,12 +42,11 @@ impl OxcCheck for Check {
                 Declaration::VariableDeclaration(v) => {
                     let mut found = None;
                     for d in &v.declarations {
-                        if let BindingPattern::BindingIdentifier(ref id) = d.id {
-                            if HTTP_METHODS.contains(&id.name.as_str()) {
+                        if let BindingPattern::BindingIdentifier(ref id) = d.id
+                            && HTTP_METHODS.contains(&id.name.as_str()) {
                                 found = Some(id.name.as_str());
                                 break;
                             }
-                        }
                     }
                     let Some(name) = found else { continue };
                     name

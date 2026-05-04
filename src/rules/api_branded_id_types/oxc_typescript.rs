@@ -5,7 +5,6 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{BindingPattern, TSType};
-use oxc_span::GetSpan;
 use std::sync::Arc;
 
 #[derive(Debug)]
@@ -107,11 +106,10 @@ fn is_in_exported_context(
             AstKind::Function(_) => {
                 // Check if this function is exported
                 let gp_id = nodes.parent_id(parent_id);
-                if gp_id != parent_id {
-                    if let AstKind::ExportNamedDeclaration(_) = nodes.get_node(gp_id).kind() {
+                if gp_id != parent_id
+                    && let AstKind::ExportNamedDeclaration(_) = nodes.get_node(gp_id).kind() {
                         return true;
                     }
-                }
                 return false;
             }
             AstKind::ArrowFunctionExpression(_) => {
@@ -144,13 +142,12 @@ fn is_in_exported_context(
                         }
                         AstKind::Class(_) => {
                             let class_parent_id = nodes.parent_id(up_id);
-                            if class_parent_id != up_id {
-                                if let AstKind::ExportNamedDeclaration(_) =
+                            if class_parent_id != up_id
+                                && let AstKind::ExportNamedDeclaration(_) =
                                     nodes.get_node(class_parent_id).kind()
                                 {
                                     return true;
                                 }
-                            }
                             return false;
                         }
                         _ => return false,

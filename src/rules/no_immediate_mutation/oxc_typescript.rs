@@ -3,10 +3,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{
-    Expression, SimpleAssignmentTarget, VariableDeclarationKind,
-};
-use oxc_span::GetSpan;
+use oxc_ast::ast::Expression;
 use std::sync::Arc;
 
 pub struct Check;
@@ -71,7 +68,7 @@ impl OxcCheck for Check {
             if parent_id == node.id() {
                 continue;
             }
-            let parent = semantic.nodes().get_node(parent_id);
+            let _parent = semantic.nodes().get_node(parent_id);
 
             // The parent should be something that contains statements
             // We need to find the next statement after this declaration
@@ -104,7 +101,7 @@ impl OxcCheck for Check {
 
             if flagged {
                 // Report on the next statement position
-                let next_offset = decl_end as usize + (ctx.source[decl_end as usize..].len() - next_stmt_text.len() - ctx.source[decl_end as usize..].trim_start().len() + next_stmt_text.len());
+                let _next_offset = decl_end as usize + (ctx.source[decl_end as usize..].len() - next_stmt_text.len() - ctx.source[decl_end as usize..].trim_start().len() + next_stmt_text.len());
                 // Simpler: find position of next_stmt in source after decl_end
                 let after_decl = &ctx.source[decl_end as usize..];
                 let trimmed = after_decl.trim_start();

@@ -62,11 +62,10 @@ impl OxcCheck for Check {
         }
 
         // Defer to next-no-font-link for Google Fonts URLs.
-        if let Some(href) = href_value {
-            if FONT_HOSTS.iter().any(|host| href.contains(host)) {
+        if let Some(href) = href_value
+            && FONT_HOSTS.iter().any(|host| href.contains(host)) {
                 return;
             }
-        }
 
         let (line, column) =
             byte_offset_to_line_col(ctx.source, opening.span.start as usize);

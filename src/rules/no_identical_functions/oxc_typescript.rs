@@ -13,7 +13,6 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, OxcCheck};
 use oxc_ast::AstKind;
 use oxc_ast::ast::*;
-use oxc_span::GetSpan;
 use std::sync::Arc;
 
 pub struct Check;

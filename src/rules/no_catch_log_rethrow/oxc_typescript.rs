@@ -78,7 +78,7 @@ impl OxcCheck for Check {
     }
 }
 
-fn is_log_call(expr: &oxc_ast::ast::Expression, source: &str) -> bool {
+fn is_log_call(expr: &oxc_ast::ast::Expression, _source: &str) -> bool {
     use oxc_ast::ast::Expression;
 
     let Expression::CallExpression(call) = expr else {

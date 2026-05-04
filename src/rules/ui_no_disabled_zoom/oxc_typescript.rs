@@ -11,23 +11,19 @@ fn content_disables_zoom(content: &str) -> bool {
     let lower = content.to_ascii_lowercase();
     for part in lower.split(',') {
         let trimmed = part.trim();
-        if trimmed.starts_with("user-scalable") {
-            if let Some((_, v)) = trimmed.split_once('=') {
+        if trimmed.starts_with("user-scalable")
+            && let Some((_, v)) = trimmed.split_once('=') {
                 let val = v.trim();
                 if val == "no" || val == "0" {
                     return true;
                 }
             }
-        }
-        if trimmed.starts_with("maximum-scale") {
-            if let Some((_, v)) = trimmed.split_once('=') {
-                if let Ok(scale) = v.trim().parse::<f64>() {
-                    if scale <= 1.0 {
+        if trimmed.starts_with("maximum-scale")
+            && let Some((_, v)) = trimmed.split_once('=')
+                && let Ok(scale) = v.trim().parse::<f64>()
+                    && scale <= 1.0 {
                         return true;
                     }
-                }
-            }
-        }
     }
     false
 }
@@ -72,11 +68,10 @@ impl OxcCheck for Check {
 
             match attr_name {
                 "name" => {
-                    if let Some(JSXAttributeValue::StringLiteral(lit)) = &attr.value {
-                        if lit.value.as_str() == "viewport" {
+                    if let Some(JSXAttributeValue::StringLiteral(lit)) = &attr.value
+                        && lit.value.as_str() == "viewport" {
                             is_viewport = true;
                         }
-                    }
                 }
                 "content" => {
                     if let Some(JSXAttributeValue::StringLiteral(lit)) = &attr.value {

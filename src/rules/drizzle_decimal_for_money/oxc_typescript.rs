@@ -51,8 +51,8 @@ impl OxcCheck for Check {
         }
 
         // Check for a second argument that is an object containing `precision`.
-        if let Some(second) = call.arguments.get(1) {
-            if let Argument::ObjectExpression(obj) = second {
+        if let Some(second) = call.arguments.get(1)
+            && let Argument::ObjectExpression(obj) = second {
                 let has_precision = obj.properties.iter().any(|p| {
                     if let ObjectPropertyKind::ObjectProperty(prop) = p {
                         matches!(&prop.key, PropertyKey::StaticIdentifier(id) if id.name == "precision")
@@ -64,7 +64,6 @@ impl OxcCheck for Check {
                     return;
                 }
             }
-        }
 
         let (line, column) = byte_offset_to_line_col(ctx.source, call.span.start as usize);
         diagnostics.push(Diagnostic {

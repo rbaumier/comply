@@ -46,13 +46,11 @@ impl OxcCheck for Check {
             if cur_id == node.id() || cur_id == nodes.parent_id(cur_id) {
                 break;
             }
-            if let AstKind::CallExpression(ancestor_call) = nodes.kind(cur_id) {
-                if let Expression::Identifier(id) = &ancestor_call.callee {
-                    if id.name.as_str() == "assign" {
+            if let AstKind::CallExpression(ancestor_call) = nodes.kind(cur_id)
+                && let Expression::Identifier(id) = &ancestor_call.callee
+                    && id.name.as_str() == "assign" {
                         return;
                     }
-                }
-            }
             cur_id = nodes.parent_id(cur_id);
         }
 

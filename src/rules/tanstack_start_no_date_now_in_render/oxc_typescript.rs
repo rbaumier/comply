@@ -46,11 +46,10 @@ impl OxcCheck for Check {
                 AstKind::Function(func) => {
                     if let Some(id) = &func.id {
                         let name = id.name.as_str();
-                        if starts_uppercase(name) {
-                            if let Some(body) = &func.body {
+                        if starts_uppercase(name)
+                            && let Some(body) = &func.body {
                                 scan_render_body_oxc(body, nodes, ctx, &mut diagnostics);
                             }
-                        }
                     }
                 }
                 AstKind::VariableDeclarator(decl) => {
@@ -143,17 +142,13 @@ fn scan_source_for_offending(
         if b == b'{' {
             brace_depth += 1;
         } else if b == b'}' {
-            if brace_depth > 0 {
-                brace_depth -= 1;
-            }
-            if skip_depth > 0 {
-                if let Some(&start_depth) = skip_starts.last() {
-                    if brace_depth < start_depth {
+            brace_depth = brace_depth.saturating_sub(1);
+            if skip_depth > 0
+                && let Some(&start_depth) = skip_starts.last()
+                    && brace_depth < start_depth {
                         skip_starts.pop();
                         skip_depth -= 1;
                     }
-                }
-            }
         }
 
         // Check for safe callback hooks or nested function declarations

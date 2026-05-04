@@ -33,11 +33,10 @@ impl OxcCheck for Check {
         // 1. Collect namespace imports: local_name -> resolved source path.
         let mut ns_map: HashMap<String, PathBuf> = HashMap::new();
         for imp in index.get_imports(&canon) {
-            if imp.kind == ImportKind::Namespace {
-                if let Some(src) = &imp.source_path {
+            if imp.kind == ImportKind::Namespace
+                && let Some(src) = &imp.source_path {
                     ns_map.insert(imp.local_name.clone(), src.clone());
                 }
-            }
         }
 
         if ns_map.is_empty() {

@@ -24,13 +24,11 @@ fn report(span_start: u32, ctx: &CheckCtx, diagnostics: &mut Vec<Diagnostic>, ms
 
 /// Check if expression is `window.location` or bare `location`.
 fn is_window_location_target(expr: &Expression) -> bool {
-    if let Expression::StaticMemberExpression(member) = expr {
-        if let Expression::Identifier(id) = &member.object {
-            if id.name.as_str() == "window" && member.property.name.as_str() == "location" {
+    if let Expression::StaticMemberExpression(member) = expr
+        && let Expression::Identifier(id) = &member.object
+            && id.name.as_str() == "window" && member.property.name.as_str() == "location" {
                 return true;
             }
-        }
-    }
     matches!(expr, Expression::Identifier(id) if id.name.as_str() == "location")
 }
 

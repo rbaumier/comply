@@ -175,11 +175,10 @@ impl OxcCheck for Check {
                 }
                 // Walk up to find variable declarator
                 nodes.ancestors(parent.id()).nth(1).is_some_and(|gp| {
-                    if let AstKind::VariableDeclarator(decl) = gp.kind() {
-                        if let BindingPattern::BindingIdentifier(id) = &decl.id {
+                    if let AstKind::VariableDeclarator(decl) = gp.kind()
+                        && let BindingPattern::BindingIdentifier(id) = &decl.id {
                             return starts_with_uppercase(id.name.as_str());
                         }
-                    }
                     false
                 })
             }

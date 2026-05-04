@@ -5,7 +5,6 @@ use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use crate::rules::file_ctx::RscContext;
 use oxc_ast::ast::Expression;
-use oxc_span::GetSpan;
 use std::sync::Arc;
 
 const BROWSER_GLOBALS: &[&str] = &[
@@ -31,11 +30,10 @@ fn is_inside_typeof(
             return false;
         }
         let parent = nodes.get_node(parent_id);
-        if let AstKind::UnaryExpression(unary) = parent.kind() {
-            if unary.operator == oxc_ast::ast::UnaryOperator::Typeof {
+        if let AstKind::UnaryExpression(unary) = parent.kind()
+            && unary.operator == oxc_ast::ast::UnaryOperator::Typeof {
                 return true;
             }
-        }
         current_id = parent_id;
     }
 }

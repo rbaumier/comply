@@ -27,11 +27,10 @@ fn chain_root<'a>(expr: &'a Expression<'a>) -> &'a Expression<'a> {
 /// Whether `expr` is a call chain starting with `z.<anything>`.
 fn starts_with_z(expr: &Expression) -> bool {
     let root = chain_root(expr);
-    if let Expression::StaticMemberExpression(member) = root {
-        if let Expression::Identifier(id) = &member.object {
+    if let Expression::StaticMemberExpression(member) = root
+        && let Expression::Identifier(id) = &member.object {
             return id.name.as_str() == "z";
         }
-    }
     false
 }
 

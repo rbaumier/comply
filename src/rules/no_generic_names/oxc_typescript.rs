@@ -231,8 +231,8 @@ impl OxcCheck for Check {
         };
 
         // Check banned words — only at declaration sites (BindingIdentifier)
-        if let AstKind::BindingIdentifier(_) = node.kind() {
-            if !is_destructuring(node, semantic)
+        if let AstKind::BindingIdentifier(_) = node.kind()
+            && !is_destructuring(node, semantic)
                 && !is_iterator_callback_param(node, semantic, ctx.source)
             {
                 let lower = name.to_ascii_lowercase();
@@ -255,7 +255,6 @@ impl OxcCheck for Check {
                     return;
                 }
             }
-        }
 
         // Check banned prefixes — on any identifier (both binding and reference)
         if is_destructuring(node, semantic) {

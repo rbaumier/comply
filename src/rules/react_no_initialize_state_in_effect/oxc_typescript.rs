@@ -4,7 +4,6 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::Expression;
-use oxc_span::GetSpan;
 use std::sync::Arc;
 
 /// True if a call expression is a setter like `setFoo(...)`.
@@ -43,16 +42,14 @@ fn stmt_calls_setter(stmt: &oxc_ast::ast::Statement) -> bool {
             })
         }
         oxc_ast::ast::Statement::IfStatement(if_stmt) => {
-            if let oxc_ast::ast::Statement::BlockStatement(block) = &if_stmt.consequent {
-                if body_calls_setter(&block.body) {
+            if let oxc_ast::ast::Statement::BlockStatement(block) = &if_stmt.consequent
+                && body_calls_setter(&block.body) {
                     return true;
                 }
-            }
-            if let Some(alt) = &if_stmt.alternate {
-                if stmt_calls_setter(alt) {
+            if let Some(alt) = &if_stmt.alternate
+                && stmt_calls_setter(alt) {
                     return true;
                 }
-            }
             false
         }
         oxc_ast::ast::Statement::BlockStatement(block) => body_calls_setter(&block.body),

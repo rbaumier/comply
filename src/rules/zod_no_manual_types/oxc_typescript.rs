@@ -34,21 +34,15 @@ impl OxcCheck for Check {
             match node.kind() {
                 AstKind::CallExpression(call) => {
                     // Check for z.object(...)
-                    if let Expression::StaticMemberExpression(member) = &call.callee {
-                        if member.property.name == "object" {
-                            if let Expression::Identifier(id) = &member.object {
-                                if id.name == "z" {
-                                    if let Some(first_arg) = call.arguments.first() {
-                                        if let Some(expr) = first_arg.as_expression() {
-                                            if let Some(keys) = collect_object_expr_keys(expr, ctx.source) {
+                    if let Expression::StaticMemberExpression(member) = &call.callee
+                        && member.property.name == "object"
+                            && let Expression::Identifier(id) = &member.object
+                                && id.name == "z"
+                                    && let Some(first_arg) = call.arguments.first()
+                                        && let Some(expr) = first_arg.as_expression()
+                                            && let Some(keys) = collect_object_expr_keys(expr, ctx.source) {
                                                 schema_key_sets.push(keys);
                                             }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
                 }
                 AstKind::TSTypeAliasDeclaration(alias) => {
                     // Check the alias value for object type keys.

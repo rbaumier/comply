@@ -31,8 +31,8 @@ fn handler_span_contains_setstate(
         if s.start < handler_span.start || s.end > handler_span.end {
             continue;
         }
-        if let AstKind::CallExpression(call) = n.kind() {
-            if let Expression::Identifier(id) = &call.callee {
+        if let AstKind::CallExpression(call) = n.kind()
+            && let Expression::Identifier(id) = &call.callee {
                 let name = id.name.as_str();
                 if name.starts_with("set")
                     && name.len() > 3
@@ -41,7 +41,6 @@ fn handler_span_contains_setstate(
                     return true;
                 }
             }
-        }
     }
     false
 }

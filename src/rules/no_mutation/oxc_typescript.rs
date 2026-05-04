@@ -4,7 +4,6 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{AssignmentTarget, Expression, UnaryOperator, VariableDeclarationKind};
-use oxc_span::GetSpan;
 use std::sync::Arc;
 
 const MUTATING_ARRAY_METHODS: &[&str] = &[
@@ -89,9 +88,9 @@ impl OxcCheck for Check {
 
                 // Object.assign(target, ...)
                 if OBJECT_MUTATOR_FUNCTIONS.contains(&method) {
-                    if let Expression::Identifier(obj) = &member.object {
-                        if obj.name.as_str() == "Object" {
-                            if let Some(first_arg) = call.arguments.first() {
+                    if let Expression::Identifier(obj) = &member.object
+                        && obj.name.as_str() == "Object"
+                            && let Some(first_arg) = call.arguments.first() {
                                 let root = match first_arg.as_expression() {
                                     Some(Expression::Identifier(ident)) => {
                                         Some(ident.name.as_str())
@@ -99,8 +98,8 @@ impl OxcCheck for Check {
                                     Some(expr) => root_name_of_expr(expr),
                                     None => None,
                                 };
-                                if let Some(root) = root {
-                                    if is_declared_as_const(semantic, root) {
+                                if let Some(root) = root
+                                    && is_declared_as_const(semantic, root) {
                                         report(
                                             diagnostics,
                                             ctx,
@@ -109,10 +108,7 @@ impl OxcCheck for Check {
                                             "Mutating",
                                         );
                                     }
-                                }
                             }
-                        }
-                    }
                     return;
                 }
 

@@ -4,7 +4,6 @@ use crate::diagnostic::Diagnostic;
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, CheckCtx, OxcCheck};
 use oxc_ast::ast::{Declaration, Statement};
-use oxc_span::GetSpan;
 use std::sync::Arc;
 
 pub struct Check;
@@ -64,15 +63,14 @@ fn extract_overload_sig(stmt: &Statement) -> Option<(String, u32)> {
             Some((name, f.span.start))
         }
         Statement::ExportNamedDeclaration(exp) => {
-            if let Some(ref decl) = exp.declaration {
-                if let Declaration::FunctionDeclaration(f) = decl {
+            if let Some(ref decl) = exp.declaration
+                && let Declaration::FunctionDeclaration(f) = decl {
                     if f.body.is_some() {
                         return None;
                     }
                     let name = f.id.as_ref()?.name.to_string();
                     return Some((name, f.span.start));
                 }
-            }
             None
         }
         _ => None,

@@ -44,14 +44,13 @@ impl OxcCheck for Check {
 
         // Check if wrapped in a validator: parent is an argument to .parse()/.safeParse().
         let parent = semantic.nodes().parent_node(node.id());
-        if let AstKind::CallExpression(outer_call) = parent.kind() {
-            if let Expression::StaticMemberExpression(outer_member) = &outer_call.callee {
+        if let AstKind::CallExpression(outer_call) = parent.kind()
+            && let Expression::StaticMemberExpression(outer_member) = &outer_call.callee {
                 let method = outer_member.property.name.as_str();
                 if method == "parse" || method == "safeParse" {
                     return;
                 }
             }
-        }
 
         let (line, column) = byte_offset_to_line_col(ctx.source, call.span.start as usize);
         diagnostics.push(Diagnostic {

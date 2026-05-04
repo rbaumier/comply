@@ -120,7 +120,7 @@ impl OxcCheck for Check {
 
         // Phase 2: collect all references in the class body.
         let mut all_references: Vec<&str> = Vec::new();
-        let body_span = class.body.span;
+        let _body_span = class.body.span;
 
         for element in &class.body.body {
             match element {

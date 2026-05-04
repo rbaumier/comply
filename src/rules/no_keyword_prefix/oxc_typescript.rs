@@ -5,7 +5,6 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::BindingPattern;
-use oxc_span::GetSpan;
 use std::sync::Arc;
 
 pub struct Check;
@@ -14,11 +13,10 @@ const DISALLOWED_PREFIXES: &[&str] = &["new", "class"];
 
 fn find_keyword_prefix(name: &str) -> Option<&'static str> {
     for &prefix in DISALLOWED_PREFIXES {
-        if let Some(rest) = name.strip_prefix(prefix) {
-            if rest.starts_with(|c: char| c.is_ascii_uppercase()) {
+        if let Some(rest) = name.strip_prefix(prefix)
+            && rest.starts_with(|c: char| c.is_ascii_uppercase()) {
                 return Some(prefix);
             }
-        }
     }
     None
 }

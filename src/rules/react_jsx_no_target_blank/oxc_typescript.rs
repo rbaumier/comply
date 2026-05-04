@@ -21,7 +21,7 @@ impl OxcCheck for Check {
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        semantic: &'a oxc_semantic::Semantic<'a>,
+        _semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let AstKind::JSXOpeningElement(opening) = node.kind() else {

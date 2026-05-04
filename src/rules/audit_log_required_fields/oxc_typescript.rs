@@ -26,11 +26,10 @@ fn is_audit_call(callee: &Expression) -> bool {
                 return true;
             }
             // `audit.log(...)` / `*audit*.log(...)`
-            if method == "log" {
-                if let Expression::Identifier(obj) = &member.object {
+            if method == "log"
+                && let Expression::Identifier(obj) = &member.object {
                     return obj.name.as_str().contains("audit");
                 }
-            }
             false
         }
         _ => false,

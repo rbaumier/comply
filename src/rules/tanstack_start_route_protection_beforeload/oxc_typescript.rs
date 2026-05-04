@@ -4,7 +4,6 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::Expression;
-use oxc_span::GetSpan;
 use std::sync::Arc;
 
 const AUTH_PATH_MARKERS: &[&str] = &["login", "signin", "sign-in", "auth", "authenticate"];
@@ -24,7 +23,7 @@ impl OxcCheck for Check {
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        semantic: &'a oxc_semantic::Semantic<'a>,
+        _semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let AstKind::CallExpression(call) = node.kind() else {
@@ -101,13 +100,8 @@ fn contains_auth_redirect_text(body: &str) -> bool {
         && AUTH_PATH_MARKERS.iter().any(|m| body.to_ascii_lowercase().contains(m));
 
     // Check for window.location assignments
-    let has_location_assign = (body.contains("window.location")
-        && AUTH_PATH_MARKERS.iter().any(|m| body.to_ascii_lowercase().contains(m)));
+    let has_location_assign = body.contains("window.location")
+        && AUTH_PATH_MARKERS.iter().any(|m| body.to_ascii_lowercase().contains(m));
 
     has_redirect_call || has_location_assign
-}
-
-fn path_looks_like_auth(s: &str) -> bool {
-    let lower = s.to_ascii_lowercase();
-    AUTH_PATH_MARKERS.iter().any(|m| lower.contains(m))
 }

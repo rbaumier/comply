@@ -36,7 +36,7 @@ fn leftmost_identifier<'a>(expr: &'a Expression<'a>, source: &str) -> Option<Str
 fn collect_chain_methods<'a>(
     node: &oxc_semantic::AstNode<'a>,
     semantic: &'a oxc_semantic::Semantic<'a>,
-    source: &str,
+    _source: &str,
 ) -> (oxc_span::Span, Vec<String>) {
     let AstKind::CallExpression(call) = node.kind() else {
         return (oxc_span::Span::new(0, 0), Vec::new());

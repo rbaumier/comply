@@ -51,11 +51,10 @@ impl OxcCheck for Check {
             };
             let name = name_ident.name.as_str();
             present_attrs.push(name);
-            if name == "role" {
-                if let Some(JSXAttributeValue::StringLiteral(lit)) = &attr.value {
+            if name == "role"
+                && let Some(JSXAttributeValue::StringLiteral(lit)) = &attr.value {
                     role_value = Some(lit.value.as_str());
                 }
-            }
         }
 
         let Some(role) = role_value else { return };

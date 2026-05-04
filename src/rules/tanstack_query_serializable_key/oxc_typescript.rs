@@ -66,19 +66,17 @@ fn unserializable_reason(expr: &Expression<'_>) -> Option<&'static str> {
             Some("function/closure")
         }
         Expression::NewExpression(new_expr) => {
-            if let Expression::Identifier(id) = &new_expr.callee {
-                if id.name == "Date" {
+            if let Expression::Identifier(id) = &new_expr.callee
+                && id.name == "Date" {
                     return Some("`new Date()` — use `.toISOString()`");
                 }
-            }
             Some("class instance")
         }
         Expression::CallExpression(call) => {
-            if let Expression::Identifier(id) = &call.callee {
-                if id.name == "Symbol" {
+            if let Expression::Identifier(id) = &call.callee
+                && id.name == "Symbol" {
                     return Some("`Symbol(...)`");
                 }
-            }
             None
         }
         _ => None,

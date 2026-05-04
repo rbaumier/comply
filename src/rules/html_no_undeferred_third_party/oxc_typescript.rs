@@ -53,11 +53,10 @@ impl OxcCheck for Check {
             };
             match name_ident.name.as_str() {
                 "src" => {
-                    if let Some(JSXAttributeValue::StringLiteral(lit)) = &attr.value {
-                        if is_third_party_src(lit.value.as_str()) {
+                    if let Some(JSXAttributeValue::StringLiteral(lit)) = &attr.value
+                        && is_third_party_src(lit.value.as_str()) {
                             has_third_party_src = true;
                         }
-                    }
                 }
                 "defer" | "async" => {
                     has_defer_or_async = true;

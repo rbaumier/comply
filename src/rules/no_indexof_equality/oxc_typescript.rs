@@ -21,13 +21,11 @@ fn numeric_literal_value(expr: &Expression) -> Option<&'static str> {
             else { None }
         }
         Expression::UnaryExpression(u) => {
-            if u.operator == oxc_ast::ast::UnaryOperator::UnaryNegation {
-                if let Expression::NumericLiteral(n) = &u.argument {
-                    if n.value == 1.0 {
+            if u.operator == oxc_ast::ast::UnaryOperator::UnaryNegation
+                && let Expression::NumericLiteral(n) = &u.argument
+                    && n.value == 1.0 {
                         return Some("-1");
                     }
-                }
-            }
             None
         }
         _ => None,

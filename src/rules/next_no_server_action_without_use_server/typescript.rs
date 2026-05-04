@@ -48,17 +48,15 @@ fn exports_async_function(source: &str) -> Option<(usize, usize)> {
             return Some((idx + 1, line.len() - t.len() + 1));
         }
         // `export const foo = async (` / `export const foo = async function`
-        if t.starts_with("export const ")
+        if (t.starts_with("export const ")
             || t.starts_with("export let ")
-            || t.starts_with("export var ")
-        {
-            if let Some(eq) = t.find('=') {
+            || t.starts_with("export var "))
+            && let Some(eq) = t.find('=') {
                 let rhs = t[eq + 1..].trim_start();
                 if rhs.starts_with("async ") || rhs.starts_with("async(") {
                     return Some((idx + 1, line.len() - t.len() + 1));
                 }
             }
-        }
     }
     None
 }

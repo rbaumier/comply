@@ -7,7 +7,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{BindingPattern, Expression, RegExpFlags};
+use oxc_ast::ast::{BindingPattern, RegExpFlags};
 use std::sync::Arc;
 
 pub struct Check;

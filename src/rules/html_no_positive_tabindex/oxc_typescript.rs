@@ -24,11 +24,10 @@ fn is_positive_value(val: &JSXAttributeValue) -> bool {
                 Expression::NumericLiteral(n) => n.value > 0.0,
                 Expression::UnaryExpression(u) => {
                     // Handle negative: -{N}
-                    if matches!(u.operator, oxc_ast::ast::UnaryOperator::UnaryNegation) {
-                        if let Expression::NumericLiteral(n) = &u.argument {
+                    if matches!(u.operator, oxc_ast::ast::UnaryOperator::UnaryNegation)
+                        && let Expression::NumericLiteral(n) = &u.argument {
                             return (-n.value) > 0.0;
                         }
-                    }
                     false
                 }
                 _ => false,

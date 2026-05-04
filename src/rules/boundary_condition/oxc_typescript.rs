@@ -38,7 +38,7 @@ impl OxcCheck for Check {
         }
 
         let is_first = is_zero_index(&member.expression, source);
-        let is_last = !is_first && is_last_index(&member.expression, &obj_text, source);
+        let is_last = !is_first && is_last_index(&member.expression, obj_text, source);
         if !is_first && !is_last {
             return;
         }

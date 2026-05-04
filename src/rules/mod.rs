@@ -1691,7 +1691,7 @@ pub struct RuleDef {
 
 // Registry helpers + macros — moved to `registry.rs` and re-exported below.
 mod registry;
-pub use registry::{RustBinding, build_rust_only_rule, build_ts_family_rule};
+pub use registry::build_rust_only_rule;
 
 pub mod a11y_button_without_accessible_name;
 pub mod a11y_dialog_missing_aria_labelledby;

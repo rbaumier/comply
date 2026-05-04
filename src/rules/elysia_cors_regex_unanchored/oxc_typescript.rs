@@ -39,12 +39,11 @@ impl OxcCheck for Check {
         let mut idx = 0;
         let bytes = args_text.as_bytes();
         while idx < bytes.len() {
-            if let Some(rest) = args_text.get(idx..) {
-                if let Some(off) = rest.find("origin:") {
+            if let Some(rest) = args_text.get(idx..)
+                && let Some(off) = rest.find("origin:") {
                     let after = &rest[off + "origin:".len()..];
                     let after_trim = after.trim_start();
-                    if after_trim.starts_with('/') {
-                        let body = &after_trim[1..];
+                    if let Some(body) = after_trim.strip_prefix('/') {
                         let mut end = None;
                         let mut esc = false;
                         for (i, c) in body.char_indices() {
@@ -71,7 +70,6 @@ impl OxcCheck for Check {
                     idx += off + "origin:".len();
                     continue;
                 }
-            }
             break;
         }
     }

@@ -141,11 +141,10 @@ fn is_closure_param(node: tree_sitter::Node) -> bool {
     if parent.kind() == "closure_parameters" {
         return true;
     }
-    if parent.kind() == "parameter" {
-        if let Some(gp) = parent.parent() {
+    if parent.kind() == "parameter"
+        && let Some(gp) = parent.parent() {
             return gp.kind() == "closure_parameters";
         }
-    }
     false
 }
 

@@ -29,26 +29,6 @@ const FORCE_ACTIONS: &[&str] = &[
     "dragTo",
 ];
 
-/// Recursively check if any object property in a node is `force: true`.
-fn has_force_true<'a>(expr: &oxc_ast::ast::Expression<'a>, source: &str) -> bool {
-    let oxc_ast::ast::Expression::ObjectExpression(obj) = expr else {
-        return false;
-    };
-    for prop in &obj.properties {
-        let oxc_ast::ast::ObjectPropertyKind::ObjectProperty(p) = prop else {
-            continue;
-        };
-        let key_text = &source[p.key.span().start as usize..p.key.span().end as usize];
-        if key_text == "force" {
-            let val_text = &source[p.value.span().start as usize..p.value.span().end as usize];
-            if val_text == "true" {
-                return true;
-            }
-        }
-    }
-    false
-}
-
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[AstType::CallExpression]

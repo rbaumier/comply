@@ -106,13 +106,10 @@ fn is_react_wrapper_call(call: &CallExpression) -> bool {
 /// Check if any JSX node exists within the given span by scanning semantic nodes.
 fn contains_jsx(outer: oxc_span::Span, semantic: &oxc_semantic::Semantic) -> bool {
     for node in semantic.nodes().iter() {
-        match node.kind() {
-            AstKind::JSXOpeningElement(el) => {
-                if el.span.start >= outer.start && el.span.end <= outer.end {
-                    return true;
-                }
+        if let AstKind::JSXOpeningElement(el) = node.kind() {
+            if el.span.start >= outer.start && el.span.end <= outer.end {
+                return true;
             }
-            _ => {}
         }
     }
     false

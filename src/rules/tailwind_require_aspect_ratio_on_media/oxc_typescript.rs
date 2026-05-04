@@ -48,8 +48,8 @@ impl OxcCheck for Check {
                 "width" => has_width = true,
                 "height" => has_height = true,
                 "className" | "class" => {
-                    if let Some(JSXAttributeValue::StringLiteral(lit)) = &attr.value {
-                        if lit
+                    if let Some(JSXAttributeValue::StringLiteral(lit)) = &attr.value
+                        && lit
                             .value
                             .as_str()
                             .split_whitespace()
@@ -57,7 +57,6 @@ impl OxcCheck for Check {
                         {
                             has_aspect_class = true;
                         }
-                    }
                 }
                 _ => {}
             }

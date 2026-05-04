@@ -71,19 +71,16 @@ impl OxcCheck for Check {
         }
 
         // Skip constructors with parameter properties (accessibility modifiers).
-        if is_method {
-            if let AstKind::MethodDefinition(method) = semantic.nodes().parent_node(node.id()).kind() {
-                if method.key.is_specific_id("constructor") {
-                    if let AstKind::Function(func) = node.kind() {
+        if is_method
+            && let AstKind::MethodDefinition(method) = semantic.nodes().parent_node(node.id()).kind()
+                && method.key.is_specific_id("constructor")
+                    && let AstKind::Function(func) = node.kind() {
                         for param in &func.params.items {
                             if param.accessibility.is_some() {
                                 return;
                             }
                         }
                     }
-                }
-            }
-        }
 
         let (line, column) = byte_offset_to_line_col(ctx.source, span.start as usize);
         diagnostics.push(Diagnostic {

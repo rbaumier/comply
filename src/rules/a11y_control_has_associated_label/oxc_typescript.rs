@@ -47,13 +47,11 @@ impl OxcCheck for Check {
                 let JSXAttributeName::Identifier(name_ident) = &attr.name else {
                     continue;
                 };
-                if name_ident.name.as_str() == "type" {
-                    if let Some(JSXAttributeValue::StringLiteral(lit)) = &attr.value {
-                        if lit.value.as_str() == "hidden" {
+                if name_ident.name.as_str() == "type"
+                    && let Some(JSXAttributeValue::StringLiteral(lit)) = &attr.value
+                        && lit.value.as_str() == "hidden" {
                             return;
                         }
-                    }
-                }
             }
         }
 
@@ -73,9 +71,9 @@ impl OxcCheck for Check {
         }
 
         // For <button> elements, check parent JSXElement for text content
-        if tag == "button" {
-            if let Some(parent) = semantic.nodes().ancestors(node.id()).nth(1) {
-                if let AstKind::JSXElement(element) = parent.kind() {
+        if tag == "button"
+            && let Some(parent) = semantic.nodes().ancestors(node.id()).nth(1)
+                && let AstKind::JSXElement(element) = parent.kind() {
                     let has_content = element.children.iter().any(|child| match child {
                         JSXChild::Text(text) => !text.value.trim().is_empty(),
                         JSXChild::Element(_) => true,
@@ -89,8 +87,6 @@ impl OxcCheck for Check {
                         return;
                     }
                 }
-            }
-        }
 
         let (line, column) =
             byte_offset_to_line_col(ctx.source, opening.span.start as usize);

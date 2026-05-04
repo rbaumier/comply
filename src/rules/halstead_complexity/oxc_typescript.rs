@@ -32,14 +32,14 @@ impl OxcCheck for Check {
                 let parent_id = semantic.nodes().parent_id(node.id());
                 let parent = semantic.nodes().get_node(parent_id);
                 let is_method = matches!(parent.kind(), AstKind::MethodDefinition(_));
-                if is_method {
-                    if let AstKind::MethodDefinition(method) = parent.kind() {
-                        if matches!(
+                if is_method
+                    && let AstKind::MethodDefinition(method) = parent.kind()
+                        && matches!(
                             method.kind,
                             MethodDefinitionKind::Get | MethodDefinitionKind::Set
-                        ) {
-                            if let Some(body) = &func.body {
-                                if body.statements.len() == 1
+                        )
+                            && let Some(body) = &func.body
+                                && body.statements.len() == 1
                                     && matches!(
                                         body.statements[0],
                                         Statement::ReturnStatement(_)
@@ -48,10 +48,6 @@ impl OxcCheck for Check {
                                 {
                                     return;
                                 }
-                            }
-                        }
-                    }
-                }
                 (func.span.start, func.body.as_ref(), is_method)
             }
             AstKind::ArrowFunctionExpression(arrow) => {
@@ -316,7 +312,7 @@ fn visit_expr(expr: &Expression, source: &str, counts: &mut Counts) {
             counts.add_operand("null");
         }
         Expression::BinaryExpression(bin) => {
-            counts.add_op(&format!("{}", bin.operator.as_str()));
+            counts.add_op(&bin.operator.as_str().to_string());
             visit_expr(&bin.left, source, counts);
             visit_expr(&bin.right, source, counts);
         }

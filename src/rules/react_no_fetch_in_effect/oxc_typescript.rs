@@ -4,7 +4,6 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::Expression;
-use oxc_span::GetSpan;
 use std::sync::Arc;
 
 fn is_effect_callee(expr: &Expression) -> bool {
@@ -45,11 +44,10 @@ fn stmt_has_fetch(stmt: &oxc_ast::ast::Statement) -> bool {
             if expr_has_fetch(&if_stmt.test) {
                 return true;
             }
-            if let oxc_ast::ast::Statement::BlockStatement(block) = &if_stmt.consequent {
-                if contains_top_level_fetch_stmts(&block.body) {
+            if let oxc_ast::ast::Statement::BlockStatement(block) = &if_stmt.consequent
+                && contains_top_level_fetch_stmts(&block.body) {
                     return true;
                 }
-            }
             if_stmt.alternate.as_ref().is_some_and(|s| stmt_has_fetch(s))
         }
         oxc_ast::ast::Statement::BlockStatement(block) => {
@@ -72,11 +70,10 @@ fn stmt_has_fetch(stmt: &oxc_ast::ast::Statement) -> bool {
 fn expr_has_fetch(expr: &Expression) -> bool {
     match expr {
         Expression::CallExpression(call) => {
-            if let Expression::Identifier(callee) = &call.callee {
-                if callee.name == "fetch" {
+            if let Expression::Identifier(callee) = &call.callee
+                && callee.name == "fetch" {
                     return true;
                 }
-            }
             // Check arguments but don't cross function boundaries.
             call.arguments.iter().any(|arg| {
                 let e = arg.to_expression();
@@ -94,11 +91,10 @@ fn expr_has_fetch(expr: &Expression) -> bool {
         Expression::StaticMemberExpression(mem) => expr_has_fetch(&mem.object),
         Expression::ChainExpression(chain) => match &chain.expression {
             oxc_ast::ast::ChainElement::CallExpression(call) => {
-                if let Expression::Identifier(callee) = &call.callee {
-                    if callee.name == "fetch" {
+                if let Expression::Identifier(callee) = &call.callee
+                    && callee.name == "fetch" {
                         return true;
                     }
-                }
                 false
             }
             _ => false,

@@ -65,11 +65,10 @@ impl OxcCheck for Check {
                     break;
                 }
                 let parent = semantic.nodes().get_node(parent_id);
-                if let AstKind::CallExpression(pc) = parent.kind() {
-                    if is_describe_call(&pc.callee) {
+                if let AstKind::CallExpression(pc) = parent.kind()
+                    && is_describe_call(&pc.callee) {
                         depth += 1;
                     }
-                }
                 cur = parent_id;
             }
 

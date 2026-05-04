@@ -36,8 +36,8 @@ impl OxcCheck for Check {
             }
         }
 
-        if let (Some(di), Some(lci)) = (default_idx, last_case_idx) {
-            if di < lci {
+        if let (Some(di), Some(lci)) = (default_idx, last_case_idx)
+            && di < lci {
                 let default_case: &SwitchCase = &cases[di];
                 let (line, column) =
                     byte_offset_to_line_col(ctx.source, default_case.span.start as usize);
@@ -53,6 +53,5 @@ impl OxcCheck for Check {
                     span: None,
                 });
             }
-        }
     }
 }

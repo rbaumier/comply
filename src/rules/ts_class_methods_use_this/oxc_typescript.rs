@@ -114,13 +114,12 @@ fn body_contains_this(
                     let gp_id = nodes.parent_id(parent_id);
                     if gp_id != parent_id {
                         let gp = nodes.get_node(gp_id);
-                        if let AstKind::MethodDefinition(m) = gp.kind() {
-                            if m.span.start == method_span_start {
+                        if let AstKind::MethodDefinition(m) = gp.kind()
+                            && m.span.start == method_span_start {
                                 // This is the method's own function — allow
                                 current = parent_id;
                                 continue;
                             }
-                        }
                     }
                     // Different function — rebinds `this`
                     break;

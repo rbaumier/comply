@@ -35,11 +35,10 @@ impl OxcCheck for Check {
             if call.arguments.len() >= 2 {
                 return;
             }
-            if let Some(first) = call.arguments.first() {
-                if let Some(Expression::ObjectExpression(_)) = first.as_expression() {
+            if let Some(first) = call.arguments.first()
+                && let Some(Expression::ObjectExpression(_)) = first.as_expression() {
                     return;
                 }
-            }
             let (line, column) =
                 byte_offset_to_line_col(ctx.source, call.span.start as usize);
             diagnostics.push(Diagnostic {
@@ -76,7 +75,7 @@ impl OxcCheck for Check {
         if prop == "slice" {
             let is_copy = call.arguments.is_empty()
                 || (call.arguments.len() == 1
-                    && call.arguments.first().map_or(false, |arg| {
+                    && call.arguments.first().is_some_and(|arg| {
                         matches!(arg.as_expression(), Some(Expression::NumericLiteral(n)) if n.value == 0.0)
                     }));
             if is_copy {

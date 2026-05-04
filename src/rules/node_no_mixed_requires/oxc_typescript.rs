@@ -9,11 +9,10 @@ use std::sync::Arc;
 pub struct Check;
 
 fn is_require_init(init: &Expression) -> bool {
-    if let Expression::CallExpression(call) = init {
-        if let Expression::Identifier(id) = &call.callee {
+    if let Expression::CallExpression(call) = init
+        && let Expression::Identifier(id) = &call.callee {
             return id.name.as_str() == "require";
         }
-    }
     false
 }
 

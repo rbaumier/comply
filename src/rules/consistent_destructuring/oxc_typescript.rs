@@ -53,10 +53,7 @@ impl OxcCheck for Check {
 
                     let mut has_props = false;
                     for prop in &pattern.properties {
-                        match &prop.key {
-                            PropertyKey::StaticIdentifier(_) => { has_props = true; }
-                            _ => {}
-                        }
+                        if let PropertyKey::StaticIdentifier(_) = &prop.key { has_props = true; }
                     }
                     if !has_props {
                         continue;
@@ -96,16 +93,14 @@ impl OxcCheck for Check {
                                 let gp_id = nodes.parent_id(parent_id);
                                 if gp_id != parent_id {
                                     let gp = nodes.get_node(gp_id);
-                                    if let AstKind::AssignmentExpression(assign) = gp.kind() {
-                                        if assign.left.span().start == member.span().start
+                                    if let AstKind::AssignmentExpression(assign) = gp.kind()
+                                        && assign.left.span().start == member.span().start
                                             && assign.left.span().end == member.span().end
                                         {
                                             continue;
                                         }
-                                    }
                                 }
                             }
-                            _ => {}
                         }
                     }
 

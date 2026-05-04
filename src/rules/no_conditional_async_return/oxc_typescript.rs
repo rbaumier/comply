@@ -81,7 +81,7 @@ impl OxcCheck for Check {
 }
 
 /// Classify a return-value expression as promise-returning or sync.
-fn classify_value(expr: &Expression, source: &str) -> ReturnKind {
+fn classify_value(expr: &Expression, _source: &str) -> ReturnKind {
     let Expression::CallExpression(call) = expr else {
         return ReturnKind::Sync;
     };
@@ -96,8 +96,8 @@ fn classify_value(expr: &Expression, source: &str) -> ReturnKind {
     }
 
     // `Promise.<combinator>(...)`
-    if let Expression::Identifier(obj) = &member.object {
-        if obj.name.as_str() == "Promise"
+    if let Expression::Identifier(obj) = &member.object
+        && obj.name.as_str() == "Promise"
             && matches!(
                 method,
                 "resolve" | "reject" | "all" | "allSettled" | "race" | "any"
@@ -105,7 +105,6 @@ fn classify_value(expr: &Expression, source: &str) -> ReturnKind {
         {
             return ReturnKind::Promise;
         }
-    }
 
     ReturnKind::Sync
 }

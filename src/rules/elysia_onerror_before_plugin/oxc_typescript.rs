@@ -62,13 +62,11 @@ impl OxcCheck for Check {
         // Only operate on the outermost call in a chain: if our parent is a
         // StaticMemberExpression whose object is this node, we're not outermost.
         let parent = semantic.nodes().parent_node(node.id());
-        if let AstKind::StaticMemberExpression(m) = parent.kind() {
-            if let Expression::CallExpression(parent_call_obj) = &m.object {
-                if parent_call_obj.span == call.span {
+        if let AstKind::StaticMemberExpression(m) = parent.kind()
+            && let Expression::CallExpression(parent_call_obj) = &m.object
+                && parent_call_obj.span == call.span {
                     return;
                 }
-            }
-        }
 
         let methods = collect_chain(call);
         if methods.len() < 2 {

@@ -36,11 +36,10 @@ fn has_self_param(node: tree_sitter::Node, source: &[u8]) -> bool {
         if child.kind() == "self_parameter" {
             return true;
         }
-        if let Ok(text) = child.utf8_text(source) {
-            if text.contains("self") {
+        if let Ok(text) = child.utf8_text(source)
+            && text.contains("self") {
                 return true;
             }
-        }
     }
     false
 }

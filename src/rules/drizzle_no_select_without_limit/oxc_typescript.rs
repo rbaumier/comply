@@ -8,40 +8,6 @@ use std::sync::Arc;
 
 pub struct Check;
 
-/// Walk up from a `.select()` call through chained method calls,
-/// collecting method names. Returns (outermost span start, method names).
-fn collect_chain_methods<'a>(
-    call: &'a oxc_ast::ast::CallExpression<'a>,
-    source: &str,
-) -> (u32, Vec<&'a str>) {
-    let mut methods = Vec::new();
-    let mut outer_span_start = call.span.start;
-
-    // We need to walk the source to find chained calls.
-    // In oxc AST, `db.select().from(table).limit(10)` is nested:
-    //   CallExpression(.limit)
-    //     callee: StaticMemberExpression
-    //       object: CallExpression(.from)
-    //         callee: StaticMemberExpression
-    //           object: CallExpression(.select)
-    //
-    // Since we match on `.select()`, we need to look at the PARENT chain.
-    // But we don't have parent access easily here. Instead, we detect the
-    // `.select()` pattern and then scan source for the chain.
-    //
-    // Actually, the simpler approach: since this check visits ALL
-    // CallExpressions, we can instead check from the outermost call
-    // and look for `.select` in the chain downward. But the TreeSitter
-    // version walks upward from `.select()`.
-    //
-    // For OXC, let's use a different strategy: check the source text
-    // for the chain from the call span outward.
-    let _ = (source, &mut outer_span_start, &mut methods);
-
-    // We'll use a recursive descent through the callee chain instead.
-    (outer_span_start, methods)
-}
-
 /// Check if a call expression is part of a `.select().from()` chain
 /// without `.limit()` or `.where()`.
 fn check_select_chain(call: &oxc_ast::ast::CallExpression, source: &str) -> Option<u32> {

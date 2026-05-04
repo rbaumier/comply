@@ -101,11 +101,10 @@ impl OxcCheck for Check {
             }
             // Skip if it's a property of a member expression (e.g. Number.NaN).
             let parent = semantic.nodes().parent_node(node.id());
-            if let AstKind::StaticMemberExpression(member) = parent.kind() {
-                if member.property.span == ident.span {
+            if let AstKind::StaticMemberExpression(member) = parent.kind()
+                && member.property.span == ident.span {
                     continue;
                 }
-            }
             // Skip if it's the callee of a call expression (handled by `run`).
             if matches!(parent.kind(), AstKind::CallExpression(_)) {
                 continue;

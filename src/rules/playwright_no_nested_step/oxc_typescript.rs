@@ -82,11 +82,10 @@ fn is_inside_step(
                 if call_id == id {
                     continue;
                 }
-                if let AstKind::CallExpression(call) = nodes.kind(call_id) {
-                    if is_test_step_call(call) {
+                if let AstKind::CallExpression(call) = nodes.kind(call_id)
+                    && is_test_step_call(call) {
                         return true;
                     }
-                }
             }
             _ => {}
         }

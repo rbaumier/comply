@@ -100,7 +100,7 @@ fn is_db_mutation_call(call: &CallExpression, source: &str) -> bool {
         return false;
     }
     let obj_text = &source[member.object.span().start as usize..member.object.span().end as usize];
-    DB_RECEIVERS.iter().any(|r| obj_text == *r)
+    DB_RECEIVERS.contains(&obj_text)
 }
 
 /// Walk down a chained call expression to find any inner `db.insert/update/delete`.

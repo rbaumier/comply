@@ -2,7 +2,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-fn from_value<'a>(param_text: &'a str) -> Option<&'a str> {
+fn from_value(param_text: &str) -> Option<&str> {
     // param_text looks like `--from=build`.
     let stripped = param_text.strip_prefix("--from=")?;
     Some(stripped.trim())
@@ -17,11 +17,10 @@ fn collect_stage_aliases<'a>(root: tree_sitter::Node<'a>, source: &'a [u8]) -> V
         }
         for j in 0..child.child_count() {
             let sub = child.child(j).unwrap();
-            if sub.kind() == "image_alias" {
-                if let Ok(t) = std::str::from_utf8(&source[sub.byte_range()]) {
+            if sub.kind() == "image_alias"
+                && let Ok(t) = std::str::from_utf8(&source[sub.byte_range()]) {
                     out.push(t.trim());
                 }
-            }
         }
     }
     out
@@ -52,7 +51,7 @@ crate::ast_check! { on ["copy_instruction"] => |node, source, ctx, diagnostics|
         root = p;
     }
     let aliases = collect_stage_aliases(root, source);
-    if aliases.iter().any(|a| *a == target) { return; }
+    if aliases.contains(&target) { return; }
     let highlight = param_node.unwrap_or(node);
     let pos = highlight.start_position();
     diagnostics.push(Diagnostic {

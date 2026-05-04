@@ -11,11 +11,10 @@ pub struct Check;
 /// Check whether an ObjectExpression has a property with any of the given key names.
 fn object_has_key(obj: &oxc_ast::ast::ObjectExpression, names: &[&str]) -> bool {
     obj.properties.iter().any(|prop| {
-        if let oxc_ast::ast::ObjectPropertyKind::ObjectProperty(p) = prop {
-            if let Some(name) = p.key.name() {
+        if let oxc_ast::ast::ObjectPropertyKind::ObjectProperty(p) = prop
+            && let Some(name) = p.key.name() {
                 return names.contains(&name.as_ref());
             }
-        }
         false
     })
 }

@@ -4,7 +4,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{JSXAttributeItem, JSXAttributeName, JSXAttributeValue};
+use oxc_ast::ast::{JSXAttributeName, JSXAttributeValue};
 use std::sync::Arc;
 
 /// Markers that indicate the file already reads the Tailwind theme/config.

@@ -18,7 +18,7 @@ pub const META: RuleMeta = RuleMeta {
 };
 
 /// Return the matching `w-V`/`h-V` value if both appear in the class string.
-pub(crate) fn find_wh_duplicate<'a>(class_str: &'a str) -> Option<&'a str> {
+pub(crate) fn find_wh_duplicate(class_str: &str) -> Option<&str> {
     let tokens: Vec<&str> = class_str.split_whitespace().collect();
     let w_vals: Vec<&str> = tokens.iter().filter_map(|t| t.strip_prefix("w-")).collect();
     let h_vals: Vec<&str> = tokens.iter().filter_map(|t| t.strip_prefix("h-")).collect();

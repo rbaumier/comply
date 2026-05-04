@@ -23,11 +23,10 @@ fn has_explicit_size(classes: &str) -> bool {
                 if rest == "full" || rest == "screen" {
                     return true;
                 }
-                if let Ok(n) = rest.parse::<u32>() {
-                    if n >= 11 {
+                if let Ok(n) = rest.parse::<u32>()
+                    && n >= 11 {
                         return true;
                     }
-                }
             }
         }
         false
@@ -120,11 +119,10 @@ impl OxcCheck for Check {
                     class_value = get_jsx_attr_string_value(attr, ctx.source);
                 }
                 "role" => {
-                    if let Some(val) = get_jsx_attr_string_value(attr, ctx.source) {
-                        if val == "button" {
+                    if let Some(val) = get_jsx_attr_string_value(attr, ctx.source)
+                        && val == "button" {
                             is_role_button = true;
                         }
-                    }
                 }
                 _ => {}
             }

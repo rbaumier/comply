@@ -2,7 +2,6 @@ use crate::diagnostic::Diagnostic;
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{BinaryOperator, Expression};
-use oxc_span::GetSpan;
 use std::sync::Arc;
 
 pub struct Check;

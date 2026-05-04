@@ -45,11 +45,10 @@ fn is_test_file(path: &std::path::Path) -> bool {
 }
 
 fn is_expect_call(expr: &Expression) -> bool {
-    if let Expression::CallExpression(call) = expr {
-        if let Expression::Identifier(ident) = &call.callee {
+    if let Expression::CallExpression(call) = expr
+        && let Expression::Identifier(ident) = &call.callee {
             return ident.name.as_str() == "expect";
         }
-    }
     false
 }
 

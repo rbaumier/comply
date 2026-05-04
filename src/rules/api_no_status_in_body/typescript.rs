@@ -55,9 +55,8 @@ fn line_starts_with_response_context(source: &str, offset: usize) -> bool {
         "res.json(",
         "res.send(",
     ];
-    let line_or_scope_match =
-        line.contains("return") || scope_signals.iter().any(|s| scope.contains(s));
-    line_or_scope_match
+    
+    line.contains("return") || scope_signals.iter().any(|s| scope.contains(s))
 }
 
 fn find_offenses(source: &str) -> Vec<usize> {

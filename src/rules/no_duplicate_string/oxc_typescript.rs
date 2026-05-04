@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
-use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
+use crate::rules::backend::{AstKind, CheckCtx, OxcCheck};
 use std::sync::Arc;
 
 pub struct Check;
@@ -110,11 +110,10 @@ fn should_ignore_oxc_node<'a>(
                     }
                     _ => None,
                 };
-                if let Some(name) = callee_name {
-                    if TAILWIND_HELPERS.contains(&name) {
+                if let Some(name) = callee_name
+                    && TAILWIND_HELPERS.contains(&name) {
                         return true;
                     }
-                }
             }
             _ => {}
         }

@@ -7,7 +7,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{
-    Argument, BindingPattern, Expression, JSXAttributeItem, JSXAttributeName,
+    Argument, BindingPattern, Expression, JSXAttributeName,
     JSXAttributeValue, JSXExpression,
 };
 use std::sync::Arc;

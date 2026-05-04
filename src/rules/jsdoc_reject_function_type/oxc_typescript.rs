@@ -48,7 +48,7 @@ impl OxcCheck for Check {
             let end = comment.span.end as usize;
             // OXC comment spans exclude the leading `//` or `/*`, so we need
             // to check the raw source including the prefix.
-            let prefix_start = if start >= 2 { start - 2 } else { 0 };
+            let prefix_start = start.saturating_sub(2);
             let raw_prefix = ctx.source.get(prefix_start..start).unwrap_or("");
             if raw_prefix != "/*" {
                 continue;

@@ -107,14 +107,13 @@ impl OxcCheck for Check {
                 AstKind::ComputedMemberExpression(member) => {
                     if let Expression::Identifier(obj) = &member.object {
                         let obj_name = obj.name.as_str();
-                        if enums.contains_key(obj_name) {
-                            if let Expression::StringLiteral(s) = &member.expression {
+                        if enums.contains_key(obj_name)
+                            && let Expression::StringLiteral(s) = &member.expression {
                                 used.insert((
                                     obj_name.to_string(),
                                     s.value.as_str().to_string(),
                                 ));
                             }
-                        }
                     }
                 }
                 _ => {}

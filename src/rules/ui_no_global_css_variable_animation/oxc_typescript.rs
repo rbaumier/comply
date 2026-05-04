@@ -73,8 +73,6 @@ fn is_inside_raf<'a>(
                     }
                 }
             }
-            // Stop at named function declarations / class boundaries
-            AstKind::Function(f) if f.id.is_some() => return false,
             _ => {}
         }
     }

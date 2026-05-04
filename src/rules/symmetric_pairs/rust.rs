@@ -106,7 +106,7 @@ impl AstCheck for Check {
                         break;
                     }
                     let expected = format!("{counterpart_pfx}{suffix}");
-                    if pfx == "set_" && names.iter().any(|n| *n == suffix) {
+                    if pfx == "set_" && names.contains(&suffix) {
                         break;
                     }
                     if !names.iter().any(|n| *n == expected) {

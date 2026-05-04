@@ -39,8 +39,8 @@ impl OxcCheck for Check {
                 returned = true;
                 continue;
             }
-            if returned {
-                if let Statement::ExpressionStatement(expr_stmt) = stmt {
+            if returned
+                && let Statement::ExpressionStatement(expr_stmt) = stmt {
                     let text = &ctx.source
                         [expr_stmt.span.start as usize..expr_stmt.span.end as usize];
                     let trimmed = text.trim();
@@ -60,7 +60,6 @@ impl OxcCheck for Check {
                         });
                     }
                 }
-            }
         }
     }
 }

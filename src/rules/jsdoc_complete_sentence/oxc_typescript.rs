@@ -62,8 +62,8 @@ impl OxcCheck for Check {
 
             // First line must start with a capital letter.
             let (first_text, first_offset) = &description_lines[0];
-            if let Some(ch) = first_text.chars().next() {
-                if ch.is_alphabetic() && !ch.is_uppercase() {
+            if let Some(ch) = first_text.chars().next()
+                && ch.is_alphabetic() && !ch.is_uppercase() {
                     let line_byte_offset =
                         find_line_byte_offset(raw, *first_offset);
                     let (line, column) = byte_offset_to_line_col(
@@ -80,12 +80,11 @@ impl OxcCheck for Check {
                         span: None,
                     });
                 }
-            }
 
             // Last line must end with punctuation.
             let (last_text, last_offset) = &description_lines[description_lines.len() - 1];
-            if let Some(ch) = last_text.trim_end().chars().last() {
-                if ch != '.' && ch != '!' && ch != '?' {
+            if let Some(ch) = last_text.trim_end().chars().last()
+                && ch != '.' && ch != '!' && ch != '?' {
                     let line_byte_offset =
                         find_line_byte_offset(raw, *last_offset);
                     let (line, column) = byte_offset_to_line_col(
@@ -102,7 +101,6 @@ impl OxcCheck for Check {
                         span: None,
                     });
                 }
-            }
         }
 
         diagnostics

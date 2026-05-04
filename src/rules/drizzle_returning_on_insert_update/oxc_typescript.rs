@@ -41,15 +41,15 @@ impl OxcCheck for Check {
 
         // Must contain a mutation step.
         let has_mutation = if is_insert {
-            methods.iter().any(|m| *m == "values")
+            methods.contains(&"values")
         } else {
-            methods.iter().any(|m| *m == "set")
+            methods.contains(&"set")
         };
         if !has_mutation {
             return;
         }
 
-        if methods.iter().any(|m| *m == "returning") {
+        if methods.contains(&"returning") {
             return;
         }
 

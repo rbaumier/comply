@@ -40,11 +40,10 @@ fn extract_param_names(params: &FormalParameters) -> Vec<String> {
             names.push(id.name.to_string());
         }
     }
-    if let Some(ref rest) = params.rest {
-        if let BindingPattern::BindingIdentifier(id) = &rest.rest.argument {
+    if let Some(ref rest) = params.rest
+        && let BindingPattern::BindingIdentifier(id) = &rest.rest.argument {
             names.push(id.name.to_string());
         }
-    }
     names
 }
 
@@ -204,8 +203,8 @@ impl OxcCheck for Check {
                 .collect();
 
             for loc in locations {
-                if let FnLocation::Local(line) = loc {
-                    if flagged.insert(loc.clone()) {
+                if let FnLocation::Local(line) = loc
+                    && flagged.insert(loc.clone()) {
                         let msg = if external_locs.is_empty() {
                             format!(
                                 "Parameters [{}] appear together in {} functions — extract into a type.",
@@ -225,7 +224,6 @@ impl OxcCheck for Check {
                         };
                         results.push((*line, msg));
                     }
-                }
             }
         }
 

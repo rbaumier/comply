@@ -11,7 +11,7 @@ fn segment_starts_with_cd(segment: &str) -> bool {
 }
 
 fn has_cd_command(text: &str) -> bool {
-    for segment in text.split(|c| matches!(c, '\n' | ';' | '&' | '|')) {
+    for segment in text.split(['\n', ';', '&', '|']) {
         if segment_starts_with_cd(segment) {
             return true;
         }

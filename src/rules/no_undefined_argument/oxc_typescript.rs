@@ -27,11 +27,10 @@ fn is_in_assertion_chain<'a>(
                 Expression::StaticMemberExpression(m) => Some(m.property.name.as_str()),
                 _ => None,
             };
-            if let Some(name) = callee_text {
-                if name.contains("expect") || name.contains("assert") {
+            if let Some(name) = callee_text
+                && (name.contains("expect") || name.contains("assert")) {
                     return true;
                 }
-            }
         }
         current_id = parent_id;
     }

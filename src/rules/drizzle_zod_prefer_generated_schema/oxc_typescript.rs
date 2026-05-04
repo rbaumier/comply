@@ -56,13 +56,12 @@ impl OxcCheck for Check {
                             }
                         }
                         Expression::StaticMemberExpression(member) => {
-                            if let Expression::Identifier(obj) = &member.object {
-                                if obj.name.as_str() == "z"
+                            if let Expression::Identifier(obj) = &member.object
+                                && obj.name.as_str() == "z"
                                     && member.property.name.as_str() == "object"
                                 {
                                     z_object_spans.push(call.span);
                                 }
-                            }
                         }
                         _ => {}
                     }

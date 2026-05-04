@@ -42,8 +42,8 @@ impl OxcCheck for Check {
         }
         // .fill() on a chained call (e.g. page.getByLabel(...).fill()) is almost
         // certainly Playwright/Locator.fill, not Array.fill.
-        if name == "fill" {
-            if matches!(
+        if name == "fill"
+            && matches!(
                 &member.object,
                 Expression::CallExpression(_)
                     | Expression::StaticMemberExpression(_)
@@ -51,7 +51,6 @@ impl OxcCheck for Check {
             ) {
                 return;
             }
-        }
         let (line, column) = byte_offset_to_line_col(ctx.source, call.span.start as usize);
         diagnostics.push(Diagnostic {
             path: Arc::clone(&ctx.path_arc),

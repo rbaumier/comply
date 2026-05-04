@@ -54,7 +54,7 @@ impl OxcCheck for Check {
         let AstKind::RegExpLiteral(regex) = node.kind() else { return };
 
         let pattern = regex.regex.pattern.text.as_str();
-        if !has_backspace_in_char_class(&pattern) {
+        if !has_backspace_in_char_class(pattern) {
             return;
         }
 

@@ -4,7 +4,6 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{BindingPattern, Expression, FormalParameters};
-use oxc_span::GetSpan;
 use std::sync::Arc;
 
 pub struct Check;
@@ -112,9 +111,9 @@ impl OxcCheck for Check {
             }
             AstKind::ArrowFunctionExpression(arrow) => {
                 let nodes = semantic.nodes();
-                if let Some(parent) = nodes.ancestors(node.id()).nth(1) {
-                    if let AstKind::VariableDeclarator(decl) = parent.kind() {
-                        if let BindingPattern::BindingIdentifier(id) = &decl.id {
+                if let Some(parent) = nodes.ancestors(node.id()).nth(1)
+                    && let AstKind::VariableDeclarator(decl) = parent.kind()
+                        && let BindingPattern::BindingIdentifier(id) = &decl.id {
                             check_function_params(
                                 id.name.as_str(),
                                 &arrow.params,
@@ -122,8 +121,6 @@ impl OxcCheck for Check {
                                 diagnostics,
                             );
                         }
-                    }
-                }
             }
             _ => {}
         }

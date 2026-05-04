@@ -43,11 +43,10 @@ impl OxcCheck for Check {
                 }
                 // Don't double-fire: skip if our parent is also `~`
                 let parent = semantic.nodes().parent_node(node.id());
-                if let AstKind::UnaryExpression(p) = parent.kind() {
-                    if p.operator == UnaryOperator::BitwiseNot {
+                if let AstKind::UnaryExpression(p) = parent.kind()
+                    && p.operator == UnaryOperator::BitwiseNot {
                         return;
                     }
-                }
                 let (line, column) =
                     byte_offset_to_line_col(ctx.source, unary.span.start as usize);
                 diagnostics.push(Diagnostic {

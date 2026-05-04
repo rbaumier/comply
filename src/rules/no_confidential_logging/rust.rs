@@ -56,15 +56,14 @@ fn has_sensitive_identifier(node: tree_sitter::Node, source: &[u8]) -> bool {
     }
     if kind == "field_expression" {
         let mut cursor = node.walk();
-        if let Some(field) = node.children(&mut cursor).last() {
-            if field.kind() == "field_identifier" {
+        if let Some(field) = node.children(&mut cursor).last()
+            && field.kind() == "field_identifier" {
                 let Ok(field_name) = field.utf8_text(source) else {
                     return false;
                 };
                 let lower = field_name.to_ascii_lowercase();
                 return SENSITIVE_WORDS.iter().any(|w| lower.contains(w));
             }
-        }
         return false;
     }
     if kind == "identifier" || kind == "field_identifier" {
@@ -74,11 +73,10 @@ fn has_sensitive_identifier(node: tree_sitter::Node, source: &[u8]) -> bool {
         if is_boolean_name(text) {
             return false;
         }
-        if let Some(next) = node.next_sibling() {
-            if next.utf8_text(source).is_ok_and(|t| t == ".") {
+        if let Some(next) = node.next_sibling()
+            && next.utf8_text(source).is_ok_and(|t| t == ".") {
                 return false;
             }
-        }
         let lower = text.to_ascii_lowercase();
         if SENSITIVE_WORDS.iter().any(|w| lower.contains(w)) {
             return true;

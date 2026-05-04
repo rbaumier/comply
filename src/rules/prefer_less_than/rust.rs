@@ -13,13 +13,12 @@ crate::ast_check! { on ["binary_expression"] => |node, source, ctx, diagnostics|
         _ => return,
     };
 
-    if let Some(rhs) = node.child_by_field_name("right") {
-        if matches!(rhs.kind(), "integer_literal" | "float_literal"
+    if let Some(rhs) = node.child_by_field_name("right")
+        && matches!(rhs.kind(), "integer_literal" | "float_literal"
                     | "string_literal" | "boolean_literal" | "char_literal"
                     | "unary_expression") {
             return;
         }
-    }
 
     let pos = node.start_position();
     diagnostics.push(Diagnostic {

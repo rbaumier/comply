@@ -50,11 +50,10 @@ impl OxcCheck for Check {
         let pid = semantic.nodes().parent_id(node.id());
         if let AstKind::StaticMemberExpression(_) = semantic.nodes().kind(pid) {
             let gpid = semantic.nodes().parent_id(pid);
-            if let AstKind::CallExpression(gp_call) = semantic.nodes().kind(gpid) {
-                if is_andthen_call(gp_call) {
+            if let AstKind::CallExpression(gp_call) = semantic.nodes().kind(gpid)
+                && is_andthen_call(gp_call) {
                     return;
                 }
-            }
         }
 
         let (line, column) = byte_offset_to_line_col(ctx.source, call.span.start as usize);

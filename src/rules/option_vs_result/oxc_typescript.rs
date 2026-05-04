@@ -12,11 +12,10 @@ pub struct Check;
 /// an uppercase letter (camelCase convention).
 fn is_find_or_get(name: &str) -> bool {
     for prefix in &["find", "get"] {
-        if let Some(rest) = name.strip_prefix(prefix) {
-            if rest.starts_with(|c: char| c.is_ascii_uppercase()) {
+        if let Some(rest) = name.strip_prefix(prefix)
+            && rest.starts_with(|c: char| c.is_ascii_uppercase()) {
                 return true;
             }
-        }
     }
     false
 }

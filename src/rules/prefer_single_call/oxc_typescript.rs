@@ -19,13 +19,11 @@ fn extract_call_key(expr: &Expression, source: &str) -> Option<String> {
         return Some(format!("{obj_text}.push"));
     }
 
-    if prop == "add" || prop == "remove" {
-        if let Expression::StaticMemberExpression(inner) = &member.object {
-            if inner.property.name.as_str() == "classList" {
+    if (prop == "add" || prop == "remove")
+        && let Expression::StaticMemberExpression(inner) = &member.object
+            && inner.property.name.as_str() == "classList" {
                 return Some(format!("{obj_text}.{prop}"));
             }
-        }
-    }
 
     None
 }
@@ -34,10 +32,10 @@ fn scan_statements(stmts: &[Statement], source: &str, ctx: &CheckCtx, diagnostic
     let mut prev_key: Option<String> = None;
 
     for stmt in stmts {
-        if let Statement::ExpressionStatement(expr_stmt) = stmt {
-            if let Some(key) = extract_call_key(&expr_stmt.expression, source) {
-                if let Some(ref pk) = prev_key {
-                    if *pk == key {
+        if let Statement::ExpressionStatement(expr_stmt) = stmt
+            && let Some(key) = extract_call_key(&expr_stmt.expression, source) {
+                if let Some(ref pk) = prev_key
+                    && *pk == key {
                         let span = expr_stmt.expression.span();
                         let (line, column) = byte_offset_to_line_col(source, span.start as usize);
                         diagnostics.push(Diagnostic {
@@ -50,11 +48,9 @@ fn scan_statements(stmts: &[Statement], source: &str, ctx: &CheckCtx, diagnostic
                             span: None,
                         });
                     }
-                }
                 prev_key = Some(key);
                 continue;
             }
-        }
 
         // Non-matching statement breaks the chain
         prev_key = None;
@@ -68,11 +64,10 @@ fn scan_statements(stmts: &[Statement], source: &str, ctx: &CheckCtx, diagnostic
                 if let Statement::BlockStatement(block) = &if_stmt.consequent {
                     scan_statements(&block.body, source, ctx, diagnostics);
                 }
-                if let Some(ref alt) = if_stmt.alternate {
-                    if let Statement::BlockStatement(block) = alt {
+                if let Some(ref alt) = if_stmt.alternate
+                    && let Statement::BlockStatement(block) = alt {
                         scan_statements(&block.body, source, ctx, diagnostics);
                     }
-                }
             }
             Statement::ForStatement(for_stmt) => {
                 if let Statement::BlockStatement(block) = &for_stmt.body {

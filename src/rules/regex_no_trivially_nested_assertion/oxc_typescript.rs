@@ -30,11 +30,10 @@ fn find_trivially_nested(pattern: &str) -> bool {
                     continue;
                 }
                 if bytes[j] == b'(' && bytes[j + 1] == b'?' {
-                    if let Some(inner_kind) = get_lookaround_kind(bytes, j) {
-                        if inner_kind == kind {
+                    if let Some(inner_kind) = get_lookaround_kind(bytes, j)
+                        && inner_kind == kind {
                             return true;
                         }
-                    }
                     depth += 1;
                 } else if bytes[j] == b'(' {
                     depth += 1;

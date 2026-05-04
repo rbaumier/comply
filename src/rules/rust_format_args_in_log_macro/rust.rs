@@ -63,13 +63,11 @@ impl AstCheck for Check {
 fn contains_format_macro(node: tree_sitter::Node, source: &[u8]) -> bool {
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
-        if child.kind() == "token_tree" {
-            if let Ok(text) = child.utf8_text(source) {
-                if text.contains("format!") {
+        if child.kind() == "token_tree"
+            && let Ok(text) = child.utf8_text(source)
+                && text.contains("format!") {
                     return true;
                 }
-            }
-        }
     }
     false
 }

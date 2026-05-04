@@ -2,7 +2,6 @@ use crate::diagnostic::Diagnostic;
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, CheckCtx, OxcCheck};
 use oxc_ast::ast::Statement;
-use oxc_span::GetSpan;
 use std::sync::Arc;
 
 pub struct Check;
@@ -18,31 +17,27 @@ impl OxcCheck for Check {
             match node.kind() {
                 AstKind::TryStatement(try_stmt) => {
                     // Check catch clause
-                    if let Some(handler) = &try_stmt.handler {
-                        if block_is_empty_no_comment(&handler.body.body, ctx.source, handler.body.span) {
+                    if let Some(handler) = &try_stmt.handler
+                        && block_is_empty_no_comment(&handler.body.body, ctx.source, handler.body.span) {
                             flag(ctx, handler.span.start, "catch", &mut diagnostics);
                         }
-                    }
                     // Check finally clause (finalizer is a BlockStatement)
-                    if let Some(finalizer) = &try_stmt.finalizer {
-                        if block_is_empty_no_comment(&finalizer.body, ctx.source, finalizer.span) {
+                    if let Some(finalizer) = &try_stmt.finalizer
+                        && block_is_empty_no_comment(&finalizer.body, ctx.source, finalizer.span) {
                             flag(ctx, finalizer.span.start, "finally", &mut diagnostics);
                         }
-                    }
                 }
                 AstKind::IfStatement(stmt) => {
                     // Check if consequence is empty block
-                    if let Statement::BlockStatement(block) = &stmt.consequent {
-                        if block_is_empty_no_comment(&block.body, ctx.source, block.span) {
+                    if let Statement::BlockStatement(block) = &stmt.consequent
+                        && block_is_empty_no_comment(&block.body, ctx.source, block.span) {
                             flag(ctx, stmt.span.start, "if", &mut diagnostics);
                         }
-                    }
                     // Check else branch (alternate)
-                    if let Some(Statement::BlockStatement(block)) = &stmt.alternate {
-                        if block_is_empty_no_comment(&block.body, ctx.source, block.span) {
+                    if let Some(Statement::BlockStatement(block)) = &stmt.alternate
+                        && block_is_empty_no_comment(&block.body, ctx.source, block.span) {
                             flag(ctx, block.span.start, "else", &mut diagnostics);
                         }
-                    }
                 }
                 AstKind::SwitchCase(case) => {
                     // Only flag default case (test is None)
@@ -55,39 +50,34 @@ impl OxcCheck for Check {
                     }
                 }
                 AstKind::WhileStatement(stmt) => {
-                    if let Statement::BlockStatement(block) = &stmt.body {
-                        if block_is_empty_no_comment(&block.body, ctx.source, block.span) {
+                    if let Statement::BlockStatement(block) = &stmt.body
+                        && block_is_empty_no_comment(&block.body, ctx.source, block.span) {
                             flag(ctx, stmt.span.start, "while", &mut diagnostics);
                         }
-                    }
                 }
                 AstKind::DoWhileStatement(stmt) => {
-                    if let Statement::BlockStatement(block) = &stmt.body {
-                        if block_is_empty_no_comment(&block.body, ctx.source, block.span) {
+                    if let Statement::BlockStatement(block) = &stmt.body
+                        && block_is_empty_no_comment(&block.body, ctx.source, block.span) {
                             flag(ctx, stmt.span.start, "do-while", &mut diagnostics);
                         }
-                    }
                 }
                 AstKind::ForStatement(stmt) => {
-                    if let Statement::BlockStatement(block) = &stmt.body {
-                        if block_is_empty_no_comment(&block.body, ctx.source, block.span) {
+                    if let Statement::BlockStatement(block) = &stmt.body
+                        && block_is_empty_no_comment(&block.body, ctx.source, block.span) {
                             flag(ctx, stmt.span.start, "for", &mut diagnostics);
                         }
-                    }
                 }
                 AstKind::ForInStatement(stmt) => {
-                    if let Statement::BlockStatement(block) = &stmt.body {
-                        if block_is_empty_no_comment(&block.body, ctx.source, block.span) {
+                    if let Statement::BlockStatement(block) = &stmt.body
+                        && block_is_empty_no_comment(&block.body, ctx.source, block.span) {
                             flag(ctx, stmt.span.start, "for-in", &mut diagnostics);
                         }
-                    }
                 }
                 AstKind::ForOfStatement(stmt) => {
-                    if let Statement::BlockStatement(block) = &stmt.body {
-                        if block_is_empty_no_comment(&block.body, ctx.source, block.span) {
+                    if let Statement::BlockStatement(block) = &stmt.body
+                        && block_is_empty_no_comment(&block.body, ctx.source, block.span) {
                             flag(ctx, stmt.span.start, "for-of", &mut diagnostics);
                         }
-                    }
                 }
                 _ => {}
             }

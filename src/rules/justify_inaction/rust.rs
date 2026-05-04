@@ -107,11 +107,10 @@ match node.kind() {
             }
         }
         "match_arm" => {
-            if let Some(value) = node.child_by_field_name("value") {
-                if block_is_empty(value) && match_arm_needs_justification(node, _source) {
+            if let Some(value) = node.child_by_field_name("value")
+                && block_is_empty(value) && match_arm_needs_justification(node, _source) {
                     flag_empty(node, value, "match arm", ctx, diagnostics);
                 }
-            }
         }
         "for_expression" | "while_expression" | "loop_expression" => {
             if let Some(body) = node.child_by_field_name("body") {

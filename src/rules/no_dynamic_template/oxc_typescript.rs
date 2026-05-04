@@ -32,7 +32,7 @@ fn emit(ctx: &CheckCtx, start: u32, detail: &str, diagnostics: &mut Vec<Diagnost
 }
 
 /// Get source text for a span.
-fn span_text<'a>(source: &'a str, span: oxc_span::Span) -> &'a str {
+fn span_text(source: &str, span: oxc_span::Span) -> &str {
     &source[span.start as usize..span.end as usize]
 }
 

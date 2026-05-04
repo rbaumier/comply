@@ -16,19 +16,17 @@ fn is_return_type_context(
     for ancestor in semantic.nodes().ancestors(node.id()) {
         match ancestor.kind() {
             AstKind::Function(f) => {
-                if let Some(ret) = &f.return_type {
-                    if void_start >= ret.span.start && void_start < ret.span.end {
+                if let Some(ret) = &f.return_type
+                    && void_start >= ret.span.start && void_start < ret.span.end {
                         return true;
                     }
-                }
                 return false;
             }
             AstKind::ArrowFunctionExpression(f) => {
-                if let Some(ret) = &f.return_type {
-                    if void_start >= ret.span.start && void_start < ret.span.end {
+                if let Some(ret) = &f.return_type
+                    && void_start >= ret.span.start && void_start < ret.span.end {
                         return true;
                     }
-                }
                 return false;
             }
             AstKind::TSTypeAliasDeclaration(_) | AstKind::TSInterfaceDeclaration(_) => {

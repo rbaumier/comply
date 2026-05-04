@@ -32,13 +32,12 @@ impl OxcCheck for Check {
                 };
                 let span = init.span();
                 let init_text = &ctx.source[span.start as usize..span.end as usize];
-                if init_text.contains(".transform(") {
-                    if let oxc_ast::ast::BindingPattern::BindingIdentifier(id) =
+                if init_text.contains(".transform(")
+                    && let oxc_ast::ast::BindingPattern::BindingIdentifier(id) =
                         &declarator.id
                     {
                         transform_schemas.insert(id.name.as_str());
                     }
-                }
             }
         }
 

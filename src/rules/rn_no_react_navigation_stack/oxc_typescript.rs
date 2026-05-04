@@ -41,8 +41,8 @@ impl OxcCheck for Check {
                 }
             }
             AstKind::CallExpression(call) => {
-                if let Expression::Identifier(ident) = &call.callee {
-                    if ident.name.as_str() == "createStackNavigator" {
+                if let Expression::Identifier(ident) = &call.callee
+                    && ident.name.as_str() == "createStackNavigator" {
                         let (line, column) =
                             byte_offset_to_line_col(ctx.source, call.span.start as usize);
                         diagnostics.push(Diagnostic {
@@ -56,7 +56,6 @@ impl OxcCheck for Check {
                             span: None,
                         });
                     }
-                }
             }
             _ => {}
         }

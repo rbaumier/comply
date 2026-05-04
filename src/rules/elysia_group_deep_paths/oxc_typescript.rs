@@ -56,13 +56,11 @@ impl OxcCheck for Check {
                 break;
             }
             let parent = nodes.get_node(parent_id);
-            if let AstKind::CallExpression(parent_call) = parent.kind() {
-                if let Expression::StaticMemberExpression(pm) = &parent_call.callee {
-                    if pm.property.name.as_str() == "group" {
+            if let AstKind::CallExpression(parent_call) = parent.kind()
+                && let Expression::StaticMemberExpression(pm) = &parent_call.callee
+                    && pm.property.name.as_str() == "group" {
                         return;
                     }
-                }
-            }
             current = parent_id;
         }
 

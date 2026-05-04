@@ -9,7 +9,6 @@ use oxc_ast::ast::{
     Argument, Expression, JSXAttributeItem, JSXAttributeName, JSXAttributeValue,
     JSXElementName, JSXExpression, Statement,
 };
-use oxc_span::GetSpan;
 use std::sync::Arc;
 
 pub struct Check;
@@ -40,10 +39,10 @@ impl OxcCheck for Check {
 
         for arg in &call.arguments {
             let Argument::ArrowFunctionExpression(arrow) = arg else {
-                if let Argument::FunctionExpression(func) = arg {
-                    if let Some(body) = &func.body {
-                        if let Some(jsx) = find_returned_jsx_in_stmts(&body.statements) {
-                            if is_button_with_ternary_variant(jsx) {
+                if let Argument::FunctionExpression(func) = arg
+                    && let Some(body) = &func.body
+                        && let Some(jsx) = find_returned_jsx_in_stmts(&body.statements)
+                            && is_button_with_ternary_variant(jsx) {
                                 let (line, column) =
                                     byte_offset_to_line_col(ctx.source, call.span.start as usize);
                                 diagnostics.push(Diagnostic {
@@ -57,9 +56,6 @@ impl OxcCheck for Check {
                                 });
                                 return;
                             }
-                        }
-                    }
-                }
                 continue;
             };
 
@@ -69,8 +65,8 @@ impl OxcCheck for Check {
                 find_returned_jsx_in_stmts(&arrow.body.statements)
             };
 
-            if let Some(jsx) = jsx {
-                if is_button_with_ternary_variant(jsx) {
+            if let Some(jsx) = jsx
+                && is_button_with_ternary_variant(jsx) {
                     let (line, column) =
                         byte_offset_to_line_col(ctx.source, call.span.start as usize);
                     diagnostics.push(Diagnostic {
@@ -84,7 +80,6 @@ impl OxcCheck for Check {
                     });
                     return;
                 }
-            }
         }
     }
 }
@@ -116,11 +111,10 @@ fn find_returned_jsx_in_stmts<'a>(
     stmts: &'a [Statement<'a>],
 ) -> Option<JsxRef<'a>> {
     for stmt in stmts {
-        if let Statement::ReturnStatement(ret) = stmt {
-            if let Some(arg) = &ret.argument {
+        if let Statement::ReturnStatement(ret) = stmt
+            && let Some(arg) = &ret.argument {
                 return jsx_from_expression(arg);
             }
-        }
     }
     None
 }

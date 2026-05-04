@@ -44,11 +44,10 @@ impl OxcCheck for Check {
 }
 
 fn is_promise_type(ty: &TSType) -> bool {
-    if let TSType::TSTypeReference(tref) = ty {
-        if let TSTypeName::IdentifierReference(id) = &tref.type_name {
+    if let TSType::TSTypeReference(tref) = ty
+        && let TSTypeName::IdentifierReference(id) = &tref.type_name {
             return id.name.as_str() == "Promise";
         }
-    }
     false
 }
 

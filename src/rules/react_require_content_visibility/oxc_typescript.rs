@@ -67,15 +67,12 @@ fn large_array_source(recv: &Expression, min_nodes: usize) -> bool {
                 return false;
             };
             for prop in &obj_expr.properties {
-                if let oxc_ast::ast::ObjectPropertyKind::ObjectProperty(p) = prop {
-                    if let oxc_ast::ast::PropertyKey::StaticIdentifier(key) = &p.key {
-                        if key.name.as_str() == "length" {
-                            if let Expression::NumericLiteral(n) = &p.value {
+                if let oxc_ast::ast::ObjectPropertyKind::ObjectProperty(p) = prop
+                    && let oxc_ast::ast::PropertyKey::StaticIdentifier(key) = &p.key
+                        && key.name.as_str() == "length"
+                            && let Expression::NumericLiteral(n) = &p.value {
                                 return (n.value as usize) >= min_nodes;
                             }
-                        }
-                    }
-                }
             }
             false
         }
@@ -103,15 +100,12 @@ fn is_known_small_array_source(recv: &Expression, min_nodes: usize) -> bool {
                 return false;
             };
             for prop in &obj_expr.properties {
-                if let oxc_ast::ast::ObjectPropertyKind::ObjectProperty(p) = prop {
-                    if let oxc_ast::ast::PropertyKey::StaticIdentifier(key) = &p.key {
-                        if key.name.as_str() == "length" {
-                            if let Expression::NumericLiteral(n) = &p.value {
+                if let oxc_ast::ast::ObjectPropertyKind::ObjectProperty(p) = prop
+                    && let oxc_ast::ast::PropertyKey::StaticIdentifier(key) = &p.key
+                        && key.name.as_str() == "length"
+                            && let Expression::NumericLiteral(n) = &p.value {
                                 return (n.value as usize) < min_nodes;
                             }
-                        }
-                    }
-                }
             }
             false
         }
@@ -144,11 +138,10 @@ fn callback_returns_jsx_in_body(body: &oxc_ast::ast::FunctionBody) -> bool {
                 }
             }
             oxc_ast::ast::Statement::ReturnStatement(ret) => {
-                if let Some(arg) = &ret.argument {
-                    if walk_expr_for_jsx(arg) {
+                if let Some(arg) = &ret.argument
+                    && walk_expr_for_jsx(arg) {
                         return true;
                     }
-                }
             }
             _ => {}
         }

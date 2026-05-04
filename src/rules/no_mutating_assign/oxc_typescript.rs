@@ -41,11 +41,10 @@ impl OxcCheck for Check {
         let Some(first) = call.arguments.first() else { return };
 
         // Allow `Object.assign({}, ...)`.
-        if let oxc_ast::ast::Argument::ObjectExpression(obj_expr) = first {
-            if obj_expr.properties.is_empty() {
+        if let oxc_ast::ast::Argument::ObjectExpression(obj_expr) = first
+            && obj_expr.properties.is_empty() {
                 return;
             }
-        }
 
         let (line, column) = byte_offset_to_line_col(ctx.source, call.span.start as usize);
         diagnostics.push(Diagnostic {

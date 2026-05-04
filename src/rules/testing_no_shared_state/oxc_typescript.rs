@@ -6,7 +6,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{
-    AssignmentTarget, Expression, SimpleAssignmentTarget, VariableDeclarationKind,
+    AssignmentTarget, Expression, VariableDeclarationKind,
 };
 use oxc_span::GetSpan;
 use std::collections::HashSet;
@@ -45,7 +45,7 @@ impl OxcCheck for Check {
 
         // Step 1: collect program-level let/var bindings.
         // Program-scope variable declarations are direct children of Program.
-        let root_scope = semantic.scoping().root_scope_id();
+        let _root_scope = semantic.scoping().root_scope_id();
         let mut bindings: Vec<(String, u32)> = Vec::new(); // (name, span_start)
         let mut names: HashSet<String> = HashSet::new();
 
@@ -159,11 +159,10 @@ fn collect_mutations_in_span(
         match node.kind() {
             // Case 1 & 2: assignment expressions
             AstKind::AssignmentExpression(assign) => {
-                if let Some(name) = root_name_of_target(&assign.left) {
-                    if names.contains(name) {
+                if let Some(name) = root_name_of_target(&assign.left)
+                    && names.contains(name) {
                         found.insert(name.to_string());
                     }
-                }
             }
             // Case 3: mutating method calls
             AstKind::CallExpression(call) => {

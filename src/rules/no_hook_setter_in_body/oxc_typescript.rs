@@ -75,8 +75,8 @@ impl OxcCheck for Check {
                 }
                 AstKind::Function(func) => {
                     depth += 1;
-                    if depth == 1 {
-                        if let Some(ref id) = func.id {
+                    if depth == 1
+                        && let Some(ref id) = func.id {
                             let fn_name = id.name.as_str();
                             if fn_name
                                 .starts_with(|c: char| c.is_ascii_uppercase())
@@ -84,7 +84,6 @@ impl OxcCheck for Check {
                                 in_component = true;
                             }
                         }
-                    }
                 }
                 AstKind::ArrowFunctionExpression(_) => {
                     depth += 1;

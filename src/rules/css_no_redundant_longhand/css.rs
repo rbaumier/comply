@@ -73,7 +73,7 @@ crate::ast_check! { on ["block"] => |node, source, ctx, diagnostics|
             let pos = entries.iter().position(|(n, _)| n == lh);
             match pos {
                 Some(i) => {
-                    if first_idx.map_or(true, |fi| i < fi) {
+                    if first_idx.is_none_or(|fi| i < fi) {
                         first_idx = Some(i);
                     }
                 }

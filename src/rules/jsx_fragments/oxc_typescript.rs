@@ -30,11 +30,10 @@ fn is_fragment_tag(name: &JSXElementName) -> bool {
 
 fn has_key_attribute(attrs: &oxc_allocator::Vec<'_, JSXAttributeItem<'_>>) -> bool {
     attrs.iter().any(|item| {
-        if let JSXAttributeItem::Attribute(attr) = item {
-            if let JSXAttributeName::Identifier(id) = &attr.name {
+        if let JSXAttributeItem::Attribute(attr) = item
+            && let JSXAttributeName::Identifier(id) = &attr.name {
                 return id.name.as_str() == "key";
             }
-        }
         false
     })
 }

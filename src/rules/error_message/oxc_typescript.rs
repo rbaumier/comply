@@ -95,8 +95,8 @@ fn check_args(
             }
 
             // Empty string literal
-            if let Expression::StringLiteral(s) = expr {
-                if s.value.is_empty() {
+            if let Expression::StringLiteral(s) = expr
+                && s.value.is_empty() {
                     let (line, column) =
                         byte_offset_to_line_col(ctx.source, arg_span.start as usize);
                     diagnostics.push(Diagnostic {
@@ -110,13 +110,12 @@ fn check_args(
                     });
                     return;
                 }
-            }
 
             // Empty template literal
-            if let Expression::TemplateLiteral(tpl) = expr {
-                if tpl.expressions.is_empty() && tpl.quasis.len() == 1 {
-                    if let Some(q) = tpl.quasis.first() {
-                        if q.value.raw.is_empty() {
+            if let Expression::TemplateLiteral(tpl) = expr
+                && tpl.expressions.is_empty() && tpl.quasis.len() == 1
+                    && let Some(q) = tpl.quasis.first()
+                        && q.value.raw.is_empty() {
                             let (line, column) =
                                 byte_offset_to_line_col(ctx.source, arg_span.start as usize);
                             diagnostics.push(Diagnostic {
@@ -130,9 +129,6 @@ fn check_args(
                             });
                             return;
                         }
-                    }
-                }
-            }
 
             // Numeric or boolean literal
             if matches!(

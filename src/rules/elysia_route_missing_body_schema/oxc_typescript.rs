@@ -97,7 +97,7 @@ fn options_has_body_key(
 
 fn obj_has_body_key(
     properties: &oxc_allocator::Vec<oxc_ast::ast::ObjectPropertyKind>,
-    source: &str,
+    _source: &str,
 ) -> bool {
     use oxc_ast::ast::{ObjectPropertyKind, PropertyKey};
     for prop in properties.iter() {

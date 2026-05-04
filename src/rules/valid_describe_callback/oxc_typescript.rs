@@ -4,7 +4,6 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::Expression;
-use oxc_span::GetSpan;
 use std::sync::Arc;
 
 pub struct Check;
@@ -33,7 +32,7 @@ impl OxcCheck for Check {
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        semantic: &'a oxc_semantic::Semantic<'a>,
+        _semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let AstKind::CallExpression(call) = node.kind() else {
@@ -135,11 +134,10 @@ fn body_returns_value_stmts(stmts: &[oxc_ast::ast::Statement]) -> bool {
                 if stmt_returns_value(&if_stmt.consequent) {
                     return true;
                 }
-                if let Some(ref alt) = if_stmt.alternate {
-                    if stmt_returns_value(alt) {
+                if let Some(ref alt) = if_stmt.alternate
+                    && stmt_returns_value(alt) {
                         return true;
                     }
-                }
             }
             // Don't descend into nested function declarations/expressions
             Statement::FunctionDeclaration(_) => continue,

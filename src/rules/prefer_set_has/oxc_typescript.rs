@@ -34,15 +34,13 @@ impl OxcCheck for Check {
                     continue;
                 }
                 for declarator in &decl.declarations {
-                    if let Some(init) = &declarator.init {
-                        if matches!(init, Expression::ArrayExpression(_)) {
-                            if let oxc_ast::ast::BindingPattern::BindingIdentifier(id) =
+                    if let Some(init) = &declarator.init
+                        && matches!(init, Expression::ArrayExpression(_))
+                            && let oxc_ast::ast::BindingPattern::BindingIdentifier(id) =
                                 &declarator.id
                             {
                                 array_names.insert(id.name.as_str().to_owned());
                             }
-                        }
-                    }
                 }
             }
         }
@@ -53,11 +51,11 @@ impl OxcCheck for Check {
 
         // Phase 2: find `.includes(` calls on those names.
         for node in semantic.nodes().iter() {
-            if let AstKind::CallExpression(call) = node.kind() {
-                if let Expression::StaticMemberExpression(member) = &call.callee {
-                    if member.property.name.as_str() == "includes" {
-                        if let Expression::Identifier(obj) = &member.object {
-                            if array_names.contains(obj.name.as_str()) {
+            if let AstKind::CallExpression(call) = node.kind()
+                && let Expression::StaticMemberExpression(member) = &call.callee
+                    && member.property.name.as_str() == "includes"
+                        && let Expression::Identifier(obj) = &member.object
+                            && array_names.contains(obj.name.as_str()) {
                                 let (line, column) =
                                     byte_offset_to_line_col(ctx.source, call.span.start as usize);
                                 diagnostics.push(Diagnostic {
@@ -73,10 +71,6 @@ impl OxcCheck for Check {
                                     span: None,
                                 });
                             }
-                        }
-                    }
-                }
-            }
         }
 
         diagnostics

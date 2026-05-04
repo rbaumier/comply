@@ -43,8 +43,8 @@ impl OxcCheck for Check {
         // Check arguments region for `this.state` using source text.
         let args_start = call.arguments.first().map(|a| a.span().start as usize);
         let args_end = call.arguments.last().map(|a| a.span().end as usize);
-        if let (Some(start), Some(end)) = (args_start, args_end) {
-            if end <= ctx.source.len() {
+        if let (Some(start), Some(end)) = (args_start, args_end)
+            && end <= ctx.source.len() {
                 let args_text = &ctx.source[start..end];
                 if args_text.contains("this.state") {
                     let (line, column) =
@@ -63,6 +63,5 @@ impl OxcCheck for Check {
                     });
                 }
             }
-        }
     }
 }

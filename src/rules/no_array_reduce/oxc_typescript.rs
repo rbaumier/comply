@@ -90,8 +90,8 @@ fn is_simple_binary_or_math(expr: &Expression, source: &str) -> bool {
         return SIMPLE_OPS.contains(&bin.operator);
     }
     // Math.min / Math.max
-    if let Expression::CallExpression(call) = expr {
-        if let Expression::StaticMemberExpression(member) = &call.callee {
+    if let Expression::CallExpression(call) = expr
+        && let Expression::StaticMemberExpression(member) = &call.callee {
             use oxc_span::GetSpan;
             let obj_text = &source
                 [member.object.span().start as usize..member.object.span().end as usize];
@@ -100,7 +100,6 @@ fn is_simple_binary_or_math(expr: &Expression, source: &str) -> bool {
                 return true;
             }
         }
-    }
     false
 }
 

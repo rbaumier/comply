@@ -63,11 +63,10 @@ impl OxcCheck for Check {
                 continue;
             };
             let name = name_ident.name.as_str();
-            if name == "role" {
-                if let Some(JSXAttributeValue::StringLiteral(lit)) = &attr.value {
+            if name == "role"
+                && let Some(JSXAttributeValue::StringLiteral(lit)) = &attr.value {
                     role_value = Some(lit.value.as_str());
                 }
-            }
             if name == "href" {
                 has_href = true;
             }

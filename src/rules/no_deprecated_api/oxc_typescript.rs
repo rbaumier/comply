@@ -70,8 +70,8 @@ impl OxcCheck for Check {
     ) {
         match node.kind() {
             AstKind::NewExpression(new_expr) => {
-                if let Expression::Identifier(id) = &new_expr.callee {
-                    if id.name.as_str() == "Buffer" {
+                if let Expression::Identifier(id) = &new_expr.callee
+                    && id.name.as_str() == "Buffer" {
                         let (line, column) =
                             byte_offset_to_line_col(ctx.source, new_expr.span.start as usize);
                         diagnostics.push(Diagnostic {
@@ -84,14 +84,13 @@ impl OxcCheck for Check {
                             span: None,
                         });
                     }
-                }
             }
             AstKind::CallExpression(call) => {
                 // Check require('deprecated-module')
-                if let Expression::Identifier(callee_id) = &call.callee {
-                    if callee_id.name.as_str() == "require" {
-                        if let Some(first_arg) = call.arguments.first() {
-                            if let oxc_ast::ast::Argument::StringLiteral(lit) = first_arg {
+                if let Expression::Identifier(callee_id) = &call.callee
+                    && callee_id.name.as_str() == "require" {
+                        if let Some(first_arg) = call.arguments.first()
+                            && let oxc_ast::ast::Argument::StringLiteral(lit) = first_arg {
                                 let val = lit.value.as_str();
                                 for &(module, message) in DEPRECATED_REQUIRES {
                                     if val == module {
@@ -109,14 +108,12 @@ impl OxcCheck for Check {
                                     }
                                 }
                             }
-                        }
                         return;
                     }
-                }
 
                 // Check deprecated member calls like fs.exists(), url.parse()
-                if let Expression::StaticMemberExpression(member) = &call.callee {
-                    if let Expression::Identifier(obj) = &member.object {
+                if let Expression::StaticMemberExpression(member) = &call.callee
+                    && let Expression::Identifier(obj) = &member.object {
                         let obj_name = obj.name.as_str();
                         let prop_name = member.property.name.as_str();
 
@@ -136,7 +133,6 @@ impl OxcCheck for Check {
                             }
                         }
                     }
-                }
             }
             AstKind::StaticMemberExpression(member) => {
                 // Check deprecated member access like querystring.escape, process.env.NODE_DEBUG

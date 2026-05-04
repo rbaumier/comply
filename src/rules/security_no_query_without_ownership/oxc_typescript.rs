@@ -5,7 +5,6 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::Expression;
-use oxc_span::GetSpan;
 use std::sync::Arc;
 
 #[derive(Debug)]
@@ -153,13 +152,12 @@ fn is_in_route_handler(
                     ) {
                         // Check if exported
                         let gp_id = nodes.parent_id(parent_id);
-                        if gp_id != parent_id {
-                            if let AstKind::ExportNamedDeclaration(_) =
+                        if gp_id != parent_id
+                            && let AstKind::ExportNamedDeclaration(_) =
                                 nodes.get_node(gp_id).kind()
                             {
                                 return true;
                             }
-                        }
                     }
                 }
                 // Check for request-like parameter names

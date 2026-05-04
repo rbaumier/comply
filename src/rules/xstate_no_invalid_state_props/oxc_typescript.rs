@@ -49,7 +49,7 @@ impl OxcCheck for Check {
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        semantic: &'a oxc_semantic::Semantic<'a>,
+        _semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let AstKind::ObjectProperty(prop) = node.kind() else {

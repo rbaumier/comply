@@ -44,8 +44,8 @@ impl OxcCheck for Check {
                 }
 
                 // Pattern 3: `Number(new Date())`
-                if let Expression::Identifier(ident) = &call.callee {
-                    if ident.name.as_str() == "Number"
+                if let Expression::Identifier(ident) = &call.callee
+                    && ident.name.as_str() == "Number"
                         && call.arguments.len() == 1
                         && let Some(arg) = call.arguments.first()
                         && let Some(expr) = arg.as_expression()
@@ -66,7 +66,6 @@ impl OxcCheck for Check {
                             span: None,
                         });
                     }
-                }
             }
             AstKind::UnaryExpression(unary) => {
                 // Pattern 2: `+new Date()`

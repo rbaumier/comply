@@ -29,13 +29,12 @@ impl OxcCheck for Check {
             AstKind::Function(func) => {
                 // Skip constructors and setters — they don't take a return type.
                 let parent = semantic.nodes().parent_node(node.id());
-                if let AstKind::MethodDefinition(method) = parent.kind() {
-                    if method.kind == MethodDefinitionKind::Set
-                        || method.kind == MethodDefinitionKind::Constructor
+                if let AstKind::MethodDefinition(method) = parent.kind()
+                    && (method.kind == MethodDefinitionKind::Set
+                        || method.kind == MethodDefinitionKind::Constructor)
                     {
                         return;
                     }
-                }
 
                 if func.return_type.is_some() {
                     return;

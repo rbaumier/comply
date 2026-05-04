@@ -25,7 +25,7 @@ fn is_vi_method(call: &oxc_ast::ast::CallExpression, source: &str, methods: &[&s
 fn is_inside_after_hook(
     node_id: oxc_semantic::NodeId,
     semantic: &oxc_semantic::Semantic,
-    source: &str,
+    _source: &str,
 ) -> bool {
     let nodes = semantic.nodes();
     let mut current = node_id;

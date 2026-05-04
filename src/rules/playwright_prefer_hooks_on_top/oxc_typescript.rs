@@ -22,7 +22,7 @@ const HOOKS: &[&str] = &["beforeAll", "beforeEach", "afterAll", "afterEach"];
 
 /// Get the callee name of a call expression. For `test(...)` returns "test",
 /// for `test.only(...)` returns "test".
-fn call_name<'a>(call: &'a oxc_ast::ast::CallExpression<'a>, source: &str) -> Option<&'a str> {
+fn call_name<'a>(call: &'a oxc_ast::ast::CallExpression<'a>, _source: &str) -> Option<&'a str> {
     match &call.callee {
         Expression::Identifier(id) => Some(id.name.as_str()),
         Expression::StaticMemberExpression(mem) => {
@@ -75,17 +75,15 @@ fn check_statements(
                 }
                 _ => false,
             };
-            if is_describe {
-                if let Some(last_arg) = call.arguments.last() {
+            if is_describe
+                && let Some(last_arg) = call.arguments.last() {
                     if let oxc_ast::ast::Argument::ArrowFunctionExpression(arrow) = last_arg {
                         check_statements(&arrow.body.statements, ctx, diagnostics);
-                    } else if let oxc_ast::ast::Argument::FunctionExpression(func) = last_arg {
-                        if let Some(body) = &func.body {
+                    } else if let oxc_ast::ast::Argument::FunctionExpression(func) = last_arg
+                        && let Some(body) = &func.body {
                             check_statements(&body.statements, ctx, diagnostics);
                         }
-                    }
                 }
-            }
         }
     }
 }

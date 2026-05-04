@@ -62,8 +62,8 @@ impl OxcCheck for Check {
 
         // Walk ancestors looking for TabsList or Tabs root.
         for ancestor in semantic.nodes().ancestors(node.id()) {
-            if let AstKind::JSXOpeningElement(parent_opening) = ancestor.kind() {
-                if let Some(parent_tag) = jsx_tag_name(parent_opening) {
+            if let AstKind::JSXOpeningElement(parent_opening) = ancestor.kind()
+                && let Some(parent_tag) = jsx_tag_name(parent_opening) {
                     if is_list_tag(&parent_tag) {
                         return; // Correctly wrapped.
                     }
@@ -82,7 +82,6 @@ impl OxcCheck for Check {
                         return;
                     }
                 }
-            }
         }
     }
 }

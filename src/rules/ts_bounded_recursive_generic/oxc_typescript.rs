@@ -48,11 +48,10 @@ impl OxcCheck for Check {
         }
 
         // Must lack a depth parameter.
-        if let Some(type_params) = &alias.type_parameters {
-            if has_depth_parameter(type_params, ctx.source) {
+        if let Some(type_params) = &alias.type_parameters
+            && has_depth_parameter(type_params, ctx.source) {
                 return;
             }
-        }
 
         let (line, column) =
             byte_offset_to_line_col(ctx.source, alias.span.start as usize);

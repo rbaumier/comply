@@ -20,7 +20,6 @@ impl OxcCheck for Check {
     ) -> Vec<Diagnostic> {
         use oxc_ast::ast::*;
         use oxc_ast::AstKind;
-        use oxc_span::GetSpan;
 
         let mut diagnostics = Vec::new();
 
@@ -95,10 +94,9 @@ fn property_key_name(key: &oxc_ast::ast::PropertyKey, source: &str) -> Option<St
 
 fn extract_overload_name_from_stmt(
     stmt: &oxc_ast::ast::Statement,
-    source: &str,
+    _source: &str,
 ) -> Option<(String, oxc_span::Span)> {
     use oxc_ast::ast::*;
-    use oxc_span::GetSpan;
 
     match stmt {
         Statement::FunctionDeclaration(f) => {

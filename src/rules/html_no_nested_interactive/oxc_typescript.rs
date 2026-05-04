@@ -5,7 +5,6 @@ use oxc_ast::ast::{
     JSXAttributeItem, JSXAttributeName, JSXAttributeValue, JSXChild, JSXElementName,
     JSXExpression, UnaryOperator,
 };
-use oxc_span::GetSpan;
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -55,11 +54,10 @@ fn has_interactive_role(attrs: &oxc_allocator::Vec<'_, JSXAttributeItem>) -> boo
         if name.name.as_str() != "role" {
             continue;
         }
-        if let Some(JSXAttributeValue::StringLiteral(lit)) = &attr.value {
-            if INTERACTIVE_ROLES.contains(&lit.value.as_str()) {
+        if let Some(JSXAttributeValue::StringLiteral(lit)) = &attr.value
+            && INTERACTIVE_ROLES.contains(&lit.value.as_str()) {
                 return true;
             }
-        }
     }
     false
 }
@@ -85,13 +83,11 @@ fn has_tabindex(attrs: &oxc_allocator::Vec<'_, JSXAttributeItem>) -> bool {
                     return num.value != -1.0;
                 }
                 if let JSXExpression::UnaryExpression(unary) = &container.expression {
-                    if unary.operator == UnaryOperator::UnaryNegation {
-                        if let oxc_ast::ast::Expression::NumericLiteral(num) = &unary.argument {
-                            if num.value == 1.0 {
+                    if unary.operator == UnaryOperator::UnaryNegation
+                        && let oxc_ast::ast::Expression::NumericLiteral(num) = &unary.argument
+                            && num.value == 1.0 {
                                 return false;
                             }
-                        }
-                    }
                     return true;
                 }
                 return true;
@@ -106,11 +102,10 @@ fn is_interactive_opening(
     name: &JSXElementName,
     attrs: &oxc_allocator::Vec<'_, JSXAttributeItem>,
 ) -> bool {
-    if let Some(tag) = element_name_str(name) {
-        if is_interactive_by_tag(tag) {
+    if let Some(tag) = element_name_str(name)
+        && is_interactive_by_tag(tag) {
             return true;
         }
-    }
     has_interactive_role(attrs) || has_tabindex(attrs)
 }
 

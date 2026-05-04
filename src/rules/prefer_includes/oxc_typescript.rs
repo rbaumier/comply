@@ -101,13 +101,11 @@ fn literal_text(expr: &Expression, _source: &str) -> Option<String> {
             }
         }
         Expression::UnaryExpression(u) => {
-            if u.operator == UnaryOperator::UnaryNegation {
-                if let Expression::NumericLiteral(n) = &u.argument {
-                    if n.value == 1.0 {
+            if u.operator == UnaryOperator::UnaryNegation
+                && let Expression::NumericLiteral(n) = &u.argument
+                    && n.value == 1.0 {
                         return Some("-1".to_string());
                     }
-                }
-            }
             None
         }
         _ => None,

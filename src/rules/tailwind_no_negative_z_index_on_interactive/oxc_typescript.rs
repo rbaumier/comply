@@ -35,18 +35,16 @@ impl OxcCheck for Check {
             let name = name_ident.name.as_str();
             match name {
                 "role" => {
-                    if let Some(oxc_ast::ast::JSXAttributeValue::StringLiteral(s)) = &attr.value {
-                        if s.value.as_str() == "button" {
+                    if let Some(oxc_ast::ast::JSXAttributeValue::StringLiteral(s)) = &attr.value
+                        && s.value.as_str() == "button" {
                             role_button = true;
                         }
-                    }
                 }
                 "className" | "class" => {
-                    if let Some(oxc_ast::ast::JSXAttributeValue::StringLiteral(s)) = &attr.value {
-                        if let Some(c) = s.value.as_str().split_whitespace().find(|c| c.starts_with("-z-")) {
+                    if let Some(oxc_ast::ast::JSXAttributeValue::StringLiteral(s)) = &attr.value
+                        && let Some(c) = s.value.as_str().split_whitespace().find(|c| c.starts_with("-z-")) {
                             neg_z_class = Some(c.to_string());
                         }
-                    }
                 }
                 _ => {}
             }

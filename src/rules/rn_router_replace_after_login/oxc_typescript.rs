@@ -69,8 +69,8 @@ impl OxcCheck for Check {
     }
 }
 
-fn enclosing_function_name<'a, 'b>(
-    node: &'a oxc_semantic::AstNode<'b>,
+fn enclosing_function_name<'b>(
+    node: &oxc_semantic::AstNode<'b>,
     semantic: &'b oxc_semantic::Semantic<'b>,
     source: &'b str,
 ) -> Option<&'b str> {

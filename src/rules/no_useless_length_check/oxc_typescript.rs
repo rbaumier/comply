@@ -85,10 +85,10 @@ impl OxcCheck for Check {
         };
 
         // Pattern 1: `arr.length > 0 && arr.some(fn)` or `arr.length !== 0 && arr.some(fn)`
-        if logical.operator == LogicalOperator::And {
-            if let Some((len_name, true)) = is_length_compare_zero(&logical.left) {
-                if let Some((call_name, "some")) = is_some_or_every_call(&logical.right) {
-                    if len_name == call_name {
+        if logical.operator == LogicalOperator::And
+            && let Some((len_name, true)) = is_length_compare_zero(&logical.left)
+                && let Some((call_name, "some")) = is_some_or_every_call(&logical.right)
+                    && len_name == call_name {
                         let (line, column) =
                             byte_offset_to_line_col(ctx.source, logical.left.span().start as usize);
                         diagnostics.push(Diagnostic {
@@ -102,15 +102,12 @@ impl OxcCheck for Check {
                         });
                         return;
                     }
-                }
-            }
-        }
 
         // Pattern 2: `arr.length === 0 || arr.every(fn)`
-        if logical.operator == LogicalOperator::Or {
-            if let Some((len_name, false)) = is_length_compare_zero(&logical.left) {
-                if let Some((call_name, "every")) = is_some_or_every_call(&logical.right) {
-                    if len_name == call_name {
+        if logical.operator == LogicalOperator::Or
+            && let Some((len_name, false)) = is_length_compare_zero(&logical.left)
+                && let Some((call_name, "every")) = is_some_or_every_call(&logical.right)
+                    && len_name == call_name {
                         let (line, column) =
                             byte_offset_to_line_col(ctx.source, logical.left.span().start as usize);
                         diagnostics.push(Diagnostic {
@@ -123,8 +120,5 @@ impl OxcCheck for Check {
                             span: None,
                         });
                     }
-                }
-            }
-        }
     }
 }

@@ -6,7 +6,6 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{Argument, Expression, Statement};
-use oxc_span::GetSpan;
 use std::sync::Arc;
 
 #[derive(Debug)]
@@ -109,11 +108,10 @@ fn settle_kind_from_arrow<'a>(
     // If expression body (single expression, no braces)
     if arrow.expression {
         let stmts = &arrow.body.statements;
-        if stmts.len() == 1 {
-            if let Statement::ExpressionStatement(expr_stmt) = &stmts[0] {
+        if stmts.len() == 1
+            && let Statement::ExpressionStatement(expr_stmt) = &stmts[0] {
                 return promise_settle_kind(&expr_stmt.expression);
             }
-        }
         return None;
     }
 

@@ -60,14 +60,13 @@ impl OxcCheck for Check {
                     }
                     if let Some(idx) = found_idx {
                         // Check if the next statement is a return or throw.
-                        if let Some(next) = stmts.get(idx + 1) {
-                            if matches!(
+                        if let Some(next) = stmts.get(idx + 1)
+                            && matches!(
                                 next,
                                 Statement::ReturnStatement(_) | Statement::ThrowStatement(_)
                             ) {
                                 return;
                             }
-                        }
 
                         // If this is the last statement in a function body, it's fine.
                         if idx == stmts.len() - 1 {

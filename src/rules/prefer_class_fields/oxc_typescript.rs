@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use oxc_ast::ast::{AssignmentOperator, Expression};
-use oxc_span::GetSpan;
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;

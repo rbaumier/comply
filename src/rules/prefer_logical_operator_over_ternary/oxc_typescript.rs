@@ -52,8 +52,8 @@ impl OxcCheck for Check {
         }
 
         // Pattern 2: `!bar ? foo : bar` — negated test.argument === alternate
-        if let oxc_ast::ast::Expression::UnaryExpression(unary) = &cond.test {
-            if unary.operator == UnaryOperator::LogicalNot {
+        if let oxc_ast::ast::Expression::UnaryExpression(unary) = &cond.test
+            && unary.operator == UnaryOperator::LogicalNot {
                 let arg_text = &ctx.source[unary.argument.span().start as usize..unary.argument.span().end as usize];
                 if same_text(arg_text, alternate_text) {
                     let (line, column) = byte_offset_to_line_col(ctx.source, cond.span.start as usize);
@@ -71,6 +71,5 @@ impl OxcCheck for Check {
                     });
                 }
             }
-        }
     }
 }

@@ -28,19 +28,17 @@ impl OxcCheck for Check {
             };
 
             // Check for createServerFn(...)
-            if let oxc_ast::ast::Expression::Identifier(id) = &call.callee {
-                if id.name.as_str() == "createServerFn" {
+            if let oxc_ast::ast::Expression::Identifier(id) = &call.callee
+                && id.name.as_str() == "createServerFn" {
                     server_fn_spans.push(call.span);
                     continue;
                 }
-            }
 
             // Check for .input() / .safeParse() / .parse()
-            if let oxc_ast::ast::Expression::StaticMemberExpression(member) = &call.callee {
-                if VALIDATION_METHODS.contains(&member.property.name.as_str()) {
+            if let oxc_ast::ast::Expression::StaticMemberExpression(member) = &call.callee
+                && VALIDATION_METHODS.contains(&member.property.name.as_str()) {
                     has_validation = true;
                 }
-            }
         }
 
         if server_fn_spans.is_empty() || has_validation {

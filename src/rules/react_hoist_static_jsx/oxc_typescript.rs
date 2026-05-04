@@ -72,13 +72,11 @@ fn inside_component_body<'a>(
                 }
             }
             AstKind::ArrowFunctionExpression(_) => {
-                if let Some(grandparent) = nodes.ancestors(ancestor.id()).nth(1) {
-                    if let AstKind::VariableDeclarator(decl) = grandparent.kind() {
-                        if let BindingPattern::BindingIdentifier(id) = &decl.id {
+                if let Some(grandparent) = nodes.ancestors(ancestor.id()).nth(1)
+                    && let AstKind::VariableDeclarator(decl) = grandparent.kind()
+                        && let BindingPattern::BindingIdentifier(id) = &decl.id {
                             return starts_with_uppercase(id.name.as_str());
                         }
-                    }
-                }
             }
             _ => continue,
         }

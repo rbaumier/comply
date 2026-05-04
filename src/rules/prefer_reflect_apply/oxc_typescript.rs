@@ -38,11 +38,10 @@ impl OxcCheck for Check {
         }
 
         // Skip `Reflect.apply(...)`.
-        if let Expression::Identifier(obj) = &member.object {
-            if obj.name.as_str() == "Reflect" {
+        if let Expression::Identifier(obj) = &member.object
+            && obj.name.as_str() == "Reflect" {
                 return;
             }
-        }
 
         let (line, column) = byte_offset_to_line_col(ctx.source, call.span.start as usize);
 

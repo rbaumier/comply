@@ -28,7 +28,7 @@ fn is_screaming_snake(s: &str) -> bool {
 }
 
 /// Extract the name and span from a PropertyKey.
-fn key_name_and_span<'a>(key: &'a PropertyKey<'a>, source: &'a str) -> Option<(String, Span)> {
+fn key_name_and_span<'a>(key: &'a PropertyKey<'a>, _source: &'a str) -> Option<(String, Span)> {
     match key {
         PropertyKey::StaticIdentifier(id) => Some((id.name.to_string(), id.span)),
         PropertyKey::StringLiteral(s) => Some((s.value.to_string(), s.span)),

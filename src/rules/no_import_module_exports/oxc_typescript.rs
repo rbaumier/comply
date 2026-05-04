@@ -29,8 +29,8 @@ impl OxcCheck for Check {
             }
 
             // expression_statement containing module.exports = ... or exports.foo = ...
-            if let Statement::ExpressionStatement(expr_stmt) = stmt {
-                if let Expression::AssignmentExpression(assign) = &expr_stmt.expression {
+            if let Statement::ExpressionStatement(expr_stmt) = stmt
+                && let Expression::AssignmentExpression(assign) = &expr_stmt.expression {
                     let left_text = match &assign.left {
                         AssignmentTarget::StaticMemberExpression(member) => {
                             &ctx.source
@@ -48,7 +48,6 @@ impl OxcCheck for Check {
                         module_exports_spans.push(expr_stmt.span);
                     }
                 }
-            }
         }
 
         if !has_import {

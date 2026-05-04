@@ -38,8 +38,8 @@ impl OxcCheck for Check {
                 let Some(ref decl) = export.declaration else {
                     continue;
                 };
-                if let oxc_ast::ast::Declaration::FunctionDeclaration(func) = decl {
-                    if !func.r#async {
+                if let oxc_ast::ast::Declaration::FunctionDeclaration(func) = decl
+                    && !func.r#async {
                         let (line, column) =
                             byte_offset_to_line_col(ctx.source, func.span.start as usize);
                         diagnostics.push(Diagnostic {
@@ -55,7 +55,6 @@ impl OxcCheck for Check {
                             span: None,
                         });
                     }
-                }
             }
         }
 
@@ -78,11 +77,10 @@ impl OxcCheck for Check {
             };
             let Some(stmts) = body_stmts else { continue };
             let has_use_server = stmts.iter().any(|stmt| {
-                if let oxc_ast::ast::Statement::ExpressionStatement(expr) = stmt {
-                    if let oxc_ast::ast::Expression::StringLiteral(lit) = &expr.expression {
+                if let oxc_ast::ast::Statement::ExpressionStatement(expr) = stmt
+                    && let oxc_ast::ast::Expression::StringLiteral(lit) = &expr.expression {
                         return lit.value == "use server";
                     }
-                }
                 false
             });
             if has_use_server {

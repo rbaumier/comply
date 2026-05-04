@@ -168,9 +168,9 @@ impl OxcCheck for Check {
         let method_name = member.property.name.as_str();
 
         // Check for expect(...).toBeX pattern.
-        if let Expression::CallExpression(inner_call) = &member.object {
-            if let Expression::Identifier(id) = &inner_call.callee {
-                if id.name.as_str() == "expect" && ASYNC_EXPECT_METHODS.contains(&method_name) {
+        if let Expression::CallExpression(inner_call) = &member.object
+            && let Expression::Identifier(id) = &inner_call.callee
+                && id.name.as_str() == "expect" && ASYNC_EXPECT_METHODS.contains(&method_name) {
                     let (line, column) =
                         byte_offset_to_line_col(ctx.source, call.span.start as usize);
                     diagnostics.push(Diagnostic {
@@ -186,15 +186,13 @@ impl OxcCheck for Check {
                     });
                     return;
                 }
-            }
-        }
 
         // Check for .not.toBeX pattern (expect(...).not.toBeVisible()).
-        if let Expression::StaticMemberExpression(outer_member) = &member.object {
-            if outer_member.property.name.as_str() == "not" {
-                if let Expression::CallExpression(inner_call) = &outer_member.object {
-                    if let Expression::Identifier(id) = &inner_call.callee {
-                        if id.name.as_str() == "expect"
+        if let Expression::StaticMemberExpression(outer_member) = &member.object
+            && outer_member.property.name.as_str() == "not"
+                && let Expression::CallExpression(inner_call) = &outer_member.object
+                    && let Expression::Identifier(id) = &inner_call.callee
+                        && id.name.as_str() == "expect"
                             && ASYNC_EXPECT_METHODS.contains(&method_name)
                         {
                             let (line, column) =
@@ -212,10 +210,6 @@ impl OxcCheck for Check {
                             });
                             return;
                         }
-                    }
-                }
-            }
-        }
 
         // Check for playwright object method calls.
         if ASYNC_METHODS.contains(&method_name) {

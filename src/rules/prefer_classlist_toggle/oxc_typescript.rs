@@ -34,8 +34,8 @@ impl OxcCheck for Check {
             AstKind::ConditionalExpression(ternary) => {
                 let cm = classlist_method_from_expr(&ternary.consequent);
                 let am = classlist_method_from_expr(&ternary.alternate);
-                if let (Some(m1), Some(m2)) = (cm, am) {
-                    if (m1 == "add" && m2 == "remove") || (m1 == "remove" && m2 == "add") {
+                if let (Some(m1), Some(m2)) = (cm, am)
+                    && ((m1 == "add" && m2 == "remove") || (m1 == "remove" && m2 == "add")) {
                         let (line, column) =
                             byte_offset_to_line_col(ctx.source, ternary.span.start as usize);
                         diagnostics.push(Diagnostic {
@@ -48,7 +48,6 @@ impl OxcCheck for Check {
                             span: None,
                         });
                     }
-                }
             }
             // Pattern 2: if/else
             AstKind::IfStatement(if_stmt) => {
@@ -57,8 +56,8 @@ impl OxcCheck for Check {
                 };
                 let cons_method = find_classlist_call_in_stmt(&if_stmt.consequent);
                 let alt_method = find_classlist_call_in_stmt(alt);
-                if let (Some(m1), Some(m2)) = (cons_method, alt_method) {
-                    if (m1 == "add" && m2 == "remove") || (m1 == "remove" && m2 == "add") {
+                if let (Some(m1), Some(m2)) = (cons_method, alt_method)
+                    && ((m1 == "add" && m2 == "remove") || (m1 == "remove" && m2 == "add")) {
                         let (line, column) =
                             byte_offset_to_line_col(ctx.source, if_stmt.span.start as usize);
                         diagnostics.push(Diagnostic {
@@ -71,7 +70,6 @@ impl OxcCheck for Check {
                             span: None,
                         });
                     }
-                }
             }
             // Pattern 3: computed access — `el.classList[cond ? 'add' : 'remove']('x')`
             AstKind::CallExpression(call) => {

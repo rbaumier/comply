@@ -26,8 +26,8 @@ impl OxcCheck for Check {
                 }
                 let Some(specifiers) = &import.specifiers else { return };
                 for spec in specifiers {
-                    if let oxc_ast::ast::ImportDeclarationSpecifier::ImportSpecifier(s) = spec {
-                        if s.imported.name().as_str() == "Animated" {
+                    if let oxc_ast::ast::ImportDeclarationSpecifier::ImportSpecifier(s) = spec
+                        && s.imported.name().as_str() == "Animated" {
                             let (line, column) =
                                 byte_offset_to_line_col(ctx.source, import.span.start as usize);
                             diagnostics.push(Diagnostic {
@@ -41,7 +41,6 @@ impl OxcCheck for Check {
                             });
                             return;
                         }
-                    }
                 }
             }
             AstKind::CallExpression(call) => {

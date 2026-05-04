@@ -40,18 +40,16 @@ impl OxcCheck for Check {
         // Allow `module.exports = exports = {}` pattern:
         // if parent is also an assignment whose left is `module.exports`, skip.
         let parent = semantic.nodes().parent_node(node.id());
-        if let AstKind::AssignmentExpression(parent_assign) = parent.kind() {
-            if is_module_exports_target(&parent_assign.left) {
+        if let AstKind::AssignmentExpression(parent_assign) = parent.kind()
+            && is_module_exports_target(&parent_assign.left) {
                 return;
             }
-        }
 
         // Allow `exports = module.exports = {}` pattern.
-        if let Expression::AssignmentExpression(ref right) = assign.right {
-            if is_module_exports_target(&right.left) {
+        if let Expression::AssignmentExpression(ref right) = assign.right
+            && is_module_exports_target(&right.left) {
                 return;
             }
-        }
 
         let (line, column) = byte_offset_to_line_col(ctx.source, assign.span.start as usize);
         diagnostics.push(Diagnostic {

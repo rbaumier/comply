@@ -32,7 +32,7 @@ impl OxcCheck for Check {
             return;
         }
 
-        let Some(body) = &class.body.body.first() else {
+        let Some(_body) = &class.body.body.first() else {
             return;
         };
 

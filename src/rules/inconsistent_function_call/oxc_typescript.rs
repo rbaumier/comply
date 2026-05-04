@@ -11,7 +11,6 @@ use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::project::import_index::CallKind;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::*;
-use oxc_span::GetSpan;
 
 pub struct Check;
 
@@ -192,15 +191,14 @@ fn collect_from_statement(
             }
         }
         Statement::ExportDefaultDeclaration(export) => {
-            if let ExportDefaultDeclarationKind::FunctionDeclaration(f) = &export.declaration {
-                if let Some(ref id) = f.id {
+            if let ExportDefaultDeclarationKind::FunctionDeclaration(f) = &export.declaration
+                && let Some(ref id) = f.id {
                     let (line, _) = byte_offset_to_line_col(source, f.span.start as usize);
                     out.entry(id.name.to_string()).or_insert(DeclInfo {
                         line,
                         exported: true,
                     });
                 }
-            }
         }
         Statement::BlockStatement(block) => {
             for s in &block.body {
@@ -217,13 +215,12 @@ fn collect_from_declaration(
     exported: bool,
     out: &mut HashMap<String, DeclInfo>,
 ) {
-    if let Declaration::FunctionDeclaration(f) = decl {
-        if let Some(ref id) = f.id {
+    if let Declaration::FunctionDeclaration(f) = decl
+        && let Some(ref id) = f.id {
             let (line, _) = byte_offset_to_line_col(source, f.span.start as usize);
             out.entry(id.name.to_string()).or_insert(DeclInfo {
                 line,
                 exported,
             });
         }
-    }
 }

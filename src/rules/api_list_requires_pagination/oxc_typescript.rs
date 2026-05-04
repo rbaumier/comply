@@ -43,12 +43,11 @@ impl OxcCheck for Check {
                             }
                             let mut found = None;
                             for decl in &v.declarations {
-                                if let oxc_ast::ast::BindingPattern::BindingIdentifier(ref id) = decl.id {
-                                    if id.name.as_str() == "GET" {
+                                if let oxc_ast::ast::BindingPattern::BindingIdentifier(ref id) = decl.id
+                                    && id.name.as_str() == "GET" {
                                         found = Some(v.span);
                                         break;
                                     }
-                                }
                             }
                             let Some(s) = found else { continue };
                             s

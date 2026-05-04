@@ -94,7 +94,7 @@ fn leftmost_identifier<'a>(expr: &'a Expression<'a>, source: &str) -> Option<Str
 fn collect_chain_methods(
     start: &oxc_semantic::AstNode,
     semantic: &oxc_semantic::Semantic,
-    source: &str,
+    _source: &str,
 ) -> Vec<String> {
     let mut methods = Vec::new();
     let nodes = semantic.nodes();
@@ -131,7 +131,7 @@ fn collect_chain_methods(
 fn outermost_call_span(
     start: &oxc_semantic::AstNode,
     semantic: &oxc_semantic::Semantic,
-    source: &str,
+    _source: &str,
 ) -> u32 {
     let nodes = semantic.nodes();
     let mut current_id = start.id();

@@ -4,7 +4,6 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::Expression;
-use oxc_span::GetSpan;
 use std::sync::Arc;
 
 pub struct Check;
@@ -37,10 +36,10 @@ fn extract_usestate(decl: &oxc_ast::ast::VariableDeclarator) -> Option<(String, 
     if elems.len() < 2 {
         return None;
     }
-    let oxc_ast::ast::BindingPattern::BindingIdentifier(state_id) = &*elems[0] else {
+    let oxc_ast::ast::BindingPattern::BindingIdentifier(state_id) = elems[0] else {
         return None;
     };
-    let oxc_ast::ast::BindingPattern::BindingIdentifier(setter_id) = &*elems[1] else {
+    let oxc_ast::ast::BindingPattern::BindingIdentifier(setter_id) = elems[1] else {
         return None;
     };
     Some((state_id.name.to_string(), setter_id.name.to_string()))
@@ -235,8 +234,8 @@ fn check_expr_for_setter(
 ) {
     match expr {
         Expression::CallExpression(call) => {
-            if let Expression::Identifier(callee) = &call.callee {
-                if callee.name == setter_name && !call.arguments.is_empty() {
+            if let Expression::Identifier(callee) = &call.callee
+                && callee.name == setter_name && !call.arguments.is_empty() {
                     let first_arg = &call.arguments[0];
                     let arg_expr = first_arg.to_expression();
                     // If the argument is an arrow/function, that's the correct updater form.
@@ -264,7 +263,6 @@ fn check_expr_for_setter(
                         });
                     }
                 }
-            }
         }
         Expression::ArrowFunctionExpression(arrow) => {
             // Walk into arrow bodies (event handlers like `() => setCount(count + 1)`)

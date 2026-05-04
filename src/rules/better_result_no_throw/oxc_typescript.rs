@@ -51,18 +51,15 @@ fn inside_result_try_callback<'a>(
     semantic: &'a oxc_semantic::Semantic<'a>,
 ) -> bool {
     for ancestor in semantic.nodes().ancestors(node.id()) {
-        if let AstKind::CallExpression(call) = ancestor.kind() {
-            if let Expression::StaticMemberExpression(member) = &call.callee {
+        if let AstKind::CallExpression(call) = ancestor.kind()
+            && let Expression::StaticMemberExpression(member) = &call.callee {
                 let prop = member.property.name.as_str();
-                if prop == "try" || prop == "tryPromise" {
-                    if let Expression::Identifier(obj) = &member.object {
-                        if obj.name.as_str() == "Result" {
+                if (prop == "try" || prop == "tryPromise")
+                    && let Expression::Identifier(obj) = &member.object
+                        && obj.name.as_str() == "Result" {
                             return true;
                         }
-                    }
-                }
             }
-        }
     }
     false
 }

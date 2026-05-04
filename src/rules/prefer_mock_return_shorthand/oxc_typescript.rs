@@ -7,7 +7,6 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{Expression, Statement};
-use oxc_span::GetSpan;
 use std::sync::Arc;
 
 pub struct Check;
@@ -38,11 +37,10 @@ fn single_return_expr<'a>(
 ) -> Option<&'a Expression<'a>> {
     // Arrow concise body: the body has a single expression statement.
     if is_expression {
-        if body.statements.len() == 1 {
-            if let Statement::ExpressionStatement(es) = &body.statements[0] {
+        if body.statements.len() == 1
+            && let Statement::ExpressionStatement(es) = &body.statements[0] {
                 return Some(&es.expression);
             }
-        }
         return None;
     }
 

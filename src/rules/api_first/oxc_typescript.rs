@@ -41,7 +41,7 @@ impl OxcCheck for Check {
                 continue;
             }
             let start = call.span.start;
-            if route_span.map_or(true, |s: u32| start < s) {
+            if route_span.is_none_or(|s: u32| start < s) {
                 route_span = Some(start);
             }
         }

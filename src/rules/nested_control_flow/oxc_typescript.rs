@@ -57,13 +57,11 @@ impl OxcCheck for Check {
                     let AstKind::IfStatement(parent_if) = nodes.kind(parent_id) else {
                         unreachable!()
                     };
-                    if let Some(alt) = &parent_if.alternate {
-                        if let oxc_ast::ast::Statement::IfStatement(alt_if) = alt {
-                            if alt_if.span.start == node.kind().span().start {
+                    if let Some(alt) = &parent_if.alternate
+                        && let oxc_ast::ast::Statement::IfStatement(alt_if) = alt
+                            && alt_if.span.start == node.kind().span().start {
                                 continue;
                             }
-                        }
-                    }
                 }
             }
 

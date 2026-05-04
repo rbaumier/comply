@@ -39,22 +39,20 @@ fn inside_known_scope<'a>(
                     Expression::StaticMemberExpression(m) => Some(m.property.name.as_str()),
                     _ => None,
                 };
-                if let Some(n) = name {
-                    if SCOPES.contains(&n) {
+                if let Some(n) = name
+                    && SCOPES.contains(&n) {
                         return true;
                     }
-                }
             }
             AstKind::NewExpression(new_expr) => {
                 let name = match &new_expr.callee {
                     Expression::Identifier(id) => Some(id.name.as_str()),
                     _ => None,
                 };
-                if let Some(n) = name {
-                    if SCOPES.contains(&n) {
+                if let Some(n) = name
+                    && SCOPES.contains(&n) {
                         return true;
                     }
-                }
             }
             _ => {}
         }

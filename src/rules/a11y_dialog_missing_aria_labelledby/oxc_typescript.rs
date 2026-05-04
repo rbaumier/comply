@@ -53,11 +53,10 @@ impl OxcCheck for Check {
             };
             match name.name.as_str() {
                 "role" => {
-                    if let Some(oxc_ast::ast::JSXAttributeValue::StringLiteral(s)) = &attr.value {
-                        if s.value.as_str() == "dialog" || s.value.as_str() == "alertdialog" {
+                    if let Some(oxc_ast::ast::JSXAttributeValue::StringLiteral(s)) = &attr.value
+                        && (s.value.as_str() == "dialog" || s.value.as_str() == "alertdialog") {
                             role_dialog = true;
                         }
-                    }
                 }
                 "aria-label" | "aria-labelledby" => {
                     has_label = true;

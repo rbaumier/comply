@@ -180,7 +180,7 @@ fn pattern_contains_identifier(pattern: tree_sitter::Node, name: &str, source: &
         .any(|child| pattern_contains_identifier(child, name, source))
 }
 
-fn is_literal_cast(node: tree_sitter::Node, source: &[u8]) -> bool {
+fn is_literal_cast(node: tree_sitter::Node, _source: &[u8]) -> bool {
     let Some(value) = node.child_by_field_name("value") else {
         return false;
     };

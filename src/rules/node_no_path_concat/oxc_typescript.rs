@@ -48,11 +48,10 @@ impl OxcCheck for Check {
         // Avoid double-reporting: if parent is also a `+` binary expression
         // whose left side is a path global, skip this node.
         let parent = semantic.nodes().parent_node(node.id());
-        if let AstKind::BinaryExpression(parent_bin) = parent.kind() {
-            if parent_bin.operator == BinaryOperator::Addition && is_path_global(&parent_bin.left) {
+        if let AstKind::BinaryExpression(parent_bin) = parent.kind()
+            && parent_bin.operator == BinaryOperator::Addition && is_path_global(&parent_bin.left) {
                 return;
             }
-        }
 
         let (line, column) = byte_offset_to_line_col(ctx.source, bin.span.start as usize);
         diagnostics.push(Diagnostic {

@@ -18,9 +18,9 @@ crate::ast_check! { on ["from_instruction"] => |node, source, ctx, diagnostics|
     let Some(alias) = alias_of(node, source) else { return; };
     let mut prev = node.prev_sibling();
     while let Some(sibling) = prev {
-        if sibling.kind() == "from_instruction" {
-            if let Some(other) = alias_of(sibling, source) {
-                if other == alias {
+        if sibling.kind() == "from_instruction"
+            && let Some(other) = alias_of(sibling, source)
+                && other == alias {
                     let pos = node.start_position();
                     diagnostics.push(Diagnostic {
                         path: std::sync::Arc::clone(&ctx.path_arc),
@@ -33,8 +33,6 @@ crate::ast_check! { on ["from_instruction"] => |node, source, ctx, diagnostics|
                     });
                     return;
                 }
-            }
-        }
         prev = sibling.prev_sibling();
     }
 }

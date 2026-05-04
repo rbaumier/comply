@@ -37,8 +37,8 @@ impl OxcCheck for Check {
         let first_arg = &new_expr.arguments[0];
         let oxc_ast::ast::Argument::StringLiteral(lit) = first_arg else {
             // Also check template literals
-            if let oxc_ast::ast::Argument::TemplateLiteral(tpl) = first_arg {
-                if tpl.quasis.len() == 1 {
+            if let oxc_ast::ast::Argument::TemplateLiteral(tpl) = first_arg
+                && tpl.quasis.len() == 1 {
                     let raw = tpl.quasis[0].value.raw.as_str();
                     if raw.starts_with("./") {
                         let (line, column) =
@@ -55,7 +55,6 @@ impl OxcCheck for Check {
                         });
                     }
                 }
-            }
             return;
         };
 

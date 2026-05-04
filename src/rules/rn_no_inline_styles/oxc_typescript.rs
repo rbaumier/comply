@@ -24,7 +24,7 @@ impl OxcCheck for Check {
             return;
         }
         let AstKind::JSXAttribute(attr) = node.kind() else { return };
-        if attr.name.as_identifier().map_or(true, |id| id.name.as_str() != "style") {
+        if attr.name.as_identifier().is_none_or(|id| id.name.as_str() != "style") {
             return;
         }
         let Some(value) = &attr.value else { return };

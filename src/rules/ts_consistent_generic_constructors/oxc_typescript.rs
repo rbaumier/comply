@@ -51,11 +51,10 @@ impl OxcCheck for Check {
             }
             _ => None,
         };
-        if let (Some(cn), Some(tn)) = (constructor_name, type_name) {
-            if cn != tn {
+        if let (Some(cn), Some(tn)) = (constructor_name, type_name)
+            && cn != tn {
                 return;
             }
-        }
         let BindingPattern::BindingIdentifier(id) = &declarator.id else {
             return;
         };

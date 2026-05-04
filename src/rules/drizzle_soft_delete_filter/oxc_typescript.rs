@@ -101,7 +101,7 @@ impl OxcCheck for Check {
         }
 
         // Walk up the call chain via source text and check for `isNull(`.
-        let chain_text = &ctx.source[call.span.start as usize..];
+        let _chain_text = &ctx.source[call.span.start as usize..];
         // Find the extent of the chain: we need the full chain from the
         // outermost expression. Use a simpler approach: check the whole
         // line/surrounding source for `isNull(`.

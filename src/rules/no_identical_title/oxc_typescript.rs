@@ -5,7 +5,6 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::*;
-use oxc_span::GetSpan;
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -111,8 +110,8 @@ fn check_statements(
         }
 
         // For describe blocks, recurse into the callback body.
-        if kind == "describe" {
-            if let Some(last_arg) = call.arguments.last() {
+        if kind == "describe"
+            && let Some(last_arg) = call.arguments.last() {
                 let cb = match last_arg {
                     Argument::ArrowFunctionExpression(f) => Some(&f.body),
                     Argument::FunctionExpression(f) => f.body.as_ref(),
@@ -122,6 +121,5 @@ fn check_statements(
                     check_statements(&body.statements, ctx, diagnostics);
                 }
             }
-        }
     }
 }

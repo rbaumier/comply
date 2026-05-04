@@ -8,7 +8,6 @@ use oxc_ast::ast::{
     Expression, JSXAttributeItem, JSXAttributeName, JSXAttributeValue, JSXExpression,
     ObjectPropertyKind, PropertyKey,
 };
-use oxc_span::GetSpan;
 use std::sync::Arc;
 
 pub struct Check;

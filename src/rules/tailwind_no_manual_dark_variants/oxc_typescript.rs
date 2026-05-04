@@ -20,11 +20,10 @@ fn is_raw_color_base(base: &str) -> bool {
         if RAW_COLORS.contains(&rest) {
             return true;
         }
-        if let Some((color, shade)) = rest.rsplit_once('-') {
-            if RAW_COLORS.contains(&color) && shade.chars().all(|c| c.is_ascii_digit()) {
+        if let Some((color, shade)) = rest.rsplit_once('-')
+            && RAW_COLORS.contains(&color) && shade.chars().all(|c| c.is_ascii_digit()) {
                 return true;
             }
-        }
     }
     false
 }

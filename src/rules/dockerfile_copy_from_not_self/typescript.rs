@@ -2,7 +2,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-fn from_value<'a>(param_text: &'a str) -> Option<&'a str> {
+fn from_value(param_text: &str) -> Option<&str> {
     let stripped = param_text.strip_prefix("--from=")?;
     Some(stripped.trim())
 }

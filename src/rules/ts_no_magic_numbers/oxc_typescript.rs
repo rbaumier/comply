@@ -47,17 +47,15 @@ impl OxcCheck for Check {
         // Check for unary minus: parent is UnaryExpression with "-".
         let nodes = semantic.nodes();
         let parent_id = nodes.parent_id(node.id());
-        if parent_id != node.id() {
-            if let AstKind::UnaryExpression(unary) = nodes.get_node(parent_id).kind() {
-                if unary.operator == oxc_ast::ast::UnaryOperator::UnaryNegation {
+        if parent_id != node.id()
+            && let AstKind::UnaryExpression(unary) = nodes.get_node(parent_id).kind()
+                && unary.operator == oxc_ast::ast::UnaryOperator::UnaryNegation {
                     let parent_text =
                         &ctx.source[unary.span.start as usize..unary.span.end as usize];
                     if ALLOWED.contains(&parent_text) {
                         return;
                     }
                 }
-            }
-        }
 
         if is_allowed_context(node.id(), semantic) {
             return;
@@ -94,13 +92,11 @@ fn is_allowed_context(
             // const declaration initializer
             AstKind::VariableDeclarator(_) => {
                 let gp_id = nodes.parent_id(parent_id);
-                if gp_id != parent_id {
-                    if let AstKind::VariableDeclaration(decl) = nodes.get_node(gp_id).kind() {
-                        if decl.kind == oxc_ast::ast::VariableDeclarationKind::Const {
+                if gp_id != parent_id
+                    && let AstKind::VariableDeclaration(decl) = nodes.get_node(gp_id).kind()
+                        && decl.kind == oxc_ast::ast::VariableDeclarationKind::Const {
                             return true;
                         }
-                    }
-                }
             }
             // Enum member value
             AstKind::TSEnumMember(_) | AstKind::TSEnumBody(_) | AstKind::TSEnumDeclaration(_) => {

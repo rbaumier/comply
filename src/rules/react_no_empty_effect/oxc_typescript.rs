@@ -49,7 +49,7 @@ impl OxcCheck for Check {
 
         let has_empty_body = match first_arg {
             Argument::ArrowFunctionExpression(arrow) => {
-                arrow.expression == false && body_is_empty(&arrow.body)
+                !arrow.expression && body_is_empty(&arrow.body)
             }
             Argument::FunctionExpression(func) => {
                 func.body.as_ref().is_some_and(|b| body_is_empty(b))
