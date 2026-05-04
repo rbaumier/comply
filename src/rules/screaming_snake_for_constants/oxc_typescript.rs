@@ -41,7 +41,7 @@ impl OxcCheck for Check {
 
             let name = id.name.as_str();
 
-            if is_function_or_class_init(declarator) {
+            if !is_primitive_init(declarator) {
                 continue;
             }
 
@@ -63,14 +63,35 @@ impl OxcCheck for Check {
     }
 }
 
-fn is_function_or_class_init(declarator: &oxc_ast::ast::VariableDeclarator) -> bool {
+fn is_primitive_init(declarator: &oxc_ast::ast::VariableDeclarator) -> bool {
     let Some(init) = &declarator.init else {
         return false;
     };
     matches!(
         init,
-        oxc_ast::ast::Expression::ArrowFunctionExpression(_)
-            | oxc_ast::ast::Expression::FunctionExpression(_)
-            | oxc_ast::ast::Expression::ClassExpression(_)
-    )
+        oxc_ast::ast::Expression::NumericLiteral(_)
+            | oxc_ast::ast::Expression::BooleanLiteral(_)
+    ) || is_unary_numeric(init)
+        || is_array_of_literals(init)
+}
+
+fn is_unary_numeric(expr: &oxc_ast::ast::Expression) -> bool {
+    if let oxc_ast::ast::Expression::UnaryExpression(u) = expr {
+        return matches!(u.argument, oxc_ast::ast::Expression::NumericLiteral(_));
+    }
+    false
+}
+
+fn is_array_of_literals(expr: &oxc_ast::ast::Expression) -> bool {
+    let oxc_ast::ast::Expression::ArrayExpression(arr) = expr else {
+        return false;
+    };
+    arr.elements.iter().all(|el| {
+        matches!(
+            el,
+            oxc_ast::ast::ArrayExpressionElement::NumericLiteral(_)
+                | oxc_ast::ast::ArrayExpressionElement::StringLiteral(_)
+                | oxc_ast::ast::ArrayExpressionElement::BooleanLiteral(_)
+        )
+    })
 }

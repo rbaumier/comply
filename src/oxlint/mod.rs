@@ -169,6 +169,8 @@ fn invoke_oxlint(
     }
 
     let mut child = cmd
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
         .spawn()
         .context("failed to invoke oxlint — install it with: npm install -g oxlint")?;
     let Some(status) = child

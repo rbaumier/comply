@@ -8,10 +8,15 @@ mod tests {
     }
 
     #[test]
-    fn flags_camel_case_top_level() {
+    fn flags_camel_case_numeric() {
         let diags = run("const maxRetries = 3;");
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("maxRetries"));
+    }
+
+    #[test]
+    fn allows_string_constant() {
+        assert!(run("const apiUrl = \"https://example.com\";").is_empty());
     }
 
     #[test]
@@ -22,6 +27,16 @@ mod tests {
     #[test]
     fn allows_function_assignment() {
         assert!(run("const handleClick = () => {};").is_empty());
+    }
+
+    #[test]
+    fn allows_call_expression() {
+        assert!(run("const errorReporter = createReporter();").is_empty());
+    }
+
+    #[test]
+    fn allows_object_literal() {
+        assert!(run("const config = { a: 1 };").is_empty());
     }
 
     #[test]
@@ -38,5 +53,16 @@ mod tests {
     #[test]
     fn allows_exported_screaming_snake() {
         assert!(run("export const MAX_RETRIES = 3;").is_empty());
+    }
+
+    #[test]
+    fn flags_negative_number() {
+        let diags = run("const minValue = -1;");
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn allows_new_expression() {
+        assert!(run("const instance = new Map();").is_empty());
     }
 }
