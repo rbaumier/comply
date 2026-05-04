@@ -3,6 +3,8 @@
 //! Tailwind v4.
 
 mod css;
+mod oxc_typescript;
+#[cfg(test)]
 mod typescript;
 
 use crate::diagnostic::Severity;
@@ -21,8 +23,13 @@ pub const META: RuleMeta = RuleMeta {
 };
 
 pub fn register() -> RuleDef {
-    let mut def = crate::register_ts_family!(META, typescript);
-    def.backends
-        .push((Language::Css, Backend::Text(Box::new(css::Check))));
-    def
+    RuleDef {
+        meta: META,
+        backends: vec![
+            (Language::TypeScript, Backend::Oxc(Box::new(oxc_typescript::Check))),
+            (Language::JavaScript, Backend::Oxc(Box::new(oxc_typescript::Check))),
+            (Language::Tsx, Backend::Oxc(Box::new(oxc_typescript::Check))),
+            (Language::Css, Backend::Text(Box::new(css::Check))),
+        ],
+    }
 }

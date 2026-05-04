@@ -1,0 +1,77 @@
+//! sql-no-reserved-keyword-identifiers — oxc backend for TS / JS / TSX.
+
+use super::ReservedHit;
+use crate::diagnostic::{Diagnostic, Severity};
+use crate::oxc_helpers::byte_offset_to_line_col;
+use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
+use crate::rules::sql_helpers::is_sql_ddl;
+use std::sync::Arc;
+
+pub struct Check;
+
+impl OxcCheck for Check {
+    fn interested_kinds(&self) -> &'static [AstType] {
+        &[AstType::StringLiteral, AstType::TemplateLiteral]
+    }
+
+    fn run<'a>(
+        &self,
+        node: &oxc_semantic::AstNode<'a>,
+        ctx: &CheckCtx,
+        _semantic: &'a oxc_semantic::Semantic<'a>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
+        let (text, offset) = match node.kind() {
+            AstKind::StringLiteral(lit) => (lit.value.as_str().to_string(), lit.span.start as usize),
+            AstKind::TemplateLiteral(tpl) => {
+                let s: String = tpl.quasis.iter().map(|q| q.value.raw.as_str()).collect::<Vec<_>>().join(" ");
+                (s, tpl.span.start as usize)
+            }
+            _ => return,
+        };
+        if !is_sql_ddl(&text) {
+            return;
+        }
+        let (line, column) = byte_offset_to_line_col(ctx.source, offset);
+        for hit in super::find_reserved_hits(&text) {
+            let message = match hit {
+                ReservedHit::Table(name) => {
+                    format!("`{name}` is a PostgreSQL reserved word — rename the table.")
+                }
+                ReservedHit::Column(name) => {
+                    format!("Column `{name}` is a PostgreSQL reserved word — rename it.")
+                }
+            };
+            diagnostics.push(Diagnostic {
+                path: Arc::clone(&ctx.path_arc),
+                line,
+                column,
+                rule_id: super::META.id.into(),
+                message,
+                severity: Severity::Warning,
+                span: None,
+            });
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+    #[test]
+    fn flags_table_named_user() {
+        let src = r#"const m = "CREATE TABLE user (id INT);";"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_non_reserved() {
+        let src = r#"const m = "CREATE TABLE account (id INT);";"#;
+        assert!(run_on(src).is_empty());
+    }
+}

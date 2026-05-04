@@ -1,3 +1,5 @@
+mod oxc_typescript;
+
 mod typescript;
 
 use crate::diagnostic::Severity;
@@ -15,21 +17,37 @@ pub const META: RuleMeta = RuleMeta {
     categories: &["tailwind"],
 };
 
+pub(crate) const SPACING_PREFIXES: &[&str] = &[
+    "p-[", "px-[", "py-[", "pt-[", "pb-[", "pl-[", "pr-[",
+    "m-[", "mx-[", "my-[", "mt-[", "mb-[", "ml-[", "mr-[",
+    "gap-[", "gap-x-[", "gap-y-[", "space-x-[", "space-y-[",
+];
+
+/// Parse a value like `13px` as `Some(13)`. Anything that does not end in
+/// `px` with only digits before it returns `None`.
+pub(crate) fn parse_px(value: &str) -> Option<u64> {
+    let stripped = value.strip_suffix("px")?;
+    if stripped.is_empty() {
+        return None;
+    }
+    stripped.parse::<u64>().ok()
+}
+
 pub fn register() -> RuleDef {
     RuleDef {
         meta: META,
         backends: vec![
             (
                 Language::TypeScript,
-                Backend::TreeSitter(Box::new(typescript::Check)),
+                Backend::Oxc(Box::new(oxc_typescript::Check)),
             ),
             (
                 Language::Tsx,
-                Backend::TreeSitter(Box::new(typescript::Check)),
+                Backend::Oxc(Box::new(oxc_typescript::Check)),
             ),
             (
                 Language::JavaScript,
-                Backend::TreeSitter(Box::new(typescript::Check)),
+                Backend::Oxc(Box::new(oxc_typescript::Check)),
             ),
             (
                 Language::Vue,

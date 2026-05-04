@@ -1,0 +1,44 @@
+//! elysia-string-format-email oxc backend — flag schema fields named after a
+//! known string format that use bare `t.String()`.
+
+use crate::diagnostic::{Diagnostic, Severity};
+use crate::rules::backend::{CheckCtx, OxcCheck};
+use std::sync::Arc;
+
+const PATTERNS: &[&str] = &["email:t.String()", "url:t.String()", "uri:t.String()"];
+
+pub struct Check;
+
+impl OxcCheck for Check {
+    fn run_on_semantic<'a>(
+        &self,
+        _semantic: &'a oxc_semantic::Semantic<'a>,
+        ctx: &CheckCtx,
+    ) -> Vec<Diagnostic> {
+        if !ctx.project.has_framework("elysia") {
+            return Vec::new();
+        }
+
+        let norm: String = ctx.source.chars().filter(|c| !c.is_whitespace()).collect();
+        let mut hit = false;
+        for pat in PATTERNS {
+            if norm.contains(pat) {
+                hit = true;
+                break;
+            }
+        }
+        if !hit {
+            return Vec::new();
+        }
+
+        vec![Diagnostic {
+            path: Arc::clone(&ctx.path_arc),
+            line: 1,
+            column: 1,
+            rule_id: super::META.id.into(),
+            message: "Field named after a known format uses bare `t.String()` — add `{ format: 'email' }` (or `'uri'`).".into(),
+            severity: Severity::Warning,
+            span: None,
+        }]
+    }
+}

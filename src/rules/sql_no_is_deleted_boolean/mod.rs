@@ -1,8 +1,12 @@
 //! sql-no-is-deleted-boolean
 
+mod oxc_drizzle;
+#[cfg(test)]
 mod drizzle;
 mod rust;
 mod sql;
+mod oxc_typescript;
+#[cfg(test)]
 mod typescript;
 
 use crate::diagnostic::Severity;
@@ -26,19 +30,19 @@ pub fn register() -> RuleDef {
         backends: vec![
             (
                 Language::TypeScript,
-                Backend::TreeSitter(Box::new(typescript::Check)),
+                Backend::Oxc(Box::new(oxc_typescript::Check)),
             ),
             (
                 Language::TypeScript,
-                Backend::TreeSitter(Box::new(drizzle::Check)),
+                Backend::Oxc(Box::new(oxc_drizzle::Check)),
             ),
             (
                 Language::JavaScript,
-                Backend::TreeSitter(Box::new(typescript::Check)),
+                Backend::Oxc(Box::new(oxc_typescript::Check)),
             ),
             (
                 Language::Tsx,
-                Backend::TreeSitter(Box::new(typescript::Check)),
+                Backend::Oxc(Box::new(oxc_typescript::Check)),
             ),
             (Language::Rust, Backend::TreeSitter(Box::new(rust::Check))),
             (Language::Sql, Backend::Text(Box::new(sql::Check))),

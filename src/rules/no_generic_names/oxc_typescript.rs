@@ -1,0 +1,292 @@
+//! no-generic-names OXC backend.
+
+use crate::diagnostic::{Diagnostic, Severity};
+use crate::oxc_helpers::byte_offset_to_line_col;
+use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
+use oxc_ast::ast::*;
+use oxc_span::GetSpan;
+use std::sync::Arc;
+
+pub struct Check;
+
+const BANNED_WORDS: &[&str] = &[
+    "info", "temp", "result", "obj", "item", "thing", "stuff", "val", "retval", "value", "foo",
+    "bar",
+];
+
+const BANNED_PREFIXES: &[&str] = &["process", "data", "do", "execute", "run", "perform"];
+
+const GLOBAL_IDENTIFIER_ALLOWLIST: &[&str] = &[
+    "process",
+    "require",
+    "module",
+    "exports",
+    "Buffer",
+    "globalThis",
+    "console",
+    "__dirname",
+    "__filename",
+];
+
+const DESCRIPTIVE_SUFFIXES: &[&str] = &[
+    "_DIR", "_PATH", "_FILE", "_URL", "_URI", "_KEY", "_ID", "_PORT", "_HOST", "_ADDR", "_SIZE",
+    "_LEN", "_COUNT", "_MAX", "_MIN", "_TIMEOUT", "_INTERVAL", "_LIMIT", "_TTL", "_ROOT", "_BASE",
+];
+
+const ITERATOR_METHODS: &[&str] = &[
+    "map",
+    "filter",
+    "find",
+    "findIndex",
+    "forEach",
+    "some",
+    "every",
+    "flatMap",
+    "reduce",
+    "sort",
+];
+
+/// Return the banned prefix matching `name` on a word boundary, or None.
+fn matched_banned_prefix(name: &str) -> Option<&'static str> {
+    let bytes = name.as_bytes();
+    for &prefix in BANNED_PREFIXES {
+        let plen = prefix.len();
+        if bytes.len() < plen {
+            continue;
+        }
+        if !bytes[..plen].eq_ignore_ascii_case(prefix.as_bytes()) {
+            continue;
+        }
+        let on_boundary = if bytes.len() == plen {
+            true
+        } else if bytes[..plen].iter().all(|b| b.is_ascii_uppercase()) {
+            if bytes[plen] != b'_' {
+                continue;
+            }
+            let suffix = &name[plen..];
+            if DESCRIPTIVE_SUFFIXES
+                .iter()
+                .any(|s| suffix.eq_ignore_ascii_case(s))
+            {
+                continue;
+            }
+            true
+        } else {
+            bytes[plen].is_ascii_uppercase() || bytes[plen] == b'_'
+        };
+        if on_boundary {
+            return Some(prefix);
+        }
+    }
+    None
+}
+
+/// True when the node is inside a destructuring pattern (object pattern).
+fn is_destructuring<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    let nodes = semantic.nodes();
+    for kind in nodes.ancestor_kinds(node.id()) {
+        if matches!(kind, AstKind::ObjectPattern(_)) {
+            return true;
+        }
+        // Stop at statement boundaries
+        if matches!(
+            kind,
+            AstKind::VariableDeclaration(_)
+                | AstKind::Function(_)
+                | AstKind::ArrowFunctionExpression(_)
+                | AstKind::Program(_)
+        ) {
+            break;
+        }
+    }
+    false
+}
+
+/// True if the identifier is a parameter of an iterator callback (.map, .filter, etc.).
+fn is_iterator_callback_param<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+    source: &str,
+) -> bool {
+    let nodes = semantic.nodes();
+    // Walk up: FormalParameter -> FormalParameters -> Function/Arrow -> Argument -> CallExpression
+    let mut func_id = None;
+    for (kind, nid) in nodes.ancestor_kinds(node.id()).zip(nodes.ancestor_ids(node.id())) {
+        match kind {
+            AstKind::ArrowFunctionExpression(_) | AstKind::Function(_) => {
+                func_id = Some(nid);
+                break;
+            }
+            AstKind::FormalParameter(_) | AstKind::FormalParameters(_) => continue,
+            _ => break,
+        }
+    }
+    let Some(func_id) = func_id else {
+        return false;
+    };
+    // The function must be a direct argument of a call expression whose callee
+    // is a member expression with a property in ITERATOR_METHODS.
+    let parent_id = nodes.parent_id(func_id);
+    if parent_id == func_id {
+        return false;
+    }
+    // Walk up through Argument wrapper to CallExpression
+    let mut cur = parent_id;
+    for _ in 0..3 {
+        let kind = nodes.kind(cur);
+        if let AstKind::CallExpression(call) = kind {
+            if let Expression::StaticMemberExpression(ref member) = call.callee {
+                let method = member.property.name.as_str();
+                return ITERATOR_METHODS.contains(&method);
+            }
+            let callee_text =
+                &source[call.callee.span().start as usize..call.callee.span().end as usize];
+            if let Some(method) = callee_text.rsplit('.').next() {
+                return ITERATOR_METHODS.contains(&method);
+            }
+            return false;
+        }
+        let next = nodes.parent_id(cur);
+        if next == cur {
+            break;
+        }
+        cur = next;
+    }
+    false
+}
+
+/// True when the identifier is a property key in an object literal.
+fn is_object_literal_key<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    let nodes = semantic.nodes();
+    let parent_id = nodes.parent_id(node.id());
+    if parent_id == node.id() {
+        return false;
+    }
+    let parent_kind = nodes.kind(parent_id);
+    if let AstKind::ObjectProperty(prop) = parent_kind {
+        // Check if we're the key, not the value
+        let key_span = match &prop.key {
+            PropertyKey::StaticIdentifier(id) => Some(id.span),
+            _ => None,
+        };
+        if let Some(ks) = key_span {
+            let node_span = node.kind().span();
+            return ks.start == node_span.start && ks.end == node_span.end;
+        }
+    }
+    false
+}
+
+/// True when the identifier is a method call property (`obj.execute()`).
+fn is_method_call_name<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    let nodes = semantic.nodes();
+    let parent_id = nodes.parent_id(node.id());
+    if parent_id == node.id() {
+        return false;
+    }
+    let parent_kind = nodes.kind(parent_id);
+    if let AstKind::StaticMemberExpression(member) = parent_kind {
+        // We must be the property
+        let node_span = node.kind().span();
+        if member.property.span.start == node_span.start {
+            // And the member must be called
+            let gp_id = nodes.parent_id(parent_id);
+            if gp_id != parent_id {
+                return matches!(nodes.kind(gp_id), AstKind::CallExpression(_));
+            }
+        }
+    }
+    false
+}
+
+impl OxcCheck for Check {
+    fn interested_kinds(&self) -> &'static [AstType] {
+        &[AstType::IdentifierReference, AstType::BindingIdentifier]
+    }
+
+    fn run<'a>(
+        &self,
+        node: &oxc_semantic::AstNode<'a>,
+        ctx: &CheckCtx,
+        semantic: &'a oxc_semantic::Semantic<'a>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
+        if ctx.file.path_segments.in_test_dir || ctx.file.path_segments.in_storybook {
+            return;
+        }
+
+        let (name, span) = match node.kind() {
+            AstKind::BindingIdentifier(id) => (id.name.as_str(), id.span),
+            AstKind::IdentifierReference(id) => (id.name.as_str(), id.span),
+            _ => return,
+        };
+
+        // Check banned words — only at declaration sites (BindingIdentifier)
+        if let AstKind::BindingIdentifier(_) = node.kind() {
+            if !is_destructuring(node, semantic)
+                && !is_iterator_callback_param(node, semantic, ctx.source)
+            {
+                let lower = name.to_ascii_lowercase();
+                if BANNED_WORDS.contains(&lower.as_str()) {
+                    let (line, column) =
+                        byte_offset_to_line_col(ctx.source, span.start as usize);
+                    diagnostics.push(Diagnostic {
+                        path: Arc::clone(&ctx.path_arc),
+                        line,
+                        column,
+                        rule_id: super::META.id.into(),
+                        message: format!(
+                            "Identifier '{name}' carries no meaning — rename to describe \
+                             what the value IS (`parsedOrder`, `userProfile`, \
+                             `paymentReceipt`)."
+                        ),
+                        severity: Severity::Warning,
+                        span: None,
+                    });
+                    return;
+                }
+            }
+        }
+
+        // Check banned prefixes — on any identifier (both binding and reference)
+        if is_destructuring(node, semantic) {
+            return;
+        }
+        if is_object_literal_key(node, semantic) {
+            return;
+        }
+        if is_method_call_name(node, semantic) {
+            return;
+        }
+        if GLOBAL_IDENTIFIER_ALLOWLIST.contains(&name) {
+            return;
+        }
+
+        if let Some(prefix) = matched_banned_prefix(name) {
+            let (line, column) = byte_offset_to_line_col(ctx.source, span.start as usize);
+            diagnostics.push(Diagnostic {
+                path: Arc::clone(&ctx.path_arc),
+                line,
+                column,
+                rule_id: super::META.id.into(),
+                message: format!(
+                    "Identifier '{name}' uses banned prefix '{prefix}' — use \
+                     intent over implementation. Try: what does this actually \
+                     accomplish? (`processOrder` → `fulfillOrder`, `doPayment` → \
+                     `chargeCustomer`)."
+                ),
+                severity: Severity::Warning,
+                span: None,
+            });
+        }
+    }
+}

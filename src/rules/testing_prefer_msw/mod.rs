@@ -1,10 +1,14 @@
 //! testing-prefer-msw — flag direct HTTP-client mocking in tests.
 
+mod oxc_typescript;
+#[cfg(test)]
 mod typescript;
 
 use crate::diagnostic::Severity;
+use crate::files::Language;
 use crate::rules::RuleDef;
 use crate::rules::meta::RuleMeta;
+use crate::rules::backend::Backend;
 
 pub const META: RuleMeta = RuleMeta {
     id: "testing-prefer-msw",
@@ -16,5 +20,12 @@ pub const META: RuleMeta = RuleMeta {
 };
 
 pub fn register() -> RuleDef {
-    crate::register_ts_family!(META, typescript)
+    RuleDef {
+        meta: META,
+        backends: vec![
+            (Language::TypeScript, Backend::Oxc(Box::new(oxc_typescript::Check))),
+            (Language::JavaScript, Backend::Oxc(Box::new(oxc_typescript::Check))),
+            (Language::Tsx, Backend::Oxc(Box::new(oxc_typescript::Check))),
+        ],
+    }
 }

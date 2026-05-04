@@ -3,7 +3,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
 crate::ast_check! { on ["call_expression"] prefilter = ["Sync"] => |node, source, ctx, diagnostics|
-    if allows_sync_node_api(ctx.path, ctx.source) {
+    if super::allows_sync_node_api(ctx.path, ctx.source) {
         return;
     }
 
@@ -37,29 +37,6 @@ crate::ast_check! { on ["call_expression"] prefilter = ["Sync"] => |node, source
         severity: Severity::Warning,
         span: None,
     });
-}
-
-fn allows_sync_node_api(path: &std::path::Path, source: &str) -> bool {
-    let lower = path.to_string_lossy().replace('\\', "/").to_ascii_lowercase();
-    lower.starts_with("scripts/")
-        || lower.contains("/scripts/")
-        || lower.starts_with("bin/")
-        || lower.contains("/bin/")
-        || lower.starts_with("tools/")
-        || lower.contains("/tools/")
-        || lower.starts_with("cli/")
-        || lower.contains("/cli/")
-        || file_name_is_config(path)
-        || source
-            .lines()
-            .next()
-            .is_some_and(|line| line.starts_with("#!") && line.contains("node"))
-}
-
-fn file_name_is_config(path: &std::path::Path) -> bool {
-    path.file_name()
-        .and_then(|file_name| file_name.to_str())
-        .is_some_and(|file_name| file_name.contains(".config."))
 }
 
 #[cfg(test)]

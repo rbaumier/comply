@@ -1,3 +1,5 @@
+mod oxc_typescript;
+
 mod typescript;
 
 use crate::diagnostic::Severity;
@@ -15,21 +17,28 @@ pub const META: RuleMeta = RuleMeta {
     categories: &["tailwind"],
 };
 
+/// True when `s` contains two or more consecutive space characters.
+pub(crate) fn has_consecutive_spaces(s: &str) -> bool {
+    s.as_bytes()
+        .windows(2)
+        .any(|w| w[0] == b' ' && w[1] == b' ')
+}
+
 pub fn register() -> RuleDef {
     RuleDef {
         meta: META,
         backends: vec![
             (
                 Language::TypeScript,
-                Backend::TreeSitter(Box::new(typescript::Check)),
+                Backend::Oxc(Box::new(oxc_typescript::Check)),
             ),
             (
                 Language::Tsx,
-                Backend::TreeSitter(Box::new(typescript::Check)),
+                Backend::Oxc(Box::new(oxc_typescript::Check)),
             ),
             (
                 Language::JavaScript,
-                Backend::TreeSitter(Box::new(typescript::Check)),
+                Backend::Oxc(Box::new(oxc_typescript::Check)),
             ),
             (
                 Language::Vue,

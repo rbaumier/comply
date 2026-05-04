@@ -1,9 +1,13 @@
 //! no-boolean-flag-param — split boolean-flagged functions into two.
 
+mod oxc_typescript;
+#[cfg(test)]
 mod typescript;
 
 use crate::diagnostic::Severity;
+use crate::files::Language;
 use crate::rules::RuleDef;
+use crate::rules::backend::Backend;
 use crate::rules::meta::RuleMeta;
 
 pub const META: RuleMeta = RuleMeta {
@@ -19,9 +23,13 @@ pub const META: RuleMeta = RuleMeta {
     categories: &["code-quality"],
 };
 pub fn register() -> RuleDef {
-    crate::register_ts_family_with_clippy_marker!(
-        META,
-        typescript,
-        "clippy::fn_params_excessive_bools"
-    )
+    RuleDef {
+        meta: META,
+        backends: vec![
+            (Language::TypeScript, Backend::Oxc(Box::new(oxc_typescript::Check))),
+            (Language::JavaScript, Backend::Oxc(Box::new(oxc_typescript::Check))),
+            (Language::Tsx, Backend::Oxc(Box::new(oxc_typescript::Check))),
+            (Language::Rust, Backend::Clippy { lint: "clippy::fn_params_excessive_bools" }),
+        ],
+    }
 }

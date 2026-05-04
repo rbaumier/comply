@@ -1,5 +1,7 @@
 //! no-dangerously-set-inner-html — XSS vector.
 
+mod oxc_typescript;
+#[cfg(test)]
 mod typescript;
 
 use crate::diagnostic::Severity;
@@ -25,7 +27,7 @@ pub fn register() -> RuleDef {
         meta: META,
         backends: vec![(
             Language::Tsx,
-            Backend::TreeSitter(Box::new(typescript::Check)),
+            Backend::Oxc(Box::new(oxc_typescript::Check)),
         )],
     }
 }

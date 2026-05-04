@@ -1,3 +1,5 @@
+mod oxc_typescript;
+
 mod typescript;
 
 use crate::diagnostic::Severity;
@@ -15,21 +17,40 @@ pub const META: RuleMeta = RuleMeta {
     categories: &["tailwind"],
 };
 
+/// Deprecated class → recommended replacement.
+pub(crate) const DEPRECATED: &[(&str, &str)] = &[
+    ("flex-grow-0", "grow-0"),
+    ("flex-grow", "grow"),
+    ("flex-shrink-0", "shrink-0"),
+    ("flex-shrink", "shrink"),
+    ("overflow-ellipsis", "text-ellipsis"),
+    ("overflow-clip", "text-clip"),
+    ("decoration-slice", "box-decoration-slice"),
+    ("decoration-clone", "box-decoration-clone"),
+];
+
+pub(crate) fn replacement_for(class: &str) -> Option<&'static str> {
+    DEPRECATED
+        .iter()
+        .find(|(dep, _)| *dep == class)
+        .map(|(_, repl)| *repl)
+}
+
 pub fn register() -> RuleDef {
     RuleDef {
         meta: META,
         backends: vec![
             (
                 Language::TypeScript,
-                Backend::TreeSitter(Box::new(typescript::Check)),
+                Backend::Oxc(Box::new(oxc_typescript::Check)),
             ),
             (
                 Language::Tsx,
-                Backend::TreeSitter(Box::new(typescript::Check)),
+                Backend::Oxc(Box::new(oxc_typescript::Check)),
             ),
             (
                 Language::JavaScript,
-                Backend::TreeSitter(Box::new(typescript::Check)),
+                Backend::Oxc(Box::new(oxc_typescript::Check)),
             ),
             (
                 Language::Vue,

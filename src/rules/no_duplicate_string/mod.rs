@@ -23,6 +23,7 @@
 //! Rust via `rust`, Vue via `vue` (which re-parses each `<script>`
 //! block with the TS grammar).
 
+mod oxc_typescript;
 mod rust;
 mod typescript;
 mod vue;
@@ -53,15 +54,15 @@ pub fn register() -> RuleDef {
         backends: vec![
             (
                 Language::TypeScript,
-                Backend::TreeSitter(Box::new(typescript::Check)),
+                Backend::Oxc(Box::new(oxc_typescript::Check)),
             ),
             (
                 Language::JavaScript,
-                Backend::TreeSitter(Box::new(typescript::Check)),
+                Backend::Oxc(Box::new(oxc_typescript::Check)),
             ),
             (
                 Language::Tsx,
-                Backend::TreeSitter(Box::new(typescript::Check)),
+                Backend::Oxc(Box::new(oxc_typescript::Check)),
             ),
             (Language::Rust, Backend::TreeSitter(Box::new(rust::Check))),
             (Language::Vue, Backend::TreeSitter(Box::new(vue::Check))),
@@ -142,7 +143,7 @@ pub(super) fn collect_diagnostics(
 
 /// URI-scheme and MIME-type strings are spec-mandated literals (RFC 9457,
 /// HTTP headers, etc.) — repeating them is intentional, not accidental.
-fn is_spec_literal(s: &str) -> bool {
+pub(crate) fn is_spec_literal(s: &str) -> bool {
     const URI_SCHEMES: &[&str] = &[
         "about:", "http:", "https:", "data:", "blob:", "file:", "mailto:", "tel:", "urn:",
     ];

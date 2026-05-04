@@ -1,10 +1,14 @@
 //! hono-error-leaks-stack — flag error handlers that return `err.stack` / `err.message`.
 
+mod oxc_typescript;
+#[cfg(test)]
 mod typescript;
 
 use crate::diagnostic::Severity;
-use crate::rules::meta::RuleMeta;
+use crate::files::Language;
 use crate::rules::RuleDef;
+use crate::rules::backend::Backend;
+use crate::rules::meta::RuleMeta;
 
 pub const META: RuleMeta = RuleMeta {
     id: "hono-error-leaks-stack",
@@ -16,5 +20,12 @@ pub const META: RuleMeta = RuleMeta {
 };
 
 pub fn register() -> RuleDef {
-    crate::register_ts_family!(META, typescript)
+    RuleDef {
+        meta: META,
+        backends: vec![
+            (Language::TypeScript, Backend::Oxc(Box::new(oxc_typescript::Check))),
+            (Language::JavaScript, Backend::Oxc(Box::new(oxc_typescript::Check))),
+            (Language::Tsx, Backend::Oxc(Box::new(oxc_typescript::Check))),
+        ],
+    }
 }

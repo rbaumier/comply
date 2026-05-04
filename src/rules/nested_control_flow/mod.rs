@@ -28,9 +28,11 @@
 //! whose ESTree equivalent is `if (node.parent.type !== "IfStatement")
 //! { pushBlock(node); }`.
 
+mod oxc_typescript;
 mod rust;
 #[cfg(test)]
 mod shared_tests;
+#[cfg(test)]
 mod typescript;
 
 use crate::diagnostic::Severity;
@@ -50,7 +52,7 @@ pub const META: RuleMeta = RuleMeta {
 pub fn register() -> RuleDef {
     let mut backends: Vec<(Language, Backend)> = TS_FAMILY
         .iter()
-        .map(|&lang| (lang, Backend::TreeSitter(Box::new(typescript::Check))))
+        .map(|&lang| (lang, Backend::Oxc(Box::new(oxc_typescript::Check))))
         .collect();
     backends.push((Language::Rust, Backend::TreeSitter(Box::new(rust::Check))));
     RuleDef {

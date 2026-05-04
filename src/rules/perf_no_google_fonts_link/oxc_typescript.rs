@@ -1,0 +1,66 @@
+//! OxcCheck backend — flags JSX `<link>` whose `href` points at Google Fonts.
+
+use crate::diagnostic::{Diagnostic, Severity};
+use crate::oxc_helpers::byte_offset_to_line_col;
+use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
+use oxc_ast::ast::JSXAttributeItem;
+use std::sync::Arc;
+
+pub struct Check;
+
+impl OxcCheck for Check {
+    fn interested_kinds(&self) -> &'static [AstType] {
+        &[AstType::JSXOpeningElement]
+    }
+
+    fn prefilter(&self) -> Option<&'static [&'static str]> {
+        Some(&["fonts.googleapis.com", "fonts.gstatic.com"])
+    }
+
+    fn run<'a>(
+        &self,
+        node: &oxc_semantic::AstNode<'a>,
+        ctx: &CheckCtx,
+        _semantic: &'a oxc_semantic::Semantic<'a>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
+        let AstKind::JSXOpeningElement(opening) = node.kind() else { return };
+
+        // Check tag name is "link"
+        let tag_name = match &opening.name {
+            oxc_ast::ast::JSXElementName::Identifier(id) => id.name.as_str(),
+            _ => return,
+        };
+        if tag_name != "link" {
+            return;
+        }
+
+        for attr_item in &opening.attributes {
+            let JSXAttributeItem::Attribute(attr) = attr_item else { continue };
+            let oxc_ast::ast::JSXAttributeName::Identifier(attr_name) = &attr.name else {
+                continue;
+            };
+            if attr_name.name.as_str() != "href" {
+                continue;
+            }
+            let Some(oxc_ast::ast::JSXAttributeValue::StringLiteral(val)) = &attr.value else {
+                continue;
+            };
+            let href = val.value.as_str();
+            if href.contains("fonts.googleapis.com") || href.contains("fonts.gstatic.com") {
+                let (line, column) =
+                    byte_offset_to_line_col(ctx.source, opening.span.start as usize);
+                diagnostics.push(Diagnostic {
+                    path: Arc::clone(&ctx.path_arc),
+                    line,
+                    column,
+                    rule_id: super::META.id.into(),
+                    message: "Avoid loading fonts from `fonts.googleapis.com` — self-host them to cut a third-party handshake.".into(),
+                    severity: Severity::Warning,
+                    span: None,
+                });
+                return;
+            }
+        }
+    }
+}

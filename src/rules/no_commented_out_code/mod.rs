@@ -77,7 +77,9 @@
 //!   in TS (ASI) and DOES flag. This is intentional.
 //! - `//  const  x  =  5 ;  ` (excess whitespace) flags. Intentional.
 
+mod oxc_typescript;
 mod rust;
+#[cfg(test)]
 mod typescript;
 mod vue;
 
@@ -111,15 +113,15 @@ pub fn register() -> RuleDef {
         backends: vec![
             (
                 Language::TypeScript,
-                Backend::TreeSitter(Box::new(typescript::Check)),
+                Backend::Oxc(Box::new(oxc_typescript::Check)),
             ),
             (
                 Language::JavaScript,
-                Backend::TreeSitter(Box::new(typescript::Check)),
+                Backend::Oxc(Box::new(oxc_typescript::Check)),
             ),
             (
                 Language::Tsx,
-                Backend::TreeSitter(Box::new(typescript::Check)),
+                Backend::Oxc(Box::new(oxc_typescript::Check)),
             ),
             (Language::Rust, Backend::TreeSitter(Box::new(rust::Check))),
             (Language::Vue, Backend::TreeSitter(Box::new(vue::Check))),
@@ -175,6 +177,62 @@ pub(super) fn group_adjacent<'tree>(
         }
     }
     groups
+}
+
+pub(super) fn parses_as_typescript_code(body: &str) -> bool {
+    let mut parser = tree_sitter::Parser::new();
+    if parser
+        .set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into())
+        .is_err()
+    {
+        return false;
+    }
+    let Some(tree) = parser.parse(body, None) else {
+        return false;
+    };
+    let root = tree.root_node();
+    if root.has_error() {
+        return false;
+    }
+    let mut found = false;
+    crate::rules::walker::walk_tree(&tree, |node| {
+        if found {
+            return;
+        }
+        if matches!(
+            node.kind(),
+            "call_expression"
+                | "assignment_expression"
+                | "augmented_assignment_expression"
+                | "lexical_declaration"
+                | "variable_declaration"
+                | "function_declaration"
+                | "function_expression"
+                | "generator_function_declaration"
+                | "arrow_function"
+                | "if_statement"
+                | "for_statement"
+                | "for_in_statement"
+                | "while_statement"
+                | "do_statement"
+                | "return_statement"
+                | "throw_statement"
+                | "try_statement"
+                | "switch_statement"
+                | "class_declaration"
+                | "interface_declaration"
+                | "type_alias_declaration"
+                | "enum_declaration"
+                | "import_statement"
+                | "export_statement"
+                | "new_expression"
+                | "update_expression"
+                | "await_expression"
+        ) {
+            found = true;
+        }
+    });
+    found
 }
 
 #[cfg(test)]

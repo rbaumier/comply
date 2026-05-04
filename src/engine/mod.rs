@@ -12,9 +12,11 @@
 //!    Oxlint/Clippy/Tsc contribute their rule-id to external tools and
 //!    their diagnostics are remapped post-hoc.
 
+mod oxc_walk;
 mod prefilter;
 mod walk;
 
+use oxc_walk::run_oxc_checks;
 use prefilter::{PrefilterFinders, build_finders, source_matches_prefilter};
 use walk::{run_legacy_checks, run_multiplexed_walk};
 
@@ -32,11 +34,13 @@ use crate::diagnostic::Diagnostic;
 use crate::files::{Language, SourceFile};
 use crate::project::ProjectCtx;
 use crate::rules::backend::AstCheck;
+use crate::rules::backend::OxcCheck;
 use crate::rules::file_ctx::FileCtx;
 use crate::rules::{self, RuleDef, backend::Backend, backend::CheckCtx, meta::RuleMeta};
 
 const LARGE_PROJECT_FILE_COUNT: usize = 1_000;
 const ENGINE_LARGE_PROJECT_BUDGET: Duration = Duration::from_secs(55);
+
 
 /// Pre-computed per-language dispatch table. Built once in `lint_files`,
 /// shared read-only across all rayon workers.
@@ -54,8 +58,11 @@ struct LangDispatch<'a> {
     multiplexed_prefilters: Vec<Option<PrefilterFinders>>,
     legacy: Vec<(&'a RuleMeta, &'a dyn AstCheck)>,
     legacy_prefilters: Vec<Option<PrefilterFinders>>,
-    dispatch: FxHashMap<u16, Vec<usize>>,
+    dispatch: Vec<Vec<usize>>,
     interesting: Vec<bool>,
+    oxc_rules: Vec<(&'a RuleMeta, &'a dyn OxcCheck)>,
+    oxc_prefilters: Vec<Option<PrefilterFinders>>,
+    has_ts_rules: bool,
 }
 
 impl<'a> LangDispatch<'a> {
@@ -67,6 +74,7 @@ impl<'a> LangDispatch<'a> {
             .map(|(_, backend)| match backend {
                 Backend::TreeSitter(c) => c.prefilter().map(build_finders),
                 Backend::Text(c) => c.prefilter().map(build_finders),
+                Backend::Oxc(c) => c.prefilter().map(build_finders),
                 _ => None,
             })
             .collect();
@@ -87,30 +95,36 @@ impl<'a> LangDispatch<'a> {
                 }
             }
         }
+        let mut oxc_rules: Vec<(&'a RuleMeta, &'a dyn OxcCheck)> = Vec::new();
+        let mut oxc_prefilters: Vec<Option<PrefilterFinders>> = Vec::new();
+        for &(meta, ref backend) in &applicable {
+            if let Backend::Oxc(check) = backend {
+                let check: &dyn OxcCheck = &**check;
+                let pf = check.prefilter().map(build_finders);
+                oxc_rules.push((meta, check));
+                oxc_prefilters.push(pf);
+            }
+        }
         let ts_lang = crate::parsing::ts_language_for(language);
-        let mut dispatch: FxHashMap<u16, Vec<usize>> = FxHashMap::default();
-        let mut max_kind_id: u16 = 0;
+        let mut entries: Vec<(u16, usize)> = Vec::new();
         if let Some(ref tsl) = ts_lang {
             for (i, (_, check)) in multiplexed.iter().enumerate() {
                 for kind in check.interested_kinds().unwrap() {
                     let kid = tsl.id_for_node_kind(kind, true);
-                    // id_for_node_kind returns 0 for unknown kinds (= the ERROR
-                    // kind sentinel). Skip those — they'd cause every error
-                    // node to dispatch into rules that didn't ask for it.
                     if kid == 0 {
                         continue;
                     }
-                    if kid > max_kind_id {
-                        max_kind_id = kid;
-                    }
-                    dispatch.entry(kid).or_default().push(i);
+                    entries.push((kid, i));
                 }
             }
         }
-        let mut interesting = vec![false; max_kind_id as usize + 1];
-        for &kid in dispatch.keys() {
-            interesting[kid as usize] = true;
+        let max_kind_id = entries.iter().map(|(k, _)| *k).max().unwrap_or(0);
+        let mut dispatch: Vec<Vec<usize>> = vec![Vec::new(); max_kind_id as usize + 1];
+        for (kid, i) in entries {
+            dispatch[kid as usize].push(i);
         }
+        let interesting: Vec<bool> = dispatch.iter().map(|v| !v.is_empty()).collect();
+        let has_ts_rules = !multiplexed.is_empty() || !legacy.is_empty();
         Self {
             applicable,
             applicable_prefilters,
@@ -120,6 +134,9 @@ impl<'a> LangDispatch<'a> {
             legacy_prefilters,
             dispatch,
             interesting,
+            oxc_rules,
+            oxc_prefilters,
+            has_ts_rules,
         }
     }
 }
@@ -223,6 +240,7 @@ pub fn lint_files_with_project(
     }
 
     diagnostics.retain(|d| !is_self_reference(d));
+
     Ok(diagnostics)
 }
 
@@ -301,21 +319,22 @@ fn dispatch_with_lang(
         return Vec::new();
     }
 
-    let needs_ast = ld
-        .applicable
-        .iter()
-        .zip(&ld.applicable_prefilters)
-        .any(|((meta, b), pf)| match b {
-            Backend::TreeSitter(_) => {
-                config.is_rule_enabled(meta.id, path)
-                    && !should_skip_test_fixture_rule(meta, &file_ctx)
-                    && !should_skip_relaxed_directory_rule(meta, path)
-                    && pf
-                        .as_ref()
-                        .is_none_or(|f| source_matches_prefilter(source, f))
-            }
-            _ => false,
-        });
+    let needs_ast = ld.has_ts_rules
+        && ld
+            .applicable
+            .iter()
+            .zip(&ld.applicable_prefilters)
+            .any(|((meta, b), pf)| match b {
+                Backend::TreeSitter(_) => {
+                    config.is_rule_enabled(meta.id, path)
+                        && !should_skip_test_fixture_rule(meta, &file_ctx)
+                        && !should_skip_relaxed_directory_rule(meta, path)
+                        && pf
+                            .as_ref()
+                            .is_none_or(|f| source_matches_prefilter(source, f))
+                }
+                _ => false,
+            });
     let tree = if needs_ast {
         crate::parsing::parse_with_grammar(&mut worker.parser, file.language, source.as_bytes())
     } else {
@@ -356,7 +375,7 @@ fn dispatch_with_lang(
             | Backend::Clippy { .. }
             | Backend::Tsc { .. }
             | Backend::Tsgolint { .. } => Vec::new(),
-            Backend::TreeSitter(_) => continue,
+            Backend::TreeSitter(_) | Backend::Oxc(_) => continue,
         };
         if let Some(sev) = config.severity_for(meta.id) {
             for d in &mut produced {
@@ -364,6 +383,28 @@ fn dispatch_with_lang(
             }
         }
         diagnostics.extend(produced);
+    }
+
+    // oxc-based rules -- parse once with oxc_parser if any Oxc backend is
+    // enabled for this file.
+    let needs_oxc = !ld.oxc_rules.is_empty()
+        && ld
+            .oxc_rules
+            .iter()
+            .zip(&ld.oxc_prefilters)
+            .any(|((meta, _), pf)| {
+                config.is_rule_enabled(meta.id, path)
+                    && !should_skip_test_fixture_rule(meta, &file_ctx)
+                    && !should_skip_relaxed_directory_rule(meta, path)
+                    && pf
+                        .as_ref()
+                        .is_none_or(|f| source_matches_prefilter(source, f))
+            });
+
+    if needs_oxc {
+        crate::oxc_helpers::with_oxc_parse(source, path, |semantic| {
+            run_oxc_checks(ld, semantic, &ctx, source, path, config, &mut diagnostics);
+        });
     }
 
     if let Some(ref t) = tree {
@@ -465,9 +506,6 @@ fn lint_one_file_with_dispatch(
     if ld.applicable.is_empty() {
         return Ok(vec![]);
     }
-    // Take the buffer out so we can hand a &str to dispatch_with_lang while
-    // still passing &mut worker. Put it back when done so the next file
-    // reuses the allocation.
     let source = std::mem::take(&mut worker.source_buf);
     let diagnostics = dispatch_with_lang(file, &source, ld, worker, config, project);
     worker.source_buf = source;

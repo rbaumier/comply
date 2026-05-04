@@ -1,0 +1,41 @@
+//! no-nested-ternary — OXC backend.
+
+use crate::diagnostic::{Diagnostic, Severity};
+use crate::oxc_helpers::byte_offset_to_line_col;
+use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
+use std::sync::Arc;
+
+pub struct Check;
+
+impl OxcCheck for Check {
+    fn interested_kinds(&self) -> &'static [AstType] {
+        &[AstType::ConditionalExpression]
+    }
+
+    fn run<'a>(
+        &self,
+        node: &oxc_semantic::AstNode<'a>,
+        ctx: &CheckCtx,
+        semantic: &'a oxc_semantic::Semantic<'a>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
+        let AstKind::ConditionalExpression(cond) = node.kind() else { return };
+
+        let parent = semantic.nodes().parent_node(node.id());
+        if !matches!(parent.kind(), AstKind::ConditionalExpression(_)) {
+            return;
+        }
+
+        let (line, column) = byte_offset_to_line_col(ctx.source, cond.span.start as usize);
+        diagnostics.push(Diagnostic {
+            path: Arc::clone(&ctx.path_arc),
+            line,
+            column,
+            rule_id: super::META.id.into(),
+            message: "Nested ternary — extract to if/else or a named variable for each branch."
+                .into(),
+            severity: Severity::Error,
+            span: None,
+        });
+    }
+}

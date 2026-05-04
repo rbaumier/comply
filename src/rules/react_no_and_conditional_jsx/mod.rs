@@ -1,5 +1,7 @@
 //! react-no-and-conditional-jsx — prefer ternary over && for conditional rendering.
 
+mod oxc_typescript;
+#[cfg(test)]
 mod react;
 
 use crate::diagnostic::Severity;
@@ -22,6 +24,6 @@ pub const META: RuleMeta = RuleMeta {
 pub fn register() -> RuleDef {
     RuleDef {
         meta: META,
-        backends: vec![(Language::Tsx, Backend::TreeSitter(Box::new(react::Check)))],
+        backends: vec![(Language::Tsx, Backend::Oxc(Box::new(oxc_typescript::Check)))],
     }
 }

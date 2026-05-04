@@ -1,3 +1,5 @@
+mod oxc_typescript;
+
 mod typescript;
 
 use crate::diagnostic::Severity;
@@ -15,17 +17,29 @@ pub const META: RuleMeta = RuleMeta {
     categories: &["tailwind"],
 };
 
+/// Return the matching `w-V`/`h-V` value if both appear in the class string.
+pub(crate) fn find_wh_duplicate<'a>(class_str: &'a str) -> Option<&'a str> {
+    let tokens: Vec<&str> = class_str.split_whitespace().collect();
+    let w_vals: Vec<&str> = tokens.iter().filter_map(|t| t.strip_prefix("w-")).collect();
+    let h_vals: Vec<&str> = tokens.iter().filter_map(|t| t.strip_prefix("h-")).collect();
+    w_vals.into_iter().find(|w| h_vals.contains(w))
+}
+
 pub fn register() -> RuleDef {
     RuleDef {
         meta: META,
         backends: vec![
             (
                 Language::TypeScript,
-                Backend::TreeSitter(Box::new(typescript::Check)),
+                Backend::Oxc(Box::new(oxc_typescript::Check)),
             ),
             (
                 Language::Tsx,
-                Backend::TreeSitter(Box::new(typescript::Check)),
+                Backend::Oxc(Box::new(oxc_typescript::Check)),
+            ),
+            (
+                Language::JavaScript,
+                Backend::Oxc(Box::new(oxc_typescript::Check)),
             ),
             (
                 Language::Vue,

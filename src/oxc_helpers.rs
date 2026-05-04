@@ -41,3 +41,43 @@ where
     let semantic = SemanticBuilder::new().build(&parse_ret.program).semantic;
     f(&semantic)
 }
+
+/// Convert an oxc byte offset into 1-based `(line, column)`.
+///
+/// Shared across all `OxcCheck` rules that emit diagnostics — avoids the
+/// copy-pasted per-rule helper that was duplicated in 15+ tree-sitter rules.
+pub fn byte_offset_to_line_col(source: &str, byte_offset: usize) -> (usize, usize) {
+    let mut line = 1;
+    let mut col = 1;
+    for (i, c) in source.char_indices() {
+        if i >= byte_offset {
+            break;
+        }
+        if c == '\r' {
+            continue;
+        }
+        if c == '\n' {
+            line += 1;
+            col = 1;
+        } else {
+            col += 1;
+        }
+    }
+    (line, col)
+}
+
+/// Parse `source` with oxc_parser using the source type inferred from `path`,
+/// build semantic analysis, then hand the `Semantic` to `f`. The allocator
+/// and AST are dropped after `f` returns.
+///
+/// Used by the engine hot path for `Backend::Oxc` dispatch.
+pub fn with_oxc_parse<F, R>(source: &str, path: &Path, f: F) -> R
+where
+    F: for<'a> FnOnce(&'a Semantic<'a>) -> R,
+{
+    let source_type = source_type_for_path(path);
+    let allocator = Allocator::default();
+    let parse_ret = Parser::new(&allocator, source, source_type).parse();
+    let semantic = SemanticBuilder::new().build(&parse_ret.program).semantic;
+    f(&semantic)
+}

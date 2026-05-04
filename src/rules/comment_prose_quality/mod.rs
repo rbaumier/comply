@@ -1,5 +1,6 @@
 //! comment-prose-quality
 
+mod oxc_typescript;
 mod rust;
 mod text;
 mod typescript;
@@ -198,21 +199,123 @@ pub(crate) fn lint_comment_nodes(
     diagnostics
 }
 
+/// Lint a set of comment spans given as `(raw_text, start_row_0based)` pairs.
+/// Shared between the tree-sitter and oxc backends.
+pub(crate) fn lint_comment_spans(
+    ctx: &CheckCtx,
+    spans: &[(&str, usize)],
+) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+    let mut prev_last_word: Option<(String, usize)> = None;
+    let mut prev_line: Option<usize> = None;
+    let mut text_of_prev_line: Option<String> = None;
+
+    for &(raw, start_row) in spans {
+        let is_doc_comment = raw.starts_with("///")
+            || raw.starts_with("//!")
+            || raw.starts_with("/**");
+        let mut in_code_block = false;
+        for (offset, line) in raw.lines().enumerate() {
+            let line_no = start_row + offset + 1;
+            let text = strip_marker(line);
+            let trimmed = text.trim();
+
+            if trimmed.starts_with("```") {
+                in_code_block = !in_code_block;
+                continue;
+            }
+            if in_code_block || (is_doc_comment && trimmed.starts_with("    ")) {
+                continue;
+            }
+
+            let lower = text.to_lowercase();
+
+            if !is_doc_comment {
+                for &weasel in WEASEL_WORDS {
+                    if contains_word(&lower, weasel) {
+                        diagnostics.push(Diagnostic {
+                            path: std::sync::Arc::clone(&ctx.path_arc),
+                            line: line_no,
+                            column: 1,
+                            rule_id: META.id.into(),
+                            message: format!("Weasel word `{weasel}` in comment — be specific."),
+                            severity: Severity::Warning,
+                            span: None,
+                        });
+                        break;
+                    }
+                }
+                for &passive in PASSIVE_PATTERNS {
+                    if lower.contains(passive) {
+                        diagnostics.push(Diagnostic {
+                            path: std::sync::Arc::clone(&ctx.path_arc),
+                            line: line_no,
+                            column: 1,
+                            rule_id: META.id.into(),
+                            message: format!(
+                                "Passive voice `{passive}` in comment — use active voice."
+                            ),
+                            severity: Severity::Warning,
+                            span: None,
+                        });
+                        break;
+                    }
+                }
+            }
+
+            let words: Vec<&str> = text.split_whitespace().collect();
+            let is_heading_echo = prev_last_word.as_ref().is_some_and(|(_, wc)| {
+                *wc == 2
+                    && text_of_prev_line
+                        .as_deref()
+                        .is_some_and(|pt| pt.trim().starts_with("# "))
+            });
+            if let Some((ref prev, prev_wc)) = prev_last_word
+                && let Some(prev_l) = prev_line
+                && prev_l + 1 == line_no
+                && words.len() > 1
+                && prev_wc > 1
+                && let Some(&first) = words.first()
+                && first.chars().any(|c| c.is_alphabetic())
+                && first.to_lowercase() == *prev
+                && !is_heading_echo
+            {
+                diagnostics.push(Diagnostic {
+                    path: std::sync::Arc::clone(&ctx.path_arc),
+                    line: line_no,
+                    column: 1,
+                    rule_id: META.id.into(),
+                    message: format!("Lexical illusion: `{first}` repeated across lines."),
+                    severity: Severity::Warning,
+                    span: None,
+                });
+            }
+            prev_last_word = words
+                .last()
+                .filter(|w| w.chars().any(|c| c.is_alphabetic()))
+                .map(|w| (w.to_lowercase(), words.len()));
+            prev_line = Some(line_no);
+            text_of_prev_line = Some(text.to_string());
+        }
+    }
+    diagnostics
+}
+
 pub fn register() -> RuleDef {
     RuleDef {
         meta: META,
         backends: vec![
             (
                 Language::TypeScript,
-                Backend::TreeSitter(Box::new(typescript::Check)),
+                Backend::Oxc(Box::new(oxc_typescript::Check)),
             ),
             (
                 Language::Tsx,
-                Backend::TreeSitter(Box::new(typescript::Check)),
+                Backend::Oxc(Box::new(oxc_typescript::Check)),
             ),
             (
                 Language::JavaScript,
-                Backend::TreeSitter(Box::new(typescript::Check)),
+                Backend::Oxc(Box::new(oxc_typescript::Check)),
             ),
             (Language::Rust, Backend::TreeSitter(Box::new(rust::Check))),
             (Language::Vue, Backend::Text(Box::new(text::Check))),

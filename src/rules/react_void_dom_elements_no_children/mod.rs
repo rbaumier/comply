@@ -1,5 +1,7 @@
 //! react-void-dom-elements-no-children — void elements cannot have children.
 
+mod oxc_react;
+#[cfg(test)]
 mod react;
 
 use crate::diagnostic::Severity;
@@ -24,7 +26,7 @@ pub fn register() -> RuleDef {
         backends: {
             let b: Vec<_> = TS_FAMILY
                 .iter()
-                .map(|&lang| (lang, Backend::TreeSitter(Box::new(react::Check))))
+                .map(|&lang| (lang, Backend::Oxc(Box::new(oxc_react::Check))))
                 .collect();
             b
         },

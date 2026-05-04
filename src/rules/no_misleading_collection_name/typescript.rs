@@ -9,6 +9,7 @@
 //! restrict to constructor calls and array literals — type annotations
 //! alone are too easy to misread, and we want zero false positives.
 
+use super::Shape;
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 
@@ -34,7 +35,7 @@ impl AstCheck for Check {
         let Ok(name) = name_node.utf8_text(source) else {
             return;
         };
-        let Some(claimed) = name_suffix_shape(name) else {
+        let Some(claimed) = super::name_suffix_shape(name) else {
             return;
         };
         let Some(value) = node.child_by_field_name("value") else {
@@ -56,56 +57,14 @@ impl AstCheck for Check {
                 "`{name}` is named like {claimed_article} {claimed_label} but holds \
                  {actual_article} {actual_label}. Rename to match the actual type — \
                  the suffix is part of the contract.",
-                claimed_article = article(claimed.label()),
+                claimed_article = super::article(claimed.label()),
                 claimed_label = claimed.label(),
-                actual_article = article(actual.label()),
+                actual_article = super::article(actual.label()),
                 actual_label = actual.label()
             ),
             severity: Severity::Error,
             span: None,
         });
-    }
-}
-
-/// Claimed vs. actual collection shape inferred from a binding name's
-/// suffix and from its initializer expression. Kept as a closed enum so
-/// we can exhaustively match on it in `name_suffix_shape` /
-/// `initializer_shape`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Shape {
-    Array,
-    Set,
-    Map,
-}
-
-impl Shape {
-    fn label(self) -> &'static str {
-        match self {
-            Shape::Array => "Array",
-            Shape::Set => "Set",
-            Shape::Map => "Map",
-        }
-    }
-}
-
-/// English article ("a" / "an") for a label starting with a vowel sound.
-fn article(label: &str) -> &'static str {
-    match label.chars().next() {
-        Some('A') | Some('E') | Some('I') | Some('O') | Some('U') => "an",
-        _ => "a",
-    }
-}
-
-/// Map a binding name's suffix to its claimed shape.
-fn name_suffix_shape(name: &str) -> Option<Shape> {
-    if name.ends_with("List") || name.ends_with("Array") {
-        Some(Shape::Array)
-    } else if name.ends_with("Set") {
-        Some(Shape::Set)
-    } else if name.ends_with("Map") {
-        Some(Shape::Map)
-    } else {
-        None
     }
 }
 

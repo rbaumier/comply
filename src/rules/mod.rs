@@ -14,6 +14,8 @@
 //!
 //! See TODO.md "Architecture" for the full rationale. // comply-ignore: todo-needs-issue-link — file reference, not marker.
 
+pub mod angular_no_direct_dom;
+pub mod angular_no_subscribe_without_unsubscribe;
 pub mod angular_no_topromise;
 pub mod angular_prefer_signals;
 pub mod angular_require_onpush;
@@ -607,6 +609,7 @@ pub mod vue_scoped_styles_preferred;
 pub mod vue_self_closing_comp;
 pub mod vue_setup_store_return_all;
 pub mod vue_sfc;
+pub mod vue_sfc_oxc;
 pub mod vue_shallowref_for_primitives;
 pub mod vue_template_helpers;
 pub mod vue_typed_define_props_emits;
@@ -2410,6 +2413,8 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         hono_no_hardcoded_cors_origin::register(),
         hono_secure_headers_disabled::register(),
         // Angular rules.
+        angular_no_direct_dom::register(),
+        angular_no_subscribe_without_unsubscribe::register(),
         angular_no_topromise::register(),
         angular_prefer_signals::register(),
         angular_require_onpush::register(),

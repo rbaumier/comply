@@ -36,8 +36,11 @@
 //! plus `block_comment` in Rust), so callers pass the kinds they care
 //! about as a slice parameter.
 
+#[cfg(test)]
 use crate::diagnostic::{Diagnostic, Severity};
+#[cfg(test)]
 use crate::rules::backend::CheckCtx;
+#[cfg(test)]
 use crate::rules::walker::walk_tree;
 
 /// Scan `tree` for single-line statements whose stripped source line
@@ -51,6 +54,7 @@ use crate::rules::walker::walk_tree;
 /// comments (`comment` for TS, `line_comment` + `block_comment` for
 /// Rust). Their byte ranges are stripped from candidate lines before
 /// the operator count and length check.
+#[cfg(test)]
 #[must_use]
 pub fn scan_dense_lines(
     ctx: &CheckCtx,
@@ -113,7 +117,7 @@ pub fn scan_dense_lines(
 /// tuples. `line_text` excludes the trailing `\n` / `\r\n` so that
 /// `line_text.len()` matches what we want to compare against
 /// `min_line_length`. The byte offsets are absolute in the source.
-fn compute_line_offsets(source: &str) -> Vec<(usize, &str)> {
+pub(super) fn compute_line_offsets(source: &str) -> Vec<(usize, &str)> {
     let mut out = Vec::new();
     let mut byte_offset = 0;
     for chunk in source.split_inclusive('\n') {
@@ -127,6 +131,7 @@ fn compute_line_offsets(source: &str) -> Vec<(usize, &str)> {
 /// Collect `(start_byte, end_byte)` ranges for every comment node in
 /// the tree. Delegates the cursor walk to `walker::collect_nodes_of_kinds`
 /// and maps each node to its byte range.
+#[cfg(test)]
 fn collect_comment_ranges(tree: &tree_sitter::Tree, comment_kinds: &[&str]) -> Vec<(usize, usize)> {
     crate::rules::walker::collect_nodes_of_kinds(tree, comment_kinds)
         .into_iter()
@@ -140,7 +145,7 @@ fn collect_comment_ranges(tree: &tree_sitter::Tree, comment_kinds: &[&str]) -> V
 ///
 /// `line_start_byte` is the absolute byte offset where `line_text`
 /// begins in the original source.
-fn strip_comments(line_text: &str, line_start_byte: usize, ranges: &[(usize, usize)]) -> String {
+pub(super) fn strip_comments(line_text: &str, line_start_byte: usize, ranges: &[(usize, usize)]) -> String {
     if ranges.is_empty() {
         return line_text.to_string();
     }
@@ -171,7 +176,7 @@ fn strip_comments(line_text: &str, line_start_byte: usize, ranges: &[(usize, usi
 ///
 /// Comment stripping happens before this is called; nothing in the
 /// input string should be a comment.
-fn count_operators(line: &str) -> usize {
+pub(super) fn count_operators(line: &str) -> usize {
     let mut count = 0;
     let mut in_string = false;
     let mut prev: u8 = 0;
