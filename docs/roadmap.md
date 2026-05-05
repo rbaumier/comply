@@ -127,8 +127,8 @@
 
 | ID | Title | Type | Status | Severity | Blocked by | Estimation |
 |---|---|---|---|---|---|---|
-| ISS-091 | Crash UTF-8 byte-indexing systémique (3+ règles confirmées) | bug | open | critical | — | M |
-| ISS-101 | Stack overflow sur projets volumineux (playwright) | bug | open | high | — | M |
+| ISS-091 | Crash UTF-8 byte-indexing systémique (3+ règles confirmées) | bug | done | critical | — | M |
+| ISS-101 | Stack overflow sur projets volumineux (playwright) | bug | done | high | — | M |
 
 ## Batch 14 — Decorator/DI framework awareness (nest audit)
 
@@ -182,3 +182,11 @@
 |---|---|---|---|---|---|---|
 | ISS-118 | no-default-export FP sur fichiers config et routing Next.js | bug | open | high | — | S |
 | ISS-119 | zod-validate-env-at-startup FP sur le fichier de validation env | bug | open | high | — | S |
+
+## Batch 21 — Engine performance (cal.com perf)
+
+| ID | Title | Type | Status | Severity | Blocked by | Estimation |
+|---|---|---|---|---|---|---|
+| ISS-174 | Migrer le parser de tree-sitter vers oxc_parser natif | feature | done | critical | — | XL |
+| ISS-172 | Node-kind bitset pour skip de règles par fichier | feature | open | medium | — | S |
+| ISS-173 | Remplacer HashMap dispatch par index direct | feature | open | low | — | S |
