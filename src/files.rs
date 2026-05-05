@@ -193,11 +193,10 @@ fn walk_directory(path: &Path) -> Result<Vec<SourceFile>> {
     let walker = WalkBuilder::new(path)
         .standard_filters(true)
         .filter_entry(|entry| {
-            if entry.file_type().is_some_and(|ft| ft.is_dir()) {
-                if let Some(name) = entry.file_name().to_str() {
+            if entry.file_type().is_some_and(|ft| ft.is_dir())
+                && let Some(name) = entry.file_name().to_str() {
                     return !EXCLUDED_DIRS.contains(&name);
                 }
-            }
             true
         })
         .build();
@@ -263,15 +262,14 @@ fn parse_git_output(stdout: &[u8]) -> Result<Vec<SourceFile>> {
 /// Classify a file path into a Language based on its extension.
 /// Returns None for unsupported extensions (silently skipped).
 fn classify(path: &Path) -> Option<SourceFile> {
-    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-        if name.ends_with(".d.ts")
+    if let Some(name) = path.file_name().and_then(|n| n.to_str())
+        && (name.ends_with(".d.ts")
             || name.ends_with(".d.mts")
             || name.ends_with(".d.cts")
-            || name.ends_with(".d.tsx")
+            || name.ends_with(".d.tsx"))
         {
             return None;
         }
-    }
     let language = if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
         if TS_EXTENSIONS.contains(&ext) {
             Language::TypeScript

@@ -482,12 +482,11 @@ impl App {
         if self.cursor >= self.visible_rows.len() {
             return;
         }
-        if let Row::Group { ref key, expanded } = self.visible_rows[self.cursor] {
-            if !expanded {
+        if let Row::Group { ref key, expanded } = self.visible_rows[self.cursor]
+            && !expanded {
                 self.expanded_groups.insert(key.clone());
                 self.rebuild();
             }
-        }
     }
 
     pub fn collapse(&mut self) {

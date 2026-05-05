@@ -141,7 +141,7 @@ fn lint_files_with_bindings(
         .map(|(key, _, sev)| (*key, *sev, options::for_rule(key, config)))
         .collect();
     let oxlint_config = crate::oxlint_config::generate(&rule_entries)?;
-    let remap = remap::build_table(&bindings);
+    let remap = remap::build_table(bindings);
 
     let mut all = Vec::with_capacity(files.len());
     for batch in files.chunks(FILES_PER_BATCH) {

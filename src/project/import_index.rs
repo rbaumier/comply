@@ -1534,11 +1534,10 @@ impl OxcPathResolver {
         let entry = self.resolvers.iter().find(|e| importer.starts_with(&e.dir));
 
         // Try tsconfig path aliases first.
-        if let Some(e) = entry {
-            if let Some(resolved) = Self::resolve_alias(specifier, &e.aliases, known) {
+        if let Some(e) = entry
+            && let Some(resolved) = Self::resolve_alias(specifier, &e.aliases, known) {
                 return Some(resolved);
             }
-        }
 
         // Fall through to oxc_resolver for node_modules / other resolution.
         let oxc = entry.map(|e| &e.oxc).or(self.fallback.as_ref())?;

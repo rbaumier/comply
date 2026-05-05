@@ -74,11 +74,10 @@ fn find_cargo_workspace_root(path: &Path) -> Option<std::path::PathBuf> {
             if nearest.is_none() {
                 nearest = Some(dir.to_path_buf());
             }
-            if let Ok(content) = fs::read_to_string(&cargo_toml) {
-                if content.contains("[workspace]") {
+            if let Ok(content) = fs::read_to_string(&cargo_toml)
+                && content.contains("[workspace]") {
                     return Some(dir.to_path_buf());
                 }
-            }
         }
         current = dir.parent();
     }
@@ -126,17 +125,15 @@ fn is_optional_dep(manifest_path: &Path, message: &str) -> bool {
         return false;
     };
     for section in ["dependencies", "dev-dependencies", "build-dependencies"] {
-        if let Some(deps) = toml.get(section).and_then(|d| d.as_table()) {
-            if let Some(entry) = deps.get(dep_name) {
-                if entry
+        if let Some(deps) = toml.get(section).and_then(|d| d.as_table())
+            && let Some(entry) = deps.get(dep_name)
+                && entry
                     .get("optional")
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false)
                 {
                     return true;
                 }
-            }
-        }
     }
     false
 }

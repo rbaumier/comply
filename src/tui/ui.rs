@@ -217,14 +217,13 @@ fn draw_preview(frame: &mut Frame, app: &mut App, area: Rect) {
                     Span::styled(format!("{} ", marker), gutter_style),
                 ];
                 let mut hl_hit = false;
-                if let Some(file_hl) = app.highlight_cache.get(&path) {
-                    if let Some(spans_for_line) = file_hl.get(ln.wrapping_sub(1)) {
+                if let Some(file_hl) = app.highlight_cache.get(&path)
+                    && let Some(spans_for_line) = file_hl.get(ln.wrapping_sub(1)) {
                         for (color, text) in spans_for_line {
                             spans.push(Span::styled(text.clone(), Style::default().fg(*color)));
                         }
                         hl_hit = true;
                     }
-                }
                 if !hl_hit {
                     spans.push(Span::styled(src, Style::default().fg(Color::White)));
                 }

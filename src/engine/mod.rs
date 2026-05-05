@@ -202,7 +202,7 @@ pub fn lint_files_with_project(
         .collect();
     let lang_dispatches: FxHashMap<Language, LangDispatch> = languages
         .into_iter()
-        .map(|lang| (lang, LangDispatch::build(&rule_defs, lang, &project)))
+        .map(|lang| (lang, LangDispatch::build(&rule_defs, lang, project)))
         .collect();
 
     let deadline = (files.len() > LARGE_PROJECT_FILE_COUNT)
