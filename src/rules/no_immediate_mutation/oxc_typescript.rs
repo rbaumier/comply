@@ -100,9 +100,7 @@ impl OxcCheck for Check {
             };
 
             if flagged {
-                // Report on the next statement position
-                let _next_offset = decl_end as usize + (ctx.source[decl_end as usize..].len() - next_stmt_text.len() - ctx.source[decl_end as usize..].trim_start().len() + next_stmt_text.len());
-                // Simpler: find position of next_stmt in source after decl_end
+                // Find position of next_stmt in source after decl_end
                 let after_decl = &ctx.source[decl_end as usize..];
                 let trimmed = after_decl.trim_start();
                 let offset = decl_end as usize + (after_decl.len() - trimmed.len());

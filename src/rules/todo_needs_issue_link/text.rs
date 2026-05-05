@@ -47,7 +47,9 @@ fn has_issue_ref(rest: &str) -> bool {
             }
 
         // `https://` or `http://`
-        if b == b'h' && rest[i..].starts_with("http://") || rest[i..].starts_with("https://") {
+        if b == b'h' && rest.is_char_boundary(i)
+            && (rest[i..].starts_with("http://") || rest[i..].starts_with("https://"))
+        {
             return true;
         }
 
@@ -218,5 +220,13 @@ mod tests {
         let diags = run(src);
         assert_eq!(diags.len(), 1);
         assert_eq!(diags[0].line, 2);
+    }
+
+    #[test]
+    fn no_panic_on_multibyte_chars() {
+        // Emoji before the URL pattern — used to panic on char boundary
+        assert!(run("// TODO 💡 https://github.com/org/repo/issues/1").is_empty());
+        let diags = run("// TODO 💡💡💡 fix this later");
+        assert_eq!(diags.len(), 1);
     }
 }
