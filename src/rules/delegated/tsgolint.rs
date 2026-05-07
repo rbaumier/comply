@@ -121,12 +121,12 @@ pub fn register_all() -> Vec<RuleDef> {
         // ══════════════════════════════════════════════════════════════════
         // BOOLEAN / CONDITIONS
         // ══════════════════════════════════════════════════════════════════
-        entry(
-            "strict-boolean-expressions",
-            "strict-boolean-expressions",
-            "Condition is not explicitly boolean — implicit coercion is error-prone.",
-            "Use an explicit comparison: `!== undefined`, `> 0`, `Boolean(x)`.",
-        ),
+        // entry(
+        //     "strict-boolean-expressions",
+        //     "strict-boolean-expressions",
+        //     "Condition is not explicitly boolean — implicit coercion is error-prone.",
+        //     "Use an explicit comparison: `!== undefined`, `> 0`, `Boolean(x)`.",
+        // ),
         entry(
             "no-unnecessary-condition",
             "no-unnecessary-condition",
