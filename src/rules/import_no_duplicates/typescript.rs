@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use crate::diagnostic::{Diagnostic, Severity};
 
 crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
-    let mut seen: HashMap<String, usize> = HashMap::new();
+    let mut seen: HashMap<(String, bool), usize> = HashMap::new();
     let mut cursor = node.walk();
 
     for child in node.children(&mut cursor) {
@@ -25,8 +25,14 @@ crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
             continue;
         };
         let spec_clean = spec.trim_matches(|c| c == '"' || c == '\'' || c == '`');
+        let is_type = child
+            .utf8_text(source)
+            .unwrap_or("")
+            .trim()
+            .starts_with("import type ");
+        let key = (spec_clean.to_string(), is_type);
 
-        if let Some(&first_line) = seen.get(spec_clean) {
+        if let Some(&first_line) = seen.get(&key) {
             let pos = child.start_position();
             diagnostics.push(Diagnostic {
                 path: std::sync::Arc::clone(&ctx.path_arc),
@@ -40,7 +46,7 @@ crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
                 span: None,
             });
         } else {
-            seen.insert(spec_clean.to_string(), child.start_position().row + 1);
+            seen.insert(key, child.start_position().row + 1);
         }
     }
 }
@@ -68,8 +74,14 @@ mod tests {
     }
 
     #[test]
-    fn flags_type_and_value_duplicate() {
+    fn allows_import_and_import_type_from_same_module() {
         let src = "import { foo } from './utils';\nimport type { FooType } from './utils';";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_duplicate_type_imports() {
+        let src = "import type { Foo } from './utils';\nimport type { Bar } from './utils';";
         let d = run_on(src);
         assert_eq!(d.len(), 1);
     }

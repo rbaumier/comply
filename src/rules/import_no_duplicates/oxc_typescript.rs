@@ -18,7 +18,7 @@ impl OxcCheck for Check {
         semantic: &'a oxc_semantic::Semantic<'a>,
         ctx: &CheckCtx,
     ) -> Vec<Diagnostic> {
-        let mut seen: HashMap<&str, usize> = HashMap::new();
+        let mut seen: HashMap<(&str, bool), usize> = HashMap::new();
         let mut diagnostics = Vec::new();
 
         for stmt in &semantic.nodes().program().body {
@@ -26,7 +26,9 @@ impl OxcCheck for Check {
                 continue;
             };
             let spec = import.source.value.as_str();
-            if let Some(&first_line) = seen.get(spec) {
+            let is_type = import.import_kind.is_type();
+            let key = (spec, is_type);
+            if let Some(&first_line) = seen.get(&key) {
                 let (line, column) =
                     byte_offset_to_line_col(ctx.source, import.span.start as usize);
                 diagnostics.push(Diagnostic {
@@ -43,7 +45,7 @@ impl OxcCheck for Check {
             } else {
                 let (first_line, _) =
                     byte_offset_to_line_col(ctx.source, import.span.start as usize);
-                seen.insert(spec, first_line);
+                seen.insert(key, first_line);
             }
         }
         diagnostics

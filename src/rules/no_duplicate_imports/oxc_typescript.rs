@@ -19,8 +19,8 @@ impl OxcCheck for Check {
         ctx: &CheckCtx,
     ) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
-        // module source -> (first line number)
-        let mut seen: HashMap<&str, usize> = HashMap::new();
+        // (module source, is_type_import) -> first line number
+        let mut seen: HashMap<(&str, bool), usize> = HashMap::new();
 
         for node in semantic.nodes().iter() {
             let AstKind::ImportDeclaration(import) = node.kind() else {
@@ -30,9 +30,11 @@ impl OxcCheck for Check {
             if module.is_empty() {
                 continue;
             }
+            let is_type = import.import_kind.is_type();
+            let key = (module, is_type);
             let (line, column) =
                 byte_offset_to_line_col(ctx.source, import.span.start as usize);
-            if let Some(&first_line) = seen.get(module) {
+            if let Some(&first_line) = seen.get(&key) {
                 diagnostics.push(Diagnostic {
                     path: Arc::clone(&ctx.path_arc),
                     line,
@@ -46,7 +48,7 @@ impl OxcCheck for Check {
                     span: None,
                 });
             } else {
-                seen.insert(module, line);
+                seen.insert(key, line);
             }
         }
         diagnostics

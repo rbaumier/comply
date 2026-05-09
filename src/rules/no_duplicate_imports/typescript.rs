@@ -12,7 +12,8 @@ pub struct Check;
 
 #[derive(Default)]
 struct State {
-    seen: HashMap<String, usize>,
+    /// (module, is_type_import) -> first line number
+    seen: HashMap<(String, bool), usize>,
 }
 
 impl AstCheck for Check {
@@ -46,9 +47,15 @@ impl AstCheck for Check {
         if module.is_empty() {
             return;
         }
+        let is_type = node
+            .utf8_text(source)
+            .unwrap_or("")
+            .trim()
+            .starts_with("import type ");
+        let key = (module.clone(), is_type);
         let pos = node.start_position();
         let line_num = pos.row + 1;
-        if let Some(&first_line) = state.seen.get(&module) {
+        if let Some(&first_line) = state.seen.get(&key) {
             diagnostics.push(Diagnostic {
                 path: std::sync::Arc::clone(&ctx.path_arc),
                 line: line_num,
@@ -62,7 +69,7 @@ impl AstCheck for Check {
                 span: None,
             });
         } else {
-            state.seen.insert(module, line_num);
+            state.seen.insert(key, line_num);
         }
     }
 }
@@ -117,6 +124,19 @@ mod tests {
     #[test]
     fn flags_two_multiline_imports_same_source() {
         let src = "import {\n  a,\n} from 'x';\nimport {\n  b,\n} from 'x';\n";
+        let diags = run(src);
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn allows_import_and_import_type_from_same_module() {
+        let src = "import { value } from 'bar';\nimport type { Foo } from 'bar';\n";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_duplicate_type_imports_from_same_module() {
+        let src = "import type { Foo } from 'bar';\nimport type { Bar } from 'bar';\n";
         let diags = run(src);
         assert_eq!(diags.len(), 1);
     }
