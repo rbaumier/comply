@@ -60,6 +60,7 @@ max = 3
 
 [rules.no-abbreviated-names]
 allowed = []
+banned = []
 
 [rules.id-length]
 min = 2

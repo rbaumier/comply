@@ -18,7 +18,7 @@ use crate::rules::backend::{AstCheck, CheckCtx};
 // reads them at sight and expanding them to `config`/`context`/`index`
 // only adds typing overhead. The rule targets the 2-keystroke-savings
 // names that look like leetcode solution variables.
-const BANNED_ABBREVIATIONS: &[(&str, &str)] = &[
+const DEFAULT_BANNED: &[(&str, &str)] = &[
     ("acct", "account"),
     ("usr", "user"),
     ("btn", "button"),
@@ -26,8 +26,7 @@ const BANNED_ABBREVIATIONS: &[(&str, &str)] = &[
     ("cnt", "count"),
     ("desc", "description"),
     ("addr", "address"),
-    // `tmp` is not on the list — `os.tmpdir()` / `fs.mkdtemp` bindings
-    // conventionally use `tmp` in both Node.js and browser JS.
+    ("org", "organization"),
 ];
 
 #[derive(Debug)]
@@ -46,14 +45,16 @@ impl AstCheck for Check {
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let allowed = ctx.config.string_list("no-abbreviated-names", "allowed", ctx.lang);
+        let extra = ctx.config.string_list("no-abbreviated-names", "banned", ctx.lang);
+        let merged = build_banned_list(&extra);
         let source_bytes = ctx.source.as_bytes();
         let Ok(name) = node.utf8_text(source_bytes) else {
             return;
         };
-        let Some((abbr, full)) = matches_banned(name) else {
+        let Some((abbr, full)) = matches_banned(name, &merged) else {
             return;
         };
-        if allowed.iter().any(|a| a == abbr) {
+        if allowed.iter().any(|a| a == &abbr) {
             return;
         }
         let pos = node.start_position();
@@ -73,13 +74,28 @@ impl AstCheck for Check {
     }
 }
 
-/// Split `name` into words (camelCase or snake_case) and check each one.
-/// Returns the first banned abbreviation found with its suggested full word.
-fn matches_banned(name: &str) -> Option<(&'static str, &'static str)> {
+fn build_banned_list(extra: &[String]) -> Vec<(String, String)> {
+    let mut list: Vec<(String, String)> = DEFAULT_BANNED
+        .iter()
+        .map(|(a, f)| ((*a).to_owned(), (*f).to_owned()))
+        .collect();
+    for entry in extra {
+        if let Some((abbr, full)) = entry.split_once(':') {
+            let abbr = abbr.trim().to_lowercase();
+            let full = full.trim().to_owned();
+            if !list.iter().any(|(a, _)| *a == abbr) {
+                list.push((abbr, full));
+            }
+        }
+    }
+    list
+}
+
+fn matches_banned(name: &str, banned: &[(String, String)]) -> Option<(String, String)> {
     for word in split_words(name) {
         let lower = word.to_ascii_lowercase();
-        if let Some(&pair) = BANNED_ABBREVIATIONS.iter().find(|(abbr, _)| lower == *abbr) {
-            return Some(pair);
+        if let Some(pair) = banned.iter().find(|(abbr, _)| lower == *abbr) {
+            return Some(pair.clone());
         }
     }
     None
