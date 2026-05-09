@@ -21,12 +21,11 @@ impl TextCheck for Check {
             return Vec::new();
         }
 
-        // Once-per-project guard: only fire on the deterministic anchor.
         let canon = std::fs::canonicalize(ctx.path).unwrap_or_else(|_| ctx.path.to_path_buf());
-        let Some(anchor) = index.indexed_paths().min() else {
+        let Some(anchor) = ctx.project.anchor_path() else {
             return Vec::new();
         };
-        if canon.as_path() != anchor {
+        if canon != anchor {
             return Vec::new();
         }
 

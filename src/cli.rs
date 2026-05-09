@@ -157,6 +157,10 @@ pub enum ScanMode {
 }
 
 impl Cli {
+    pub fn is_partial_scan(&self) -> bool {
+        self.working_tree || self.staged || self.last_commit || self.commit.is_some() || self.range.is_some()
+    }
+
     pub fn scan_mode(&self) -> ScanMode {
         if self.working_tree {
             return ScanMode::WorkingTree;

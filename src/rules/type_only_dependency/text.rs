@@ -29,13 +29,11 @@ impl TextCheck for Check {
         };
 
         let index = ctx.project.import_index();
-        // Project-level rule, dispatched per-file: only fire on the
-        // lexicographically smallest indexed path (deterministic across runs).
         let canon = std::fs::canonicalize(ctx.path).unwrap_or_else(|_| ctx.path.to_path_buf());
-        let Some(anchor) = index.indexed_paths().min() else {
+        let Some(anchor) = ctx.project.anchor_path() else {
             return Vec::new();
         };
-        if anchor != canon.as_path() {
+        if anchor != canon {
             return Vec::new();
         }
 

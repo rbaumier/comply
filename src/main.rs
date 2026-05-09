@@ -321,8 +321,13 @@ fn lint_project(cli: &Cli) -> Result<bool> {
         eprintln!("comply: ran {runs} fixer(s); re-linting");
     }
 
-    let diagnostics =
-        collect_all_diagnostics(&discovered, &config, &mut timings, cli.comply_only)?;
+    let diagnostics = collect_all_diagnostics(
+        &discovered,
+        &config,
+        &mut timings,
+        cli.comply_only,
+        cli.is_partial_scan(),
+    )?;
 
     let t_post = Instant::now();
     let after_overrides = apply_config_filters(diagnostics, &config);
@@ -387,14 +392,47 @@ fn collect_all_diagnostics(
     config: &Config,
     timings: &mut Timings,
     is_comply_only: bool,
+    is_partial: bool,
 ) -> Result<Vec<Diagnostic>> {
     let by_lang = partition_by_language(discovered);
     let mut diagnostics = Vec::with_capacity(discovered.len());
 
-    // Build a single ProjectCtx from ALL files so the ImportIndex covers
-    // every language — Vue imports from TS (and vice-versa) are resolved.
-    let all_refs: Vec<&SourceFile> = discovered.iter().collect();
-    let project = std::sync::Arc::new(crate::project::ProjectCtx::load(&all_refs, config));
+    // In diff modes the discovered set only contains changed files.
+    // Cross-file rules (unused-dependency, dead-export, unused-file) need
+    // a complete import index, so walk the full project tree for the
+    // ProjectCtx when running a partial scan.
+    let full_project_files;
+    let index_refs: Vec<&SourceFile> = if is_partial {
+        let cwd = std::env::current_dir().unwrap_or_default();
+        let start = discovered
+            .first()
+            .map(|f| {
+                let p = f.path.parent().unwrap_or(std::path::Path::new("."));
+                if p.as_os_str().is_empty() { &cwd } else { p }
+            })
+            .unwrap_or(&cwd);
+        let root = crate::project::walk_up_finding(start, "package.json")
+            .or_else(|| crate::project::walk_up_finding(start, ".git"))
+            .unwrap_or_else(|| start.to_path_buf());
+        let root = if root.as_os_str().is_empty() {
+            std::path::PathBuf::from(".")
+        } else {
+            root
+        };
+        full_project_files = files::discover(&cli::ScanMode::All(root))?;
+        full_project_files.iter().collect()
+    } else {
+        discovered.iter().collect()
+    };
+    let project = std::sync::Arc::new(crate::project::ProjectCtx::load(&index_refs, config));
+
+    if is_partial {
+        let linted: Vec<std::path::PathBuf> = discovered
+            .iter()
+            .filter_map(|f| std::fs::canonicalize(&f.path).ok())
+            .collect();
+        project.set_linted_paths(linted);
+    }
 
     if !by_lang.ts.is_empty() {
         diagnostics.extend(lint_typescript(

@@ -368,6 +368,13 @@ pub struct ProjectCtx {
     tailwind_theme: OnceLock<Option<TailwindTheme>>,
     drizzle_config: OnceLock<Option<DrizzleConfig>>,
 
+    // In diff modes the import index covers the full project but only a
+    // subset of files is actually linted. Cross-file rules that emit
+    // once-per-project use `anchor_path()` to pick a deterministic file
+    // to attach their diagnostics to — that file must be among the linted
+    // set, otherwise the diagnostic is never emitted.
+    linted_paths: OnceLock<Vec<PathBuf>>,
+
     // Cross-file import/export index. Eagerly built by `load` when files are
     // known; empty (still queryable, returns no matches) for callers that
     // construct a `ProjectCtx` via `empty()` — e.g. the LSP server, where
@@ -449,6 +456,22 @@ impl ProjectCtx {
         let k8s_idx = K8sIndex::build(files);
         let _ = ctx.k8s_index.set(k8s_idx);
         ctx
+    }
+
+    pub fn set_linted_paths(&self, paths: Vec<PathBuf>) {
+        let _ = self.linted_paths.set(paths);
+    }
+
+    /// Deterministic anchor for once-per-project rules: the canonical
+    /// smallest path among the files being linted. In full-scan mode this
+    /// equals `indexed_paths().min()`; in diff mode it restricts to the
+    /// changed files so the diagnostic is actually emitted.
+    pub fn anchor_path(&self) -> Option<PathBuf> {
+        if let Some(linted) = self.linted_paths.get() {
+            linted.iter().min().cloned()
+        } else {
+            self.import_index().indexed_paths().min().map(Path::to_path_buf)
+        }
     }
 
     /// Cross-file import/export index. Always returns a handle: when the
@@ -671,7 +694,7 @@ fn common_ancestor(files: &[&SourceFile]) -> Option<PathBuf> {
     Some(common)
 }
 
-fn walk_up_finding(start: &Path, target: &str) -> Option<PathBuf> {
+pub(crate) fn walk_up_finding(start: &Path, target: &str) -> Option<PathBuf> {
     let mut cur = Some(start);
     while let Some(dir) = cur {
         if dir.join(target).exists() {
