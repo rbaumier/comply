@@ -33,7 +33,7 @@ crate::ast_check! { on ["member_expression", "subscript_expression"] => |node, s
         message: "Do not access a member directly from an await expression \
                   — extract to a variable first."
             .into(),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: None,
     });
 }

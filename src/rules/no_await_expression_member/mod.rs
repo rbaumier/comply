@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "Do not access a member directly from an await expression.",
     remediation: "Extract the awaited value into a variable, then access the member: \
                   `const response = await fetch(url); const data = response.json();`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 };
