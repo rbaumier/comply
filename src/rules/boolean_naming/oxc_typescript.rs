@@ -16,9 +16,9 @@ const NEGATIVE_SUBSTRINGS: &[&str] = &["Not", "Isnt", "Cannot", "Cant", "Shouldn
 /// Standard HTML attributes and React controlled-component props whose names
 /// are dictated by the platform / component library API.
 const ALLOWED_NAMES: &[&str] = &[
-    "open", "checked", "disabled", "hidden", "required", "selected", "readOnly",
-    "multiple", "autoFocus", "autoPlay", "defer", "async", "noValidate",
-    "value", "defaultOpen", "defaultChecked",
+    "open", "checked", "disabled", "enabled", "hidden", "required", "selected",
+    "readOnly", "multiple", "autoFocus", "autoPlay", "defer", "async",
+    "noValidate", "value", "defaultOpen", "defaultChecked",
 ];
 
 /// Return a short problem description if the name doesn't match the rule.

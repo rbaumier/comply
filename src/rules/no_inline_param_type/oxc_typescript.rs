@@ -29,6 +29,10 @@ impl OxcCheck for Check {
         if !matches!(annotation.type_annotation, TSType::TSTypeLiteral(_)) {
             return;
         }
+        // Destructured params: the inline type documents the destructured shape.
+        if matches!(param.pattern, BindingPattern::ObjectPattern(_)) {
+            return;
+        }
         // React component props are conventionally inline.
         if is_react_component_param(semantic, node) {
             return;
@@ -130,5 +134,10 @@ mod tests {
             run_on("function fetchUser(opts: { id: string }) {}").len(),
             1
         );
+    }
+
+    #[test]
+    fn allows_destructured_param() {
+        assert!(run_on("function createPlugin({ db, auth }: { db: Database; auth: Auth }) {}").is_empty());
     }
 }

@@ -19,9 +19,9 @@ const PREDICATE_PREFIXES: &[&str] = &[
 ];
 
 const ALLOWED_NAMES: &[&str] = &[
-    "open", "checked", "disabled", "hidden", "required", "selected", "readOnly",
-    "multiple", "autoFocus", "autoPlay", "defer", "async", "noValidate",
-    "defaultOpen", "defaultChecked",
+    "open", "checked", "disabled", "enabled", "hidden", "required", "selected",
+    "readOnly", "multiple", "autoFocus", "autoPlay", "defer", "async",
+    "noValidate", "defaultOpen", "defaultChecked",
 ];
 
 fn has_predicate_prefix(name: &str) -> bool {

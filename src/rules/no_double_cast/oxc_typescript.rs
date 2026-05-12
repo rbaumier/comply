@@ -22,6 +22,11 @@ impl OxcCheck for Check {
     ) {
         let AstKind::TSAsExpression(as_expr) = node.kind() else { return };
 
+        // Double casts are the standard pattern for test doubles / partial stubs.
+        if ctx.file.path_segments.in_test_dir {
+            return;
+        }
+
         // The inner expression of `x as A as B` is itself a TSAsExpression.
         if !matches!(&as_expr.expression, Expression::TSAsExpression(_)) {
             return;

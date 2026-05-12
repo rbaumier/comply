@@ -33,6 +33,9 @@ impl AstCheck for Check {
         if !has_inline_object_type(node) {
             return;
         }
+        if is_destructured_param(node) {
+            return;
+        }
         if is_react_component_param(node, source_bytes) {
             return;
         }
@@ -69,6 +72,12 @@ fn has_inline_object_type(node: tree_sitter::Node) -> bool {
         }
     }
     false
+}
+
+fn is_destructured_param(node: tree_sitter::Node) -> bool {
+    let mut cursor = node.walk();
+    node.children(&mut cursor)
+        .any(|c| c.kind() == "object_pattern")
 }
 
 /// True when the parameter belongs to a function whose name starts with an
@@ -151,5 +160,10 @@ mod tests {
     #[test]
     fn allows_react_arrow_component_inline_props() {
         assert!(run_on("const UserCard = ({ name }: { name: string }) => null;").is_empty());
+    }
+
+    #[test]
+    fn allows_destructured_param() {
+        assert!(run_on("function createPlugin({ db, auth }: { db: Database; auth: Auth }) {}").is_empty());
     }
 }

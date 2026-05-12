@@ -26,6 +26,9 @@ impl AstCheck for Check {
         _state: Option<&mut dyn std::any::Any>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
+        if ctx.file.path_segments.in_test_dir {
+            return;
+        }
         // The "value" side of an as_expression is the first child.
         let Some(inner) = node.named_child(0) else {
             return;
