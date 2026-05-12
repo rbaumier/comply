@@ -20,6 +20,11 @@ impl OxcCheck for Check {
         semantic: &'a oxc_semantic::Semantic<'a>,
         ctx: &CheckCtx,
     ) -> Vec<Diagnostic> {
+        // .d.ts files use interface for declaration merging / module augmentation.
+        if ctx.path.to_str().is_some_and(|p| p.ends_with(".d.ts")) {
+            return Vec::new();
+        }
+
         // First pass: collect all names used in `implements` clauses.
         let mut implemented = HashSet::new();
         for node in semantic.nodes().iter() {
@@ -46,6 +51,10 @@ impl OxcCheck for Check {
             if implemented.contains(name) {
                 continue;
             }
+            // Interfaces inside `declare module` are for augmentation / merging.
+            if is_inside_declare_module(semantic, node) {
+                continue;
+            }
             let (line, column) = byte_offset_to_line_col(ctx.source, iface.span.start as usize);
             diagnostics.push(Diagnostic {
                 path: Arc::clone(&ctx.path_arc),
@@ -65,6 +74,18 @@ impl OxcCheck for Check {
         }
         diagnostics
     }
+}
+
+fn is_inside_declare_module<'a>(
+    semantic: &'a oxc_semantic::Semantic<'a>,
+    node: &oxc_semantic::AstNode<'a>,
+) -> bool {
+    for ancestor in semantic.nodes().ancestors(node.id()).skip(1) {
+        if matches!(ancestor.kind(), AstKind::TSModuleDeclaration(_)) {
+            return true;
+        }
+    }
+    false
 }
 
 fn type_name_str<'a>(name: &'a oxc_ast::ast::TSTypeName<'a>) -> Option<&'a str> {
@@ -122,5 +143,25 @@ mod tests {
             class User implements OtherInterface {}
         "#;
         assert_eq!(run_on(code).len(), 1);
+    }
+
+    #[test]
+    fn allows_interface_in_declare_module() {
+        let code = r#"
+            declare module "@tanstack/react-router" {
+                interface Register { router: typeof router; }
+            }
+        "#;
+        assert!(run_on(code).is_empty());
+    }
+
+    #[test]
+    fn allows_dts_file() {
+        let diags = crate::rules::test_helpers::run_oxc_ts_with_path(
+            "interface ImportMetaEnv { readonly VITE_API: string; }",
+            &Check,
+            "env.d.ts",
+        );
+        assert!(diags.is_empty());
     }
 }

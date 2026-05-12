@@ -14,7 +14,12 @@ use crate::diagnostic::{Diagnostic, Severity};
 /// embedded in string literals (e.g. Tailwind classes like `"p-4"`)
 /// are already ignored because this check only visits `number` AST
 /// nodes, never string contents.
-const ALLOWED: &[&str] = &["-1", "0", "1", "0.0", "1.0"];
+const ALLOWED: &[&str] = &["-1", "0", "1", "2", "0.0", "1.0"];
+
+const HTTP_STATUS_CODES: &[&str] = &[
+    "200", "201", "204", "301", "302", "304", "400", "401", "403", "404",
+    "405", "409", "422", "429", "500", "502", "503",
+];
 
 fn is_allowed_context(node: tree_sitter::Node) -> bool {
     let mut current = node.parent();
@@ -71,6 +76,9 @@ crate::ast_check! { on ["number"] => |node, source, ctx, diagnostics|
 
     // Allow universally understood values.
     if ALLOWED.contains(&text) {
+        return;
+    }
+    if HTTP_STATUS_CODES.contains(&text) {
         return;
     }
 
@@ -165,13 +173,20 @@ mod tests {
     }
 
     #[test]
-    fn flags_two_now_that_it_is_out_of_allowlist() {
-        // `2` was previously allowlisted; narrowed to {-1, 0, 1}
-        // because halving/doubling factors are still meaningful
-        // constants worth naming.
-        let diags = run_on("function f(x) { return x + 2; }");
-        assert_eq!(diags.len(), 1);
-        assert!(diags[0].message.contains("2"));
+    fn allows_two() {
+        assert!(run_on("function f(x) { return x + 2; }").is_empty());
+    }
+
+    #[test]
+    fn allows_http_status_codes() {
+        assert!(run_on("if (res.status === 200) {}").is_empty());
+        assert!(run_on("if (res.status === 404) {}").is_empty());
+        assert!(run_on("if (res.status === 500) {}").is_empty());
+    }
+
+    #[test]
+    fn still_flags_non_standard_numbers() {
+        assert_eq!(run_on("function f(x) { return x + 42; }").len(), 1);
     }
 
     #[test]

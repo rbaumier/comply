@@ -33,6 +33,9 @@ impl AstCheck for Check {
         if !has_inline_object_type(node) {
             return;
         }
+        if is_react_component_param(node, source_bytes) {
+            return;
+        }
         let name = param_name(node, source_bytes).unwrap_or("<param>");
         let pos = node.start_position();
         diagnostics.push(Diagnostic {
@@ -63,6 +66,34 @@ fn has_inline_object_type(node: tree_sitter::Node) -> bool {
             .any(|c| c.kind() == "object_type")
         {
             return true;
+        }
+    }
+    false
+}
+
+/// True when the parameter belongs to a function whose name starts with an
+/// uppercase letter (React component convention).
+fn is_react_component_param(node: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut current = node;
+    while let Some(parent) = current.parent() {
+        match parent.kind() {
+            "function_declaration" | "function" => {
+                if let Some(name_node) = parent.child_by_field_name("name") {
+                    if let Ok(name) = name_node.utf8_text(source) {
+                        return name.as_bytes().first().is_some_and(|b| b.is_ascii_uppercase());
+                    }
+                }
+                return false;
+            }
+            "variable_declarator" => {
+                if let Some(name_node) = parent.child_by_field_name("name") {
+                    if let Ok(name) = name_node.utf8_text(source) {
+                        return name.as_bytes().first().is_some_and(|b| b.is_ascii_uppercase());
+                    }
+                }
+                return false;
+            }
+            _ => current = parent,
         }
     }
     false
@@ -110,5 +141,15 @@ mod tests {
             run_on("const f = (opts: { a: number }) => opts.a;").len(),
             1
         );
+    }
+
+    #[test]
+    fn allows_react_component_inline_props() {
+        assert!(run_on("function UserCard({ name }: { name: string }) {}").is_empty());
+    }
+
+    #[test]
+    fn allows_react_arrow_component_inline_props() {
+        assert!(run_on("const UserCard = ({ name }: { name: string }) => null;").is_empty());
     }
 }

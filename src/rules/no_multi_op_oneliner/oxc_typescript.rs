@@ -13,6 +13,10 @@ impl OxcCheck for Check {
         semantic: &'a oxc_semantic::Semantic<'a>,
         ctx: &CheckCtx,
     ) -> Vec<Diagnostic> {
+        // Test assertions (Playwright, Vitest) are inherently chained.
+        if ctx.file.path_segments.in_test_dir {
+            return Vec::new();
+        }
         let min_ops = ctx
             .config
             .threshold("no-multi-op-oneliner", "min_ops", ctx.lang);

@@ -7,6 +7,25 @@ use std::sync::Arc;
 
 pub struct Check;
 
+const PREDICATE_PREFIXES: &[&str] = &[
+    "is", "has", "should", "can", "will", "did", "was",
+];
+
+/// Standard HTML/React controlled-component props that must be boolean.
+const ALLOWED_NAMES: &[&str] = &[
+    "open", "checked", "disabled", "hidden", "required", "selected", "readOnly",
+    "multiple", "autoFocus", "autoPlay", "defer", "async", "noValidate",
+    "defaultOpen", "defaultChecked",
+];
+
+fn has_predicate_prefix(name: &str) -> bool {
+    PREDICATE_PREFIXES.iter().any(|prefix| {
+        name.strip_prefix(prefix).is_some_and(|rest| {
+            rest.is_empty() || rest.chars().next().is_some_and(|c| c.is_ascii_uppercase())
+        })
+    })
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[AstType::FormalParameter]
@@ -43,6 +62,10 @@ impl OxcCheck for Check {
             oxc_ast::ast::BindingPattern::BindingIdentifier(id) => id.name.as_str(),
             _ => "<flag>",
         };
+
+        if ALLOWED_NAMES.contains(&name) || has_predicate_prefix(name) {
+            return;
+        }
 
         let (line, column) = byte_offset_to_line_col(ctx.source, param.span.start as usize);
         diagnostics.push(Diagnostic {

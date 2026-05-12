@@ -13,6 +13,14 @@ const VALID_PREFIXES: &[&str] = &[
 ];
 const NEGATIVE_SUBSTRINGS: &[&str] = &["Not", "Isnt", "Cannot", "Cant", "Shouldnt"];
 
+/// Standard HTML attributes and React controlled-component props whose names
+/// are dictated by the platform / component library API.
+const ALLOWED_NAMES: &[&str] = &[
+    "open", "checked", "disabled", "hidden", "required", "selected", "readOnly",
+    "multiple", "autoFocus", "autoPlay", "defer", "async", "noValidate",
+    "value", "defaultOpen", "defaultChecked",
+];
+
 /// Return a short problem description if the name doesn't match the rule.
 fn classify_name(name: &str) -> Option<&'static str> {
     if NEGATIVE_SUBSTRINGS.iter().any(|neg| name.contains(neg)) {
@@ -85,6 +93,10 @@ impl OxcCheck for Check {
         };
 
         if !is_bool {
+            return;
+        }
+
+        if ALLOWED_NAMES.contains(&name) {
             return;
         }
 

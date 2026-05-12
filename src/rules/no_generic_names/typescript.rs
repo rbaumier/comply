@@ -28,7 +28,7 @@ use crate::rules::backend::{AstCheck, CheckCtx};
 /// use.
 const BANNED_WORDS: &[&str] = &[
     "info", "temp", "result", "obj", "item", "thing", "stuff", "val", "retval", "value", "foo",
-    "bar",
+    "bar", "row", "rows",
 ];
 
 /// Prefixes that describe mechanics rather than intent. Word-boundary
@@ -125,6 +125,11 @@ fn check_banned_prefix(
     path: &std::path::Path,
 ) -> Option<Diagnostic> {
     if node.kind() != "identifier" && node.kind() != "property_identifier" {
+        return None;
+    }
+    // Only check at declaration sites — flagging every reference to a
+    // framework-imposed name like `data` is noise.
+    if node.kind() == "identifier" && !is_declaration_site(node) {
         return None;
     }
     if is_destructuring_property(node) {
@@ -228,7 +233,11 @@ fn is_declaration_site(node: tree_sitter::Node) -> bool {
     };
     matches!(
         parent.kind(),
-        "variable_declarator" | "required_parameter" | "catch_clause"
+        "variable_declarator"
+            | "required_parameter"
+            | "catch_clause"
+            | "function_declaration"
+            | "class_declaration"
     )
 }
 

@@ -11,7 +11,7 @@ pub struct Check;
 
 const BANNED_WORDS: &[&str] = &[
     "info", "temp", "result", "obj", "item", "thing", "stuff", "val", "retval", "value", "foo",
-    "bar",
+    "bar", "row", "rows",
 ];
 
 const BANNED_PREFIXES: &[&str] = &["process", "data", "do", "execute", "run", "perform"];
@@ -256,7 +256,12 @@ impl OxcCheck for Check {
                 }
             }
 
-        // Check banned prefixes — on any identifier (both binding and reference)
+        // Check banned prefixes — only at declaration sites (BindingIdentifier).
+        // Checking references would re-flag every usage of a destructured name
+        // like `data` from `const { data } = useQuery(...)`.
+        if !matches!(node.kind(), AstKind::BindingIdentifier(_)) {
+            return;
+        }
         if is_destructuring(node, semantic) {
             return;
         }

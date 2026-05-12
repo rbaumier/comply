@@ -14,6 +14,24 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 
+const PREDICATE_PREFIXES: &[&str] = &[
+    "is", "has", "should", "can", "will", "did", "was",
+];
+
+const ALLOWED_NAMES: &[&str] = &[
+    "open", "checked", "disabled", "hidden", "required", "selected", "readOnly",
+    "multiple", "autoFocus", "autoPlay", "defer", "async", "noValidate",
+    "defaultOpen", "defaultChecked",
+];
+
+fn has_predicate_prefix(name: &str) -> bool {
+    PREDICATE_PREFIXES.iter().any(|prefix| {
+        name.strip_prefix(prefix).is_some_and(|rest| {
+            rest.is_empty() || rest.chars().next().is_some_and(|c| c.is_ascii_uppercase())
+        })
+    })
+}
+
 #[derive(Debug)]
 pub struct Check;
 
@@ -37,6 +55,9 @@ impl AstCheck for Check {
             return;
         }
         let name = param_name(node, source_bytes).unwrap_or("<flag>");
+        if ALLOWED_NAMES.contains(&name) || has_predicate_prefix(name) {
+            return;
+        }
         let pos = node.start_position();
         diagnostics.push(Diagnostic {
             path: std::sync::Arc::clone(&ctx.path_arc),
@@ -99,10 +120,10 @@ mod tests {
     }
 
     #[test]
-    fn flags_boolean_param() {
-        let diags = run_on("function send(msg: string, isUrgent: boolean) {}");
+    fn flags_bare_boolean_param() {
+        let diags = run_on("function send(msg: string, urgent: boolean) {}");
         assert_eq!(diags.len(), 1);
-        assert!(diags[0].message.contains("'isUrgent'"));
+        assert!(diags[0].message.contains("'urgent'"));
     }
 
     #[test]
@@ -121,7 +142,20 @@ mod tests {
     }
 
     #[test]
-    fn flags_multiple_boolean_params() {
-        assert_eq!(run_on("function f(isA: boolean, isB: boolean) {}").len(), 2);
+    fn allows_predicate_prefix() {
+        assert!(run_on("function send(msg: string, isUrgent: boolean) {}").is_empty());
+        assert!(run_on("function f(hasAccess: boolean) {}").is_empty());
+        assert!(run_on("function f(shouldRetry: boolean) {}").is_empty());
+    }
+
+    #[test]
+    fn allows_controlled_component_props() {
+        assert!(run_on("function Dialog(open: boolean) {}").is_empty());
+        assert!(run_on("function Input(disabled: boolean) {}").is_empty());
+    }
+
+    #[test]
+    fn flags_multiple_bare_boolean_params() {
+        assert_eq!(run_on("function f(foo: boolean, bar: boolean) {}").len(), 2);
     }
 }

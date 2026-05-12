@@ -37,9 +37,20 @@ impl AstCheck for Check {
         let Some(args) = node.child_by_field_name("arguments") else {
             return;
         };
-        // Expect 1 arg (column name only) — 2 args means options were passed.
-        if args.named_child_count() >= 2 {
+        let arg_count = args.named_child_count();
+        // 2+ args: timestamp('col', { withTimezone: true }) — options present.
+        if arg_count >= 2 {
             return;
+        }
+        // 1 arg: could be timestamp('col') OR timestamp({ withTimezone: true }).
+        // If the single arg is an object, the user passed options directly
+        // (Drizzle infers column name from the JS property key).
+        if arg_count == 1 {
+            if let Some(arg) = args.named_child(0) {
+                if arg.kind() == "object" {
+                    return;
+                }
+            }
         }
         let pos = node.start_position();
         diagnostics.push(Diagnostic {
@@ -73,5 +84,10 @@ mod tests {
     #[test]
     fn allows_timestamp_with_options() {
         assert!(run_on("const t = timestamp('created_at', { withTimezone: true });").is_empty());
+    }
+
+    #[test]
+    fn allows_timestamp_options_without_column_name() {
+        assert!(run_on("const t = timestamp({ withTimezone: true });").is_empty());
     }
 }

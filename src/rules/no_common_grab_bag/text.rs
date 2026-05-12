@@ -23,6 +23,10 @@ impl TextCheck for Check {
         if !BANNED_STEMS.contains(&lower.as_str()) {
             return vec![];
         }
+        // Tiny files (< 10 lines) are often single-purpose wrappers (e.g. shadcn cn()).
+        if ctx.source.lines().count() < 10 {
+            return vec![];
+        }
         vec![Diagnostic {
             path: std::sync::Arc::clone(&ctx.path_arc),
             line: 1,
@@ -44,29 +48,39 @@ mod tests {
     use super::*;
     use std::path::Path;
 
-    fn run(path_str: &str) -> Vec<Diagnostic> {
-        Check.check(&CheckCtx::for_test(Path::new(path_str), ""))
+    const LONG_SOURCE: &str = "line1\nline2\nline3\nline4\nline5\n\
+                               line6\nline7\nline8\nline9\nline10\n";
+    const SHORT_SOURCE: &str = "import { clsx } from 'clsx';\n\
+                                export function cn(...args) { return clsx(args); }\n";
+
+    fn run(path_str: &str, source: &str) -> Vec<Diagnostic> {
+        Check.check(&CheckCtx::for_test(Path::new(path_str), source))
     }
 
     #[test]
     fn flags_utils_ts() {
-        assert_eq!(run("src/utils.ts").len(), 1);
+        assert_eq!(run("src/utils.ts", LONG_SOURCE).len(), 1);
     }
 
     #[test]
     fn flags_common_js() {
-        assert_eq!(run("src/common.js").len(), 1);
+        assert_eq!(run("src/common.js", LONG_SOURCE).len(), 1);
     }
 
     #[test]
     fn flags_shared_rs() {
-        assert_eq!(run("src/shared.rs").len(), 1);
+        assert_eq!(run("src/shared.rs", LONG_SOURCE).len(), 1);
     }
 
     #[test]
     fn allows_meaningful_names() {
         for path in ["src/order_service.ts", "src/payment.ts", "src/auth.rs"] {
-            assert!(run(path).is_empty(), "{path} should be allowed");
+            assert!(run(path, LONG_SOURCE).is_empty(), "{path} should be allowed");
         }
+    }
+
+    #[test]
+    fn allows_tiny_utils_file() {
+        assert!(run("src/utils.ts", SHORT_SOURCE).is_empty());
     }
 }

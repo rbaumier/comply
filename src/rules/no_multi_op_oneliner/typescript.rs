@@ -21,6 +21,9 @@ pub struct Check;
 
 impl AstCheck for Check {
     fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
+        if ctx.file.path_segments.in_test_dir {
+            return Vec::new();
+        }
         super::dense_lines::scan_dense_lines(
             ctx,
             tree,

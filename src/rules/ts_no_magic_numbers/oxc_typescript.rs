@@ -9,7 +9,14 @@ use oxc_span::GetSpan;
 use std::sync::Arc;
 
 /// Numeric values so idiomatic that flagging them is pure noise.
-const ALLOWED: &[&str] = &["-1", "0", "1", "0.0", "1.0"];
+const ALLOWED: &[&str] = &["-1", "0", "1", "2", "0.0", "1.0"];
+
+/// HTTP status codes — universally understood, extracting them to a constant
+/// makes the code less readable, not more.
+const HTTP_STATUS_CODES: &[f64] = &[
+    200.0, 201.0, 204.0, 301.0, 302.0, 304.0, 400.0, 401.0, 403.0, 404.0,
+    405.0, 409.0, 422.0, 429.0, 500.0, 502.0, 503.0,
+];
 
 #[derive(Debug)]
 pub struct Check;
@@ -41,6 +48,9 @@ impl OxcCheck for Check {
 
         // Allow universally understood values.
         if ALLOWED.contains(&text) {
+            return;
+        }
+        if HTTP_STATUS_CODES.contains(&num.value) {
             return;
         }
 

@@ -20,6 +20,14 @@ const VALID_PREFIXES: &[&str] = &[
 ];
 const NEGATIVE_SUBSTRINGS: &[&str] = &["Not", "Isnt", "Cannot", "Cant", "Shouldnt"];
 
+/// Standard HTML attributes and React controlled-component props whose names
+/// are dictated by the platform / component library API.
+const ALLOWED_NAMES: &[&str] = &[
+    "open", "checked", "disabled", "hidden", "required", "selected", "readOnly",
+    "multiple", "autoFocus", "autoPlay", "defer", "async", "noValidate",
+    "value", "defaultOpen", "defaultChecked",
+];
+
 #[derive(Debug)]
 pub struct Check;
 
@@ -56,6 +64,9 @@ fn check_node(
         return None;
     }
     let name = extract_identifier(node, source)?;
+    if ALLOWED_NAMES.contains(&name) {
+        return None;
+    }
     let problem = classify_name(name)?;
     let pos = node.start_position();
     Some(Diagnostic {
@@ -188,5 +199,13 @@ mod tests {
     fn flags_param_without_prefix() {
         let diags = run_on("function f(ready: boolean) {}");
         assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn allows_controlled_component_props() {
+        for name in ["open", "checked", "disabled", "hidden", "selected", "value"] {
+            let source = format!("function F({name}: boolean) {{}}");
+            assert!(run_on(&source).is_empty(), "'{name}' should be allowed");
+        }
     }
 }
