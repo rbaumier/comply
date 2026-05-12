@@ -31,6 +31,8 @@ const BANNED_WORDS: &[&str] = &[
     "bar", "row", "rows",
 ];
 
+const PARAM_ALLOWED_WORDS: &[&str] = &["value", "item"];
+
 /// Prefixes that describe mechanics rather than intent. Word-boundary
 /// matched — `dataSource` matches but `database` does not.
 const BANNED_PREFIXES: &[&str] = &["process", "data", "do", "execute", "run", "perform"];
@@ -102,6 +104,13 @@ fn check_banned_word(
     let lower = name.to_ascii_lowercase();
     if !BANNED_WORDS.contains(&lower.as_str()) {
         return None;
+    }
+    if PARAM_ALLOWED_WORDS.contains(&lower.as_str()) {
+        if let Some(parent) = node.parent() {
+            if matches!(parent.kind(), "required_parameter" | "optional_parameter") {
+                return None;
+            }
+        }
     }
     let pos = node.start_position();
     Some(Diagnostic {

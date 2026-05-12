@@ -77,6 +77,22 @@ impl OxcCheck for Check {
             return;
         }
 
+        // Only fire in files that could be React Server Components.
+        // Backend .ts files (Elysia, Drizzle, etc.) sharing the same
+        // package.json shouldn't get this rule.
+        let trimmed = ctx.source.trim_start();
+        let has_directive = trimmed.starts_with("'use server'")
+            || trimmed.starts_with("\"use server\"")
+            || trimmed.starts_with("'use client'")
+            || trimmed.starts_with("\"use client\"");
+        let is_rsc_candidate = ctx.file.path_segments.in_app_router
+            || ctx.file.path_segments.in_pages_router
+            || matches!(ctx.lang, crate::files::Language::Tsx)
+            || has_directive;
+        if !is_rsc_candidate {
+            return;
+        }
+
         // Only flag at module scope
         let nodes = semantic.nodes();
         if let Some(parent) = nodes.ancestors(node.id()).nth(1)

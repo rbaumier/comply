@@ -190,7 +190,7 @@ pub(super) fn count_operators(line: &str) -> usize {
             prev = b;
             continue;
         }
-        if matches!(b, b'.' | b'+' | b'-' | b'*' | b'/' | b'%' | b'(') {
+        if matches!(b, b'+' | b'-' | b'*' | b'/' | b'%' | b'(') {
             count += 1;
         }
         prev = b;
@@ -230,6 +230,6 @@ mod tests {
 
     #[test]
     fn count_operators_on_clean_code() {
-        assert_eq!(count_operators("a.b.c.d()"), 4);
+        assert_eq!(count_operators("a.b.c.d()"), 1);
     }
 }

@@ -1,7 +1,4 @@
-//! symmetric-pairs
-
 mod oxc_typescript;
-mod rust;
 #[cfg(test)]
 mod typescript;
 
@@ -12,12 +9,12 @@ use crate::rules::backend::Backend;
 use crate::rules::meta::RuleMeta;
 
 pub const META: RuleMeta = RuleMeta {
-    id: "symmetric-pairs",
-    description: "Exported function has no symmetric counterpart (get/set, add/remove, open/close, start/stop, create/delete).",
-    remediation: "Add the missing counterpart or remove the export if the pair is intentionally incomplete.",
+    id: "better-result-prefer-unwrap",
+    description: "Forbid `if (r.isErr()) { throw r.error; }` — use `.unwrap()` instead.",
+    remediation: "Call `.unwrap()` on the Result directly instead of manually checking and throwing.",
     severity: Severity::Warning,
     doc_url: None,
-    categories: &["code-quality"],
+    categories: &["better-result"],
 };
 
 pub fn register() -> RuleDef {
@@ -27,7 +24,6 @@ pub fn register() -> RuleDef {
             (Language::TypeScript, Backend::Oxc(Box::new(oxc_typescript::Check))),
             (Language::JavaScript, Backend::Oxc(Box::new(oxc_typescript::Check))),
             (Language::Tsx, Backend::Oxc(Box::new(oxc_typescript::Check))),
-            (Language::Rust, Backend::TreeSitter(Box::new(rust::Check))),
         ],
     }
 }

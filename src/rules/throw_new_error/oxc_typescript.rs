@@ -39,6 +39,10 @@ impl OxcCheck for Check {
                 if !is_error_like(name) {
                     return;
                 }
+                // TaggedError("tag") is an Effect class factory, not an error constructor.
+                if name == "TaggedError" {
+                    return;
+                }
                 name
             }
             // Member access: `module.CustomError('x')`

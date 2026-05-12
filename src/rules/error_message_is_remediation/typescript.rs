@@ -16,6 +16,7 @@ const VERBS: &[&str] = &[
 ];
 
 crate::ast_check! { on ["new_expression"] prefilter = ["Error"] => |node, source, ctx, diagnostics|
+    if ctx.file.path_segments.in_test_dir { return; }
     // Check constructor name is "Error".
     let Some(ctor) = node.child_by_field_name("constructor") else { return };
     if ctor.utf8_text(source).unwrap_or("") != "Error" {

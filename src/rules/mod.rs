@@ -1255,7 +1255,6 @@ pub mod regex_sort_flags;
 pub mod regex_use_unicode_flag;
 pub mod strings_comparison;
 pub mod structured_api_error;
-pub mod symmetric_pairs;
 pub mod test_check_exception;
 pub mod testing_no_and_in_test_name;
 pub mod testing_no_undefined_mock_var;
@@ -1365,7 +1364,6 @@ pub mod no_mutation;
 pub mod no_named_default;
 pub mod no_negated_condition;
 pub mod no_negation_in_equality_check;
-pub mod no_null;
 pub mod no_object_as_default_parameter;
 pub mod no_process_exit;
 pub mod no_single_promise_in_promise_methods;
@@ -1507,7 +1505,6 @@ pub mod ts_consistent_type_exports;
 pub mod ts_consistent_type_imports;
 pub mod ts_default_param_last;
 pub mod ts_explicit_function_return_type;
-pub mod ts_explicit_member_accessibility;
 pub mod ts_explicit_module_boundary_types;
 pub mod ts_init_declarations;
 pub mod ts_max_params;
@@ -2471,7 +2468,6 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         option_vs_result::register(),
         pure_by_default::register(),
         structured_api_error::register(),
-        symmetric_pairs::register(),
         a11y_alt_text::register(),
         a11y_anchor_ambiguous_text::register(),
         a11y_anchor_has_content::register(),
@@ -2596,7 +2592,6 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         no_named_default::register(),
         no_negated_condition::register(),
         no_negation_in_equality_check::register(),
-        no_null::register(),
         no_object_as_default_parameter::register(),
         no_process_exit::register(),
         no_single_promise_in_promise_methods::register(),
@@ -2849,7 +2844,6 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         ts_prefer_promise_reject_errors::register(),
         ts_default_param_last::register(),
         ts_explicit_function_return_type::register(),
-        ts_explicit_member_accessibility::register(),
         ts_explicit_module_boundary_types::register(),
         ts_init_declarations::register(),
         // eslint-plugin-playwright rules (native implementations).

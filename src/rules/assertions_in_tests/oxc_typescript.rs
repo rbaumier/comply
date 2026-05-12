@@ -83,13 +83,23 @@ impl OxcCheck for Check {
         for node in semantic.nodes().iter() {
             let is_assert = match node.kind() {
                 AstKind::CallExpression(call) => {
-                    let text = &ctx.source[call.span.start as usize..call.span.end as usize];
-                    text.contains("expect(")
-                        || text.contains("expectTypeOf(")
-                        || text.contains("assert")
-                        || text.contains(".plan(")
-                        || text.contains(".waitFor")
-                        || is_testing_library_query(text)
+                    let callee_is_expect = match &call.callee {
+                        Expression::Identifier(id) => id.name.starts_with("expect"),
+                        Expression::StaticMemberExpression(member) => {
+                            member.property.name.as_str() == "expect"
+                                || member.property.name.starts_with("expect")
+                        }
+                        _ => false,
+                    };
+                    if callee_is_expect {
+                        true
+                    } else {
+                        let text = &ctx.source[call.span.start as usize..call.span.end as usize];
+                        text.contains("assert")
+                            || text.contains(".plan(")
+                            || text.contains(".waitFor")
+                            || is_testing_library_query(text)
+                    }
                 }
                 AstKind::StaticMemberExpression(member) => {
                     let name = member.property.name.as_str();

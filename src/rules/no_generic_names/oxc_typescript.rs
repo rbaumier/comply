@@ -14,6 +14,8 @@ const BANNED_WORDS: &[&str] = &[
     "bar", "row", "rows",
 ];
 
+const PARAM_ALLOWED_WORDS: &[&str] = &["value", "item"];
+
 const BANNED_PREFIXES: &[&str] = &["process", "data", "do", "execute", "run", "perform"];
 
 const GLOBAL_IDENTIFIER_ALLOWLIST: &[&str] = &[
@@ -92,6 +94,28 @@ fn is_destructuring<'a>(
             return true;
         }
         // Stop at statement boundaries
+        if matches!(
+            kind,
+            AstKind::VariableDeclaration(_)
+                | AstKind::Function(_)
+                | AstKind::ArrowFunctionExpression(_)
+                | AstKind::Program(_)
+        ) {
+            break;
+        }
+    }
+    false
+}
+
+/// True when the identifier is a function/arrow parameter (inside a FormalParameter).
+fn is_function_param<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    for kind in semantic.nodes().ancestor_kinds(node.id()) {
+        if matches!(kind, AstKind::FormalParameter(_)) {
+            return true;
+        }
         if matches!(
             kind,
             AstKind::VariableDeclaration(_)
@@ -237,6 +261,11 @@ impl OxcCheck for Check {
             {
                 let lower = name.to_ascii_lowercase();
                 if BANNED_WORDS.contains(&lower.as_str()) {
+                    if PARAM_ALLOWED_WORDS.contains(&lower.as_str())
+                        && is_function_param(node, semantic)
+                    {
+                        return;
+                    }
                     let (line, column) =
                         byte_offset_to_line_col(ctx.source, span.start as usize);
                     diagnostics.push(Diagnostic {

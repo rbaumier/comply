@@ -17,10 +17,14 @@ fn has_assertion(node: tree_sitter::Node, source: &[u8]) -> bool {
 
     match node.kind() {
         "call_expression" => {
+            if let Some(func) = node.child_by_field_name("function") {
+                let callee = func.utf8_text(source).unwrap_or("");
+                if callee.starts_with("expect") || callee.ends_with(".expect") {
+                    return true;
+                }
+            }
             let text = node.utf8_text(source).unwrap_or("");
-            if text.contains("expect(")
-                || text.contains("expectTypeOf(")
-                || text.contains("assert")
+            if text.contains("assert")
                 || text.contains(".plan(")
                 || text.contains(".waitFor")
                 || is_testing_library_query(text)

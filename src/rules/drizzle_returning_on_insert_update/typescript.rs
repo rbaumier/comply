@@ -12,6 +12,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
 crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
+    if ctx.file.path_segments.in_test_dir { return; }
     let Some(func) = node.child_by_field_name("function") else { return };
     if func.kind() != "member_expression" { return; }
 

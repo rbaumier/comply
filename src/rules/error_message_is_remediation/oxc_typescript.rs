@@ -45,6 +45,10 @@ impl OxcCheck for Check {
             return;
         };
 
+        if ctx.file.path_segments.in_test_dir {
+            return;
+        }
+
         // Check constructor name is "Error".
         let callee_name = match &new_expr.callee.without_parentheses() {
             Expression::Identifier(id) => &*id.name,

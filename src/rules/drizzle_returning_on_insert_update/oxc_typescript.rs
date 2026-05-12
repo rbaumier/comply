@@ -25,6 +25,10 @@ impl OxcCheck for Check {
             return;
         };
 
+        if ctx.file.path_segments.in_test_dir {
+            return;
+        }
+
         // Match `.insert(...)` or `.update(...)` member calls.
         let Expression::StaticMemberExpression(member) = &call.callee else {
             return;

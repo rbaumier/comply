@@ -19,6 +19,7 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
         "identifier" => {
             let name = callee.utf8_text(source).unwrap_or("");
             if !is_error_like(name) { return; }
+            if name == "TaggedError" { return; }
             name
         }
         // Member access: `module.CustomError('x')`
