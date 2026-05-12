@@ -47,26 +47,24 @@ fn collect_chain_methods<'a>(
     // Walk ancestors: parent should be StaticMemberExpression, grandparent CallExpression.
     let mut current_id = node.id();
     loop {
-        // Look for parent being a member expression where we are the object.
-        let Some(parent) = semantic.nodes().ancestors(current_id).nth(1) else {
+        let mut ancestors = semantic.nodes().ancestors(current_id);
+        let Some(parent) = ancestors.next() else {
             break;
         };
         let AstKind::StaticMemberExpression(member) = parent.kind() else {
             break;
         };
-        // Check that we are the object of this member expression.
         if member.object.span().start != outer_span.start
             || member.object.span().end != outer_span.end
         {
             break;
         }
-        let Some(grand) = semantic.nodes().ancestors(parent.id()).nth(1) else {
+        let Some(grand) = ancestors.next() else {
             break;
         };
         let AstKind::CallExpression(grand_call) = grand.kind() else {
             break;
         };
-        // Check that the member is the callee.
         if grand_call.callee.span().start != member.span.start
             || grand_call.callee.span().end != member.span.end
         {

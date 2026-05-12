@@ -474,6 +474,13 @@ fn collect_all_diagnostics(
         timings.clones = t.elapsed();
     }
 
+    if project.has_framework("drizzle") {
+        diagnostics.retain(|d| {
+            !(d.rule_id.as_ref() == "oxc/no-barrel-file"
+                && d.path.file_name().is_some_and(|n| n == "schema.ts"))
+        });
+    }
+
     Ok(diagnostics)
 }
 

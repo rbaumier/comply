@@ -7,6 +7,20 @@ use std::sync::Arc;
 
 pub struct Check;
 
+fn has_assignment(text: &str, target: &str) -> bool {
+    let mut start = 0;
+    while let Some(pos) = text[start..].find(target) {
+        let after = start + pos + target.len();
+        let rest = &text[after..];
+        let next = rest.trim_start();
+        if next.starts_with('=') && !next.starts_with("==") {
+            return true;
+        }
+        start = after;
+    }
+    false
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[AstType::CallExpression]
@@ -35,10 +49,11 @@ impl OxcCheck for Check {
         // Check arguments text by looking at the full call expression source.
         let call_text =
             &ctx.source[call.span.start as usize..call.span.end as usize];
-        if !call_text.contains("set.headers")
-            && !call_text.contains("set.status")
-            && !call_text.contains("return ")
-        {
+        let has_header_mutation = call_text.contains("set.headers[")
+            || call_text.contains("set.headers =");
+        let has_status_mutation = has_assignment(call_text, "set.status");
+        let has_return = call_text.contains("return ");
+        if !has_header_mutation && !has_status_mutation && !has_return {
             return;
         }
 

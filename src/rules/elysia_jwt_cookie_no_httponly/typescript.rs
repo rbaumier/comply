@@ -19,6 +19,12 @@ impl AstCheck for Check {
             if !line.contains(".set({") {
                 continue;
             }
+            if let Some(pos) = line.find(".set({") {
+                let before = &line[..pos];
+                if !before.contains("cookie") {
+                    continue;
+                }
+            }
             let end = (idx + 6).min(lines.len());
             let block: String = lines[idx..end].join("\n");
             let norm: String = block.chars().filter(|c| !c.is_whitespace()).collect();
@@ -48,20 +54,26 @@ mod tests {
     }
 
     #[test]
-    fn flags_set_without_httponly() {
-        let src = "import { jwt } from '@elysiajs/jwt';\nauth.set({ value: token, secure: true });";
+    fn flags_cookie_set_without_httponly() {
+        let src = "import { jwt } from '@elysiajs/jwt';\ncookie.auth.set({ value: token, secure: true });";
         assert_eq!(run_on(src).len(), 1);
     }
 
     #[test]
-    fn allows_set_with_httponly() {
-        let src = "import { jwt } from '@elysiajs/jwt';\nauth.set({ value: token, httpOnly: true, secure: true });";
+    fn allows_cookie_set_with_httponly() {
+        let src = "import { jwt } from '@elysiajs/jwt';\ncookie.auth.set({ value: token, httpOnly: true, secure: true });";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_non_cookie_set() {
+        let src = "log.set({ requestId });\ndb.update(table).set({ role: 'admin' });";
         assert!(run_on(src).is_empty());
     }
 
     #[test]
     fn ignores_non_elysia_files() {
-        let src = "auth.set({ value: token });";
+        let src = "cookie.auth.set({ value: token });";
         assert!(crate::rules::test_helpers::run_ts(src, &Check).is_empty());
     }
 }

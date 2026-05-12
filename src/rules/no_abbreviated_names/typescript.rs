@@ -18,6 +18,9 @@ use crate::rules::backend::{AstCheck, CheckCtx};
 // reads them at sight and expanding them to `config`/`context`/`index`
 // only adds typing overhead. The rule targets the 2-keystroke-savings
 // names that look like leetcode solution variables.
+// better-result API: Result.err(value), result.isErr()
+const ALLOWED_METHOD_NAMES: &[&str] = &["err", "isErr"];
+
 const DEFAULT_BANNED: &[(&str, &str)] = &[
     ("acct", "account"),
     ("usr", "user"),
@@ -44,13 +47,16 @@ impl AstCheck for Check {
         _state: Option<&mut dyn std::any::Any>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
-        let allowed = ctx.config.string_list("no-abbreviated-names", "allowed", ctx.lang);
-        let extra = ctx.config.string_list("no-abbreviated-names", "banned", ctx.lang);
-        let merged = build_banned_list(&extra);
         let source_bytes = ctx.source.as_bytes();
         let Ok(name) = node.utf8_text(source_bytes) else {
             return;
         };
+        if node.kind() == "property_identifier" && ALLOWED_METHOD_NAMES.contains(&name) {
+            return;
+        }
+        let allowed = ctx.config.string_list("no-abbreviated-names", "allowed", ctx.lang);
+        let extra = ctx.config.string_list("no-abbreviated-names", "banned", ctx.lang);
+        let merged = build_banned_list(&extra);
         let Some((abbr, full)) = matches_banned(name, &merged) else {
             return;
         };

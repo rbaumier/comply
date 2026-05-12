@@ -43,12 +43,6 @@ pub fn register_all() -> Vec<RuleDef> {
              flow linear and enables try/catch.",
         ),
         entry(
-            "promise/prefer-await-to-callbacks",
-            "promise/prefer-await-to-callbacks",
-            "Replace node-style callbacks with await on a promisified \
-             version. Callbacks fragment error handling.",
-        ),
-        entry(
             "promise/no-return-in-finally",
             "promise/no-return-in-finally",
             "Don't `return` from `.finally()`. The return value is discarded \

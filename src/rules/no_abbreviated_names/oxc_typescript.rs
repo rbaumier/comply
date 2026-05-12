@@ -6,6 +6,9 @@ use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstType, CheckCtx, OxcCheck};
 use std::sync::Arc;
 
+// better-result API: Result.err(value), result.isErr()
+const ALLOWED_METHOD_NAMES: &[&str] = &["err", "isErr"];
+
 const DEFAULT_BANNED: &[(&str, &str)] = &[
     ("acct", "account"),
     ("usr", "user"),
@@ -39,7 +42,11 @@ impl OxcCheck for Check {
             oxc_ast::AstKind::BindingIdentifier(id) => (id.name.as_str(), id.span.start),
             oxc_ast::AstKind::IdentifierReference(id) => (id.name.as_str(), id.span.start),
             oxc_ast::AstKind::StaticMemberExpression(expr) => {
-                (expr.property.name.as_str(), expr.property.span.start)
+                let prop = expr.property.name.as_str();
+                if ALLOWED_METHOD_NAMES.contains(&prop) {
+                    return;
+                }
+                (prop, expr.property.span.start)
             }
             _ => return,
         };

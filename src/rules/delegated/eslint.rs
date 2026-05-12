@@ -106,14 +106,6 @@ pub fn register_all() -> Vec<RuleDef> {
             "Either handle the case or add a comment naming why the block \
              is intentionally empty. Silent empty blocks rot into bugs.",
         ),
-        entry(
-            "no-implicit-coercion",
-            "no-implicit-coercion",
-            Severity::Error,
-            "Implicit type coercion hides intent.",
-            "Replace `!!value` with `Boolean(value)`, `+str` with \
-             `Number(str)`, `~~n` with `Math.trunc(n)`. Explicit is clearer.",
-        ),
     ]
 }
 

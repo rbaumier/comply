@@ -18,10 +18,13 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
 
     let Some(args) = node.child_by_field_name("arguments") else { return };
     let args_text = args.utf8_text(source).unwrap_or("");
-    if !args_text.contains("set.headers")
-        && !args_text.contains("set.status")
-        && !args_text.contains("return ")
-    {
+
+    let has_header_mutation = args_text.contains("set.headers[")
+        || args_text.contains("set.headers =");
+    let has_status_mutation = has_assignment(args_text, "set.status");
+    let has_return = args_text.contains("return ");
+
+    if !has_header_mutation && !has_status_mutation && !has_return {
         return;
     }
 
@@ -35,6 +38,20 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
         severity: Severity::Error,
         span: None,
     });
+}
+
+fn has_assignment(text: &str, target: &str) -> bool {
+    let mut start = 0;
+    while let Some(pos) = text[start..].find(target) {
+        let after = start + pos + target.len();
+        let rest = &text[after..];
+        let next = rest.trim_start();
+        if next.starts_with('=') && !next.starts_with("==") {
+            return true;
+        }
+        start = after;
+    }
+    false
 }
 
 #[cfg(test)]
@@ -66,6 +83,12 @@ mod tests {
     #[test]
     fn allows_logging_in_after() {
         let src = "import { Elysia } from 'elysia';\napp.onAfterResponse(({ request }) => {\n  console.log(request.url);\n});";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_read_only_set_status() {
+        let src = "import { Elysia } from 'elysia';\napp.onAfterResponse(({ set }) => {\n  const status = typeof set.status === 'number' ? set.status : 200;\n  counter.add(1, { status });\n});";
         assert!(run_on(src).is_empty());
     }
 

@@ -54,6 +54,7 @@ pub mod better_result_catch_returns_tagged;
 pub mod better_result_constructor_spreads_args;
 pub mod better_result_no_catch_panic;
 pub mod better_result_no_manual_propagation;
+pub mod better_result_prefer_unwrap;
 pub mod better_result_no_mixed_throw;
 pub mod better_result_no_nullable_return;
 pub mod better_result_no_param_properties;
@@ -1269,7 +1270,6 @@ pub mod valid_expect;
 pub mod valid_expect_in_promise;
 
 // eslint-plugin-import rules (native implementations).
-pub mod exports_last;
 pub mod id_length;
 pub mod import_consistent_type_specifier_style;
 pub mod import_default;
@@ -1616,7 +1616,6 @@ pub mod avoid_barrel_files;
 pub mod avoid_importing_barrel_files;
 pub mod avoid_re_export_all;
 pub mod import_dedupe;
-pub mod no_default_export;
 pub mod no_full_import;
 pub mod no_test_imports_in_prod;
 pub mod prefer_promise_all;
@@ -2541,7 +2540,6 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         require_not_empty::register(),
         import_dynamic_import_chunkname::register(),
         import_consistent_type_specifier_style::register(),
-        exports_last::register(),
         // eslint-plugin-unicorn rules (native implementations).
         catch_error_name::register(),
         consistent_date_clone::register(),
@@ -2928,7 +2926,6 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         import_dedupe::register(),
         no_full_import::register(),
         no_test_imports_in_prod::register(),
-        no_default_export::register(),
         prefer_promise_all::register(),
         ts_prefer_using_declaration::register(),
         // v3.0 — Skill-driven rules: Batch 2 (React)
@@ -3226,6 +3223,7 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         better_result_constructor_spreads_args::register(),
         better_result_no_catch_panic::register(),
         better_result_no_manual_propagation::register(),
+        better_result_prefer_unwrap::register(),
         better_result_no_mixed_throw::register(),
         better_result_no_nullable_return::register(),
         better_result_no_param_properties::register(),

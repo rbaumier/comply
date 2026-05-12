@@ -25,6 +25,12 @@ impl OxcCheck for Check {
             if !line.contains(".set({") {
                 continue;
             }
+            if let Some(pos) = line.find(".set({") {
+                let before = &line[..pos];
+                if !before.contains("cookie") {
+                    continue;
+                }
+            }
             let end = (idx + 6).min(lines.len());
             let block: String = lines[idx..end].join("\n");
             let norm: String = block.chars().filter(|c| !c.is_whitespace()).collect();
