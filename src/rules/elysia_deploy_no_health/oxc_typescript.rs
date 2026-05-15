@@ -50,6 +50,16 @@ impl OxcCheck for Check {
             return;
         }
 
+        // Skip non-Elysia receivers (e.g. MSW's mswServer.listen()).
+        let Some(root) =
+            crate::rules::elysia_helpers::root_identifier_name(&member.object)
+        else {
+            return;
+        };
+        if !crate::rules::elysia_helpers::looks_like_elysia_identifier(root) {
+            return;
+        }
+
         let (line, column) = byte_offset_to_line_col(ctx.source, call.span.start as usize);
         diagnostics.push(Diagnostic {
             path: Arc::clone(&ctx.path_arc),
@@ -60,5 +70,30 @@ impl OxcCheck for Check {
             severity: Severity::Warning,
             span: None,
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_framework(src, &Check, "elysia")
+    }
+
+    #[test]
+    fn flags_app_listen_without_health() {
+        let src = "app.listen(3000);";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn ignores_msw_server_listen() {
+        // Regression for rbaumier/comply#21.
+        let src = r#"
+            const mswServer = setupServer();
+            mswServer.listen({ onUnhandledRequest: "error" });
+        "#;
+        assert!(run(src).is_empty());
     }
 }

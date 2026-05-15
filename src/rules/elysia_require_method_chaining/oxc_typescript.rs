@@ -56,6 +56,11 @@ impl OxcCheck for Check {
         // identifier, the chain has been broken.
         let Expression::Identifier(obj_id) = &member.object else { return };
 
+        // Skip non-Elysia receivers (e.g. MSW's mswServer.listen()).
+        if !crate::rules::elysia_helpers::looks_like_elysia_identifier(obj_id.name.as_str()) {
+            return;
+        }
+
         // Ensure the call is an expression statement (not part of a chain).
         let parent = semantic.nodes().parent_node(node.id());
         if !matches!(parent.kind(), AstKind::ExpressionStatement(_)) {
@@ -75,5 +80,41 @@ impl OxcCheck for Check {
             severity: Severity::Error,
             span: None,
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_framework(src, &Check, "elysia")
+    }
+
+    #[test]
+    fn flags_broken_chain_on_app() {
+        let src = "app.get('/', () => 'x');";
+        assert!(!run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_msw_server_listen() {
+        // Regression for rbaumier/comply#21 — MSW's mswServer.listen()
+        // must not be flagged as a broken Elysia chain.
+        let src = r#"
+            import { setupServer } from "msw/node";
+            const mswServer = setupServer();
+            mswServer.listen({ onUnhandledRequest: "error" });
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_msw_server_use() {
+        let src = r#"
+            const mswServer = setupServer();
+            mswServer.use(handler);
+        "#;
+        assert!(run(src).is_empty());
     }
 }
