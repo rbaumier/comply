@@ -123,6 +123,17 @@ impl OxcCheck for Check {
                 let Some(root) = root else {
                     return;
                 };
+
+                // Skip `.push()` / `.unshift()` on a const local
+                // accumulator inside a loop body — a common,
+                // bounded, escape-free pattern.
+                if matches!(method, "push" | "unshift")
+                    && matches!(&member.object, Expression::Identifier(_))
+                    && is_inside_loop_body(node, semantic)
+                {
+                    return;
+                }
+
                 if is_declared_as_const(semantic, root) {
                     report(
                         diagnostics,
@@ -205,6 +216,28 @@ fn is_declared_as_const(semantic: &oxc_semantic::Semantic, name: &str) -> bool {
                 }
                 _ => continue,
             }
+        }
+    }
+    false
+}
+
+/// True if `node` sits inside a `for` / `for-of` / `for-in` / `while`
+/// loop body, stopping at function boundaries. Used to recognise the
+/// bounded local-accumulator pattern (`const items = []; for (...)
+/// items.push(...);`) as a deliberate, escape-free mutation.
+fn is_inside_loop_body(
+    node: &oxc_semantic::AstNode,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    for ancestor in semantic.nodes().ancestors(node.id()) {
+        match ancestor.kind() {
+            AstKind::ForStatement(_)
+            | AstKind::ForOfStatement(_)
+            | AstKind::ForInStatement(_)
+            | AstKind::WhileStatement(_)
+            | AstKind::DoWhileStatement(_) => return true,
+            AstKind::Function(_) | AstKind::ArrowFunctionExpression(_) => return false,
+            _ => {}
         }
     }
     false
