@@ -129,6 +129,86 @@ fn is_function_param<'a>(
     false
 }
 
+/// True when the identifier sits inside an `import { … }` / `import x from …`
+/// / `import * as x from …` declaration. The author has no rename freedom
+/// for a third-party export (e.g. `import { Result } from "better-result"`).
+fn is_in_import_declaration<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    for kind in semantic.nodes().ancestor_kinds(node.id()) {
+        if matches!(kind, AstKind::ImportDeclaration(_)) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Look at the surrounding FormalParameter / VariableDeclarator's type
+/// annotation and decide whether it carries enough domain information to
+/// justify a generic name. We accept three shapes:
+///
+/// - A type reference named `Result` (e.g. `result: Result<User, Err>`).
+/// - A type reference named `Promise<Result<…>>` (the awaited form).
+/// - An array type (`readonly TRow[]`, `User[]`, `Array<User>`) — for
+///   helpers like `firstOrError<TRow>(rows: readonly TRow[], …)`.
+fn type_annotation_is_descriptive<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    let nodes = semantic.nodes();
+    for kind in nodes.ancestor_kinds(node.id()) {
+        let annotation = match kind {
+            AstKind::FormalParameter(p) => p.type_annotation.as_ref(),
+            AstKind::VariableDeclarator(d) => d.type_annotation.as_ref(),
+            // Stop walking when we leave the binding's surroundings.
+            AstKind::Function(_)
+            | AstKind::ArrowFunctionExpression(_)
+            | AstKind::Program(_) => return false,
+            _ => continue,
+        };
+        let Some(ann) = annotation else {
+            return false;
+        };
+        return ts_type_is_descriptive(&ann.type_annotation);
+    }
+    false
+}
+
+fn ts_type_is_descriptive(ty: &TSType) -> bool {
+    match ty {
+        // `Result<...>`, `Promise<Result<...>>`, etc.
+        TSType::TSTypeReference(type_ref) => {
+            let name = match &type_ref.type_name {
+                TSTypeName::IdentifierReference(id) => Some(id.name.as_str()),
+                TSTypeName::QualifiedName(q) => Some(q.right.name.as_str()),
+                _ => None,
+            };
+            if matches!(name, Some("Result")) {
+                return true;
+            }
+            // `Promise<Result<...>>` / `Readonly<Foo[]>` / `Array<T>` —
+            // recurse into the type argument.
+            if matches!(name, Some("Promise") | Some("Readonly") | Some("Array") | Some("ReadonlyArray")) {
+                if let Some(params) = &type_ref.type_arguments
+                    && let Some(first) = params.params.first()
+                {
+                    return ts_type_is_descriptive(first);
+                }
+            }
+            false
+        }
+        // `T[]` / `readonly T[]`.
+        TSType::TSArrayType(_) => true,
+        // `readonly T[]` shows up as TSTypeOperator (op = Readonly) wrapping
+        // a TSArrayType in oxc's AST.
+        TSType::TSTypeOperatorType(op) => ts_type_is_descriptive(&op.type_annotation),
+        // `Result | null`, `Result | undefined`.
+        TSType::TSUnionType(u) => u.types.iter().any(ts_type_is_descriptive),
+        _ => false,
+    }
+}
+
 /// True if the identifier is a parameter of an iterator callback (.map, .filter, etc.).
 fn is_iterator_callback_param<'a>(
     node: &oxc_semantic::AstNode<'a>,
@@ -254,6 +334,13 @@ impl OxcCheck for Check {
             _ => return,
         };
 
+        // Identifiers introduced by `import { Foo } from "..."` cannot
+        // be renamed by the author — third-party exports are out of their
+        // control. Same for default / namespace imports.
+        if is_in_import_declaration(node, semantic) {
+            return;
+        }
+
         // Check banned words — only at declaration sites (BindingIdentifier)
         if let AstKind::BindingIdentifier(_) = node.kind()
             && !is_destructuring(node, semantic)
@@ -264,6 +351,12 @@ impl OxcCheck for Check {
                     if PARAM_ALLOWED_WORDS.contains(&lower.as_str())
                         && is_function_param(node, semantic)
                     {
+                        return;
+                    }
+                    // A descriptive type annotation (`result: Result<…>`,
+                    // `rows: readonly TRow[]`) carries the domain info the
+                    // identifier name would otherwise need to.
+                    if type_annotation_is_descriptive(node, semantic) {
                         return;
                     }
                     let (line, column) =
@@ -321,5 +414,57 @@ impl OxcCheck for Check {
                 span: None,
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(src, &Check)
+    }
+
+    #[test]
+    fn flags_bare_result_local_const() {
+        let src = r#"function f() { const result = 1; return result; }"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn ignores_result_imported_from_better_result() {
+        // Regression for rbaumier/comply#39 case 1 — third-party imports.
+        let src = r#"import { Result } from "better-result"; const x: Result<number, Error> = anything;"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_result_when_typed_as_Result() {
+        // Regression for rbaumier/comply#39 case 2 — canonical Result name.
+        let src = r#"
+            async function unwrapOrThrow<T, E>(p: Promise<Result<T, E>>): Promise<T> {
+                const result: Result<T, E> = await p;
+                if (result.isErr()) { throw result.error; }
+                return result.value;
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_rows_parameter_typed_as_array() {
+        // Regression for rbaumier/comply#39 case 3 — generic-helper rows.
+        let src = r#"
+            function firstOrError<TRow>(rows: readonly TRow[], message: string): TRow {
+                return rows[0];
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_untyped_rows_param() {
+        let src = r#"function f(rows) { return rows[0]; }"#;
+        assert_eq!(run(src).len(), 1);
     }
 }
