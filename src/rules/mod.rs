@@ -637,6 +637,7 @@ pub mod vue_template_helpers;
 pub mod vue_typed_define_props_emits;
 pub mod vue_use_template_ref;
 pub mod vue_v_memo_requires_v_for;
+pub mod eslint_comments_disable_enable_pair;
 pub mod promise_no_multiple_resolved;
 pub mod sonarjs_no_empty_collection;
 pub mod vitest_no_identical_title;
@@ -3885,6 +3886,7 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         playwright_require_top_level_describe::register(),
         vitest_no_standalone_expect::register(),
         sonarjs_no_gratuitous_expressions::register(),
+        eslint_comments_disable_enable_pair::register(),
         promise_no_multiple_resolved::register(),
         sonarjs_no_empty_collection::register(),
         vitest_no_identical_title::register(),
