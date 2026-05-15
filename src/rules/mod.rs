@@ -1603,7 +1603,6 @@ pub mod package_json_unique_deps;
 pub mod playwright_missing_await;
 pub mod playwright_no_eval;
 pub mod top_level_function;
-pub mod vitest_hoisted_apis_on_top;
 pub mod vitest_no_disabled_tests;
 // v3.0 — Skill-driven rules: Batch 1 (TypeScript/Architecture)
 pub mod avoid_barrel_files;
@@ -2847,7 +2846,6 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         playwright_no_networkidle::register(),
         playwright_no_element_handle::register(),
         playwright_no_eval::register(),
-        vitest_hoisted_apis_on_top::register(),
         vitest_no_disabled_tests::register(),
         playwright_prefer_web_first_assertions::register(),
         playwright_no_unsafe_references::register(),
