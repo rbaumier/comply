@@ -29,6 +29,24 @@ fn is_return_type_context(
                     }
                 return false;
             }
+            // TS function-type signatures like `(open: boolean) => void`
+            // (in a parameter / variable annotation, NOT an arrow
+            // expression). The whole type's `return_type` is required.
+            AstKind::TSFunctionType(ft) => {
+                let ret_span = ft.return_type.span;
+                return void_start >= ret_span.start && void_start < ret_span.end;
+            }
+            AstKind::TSConstructorType(ct) => {
+                let ret_span = ct.return_type.span;
+                return void_start >= ret_span.start && void_start < ret_span.end;
+            }
+            AstKind::TSMethodSignature(ms) => {
+                if let Some(ret) = &ms.return_type
+                    && void_start >= ret.span.start && void_start < ret.span.end {
+                        return true;
+                    }
+                return false;
+            }
             AstKind::TSTypeAliasDeclaration(_) | AstKind::TSInterfaceDeclaration(_) => {
                 break;
             }
@@ -124,5 +142,31 @@ mod tests {
     #[test]
     fn allows_void_in_generic() {
         assert!(run_on("let x: Promise<void>;").is_empty());
+    }
+
+    #[test]
+    fn allows_void_in_function_type_callback() {
+        // Regression for rbaumier/comply#20 — TS function type with void
+        // return, common in callback prop declarations.
+        let diags = run_on("type OnChange = (open: boolean) => void;");
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn allows_void_in_inline_function_type() {
+        let src = r#"function setup(cb: (n: number) => void) { cb(1); }"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_void_in_method_signature() {
+        let src = "interface Listener { onChange(open: boolean): void }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_void_in_constructor_type() {
+        let src = "type Make = new (x: number) => void;";
+        assert!(run_on(src).is_empty());
     }
 }
