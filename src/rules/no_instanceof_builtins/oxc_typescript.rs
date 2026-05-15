@@ -8,16 +8,19 @@ use std::sync::Arc;
 
 pub struct Check;
 
+/// Built-in constructors the rule keeps flagging.
+///
+/// `Error` and its subclasses (EvalError, RangeError, …) are *not*
+/// listed here. In server-side single-realm Node/Bun apps with no
+/// `vm.runInContext`, no `Worker` boundaries and no iframes, the
+/// cross-realm concern that motivates avoiding `x instanceof Error`
+/// does not apply — and `instanceof Error` is the canonical, well-typed
+/// way to narrow an `unknown` thrown value. Forcing every boundary
+/// mapper to rewrite the same pattern through a custom helper produces
+/// a flood of false positives.
 const BUILTINS: &[&str] = &[
     "Array",
     "ArrayBuffer",
-    "Error",
-    "EvalError",
-    "RangeError",
-    "ReferenceError",
-    "SyntaxError",
-    "TypeError",
-    "URIError",
     "RegExp",
     "Promise",
     "Map",
@@ -69,5 +72,47 @@ impl OxcCheck for Check {
             severity: Severity::Warning,
             span: None,
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(src, &Check)
+    }
+
+    #[test]
+    fn flags_instanceof_array() {
+        let src = "const r = x instanceof Array;";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_instanceof_map() {
+        let src = "const r = x instanceof Map;";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn ignores_instanceof_error() {
+        // Regression for rbaumier/comply#28 — `instanceof Error` is the
+        // canonical narrowing for `unknown` thrown values in single-realm
+        // Node/Bun. No realistic TS-wide alternative exists.
+        let src = r#"
+            function fromCaught(value: unknown): Error | null {
+                return value instanceof Error ? value : null;
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_instanceof_error_subclasses() {
+        for cls in ["TypeError", "RangeError", "SyntaxError"] {
+            let src = format!("const r = x instanceof {cls};");
+            assert!(run(&src).is_empty(), "{cls} should be allowed");
+        }
     }
 }
