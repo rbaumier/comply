@@ -56,7 +56,10 @@ impl OxcCheck for Check {
         // loop: `const items = []; for (...) items.push(yield* fn());`.
         // The non-mutating spread alternative is O(n²) and the
         // canonical functional alternative (`Result.all(rows.map(...))`)
-        // does not exist in better-result.
+        // does not exist in better-result yet — tracking upstream at
+        // https://github.com/dmmulroy/better-result/issues/32. Once
+        // that lands, callers can switch to `Result.all` and this skip
+        // becomes unnecessary.
         if matches!(name, "push" | "unshift")
             && matches!(&member.object, Expression::Identifier(_))
             && is_inside_loop_body(node, semantic)
