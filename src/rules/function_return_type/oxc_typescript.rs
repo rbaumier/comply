@@ -55,6 +55,16 @@ fn check_return_types(
     if return_types.len() < 2 {
         return None;
     }
+    // If any return is "unknown" — i.e. we have no syntactic evidence
+    // of its concrete type — we cannot prove inconsistency, so the
+    // call has to defer to the TS type checker. Without this, common
+    // shapes like `useMemo<T[]>(() => data?.items ?? [])` and
+    // `typeof input` (always a string literal type) produce a steady
+    // stream of "Function returns inconsistent types: {unknown, array}"
+    // false positives.
+    if return_types.contains("unknown") {
+        return None;
+    }
     let has_null_or_undefined =
         return_types.contains("null") || return_types.contains("undefined");
     let non_nullish: Vec<_> = return_types
@@ -166,6 +176,63 @@ fn infer_type(expr: &Expression) -> &'static str {
         Expression::ArrayExpression(_) => "array",
         Expression::ObjectExpression(_) => "object",
         Expression::Identifier(id) if id.name == "undefined" => "undefined",
+        // `typeof x` always evaluates to a string literal type — treat
+        // it as a string so functions mixing literal-string returns and
+        // a final `return typeof input;` don't trip the rule.
+        Expression::UnaryExpression(unary)
+            if unary.operator == oxc_ast::ast::UnaryOperator::Typeof =>
+        {
+            "string"
+        }
         _ => "unknown",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(src, &Check)
+    }
+
+    #[test]
+    fn flags_obvious_mixed_returns() {
+        let src = r#"
+            function f(x: boolean) {
+                if (x) return 1;
+                return "two";
+            }
+        "#;
+        assert!(!run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_typeof_with_string_literals() {
+        // Regression for rbaumier/comply#18 — typeof always yields a
+        // string literal type.
+        let src = r#"
+            function inputTypeToken(input: unknown): string {
+                if (input === null) return "null";
+                if (Array.isArray(input)) return "array";
+                if (input instanceof Date) return "date";
+                if (typeof input === "number" && Number.isNaN(input)) return "nan";
+                return typeof input;
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_unknown_when_present() {
+        // Regression for rbaumier/comply#25 — useMemo<T[]>(() => data?.items ?? []).
+        let src = r#"
+            const items = useMemo(() => {
+                if (level === "org") return query.data?.items ?? [];
+                if (level === "team") return query2.data?.items ?? [];
+                return [];
+            }, []);
+        "#;
+        assert!(run(src).is_empty());
     }
 }
