@@ -22,8 +22,12 @@ fn is_event_handler_prop(name: &str) -> bool {
 }
 
 /// True if the identifier name starts with an accepted handler prefix.
+///
+/// `set` covers React `useState` setters (`setOpen`, `setUser`, …) which
+/// are the canonical name for state setters per the React docs and are
+/// routinely passed directly to handler props like `onOpenChange`.
 fn has_valid_handler_prefix(name: &str) -> bool {
-    let prefixes: [&str; 3] = ["handle", "on", "toggle"];
+    let prefixes: [&str; 4] = ["handle", "on", "toggle", "set"];
     prefixes.iter().any(|p| {
         if let Some(rest) = name.strip_prefix(p) {
             rest.as_bytes()
@@ -85,11 +89,41 @@ impl OxcCheck for Check {
                 column,
                 rule_id: super::META.id.into(),
                 message: format!(
-                    "Handler `{ident_name}` passed to `{name_str}` should be named `handle*`, `on*`, or `toggle*`."
+                    "Handler `{ident_name}` passed to `{name_str}` should be named `handle*`, `on*`, `toggle*`, or `set*`."
                 ),
                 severity: Severity::Warning,
                 span: None,
             });
         }
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(source, &Check)
+    }
+
+    #[test]
+    fn flags_bare_handler_without_known_prefix() {
+        let src = r#"const x = <Btn onClick={doStuff} />;"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_handle_prefix() {
+        let src = r#"const x = <Btn onClick={handleClick} />;"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_set_prefix_useState_setter() {
+        // Regression for rbaumier/comply#16 — setOpen from useState should
+        // pass straight through to onOpenChange without renaming.
+        let src = r#"const x = <Dialog open={open} onOpenChange={setOpen} />;"#;
+        assert!(run(src).is_empty());
+    }
+
 }
