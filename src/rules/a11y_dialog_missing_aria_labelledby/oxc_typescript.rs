@@ -6,8 +6,20 @@ use std::sync::Arc;
 
 pub struct Check;
 
+/// True for the *native* `<dialog>` HTML element only.
+///
+/// Library / user-defined components named `Dialog` / `*Dialog`
+/// (Base UI, Radix, coss, shadcn, app wrappers like `<CreateUserDialog>`)
+/// own their own a11y wiring — they read `<DialogTitle>` from their
+/// children and assign `aria-labelledby` themselves. This rule cannot
+/// see across the component boundary, so flagging those components
+/// produces a flood of false positives.
+///
+/// For unambiguous dialog intent on a non-native tag, authors can still
+/// set `role="dialog"` / `role="alertdialog"` and the rule will catch
+/// missing labels there.
 fn tag_is_dialog(tag: &str) -> bool {
-    tag == "dialog" || tag == "Dialog" || tag.ends_with("Dialog") || tag == "AlertDialog"
+    tag == "dialog"
 }
 
 fn jsx_tag_name<'a>(opening: &'a oxc_ast::ast::JSXOpeningElement<'a>) -> Option<&'a str> {
@@ -86,5 +98,56 @@ impl OxcCheck for Check {
             severity: Severity::Error,
             span: None,
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(src, &Check)
+    }
+
+    #[test]
+    fn flags_native_dialog_without_label() {
+        let src = r#"const x = <dialog open>Hi</dialog>;"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_native_dialog_with_aria_labelledby() {
+        let src = r#"const x = <dialog aria-labelledby="t">Hi</dialog>;"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_role_dialog_without_label() {
+        let src = r#"const x = <div role="dialog">Hi</div>;"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn ignores_base_ui_dialog_component_with_title_child() {
+        // Regression for rbaumier/comply#14 — Base UI / coss Dialog wires
+        // aria-labelledby from <DialogTitle> automatically; the rule cannot
+        // see across the component boundary, so it must stay silent on
+        // capitalised component tags.
+        let src = r#"
+            const x = <Dialog open={open} onOpenChange={setOpen}>
+              <DialogPopup>
+                <DialogTitle>Nouvel utilisateur</DialogTitle>
+              </DialogPopup>
+            </Dialog>;
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_app_level_dialog_wrapper() {
+        // Regression for rbaumier/comply#14 — application-level wrappers
+        // around the primitive (e.g. <CreateUserDialog>) must not fire.
+        let src = r#"const x = <CreateUserDialog />;"#;
+        assert!(run(src).is_empty());
     }
 }
