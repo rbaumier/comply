@@ -23,6 +23,11 @@ const ALLOWED_PROPS: &[&str] = &[
     "right",
     "header",
     "footer",
+    // Base UI / Radix / coss composition API: a primitive accepts a
+    // JSX element in `render` and calls cloneElement on it to merge
+    // its own props onto the consumer's element. JSX literal is the
+    // intended shape; "extract to a variable" doesn't save anything.
+    "render",
 ];
 
 pub struct Check;
@@ -80,6 +85,35 @@ impl OxcCheck for Check {
                 span: None,
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(source, &Check)
+    }
+
+    #[test]
+    fn flags_jsx_as_unknown_prop() {
+        let src = r#"const x = <Wrapper before={<Inner />} />;"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn ignores_render_prop_base_ui_composition() {
+        // Regression for rbaumier/comply#17 — Base UI's `render` prop
+        // expects a JSX element and is the documented composition API.
+        let src = r#"const x = <DropdownMenuItem render={<Link to="/account" />}>Mon compte</DropdownMenuItem>;"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_known_slot_props() {
+        let src = r#"const x = <Card header={<Title />} footer={<Buttons />} />;"#;
+        assert!(run(src).is_empty());
     }
 }
 
