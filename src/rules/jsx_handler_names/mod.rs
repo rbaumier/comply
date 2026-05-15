@@ -18,8 +18,8 @@ use crate::rules::meta::RuleMeta;
 
 pub const META: RuleMeta = RuleMeta {
     id: "jsx-handler-names",
-    description: "JSX event handler props must reference handlers named `handle*`, `on*`, or `toggle*`.",
-    remediation: "Rename the referenced function to start with `handle`, `on`, or `toggle`, or inline the handler.",
+    description: "JSX event handler props must reference handlers named `handle*`, `on*`, `toggle*`, or `set*`.",
+    remediation: "Rename the referenced function to start with `handle`, `on`, `toggle`, or `set` (useState setter), or inline the handler.",
     severity: Severity::Warning,
     doc_url: Some(
         "https://github.com/jsx-eslint/eslint-plugin-react/blob/master/docs/rules/jsx-handler-names.md",
