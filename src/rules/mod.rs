@@ -441,7 +441,13 @@ pub mod react_no_chained_filter_map_reduce;
 pub mod react_no_dedup_filter_indexof;
 pub mod react_no_destructure_zustand_store;
 pub mod react_no_find_in_map_loop;
+pub mod react_no_forward_ref;
 pub mod react_no_interleaved_layout_rw;
+pub mod react_no_leaked_event_listener;
+pub mod react_no_leaked_fetch;
+pub mod react_no_leaked_interval;
+pub mod react_no_leaked_resize_observer;
+pub mod react_no_leaked_timeout;
 pub mod react_no_setstate_without_updater;
 pub mod react_no_sort_for_extrema;
 pub mod react_no_unwrapped_localstorage;
@@ -751,6 +757,7 @@ pub mod react_hoist_regex_outside_component;
 pub mod react_hoist_static_jsx;
 pub mod react_hook_form_destructuring_formstate;
 pub mod react_layout_requires_children_prop;
+pub mod react_leak_helpers;
 pub mod react_no_and_conditional_jsx;
 pub mod react_no_array_index_key;
 pub mod react_no_async_client_component;
@@ -3428,7 +3435,13 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         react_no_dedup_filter_indexof::register(),
         react_no_destructure_zustand_store::register(),
         react_no_find_in_map_loop::register(),
+        react_no_forward_ref::register(),
         react_no_interleaved_layout_rw::register(),
+        react_no_leaked_event_listener::register(),
+        react_no_leaked_fetch::register(),
+        react_no_leaked_interval::register(),
+        react_no_leaked_resize_observer::register(),
+        react_no_leaked_timeout::register(),
         react_no_setstate_without_updater::register(),
         react_no_sort_for_extrema::register(),
         react_no_unwrapped_localstorage::register(),
