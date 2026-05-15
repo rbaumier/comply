@@ -15,35 +15,53 @@ use crate::ignore_comments::payload;
 use std::path::Path;
 
 const MARKER: &str = "// comply-ignore:";
+const FILE_MARKER: &str = "// comply-ignore-file:";
 
 /// Outcome of parsing a single source line.
 #[derive(Debug)]
 pub struct LineParse {
     pub rule_id: String,
-    /// Line number to insert into the suppressions map.
-    pub target_line: usize,
+    /// Line number to insert into the suppressions map. `None` means the
+    /// directive suppresses the rule for the entire file (the new
+    /// `// comply-ignore-file:` marker).
+    pub target_line: Option<usize>,
     /// Diagnostic to emit if the comment was missing its justification.
     pub bad_ignore: Option<Diagnostic>,
 }
 
 /// Parse one source line. Returns None if no honored marker is present.
 pub fn parse(path: &Path, line: &str, line_num: usize) -> Option<LineParse> {
-    let marker_byte = line.find(MARKER)?;
+    // Check the file-level marker first — it's a strict superset of the
+    // per-line marker text (`// comply-ignore-file:` contains the
+    // per-line `// comply-ignore:` as a substring with extra suffix),
+    // so we'd misclassify otherwise.
+    let (marker_byte, is_file_scope, marker_len) =
+        if let Some(b) = line.find(FILE_MARKER) {
+            (b, true, FILE_MARKER.len())
+        } else {
+            (line.find(MARKER)?, false, MARKER.len())
+        };
     let prefix = &line[..marker_byte];
 
     if is_inside_string_literal(prefix) {
         return None;
     }
 
-    let parsed = payload::parse(&line[marker_byte + MARKER.len()..]);
+    let parsed = payload::parse(&line[marker_byte + marker_len..]);
     if parsed.rule_id.is_empty() {
         return None;
     }
 
-    // Trailing marker (code before it on the same line) suppresses THIS line;
-    // above-line marker (only whitespace before it) suppresses the NEXT line.
-    let is_trailing = !prefix.trim_start().is_empty();
-    let target_line = if is_trailing { line_num } else { line_num + 1 };
+    // File-level marker → no specific target line.
+    // Trailing per-line marker (code before it on the same line) →
+    //   suppresses THIS line.
+    // Above-line marker (only whitespace before it) → suppresses NEXT line.
+    let target_line = if is_file_scope {
+        None
+    } else {
+        let is_trailing = !prefix.trim_start().is_empty();
+        Some(if is_trailing { line_num } else { line_num + 1 })
+    };
 
     let bad_ignore = if parsed.justification.is_empty() {
         let col = prefix.chars().count();
@@ -113,7 +131,7 @@ mod tests {
     #[test]
     fn above_line_marker_targets_next_line() {
         let lp = parse(Path::new("t.ts"), "  // comply-ignore: no-throw — ok", 5).unwrap();
-        assert_eq!(lp.target_line, 6);
+        assert_eq!(lp.target_line, Some(6));
     }
 
     #[test]
@@ -124,7 +142,21 @@ mod tests {
             5,
         )
         .unwrap();
-        assert_eq!(lp.target_line, 5);
+        assert_eq!(lp.target_line, Some(5));
+    }
+
+    #[test]
+    fn file_marker_yields_no_target_line() {
+        // Regression for rbaumier/comply#27 — file-level rules need a
+        // way to be suppressed for the whole file.
+        let lp = parse(
+            Path::new("t.ts"),
+            "// comply-ignore-file: elysia-test-missing-validation — third-party endpoint",
+            1,
+        )
+        .unwrap();
+        assert_eq!(lp.target_line, None);
+        assert_eq!(lp.rule_id, "elysia-test-missing-validation");
     }
 
     #[test]
