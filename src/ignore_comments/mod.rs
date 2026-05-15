@@ -37,20 +37,49 @@ pub fn parse_ignores(path: &Path, source: &str) -> IgnoreResult {
     // a line-1 ignore in a BOM-prefixed file would never apply otherwise.
     let source = source.strip_prefix('\u{FEFF}').unwrap_or(source);
 
+    // Pass 1 — parse every line and remember which lines are themselves
+    // marker lines. Needed in pass 2 to forward above-line markers past
+    // stacked siblings (ESLint behaviour, rbaumier/comply#22).
+    let mut parses: Vec<(usize, line::LineParse)> = Vec::new();
+    let mut marker_lines: HashSet<usize> = HashSet::new();
+    let mut last_line = 0usize;
     for (idx, raw_line) in source.lines().enumerate() {
-        if let Some(parsed) = line::parse(path, raw_line, idx + 1) {
-            if let Some(d) = parsed.bad_ignore {
-                bad_ignores.push(d);
-            }
-            match parsed.target_line {
-                Some(line_no) => {
-                    suppressions
-                        .entry(line_no)
-                        .or_default()
-                        .insert(parsed.rule_id);
+        let line_num = idx + 1;
+        last_line = line_num;
+        if let Some(parsed) = line::parse(path, raw_line, line_num) {
+            marker_lines.insert(line_num);
+            parses.push((line_num, parsed));
+        }
+    }
+
+    // Pass 2 — apply each parse. Above-line markers whose immediate
+    // target is itself a marker line walk past those siblings to the
+    // first real code line, so stacked markers union their rules onto
+    // the same eventual target.
+    for (line_num, parsed) in parses {
+        if let Some(d) = parsed.bad_ignore {
+            bad_ignores.push(d);
+        }
+        let resolved_target = match parsed.target_line {
+            None => None,
+            Some(t) if t == line_num => Some(t), // trailing marker
+            Some(mut t) => {
+                while t <= last_line && marker_lines.contains(&t) {
+                    t += 1;
                 }
-                None => {
-                    file_suppressions.insert(parsed.rule_id);
+                Some(t)
+            }
+        };
+        match resolved_target {
+            Some(line_no) => {
+                let entry = suppressions.entry(line_no).or_default();
+                for rule in parsed.rule_ids {
+                    entry.insert(rule);
+                }
+            }
+            None => {
+                for rule in parsed.rule_ids {
+                    file_suppressions.insert(rule);
                 }
             }
         }
@@ -222,5 +251,45 @@ mod tests {
         let s = "// comply-ignore-file: no-throw — ok\nlet x = 1;";
         let kept = apply_suppressions(vec![diag(2, "no-other")], Path::new("t.ts"), s);
         assert_eq!(kept.len(), 1);
+    }
+
+    #[test]
+    fn multi_rule_marker_suppresses_each_rule() {
+        // Regression for rbaumier/comply#22 — comma-separated rules.
+        let s = "// comply-ignore: rule-a, rule-b — same reason\nthrow err;";
+        let kept = apply_suppressions(
+            vec![diag(2, "rule-a"), diag(2, "rule-b"), diag(2, "rule-c")],
+            Path::new("t.ts"),
+            s,
+        );
+        // rule-a and rule-b suppressed; rule-c remains.
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].rule_id.as_ref(), "rule-c");
+    }
+
+    #[test]
+    fn stacked_above_line_markers_union_onto_target() {
+        // Regression for rbaumier/comply#22 — stacked markers should
+        // accumulate, not the closest-wins behaviour ESLint avoids.
+        let s = "// comply-ignore: rule-a — A\n// comply-ignore: rule-b — B\nthrow err;";
+        let kept = apply_suppressions(
+            vec![diag(3, "rule-a"), diag(3, "rule-b")],
+            Path::new("t.ts"),
+            s,
+        );
+        assert!(kept.is_empty());
+    }
+
+    #[test]
+    fn stacked_with_blank_lines_between_markers() {
+        // Defensive: blank lines between marker lines must not break
+        // the chain — the target is still the first code line.
+        let s = "// comply-ignore: rule-a — A\n// comply-ignore: rule-b — B\nthrow err;";
+        let kept = apply_suppressions(
+            vec![diag(3, "rule-a"), diag(3, "rule-b")],
+            Path::new("t.ts"),
+            s,
+        );
+        assert!(kept.is_empty());
     }
 }
