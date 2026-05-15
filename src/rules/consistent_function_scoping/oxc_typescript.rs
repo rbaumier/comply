@@ -110,6 +110,13 @@ fn is_skipped_context(nodes: &oxc_semantic::AstNodes, node_id: NodeId) -> bool {
         | AstKind::PropertyDefinition(_)
         | AstKind::ObjectProperty(_)
         | AstKind::AccessorProperty(_) => true,
+        // JSX prop callbacks — render-prop helpers (Base UI Combobox,
+        // RHF Controller render, etc.) stay co-located with the JSX
+        // they produce even when they don't close over any local.
+        // Hoisting them out moves the render logic away from the
+        // structure that consumes it, which hurts readability more
+        // than a missing closure-capture indicator helps.
+        AstKind::JSXExpressionContainer(_) => true,
         AstKind::CallExpression(call) => {
             let node_span = nodes.kind(node_id).span();
             if call.callee.span() == node_span {
@@ -206,4 +213,45 @@ fn captures_outer_symbol(
 
 fn span_contains(outer: Span, inner: Span) -> bool {
     inner.start >= outer.start && inner.end <= outer.end
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(src, &Check)
+    }
+
+    #[test]
+    fn flags_nested_function_not_capturing() {
+        let src = r#"
+            function outer() {
+                function inner() { return 1; }
+                return inner();
+            }
+        "#;
+        assert!(!run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_jsx_render_prop_callback() {
+        // Regression for rbaumier/comply#20 — Base UI / RHF render props.
+        let src = r#"
+            function MyForm() {
+                return <Controller render={({ field }) => <Input {...field} />} />;
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_jsx_event_handler() {
+        let src = r#"
+            function Btn() {
+                return <button onClick={() => alert("hi")}>x</button>;
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
 }
