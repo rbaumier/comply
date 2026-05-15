@@ -1664,6 +1664,11 @@ pub mod promise_catch_or_return;
 pub mod promise_prefer_await_to_then;
 pub mod ts_prefer_nullish_coalescing;
 pub mod ts_prefer_optional_chain;
+pub mod testing_library_await_async_queries;
+pub mod testing_library_prefer_screen_queries;
+pub mod playwright_require_top_level_describe;
+pub mod vitest_no_standalone_expect;
+pub mod sonarjs_no_gratuitous_expressions;
 // v3.0 — Skill-driven rules: Batch 1 (TypeScript/Architecture)
 pub mod avoid_barrel_files;
 pub mod avoid_importing_barrel_files;
@@ -3869,6 +3874,11 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         promise_prefer_await_to_then::register(),
         ts_prefer_nullish_coalescing::register(),
         ts_prefer_optional_chain::register(),
+        testing_library_await_async_queries::register(),
+        testing_library_prefer_screen_queries::register(),
+        playwright_require_top_level_describe::register(),
+        vitest_no_standalone_expect::register(),
+        sonarjs_no_gratuitous_expressions::register(),
     ];
     rules.extend(delegated::register_all());
     rules.extend(delegated::register_tsgolint());
