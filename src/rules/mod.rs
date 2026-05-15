@@ -869,9 +869,12 @@ pub mod js_no_full_lodash_import;
 pub mod js_no_math_spread_array;
 pub mod js_no_moment;
 pub mod next_image_missing_sizes;
+pub mod next_inline_script_id;
+pub mod next_no_assign_module_variable;
 pub mod next_no_client_side_redirect;
 pub mod next_no_css_link;
 pub mod next_no_font_link;
+pub mod next_no_typos;
 pub mod no_try_promise;
 pub mod no_unused_collection;
 pub mod prefer_while;
@@ -3779,8 +3782,11 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         js_cache_repeated_storage::register(),
         next_no_client_side_redirect::register(),
         next_image_missing_sizes::register(),
+        next_inline_script_id::register(),
+        next_no_assign_module_variable::register(),
         next_no_font_link::register(),
         next_no_css_link::register(),
+        next_no_typos::register(),
         html_no_script_without_defer::register(),
         html_no_undeferred_third_party::register(),
     ];
