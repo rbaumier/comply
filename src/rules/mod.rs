@@ -639,6 +639,7 @@ pub mod vue_use_template_ref;
 pub mod vue_v_memo_requires_v_for;
 pub mod promise_no_multiple_resolved;
 pub mod sonarjs_no_empty_collection;
+pub mod vitest_no_identical_title;
 pub mod vue_no_ref_as_operand;
 pub mod vue_no_setup_props_reactivity_loss;
 pub mod vue_return_in_computed_property;
@@ -3886,6 +3887,7 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         sonarjs_no_gratuitous_expressions::register(),
         promise_no_multiple_resolved::register(),
         sonarjs_no_empty_collection::register(),
+        vitest_no_identical_title::register(),
         vue_no_ref_as_operand::register(),
         vue_no_setup_props_reactivity_loss::register(),
         vue_return_in_computed_property::register(),
