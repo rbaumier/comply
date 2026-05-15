@@ -126,7 +126,9 @@ impl OxcCheck for Check {
 
                 // Skip `.push()` / `.unshift()` on a const local
                 // accumulator inside a loop body — a common,
-                // bounded, escape-free pattern.
+                // bounded, escape-free pattern. The structurally
+                // correct alternative (`Result.all`) is missing from
+                // better-result: tracking dmmulroy/better-result#32.
                 if matches!(method, "push" | "unshift")
                     && matches!(&member.object, Expression::Identifier(_))
                     && is_inside_loop_body(node, semantic)
