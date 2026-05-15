@@ -1643,6 +1643,12 @@ pub mod ts_no_mixed_enums;
 pub mod security_detect_unsafe_regex;
 pub mod security_detect_object_injection;
 pub mod eslint_comments_no_unlimited_disable;
+pub mod i18n_enforce_message_id;
+pub mod i18n_enforce_default_message;
+pub mod tailwind_no_restricted_classes;
+pub mod tailwind_enforce_consistent_important_position;
+pub mod vue_no_async_in_computed_properties;
+pub mod prisma_soft_delete_filter;
 // v3.0 — Skill-driven rules: Batch 1 (TypeScript/Architecture)
 pub mod avoid_barrel_files;
 pub mod avoid_importing_barrel_files;
@@ -3827,6 +3833,12 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         next_no_duplicate_head::register(),
         next_no_script_component_in_head::register(),
         next_no_title_in_document_head::register(),
+        i18n_enforce_message_id::register(),
+        i18n_enforce_default_message::register(),
+        tailwind_no_restricted_classes::register(),
+        tailwind_enforce_consistent_important_position::register(),
+        vue_no_async_in_computed_properties::register(),
+        prisma_soft_delete_filter::register(),
     ];
     rules.extend(delegated::register_all());
     rules.extend(delegated::register_tsgolint());
