@@ -1654,6 +1654,11 @@ pub mod security_detect_insecure_randomness;
 pub mod security_detect_possible_timing_attacks;
 pub mod sonarjs_no_useless_catch;
 pub mod eslint_comments_no_duplicate_disable;
+pub mod eslint_comments_require_description;
+pub mod security_detect_non_literal_fs_filename;
+pub mod security_detect_non_literal_regexp;
+pub mod testing_library_no_debugging_utils;
+pub mod vitest_no_test_return_statement;
 // v3.0 — Skill-driven rules: Batch 1 (TypeScript/Architecture)
 pub mod avoid_barrel_files;
 pub mod avoid_importing_barrel_files;
@@ -3849,6 +3854,11 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         security_detect_possible_timing_attacks::register(),
         sonarjs_no_useless_catch::register(),
         eslint_comments_no_duplicate_disable::register(),
+        eslint_comments_require_description::register(),
+        security_detect_non_literal_fs_filename::register(),
+        security_detect_non_literal_regexp::register(),
+        testing_library_no_debugging_utils::register(),
+        vitest_no_test_return_statement::register(),
     ];
     rules.extend(delegated::register_all());
     rules.extend(delegated::register_tsgolint());
