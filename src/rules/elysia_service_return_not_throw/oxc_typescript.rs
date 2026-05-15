@@ -84,6 +84,36 @@ impl OxcCheck for Check {
             return;
         }
 
+        // `throw new XxxError(...)` / `throw new XxxException(...)` —
+        // typed error classes that flow through the project's
+        // error-handler middleware to RFC 7807 are the same wire
+        // contract as `return Result.err(...)`. The rule's spirit is
+        // about ad-hoc `throw new Error("...")` calls that break typed
+        // propagation. Bare JS built-in error classes (Error, TypeError, …)
+        // stay flagged; project-specific `*Error` / `*Exception` classes
+        // are skipped.
+        const BUILTIN_ERROR_CLASSES: &[&str] = &[
+            "Error",
+            "TypeError",
+            "RangeError",
+            "SyntaxError",
+            "ReferenceError",
+            "EvalError",
+            "URIError",
+            "AggregateError",
+        ];
+        if let Expression::NewExpression(new) = &throw.argument
+            && let Expression::Identifier(id) = &new.callee
+        {
+            let name = id.name.as_str();
+            let is_custom_typed_error = (name.ends_with("Error")
+                || name.ends_with("Exception"))
+                && !BUILTIN_ERROR_CLASSES.contains(&name);
+            if is_custom_typed_error {
+                return;
+            }
+        }
+
         let (line, column) = byte_offset_to_line_col(ctx.source, throw.span.start as usize);
         diagnostics.push(Diagnostic {
             path: Arc::clone(&ctx.path_arc),
@@ -165,5 +195,56 @@ fn callee_method_name<'a>(call: &'a oxc_ast::ast::CallExpression<'a>) -> Option<
         }
         Expression::Identifier(id) => Some(id.name.as_str()),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_framework(src, &Check, "elysia")
+    }
+
+    #[test]
+    fn flags_bare_throw_new_error() {
+        let src = r#"
+            import { Elysia } from "elysia";
+            function f() { throw new Error("nope"); }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_typed_built_in_error() {
+        let src = r#"
+            import { Elysia } from "elysia";
+            function f() { throw new TypeError("nope"); }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn ignores_custom_api_error() {
+        // Regression for rbaumier/comply#35 — typed ApiError subclasses
+        // flow through the project's error-handler middleware to RFC 7807
+        // and produce the same wire contract as Result.err. Forcing them
+        // through unwrapOrThrow(Result.gen(...)) trips require-await on
+        // bodies with no `yield`.
+        let src = r#"
+            import { Elysia } from "elysia";
+            class NotFoundError {}
+            function f() { throw new NotFoundError({}); }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_custom_exception() {
+        let src = r#"
+            import { Elysia } from "elysia";
+            function f() { throw new MyDomainException("oops"); }
+        "#;
+        assert!(run(src).is_empty());
     }
 }
