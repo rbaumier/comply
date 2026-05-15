@@ -76,6 +76,16 @@ fn looks_like_in_component_render(source: &str, parse_offset: usize) -> bool {
         return false;
     }
 
+    // Skip when the parse call sits inside a JSX event handler —
+    // `onValueChange={(v) => Schema.parse(v)}` is the boundary
+    // narrowing pattern from string-emission libraries (Base UI Radio,
+    // Combobox, …). Look for `on<UpperCase>={` followed by an arrow
+    // opening, with no closing `}` in between to ensure we're still
+    // inside the handler.
+    if is_inside_jsx_event_handler(near_snippet) {
+        return false;
+    }
+
     // Component detection: `function FooBar(`, `const FooBar = (`, `export function FooBar(`, etc.
     for keyword in ["function ", "const "] {
         let mut from = 0usize;
@@ -96,6 +106,65 @@ fn looks_like_in_component_render(source: &str, parse_offset: usize) -> bool {
         }
     }
     false
+}
+
+/// True if the preceding text ends inside an unclosed JSX event-handler
+/// prop value (`onClick={(e) => ` / `onValueChange={(v) => ` / …).
+/// Heuristic: rightmost `on<UpperCase>...={` opener after which we
+/// haven't seen a matching `}` (brace-depth-aware).
+fn is_inside_jsx_event_handler(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    // Walk forward through the snippet, tracking the brace depth of the
+    // most recent `on<UpperCase>={` opener. We want to know: at the END
+    // of the snippet (i.e. at the parse call site), are we still inside
+    // that opener's value?
+    let mut handler_starts: Vec<usize> = Vec::new();
+    let mut i = 0;
+    while i + 3 < bytes.len() {
+        if bytes[i] == b'o' && bytes[i + 1] == b'n' {
+            // Must be at a word boundary on the left.
+            let prev_ok = i == 0
+                || !(bytes[i - 1].is_ascii_alphanumeric()
+                    || bytes[i - 1] == b'_'
+                    || bytes[i - 1] == b'$');
+            if prev_ok && bytes[i + 2].is_ascii_uppercase() {
+                // Skip the identifier; require `={` immediately after.
+                let mut j = i + 2;
+                while j < bytes.len()
+                    && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_' || bytes[j] == b'$')
+                {
+                    j += 1;
+                }
+                if j + 1 < bytes.len() && bytes[j] == b'=' && bytes[j + 1] == b'{' {
+                    handler_starts.push(j + 1); // position of `{`
+                    i = j + 2;
+                    continue;
+                }
+            }
+        }
+        i += 1;
+    }
+    let Some(&start) = handler_starts.last() else {
+        return false;
+    };
+    // Brace-depth from the opener to end of text. If depth > 0 at end,
+    // we're still inside the handler.
+    let mut depth: i32 = 1;
+    let mut k = start + 1;
+    while k < bytes.len() {
+        match bytes[k] {
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return false;
+                }
+            }
+            _ => {}
+        }
+        k += 1;
+    }
+    depth > 0
 }
 
 fn find_offenses(source: &str) -> Vec<usize> {
@@ -183,5 +252,25 @@ mod tests {
     fn allows_parse_outside_component() {
         let src = "function loadConfig() { return Schema.parse(env); }\nfunction Comp() { return <div /> }";
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_parse_inside_jsx_event_handler() {
+        // Regression for rbaumier/comply#20 — Base UI radio-group
+        // discriminator parsing at the boundary.
+        let src = "function Comp() { return <Radio onValueChange={(v) => SessionLevelSchema.parse(v)} /> }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_parse_inside_on_click() {
+        let src = "function Comp() { return <button onClick={() => Schema.parse(input)}>x</button> }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_parse_outside_event_handler_in_component() {
+        let src = "function Comp(props) { const data = Schema.parse(props.input); return <div />; }";
+        assert_eq!(run(src).len(), 1);
     }
 }
