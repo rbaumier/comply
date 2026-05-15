@@ -150,28 +150,17 @@ impl OxcCheck for Check {
                 }
             }
 
-            // `async () => promiseFn()` / `async () => fetch(url)` —
-            // arrow whose expression body is a direct CallExpression.
+            // Arrow with concise-body returning a value (`async () => X`).
             // The companion `promise-function-async` rule mandates the
-            // `async` keyword on any arrow whose body returns a Promise,
-            // so flagging the lack of `await` here just bounces the
-            // author between two rules.
+            // `async` keyword whenever the surrounding type contract
+            // expects a Promise — even when the body returns a constant
+            // (`async () => EMPTY` to satisfy `(): Promise<T[]>`).
+            // Flagging missing-await here makes the two rules impossible
+            // to satisfy together. Skip any concise-body arrow.
             if let AstKind::ArrowFunctionExpression(arrow) = node.kind()
                 && arrow.expression
             {
-                let body_first = arrow.body.statements.first();
-                let is_call_expr_body = match body_first {
-                    Some(oxc_ast::ast::Statement::ExpressionStatement(es)) => {
-                        matches!(
-                            es.expression,
-                            oxc_ast::ast::Expression::CallExpression(_)
-                        )
-                    }
-                    _ => false,
-                };
-                if is_call_expr_body {
-                    continue;
-                }
+                continue;
             }
 
             let (line, column) = byte_offset_to_line_col(ctx.source, span.start as usize);
@@ -222,8 +211,19 @@ mod tests {
     }
 
     #[test]
-    fn still_flags_async_arrow_returning_literal() {
-        let src = "const f = async () => 42;";
+    fn allows_async_arrow_returning_constant() {
+        // Regression for rbaumier/comply#67 — concise-body arrow whose
+        // expression is a non-call (constant / identifier / literal).
+        // The async keyword can be load-bearing for the Promise return
+        // type contract even when the body has no await.
+        assert!(run_on("const f = async () => EMPTY;").is_empty());
+        assert!(run_on("const f = async () => 42;").is_empty());
+        assert!(run_on("const f = async () => [];").is_empty());
+    }
+
+    #[test]
+    fn still_flags_async_function_body_without_await() {
+        let src = "async function f() { return 42; }";
         assert_eq!(run_on(src).len(), 1);
     }
 
