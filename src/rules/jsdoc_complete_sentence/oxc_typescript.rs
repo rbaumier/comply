@@ -8,7 +8,13 @@ use std::sync::Arc;
 
 pub struct Check;
 
-/// Extract description lines from a JSDoc comment text (excluding @tag lines).
+/// Extract description lines from a JSDoc comment text.
+///
+/// The description is the prose **before the first `@tag`**. Once a
+/// `@tag` line is seen, everything after it (including the body of
+/// `@example` code blocks, `@param` descriptions, etc.) is no longer
+/// part of the description. Those bodies follow their own conventions
+/// — code in `@example` ends with `;`, `)`, `}`, not with `.`.
 fn extract_description_lines(text: &str) -> Vec<(String, usize)> {
     let mut description_lines = Vec::new();
     let lines: Vec<&str> = text.lines().collect();
@@ -22,7 +28,10 @@ fn extract_description_lines(text: &str) -> Vec<(String, usize)> {
             .trim_end_matches("*/")
             .trim();
 
-        if content.is_empty() || content == "/" || content.starts_with('@') {
+        if content.starts_with('@') {
+            break;
+        }
+        if content.is_empty() || content == "/" {
             continue;
         }
 
@@ -167,6 +176,38 @@ function add(a: number, b: number) {}
     #[test]
     fn allows_exclamation() {
         let source = "/** Do not call this directly! */\nfunction internal() {}";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn ignores_at_example_code_body() {
+        // Regression for rbaumier/comply#24 — @example body ends with `;`
+        // (or `)`, `}` ) by design; it must not be checked as prose.
+        let source = r#"
+/**
+ * Authorize a write intent.
+ *
+ * @example
+ * authorize(session, { kind: "createOrganization" }).unwrap();
+ */
+export function authorize(): void {}
+"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn ignores_param_descriptions_after_first_tag() {
+        let source = r#"
+/**
+ * Build a user record.
+ *
+ * @param name the display name
+ * @returns the persisted user
+ */
+export function build(): void {}
+"#;
+        // First-tag-and-after is not checked; description ends at the
+        // first `@`. "Build a user record." is fine.
         assert!(run_on(source).is_empty());
     }
 }
