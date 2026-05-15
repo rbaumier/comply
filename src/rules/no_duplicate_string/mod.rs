@@ -212,6 +212,19 @@ pub(super) fn should_ignore_string_node(node: tree_sitter::Node<'_>, source: &[u
             // etc. — strings here are compile-time metadata that cannot be
             // extracted to a `const`.
             "attribute_item" | "inner_attribute_item" => return true,
+            // Equality comparison against a string literal (e.g.
+            // `status === "pending"`). TS literal-type narrowing already
+            // protects against typos here. Also covers `switch_case`
+            // labels for the same reason.
+            "binary_expression" => {
+                if let Some(op) = parent.child_by_field_name("operator")
+                    && let Ok(op_text) = op.utf8_text(source)
+                    && matches!(op_text, "===" | "!==" | "==" | "!=")
+                {
+                    return true;
+                }
+            }
+            "switch_case" => return true,
             // `cn(...)` / `clsx(...)` / `cva(...)` etc. — match either
             // a bare callee identifier or a member expression whose
             // last segment is a known helper.

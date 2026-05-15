@@ -92,6 +92,25 @@ fn should_ignore_oxc_node<'a>(
             // `import "x"` / `import x from "y"` / `export … from "z"`.
             AstKind::ImportDeclaration(_) | AstKind::ExportNamedDeclaration(_)
             | AstKind::ExportAllDeclaration(_) => return true,
+            // Equality comparison against a string literal (e.g.
+            // `status === "pending"`). TypeScript's literal-type
+            // narrowing already protects against typos here, so
+            // repeating the literal in comparisons is not a duplication
+            // worth flagging.
+            AstKind::BinaryExpression(bin) => {
+                use oxc_ast::ast::BinaryOperator;
+                if matches!(
+                    bin.operator,
+                    BinaryOperator::StrictEquality
+                        | BinaryOperator::Equality
+                        | BinaryOperator::StrictInequality
+                        | BinaryOperator::Inequality
+                ) {
+                    return true;
+                }
+            }
+            // `case "pending":` in a switch — same rationale as `===`.
+            AstKind::SwitchCase(_) => return true,
             // JSX `className` or `class` attribute.
             AstKind::JSXAttribute(attr) => {
                 if let oxc_ast::ast::JSXAttributeName::Identifier(ident) = &attr.name {
@@ -155,6 +174,45 @@ mod tests {
             import { foo } from "some-module";
             import { bar } from "some-module";
             import { baz } from "some-module";
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_duplicate_literal_inside_union_type() {
+        // `"pending-approval"` appears 3 times in this union — a real
+        // bug TS does not catch on its own.
+        let src = r#"
+            type Status = "pending-approval" | "approved" | "pending-approval" | "pending-approval";
+        "#;
+        assert!(!run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_equality_comparisons_against_string_literal() {
+        // TS literal-type narrowing already protects against typos
+        // here, so repeating the literal in `===` checks is fine.
+        let src = r#"
+            type Status = "pending-approval" | "approved";
+            function f(status: Status) {
+                if (status === "pending-approval") return 1;
+                if (status === "pending-approval") return 2;
+                if (status === "pending-approval") return 3;
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_switch_case_string_literal() {
+        let src = r#"
+            function f(status: string) {
+                switch (status) {
+                    case "pending-approval": return 1;
+                    case "pending-approval": return 2;
+                    case "pending-approval": return 3;
+                }
+            }
         "#;
         assert!(run(src).is_empty());
     }
