@@ -874,6 +874,9 @@ pub mod next_image_missing_sizes;
 pub mod next_inline_script_id;
 pub mod next_no_assign_module_variable;
 pub mod next_no_client_side_redirect;
+pub mod next_no_duplicate_head;
+pub mod next_no_script_component_in_head;
+pub mod next_no_title_in_document_head;
 pub mod next_no_css_link;
 pub mod next_no_font_link;
 pub mod next_no_typos;
@@ -3821,6 +3824,9 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         security_detect_unsafe_regex::register(),
         security_detect_object_injection::register(),
         eslint_comments_no_unlimited_disable::register(),
+        next_no_duplicate_head::register(),
+        next_no_script_component_in_head::register(),
+        next_no_title_in_document_head::register(),
     ];
     rules.extend(delegated::register_all());
     rules.extend(delegated::register_tsgolint());
