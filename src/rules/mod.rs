@@ -637,6 +637,11 @@ pub mod vue_template_helpers;
 pub mod vue_typed_define_props_emits;
 pub mod vue_use_template_ref;
 pub mod vue_v_memo_requires_v_for;
+pub mod promise_no_multiple_resolved;
+pub mod sonarjs_no_empty_collection;
+pub mod vue_no_ref_as_operand;
+pub mod vue_no_setup_props_reactivity_loss;
+pub mod vue_return_in_computed_property;
 pub mod vue_void_elements_no_children;
 pub mod vue_watch_immediate_over_onmounted;
 pub mod vue_withdefaults_factory;
@@ -3879,6 +3884,11 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         playwright_require_top_level_describe::register(),
         vitest_no_standalone_expect::register(),
         sonarjs_no_gratuitous_expressions::register(),
+        promise_no_multiple_resolved::register(),
+        sonarjs_no_empty_collection::register(),
+        vue_no_ref_as_operand::register(),
+        vue_no_setup_props_reactivity_loss::register(),
+        vue_return_in_computed_property::register(),
     ];
     rules.extend(delegated::register_all());
     rules.extend(delegated::register_tsgolint());
