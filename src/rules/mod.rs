@@ -1649,6 +1649,11 @@ pub mod tailwind_no_restricted_classes;
 pub mod tailwind_enforce_consistent_important_position;
 pub mod vue_no_async_in_computed_properties;
 pub mod prisma_soft_delete_filter;
+pub mod security_detect_bidi_characters;
+pub mod security_detect_insecure_randomness;
+pub mod security_detect_possible_timing_attacks;
+pub mod sonarjs_no_useless_catch;
+pub mod eslint_comments_no_duplicate_disable;
 // v3.0 — Skill-driven rules: Batch 1 (TypeScript/Architecture)
 pub mod avoid_barrel_files;
 pub mod avoid_importing_barrel_files;
@@ -3839,6 +3844,11 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         tailwind_enforce_consistent_important_position::register(),
         vue_no_async_in_computed_properties::register(),
         prisma_soft_delete_filter::register(),
+        security_detect_bidi_characters::register(),
+        security_detect_insecure_randomness::register(),
+        security_detect_possible_timing_attacks::register(),
+        sonarjs_no_useless_catch::register(),
+        eslint_comments_no_duplicate_disable::register(),
     ];
     rules.extend(delegated::register_all());
     rules.extend(delegated::register_tsgolint());
