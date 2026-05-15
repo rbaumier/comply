@@ -1659,6 +1659,11 @@ pub mod security_detect_non_literal_fs_filename;
 pub mod security_detect_non_literal_regexp;
 pub mod testing_library_no_debugging_utils;
 pub mod vitest_no_test_return_statement;
+pub mod promise_no_return_wrap;
+pub mod promise_catch_or_return;
+pub mod promise_prefer_await_to_then;
+pub mod ts_prefer_nullish_coalescing;
+pub mod ts_prefer_optional_chain;
 // v3.0 — Skill-driven rules: Batch 1 (TypeScript/Architecture)
 pub mod avoid_barrel_files;
 pub mod avoid_importing_barrel_files;
@@ -3859,6 +3864,11 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         security_detect_non_literal_regexp::register(),
         testing_library_no_debugging_utils::register(),
         vitest_no_test_return_statement::register(),
+        promise_no_return_wrap::register(),
+        promise_catch_or_return::register(),
+        promise_prefer_await_to_then::register(),
+        ts_prefer_nullish_coalescing::register(),
+        ts_prefer_optional_chain::register(),
     ];
     rules.extend(delegated::register_all());
     rules.extend(delegated::register_tsgolint());
