@@ -55,8 +55,9 @@ pub(crate) fn css_value_type(value: &str) -> Option<&'static str> {
 
 pub(crate) fn text_category(class: &str) -> Option<&'static str> {
     let suffix = &class[5..];
+
+    // Non-size text-* utilities first — exact word match.
     match suffix {
-        "xs" | "sm" | "base" | "lg" | "xl" => return Some("text-size"),
         "wrap" | "nowrap" | "balance" | "pretty" => return Some("text-wrap"),
         "left" | "center" | "right" | "justify" | "start" | "end" => return Some("text-align"),
         "ellipsis" | "clip" => return Some("text-overflow"),
@@ -64,9 +65,19 @@ pub(crate) fn text_category(class: &str) -> Option<&'static str> {
         "underline" | "overline" | "line-through" | "no-underline" => return Some("text-decoration"),
         _ => {}
     }
-    if suffix.ends_with("xl") && suffix.len() > 2 {
+
+    // Font-size: strip the optional `/<line-height>` shorthand so
+    // `text-base/4.5`, `text-sm/4`, `text-base/lh` all match.
+    let size_part = suffix.split('/').next().unwrap_or(suffix);
+    match size_part {
+        "xs" | "sm" | "base" | "lg" | "xl" => return Some("text-size"),
+        _ => {}
+    }
+    if size_part.ends_with("xl") && size_part.len() > 2 {
         return Some("text-size");
     }
+
+    // Arbitrary value: `text-[16px]` (size) or `text-[#fff]` (color).
     if suffix.starts_with('[') && suffix.ends_with(']') {
         let inner = &suffix[1..suffix.len() - 1];
         return match css_value_type(inner) {
@@ -75,6 +86,8 @@ pub(crate) fn text_category(class: &str) -> Option<&'static str> {
             _ => None,
         };
     }
+
+    // Default: a named color token (`text-foreground`, `text-red-500`).
     Some("text-color")
 }
 
@@ -136,6 +149,43 @@ pub(crate) fn conflict_key(class: &str) -> Option<&'static str> {
         return Some("display");
     }
     None
+}
+
+#[cfg(test)]
+mod text_category_tests {
+    use super::*;
+
+    #[test]
+    fn classifies_size_shorthand_as_text_size() {
+        // Regression for rbaumier/comply#13 — `text-<size>/<lh>` is a
+        // font-size shorthand and must not conflict with color tokens.
+        assert_eq!(text_category("text-base/4.5"), Some("text-size"));
+        assert_eq!(text_category("text-sm/4"), Some("text-size"));
+        assert_eq!(text_category("text-base/lh"), Some("text-size"));
+        assert_eq!(text_category("text-xl/relaxed"), Some("text-size"));
+    }
+
+    #[test]
+    fn color_and_size_shorthand_do_not_conflict() {
+        // text-foreground (color) + text-base/4.5 (size) must produce
+        // distinct conflict keys so they can coexist.
+        assert_ne!(
+            text_category("text-foreground"),
+            text_category("text-base/4.5")
+        );
+    }
+
+    #[test]
+    fn plain_sizes_still_classified() {
+        assert_eq!(text_category("text-xs"), Some("text-size"));
+        assert_eq!(text_category("text-2xl"), Some("text-size"));
+    }
+
+    #[test]
+    fn color_tokens_remain_text_color() {
+        assert_eq!(text_category("text-foreground"), Some("text-color"));
+        assert_eq!(text_category("text-red-500"), Some("text-color"));
+    }
 }
 
 pub fn register() -> RuleDef {
