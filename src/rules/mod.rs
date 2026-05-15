@@ -1630,6 +1630,16 @@ pub mod playwright_no_eval;
 pub mod top_level_function;
 pub mod vitest_no_disabled_tests;
 pub mod vitest_no_focused_tests;
+pub mod vitest_no_commented_out_tests;
+pub mod vitest_no_done_callback;
+pub mod vitest_expect_expect;
+pub mod playwright_no_focused_test;
+pub mod unicorn_prefer_array_flat_map;
+pub mod promise_no_return_in_finally;
+pub mod ts_no_mixed_enums;
+pub mod security_detect_unsafe_regex;
+pub mod security_detect_object_injection;
+pub mod eslint_comments_no_unlimited_disable;
 // v3.0 — Skill-driven rules: Batch 1 (TypeScript/Architecture)
 pub mod avoid_barrel_files;
 pub mod avoid_importing_barrel_files;
@@ -3801,6 +3811,16 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         unicorn_no_useless_undefined::register(),
         vitest_no_focused_tests::register(),
         nuxt_no_page_meta_runtime_values::register(),
+        vitest_no_commented_out_tests::register(),
+        vitest_no_done_callback::register(),
+        vitest_expect_expect::register(),
+        playwright_no_focused_test::register(),
+        unicorn_prefer_array_flat_map::register(),
+        promise_no_return_in_finally::register(),
+        ts_no_mixed_enums::register(),
+        security_detect_unsafe_regex::register(),
+        security_detect_object_injection::register(),
+        eslint_comments_no_unlimited_disable::register(),
     ];
     rules.extend(delegated::register_all());
     rules.extend(delegated::register_tsgolint());
