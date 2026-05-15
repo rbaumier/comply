@@ -20,6 +20,9 @@ pub struct IgnoreResult {
     /// this way (instead of HashSet<(line, String)>) so the lookup in
     /// `apply_suppressions` doesn't have to clone the rule_id per check.
     pub suppressions: HashMap<usize, HashSet<String>>,
+    /// Set of rule ids suppressed for the entire file via the
+    /// `// comply-ignore-file: <rule-id> — <reason>` directive.
+    pub file_suppressions: HashSet<String>,
     /// Diagnostics for malformed comply-ignore comments (missing justification).
     pub bad_ignores: Vec<Diagnostic>,
 }
@@ -27,6 +30,7 @@ pub struct IgnoreResult {
 /// Parse all comply-ignore comments in source text.
 pub fn parse_ignores(path: &Path, source: &str) -> IgnoreResult {
     let mut suppressions: HashMap<usize, HashSet<String>> = HashMap::new();
+    let mut file_suppressions: HashSet<String> = HashSet::new();
     let mut bad_ignores = Vec::new();
 
     // Strip leading UTF-8 BOM — `is_whitespace` doesn't include U+FEFF, so
@@ -38,15 +42,23 @@ pub fn parse_ignores(path: &Path, source: &str) -> IgnoreResult {
             if let Some(d) = parsed.bad_ignore {
                 bad_ignores.push(d);
             }
-            suppressions
-                .entry(parsed.target_line)
-                .or_default()
-                .insert(parsed.rule_id);
+            match parsed.target_line {
+                Some(line_no) => {
+                    suppressions
+                        .entry(line_no)
+                        .or_default()
+                        .insert(parsed.rule_id);
+                }
+                None => {
+                    file_suppressions.insert(parsed.rule_id);
+                }
+            }
         }
     }
 
     IgnoreResult {
         suppressions,
+        file_suppressions,
         bad_ignores,
     }
 }
@@ -62,11 +74,14 @@ pub fn apply_suppressions(
     let mut result: Vec<Diagnostic> = Vec::with_capacity(total);
 
     for diag in diagnostics {
-        let is_suppressed = ignore_result
+        let suppressed_at_line = ignore_result
             .suppressions
             .get(&diag.line)
             .is_some_and(|rules| rules.contains(diag.rule_id.as_ref()));
-        if !is_suppressed {
+        let suppressed_for_file = ignore_result
+            .file_suppressions
+            .contains(diag.rule_id.as_ref());
+        if !suppressed_at_line && !suppressed_for_file {
             result.push(diag);
         }
     }
@@ -183,5 +198,29 @@ mod tests {
             apply_suppressions(vec![diag(2, "no-other")], Path::new("t.ts"), s).len(),
             1
         );
+    }
+
+    #[test]
+    fn file_marker_suppresses_every_line() {
+        // Regression for rbaumier/comply#27 — `// comply-ignore-file`
+        // must clear diagnostics regardless of line number.
+        let s = "// comply-ignore-file: elysia-test-missing-validation — third-party endpoint\nthrow err;\nthrow err;";
+        let kept = apply_suppressions(
+            vec![
+                diag(1, "elysia-test-missing-validation"),
+                diag(2, "elysia-test-missing-validation"),
+                diag(10, "elysia-test-missing-validation"),
+            ],
+            Path::new("t.ts"),
+            s,
+        );
+        assert!(kept.is_empty());
+    }
+
+    #[test]
+    fn file_marker_does_not_silence_other_rules() {
+        let s = "// comply-ignore-file: no-throw — ok\nlet x = 1;";
+        let kept = apply_suppressions(vec![diag(2, "no-other")], Path::new("t.ts"), s);
+        assert_eq!(kept.len(), 1);
     }
 }
