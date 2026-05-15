@@ -29,8 +29,41 @@ crate::ast_check! { on ["call_expression"] prefilter = ["findFirst"] => |node, s
         return;
     }
     let Some(args) = node.child_by_field_name("arguments") else { return };
-    let text = args.utf8_text(source).unwrap_or("");
-    if text.contains("where:") || text.contains("where :") {
+    // Find the first object-literal argument and check whether any of its
+    // top-level properties is named `where` — covers `where: filter`,
+    // shorthand `where`, and spread (`...x`, where we play safe).
+    let mut has_where = false;
+    let mut cursor = args.walk();
+    'outer: for arg in args.named_children(&mut cursor) {
+        if arg.kind() != "object" {
+            continue;
+        }
+        let mut obj_cursor = arg.walk();
+        for member in arg.named_children(&mut obj_cursor) {
+            match member.kind() {
+                "pair" => {
+                    if let Some(key) = member.child_by_field_name("key")
+                        && key.utf8_text(source).unwrap_or("") == "where"
+                    {
+                        has_where = true;
+                        break 'outer;
+                    }
+                }
+                "shorthand_property_identifier" => {
+                    if member.utf8_text(source).unwrap_or("") == "where" {
+                        has_where = true;
+                        break 'outer;
+                    }
+                }
+                "spread_element" => {
+                    has_where = true;
+                    break 'outer;
+                }
+                _ => {}
+            }
+        }
+    }
+    if has_where {
         return;
     }
     let pos = node.start_position();
@@ -74,6 +107,19 @@ mod tests {
     #[test]
     fn ignores_other_findfirst_objects() {
         let src = "arr.findFirst();";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_findfirst_with_shorthand_where() {
+        // Regression for #81 — `where` passed as shorthand binding.
+        let src = "const u = await db.query.users.findFirst({ where, with: { posts: true } });";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_findfirst_with_spread() {
+        let src = "const u = await db.query.users.findFirst({ ...opts });";
         assert!(run(src).is_empty());
     }
 }

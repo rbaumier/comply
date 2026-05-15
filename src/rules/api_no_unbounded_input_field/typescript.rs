@@ -98,9 +98,90 @@ fn chain_has_max(source: &str, chain_start: usize) -> bool {
     false
 }
 
+/// Substrings that mark a schema as a response/output (not an input).
+/// `Select` matches the Drizzle/zod-drizzle convention where row-shaped
+/// schemas are named `*SelectSchema`.
+const RESPONSE_NAME_MARKERS: &[&str] = &[
+    "Response",
+    "Output",
+    "Return",
+    "Detail",
+    "Select",
+];
+
+/// Build a list of `(start, end)` byte ranges covering top-level
+/// declarations of response-shaped zod schemas — `const FooResponseSchema = …`,
+/// `const BarSelectSchema = …`, etc. Offenses inside these ranges are not
+/// flagged: response schemas are server-controlled and don't need `.max()`.
+fn response_schema_ranges(source: &str) -> Vec<(usize, usize)> {
+    let mut ranges = Vec::new();
+    let bytes = source.as_bytes();
+    for (i, line_start) in source
+        .lines()
+        .scan(0usize, |off, line| {
+            let s = *off;
+            *off += line.len() + 1; // newline
+            Some((line, s))
+        })
+        .enumerate()
+    {
+        let _ = i;
+        let (line, off) = line_start;
+        let trimmed = line.trim_start();
+        let lead = line.len() - trimmed.len();
+        // Look for top-level `export const Foo... = ` or `const Foo... = `
+        let after_kw = trimmed
+            .strip_prefix("export const ")
+            .or_else(|| trimmed.strip_prefix("const "));
+        let Some(rest) = after_kw else { continue };
+        let Some(eq_idx) = rest.find('=') else { continue };
+        let name = rest[..eq_idx].split([':', ' ']).next().unwrap_or("").trim();
+        if !RESPONSE_NAME_MARKERS.iter().any(|m| name.contains(m)) {
+            continue;
+        }
+        // Range starts at the `=`. Find the end-of-statement by tracking
+        // brace / paren depth from the `=` until we hit `;` or EOL at depth 0.
+        let eq_abs = off + lead + after_kw.unwrap().find('=').unwrap();
+        let mut i = eq_abs + 1;
+        let mut depth_paren = 0i32;
+        let mut depth_brace = 0i32;
+        let mut in_str: Option<u8> = None;
+        while i < bytes.len() {
+            let c = bytes[i];
+            if let Some(q) = in_str {
+                if c == b'\\' {
+                    i += 2;
+                    continue;
+                }
+                if c == q {
+                    in_str = None;
+                }
+                i += 1;
+                continue;
+            }
+            match c {
+                b'"' | b'\'' | b'`' => in_str = Some(c),
+                b'(' => depth_paren += 1,
+                b')' => depth_paren -= 1,
+                b'{' => depth_brace += 1,
+                b'}' => depth_brace -= 1,
+                b';' if depth_paren == 0 && depth_brace == 0 => {
+                    i += 1;
+                    break;
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+        ranges.push((eq_abs, i));
+    }
+    ranges
+}
+
 fn find_offenses(source: &str) -> Vec<(usize, &'static str)> {
     let mut out = Vec::new();
     let bytes = source.as_bytes();
+    let exclude = response_schema_ranges(source);
     for target in TARGETS {
         let mut from = 0usize;
         while let Some(rel) = source[from..].find(target) {
@@ -109,7 +190,8 @@ fn find_offenses(source: &str) -> Vec<(usize, &'static str)> {
             let Some(end) = end_of_call(bytes, open) else {
                 break;
             };
-            if !chain_has_max(source, end) {
+            let in_response = exclude.iter().any(|(s, e)| abs >= *s && abs < *e);
+            if !in_response && !chain_has_max(source, end) {
                 out.push((abs, *target));
             }
             from = end;
@@ -185,5 +267,21 @@ mod tests {
     fn ignores_non_api_files() {
         let src = "const X = z.object({ name: z.string() });";
         assert!(run_at(src, "src/lib/util.ts").is_empty());
+    }
+
+    #[test]
+    fn ignores_response_schema_by_name() {
+        // Regression for #80 — response/select schemas are server-emitted,
+        // not user inputs, and don't need `.max()`.
+        let src = "export const OrganizationDetailSchema = z.object({\n  teams: z.array(TeamSelectSchema),\n  members: z.array(OrganizationMemberSchema),\n});";
+        assert!(run_at(src, "src/api/orgs.ts").is_empty());
+    }
+
+    #[test]
+    fn still_flags_input_schema_alongside_response() {
+        let src = "export const CreateOrgInputSchema = z.object({ name: z.string() });\nexport const OrgResponseSchema = z.object({ teams: z.array(Team) });";
+        let diags = run_at(src, "src/api/orgs.ts");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("z.string"));
     }
 }

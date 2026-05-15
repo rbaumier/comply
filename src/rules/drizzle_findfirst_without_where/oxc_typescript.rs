@@ -4,7 +4,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::Expression;
+use oxc_ast::ast::{Expression, ObjectPropertyKind, PropertyKey};
 use oxc_span::GetSpan;
 use std::sync::Arc;
 
@@ -42,10 +42,38 @@ impl OxcCheck for Check {
         if !callee_is_findfirst(&call.callee, ctx.source) {
             return;
         }
-        // Check arguments text for `where:`.
-        let Some(args_span) = call.arguments_span() else { return };
-        let text = &ctx.source[args_span.start as usize..args_span.end as usize];
-        if text.contains("where:") || text.contains("where :") {
+        // Inspect the first argument's object-literal properties. The
+        // `where` key counts whether written as `where: filter`, the
+        // shorthand `where`, or spread (`...filters` — we can't see
+        // inside, so play safe and skip).
+        let Some(first_arg) = call.arguments.first() else { return };
+        let oxc_ast::ast::Argument::ObjectExpression(obj) = first_arg else { return };
+        let mut has_where = false;
+        for prop in obj.properties.iter() {
+            match prop {
+                ObjectPropertyKind::ObjectProperty(p) => {
+                    if let PropertyKey::StaticIdentifier(id) = &p.key
+                        && id.name.as_str() == "where"
+                    {
+                        has_where = true;
+                        break;
+                    }
+                    if let PropertyKey::Identifier(id) = &p.key
+                        && id.name.as_str() == "where"
+                    {
+                        has_where = true;
+                        break;
+                    }
+                }
+                // Spread element — we can't see through `...x`, assume
+                // it might carry `where` and skip the diagnostic.
+                ObjectPropertyKind::SpreadProperty(_) => {
+                    has_where = true;
+                    break;
+                }
+            }
+        }
+        if has_where {
             return;
         }
         let (line, column) = byte_offset_to_line_col(ctx.source, call.span.start as usize);
