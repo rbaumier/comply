@@ -1,7 +1,9 @@
 //! File discovery — finds lintable files via directory walk or git diff.
 //!
 //! - `ScanMode::All` → directory walk via `ignore` crate (standard_filters
-//!   excludes .git/, node_modules/, target/).
+//!   excludes .git/, node_modules/, target/). Also honors `.gitignore`,
+//!   `.ignore`, and a comply-specific `.complyignore` (same gitignore
+//!   syntax — useful to skip files in comply without affecting git).
 //! - Git modes → shell out to `git diff` / `git show` and validate exit
 //!   status (silent empty output used to mask real failures).
 //! - Each file is classified by extension into a Language; unknown
@@ -192,6 +194,7 @@ fn walk_directory(path: &Path) -> Result<Vec<SourceFile>> {
     let mut files = Vec::new();
     let walker = WalkBuilder::new(path)
         .standard_filters(true)
+        .add_custom_ignore_filename(".complyignore")
         .filter_entry(|entry| {
             if entry.file_type().is_some_and(|ft| ft.is_dir())
                 && let Some(name) = entry.file_name().to_str() {
@@ -364,5 +367,26 @@ mod tests {
         assert_eq!(parse_git_output(b"a.ts\nb.rs\n").unwrap().len(), 2);
         // Invalid UTF-8 byte sequence — must error, not corrupt silently.
         assert!(parse_git_output(&[0xFF, 0xFE, b'\n']).is_err());
+    }
+
+    #[test]
+    fn walk_directory_honors_complyignore() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = tmp.path();
+        std::fs::write(root.join("kept.ts"), "x").unwrap();
+        std::fs::write(root.join("skipped.ts"), "x").unwrap();
+        std::fs::create_dir(root.join("nested")).unwrap();
+        std::fs::write(root.join("nested/also-skipped.ts"), "x").unwrap();
+        std::fs::write(root.join(".complyignore"), "skipped.ts\nnested/\n").unwrap();
+
+        let names: Vec<String> = walk_directory(root)
+            .expect("walk")
+            .into_iter()
+            .map(|f| f.path.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+
+        assert!(names.contains(&"kept.ts".to_string()));
+        assert!(!names.contains(&"skipped.ts".to_string()));
+        assert!(!names.contains(&"also-skipped.ts".to_string()));
     }
 }
