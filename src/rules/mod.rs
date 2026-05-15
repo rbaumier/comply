@@ -200,7 +200,6 @@ pub mod drizzle_prefer_findmany_relations;
 pub mod drizzle_prefer_inarray;
 pub mod drizzle_prefer_infer_select;
 pub mod drizzle_prepared_placeholder;
-pub mod drizzle_returning_on_insert_update;
 pub mod drizzle_serverless_pool_max_one;
 pub mod drizzle_soft_delete_filter;
 pub mod drizzle_timestamp_with_timezone;
@@ -1046,7 +1045,6 @@ pub mod arguments_order;
 pub mod array_callback_without_return;
 pub mod assertions_in_tests;
 pub mod audit_log_required_fields;
-pub mod auth_on_mutation;
 pub mod comma_or_logical_or_case;
 pub mod cyclomatic_complexity;
 pub mod data_clumps;
@@ -1160,7 +1158,6 @@ pub mod no_nested_incdec;
 pub mod no_post_message_star;
 pub mod no_primitive_wrappers;
 pub mod no_promise_reject;
-pub mod no_raw_db_entity_in_handler;
 pub mod no_redundant_await;
 pub mod no_redundant_clsx;
 pub mod no_redundant_jump;
@@ -2455,7 +2452,6 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         html_require_meta_charset::register(),
         html_require_title::register(),
         api_first::register(),
-        auth_on_mutation::register(),
         data_clumps::register(),
         error_message_is_remediation::register(),
         factory_di_shape::register(),
@@ -2464,7 +2460,6 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         justify_inaction::register(),
         no_inferred_any::register(),
         no_logger_in_business_logic::register(),
-        no_raw_db_entity_in_handler::register(),
         option_vs_result::register(),
         pure_by_default::register(),
         structured_api_error::register(),
@@ -3016,7 +3011,6 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         drizzle_chunk_large_batch_insert::register(),
         drizzle_no_select_without_limit::register(),
         drizzle_no_sql_raw_with_variable::register(),
-        drizzle_returning_on_insert_update::register(),
         drizzle_zod_prefer_generated_schema::register(),
         elysia_after_response_mutation::register(),
         elysia_apollo_no_req_res::register(),
