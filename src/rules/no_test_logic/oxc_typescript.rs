@@ -1,8 +1,46 @@
 use crate::diagnostic::Diagnostic;
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{Argument, Expression, Statement};
+use oxc_ast::ast::{Argument, BinaryExpression, BinaryOperator, Expression, Statement, UnaryOperator};
 use std::sync::Arc;
+
+fn is_type_narrowing(expr: &Expression) -> bool {
+    match expr.without_parentheses() {
+        Expression::CallExpression(call) => {
+            if let Expression::StaticMemberExpression(member) = &call.callee {
+                let m = member.property.name.as_str();
+                return matches!(m, "isErr" | "isOk");
+            }
+            false
+        }
+        Expression::BinaryExpression(bin) => {
+            matches!(bin.operator, BinaryOperator::Instanceof) || is_nullish_check(bin)
+        }
+        Expression::UnaryExpression(unary) => {
+            matches!(unary.operator, UnaryOperator::LogicalNot)
+                && is_type_narrowing(&unary.argument)
+        }
+        _ => false,
+    }
+}
+
+fn is_nullish_check(bin: &BinaryExpression) -> bool {
+    if !matches!(
+        bin.operator,
+        BinaryOperator::StrictInequality
+            | BinaryOperator::StrictEquality
+            | BinaryOperator::Inequality
+            | BinaryOperator::Equality
+    ) {
+        return false;
+    }
+    is_nullish_literal(&bin.left) || is_nullish_literal(&bin.right)
+}
+
+fn is_nullish_literal(expr: &Expression) -> bool {
+    matches!(expr.without_parentheses(), Expression::NullLiteral(_))
+        || matches!(expr.without_parentheses(), Expression::Identifier(id) if id.name.as_str() == "undefined")
+}
 
 const TEST_MARKERS: &[&str] = &[".test.", ".spec.", "__tests__", "_test."];
 const TEST_CALLEES: &[&str] = &["it", "test"];
@@ -121,7 +159,9 @@ fn collect_control_flow_stmt<'a>(
 ) {
     match stmt {
         Statement::IfStatement(s) => {
-            out.push(("if", s.span.start));
+            if !is_type_narrowing(&s.test) {
+                out.push(("if", s.span.start));
+            }
         }
         Statement::ForStatement(s) => {
             out.push(("for", s.span.start));

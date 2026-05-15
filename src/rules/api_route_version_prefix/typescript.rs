@@ -55,10 +55,11 @@ fn is_infra_path(path: &str) -> bool {
 }
 
 fn has_version_prefix(path: &str) -> bool {
-    if !path.starts_with("/v") {
+    let p = path.strip_prefix("/api").unwrap_or(path);
+    if !p.starts_with("/v") {
         return false;
     }
-    let rest = &path[2..];
+    let rest = &p[2..];
     let digit_end = rest
         .find(|c: char| !c.is_ascii_digit())
         .unwrap_or(rest.len());

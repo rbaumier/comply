@@ -6,8 +6,46 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::Expression;
+use oxc_ast::ast::{BinaryExpression, BinaryOperator, Expression, UnaryOperator};
 use std::sync::Arc;
+
+fn is_type_narrowing(expr: &Expression) -> bool {
+    match expr.without_parentheses() {
+        Expression::CallExpression(call) => {
+            if let Expression::StaticMemberExpression(member) = &call.callee {
+                let m = member.property.name.as_str();
+                return matches!(m, "isErr" | "isOk");
+            }
+            false
+        }
+        Expression::BinaryExpression(bin) => {
+            matches!(bin.operator, BinaryOperator::Instanceof) || is_nullish_check(bin)
+        }
+        Expression::UnaryExpression(unary) => {
+            matches!(unary.operator, UnaryOperator::LogicalNot)
+                && is_type_narrowing(&unary.argument)
+        }
+        _ => false,
+    }
+}
+
+fn is_nullish_check(bin: &BinaryExpression) -> bool {
+    if !matches!(
+        bin.operator,
+        BinaryOperator::StrictInequality
+            | BinaryOperator::StrictEquality
+            | BinaryOperator::Inequality
+            | BinaryOperator::Equality
+    ) {
+        return false;
+    }
+    is_nullish_literal(&bin.left) || is_nullish_literal(&bin.right)
+}
+
+fn is_nullish_literal(expr: &Expression) -> bool {
+    matches!(expr.without_parentheses(), Expression::NullLiteral(_))
+        || matches!(expr.without_parentheses(), Expression::Identifier(id) if id.name.as_str() == "undefined")
+}
 
 pub struct Check;
 
@@ -43,10 +81,14 @@ impl OxcCheck for Check {
             match parent_kind {
                 AstKind::IfStatement(if_stmt) => {
                     use oxc_span::GetSpan;
-                    let test_span = if_stmt.test.span();
-                    let call_span = call.span;
-                    if call_span.start < test_span.start || call_span.start >= test_span.end {
-                        in_if_body = true;
+                    if is_type_narrowing(&if_stmt.test) {
+                        // Type narrowing (result.isErr(), instanceof, !== null) — not conditional logic.
+                    } else {
+                        let test_span = if_stmt.test.span();
+                        let call_span = call.span;
+                        if call_span.start < test_span.start || call_span.start >= test_span.end {
+                            in_if_body = true;
+                        }
                     }
                 }
                 AstKind::CallExpression(ancestor_call) => {

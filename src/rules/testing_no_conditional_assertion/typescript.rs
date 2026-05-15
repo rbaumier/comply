@@ -26,15 +26,26 @@ fn is_bare_expect_call(node: tree_sitter::Node, source: &[u8]) -> bool {
 /// Walk ancestors looking for (a) an if_statement this node is inside the
 /// `consequence`/`alternative` of, and (b) a `test(...)` / `it(...)` call
 /// wrapping the whole thing. Both must be present.
+fn is_type_narrowing_if(if_node: tree_sitter::Node, source: &[u8]) -> bool {
+    let Some(condition) = if_node.child_by_field_name("condition") else {
+        return false;
+    };
+    let text = condition.utf8_text(source).unwrap_or("");
+    text.contains(".isErr()") || text.contains(".isOk()")
+        || text.contains(" instanceof ")
+        || text.contains(" !== null") || text.contains(" !== undefined")
+        || text.contains(" != null")
+}
+
 fn enclosing_if_and_test(mut node: tree_sitter::Node, source: &[u8]) -> (bool, bool) {
     let mut in_if_body = false;
     let mut in_test = false;
     while let Some(parent) = node.parent() {
         if !in_if_body && parent.kind() == "if_statement" {
-            // Only count if `node` is in the consequence or alternative,
-            // not the condition expression.
             let cond = parent.child_by_field_name("condition");
-            if cond.map(|c| c.id()) != Some(node.id()) {
+            if cond.map(|c| c.id()) != Some(node.id())
+                && !is_type_narrowing_if(parent, source)
+            {
                 in_if_body = true;
             }
         }

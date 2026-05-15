@@ -35,6 +35,17 @@ const CONTROL_FLOW_KINDS: &[(&str, &str)] = &[
     ("switch_statement", "switch"),
 ];
 
+fn is_type_narrowing_if(node: tree_sitter::Node, source: &[u8]) -> bool {
+    let Some(condition) = node.child_by_field_name("condition") else {
+        return false;
+    };
+    let text = condition.utf8_text(source).unwrap_or("");
+    text.contains(".isErr()") || text.contains(".isOk()")
+        || text.contains(" instanceof ")
+        || text.contains(" !== null") || text.contains(" !== undefined")
+        || text.contains(" != null")
+}
+
 fn is_test_file(path: &std::path::Path) -> bool {
     let s = path.to_string_lossy();
     TEST_MARKERS.iter().any(|m| s.contains(m))
@@ -123,9 +134,10 @@ fn collect_control_flow<'t>(
         }
 
         if let Some((_, label)) = CONTROL_FLOW_KINDS.iter().find(|(k, _)| *k == kind) {
+            if kind == "if_statement" && is_type_narrowing_if(child, source) {
+                continue;
+            }
             out.push((child, *label));
-            // Don't descend; nested control-flow inside an already-flagged
-            // node would just produce duplicate diagnostics on the same line.
             continue;
         }
 

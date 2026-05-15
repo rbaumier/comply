@@ -24,6 +24,15 @@ crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
         return;
     }
 
+    let tests_http_routes = ctx.source.contains(".handle(")
+        || lower.contains("treaty(")
+        || lower.contains("supertest")
+        || ctx.source.contains("\"/api/")
+        || ctx.source.contains("'/api/");
+    if !tests_http_routes {
+        return;
+    }
+
     if ctx.source.contains("401") || lower.contains("unauthorized") {
         return;
     }

@@ -167,6 +167,7 @@ fn is_inline_route_callback(fn_node: tree_sitter::Node<'_>, source: &[u8]) -> bo
 }
 
 crate::ast_check! { |node, source, ctx, diagnostics|
+    if ctx.file.path_segments.in_test_dir { return; }
     if node.kind() != "call_expression" { return; }
     let Some(callee) = node.child_by_field_name("function") else { return };
     let Some(method) = is_parse_call(callee, source) else { return };

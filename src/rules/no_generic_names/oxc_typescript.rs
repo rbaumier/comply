@@ -11,7 +11,7 @@ pub struct Check;
 
 const BANNED_WORDS: &[&str] = &[
     "info", "temp", "result", "obj", "item", "thing", "stuff", "val", "retval", "value", "foo",
-    "bar", "row", "rows",
+    "bar", "row", "rows", "lookup",
 ];
 
 const PARAM_ALLOWED_WORDS: &[&str] = &["value", "item"];

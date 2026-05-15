@@ -44,6 +44,10 @@ impl OxcCheck for Check {
             return;
         };
 
+        if ctx.file.path_segments.in_test_dir {
+            return;
+        }
+
         // Callee must be `.parse` or `.safeParse`
         let Expression::StaticMemberExpression(member) = &call.callee else {
             return;

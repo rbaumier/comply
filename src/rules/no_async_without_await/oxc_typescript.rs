@@ -4,6 +4,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
+use oxc_span::GetSpan;
 use std::sync::Arc;
 
 pub struct Check;
@@ -132,6 +133,23 @@ impl OxcCheck for Check {
                 continue;
             }
 
+            // better-result: `Result.gen(async function* () { yield* Result.await(...) })`
+            // The wrapping async has no direct `await` but is justified by the Result pipeline.
+            let body_text = match node.kind() {
+                AstKind::Function(f) => f.body.as_ref().map(|b| {
+                    &ctx.source[b.span.start as usize..b.span.end as usize]
+                }),
+                AstKind::ArrowFunctionExpression(f) => {
+                    Some(&ctx.source[f.body.span().start as usize..f.body.span().end as usize])
+                }
+                _ => None,
+            };
+            if let Some(text) = body_text {
+                if text.contains("Result.await") || text.contains("Result.gen") {
+                    continue;
+                }
+            }
+
             let (line, column) = byte_offset_to_line_col(ctx.source, span.start as usize);
             diagnostics.push(Diagnostic {
                 path: Arc::clone(&ctx.path_arc),
@@ -147,5 +165,32 @@ impl OxcCheck for Check {
         }
 
         diagnostics
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+    #[test]
+    fn allows_result_await_pattern() {
+        let src = r#"const run = async () => { return Result.gen(async function* () { const v = yield* Result.await(fetch()); return v; }); };"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_result_gen_pattern() {
+        let src = r#"async function handler() { return Result.gen(async function* () { yield* Result.await(doStuff()); }); }"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_async_without_await() {
+        let d = run_on("async function f() { return 42; }");
+        assert_eq!(d.len(), 1);
     }
 }

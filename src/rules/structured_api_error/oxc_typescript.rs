@@ -36,6 +36,10 @@ impl OxcCheck for Check {
     ) {
         let AstKind::NewExpression(new_expr) = node.kind() else { return };
 
+        if ctx.file.path_segments.in_test_dir {
+            return;
+        }
+
         let Expression::Identifier(ctor) = &new_expr.callee else { return };
         if ctor.name.as_str() != "Error" {
             return;

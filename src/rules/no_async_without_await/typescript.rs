@@ -170,6 +170,11 @@ impl AstCheck for Check {
         if body_has_await(body, source) {
             return;
         }
+        if let Ok(text) = body.utf8_text(source) {
+            if text.contains("Result.await") || text.contains("Result.gen") {
+                return;
+            }
+        }
         let pos = node.start_position();
         diagnostics.push(Diagnostic {
             path: std::sync::Arc::clone(&ctx.path_arc),
@@ -249,6 +254,18 @@ mod tests {
     #[test]
     fn allows_decorated_async_method() {
         let src = "class C { @GrpcMethod('Math') async sum() { return 1; } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_result_await_pattern() {
+        let src = r#"const run = async () => { return Result.gen(async function* () { const v = yield* Result.await(fetch()); return v; }); };"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_result_gen_pattern() {
+        let src = r#"async function handler() { return Result.gen(async function* () { yield* Result.await(doStuff()); }); }"#;
         assert!(run_on(src).is_empty());
     }
 
