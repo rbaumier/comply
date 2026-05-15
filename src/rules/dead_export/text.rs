@@ -87,6 +87,16 @@ impl TextCheck for Check {
         }
 
         let index = ctx.project.import_index();
+        // `dead-export` is structurally cross-project — it needs to see
+        // at least one OTHER file to count potential consumers. When
+        // comply is invoked on a single file (pre-commit hook over a
+        // staged-only diff, ad-hoc `comply src/shared/foo.ts`), the
+        // index holds only the checked file and every export looks
+        // dead. Skip in that mode; users have a workaround already in
+        // place but the rule's premise can't be honoured.
+        if index.indexed_paths().count() < 2 {
+            return Vec::new();
+        }
         let canon = std::fs::canonicalize(ctx.path).unwrap_or_else(|_| ctx.path.to_path_buf());
 
         // Framework entry points are consumed by framework tooling rather than
@@ -218,6 +228,18 @@ mod tests {
         };
         let diags = Check.check(&ctx);
         (dir, diags)
+    }
+
+    #[test]
+    fn skips_in_single_file_scan_mode() {
+        // Regression for rbaumier/comply#33 — `comply src/shared/foo.ts`
+        // sees only one indexed file, so it can't see consumers and
+        // every export would falsely look dead. Skip in that mode.
+        let files: Vec<(&str, &str)> = vec![
+            ("foo.ts", "export function foo() {}"),
+        ];
+        let (_dir, diags) = run_on_project(&files, "foo.ts");
+        assert!(diags.is_empty(), "single-file scan must not run dead-export");
     }
 
     #[test]
