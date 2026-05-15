@@ -539,6 +539,7 @@ pub mod tanstack_query_max_pages_requires_both;
 pub mod tanstack_query_no_enabled_on_suspense;
 pub mod tanstack_query_no_global_onerror_v5;
 pub mod tanstack_query_no_v4_import_path;
+pub mod tanstack_query_no_void_query_fn;
 pub mod tanstack_query_object_syntax;
 pub mod tanstack_query_pass_signal_to_fetch;
 pub mod tanstack_query_serializable_key;
@@ -3539,6 +3540,7 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         tanstack_query_no_enabled_on_suspense::register(),
         tanstack_query_no_global_onerror_v5::register(),
         tanstack_query_no_v4_import_path::register(),
+        tanstack_query_no_void_query_fn::register(),
         tanstack_query_object_syntax::register(),
         tanstack_query_pass_signal_to_fetch::register(),
         tanstack_query_serializable_key::register(),
