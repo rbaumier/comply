@@ -20,7 +20,10 @@ const FILE_MARKER: &str = "// comply-ignore-file:";
 /// Outcome of parsing a single source line.
 #[derive(Debug)]
 pub struct LineParse {
-    pub rule_id: String,
+    /// All rule ids referenced by the marker. ESLint-style comma-separated
+    /// syntax (`// comply-ignore: rule-a, rule-b — reason`) yields multiple
+    /// entries; the single-rule form yields exactly one.
+    pub rule_ids: Vec<String>,
     /// Line number to insert into the suppressions map. `None` means the
     /// directive suppresses the rule for the entire file (the new
     /// `// comply-ignore-file:` marker).
@@ -48,7 +51,7 @@ pub fn parse(path: &Path, line: &str, line_num: usize) -> Option<LineParse> {
     }
 
     let parsed = payload::parse(&line[marker_byte + marker_len..]);
-    if parsed.rule_id.is_empty() {
+    if parsed.rule_ids.is_empty() {
         return None;
     }
 
@@ -65,17 +68,19 @@ pub fn parse(path: &Path, line: &str, line_num: usize) -> Option<LineParse> {
 
     let bad_ignore = if parsed.justification.is_empty() {
         let col = prefix.chars().count();
+        // Use the first rule id for the example in the error message —
+        // a single placeholder is clearer than enumerating the list.
         Some(make_bad_ignore_diagnostic(
             path,
             line_num,
             col,
-            &parsed.rule_id,
+            &parsed.rule_ids[0],
         ))
     } else {
         None
     };
     Some(LineParse {
-        rule_id: parsed.rule_id,
+        rule_ids: parsed.rule_ids,
         target_line,
         bad_ignore,
     })
@@ -156,7 +161,20 @@ mod tests {
         )
         .unwrap();
         assert_eq!(lp.target_line, None);
-        assert_eq!(lp.rule_id, "elysia-test-missing-validation");
+        assert_eq!(lp.rule_ids, vec!["elysia-test-missing-validation"]);
+    }
+
+    #[test]
+    fn multi_rule_marker_yields_all_rule_ids() {
+        // Regression for rbaumier/comply#22 — ESLint-style multi-rule.
+        let lp = parse(
+            Path::new("t.ts"),
+            "throw err; // comply-ignore: no-throw, no-explicit-any — legacy bridge",
+            5,
+        )
+        .unwrap();
+        assert_eq!(lp.rule_ids, vec!["no-throw", "no-explicit-any"]);
+        assert_eq!(lp.target_line, Some(5));
     }
 
     #[test]
