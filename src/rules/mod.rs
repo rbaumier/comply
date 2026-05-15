@@ -565,13 +565,18 @@ pub mod ts_bounded_recursive_generic;
 pub mod ts_branded_type_no_direct_cast;
 pub mod ts_declare_global_requires_export;
 pub mod ts_no_as_narrowing;
+pub mod ts_no_duplicate_type_constituents;
+pub mod ts_no_explicit_any;
 pub mod ts_no_generic_return_only;
 pub mod ts_no_large_string_union;
+pub mod ts_no_misused_promises;
 pub mod ts_no_mixed_decorator_systems;
 pub mod ts_no_mixed_sync_async_returns;
 pub mod ts_no_narrowing_across_closures;
+pub mod ts_no_unsafe_function_type;
 pub mod ts_no_unused_generic_parameter;
 pub mod ts_overload_signature_order;
+pub mod ts_prefer_as_const;
 pub mod ts_prefer_interface_extends;
 pub mod ts_require_variance_annotation;
 pub mod ui_animate_presence_requires_exit;
@@ -3558,13 +3563,18 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         ts_branded_type_no_direct_cast::register(),
         ts_declare_global_requires_export::register(),
         ts_no_as_narrowing::register(),
+        ts_no_duplicate_type_constituents::register(),
+        ts_no_explicit_any::register(),
         ts_no_generic_return_only::register(),
         ts_no_large_string_union::register(),
+        ts_no_misused_promises::register(),
         ts_no_mixed_decorator_systems::register(),
         ts_no_mixed_sync_async_returns::register(),
         ts_no_narrowing_across_closures::register(),
+        ts_no_unsafe_function_type::register(),
         ts_no_unused_generic_parameter::register(),
         ts_overload_signature_order::register(),
+        ts_prefer_as_const::register(),
         ts_prefer_interface_extends::register(),
         ts_require_variance_annotation::register(),
         ui_animate_presence_requires_exit::register(),
