@@ -480,6 +480,7 @@ pub mod rust_workspace_deps_centralized;
 pub mod rust_workspace_lints_shared;
 pub mod security_bcrypt_min_rounds;
 pub mod security_cookie_no_samesite_none;
+pub mod security_detect_non_literal_require;
 pub mod security_no_cors_reflect_origin;
 pub mod security_no_deserialize_untrusted;
 pub mod security_no_password_in_log;
@@ -762,6 +763,7 @@ pub mod prefer_timer_args;
 pub mod prefer_todo;
 pub mod prefer_type_over_interface;
 pub mod prefer_url_canparse;
+pub mod promise_no_new_statics;
 pub mod react_duplicate_use_directive;
 pub mod react_hoist_regex_outside_component;
 pub mod react_hoist_static_jsx;
@@ -1278,6 +1280,7 @@ pub mod testing_no_undefined_mock_var;
 pub mod testing_prefer_msw;
 pub mod testing_prefer_test_each;
 pub mod too_many_break_or_continue;
+pub mod unicorn_no_useless_undefined;
 pub mod unused_component_prop;
 pub mod unused_enum_member;
 pub mod use_type_alias;
@@ -1290,6 +1293,7 @@ pub mod id_length;
 pub mod import_consistent_type_specifier_style;
 pub mod import_default;
 pub mod import_dynamic_import_chunkname;
+pub mod import_enforce_node_protocol_usage;
 pub mod import_export;
 pub mod import_named;
 pub mod import_namespace;
@@ -1624,6 +1628,7 @@ pub mod playwright_missing_await;
 pub mod playwright_no_eval;
 pub mod top_level_function;
 pub mod vitest_no_disabled_tests;
+pub mod vitest_no_focused_tests;
 // v3.0 — Skill-driven rules: Batch 1 (TypeScript/Architecture)
 pub mod avoid_barrel_files;
 pub mod avoid_importing_barrel_files;
@@ -3789,6 +3794,11 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         next_no_typos::register(),
         html_no_script_without_defer::register(),
         html_no_undeferred_third_party::register(),
+        import_enforce_node_protocol_usage::register(),
+        promise_no_new_statics::register(),
+        security_detect_non_literal_require::register(),
+        unicorn_no_useless_undefined::register(),
+        vitest_no_focused_tests::register(),
     ];
     rules.extend(delegated::register_all());
     rules.extend(delegated::register_tsgolint());
