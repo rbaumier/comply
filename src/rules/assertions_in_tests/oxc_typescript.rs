@@ -45,21 +45,26 @@ fn extract_test_name(args: &[Argument]) -> String {
     "unnamed".to_string()
 }
 
-/// Find the nearest enclosing function/arrow for a given node, stopping
-/// at function boundaries. Returns the NodeId.
-fn nearest_function_id(
+/// Collect every enclosing function/arrow node for a given node, all
+/// the way up to the file root. An `expect(...)` nested in a callback
+/// (`await withFreshDb(async (db) => { expect(...); })`) is logically
+/// an assertion of every test function it lives inside — not just the
+/// innermost callback. Marking only the nearest enclosing function
+/// produces false positives on the common resource-bracketing pattern.
+fn enclosing_function_ids(
     node: &oxc_semantic::AstNode,
     semantic: &oxc_semantic::Semantic,
-) -> Option<oxc_semantic::NodeId> {
+) -> Vec<oxc_semantic::NodeId> {
+    let mut out = Vec::new();
     for ancestor in semantic.nodes().ancestors(node.id()) {
-        match ancestor.kind() {
-            AstKind::Function(_) | AstKind::ArrowFunctionExpression(_) => {
-                return Some(ancestor.id());
-            }
-            _ => {}
+        if matches!(
+            ancestor.kind(),
+            AstKind::Function(_) | AstKind::ArrowFunctionExpression(_)
+        ) {
+            out.push(ancestor.id());
         }
     }
-    None
+    out
 }
 
 impl OxcCheck for Check {
@@ -109,8 +114,9 @@ impl OxcCheck for Check {
             };
 
             if is_assert {
-                // Mark the nearest enclosing function as having an assertion.
-                if let Some(func_id) = nearest_function_id(node, semantic) {
+                // Mark every enclosing function — the assertion belongs
+                // logically to all of them, not just the innermost.
+                for func_id in enclosing_function_ids(node, semantic) {
                     has_assertion.insert(func_id);
                 }
             }
@@ -197,4 +203,54 @@ fn find_callback_node_id(
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        // Use a *.test.ts path so the is_test_file gate passes.
+        crate::rules::test_helpers::run_oxc_ts_with_path_and_framework(
+            src,
+            &Check,
+            "/tmp/x.test.ts",
+            "",
+        )
+    }
+
+    #[test]
+    fn flags_test_without_any_assertion() {
+        let src = r#"
+            describe("x", () => {
+                it("does nothing", () => {
+                    const y = 1 + 1;
+                });
+            });
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_direct_expect_in_it_body() {
+        let src = r#"it("works", () => { expect(1).toBe(1); });"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_expect_inside_helper_callback() {
+        // Regression for rbaumier/comply#29 — expect inside a callback
+        // passed to a helper still belongs to the test.
+        let src = r#"
+            async function withFreshDb(fn) { return fn({}); }
+            describe("db", () => {
+                it("should do thing", async () => {
+                    await withFreshDb(async (db) => {
+                        expect(await query(db)).toBe(1);
+                    });
+                });
+            });
+        "#;
+        assert!(run(src).is_empty());
+    }
 }
