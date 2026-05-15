@@ -877,6 +877,7 @@ pub mod next_no_client_side_redirect;
 pub mod next_no_css_link;
 pub mod next_no_font_link;
 pub mod next_no_typos;
+pub mod nuxt_no_page_meta_runtime_values;
 pub mod no_try_promise;
 pub mod no_unused_collection;
 pub mod prefer_while;
@@ -3799,6 +3800,7 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         security_detect_non_literal_require::register(),
         unicorn_no_useless_undefined::register(),
         vitest_no_focused_tests::register(),
+        nuxt_no_page_meta_runtime_values::register(),
     ];
     rules.extend(delegated::register_all());
     rules.extend(delegated::register_tsgolint());
