@@ -1254,18 +1254,27 @@ fn extract_export(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
                 }
             }
             "lexical_declaration" | "variable_declaration" => {
-                // `const a = 1, b = 2` can export multiple names.
+                // `const a = 1, b = 2` can export multiple names, and the
+                // LHS may also be a destructuring pattern:
+                // `export const { signIn, signOut } = authClient` —
+                // every property identifier in the pattern is a real
+                // export. Same for array patterns and nested ones.
                 let mut inner = child.walk();
                 for decl in child.named_children(&mut inner) {
                     if decl.kind() != "variable_declarator" {
                         continue;
                     }
-                    if let Some(id) = decl
+                    let Some(name_node) = decl
                         .named_children(&mut decl.walk())
-                        .find(|c| c.kind() == "identifier")
-                    {
+                        .find(|c| is_binding_pattern_kind(c.kind()))
+                    else {
+                        continue;
+                    };
+                    let mut names = Vec::new();
+                    collect_pattern_names(name_node, source, &mut names);
+                    for name in names {
                         out.push(ExportedSymbol {
-                            name: text_of(id, source),
+                            name,
                             kind: ExportKind::Named,
                             line,
                             reexport_source: None,
@@ -1308,6 +1317,62 @@ fn find_specifier_string(node: Node, source: &[u8]) -> Option<String> {
 
 fn text_of(node: Node, source: &[u8]) -> String {
     node.utf8_text(source).unwrap_or("").to_string()
+}
+
+/// Tree-sitter node kinds that can sit on the LHS of a
+/// `variable_declarator`: a single name, or an object / array pattern.
+fn is_binding_pattern_kind(kind: &str) -> bool {
+    matches!(
+        kind,
+        "identifier" | "object_pattern" | "array_pattern" | "rest_pattern"
+    )
+}
+
+/// Walk a destructuring binding pattern and push every introduced
+/// identifier name into `out`. Handles object, array, nested, default,
+/// and rest patterns:
+///
+/// - `{ a, b }`                → `a`, `b`
+/// - `{ a: renamedA }`         → `renamedA`
+/// - `{ a = 1 }`               → `a`
+/// - `[a, b, ...rest]`         → `a`, `b`, `rest`
+/// - `{ a: { b }, ...rest }`   → `b`, `rest`
+fn collect_pattern_names(node: Node, source: &[u8], out: &mut Vec<String>) {
+    match node.kind() {
+        "identifier" => out.push(text_of(node, source)),
+        "shorthand_property_identifier_pattern" => out.push(text_of(node, source)),
+        "object_pattern" => {
+            let mut cursor = node.walk();
+            for child in node.named_children(&mut cursor) {
+                collect_pattern_names(child, source, out);
+            }
+        }
+        "array_pattern" => {
+            let mut cursor = node.walk();
+            for child in node.named_children(&mut cursor) {
+                collect_pattern_names(child, source, out);
+            }
+        }
+        "pair_pattern" => {
+            // `{ a: localName }` — the value side is what's actually bound.
+            if let Some(value) = node.child_by_field_name("value") {
+                collect_pattern_names(value, source, out);
+            }
+        }
+        "assignment_pattern" | "object_assignment_pattern" => {
+            // `{ a = 1 }` / `[a = 1]` — the left side is the binding.
+            if let Some(left) = node.child_by_field_name("left") {
+                collect_pattern_names(left, source, out);
+            }
+        }
+        "rest_pattern" => {
+            let mut cursor = node.walk();
+            for child in node.named_children(&mut cursor) {
+                collect_pattern_names(child, source, out);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Extract parameter names from a function declaration node.
@@ -2113,6 +2178,46 @@ mod tests {
         assert!(names.contains(&"foo"));
         assert!(names.contains(&"bar"));
         assert!(names.contains(&"Baz"));
+    }
+
+    #[test]
+    fn indexes_destructured_object_export() {
+        // Regression for rbaumier/comply#37 — names introduced by a
+        // destructured `export const { ... } = obj` are real exports.
+        let (_dir, index, paths) = build_index(&[(
+            "client.ts",
+            "declare const authClient: any; export const { signIn, signOut, resetPassword } = authClient;",
+        )]);
+        let exports = index.get_exports(&paths[0]);
+        let names: Vec<&str> = exports.iter().map(|e| e.name.as_str()).collect();
+        assert!(names.contains(&"signIn"));
+        assert!(names.contains(&"signOut"));
+        assert!(names.contains(&"resetPassword"));
+    }
+
+    #[test]
+    fn indexes_destructured_array_export() {
+        let (_dir, index, paths) = build_index(&[(
+            "m.ts",
+            "declare const arr: any; export const [first, second] = arr;",
+        )]);
+        let exports = index.get_exports(&paths[0]);
+        let names: Vec<&str> = exports.iter().map(|e| e.name.as_str()).collect();
+        assert!(names.contains(&"first"));
+        assert!(names.contains(&"second"));
+    }
+
+    #[test]
+    fn indexes_renamed_destructured_export() {
+        let (_dir, index, paths) = build_index(&[(
+            "m.ts",
+            "declare const obj: any; export const { foo: bar } = obj;",
+        )]);
+        let exports = index.get_exports(&paths[0]);
+        let names: Vec<&str> = exports.iter().map(|e| e.name.as_str()).collect();
+        // `foo: bar` exports the local name `bar`, not `foo`.
+        assert!(names.contains(&"bar"));
+        assert!(!names.contains(&"foo"));
     }
 
     #[test]
