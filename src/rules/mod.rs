@@ -254,6 +254,7 @@ pub mod elysia_group_deep_paths;
 pub mod elysia_guard_derive_no_headers;
 pub mod elysia_headers_lowercase;
 pub mod elysia_heavy_onrequest;
+pub mod elysia_helpers;
 pub mod elysia_hooks_before_routes;
 pub mod elysia_html_import_uppercase;
 pub mod elysia_html_xss_no_safe;
