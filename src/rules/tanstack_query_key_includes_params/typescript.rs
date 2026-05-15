@@ -167,12 +167,19 @@ crate::ast_check! { on ["pair"] => |node, source, ctx, diagnostics|
         .map(String::as_str)
         .collect();
 
+    // Module-level imports and `const` declarations are stable across
+    // every call of the queryFn — they can't cause cache-key collisions.
+    // Common shape: `import { api } from "./client"; useQuery({ queryFn:
+    // () => api.foo() })`.
+    let module_bindings = collect_module_scope_bindings(node, source);
+
     let mut needed: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for name in &free_refs {
         if bound.contains(name.as_str()) { continue; }
         if IGNORED_GLOBALS.contains(&name.as_str()) { continue; }
         // Skip PascalCase (imported types, classes, API clients).
         if name.chars().next().is_some_and(char::is_uppercase) { continue; }
+        if module_bindings.contains(name) { continue; }
         needed.insert(name.clone());
     }
     if needed.is_empty() { return; }
@@ -384,6 +391,90 @@ fn collect_all_identifiers(
     });
 }
 
+/// Collect identifier names bound at the file's module scope:
+/// - `import { foo, bar as baz } from "..."` → `foo`, `baz`
+/// - `import foo from "..."` → `foo`
+/// - `import * as ns from "..."` → `ns`
+/// - top-level `const foo = ...` / `let foo = ...` / `var foo = ...`
+/// - top-level `function foo() {}` / `class Foo {}` / `type Foo = ...`
+///
+/// These are stable across every call of the queryFn and cannot vary
+/// between cache-key resolutions, so omitting them from queryKey can
+/// never produce a collision.
+fn collect_module_scope_bindings(
+    node: tree_sitter::Node,
+    source: &[u8],
+) -> std::collections::HashSet<String> {
+    // Walk up to find the program root.
+    let mut current = node;
+    while let Some(parent) = current.parent() {
+        current = parent;
+    }
+    let program = current;
+
+    let mut out: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut cursor = program.walk();
+    for child in program.named_children(&mut cursor) {
+        match child.kind() {
+            "import_statement" => {
+                let mut inner = child.walk();
+                for c in child.named_children(&mut inner) {
+                    collect_binding_identifiers(c, source, &mut Vec::new());
+                    walk_subtree(c, &mut |n| match n.kind() {
+                        "identifier" | "type_identifier" => {
+                            if let Ok(text) = n.utf8_text(source) {
+                                out.insert(text.to_string());
+                            }
+                        }
+                        _ => {}
+                    });
+                }
+            }
+            "lexical_declaration" | "variable_declaration" => {
+                let mut inner = child.walk();
+                for decl in child.named_children(&mut inner) {
+                    if decl.kind() != "variable_declarator" {
+                        continue;
+                    }
+                    if let Some(id) = decl.child_by_field_name("name") {
+                        let mut buf: Vec<String> = Vec::new();
+                        collect_binding_identifiers(id, source, &mut buf);
+                        out.extend(buf);
+                    }
+                }
+            }
+            "function_declaration"
+            | "generator_function_declaration"
+            | "class_declaration"
+            | "abstract_class_declaration"
+            | "type_alias_declaration"
+            | "interface_declaration"
+            | "enum_declaration" => {
+                if let Some(name) = child.child_by_field_name("name")
+                    && let Ok(text) = name.utf8_text(source)
+                {
+                    out.insert(text.to_string());
+                }
+            }
+            "export_statement" => {
+                let mut inner = child.walk();
+                for c in child.named_children(&mut inner) {
+                    walk_subtree(c, &mut |n| match n.kind() {
+                        "identifier" => {
+                            if let Ok(text) = n.utf8_text(source) {
+                                out.insert(text.to_string());
+                            }
+                        }
+                        _ => {}
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -443,6 +534,24 @@ mod tests {
         let diags = run_on("someOther({ queryKey: ['user'], queryFn: () => fetchUser(userId) });");
         assert!(diags.is_empty(), "{diags:?}");
     }
+
+    #[test]
+    fn ignores_module_level_imported_singleton() {
+        // Regression for rbaumier/comply#65 — Eden / oRPC / tRPC clients
+        // declared as module-level imports are stable singletons.
+        let src = r#"
+            import { api } from "./client";
+            export function usersQueryOptions(query: string) {
+                return queryOptions({
+                    queryKey: ["users", query],
+                    queryFn: async ({ signal }) => api.users.get({ query, fetch: { signal } }),
+                });
+            }
+        "#;
+        let diags = run_on(src);
+        assert!(diags.is_empty(), "{diags:?}");
+    }
+
 
     #[test]
     fn ignores_local_const_in_body() {

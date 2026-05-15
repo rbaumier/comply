@@ -77,18 +77,31 @@ impl OxcCheck for Check {
             return;
         }
 
-        // Only fire in files that could be React Server Components.
-        // Backend .ts files (Elysia, Drizzle, etc.) sharing the same
-        // package.json shouldn't get this rule.
+        // `React.cache(...)` is a server-component primitive — it's a
+        // no-op in client components and in non-RSC frameworks
+        // (TanStack Start, plain Vite SPA, Remix without server
+        // exports). Only fire when we can plausibly tell the file IS a
+        // server module.
         let trimmed = ctx.source.trim_start();
-        let has_directive = trimmed.starts_with("'use server'")
-            || trimmed.starts_with("\"use server\"")
-            || trimmed.starts_with("'use client'")
+        let has_use_client = trimmed.starts_with("'use client'")
             || trimmed.starts_with("\"use client\"");
-        let is_rsc_candidate = ctx.file.path_segments.in_app_router
-            || ctx.file.path_segments.in_pages_router
-            || matches!(ctx.lang, crate::files::Language::Tsx)
-            || has_directive;
+        let has_use_server = trimmed.starts_with("'use server'")
+            || trimmed.starts_with("\"use server\"");
+
+        // Explicit 'use client' always wins — RSC primitives are inert here.
+        if has_use_client {
+            return;
+        }
+        // The project must use Next.js (the only mainstream framework
+        // with RSC + React.cache support today). Plain React / TanStack
+        // Start / Vite SPA setups don't have the cache mechanism.
+        if !pkg.has_dep_or_engine("next") {
+            return;
+        }
+
+        let is_rsc_candidate = has_use_server
+            || ctx.file.path_segments.in_app_router
+            || ctx.file.path_segments.in_pages_router;
         if !is_rsc_candidate {
             return;
         }
