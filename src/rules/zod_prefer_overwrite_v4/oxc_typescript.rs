@@ -133,15 +133,53 @@ fn is_ident(s: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$')
 }
 
+/// Method names on `param` that REFINE without changing type — these
+/// are shape-preserving (string→string, number→number…). Anything else
+/// called on `param` (`.toISOString()`, `.toString()`, `.toFixed()`,
+/// `.toLocaleString()`, `.valueOf()`, `.charAt()`, …) is shape-changing
+/// and must NOT be treated as same-shape.
+const SHAPE_PRESERVING_METHODS: &[&str] = &[
+    "trim",
+    "trimStart",
+    "trimEnd",
+    "padStart",
+    "padEnd",
+    "replace",
+    "replaceAll",
+    "slice",
+    "substring",
+    "substr",
+    "toUpperCase",
+    "toLowerCase",
+    "normalize",
+];
+
+/// True if `s` is `param.<method>(...)` where `<method>` preserves the
+/// runtime type of `param`. Excludes type-changing methods like
+/// `.toISOString()`.
+fn is_same_shape_method_call(s: &str, param: &str) -> bool {
+    let Some(rest) = s.strip_prefix(param) else {
+        return false;
+    };
+    let Some(after_dot) = rest.strip_prefix('.') else {
+        return false;
+    };
+    // Pull the method identifier (everything up to `(` or end).
+    let method_end = after_dot
+        .find(|c: char| !c.is_ascii_alphanumeric() && c != '_' && c != '$')
+        .unwrap_or(after_dot.len());
+    let method = &after_dot[..method_end];
+    SHAPE_PRESERVING_METHODS.contains(&method)
+}
+
 fn is_same_shape_expr(expr_text: &str, param: &str) -> bool {
     let t = expr_text.trim().trim_end_matches(';');
     if t == param {
         return true;
     }
-    if let Some(rest) = t.strip_prefix(param)
-        && rest.starts_with('.') {
-            return true;
-        }
+    if is_same_shape_method_call(t, param) {
+        return true;
+    }
     for fun in [
         "Math.round",
         "Math.floor",
@@ -168,4 +206,39 @@ fn is_same_shape_expr(expr_text: &str, param: &str) -> bool {
         }
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(src, &Check)
+    }
+
+    #[test]
+    fn flags_same_shape_transform() {
+        // Truly same-shape: trimming a string stays a string.
+        let src = "const s = z.string().transform((s) => s.trim());";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_identity_transform() {
+        let src = "const s = z.string().transform(s => s);";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn ignores_type_changing_transform_to_iso_string() {
+        // Regression for rbaumier/comply#20 — Date -> string.
+        let src = "const s = z.date().transform(d => d.toISOString());";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_to_fixed_transform() {
+        let src = "const s = z.number().transform(n => n.toFixed(2));";
+        assert!(run(src).is_empty());
+    }
 }

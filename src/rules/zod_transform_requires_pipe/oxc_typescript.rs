@@ -3,10 +3,115 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::Expression;
+use oxc_ast::ast::{Argument, Expression, Statement};
+use oxc_span::GetSpan;
 use std::sync::Arc;
 
 pub struct Check;
+
+/// Method names that yield a constructively-typed result — re-validating
+/// their output with `.pipe(z.string())` (or similar) would be a redundant
+/// re-check of a value the function provably emits with the right type.
+///
+/// All of these return a string or number from a known input type, and
+/// either can't fail OR throw on bad input rather than silently producing
+/// the wrong type.
+const TYPED_OUTPUT_METHODS: &[&str] = &[
+    "toISOString",
+    "toString",
+    "toLocaleString",
+    "toFixed",
+    "toPrecision",
+    "toExponential",
+    "valueOf",
+    "toJSON",
+    "toLowerCase",
+    "toUpperCase",
+];
+
+/// Casts / serialisers whose return type is fixed by the function itself.
+const TYPED_OUTPUT_CALLEES: &[&str] = &[
+    "String",
+    "Number",
+    "Boolean",
+    "BigInt",
+];
+
+/// True if the transform callback's body produces a value whose runtime
+/// type is constructively known. `.pipe(z.*)` re-validation adds no
+/// safety in that case — the value's shape comes from the function call,
+/// not from external input.
+fn body_returns_typed_value(arrow_arg: &Argument) -> bool {
+    let arrow = match arrow_arg {
+        Argument::ArrowFunctionExpression(a) => a,
+        _ => return false,
+    };
+    let expr = if arrow.expression {
+        match arrow.body.statements.first() {
+            Some(Statement::ExpressionStatement(es)) => &es.expression,
+            _ => return false,
+        }
+    } else {
+        // Single return statement only.
+        let returns: Vec<&Expression> = arrow
+            .body
+            .statements
+            .iter()
+            .filter_map(|s| {
+                if let Statement::ReturnStatement(ret) = s {
+                    ret.argument.as_ref()
+                } else {
+                    None
+                }
+            })
+            .collect();
+        if returns.len() != 1 {
+            return false;
+        }
+        returns[0]
+    };
+    expression_yields_typed_value(expr)
+}
+
+fn expression_yields_typed_value(expr: &Expression) -> bool {
+    // Literals are obviously typed.
+    if matches!(
+        expr,
+        Expression::StringLiteral(_)
+            | Expression::NumericLiteral(_)
+            | Expression::BooleanLiteral(_)
+            | Expression::TemplateLiteral(_)
+    ) {
+        return true;
+    }
+    // Calls: either `x.toISOString()`-style or `String(x)`-style.
+    if let Expression::CallExpression(call) = expr {
+        match &call.callee {
+            Expression::StaticMemberExpression(member) => {
+                let method = member.property.name.as_str();
+                if TYPED_OUTPUT_METHODS.contains(&method) {
+                    return true;
+                }
+                // `JSON.stringify(...)` / `JSON.parse(...)` etc.
+                if let Expression::Identifier(obj) = &member.object
+                    && obj.name.as_str() == "JSON"
+                    && matches!(method, "stringify")
+                {
+                    return true;
+                }
+            }
+            Expression::Identifier(id) => {
+                let name = id.name.as_str();
+                if TYPED_OUTPUT_CALLEES.contains(&name) {
+                    return true;
+                }
+            }
+            _ => {}
+        }
+    }
+    let _ = (expr.span(),);
+    false
+}
 
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
@@ -36,6 +141,15 @@ impl OxcCheck for Check {
                 return;
             }
 
+        // Re-validation is redundant when the transform's body produces a
+        // constructively-typed value (e.g. `d => d.toISOString()` always
+        // yields a string, `n => n.toFixed(2)` always yields a string).
+        if let Some(arg) = call.arguments.first()
+            && body_returns_typed_value(arg)
+        {
+            return;
+        }
+
         let (line, column) = byte_offset_to_line_col(ctx.source, call.span.start as usize);
         diagnostics.push(Diagnostic {
             path: Arc::clone(&ctx.path_arc),
@@ -46,5 +160,45 @@ impl OxcCheck for Check {
             severity: Severity::Warning,
             span: None,
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(src, &Check)
+    }
+
+    #[test]
+    fn flags_transform_without_pipe() {
+        let src = "const s = z.string().transform(x => parseRich(x));";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_transform_with_pipe() {
+        let src = "const s = z.string().transform(x => parseRich(x)).pipe(z.object({}));";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_transform_returning_iso_string() {
+        // Regression for rbaumier/comply#20.
+        let src = "const s = z.date().transform(d => d.toISOString());";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_transform_returning_string_cast() {
+        let src = "const s = z.number().transform(n => String(n));";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_transform_returning_json_stringify() {
+        let src = "const s = z.unknown().transform(o => JSON.stringify(o));";
+        assert!(run(src).is_empty());
     }
 }
