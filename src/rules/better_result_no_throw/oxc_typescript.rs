@@ -31,6 +31,17 @@ impl OxcCheck for Check {
         if inside_result_try_callback(node, semantic) {
             return;
         }
+        // Typed-throw bridge: `throw X.error` re-throws a Result's
+        // already-typed ApiError so the framework's error middleware
+        // can map it to a Problem response. This is the canonical
+        // `unwrapOrThrow(promise)` shape mandated by Amadeo's CLAUDE.md
+        // and used by every Elysia handler. The throw IS the helper's
+        // contract, not an escape hatch.
+        if let Expression::StaticMemberExpression(member) = &throw.argument
+            && member.property.name.as_str() == "error"
+        {
+            return;
+        }
         let (line, column) = byte_offset_to_line_col(ctx.source, throw.span.start as usize);
         diagnostics.push(Diagnostic {
             path: Arc::clone(&ctx.path_arc),
@@ -62,4 +73,48 @@ fn inside_result_try_callback<'a>(
             }
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(src, &Check)
+    }
+
+    #[test]
+    fn flags_bare_throw_in_better_result_module() {
+        let src = r#"
+            import { Result } from "better-result";
+            function f() { throw new Error("oops"); }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_throw_inside_result_try() {
+        let src = r#"
+            import { Result } from "better-result";
+            const r = Result.try(() => { throw new Error("oops"); });
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_throw_x_error_bridge() {
+        // Regression for rbaumier/comply#40 — `throw result.error` is
+        // the canonical Result→typed-throw bridge used by unwrapOrThrow.
+        let src = r#"
+            import { Result } from "better-result";
+            async function unwrapOrThrow<T, E>(p: Promise<Result<T, E>>): Promise<T> {
+                const result = await p;
+                if (result.isErr()) {
+                    throw result.error;
+                }
+                return result.value;
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
 }

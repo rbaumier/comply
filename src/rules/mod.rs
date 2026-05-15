@@ -54,7 +54,6 @@ pub mod better_result_catch_returns_tagged;
 pub mod better_result_constructor_spreads_args;
 pub mod better_result_no_catch_panic;
 pub mod better_result_no_manual_propagation;
-pub mod better_result_prefer_unwrap;
 pub mod better_result_no_mixed_throw;
 pub mod better_result_no_nullable_return;
 pub mod better_result_no_param_properties;
@@ -3212,7 +3211,6 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         better_result_constructor_spreads_args::register(),
         better_result_no_catch_panic::register(),
         better_result_no_manual_propagation::register(),
-        better_result_prefer_unwrap::register(),
         better_result_no_mixed_throw::register(),
         better_result_no_nullable_return::register(),
         better_result_no_param_properties::register(),
