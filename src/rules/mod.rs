@@ -191,9 +191,11 @@ pub mod drizzle_fk_needs_index;
 pub mod drizzle_json_requires_type;
 pub mod drizzle_junction_composite_pk;
 pub mod drizzle_multi_statement_tx;
+pub mod drizzle_no_delete_without_where;
 pub mod drizzle_no_new_pool_per_request;
 pub mod drizzle_no_select_without_limit;
 pub mod drizzle_no_sql_raw_with_variable;
+pub mod drizzle_no_update_without_where;
 pub mod drizzle_pool_requires_timeouts;
 pub mod drizzle_prefer_findmany_relations;
 pub mod drizzle_prefer_inarray;
@@ -3349,7 +3351,9 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         drizzle_json_requires_type::register(),
         drizzle_junction_composite_pk::register(),
         drizzle_multi_statement_tx::register(),
+        drizzle_no_delete_without_where::register(),
         drizzle_no_new_pool_per_request::register(),
+        drizzle_no_update_without_where::register(),
         drizzle_pool_requires_timeouts::register(),
         drizzle_prefer_findmany_relations::register(),
         drizzle_prefer_inarray::register(),
