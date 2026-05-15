@@ -24,6 +24,11 @@ impl OxcCheck for Check {
     ) {
         match node.kind() {
             AstKind::Function(func) => {
+                // Explicit return type annotation — TS enforces it. Don't
+                // second-guess with text-only inference.
+                if func.return_type.is_some() {
+                    return;
+                }
                 let Some(body) = &func.body else { return };
                 let mut return_types = HashSet::new();
                 collect_return_types_from_stmts(&body.statements, &mut return_types);
@@ -34,6 +39,10 @@ impl OxcCheck for Check {
             AstKind::ArrowFunctionExpression(arrow) => {
                 // Skip arrow functions with expression body (single return type).
                 if arrow.expression {
+                    return;
+                }
+                // Same as above: trust an explicit return-type annotation.
+                if arrow.return_type.is_some() {
                     return;
                 }
                 let mut return_types = HashSet::new();
@@ -219,6 +228,23 @@ mod tests {
                 if (typeof input === "number" && Number.isNaN(input)) return "nan";
                 return typeof input;
             }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_function_with_explicit_return_type_annotation() {
+        // Regression for #70 — explicit `Promise<Option[]>` annotation
+        // means TS already enforces consistency; the rule shouldn't fire.
+        let src = r#"
+            const fn = async (query: string): Promise<Option[]> => {
+                try {
+                    const results = await search(query);
+                    return results.map((entity) => toOption(entity));
+                } catch {
+                    return [];
+                }
+            };
         "#;
         assert!(run(src).is_empty());
     }

@@ -140,6 +140,28 @@ mod tests {
     }
 
     #[test]
+    fn allows_import_from_tanstack_router_lazy_in_dash_prefixed_test() {
+        // Regression for #78 — `-*.test.tsx` next to a `.lazy.tsx` sibling
+        // must see the lazy file's named exports.
+        let (_dir, project, paths) = setup_project(&[
+            (
+                "src/app/routes/_authed/index.lazy.tsx",
+                "export function DashboardPage() { return null; }",
+            ),
+            (
+                "src/app/routes/_authed/-index.test.tsx",
+                "import { DashboardPage } from './index.lazy';\nDashboardPage;",
+            ),
+        ]);
+        let source = "import { DashboardPage } from './index.lazy';\nDashboardPage;";
+        let diags = run_ts_with_project_and_path(source, &Check, &project, &paths[1]);
+        assert!(
+            diags.is_empty(),
+            "DashboardPage IS exported by index.lazy; got: {diags:?}"
+        );
+    }
+
+    #[test]
     fn allows_reexported_name() {
         let (_dir, project, paths) = setup_project(&[
             ("base.ts", "export const foo = 1;"),

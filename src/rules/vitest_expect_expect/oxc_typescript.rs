@@ -13,6 +13,42 @@ fn is_test_file(path: &std::path::Path) -> bool {
     s.contains(".test.") || s.contains(".spec.") || s.contains("__tests__")
 }
 
+/// True when `text` contains a call to a function whose identifier starts
+/// with `expect` or `assert`. The identifier must be word-boundary-anchored
+/// on the left so we don't match `inspect(` or `reassert(`.
+fn has_assertion_prefixed_call(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    for prefix in ["expect", "assert"] {
+        let plen = prefix.len();
+        let mut from = 0usize;
+        while let Some(rel) = text[from..].find(prefix) {
+            let i = from + rel;
+            // Word boundary on left.
+            let prev_ok = i == 0
+                || !(bytes[i - 1].is_ascii_alphanumeric()
+                    || bytes[i - 1] == b'_'
+                    || bytes[i - 1] == b'$');
+            if prev_ok {
+                // Skip past prefix and any identifier chars; first
+                // non-ident byte must be `(`.
+                let mut j = i + plen;
+                while j < bytes.len()
+                    && (bytes[j].is_ascii_alphanumeric()
+                        || bytes[j] == b'_'
+                        || bytes[j] == b'$')
+                {
+                    j += 1;
+                }
+                if bytes.get(j) == Some(&b'(') {
+                    return true;
+                }
+            }
+            from = i + plen;
+        }
+    }
+    false
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[AstType::CallExpression]
@@ -54,15 +90,21 @@ impl OxcCheck for Check {
             _ => return,
         };
         let body_text = &ctx.source[body_span.start as usize..body_span.end as usize];
-        // Heuristic: any of these mean the test has an assertion.
-        if body_text.contains("expect(")
-            || body_text.contains("assert(")
-            || body_text.contains(".toBe(")
+        // Direct matcher chains and short-form `assert(…)` count.
+        if body_text.contains(".toBe(")
             || body_text.contains(".toEqual(")
             || body_text.contains(".toThrow(")
             || body_text.contains(".toMatch(")
             || body_text.contains(".toHave")
+            || body_text.contains("assert(")
         {
+            return;
+        }
+        // Any call whose identifier starts with `expect` or `assert` is
+        // treated as an assertion — covers helpers like `expectProblem(…)`,
+        // `assertResponse(…)`, in line with eslint-plugin-vitest's
+        // `assertFunctionNames` defaults.
+        if has_assertion_prefixed_call(body_text) {
             return;
         }
         let (line, column) = byte_offset_to_line_col(ctx.source, call.span.start as usize);
@@ -105,5 +147,26 @@ mod tests {
     fn allows_test_with_assert() {
         let src = r#"test("ok", () => { assert(true); });"#;
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_test_with_expect_prefixed_helper() {
+        // Regression for #79 — helper functions named `expect*` count
+        // as assertions even if the body has no literal `expect(`.
+        let src = r#"test("ok", async () => { const r = await req(); expectProblem(r, { status: 401 }); });"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_test_with_assert_prefixed_helper() {
+        let src = r#"test("ok", async () => { const r = await req(); assertResponse(r); });"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn does_not_match_word_inside_other_identifier() {
+        // `inspect(` should NOT be treated as `expect(`.
+        let src = r#"test("ok", () => { inspect(x); });"#;
+        assert_eq!(run(src).len(), 1);
     }
 }

@@ -290,6 +290,36 @@ mod tests {
     }
 
     #[test]
+    fn ignores_tanstack_router_lazy_file_imported_by_dash_prefixed_test() {
+        // Regression for #78 — TanStack Router `.lazy.tsx` route exports a
+        // component that's only consumed by a `-*.test.tsx` sibling. The
+        // route file is a framework entry point, so dead-export must not
+        // fire on its exports even if no other application file imports
+        // them directly.
+        let pkg = r#"{ "dependencies": { "@tanstack/react-router": "1.0.0" } }"#;
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "src/app/routes/_authed/index.lazy.tsx",
+                "export function DashboardPage() { return null; }\n\
+                 export const Route = createLazyFileRoute('/_authed/')({ component: DashboardPage });",
+            ),
+            (
+                "src/app/routes/_authed/-index.test.tsx",
+                "import { DashboardPage } from './index.lazy';\nDashboardPage;",
+            ),
+        ];
+        let (_dir, diags) = run_on_project_with_pkg(
+            Some(pkg),
+            &files,
+            "src/app/routes/_authed/index.lazy.tsx",
+        );
+        assert!(
+            diags.is_empty(),
+            ".lazy.tsx route is a framework entry; dead-export must not fire, got: {diags:?}"
+        );
+    }
+
+    #[test]
     fn ignores_module_consumed_via_namespace_import() {
         // When `import * as ns from './m'` exists, individual symbol usages
         // are intentionally not linked; flagging every export would be noise.
