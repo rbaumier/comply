@@ -150,6 +150,30 @@ impl OxcCheck for Check {
                 }
             }
 
+            // `async () => promiseFn()` / `async () => fetch(url)` —
+            // arrow whose expression body is a direct CallExpression.
+            // The companion `promise-function-async` rule mandates the
+            // `async` keyword on any arrow whose body returns a Promise,
+            // so flagging the lack of `await` here just bounces the
+            // author between two rules.
+            if let AstKind::ArrowFunctionExpression(arrow) = node.kind()
+                && arrow.expression
+            {
+                let body_first = arrow.body.statements.first();
+                let is_call_expr_body = match body_first {
+                    Some(oxc_ast::ast::Statement::ExpressionStatement(es)) => {
+                        matches!(
+                            es.expression,
+                            oxc_ast::ast::Expression::CallExpression(_)
+                        )
+                    }
+                    _ => false,
+                };
+                if is_call_expr_body {
+                    continue;
+                }
+            }
+
             let (line, column) = byte_offset_to_line_col(ctx.source, span.start as usize);
             diagnostics.push(Diagnostic {
                 path: Arc::clone(&ctx.path_arc),
@@ -186,6 +210,21 @@ mod tests {
     fn allows_result_gen_pattern() {
         let src = r#"async function handler() { return Result.gen(async function* () { yield* Result.await(doStuff()); }); }"#;
         assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_async_arrow_forwarding_promise_fn() {
+        // Regression for rbaumier/comply#20 — `promise-function-async`
+        // mandates async on Promise-returning arrows, then this rule
+        // would trip on the missing await. Skip CallExpression bodies.
+        assert!(run_on("const f = async () => fetch('/api');").is_empty());
+        assert!(run_on("const g = async () => doStuff();").is_empty());
+    }
+
+    #[test]
+    fn still_flags_async_arrow_returning_literal() {
+        let src = "const f = async () => 42;";
+        assert_eq!(run_on(src).len(), 1);
     }
 
     #[test]
