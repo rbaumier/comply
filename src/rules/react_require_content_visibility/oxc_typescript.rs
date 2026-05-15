@@ -183,7 +183,14 @@ impl OxcCheck for Check {
         let recv = &member.object;
         let known_large = large_array_source(recv, min_nodes);
 
-        if !known_large && is_known_small_array_source(recv, min_nodes) {
+        // The rule used to flag any `.map()` returning JSX in a JSX
+        // expression, even when the array size was unknown. That
+        // misfires on every standard React list pattern. Only flag
+        // when we can syntactically PROVE the source has >= min_nodes
+        // items (array literal or `Array.from({ length: N })`); the
+        // ambiguous case stays silent so non-virtualized lists don't
+        // produce a steady stream of speculative warnings.
+        if !known_large {
             return;
         }
         if enclosing_virtualizer_tag(node, semantic) {
@@ -215,7 +222,7 @@ impl OxcCheck for Check {
             _ => return,
         };
 
-        if !known_large && !returns_jsx {
+        if !returns_jsx {
             return;
         }
 
@@ -224,16 +231,10 @@ impl OxcCheck for Check {
         }
         let _ = cb_span;
 
-        let msg = if known_large {
-            format!(
-                "Large list rendered with `.map()` (>= {min_nodes} items) in JSX without \
-                 virtualization or `contentVisibility: 'auto'` — paints every off-screen row."
-            )
-        } else {
-            "`.map()` rendering JSX in a JSX expression — wrap with a virtualizer or set \
-             `contentVisibility: 'auto'` if the array can be long."
-                .to_string()
-        };
+        let msg = format!(
+            "Large list rendered with `.map()` (>= {min_nodes} items) in JSX without \
+             virtualization or `contentVisibility: 'auto'` — paints every off-screen row."
+        );
 
         let (line, column) = byte_offset_to_line_col(ctx.source, call.span.start as usize);
         diagnostics.push(Diagnostic {
@@ -246,4 +247,28 @@ impl OxcCheck for Check {
             span: None,
         });
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(src, &Check)
+    }
+
+    #[test]
+    fn ignores_map_on_variable_array() {
+        // Regression for rbaumier/comply#20 — the standard React list
+        // pattern. Without knowing the size we don't speculate.
+        let src = r#"function L({ items }) { return <div>{items.map(item => <Item key={item.id} />)}</div>; }"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_map_on_small_literal_array() {
+        let src = r#"function Tabs() { return <div>{[1,2,3].map(n => <Tab key={n} />)}</div>; }"#;
+        assert!(run(src).is_empty());
+    }
+
 }
