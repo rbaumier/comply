@@ -519,7 +519,9 @@ pub mod sql_no_union_when_union_all;
 pub mod sql_no_uuidv4_primary_key;
 pub mod sql_require_search_path;
 pub mod sql_singular_table_names;
+pub mod tailwind_enforce_logical_properties;
 pub mod tailwind_min_touch_target;
+pub mod tailwind_no_arbitrary_value;
 pub mod tailwind_no_legacy_directives;
 pub mod tailwind_no_manual_dark_variants;
 pub mod tailwind_no_off_scale_spacing;
@@ -3517,7 +3519,9 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         sql_no_uuidv4_primary_key::register(),
         sql_require_search_path::register(),
         sql_singular_table_names::register(),
+        tailwind_enforce_logical_properties::register(),
         tailwind_min_touch_target::register(),
+        tailwind_no_arbitrary_value::register(),
         tailwind_no_legacy_directives::register(),
         tailwind_no_manual_dark_variants::register(),
         tailwind_no_off_scale_spacing::register(),
