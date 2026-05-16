@@ -927,8 +927,8 @@ pub mod react_no_prevent_default;
 pub mod react_no_render_in_render;
 pub mod react_no_string_refs;
 pub mod react_no_this_in_sfc;
+pub mod react_no_html_entities_in_jsx;
 pub mod react_no_typos;
-pub mod react_no_unescaped_entities;
 pub mod react_no_unstable_nested_components;
 pub mod react_no_usememo_simple_expression;
 pub mod react_prefer_use_reducer;
@@ -2829,7 +2829,7 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         react_no_children_prop::register(),
         react_no_namespace::register(),
         react_no_string_refs::register(),
-        react_no_unescaped_entities::register(),
+        react_no_html_entities_in_jsx::register(),
         react_self_closing_comp::register(),
         react_no_invalid_html_attribute::register(),
         react_no_adjacent_inline_elements::register(),

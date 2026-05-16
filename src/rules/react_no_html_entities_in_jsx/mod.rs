@@ -1,8 +1,6 @@
-//! react-no-unescaped-entities — unescaped HTML entities in JSX text.
+//! react-no-html-entities-in-jsx — useless HTML entities in JSX.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod react;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
@@ -11,14 +9,12 @@ use crate::rules::backend::Backend;
 use crate::rules::meta::RuleMeta;
 
 pub const META: RuleMeta = RuleMeta {
-    id: "react-no-unescaped-entities",
-    description: "Unescaped `>`, `\"`, `'`, or `}` in JSX text can cause unexpected rendering.",
-    remediation: "Replace the character with its HTML entity: `>` with `&gt;`, \
-                  `\"` with `&quot;`, `'` with `&apos;`, `}` with `&#125;`.",
+    id: "react-no-html-entities-in-jsx",
+    description: "HTML entities like `&apos;`, `&quot;`, `&amp;`, `&gt;` are noise in JSX — React encodes raw characters automatically.",
+    remediation: "Replace the entity with the raw character: `&apos;` -> `'`, `&quot;` -> `\"`, `&amp;` -> `&`, `&gt;` -> `>`. \
+                  `&lt;` (for a literal `<`) and `&nbsp;` (non-breaking space) are kept as legitimate.",
     severity: Severity::Warning,
-    doc_url: Some(
-        "https://github.com/jsx-eslint/eslint-plugin-react/blob/master/docs/rules/no-unescaped-entities.md",
-    ),
+    doc_url: None,
     categories: &["react"],
 };
 
