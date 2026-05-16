@@ -13,6 +13,7 @@
 //!    rule-id + severity through the comply registry so users see
 //!    `[no-explicit-any]` instead of `typescript-eslint(no-explicit-any)`.
 
+mod elysia_post_filter;
 mod options;
 mod remap;
 mod schema;
@@ -102,6 +103,8 @@ pub fn lint_files(
             &module_aware_tsgolint,
         )?);
     }
+
+    elysia_post_filter::apply(&mut all);
 
     Ok(all)
 }
