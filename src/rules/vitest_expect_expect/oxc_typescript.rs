@@ -15,7 +15,9 @@ fn is_test_file(path: &std::path::Path) -> bool {
 
 /// True when `text` contains a call to a function whose identifier starts
 /// with `expect` or `assert`. The identifier must be word-boundary-anchored
-/// on the left so we don't match `inspect(` or `reassert(`.
+/// on the left so we don't match `inspect(` or `reassert(`. A TypeScript
+/// type-argument list (`<...>`) between the identifier and the call's `(`
+/// is allowed — `expectTypeOf<X>()` is a runtime call.
 fn has_assertion_prefixed_call(text: &str) -> bool {
     let bytes = text.as_bytes();
     for prefix in ["expect", "assert"] {
@@ -30,7 +32,7 @@ fn has_assertion_prefixed_call(text: &str) -> bool {
                     || bytes[i - 1] == b'$');
             if prev_ok {
                 // Skip past prefix and any identifier chars; first
-                // non-ident byte must be `(`.
+                // non-ident byte must be `(` or `<` (TS generic call).
                 let mut j = i + plen;
                 while j < bytes.len()
                     && (bytes[j].is_ascii_alphanumeric()
@@ -41,6 +43,22 @@ fn has_assertion_prefixed_call(text: &str) -> bool {
                 }
                 if bytes.get(j) == Some(&b'(') {
                     return true;
+                }
+                if bytes.get(j) == Some(&b'<') {
+                    // expectTypeOf<X>() / assertType<Y>() — look for `>(`
+                    // in a bounded window after the `<`, bailing at `;`
+                    // (statement end) so we don't cross unrelated code.
+                    let scan_end = (j + 256).min(bytes.len());
+                    let mut k = j + 1;
+                    while k + 1 < scan_end {
+                        if bytes[k] == b';' {
+                            break;
+                        }
+                        if bytes[k] == b'>' && bytes[k + 1] == b'(' {
+                            return true;
+                        }
+                        k += 1;
+                    }
                 }
             }
             from = i + plen;
@@ -168,5 +186,21 @@ mod tests {
         // `inspect(` should NOT be treated as `expect(`.
         let src = r#"test("ok", () => { inspect(x); });"#;
         assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_test_with_expect_type_of() {
+        // Regression for #88 — Vitest's `expectTypeOf<X>().toEqualTypeOf<Y>()`
+        // is the canonical type-level assertion. The identifier `expectTypeOf`
+        // is followed by `<X>` then `()`, not directly by `(`.
+        let src = r#"it("narrows correctly", () => { expectTypeOf<"a" | "b">().toEqualTypeOf<"a" | "b">(); });"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_test_with_assert_type_generic() {
+        // `assertType<T>(value)` — same generic-call shape as expectTypeOf.
+        let src = r#"it("ok", () => { assertType<string>(getValue()); });"#;
+        assert!(run(src).is_empty());
     }
 }
