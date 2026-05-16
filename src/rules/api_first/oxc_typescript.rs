@@ -4,13 +4,32 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::Expression;
+use oxc_ast::ast::{Argument, Expression};
 use std::sync::Arc;
 
 const ROUTE_METHODS: &[&str] = &["get", "post", "put", "delete"];
 const SCHEMA_INDICATORS: &[&str] = &["z", "createRoute", "openapi", "schema", "zodValidator"];
 
 pub struct Check;
+
+fn is_test_file(path: &std::path::Path) -> bool {
+    let s = path.to_string_lossy();
+    s.contains(".test.") || s.contains(".spec.") || s.contains("__tests__")
+}
+
+/// True when `arg` is a string literal whose value begins with `/`.
+/// Route registrations always take a path-string as the first argument;
+/// `Headers#get("name")`, `Map#get(key)`, `URLSearchParams#get("q")` do not.
+fn first_arg_is_route_path(arg: &Argument) -> bool {
+    match arg {
+        Argument::StringLiteral(s) => s.value.starts_with('/'),
+        Argument::TemplateLiteral(t) => t
+            .quasis
+            .first()
+            .is_some_and(|q| q.value.raw.starts_with('/')),
+        _ => false,
+    }
+}
 
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
@@ -22,12 +41,19 @@ impl OxcCheck for Check {
         semantic: &'a oxc_semantic::Semantic<'a>,
         ctx: &CheckCtx,
     ) -> Vec<Diagnostic> {
+        // Test files frequently call non-route `.get(...)` (Headers, Map, etc.)
+        // and don't define route schemas — exclude them.
+        if is_test_file(ctx.path) {
+            return Vec::new();
+        }
         // Quick check: if any schema indicator appears in source, skip.
         if SCHEMA_INDICATORS.iter().any(|s| ctx.source.contains(s)) {
             return Vec::new();
         }
 
-        // Find the first route call: `<recv>.<method>(...)` with method in ROUTE_METHODS.
+        // Find the first route call: `<recv>.<method>("/...", handler)` with
+        // method in ROUTE_METHODS. Requiring a path-literal first argument
+        // excludes `Headers#get("name")`, `Map#get(key)`, etc.
         let mut route_span = None;
         for snode in semantic.nodes().iter() {
             let AstKind::CallExpression(call) = snode.kind() else {
@@ -38,6 +64,12 @@ impl OxcCheck for Check {
             };
             let method = member.property.name.as_str();
             if !ROUTE_METHODS.contains(&method) {
+                continue;
+            }
+            let Some(first_arg) = call.arguments.first() else {
+                continue;
+            };
+            if !first_arg_is_route_path(first_arg) {
                 continue;
             }
             let start = call.span.start;
@@ -60,5 +92,73 @@ impl OxcCheck for Check {
             severity: Severity::Warning,
             span: None,
         }]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rules::test_helpers::run_oxc_ts_with_path;
+
+    fn run_on(source: &str, path: &str) -> Vec<Diagnostic> {
+        run_oxc_ts_with_path(source, &Check, path)
+    }
+
+    #[test]
+    fn flags_route_without_schema() {
+        let src = r#"app.get("/users", (c) => { return c.json([]); });"#;
+        assert_eq!(run_on(src, "src/api/users.ts").len(), 1);
+    }
+
+    #[test]
+    fn allows_route_with_zod_schema() {
+        let src = r#"
+const querySchema = z.object({ page: z.number() });
+app.get("/users", zodValidator("query", querySchema), (c) => { return c.json([]); });
+"#;
+        assert!(run_on(src, "src/api/users.ts").is_empty());
+    }
+
+    #[test]
+    fn allows_non_route_file() {
+        let src = r#"export function getUsers() { return db.query("SELECT * FROM users"); }"#;
+        assert!(run_on(src, "src/lib/users.ts").is_empty());
+    }
+
+    #[test]
+    fn ignores_headers_get_in_test_file() {
+        // Regression for #87 — `Response#headers.get("name")` is the
+        // Web Platform `Headers.get()` method, not a route registration.
+        // Test files routinely call it on response objects from
+        // `app.handle(new Request(...))` and don't define route schemas.
+        let src = r#"
+const res = await app.handle(new Request("http://example.test/"));
+const exposeHeaders = res.headers.get("access-control-expose-headers");
+"#;
+        assert!(run_on(src, "src/api/middleware/composition.test.ts").is_empty());
+    }
+
+    #[test]
+    fn ignores_headers_get_outside_test_file() {
+        // Even outside test files, `.get("name")` with a non-`/`
+        // string argument is not a route registration.
+        let src = r#"
+function readHeader(res: Response): string | null {
+    return res.headers.get("x-request-id");
+}
+"#;
+        assert!(run_on(src, "src/api/util/headers.ts").is_empty());
+    }
+
+    #[test]
+    fn ignores_map_get_with_non_path_arg() {
+        // `Map#get(key)` / `URLSearchParams#get(name)` — neither argument
+        // starts with `/`, so neither looks like a route path.
+        let src = r#"
+const params = new URLSearchParams(req.url);
+const q = params.get("q");
+const cached = cache.get(key);
+"#;
+        assert!(run_on(src, "src/api/search.ts").is_empty());
     }
 }
