@@ -10,8 +10,13 @@
 //! Only relative imports (`.`/`..`) are checked. Package imports (`react`,
 //! `@scope/pkg`) are left alone — tree-shakers handle those, and flagging
 //! them would be far too noisy.
+//!
+//! Skipped when the importing file lives under a `routes/` directory: that's
+//! the TanStack Router file-system convention where `index.tsx` is the leaf
+//! route module for a segment, not a re-export hub.
 
 use crate::diagnostic::{Diagnostic, Severity};
+use std::path::Path;
 
 const INDEX_SUFFIXES: &[&str] = &[
     "/index",
@@ -40,11 +45,19 @@ fn is_barrel_path(module: &str) -> bool {
     INDEX_SUFFIXES.iter().any(|s| module.ends_with(s))
 }
 
+fn is_tanstack_route_file(path: &Path) -> bool {
+    path.components()
+        .any(|c| c.as_os_str() == "routes")
+}
+
 crate::ast_check! { on ["import_statement"] => |node, source, ctx, diagnostics|
     let Some(src_node) = node.child_by_field_name("source") else { return };
     let raw = src_node.utf8_text(source).unwrap_or("");
     let module = strip_quotes(raw);
     if !is_barrel_path(module) {
+        return;
+    }
+    if is_tanstack_route_file(ctx.path) {
         return;
     }
     let pos = node.start_position();
@@ -115,5 +128,17 @@ mod tests {
     fn allows_file_named_index_like() {
         // `./indexer` is not a barrel; only `/index` or `/index.*`.
         assert!(run_on("import { foo } from './indexer';").is_empty());
+    }
+
+    #[test]
+    fn allows_index_import_from_tanstack_route_file() {
+        // Regression for #160: TanStack route files (under `routes/`) commonly
+        // import `./<segment>/index` as a leaf route module, not a barrel.
+        let d = crate::rules::test_helpers::run_ts_with_path(
+            "import { Route } from './_authed/index';",
+            &Check,
+            "src/routes/__root.tsx",
+        );
+        assert!(d.is_empty(), "expected no diagnostics, got {d:?}");
     }
 }
