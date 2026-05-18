@@ -74,6 +74,9 @@ impl TextCheck for Check {
         if super::is_sveltekit_route_file(file_name) {
             return Vec::new();
         }
+        if super::is_tanstack_pathless_route(ctx.path, file_name) {
+            return Vec::new();
+        }
         if is_kebab_case(stem) {
             return Vec::new();
         }
@@ -172,5 +175,25 @@ mod tests {
     #[test]
     fn allows_non_composable_camel_case() {
         assert!(run("src/externalLinks.ts").is_empty());
+    }
+
+    #[test]
+    fn allows_tanstack_pathless_layout_route_tsx() {
+        assert!(run("src/app/routes/_authed.tsx").is_empty());
+    }
+
+    #[test]
+    fn allows_tanstack_pathless_layout_route_test_tsx() {
+        assert!(run("src/app/routes/_authed.test.tsx").is_empty());
+    }
+
+    #[test]
+    fn allows_tanstack_pathless_layout_route_nested() {
+        assert!(run("src/app/routes/dashboard/_layout.tsx").is_empty());
+    }
+
+    #[test]
+    fn flags_underscore_prefix_outside_routes() {
+        assert_eq!(run("src/app/_authed.tsx").len(), 1);
     }
 }

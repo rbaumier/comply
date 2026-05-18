@@ -33,6 +33,17 @@ fn is_sveltekit_route_file(file_name: &str) -> bool {
     }
 }
 
+/// Returns `true` for TanStack Router pathless layout routes: a file whose
+/// name starts with `_` living under any `routes/` ancestor directory.
+/// See https://tanstack.com/router/latest/docs/framework/react/routing/file-based-routing#pathless-routes.
+fn is_tanstack_pathless_route(path: &std::path::Path, file_name: &str) -> bool {
+    if !file_name.starts_with('_') {
+        return false;
+    }
+    path.components()
+        .any(|c| c.as_os_str() == std::ffi::OsStr::new("routes"))
+}
+
 pub fn register() -> RuleDef {
     RuleDef {
         meta: META,
