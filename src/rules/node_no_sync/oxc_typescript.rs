@@ -8,6 +8,14 @@ use std::sync::Arc;
 
 pub struct Check;
 
+/// React hook synchronising state (e.g. `useListSearchSync`, `useStateSync`):
+/// starts with `use` followed by an uppercase letter, ends with `Sync`.
+pub(super) fn is_react_hook_sync(name: &str) -> bool {
+    name.starts_with("use")
+        && name.ends_with("Sync")
+        && name.as_bytes().get(3).is_some_and(|b| b.is_ascii_uppercase())
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[AstType::CallExpression]
@@ -48,6 +56,11 @@ impl OxcCheck for Check {
 
         // Must end with "Sync" and have at least one char before it.
         if method_name.len() <= 4 || !method_name.ends_with("Sync") {
+            return;
+        }
+
+        // Skip React hooks: `use[A-Z]...Sync` (synchronisation sense, not Node sync I/O).
+        if is_react_hook_sync(method_name) {
             return;
         }
 
