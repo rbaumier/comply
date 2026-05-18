@@ -1,10 +1,20 @@
-//! zod-string-min-1-required backend — flag `z.string()` calls that are
-//! not chained with at least one method that constrains length, format,
-//! optionality, or transforms the input. The check walks up from the
-//! `z.string()` call expression and inspects whether the parent is a
-//! `member_expression` calling one of the accepted continuations.
+//! zod-string-min-1-required: flag `z.string()` calls without a length/format/optionality continuation.
+//! Skipped in test files: fixtures use `z.string()` as a stand-in stub, never `.parse()`d at runtime.
 
 use crate::diagnostic::{Diagnostic, Severity};
+
+const TEST_MARKERS: &[&str] = &[".test.", ".spec.", "__tests__", "_test.", ".e2e.", ".e2e-spec."];
+
+fn is_test_file(path: &std::path::Path) -> bool {
+    let s = path.to_string_lossy();
+    if TEST_MARKERS.iter().any(|m| s.contains(m)) {
+        return true;
+    }
+    path.components().any(|c| {
+        let name = c.as_os_str().to_string_lossy();
+        name.eq_ignore_ascii_case("tests") || name.eq_ignore_ascii_case("e2e")
+    })
+}
 
 const VALID_CONTINUATIONS: &[&str] = &[
     "min",
@@ -25,6 +35,10 @@ const VALID_CONTINUATIONS: &[&str] = &[
 ];
 
 crate::ast_check! { prefilter = ["z.string"] => |node, source, ctx, diagnostics|
+    if is_test_file(ctx.path) {
+        return;
+    }
+
     // Match `z.string()` itself.
     let Some(name) = crate::rules::call_expression::call_function_name(node, source) else {
         return;
@@ -74,6 +88,10 @@ mod tests {
         crate::rules::test_helpers::run_ts(s, &Check)
     }
 
+    fn run_at(s: &str, path: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_ts_with_path(s, &Check, path)
+    }
+
     #[test]
     fn flags_bare_string() {
         assert_eq!(run("const s = z.object({ name: z.string() })").len(), 1);
@@ -92,5 +110,19 @@ mod tests {
     #[test]
     fn allows_optional() {
         assert!(run("z.string().optional()").is_empty());
+    }
+
+    #[test]
+    fn allows_bare_string_in_test_file() {
+        // Regression for issue #119: `z.string()` in test fixtures is a
+        // typed stand-in that is never `.parse()`d at runtime.
+        let code = "const schema = z.object({ sort: z.string() });";
+        assert!(run_at(code, "src/foo.test.ts").is_empty());
+        assert!(run_at(code, "src/foo.spec.ts").is_empty());
+        assert!(run_at(code, "src/__tests__/foo.ts").is_empty());
+        assert!(run_at(code, "e2e/foo.ts").is_empty());
+        assert!(run_at(code, "tests/foo.ts").is_empty());
+        assert!(run_at(code, "src/foo.e2e-spec.ts").is_empty());
+        assert!(run_at(code, "src/foo_test.ts").is_empty());
     }
 }
