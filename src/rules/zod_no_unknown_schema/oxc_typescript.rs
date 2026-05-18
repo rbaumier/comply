@@ -21,7 +21,7 @@ impl OxcCheck for Check {
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
+        semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let AstKind::CallExpression(call) = node.kind() else { return };
@@ -33,6 +33,18 @@ impl OxcCheck for Check {
         let Expression::Identifier(obj_id) = &member.object else { return };
         if obj_id.name.as_str() != "z" {
             return;
+        }
+
+        // `z.unknown().transform(...)`: the transform body narrows the output
+        // type, so the schema is doing real work — skip it.
+        let parent = semantic.nodes().parent_node(node.id());
+        if let AstKind::StaticMemberExpression(member) = parent.kind() {
+            if member.property.name.as_str() == "transform" {
+                let grand = semantic.nodes().parent_node(parent.id());
+                if matches!(grand.kind(), AstKind::CallExpression(_)) {
+                    return;
+                }
+            }
         }
 
         let (line, column) = byte_offset_to_line_col(ctx.source, call.span.start as usize);
@@ -48,5 +60,55 @@ impl OxcCheck for Check {
             severity: Severity::Warning,
             span: None,
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diagnostic::Diagnostic;
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+    #[test]
+    fn flags_bare_z_unknown() {
+        assert_eq!(run_on("const s = z.unknown();").len(), 1);
+    }
+
+    #[test]
+    fn flags_z_unknown_inside_object() {
+        assert_eq!(
+            run_on("const s = z.object({ data: z.unknown() });").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn allows_concrete_schema() {
+        assert!(run_on("const s = z.string();").is_empty());
+    }
+
+    /// Regression for #113: `z.unknown().transform(...)` narrows the
+    /// output via the transform body, so the schema does real work.
+    #[test]
+    fn allows_z_unknown_as_transform_head() {
+        let src = r#"
+            const sortSchema = z.unknown().transform((value): "name:asc" | "name:desc" => {
+                const parsed = sortLiteral.safeParse(value);
+                return parsed.success ? parsed.data : "name:asc";
+            });
+        "#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_z_unknown_when_transform_is_not_immediate() {
+        // `.optional()` between `z.unknown()` and `.transform(...)` —
+        // the head is still `z.unknown()` but only the immediate `.transform`
+        // case is whitelisted (anything else should keep flagging).
+        let src = "const s = z.unknown().optional();";
+        assert_eq!(run_on(src).len(), 1);
     }
 }
