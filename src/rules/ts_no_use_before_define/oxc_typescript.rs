@@ -7,6 +7,12 @@
 //! component functions declared above the `export const Route = ...` line;
 //! TanStack initializes `Route` before the component renders, so the
 //! forward reference is safe.
+//!
+//! Also skips forward references that live inside a callback passed
+//! directly to a React-style hook call (`useXxx(...)`, e.g. `useMutation`,
+//! `useEffect`, `useCallback`). Those callbacks run after the surrounding
+//! component finishes rendering, so identifiers declared later in the same
+//! function body are already initialized when the callback fires.
 
 use oxc_ast::AstKind;
 use oxc_ast::ast::Expression;
@@ -52,6 +58,9 @@ impl OxcCheck for Check {
                 let ref_node_id = reference.node_id();
                 let ref_span = nodes.kind(ref_node_id).span();
                 if ref_span.start < decl_span.start {
+                    if is_inside_react_hook_callback(nodes, ref_node_id) {
+                        continue;
+                    }
                     let (line, column) =
                         byte_offset_to_line_col(ctx.source, ref_span.start as usize);
                     diagnostics.push(Diagnostic {
@@ -118,6 +127,66 @@ fn callee_name<'a>(expr: &'a Expression<'a>) -> Option<&'a str> {
 
 fn is_tanstack_route_callee(name: &str) -> bool {
     matches!(name, "createFileRoute" | "createLazyFileRoute")
+}
+
+/// True when the reference sits inside a function/arrow callback that is
+/// passed directly as an argument to a React-style hook call (`useXxx(...)`).
+/// Such callbacks fire after the surrounding component finishes rendering, so
+/// identifiers declared later in the same function body are already in scope
+/// by the time the callback runs — the forward reference is not a real TDZ
+/// hazard.
+fn is_inside_react_hook_callback<'a>(
+    nodes: &'a oxc_semantic::AstNodes<'a>,
+    ref_node_id: NodeId,
+) -> bool {
+    for ancestor_id in nodes.ancestor_ids(ref_node_id) {
+        let ancestor = nodes.get_node(ancestor_id);
+        match ancestor.kind() {
+            AstKind::ArrowFunctionExpression(_) | AstKind::Function(_) => {
+                if callback_passed_to_react_hook(ancestor_id, nodes) {
+                    return true;
+                }
+                return false;
+            }
+            AstKind::Program(_) => return false,
+            _ => {}
+        }
+    }
+    false
+}
+
+/// True when `func_id` is the direct argument of an enclosing `useXxx(...)`
+/// call expression. Stops at the next function boundary so that nested
+/// definitions do not leak across closures.
+fn callback_passed_to_react_hook<'a>(
+    func_id: NodeId,
+    nodes: &'a oxc_semantic::AstNodes<'a>,
+) -> bool {
+    for ancestor_id in nodes.ancestor_ids(func_id) {
+        let ancestor = nodes.get_node(ancestor_id);
+        match ancestor.kind() {
+            AstKind::CallExpression(call) => {
+                if callee_name(&call.callee).is_some_and(is_react_hook_name) {
+                    return true;
+                }
+                return false;
+            }
+            AstKind::Function(_) | AstKind::ArrowFunctionExpression(_) | AstKind::Program(_) => {
+                return false;
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+/// React hook naming convention: identifier starts with `use` followed by an
+/// uppercase letter (`useMutation`, `useEffect`, `useCallback`, ...).
+fn is_react_hook_name(name: &str) -> bool {
+    let Some(rest) = name.strip_prefix("use") else {
+        return false;
+    };
+    rest.chars().next().is_some_and(|c| c.is_ascii_uppercase())
 }
 
 #[cfg(test)]
@@ -192,5 +261,75 @@ mod tests {
              const Route = makeRoute();",
         );
         assert_eq!(d.len(), 1, "non-TanStack forward refs still flagged");
+    }
+
+    #[test]
+    fn allows_forward_ref_inside_use_mutation_callback() {
+        // Issue #96 reproducer: `form` is referenced inside `onError`, which
+        // only fires after both hooks have returned, so the forward ref is
+        // safe.
+        let source = "function Page() {\n\
+                      const mutation = useMutation({\n\
+                      onError: (error) => { form.setFieldMeta('x', () => ({})); },\n\
+                      });\n\
+                      const form = useForm({});\n\
+                      return mutation;\n\
+                      }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_forward_ref_inside_use_effect_callback() {
+        let source = "function Page() {\n\
+                      useEffect(() => { handler(); }, []);\n\
+                      const handler = () => {};\n\
+                      return null;\n\
+                      }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_forward_ref_inside_use_callback() {
+        let source = "function Page() {\n\
+                      const cb = useCallback(() => other(), []);\n\
+                      const other = () => 1;\n\
+                      return cb;\n\
+                      }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn still_flags_forward_ref_in_non_hook_callback() {
+        // Plain `someFn(callback)` is not a hook, so we must keep flagging.
+        let d = run_on(
+            "someFn((x) => later);\n\
+             const later = 1;",
+        );
+        assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn still_flags_forward_ref_in_lowercase_use_call() {
+        // `use(x)` (or any non-PascalCase suffix) is not a hook.
+        let d = run_on(
+            "use(() => later);\n\
+             const later = 1;",
+        );
+        assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn still_flags_nested_function_inside_hook_callback() {
+        // A sync inner function declared inside a hook callback is not itself
+        // deferred — it captures `later` at call time, so the TDZ still applies.
+        let source = "function Page() {\n\
+                      useEffect(() => {\n\
+                      function inner() { return later; }\n\
+                      inner();\n\
+                      }, []);\n\
+                      const later = 1;\n\
+                      }";
+        let d = run_on(source);
+        assert_eq!(d.len(), 1, "inner sync function must still be flagged");
     }
 }
