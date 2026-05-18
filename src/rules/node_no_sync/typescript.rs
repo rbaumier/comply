@@ -24,6 +24,11 @@ crate::ast_check! { on ["call_expression"] prefilter = ["Sync"] => |node, source
         return;
     }
 
+    // Skip React hooks: `use[A-Z]...Sync` (synchronisation sense, not Node sync I/O).
+    if super::oxc_typescript::is_react_hook_sync(method_name) {
+        return;
+    }
+
     // Reconstruct the full callee text for the message.
     let full_name = callee.utf8_text(source).unwrap_or(method_name);
 
@@ -88,5 +93,25 @@ mod tests {
     #[test]
     fn allows_non_sync_identifier() {
         assert!(run_on("const isInSync = true;").is_empty());
+    }
+
+    #[test]
+    fn allows_react_hook_sync_call() {
+        // Issue #110 — `useListSearchSync` is a React hook synchronising state,
+        // not Node sync I/O.
+        let source = "const [state, onChange] = useListSearchSync(Route, { filterKeys: ['level'] });";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_other_react_hook_sync_variants() {
+        assert!(run_on("const x = useStateSync();").is_empty());
+        assert!(run_on("const x = useSearchParamsSync();").is_empty());
+    }
+
+    #[test]
+    fn still_flags_lowercase_use_prefix() {
+        // `users` is not a hook — must still be flagged if it ends in Sync.
+        assert_eq!(run_on("const x = usersSync();").len(), 1);
     }
 }
