@@ -1,13 +1,12 @@
-//! Heuristic: in route/api files, find zod field declarations
-//! `z.string()`, `z.number()`, `z.array(...)` and look for a `.max(`
-//! call somewhere in the same chain (until the next `,` or line break
-//! at brace depth 0).
+//! AST-only implementation.
+//!
+//! For each `call_expression` whose callee text is `z.string` / `z.number`
+//! / `z.array`, walk the surrounding member-call chain to see if it ends in
+//! `.max(...)`. If not, and the file lives in a route/api path and is not a
+//! test file and the enclosing top-level declaration is not a response-shaped
+//! schema (`*Response*Schema`, `*Select*Schema`, etc.), emit a diagnostic.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::rules::backend::{CheckCtx, TextCheck};
-
-#[derive(Debug)]
-pub struct Check;
 
 const ROUTE_HINTS: &[&str] = &["route", "api", "handler", "controller", "endpoint"];
 
@@ -16,227 +15,132 @@ fn looks_like_api_path(path: &std::path::Path) -> bool {
     ROUTE_HINTS.iter().any(|h| s.contains(h))
 }
 
-fn byte_to_line_col(source: &str, byte_offset: usize) -> (usize, usize) {
-    let mut line = 1usize;
-    let mut col = 1usize;
-    for (i, c) in source.char_indices() {
-        if i >= byte_offset {
-            break;
-        }
-        if c == '\n' {
-            line += 1;
-            col = 1;
-        } else {
-            col += 1;
-        }
+const TEST_MARKERS: &[&str] = &[
+    ".test.",
+    ".spec.",
+    "__tests__",
+    "_test.",
+    ".e2e.",
+    ".e2e-spec.",
+];
+
+fn is_test_file(path: &std::path::Path) -> bool {
+    let s = path.to_string_lossy();
+    if TEST_MARKERS.iter().any(|m| s.contains(m)) {
+        return true;
     }
-    (line, col)
+    path.components().any(|c| {
+        let name = c.as_os_str().to_string_lossy();
+        name.eq_ignore_ascii_case("tests") || name.eq_ignore_ascii_case("e2e")
+    })
 }
 
-const TARGETS: &[&str] = &["z.string(", "z.number(", "z.array("];
+/// Substrings that mark a schema as a response/output (not an input).
+const RESPONSE_NAME_MARKERS: &[&str] = &["Response", "Output", "Return", "Detail", "Select"];
 
-/// Find the byte offset just after the matching `)` of a call whose `(`
-/// is at `open_offset`.
-fn end_of_call(bytes: &[u8], open_offset: usize) -> Option<usize> {
-    if bytes.get(open_offset) != Some(&b'(') {
-        return None;
-    }
-    let mut depth = 1i32;
-    let mut i = open_offset + 1;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'(' => depth += 1,
-            b')' => {
-                depth -= 1;
-                if depth == 0 {
-                    return Some(i + 1);
-                }
-            }
-            _ => {}
-        }
-        i += 1;
-    }
-    None
-}
-
-/// True when the chain starting at `chain_start` includes a `.max(` call
-/// before it terminates (next `,` or `}` at brace depth 0, ignoring
-/// content inside parens).
-fn chain_has_max(source: &str, chain_start: usize) -> bool {
-    let bytes = source.as_bytes();
-    let mut i = chain_start;
-    let mut depth_paren = 0i32;
-    let mut depth_brace = 0i32;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'(' => depth_paren += 1,
-            b')' => {
-                if depth_paren == 0 {
-                    break;
-                }
-                depth_paren -= 1;
-            }
-            b'{' => depth_brace += 1,
-            b'}' => {
-                if depth_brace == 0 {
-                    break;
-                }
-                depth_brace -= 1;
-            }
-            b',' if depth_paren == 0 && depth_brace == 0 => break,
-            _ => {}
-        }
-        if depth_paren == 0
-            && depth_brace == 0
-            && i + 4 < bytes.len()
-            && &bytes[i..i + 5] == b".max("
+/// Walk up from `node`, looking for a `variable_declarator` ancestor whose
+/// `name` field contains one of `RESPONSE_NAME_MARKERS`. Returns true if
+/// found. Used to skip top-level response-schema declarations.
+fn enclosed_in_response_schema(node: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut cur = node;
+    while let Some(parent) = cur.parent() {
+        if parent.kind() == "variable_declarator"
+            && let Some(name_node) = parent.child_by_field_name("name")
+            && let Ok(name) = name_node.utf8_text(source)
+            && RESPONSE_NAME_MARKERS.iter().any(|m| name.contains(m))
         {
             return true;
         }
-        i += 1;
+        cur = parent;
     }
     false
 }
 
-/// Substrings that mark a schema as a response/output (not an input).
-/// `Select` matches the Drizzle/zod-drizzle convention where row-shaped
-/// schemas are named `*SelectSchema`.
-const RESPONSE_NAME_MARKERS: &[&str] = &[
-    "Response",
-    "Output",
-    "Return",
-    "Detail",
-    "Select",
-];
-
-/// Build a list of `(start, end)` byte ranges covering top-level
-/// declarations of response-shaped zod schemas — `const FooResponseSchema = …`,
-/// `const BarSelectSchema = …`, etc. Offenses inside these ranges are not
-/// flagged: response schemas are server-controlled and don't need `.max()`.
-fn response_schema_ranges(source: &str) -> Vec<(usize, usize)> {
-    let mut ranges = Vec::new();
-    let bytes = source.as_bytes();
-    for (i, line_start) in source
-        .lines()
-        .scan(0usize, |off, line| {
-            let s = *off;
-            *off += line.len() + 1; // newline
-            Some((line, s))
-        })
-        .enumerate()
-    {
-        let _ = i;
-        let (line, off) = line_start;
-        let trimmed = line.trim_start();
-        let lead = line.len() - trimmed.len();
-        // Look for top-level `export const Foo... = ` or `const Foo... = `
-        let after_kw = trimmed
-            .strip_prefix("export const ")
-            .or_else(|| trimmed.strip_prefix("const "));
-        let Some(rest) = after_kw else { continue };
-        let Some(eq_idx) = rest.find('=') else { continue };
-        let name = rest[..eq_idx].split([':', ' ']).next().unwrap_or("").trim();
-        if !RESPONSE_NAME_MARKERS.iter().any(|m| name.contains(m)) {
-            continue;
-        }
-        // Range starts at the `=`. Find the end-of-statement by tracking
-        // brace / paren depth from the `=` until we hit `;` or EOL at depth 0.
-        let eq_abs = off + lead + after_kw.unwrap().find('=').unwrap();
-        let mut i = eq_abs + 1;
-        let mut depth_paren = 0i32;
-        let mut depth_brace = 0i32;
-        let mut in_str: Option<u8> = None;
-        while i < bytes.len() {
-            let c = bytes[i];
-            if let Some(q) = in_str {
-                if c == b'\\' {
-                    i += 2;
-                    continue;
-                }
-                if c == q {
-                    in_str = None;
-                }
-                i += 1;
-                continue;
-            }
-            match c {
-                b'"' | b'\'' | b'`' => in_str = Some(c),
-                b'(' => depth_paren += 1,
-                b')' => depth_paren -= 1,
-                b'{' => depth_brace += 1,
-                b'}' => depth_brace -= 1,
-                b';' if depth_paren == 0 && depth_brace == 0 => {
-                    i += 1;
+/// Walk up the member-call chain rooted at `call_node` and return true if
+/// any `member_expression.property` along the way is `max`.
+///
+/// Chain shape: `z.string().max(100)` — the AST looks like
+/// `call_expression(member_expression(call_expression(...), property: "max"))`.
+fn chain_has_max(call_node: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut cur = call_node;
+    while let Some(parent) = cur.parent() {
+        match parent.kind() {
+            "member_expression" => {
+                // We're the `object` of a member_expression. Check its property.
+                let Some(obj) = parent.child_by_field_name("object") else {
+                    break;
+                };
+                if obj.id() != cur.id() {
                     break;
                 }
-                _ => {}
-            }
-            i += 1;
-        }
-        ranges.push((eq_abs, i));
-    }
-    ranges
-}
-
-fn find_offenses(source: &str) -> Vec<(usize, &'static str)> {
-    let mut out = Vec::new();
-    let bytes = source.as_bytes();
-    let exclude = response_schema_ranges(source);
-    for target in TARGETS {
-        let mut from = 0usize;
-        while let Some(rel) = source[from..].find(target) {
-            let abs = from + rel;
-            let open = abs + target.len() - 1; // position of `(`
-            let Some(end) = end_of_call(bytes, open) else {
-                break;
-            };
-            let in_response = exclude.iter().any(|(s, e)| abs >= *s && abs < *e);
-            if !in_response && !chain_has_max(source, end) {
-                out.push((abs, *target));
-            }
-            from = end;
-        }
-    }
-    out
-}
-
-impl TextCheck for Check {
-    fn prefilter(&self) -> Option<&'static [&'static str]> {
-        Some(&["z.string(", "z.number(", "z.array("])
-    }
-
-    fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
-        if !looks_like_api_path(ctx.path) {
-            return Vec::new();
-        }
-        find_offenses(ctx.source)
-            .into_iter()
-            .map(|(offset, target)| {
-                let (line, column) = byte_to_line_col(ctx.source, offset);
-                let kind = target.trim_end_matches('(');
-                Diagnostic {
-                    path: std::sync::Arc::clone(&ctx.path_arc),
-                    line,
-                    column,
-                    rule_id: super::META.id.into(),
-                    message: format!(
-                        "`{kind}` has no `.max(N)` — unbounded API input is a resource-exhaustion vector."
-                    ),
-                    severity: Severity::Warning,
-                    span: None,
+                if let Some(prop) = parent.child_by_field_name("property")
+                    && let Ok(prop_text) = prop.utf8_text(source)
+                    && prop_text == "max"
+                {
+                    return true;
                 }
-            })
-            .collect()
+                cur = parent;
+            }
+            "call_expression" => {
+                // We're being called: `.foo(...)` → continue walking.
+                if let Some(func) = parent.child_by_field_name("function")
+                    && func.id() == cur.id()
+                {
+                    cur = parent;
+                    continue;
+                }
+                break;
+            }
+            _ => break,
+        }
     }
+    false
+}
+
+crate::ast_check! { on ["call_expression"] prefilter = ["z.string", "z.number", "z.array"] =>
+    |node, source, ctx, diagnostics|
+
+    if !looks_like_api_path(ctx.path) {
+        return;
+    }
+    if is_test_file(ctx.path) {
+        return;
+    }
+
+    let Some(name) = crate::rules::call_expression::call_function_name(node, source) else {
+        return;
+    };
+    let kind = match name {
+        "z.string" => "z.string",
+        "z.number" => "z.number",
+        "z.array" => "z.array",
+        _ => return,
+    };
+
+    if chain_has_max(node, source) {
+        return;
+    }
+    if enclosed_in_response_schema(node, source) {
+        return;
+    }
+
+    diagnostics.push(Diagnostic::at_node(
+        ctx.path,
+        &node,
+        super::META.id,
+        format!(
+            "`{kind}` has no `.max(N)` — unbounded API input is a resource-exhaustion vector."
+        ),
+        Severity::Warning,
+    ));
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
 
-    fn run_at(source: &str, path: &str) -> Vec<Diagnostic> {
-        Check.check(&CheckCtx::for_test(Path::new(path), source))
+    fn run_at(s: &str, path: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_ts_with_path(s, &Check, path)
     }
 
     #[test]
@@ -283,5 +187,29 @@ mod tests {
         let diags = run_at(src, "src/api/orgs.ts");
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("z.string"));
+    }
+
+    #[test]
+    fn ignores_z_string_inside_string_literal() {
+        // Regression for #106 — `z.string()` appearing as text content of a
+        // template/string literal (test fixture data) must not be flagged.
+        let src = r#"test.each([
+  [`.body(z.object({ id: z.string() }))`, true],
+])('flags inline wire schema: %s', (line, expected) => {
+  expect(lineHasInlineWireSchema(line)).toBe(expected);
+});"#;
+        // Even outside a test file the AST should treat the template literal
+        // as a single string node; no `call_expression` for `z.string()` exists
+        // inside it.
+        assert!(run_at(src, "src/api/inline.ts").is_empty());
+    }
+
+    #[test]
+    fn ignores_test_files() {
+        // Regression for #106 — `z.string()` inside *.test.ts is fixture data.
+        let src = "const Body = z.object({ name: z.string() });";
+        assert!(run_at(src, "src/api/features/no-inline-wire-schemas.test.ts").is_empty());
+        assert!(run_at(src, "src/api/foo.spec.ts").is_empty());
+        assert!(run_at(src, "src/api/__tests__/foo.ts").is_empty());
     }
 }
