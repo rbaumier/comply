@@ -35,6 +35,10 @@ const DESCRIPTIVE_SUFFIXES: &[&str] = &[
     "_LEN", "_COUNT", "_MAX", "_MIN", "_TIMEOUT", "_INTERVAL", "_LIMIT", "_TTL", "_ROOT", "_BASE",
 ];
 
+/// PascalCase `Data*` UI primitive names exempted from the `data` banned-prefix check.
+const DATA_PASCAL_CASE_ALLOWED_COMPOUNDS: &[&str] =
+    &["DataTable", "DataGrid", "DataView", "DataList"];
+
 const ITERATOR_METHODS: &[&str] = &[
     "map",
     "filter",
@@ -398,6 +402,13 @@ impl OxcCheck for Check {
         }
 
         if let Some(prefix) = matched_banned_prefix(name) {
+            if prefix == "data" && DATA_PASCAL_CASE_ALLOWED_COMPOUNDS.iter().any(|allowed| match name.strip_prefix(allowed) {
+                Some("") => true,
+                Some(rest) => rest.as_bytes().first().is_some_and(|b| b.is_ascii_uppercase()),
+                None => false,
+            }) {
+                return;
+            }
             let (line, column) = byte_offset_to_line_col(ctx.source, span.start as usize);
             diagnostics.push(Diagnostic {
                 path: Arc::clone(&ctx.path_arc),
@@ -466,5 +477,29 @@ mod tests {
     fn still_flags_untyped_rows_param() {
         let src = r#"function f(rows) { return rows[0]; }"#;
         assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_data_table_design_system_compound() {
+        // Regression for rbaumier/comply#121 — `DataTable` and its derived
+        // type names are the industry-standard naming across shadcn,
+        // TanStack Table, Material UI, and Radix.
+        let src = r#"
+            export function DataTable() { return null; }
+            export type DataTableSort = { field: string };
+            export type DataTableState = { sort: DataTableSort };
+            export type DataGridColumn = { key: string };
+            export type DataViewProps = { rows: number };
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_data_prefix_on_non_canonical_compounds() {
+        // `DataSource`, `DataObject`, `DataValue` carry no more meaning than
+        // `data` alone — the `Data` allowlist is intentionally narrow to the
+        // canonical UI primitives.
+        let src = r#"const dataSource = 1; const DataObject = {}; const DataValue = 2;"#;
+        assert_eq!(run(src).len(), 3);
     }
 }
