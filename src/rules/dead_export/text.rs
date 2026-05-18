@@ -23,11 +23,18 @@
 //!     module is treated as live — we can't tell from the index alone which
 //!     specific names `ns.*` accesses touch.
 //!   - `export default` is matched against the `"default"` usage key.
+//!   - Exported types/interfaces that parameterize the signature of another
+//!     exported function in the same file are kept — callers consume them
+//!     structurally (by passing an object literal to that function) without
+//!     ever importing the type name.
 
 use crate::diagnostic::{Diagnostic, Severity};
+use crate::parsing::ts_language_for;
 use crate::project::import_index::{ExportKind, ImportKind};
 use crate::rules::backend::{CheckCtx, TextCheck};
 use crate::rules::path_utils::{is_config_file, is_framework_entry_point};
+use crate::rules::walker::walk_tree;
+use std::collections::HashSet;
 use std::path::Path;
 
 const RULE_ID: &str = "dead-export";
@@ -122,6 +129,12 @@ impl TextCheck for Check {
         let magic: std::collections::HashSet<&str> =
             ctx.project.framework_magic_exports().collect();
 
+        // Types/interfaces consumed structurally by other exported functions
+        // in the same file. Callers don't have to import the type name —
+        // passing an object literal to the exported function is enough — so
+        // the type's usage map looks empty but it is not dead.
+        let structurally_consumed = collect_structurally_consumed_types(ctx.source, ctx.lang);
+
         let mut diagnostics = Vec::new();
         for export in exports {
             if matches!(export.kind, ExportKind::StarReExport) {
@@ -131,6 +144,9 @@ impl TextCheck for Check {
                 continue;
             }
             if !index.get_usages(&canon, &export.name).is_empty() {
+                continue;
+            }
+            if structurally_consumed.contains(export.name.as_str()) {
                 continue;
             }
             diagnostics.push(Diagnostic {
@@ -148,6 +164,69 @@ impl TextCheck for Check {
             });
         }
         diagnostics
+    }
+}
+
+/// Collect the names of types/interfaces that appear inside an exported
+/// function signature in the same file. Such names are consumed
+/// structurally — callers reach them by passing an object literal to the
+/// exported function, never by importing the type — so they look unused in
+/// the import index even though they're load-bearing.
+///
+/// The walk only inspects nodes within `export_statement` whose declaration
+/// is a function (`function_declaration`, `generator_function_declaration`).
+/// Inside those, every `type_identifier` is collected. Type identifiers
+/// that appear inside another exported `type_alias_declaration` or
+/// `interface_declaration` are deliberately ignored — chaining one
+/// "potentially dead" type through another doesn't make either of them live.
+fn collect_structurally_consumed_types(source: &str, lang: crate::files::Language) -> HashSet<String> {
+    let mut out = HashSet::new();
+    let Some(grammar) = ts_language_for(lang) else {
+        return out;
+    };
+    let mut parser = tree_sitter::Parser::new();
+    if parser.set_language(&grammar).is_err() {
+        return out;
+    }
+    let Some(tree) = parser.parse(source, None) else {
+        return out;
+    };
+    let bytes = source.as_bytes();
+    walk_tree(&tree, |node| {
+        if node.kind() != "export_statement" {
+            return;
+        }
+        for child in node.named_children(&mut node.walk()) {
+            match child.kind() {
+                "function_declaration" | "generator_function_declaration" => {
+                    collect_type_identifiers(child, bytes, &mut out);
+                }
+                _ => {}
+            }
+        }
+    });
+    out
+}
+
+/// Push the text of every `type_identifier` in `node`'s signature into `out`.
+/// Only descends into `formal_parameters` and `return_type` children; skips
+/// `statement_block` so that type casts or local variable annotations inside
+/// the function body do not silence dead-export for types that appear nowhere
+/// in the public signature.
+fn collect_type_identifiers(node: tree_sitter::Node, source: &[u8], out: &mut HashSet<String>) {
+    let mut stack = vec![node];
+    while let Some(n) = stack.pop() {
+        if n.kind() == "type_identifier" {
+            if let Ok(text) = n.utf8_text(source) {
+                out.insert(text.to_string());
+            }
+        }
+        for child in n.named_children(&mut n.walk()) {
+            if child.kind() == "statement_block" {
+                continue;
+            }
+            stack.push(child);
+        }
     }
 }
 
@@ -436,6 +515,70 @@ mod tests {
             diags.len(),
             1,
             "components/<feature>/ should still be flagged"
+        );
+    }
+
+    #[test]
+    fn skips_type_used_in_exported_function_signature() {
+        // Regression for #100 — `FormServerErrorTarget` parameterizes
+        // `applyProblemErrorToForm`'s second argument. Callers pass an
+        // object literal into the function and never import the type by
+        // name, so the import index sees zero usages. The type IS still
+        // consumed structurally; dead-export must keep quiet.
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "form-server-errors.ts",
+                "export type FormServerErrorTarget = { field: string };\n\
+                 export function applyProblemErrorToForm(error: Error, target: FormServerErrorTarget): void {}\n",
+            ),
+            (
+                "app.ts",
+                "import { applyProblemErrorToForm } from './form-server-errors';\n\
+                 applyProblemErrorToForm(new Error('x'), { field: 'email' });\n",
+            ),
+        ];
+        let (_dir, diags) = run_on_project(&files, "form-server-errors.ts");
+        assert!(
+            diags.iter().all(|d| !d.message.contains("FormServerErrorTarget")),
+            "type used structurally by an exported function must not be flagged, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_type_not_referenced_by_any_export() {
+        // Sibling guard for #100 — a truly orphan type with no importer
+        // and no in-file consumer must still be flagged.
+        let files: Vec<(&str, &str)> = vec![
+            ("types.ts", "export type Orphan = { a: number };\n"),
+            ("other.ts", "export const z = 1;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files, "types.ts");
+        assert_eq!(diags.len(), 1, "orphan type should still be flagged");
+        assert!(diags[0].message.contains("Orphan"));
+    }
+
+    #[test]
+    fn still_flags_type_only_referenced_in_function_body() {
+        // Regression — a type that appears only as a cast (`as MyType`) inside
+        // a function body, not in the function's signature, must still be
+        // flagged as dead. Previously `collect_type_identifiers` walked all
+        // descendants including `statement_block`, which caused the body cast
+        // to silently suppress the diagnostic.
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "casts.ts",
+                "export type BodyOnly = { x: number };\n\
+                 export function doStuff() {\n\
+                   const v = {} as BodyOnly;\n\
+                   return v;\n\
+                 }\n",
+            ),
+            ("other.ts", "import { doStuff } from './casts';\ndoStuff();\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files, "casts.ts");
+        assert!(
+            diags.iter().any(|d| d.message.contains("BodyOnly")),
+            "type only cast inside body should still be flagged, got: {diags:?}"
         );
     }
 
