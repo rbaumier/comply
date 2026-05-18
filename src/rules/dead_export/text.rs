@@ -27,6 +27,10 @@
 //!     exported function in the same file are kept — callers consume them
 //!     structurally (by passing an object literal to that function) without
 //!     ever importing the type name.
+//!   - Exports referenced anywhere else in the same file (schema chains like
+//!     `BaseSchema.extend(...)`, `z.infer<typeof BaseSchema>`, composition
+//!     into another exported value) are kept. The base name is consumed
+//!     in-file; its derived form is what callers import.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::parsing::ts_language_for;
@@ -135,6 +139,12 @@ impl TextCheck for Check {
         // the type's usage map looks empty but it is not dead.
         let structurally_consumed = collect_structurally_consumed_types(ctx.source, ctx.lang);
 
+        // Names referenced anywhere in the file's body (outside their own
+        // declaration site). Captures schema chains (`BaseSchema.extend(...)`,
+        // `z.infer<typeof BaseSchema>`), object composition, and any other
+        // intra-file re-use that doesn't go through the import index.
+        let in_file_referenced = collect_in_file_referenced_names(ctx.source, ctx.lang);
+
         let mut diagnostics = Vec::new();
         for export in exports {
             if matches!(export.kind, ExportKind::StarReExport) {
@@ -147,6 +157,9 @@ impl TextCheck for Check {
                 continue;
             }
             if structurally_consumed.contains(export.name.as_str()) {
+                continue;
+            }
+            if in_file_referenced.contains(export.name.as_str()) {
                 continue;
             }
             diagnostics.push(Diagnostic {
@@ -206,6 +219,67 @@ fn collect_structurally_consumed_types(source: &str, lang: crate::files::Languag
         }
     });
     out
+}
+
+/// Collect names that occur 2+ times across the file's identifier and
+/// type-identifier nodes at module top level (outside function bodies). The
+/// declaration of an exported name contributes one occurrence; any additional
+/// occurrence at top level means the name is consumed in-file by another
+/// declaration (e.g. `BaseSchema.extend(...)`, `z.infer<typeof BaseSchema>`,
+/// composition into another exported value).
+///
+/// Function bodies are excluded so that a type referenced only as a cast
+/// inside an unrelated function (`{} as MyType`) does not silence the
+/// diagnostic — see `still_flags_type_only_referenced_in_function_body`.
+///
+/// The heuristic deliberately ignores binding scope. A shadowed parameter
+/// sharing a name with an export at top level would silence the diagnostic —
+/// a false negative we accept in exchange for never re-flagging an export
+/// that's genuinely re-used in the same file.
+fn collect_in_file_referenced_names(source: &str, lang: crate::files::Language) -> HashSet<String> {
+    let mut counts: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+    let Some(grammar) = ts_language_for(lang) else {
+        return HashSet::new();
+    };
+    let mut parser = tree_sitter::Parser::new();
+    if parser.set_language(&grammar).is_err() {
+        return HashSet::new();
+    }
+    let Some(tree) = parser.parse(source, None) else {
+        return HashSet::new();
+    };
+    let bytes = source.as_bytes();
+    let root = tree.root_node();
+    let mut stack: Vec<tree_sitter::Node> = vec![root];
+    while let Some(node) = stack.pop() {
+        match node.kind() {
+            "identifier" | "type_identifier" | "shorthand_property_identifier" => {
+                if let Ok(text) = node.utf8_text(bytes) {
+                    *counts.entry(text.to_string()).or_insert(0) += 1;
+                }
+            }
+            _ => {}
+        }
+        for child in node.named_children(&mut node.walk()) {
+            match child.kind() {
+                // Skip function bodies — references inside them aren't a sign
+                // the exported name is consumed by another module-level export.
+                "statement_block" => continue,
+                // Skip export clauses (`export { Foo as Bar }`) — the
+                // identifiers there are re-export references, not in-file
+                // consumers. Counting them would inflate `Foo`'s occurrence
+                // count and silence dead-export when neither `Foo` nor `Bar`
+                // is imported elsewhere.
+                "export_clause" | "export_specifier" => continue,
+                _ => {}
+            }
+            stack.push(child);
+        }
+    }
+    counts
+        .into_iter()
+        .filter_map(|(name, n)| if n >= 2 { Some(name) } else { None })
+        .collect()
 }
 
 /// Push the text of every `type_identifier` in `node`'s signature into `out`.
@@ -579,6 +653,62 @@ mod tests {
         assert!(
             diags.iter().any(|d| d.message.contains("BodyOnly")),
             "type only cast inside body should still be flagged, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn skips_schema_reused_via_extend_in_same_file() {
+        // Regression for #95 — `TeamCentralCodeSchema` is consumed in-file by
+        // `TeamCentralCodeSchema.extend(...)` and `z.infer<typeof TeamCentralCodeSchema>`.
+        // Only the derived schema is imported elsewhere; dead-export must not
+        // flag the base.
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "schemas.ts",
+                "import { z } from 'zod';\n\
+                 export const TeamCentralCodeSchema = z.object({ code: z.string() });\n\
+                 export type TeamCentralCode = z.infer<typeof TeamCentralCodeSchema>;\n\
+                 export const TeamCentralCodeWithCentraleResponseSchema = TeamCentralCodeSchema.extend({ extra: z.string() });\n\
+                 export type TeamCentralCodeWithCentraleResponse = z.infer<typeof TeamCentralCodeWithCentraleResponseSchema>;\n",
+            ),
+            (
+                "app.ts",
+                "import { TeamCentralCodeWithCentraleResponseSchema } from './schemas';\n\
+                 TeamCentralCodeWithCentraleResponseSchema.parse({});\n",
+            ),
+        ];
+        let (_dir, diags) = run_on_project(&files, "schemas.ts");
+        assert!(
+            diags.iter().all(|d| !d.message.contains("TeamCentralCodeSchema")),
+            "base schema reused in-file via .extend / z.infer<typeof> must not be flagged, got: {diags:?}"
+        );
+        assert!(
+            diags.iter().all(|d| !d.message.contains("TeamCentralCode\"")),
+            "base type reused in-file must not be flagged, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_export_only_re_exported_via_alias() {
+        // Regression — `export { Foo as Bar }` used to inflate `Foo`'s
+        // in-file reference count to 2, silencing dead-export even when
+        // neither `Foo` nor `Bar` is imported by any other file.
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "reexport.ts",
+                "export const Foo = 1;\nexport { Foo as Bar };\n",
+            ),
+            ("other.ts", "export const z = 1;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files, "reexport.ts");
+        let names: Vec<&str> = diags.iter().map(|d| d.message.as_str()).collect();
+        assert!(
+            diags.iter().any(|d| d.message.contains("`Foo`")),
+            "Foo is never imported — should be flagged, got: {names:?}"
+        );
+        assert!(
+            diags.iter().any(|d| d.message.contains("`Bar`")),
+            "Bar is never imported — should be flagged, got: {names:?}"
         );
     }
 
