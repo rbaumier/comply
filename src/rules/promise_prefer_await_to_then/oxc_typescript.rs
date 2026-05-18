@@ -24,6 +24,23 @@ fn inside_async_function<'a>(
     false
 }
 
+/// True when the receiver chain bottoms out at the literal identifier `z` (Zod).
+/// Syntactic only — does not resolve aliased imports (`z as zod`), variable-bound schemas (`const Schema = z.string()`), or nested `.pipe(z.x)`.
+fn receiver_is_zod_chain(expr: &Expression) -> bool {
+    let mut cur = expr;
+    loop {
+        match cur {
+            Expression::Identifier(id) => return id.name.as_str() == "z",
+            Expression::StaticMemberExpression(m) => cur = &m.object,
+            Expression::ComputedMemberExpression(m) => cur = &m.object,
+            Expression::CallExpression(c) => cur = &c.callee,
+            Expression::TSNonNullExpression(n) => cur = &n.expression,
+            Expression::ParenthesizedExpression(p) => cur = &p.expression,
+            _ => return false,
+        }
+    }
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[AstType::CallExpression]
@@ -47,6 +64,10 @@ impl OxcCheck for Check {
             return;
         };
         if member.property.name.as_str() != "then" {
+            return;
+        }
+        // Zod `.catch`/`.then` are schema combinators — flagging them is a false positive.
+        if receiver_is_zod_chain(&member.object) {
             return;
         }
         // Only flag inside async functions — switching to await is
