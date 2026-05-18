@@ -63,4 +63,33 @@ mod tests {
     fn allows_two_short_sentences() {
         assert!(run("// first thing happens. second thing happens.").is_empty());
     }
+
+    // Regression for #107: `// =>` trailers inside `@example` blocks are
+    // source-as-prose and must not be counted as a long sentence.
+    #[test]
+    fn ignores_jsdoc_example_block_with_result_trailer() {
+        let src = r#"/**
+ * Atomically replace the child set of an N-N junction table for one parent.
+ *
+ * @example
+ * const networks = yield* Result.await(replaceJunction({ a: 1 }));
+ * // => [{ id: "n-1", name: "Pegas" }, { id: "n-2", name: "Cristal" }]
+ */
+export function replaceJunction() {}"#;
+        assert!(run(src).is_empty(), "diagnostics: {:?}", run(src));
+    }
+
+    // Verify the `@example` skip ends when the next tag opens — long
+    // sentences in subsequent prose still get flagged.
+    #[test]
+    fn still_flags_long_sentence_after_example_block() {
+        let src = r#"/**
+ * @example
+ * const x = 1;
+ * @remarks
+ * this remark goes on and on and on and on and on and on and on and on and on and on forever please stop right now and ever.
+ */
+export function f() {}"#;
+        assert_eq!(run(src).len(), 1);
+    }
 }
