@@ -6,6 +6,24 @@ use std::sync::Arc;
 
 const TEST_MARKERS: &[&str] = &[".test.", ".spec.", "__tests__", "_test."];
 
+/// Auth middleware identifiers — matched verbatim.
+const AUTH_INVOCATION_MARKERS: &[&str] = &[
+    "requireAuth",
+    "requireAuthorization",
+    "authPlugin",
+    "authMiddleware",
+    "betterAuth",
+];
+
+/// Auth invocation patterns — matched after lowercasing.
+const AUTH_INVOCATION_MARKERS_CI: &[&str] = &[
+    ".use(auth",
+    "beforehandle: requireauth",
+    "beforehandle: auth",
+    "bearer(",
+    "jwt(",
+];
+
 fn is_test_file(path: &std::path::Path) -> bool {
     let s = path.to_string_lossy();
     TEST_MARKERS.iter().any(|m| s.contains(m))
@@ -27,9 +45,15 @@ impl OxcCheck for Check {
         }
 
         let lower = ctx.source.to_lowercase();
-        let touches_auth =
-            lower.contains("auth") || lower.contains("bearer") || lower.contains("jwt");
-        if !touches_auth {
+
+        // Bare "auth" in header literals is not middleware composition.
+        let exercises_auth_route = AUTH_INVOCATION_MARKERS
+            .iter()
+            .any(|m| ctx.source.contains(m))
+            || AUTH_INVOCATION_MARKERS_CI
+                .iter()
+                .any(|m| lower.contains(m));
+        if !exercises_auth_route {
             return Vec::new();
         }
 
