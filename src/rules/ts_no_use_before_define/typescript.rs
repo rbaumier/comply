@@ -7,14 +7,15 @@
 //! `var` bindings — both are hoisted and not subject to the Temporal
 //! Dead Zone.
 //!
-//! Picks up cases the previous tree-sitter walker missed:
-//! - references to a TDZ binding from inside a nested arrow / function
-//!   (the heuristic stopped recursing at scope boundaries),
-//! - destructuring-pattern declarations,
-//! - class declarations referenced before their definition,
-//! - block-scoped enums in TS.
+//! Also skips bindings initialized via TanStack Router's
+//! `createFileRoute(...)` / `createLazyFileRoute(...)` factories: the
+//! generated `Route` object is referenced (e.g. `Route.useSearch()`)
+//! inside component functions declared above the `export const Route = ...`
+//! line, and TanStack initializes `Route` before the component renders.
 
-use oxc_semantic::SymbolFlags;
+use oxc_ast::AstKind;
+use oxc_ast::ast::Expression;
+use oxc_semantic::{NodeId, SymbolFlags};
 use oxc_span::GetSpan;
 
 use crate::diagnostic::{Diagnostic, Severity};
@@ -37,6 +38,11 @@ impl crate::rules::backend::AstCheck for Check {
                 // Only block-scoped declarations have a Temporal Dead Zone.
                 // `var` and function declarations are hoisted.
                 if !flags.intersects(SymbolFlags::BlockScoped) {
+                    continue;
+                }
+
+                let decl_node_id = scoping.symbol_declaration(symbol_id);
+                if is_tanstack_route_factory(nodes, decl_node_id) {
                     continue;
                 }
 
@@ -65,6 +71,49 @@ impl crate::rules::backend::AstCheck for Check {
             diagnostics
         })
     }
+}
+
+fn is_tanstack_route_factory<'a>(
+    nodes: &'a oxc_semantic::AstNodes<'a>,
+    start: NodeId,
+) -> bool {
+    let iter = std::iter::once(nodes.kind(start)).chain(nodes.ancestor_kinds(start));
+    for kind in iter {
+        if let AstKind::VariableDeclarator(decl) = kind {
+            return decl
+                .init
+                .as_ref()
+                .is_some_and(initializer_is_tanstack_route);
+        }
+    }
+    false
+}
+
+fn initializer_is_tanstack_route(expr: &Expression) -> bool {
+    let Expression::CallExpression(outer) = expr else {
+        return false;
+    };
+    if callee_name(&outer.callee).is_some_and(is_tanstack_route_callee) {
+        return true;
+    }
+    if let Expression::CallExpression(inner) = &outer.callee
+        && callee_name(&inner.callee).is_some_and(is_tanstack_route_callee)
+    {
+        return true;
+    }
+    false
+}
+
+fn callee_name<'a>(expr: &'a Expression<'a>) -> Option<&'a str> {
+    match expr {
+        Expression::Identifier(ident) => Some(ident.name.as_str()),
+        Expression::StaticMemberExpression(member) => Some(member.property.name.as_str()),
+        _ => None,
+    }
+}
+
+fn is_tanstack_route_callee(name: &str) -> bool {
+    matches!(name, "createFileRoute" | "createLazyFileRoute")
 }
 
 fn byte_offset_to_line_col(source: &str, byte_offset: usize) -> (usize, usize) {
@@ -130,5 +179,34 @@ mod tests {
     fn allows_var_hoisting() {
         // `var` is function-scoped and hoisted: not a TDZ violation.
         assert!(run_on("console.log(x); var x = 1;").is_empty());
+    }
+
+    #[test]
+    fn allows_forward_ref_to_tanstack_create_lazy_file_route() {
+        let source = "function UsersPage() {\n\
+                      const search = Route.useSearch();\n\
+                      return null;\n\
+                      }\n\
+                      export const Route = createLazyFileRoute(\"/users\")({ component: UsersPage });";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_forward_ref_to_tanstack_create_file_route() {
+        let source = "function UsersPage() {\n\
+                      const nav = Route.useNavigate();\n\
+                      return null;\n\
+                      }\n\
+                      export const Route = createFileRoute(\"/users\")({ component: UsersPage });";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn still_flags_non_tanstack_forward_ref() {
+        let d = run_on(
+            "function f() { return Route.x; }\n\
+             const Route = makeRoute();",
+        );
+        assert_eq!(d.len(), 1, "non-TanStack forward refs still flagged");
     }
 }
