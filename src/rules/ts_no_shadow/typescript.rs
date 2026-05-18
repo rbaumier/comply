@@ -11,6 +11,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::{source_type_for_path, with_semantic};
 use crate::rules::backend::CheckCtx;
+use oxc_ast::AstKind;
 
 #[derive(Debug)]
 pub struct Check;
@@ -20,6 +21,7 @@ impl crate::rules::backend::AstCheck for Check {
         let source_type = source_type_for_path(ctx.path);
         with_semantic(ctx.source, source_type, |semantic| {
             let scoping = semantic.scoping();
+            let nodes = semantic.nodes();
             let mut diagnostics = Vec::new();
 
             for symbol_id in scoping.symbol_ids() {
@@ -29,6 +31,13 @@ impl crate::rules::backend::AstCheck for Check {
                 };
                 let name = scoping.symbol_name(symbol_id);
                 if is_single_uppercase(name) {
+                    continue;
+                }
+                let decl_node = scoping.symbol_declaration(symbol_id);
+                if std::iter::once(nodes.kind(decl_node))
+                    .chain(nodes.ancestor_kinds(decl_node))
+                    .any(is_type_only_binding_context)
+                {
                     continue;
                 }
                 let ident = oxc_str::Ident::from(name);
@@ -54,6 +63,22 @@ impl crate::rules::backend::AstCheck for Check {
 
 fn is_single_uppercase(name: &str) -> bool {
     name.len() == 1 && name.as_bytes()[0].is_ascii_uppercase()
+}
+
+/// True when the binding is in a type-only context (function/index/mapped/infer)
+/// whose names are not accessible at runtime.
+fn is_type_only_binding_context(kind: AstKind<'_>) -> bool {
+    matches!(
+        kind,
+        AstKind::TSFunctionType(_)
+            | AstKind::TSConstructorType(_)
+            | AstKind::TSCallSignatureDeclaration(_)
+            | AstKind::TSConstructSignatureDeclaration(_)
+            | AstKind::TSMethodSignature(_)
+            | AstKind::TSIndexSignature(_)
+            | AstKind::TSMappedType(_)
+            | AstKind::TSInferType(_)
+    )
 }
 
 fn byte_offset_to_line_col(source: &str, byte_offset: usize) -> (usize, usize) {
@@ -121,5 +146,44 @@ mod tests {
     fn allows_single_uppercase_type_param_shadow() {
         let d = run_on("function f<A>(a: A) { function g<A>(b: A) { return b; } return g(a); }");
         assert!(d.is_empty());
+    }
+
+    #[test]
+    fn allows_repeated_param_names_in_nested_function_type_signatures() {
+        let d = run_on(
+            "type AnyUseNavigate = (...args: never[]) => (...args: never[]) => unknown;",
+        );
+        assert!(d.is_empty(), "expected no diagnostics, got: {d:?}");
+    }
+
+    #[test]
+    fn allows_param_in_function_type_alias_matching_outer_const() {
+        let d = run_on("const x = 1; type F = (x: number) => void;");
+        assert!(d.is_empty(), "param inside function type should not shadow outer `x`");
+    }
+
+    #[test]
+    fn still_flags_shadowing_in_real_function() {
+        // Real function params still flag as shadows.
+        let d = run_on("const x = 1; function f(x: number) { return x; }");
+        assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn allows_index_signature_parameter_with_shadow() {
+        let d = run_on("interface I { [key: string]: number } const key = \"x\";");
+        assert!(d.is_empty(), "expected no diagnostics, got: {d:?}");
+    }
+
+    #[test]
+    fn allows_mapped_type_key_with_shadow() {
+        let d = run_on("type M<T> = { [K in keyof T]: T[K] }; const K = 1;");
+        assert!(d.is_empty(), "expected no diagnostics, got: {d:?}");
+    }
+
+    #[test]
+    fn allows_infer_type_parameter_with_shadow() {
+        let d = run_on("type Unpack<T> = T extends Promise<infer R> ? R : never; const R = 1;");
+        assert!(d.is_empty(), "expected no diagnostics, got: {d:?}");
     }
 }
