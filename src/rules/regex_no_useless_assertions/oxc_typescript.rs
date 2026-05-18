@@ -8,13 +8,57 @@ use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use std::sync::Arc;
 
+/// Returns true if byte at `i` is inside a `[...]` character class.
+/// Tracks `[` / `]` while respecting `\` escapes and the JavaScript/POSIX rule
+/// that the first `]` after `[` (or `[^`) is a literal character, not a closer.
+fn is_inside_char_class(bytes: &[u8], target: usize) -> bool {
+    let mut inside = false;
+    // When `just_opened` is true, the next `]` is treated as a literal.
+    let mut just_opened = false;
+    let mut i = 0;
+    while i < target {
+        match bytes[i] {
+            b'\\' => {
+                // Fix: guard against trailing backslash to avoid OOB panic.
+                i = i.saturating_add(2).min(bytes.len());
+                just_opened = false;
+            }
+            b'[' if !inside => {
+                inside = true;
+                just_opened = true;
+                i += 1;
+                // Skip optional `^` at the start of a negated class.
+                if i < target && i < bytes.len() && bytes[i] == b'^' {
+                    i += 1;
+                }
+            }
+            b']' if inside => {
+                if just_opened {
+                    // First `]` after `[` or `[^` is a literal in JS regex.
+                    just_opened = false;
+                    i += 1;
+                } else {
+                    inside = false;
+                    i += 1;
+                }
+            }
+            _ => {
+                just_opened = false;
+                i += 1;
+            }
+        }
+    }
+    inside
+}
+
 fn has_useless_dollar(pattern: &str) -> bool {
     let bytes = pattern.as_bytes();
     for (i, &b) in bytes.iter().enumerate() {
         if b == b'$' && i + 1 < bytes.len() {
             let next = bytes[i + 1];
             if next != b')' && next != b'|'
-                && (i == 0 || bytes[i - 1] != b'\\') {
+                && (i == 0 || bytes[i - 1] != b'\\')
+                && !is_inside_char_class(bytes, i) {
                     return true;
                 }
         }
@@ -27,7 +71,8 @@ fn has_useless_caret(pattern: &str) -> bool {
     for (i, &b) in bytes.iter().enumerate() {
         if b == b'^' && i > 0 {
             let prev = bytes[i - 1];
-            if prev != b'(' && prev != b'|' && prev != b'[' && prev != b'\\' {
+            if prev != b'(' && prev != b'|' && prev != b'[' && prev != b'\\'
+                && !is_inside_char_class(bytes, i) {
                 return true;
             }
         }
@@ -36,6 +81,59 @@ fn has_useless_caret(pattern: &str) -> bool {
 }
 
 pub struct Check;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diagnostic::Diagnostic;
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+    #[test]
+    fn allows_negated_word_class_boundary_guard() {
+        // Issue #103 reproducer.
+        let src = r#"const re = /[^\w](?:body|response):\s*z\.(?:object|strictObject)\(/;"#;
+        assert!(run_on(src).is_empty(), "[^\\w] is a character class, not an assertion");
+    }
+
+    #[test]
+    fn allows_dollar_inside_char_class() {
+        // `$` inside `[...]` is a literal `$`, not an end-of-line assertion.
+        assert!(run_on(r#"const re = /[A-Za-z_$\xA0-￿]/;"#).is_empty());
+        assert!(run_on(r#"const re = /[\w$_]+/;"#).is_empty());
+    }
+
+    #[test]
+    fn allows_caret_inside_char_class() {
+        // `^` not at index 1 of a char class is a literal `^`.
+        assert!(run_on(r#"const re = /[a^b]/;"#).is_empty());
+    }
+
+    #[test]
+    fn still_flags_dollar_outside_char_class() {
+        assert_eq!(run_on(r#"const re = /[abc]$foo/;"#).len(), 1);
+    }
+
+    #[test]
+    fn does_not_panic_on_trailing_backslash() {
+        // `/\\/` — the pattern seen by the checker is `\\`, trailing backslash
+        // after the escape. Must not panic with OOB index.
+        assert!(run_on(r#"const re = /\\/;"#).is_empty());
+        // Incomplete char class with trailing backslash — also must not panic.
+        assert!(run_on(r#"const re = /[\\/;"#).is_empty() || true); // may or may not flag; no panic
+    }
+
+    #[test]
+    fn allows_dollar_after_literal_close_bracket() {
+        // `/[]$]/` — the first `]` after `[` is a literal in JS regex,
+        // so `$` here is inside the char class and must not be flagged.
+        assert!(run_on(r#"const re = /[]$]/;"#).is_empty());
+        // Negated variant: `/[^]$]/`
+        assert!(run_on(r#"const re = /[^]$]/;"#).is_empty());
+    }
+}
 
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
