@@ -3,9 +3,9 @@
 use std::sync::Arc;
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::oxc_helpers::byte_offset_to_line_col;
+use crate::oxc_helpers::{byte_offset_to_line_col, name_is_generic_type_param_in_scope};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::TSType;
+use oxc_ast::ast::{TSType, TSTypeName};
 use oxc_span::GetSpan;
 
 pub struct Check;
@@ -23,11 +23,12 @@ const NARROWING_UTILITY_TYPES: &[&str] = &[
     "Lowercase",
 ];
 
-fn target_is_narrowing(ty: &TSType, source: &str) -> bool {
+fn target_is_narrowing(ty: &TSType, _source: &str) -> bool {
     match ty {
         TSType::TSLiteralType(_) | TSType::TSTemplateLiteralType(_) => true,
         TSType::TSTypeReference(r) => {
-            let name = &source[r.type_name.span().start as usize..r.type_name.span().end as usize];
+            let TSTypeName::IdentifierReference(id) = &r.type_name else { return false };
+            let name = id.name.as_str();
             if r.type_arguments.is_some() {
                 // Generic utility type like `NonNullable<T>`.
                 NARROWING_UTILITY_TYPES.contains(&name)
@@ -49,7 +50,7 @@ impl OxcCheck for Check {
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
+        semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let AstKind::TSAsExpression(as_expr) = node.kind() else {
@@ -67,6 +68,20 @@ impl OxcCheck for Check {
             return;
         }
 
+        // Skip `as TParam` when `TParam` is a generic type parameter on an
+        // enclosing function/method/class/interface/type alias. These are
+        // structural type-bridge casts (e.g. TanStack Router's
+        // `useSearch() as TSearch`), not narrowings.
+        if let TSType::TSTypeReference(r) = &as_expr.type_annotation
+            && r.type_arguments.is_none()
+        {
+            let TSTypeName::IdentifierReference(id) = &r.type_name else { return };
+            let name = id.name.as_str();
+            if name_is_generic_type_param_in_scope(name, node.id(), semantic) {
+                return;
+            }
+        }
+
         let (line, column) = byte_offset_to_line_col(ctx.source, as_expr.span.start as usize);
         diagnostics.push(Diagnostic {
             path: Arc::clone(&ctx.path_arc),
@@ -77,5 +92,48 @@ impl OxcCheck for Check {
             severity: Severity::Warning,
             span: None,
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+    #[test]
+    fn flags_pascal_user_type() {
+        assert_eq!(run_on("const x = value as AdminUser;").len(), 1);
+    }
+
+    #[test]
+    fn flags_literal_target() {
+        assert_eq!(run_on("const x = val as 'foo';").len(), 1);
+    }
+
+    #[test]
+    fn allows_generic_type_param_in_function() {
+        // Regression for #114: `as TSearch` where `<TSearch>` is on the
+        // enclosing function is a structural type bridge, not a narrowing.
+        let src = "function useTypedSearch<TSearch>(api: { useSearch: () => unknown }) {\n\
+                   const search = api.useSearch() as TSearch;\n\
+                   return search;\n}";
+        let diags = run_on(src);
+        assert!(diags.is_empty(), "unexpected diags: {:?}", diags);
+    }
+
+    #[test]
+    fn allows_generic_type_param_in_class_method() {
+        let src = "class Wrap<T> { unwrap(v: unknown) { return v as T; } }";
+        let diags = run_on(src);
+        assert!(diags.is_empty(), "unexpected diags: {:?}", diags);
+    }
+
+    #[test]
+    fn flags_pascal_cased_when_not_generic_param() {
+        let diags = run_on("function f() { return x as MyType; }");
+        assert_eq!(diags.len(), 1);
     }
 }

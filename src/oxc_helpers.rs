@@ -78,3 +78,35 @@ where
     let semantic = SemanticBuilder::new().build(&parse_ret.program).semantic;
     f(&semantic)
 }
+
+/// True when `name` matches a generic type parameter declared on any enclosing
+/// function, method, class, interface, or type alias of `node`.
+#[must_use]
+pub fn name_is_generic_type_param_in_scope(
+    name: &str,
+    node_id: oxc_semantic::NodeId,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_ast::AstKind;
+    for ancestor in semantic.nodes().ancestors(node_id) {
+        let type_params = match ancestor.kind() {
+            AstKind::Function(f) => f.type_parameters.as_deref(),
+            AstKind::ArrowFunctionExpression(a) => a.type_parameters.as_deref(),
+            AstKind::Class(c) => c.type_parameters.as_deref(),
+            AstKind::TSInterfaceDeclaration(i) => i.type_parameters.as_deref(),
+            AstKind::TSTypeAliasDeclaration(a) => a.type_parameters.as_deref(),
+            AstKind::TSMethodSignature(m) => m.type_parameters.as_deref(),
+            AstKind::TSCallSignatureDeclaration(c) => c.type_parameters.as_deref(),
+            AstKind::TSConstructSignatureDeclaration(c) => c.type_parameters.as_deref(),
+            _ => None,
+        };
+        if let Some(tp_decl) = type_params {
+            for tp in &tp_decl.params {
+                if tp.name.name.as_str() == name {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}

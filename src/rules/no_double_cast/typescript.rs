@@ -36,6 +36,16 @@ impl AstCheck for Check {
         if inner.kind() != "as_expression" {
             return;
         }
+        // `x as unknown as T` is the canonical contravariant-boundary escape
+        // hatch; skip it. The middle type (named child 1 of the inner cast)
+        // must be the `unknown` keyword.
+        if let Some(inner_target) = inner.named_child(1)
+            && inner_target
+                .utf8_text(ctx.source.as_bytes())
+                .is_ok_and(|t| t.trim() == "unknown")
+        {
+            return;
+        }
         let pos = node.start_position();
         diagnostics.push(Diagnostic {
             path: std::sync::Arc::clone(&ctx.path_arc),
@@ -62,13 +72,18 @@ mod tests {
     }
 
     #[test]
-    fn flags_as_unknown_as_t() {
-        assert_eq!(run_on("const x = value as unknown as MyType;").len(), 1);
+    fn flags_as_any_as_t() {
+        assert_eq!(run_on("const x = value as any as User;").len(), 1);
     }
 
     #[test]
-    fn flags_as_any_as_t() {
-        assert_eq!(run_on("const x = value as any as User;").len(), 1);
+    fn allows_as_unknown_as_t() {
+        // `as unknown as T` is the canonical contravariant-boundary escape
+        // hatch — required by TanStack Router and similar generic bridges.
+        // Regression for #114.
+        let src = "const navigate = routeApi.useNavigate() as unknown as \
+                   (options: { search: (p: TSearch) => TSearch }) => void;";
+        assert!(run_on(src).is_empty(), "unexpected diags: {:?}", run_on(src));
     }
 
     #[test]
