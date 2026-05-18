@@ -56,11 +56,22 @@ impl OxcCheck for Check {
         let row = line.saturating_sub(1);
         let lines: Vec<&str> = ctx.source.lines().collect();
 
-        if row > 0 && lines.get(row - 1).is_some_and(|l| {
-            let t = l.trim();
-            t.starts_with("//") || t.starts_with("/*") || t.starts_with("*")
-        }) {
-            return;
+        // Blank lines between comment and declaration still count as documentation.
+        let mut probe = row;
+        while probe > 0 {
+            probe -= 1;
+            let Some(text) = lines.get(probe) else { break };
+            let trimmed = text.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if trimmed.starts_with("//")
+                || trimmed.starts_with("/*")
+                || trimmed.starts_with("*")
+            {
+                return;
+            }
+            break;
         }
 
         let has_comment_before = semantic.comments().iter().any(|c| {
@@ -112,6 +123,24 @@ mod tests {
         // metacharacters IS its own documentation.
         let src = r#"const r = /^Type invalide : chaîne attendu, nombre reçu$/;"#;
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_block_comment_above_const_declaration() {
+        // Regression for rbaumier/comply#102 — a multi-line `//` comment
+        // block describing the regex semantics, separated from the `const`
+        // declaration by a blank line, should still count as documentation
+        // for the regex inside the declaration.
+        let src = "// Two regexes, intentionally separate so each one is plain and self-explanatory.\n//\n// `BODY_RESPONSE_CALL_RE` — Elysia's legacy fluent shape: a `.body(...)` or\n// `.response(...)` method call whose first token is `z.object(` / `z.strictObject(`.\n\nconst BODY_RESPONSE_CALL_RE = /\\.(?:body|response)\\(\\s*z\\.(?:object|strictObject)\\(/;\n";
+        assert!(run(src).is_empty(), "expected no diagnostics, got: {:?}", run(src));
+    }
+
+    #[test]
+    fn still_flags_when_only_unrelated_code_precedes() {
+        // Sanity check: skipping blank lines must not reach past real code
+        // and treat a far-away comment as documentation for this regex.
+        let src = "// A comment about something unrelated.\nconst other = 1;\n\nconst r = /^[a-z]+@[a-z]+\\.[a-z]{2,4}$/;\n";
+        assert_eq!(run(src).len(), 1);
     }
 
     #[test]
