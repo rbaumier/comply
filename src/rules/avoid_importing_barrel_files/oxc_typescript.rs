@@ -1,9 +1,14 @@
 //! avoid-importing-barrel-files OXC backend — flag relative imports that
 //! resolve to a barrel file.
+//!
+//! Skipped when the importing file lives under a `routes/` directory: that's
+//! the TanStack Router file-system convention where `index.tsx` is the leaf
+//! route module for a segment, not a re-export hub.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
+use std::path::Path;
 use std::sync::Arc;
 
 const INDEX_SUFFIXES: &[&str] = &[
@@ -29,6 +34,11 @@ fn is_barrel_path(module: &str) -> bool {
     INDEX_SUFFIXES.iter().any(|s| module.ends_with(s))
 }
 
+fn is_tanstack_route_file(path: &Path) -> bool {
+    path.components()
+        .any(|c| c.as_os_str() == "routes")
+}
+
 pub struct Check;
 
 impl OxcCheck for Check {
@@ -48,6 +58,9 @@ impl OxcCheck for Check {
         };
         let module = import.source.value.as_str();
         if !is_barrel_path(module) {
+            return;
+        }
+        if is_tanstack_route_file(ctx.path) {
             return;
         }
         let (line, column) =
@@ -121,5 +134,17 @@ mod tests {
     #[test]
     fn allows_file_named_index_like() {
         assert!(run_on("import { foo } from './indexer';").is_empty());
+    }
+
+    #[test]
+    fn allows_index_import_from_tanstack_route_file() {
+        // Regression for #160: TanStack route files (under `routes/`) commonly
+        // import `./<segment>/index` as a leaf route module, not a barrel.
+        let d = crate::rules::test_helpers::run_oxc_ts_with_path(
+            "import { Route } from './_authed/index';",
+            &Check,
+            "src/routes/__root.tsx",
+        );
+        assert!(d.is_empty(), "expected no diagnostics, got {d:?}");
     }
 }
