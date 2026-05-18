@@ -28,7 +28,23 @@ fn find_matching_brace(bytes: &[u8], start: usize) -> Option<usize> {
     None
 }
 
-fn body_calls_setter(body: &str) -> bool {
+/// Returns `true` if the setter name suggests it tracks error/status/loading
+/// state rather than real optimistic UI (e.g. `setRootError`, `setSubmitStatus`,
+/// `setIsPending`). These are set *after* a failed request, not before — the
+/// inverse of an optimistic update.
+fn is_error_or_status_setter(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    const SUFFIXES: &[&str] = &["error", "status", "loading", "pending", "failure"];
+    SUFFIXES.iter().any(|s| lower.ends_with(s))
+        || lower.contains("error")
+        || lower.contains("status")
+}
+
+/// Returns `true` if the catch body contains a setter call that looks like a
+/// real rollback (i.e. not an error/status setter). The optimistic-rollback
+/// pattern reverts a value the success path would have kept — error setters
+/// don't fit that shape.
+fn body_calls_rollback_setter(body: &str) -> bool {
     let bytes = body.as_bytes();
     let mut i = 0;
     while i + 4 <= bytes.len() {
@@ -41,7 +57,10 @@ fn body_calls_setter(body: &str) -> bool {
                 j += 1;
             }
             if j < bytes.len() && bytes[j] == b'(' {
-                return true;
+                let name = &body[i..j];
+                if !is_error_or_status_setter(name) {
+                    return true;
+                }
             }
             i = j;
         } else {
@@ -99,7 +118,7 @@ impl TextCheck for Check {
                 break;
             };
             let body = &ctx.source[j + 1..end];
-            if body_calls_setter(body) {
+            if body_calls_rollback_setter(body) {
                 let prefix = &ctx.source[..abs];
                 let line = prefix.bytes().filter(|b| *b == b'\n').count() + 1;
                 let col = prefix.rfind('\n').map_or(abs, |nl| abs - nl - 1) + 1;
@@ -153,5 +172,32 @@ mod tests {
     fn allows_no_catch() {
         let src = "async function f() { await save(); setItems(next); }";
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_root_error_setter_in_auth_form_catch() {
+        // Regression for #99: sign-in onSubmit clears root error then sets it
+        // on failure. There's no optimistic value to roll back — the success
+        // path navigates away.
+        let src = "async function onSubmit(value) { \
+                       setRootError(null); \
+                       try { await signIn.email(value); } \
+                       catch (e) { setRootError('Invalid credentials'); } \
+                   }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_status_or_pending_setter_in_catch() {
+        let src = "try { await save(); } catch (e) { setSubmitStatus('failed'); setIsPending(false); }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_mixed_setter_when_real_rollback_present() {
+        // Real rollback setter alongside an error setter still warrants the
+        // suggestion — the rollback is what `useOptimistic` would replace.
+        let src = "try { await save(); } catch (e) { setRootError('x'); setItems(prev); }";
+        assert_eq!(run(src).len(), 1);
     }
 }
