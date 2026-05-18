@@ -1368,6 +1368,7 @@ pub mod no_array_reverse;
 pub mod no_array_sort_mutation;
 pub mod no_assign_mutated_array;
 pub mod no_await_expression_member;
+pub mod no_await_in_loop;
 pub mod no_await_in_promise_methods;
 pub mod no_catch_log_rethrow;
 pub mod no_catch_without_use;
@@ -1956,6 +1957,7 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         no_async_without_await::register(),
         no_async_array_callback::register(),
         no_floating_promise::register(),
+        no_await_in_loop::register(),
         no_redundant_await::register(),
         no_redundant_state::register(),
         no_unused_locators::register(),

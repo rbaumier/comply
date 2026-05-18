@@ -78,18 +78,7 @@ pub fn register_all() -> Vec<RuleDef> {
         ),
         // --- v1.1 additions ---
         // `id-length` is handled natively — see `src/rules/id_length/`.
-        // The previous oxlint + clippy delegation hid the offending
-        // identifier behind a generic message; the native version
-        // names it.
-        entry(
-            "no-await-in-loop",
-            "no-await-in-loop",
-            Severity::Error,
-            "Sequential `await` in a loop serializes independent work.",
-            "If the iterations don't depend on each other, use \
-             `Promise.all(items.map(f))` instead. If they do depend, keep the \
-             loop and document why.",
-        ),
+        // `no-await-in-loop` handled natively — see src/rules/no_await_in_loop/.
         entry(
             "no-param-reassign",
             "no-param-reassign",
