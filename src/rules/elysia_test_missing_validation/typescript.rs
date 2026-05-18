@@ -23,6 +23,13 @@ crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
         return;
     }
 
+    let uses_elysia_client = ctx.source.contains("app.handle(")
+        || ctx.source.contains("treaty(")
+        || ctx.source.contains("new Elysia(");
+    if !uses_elysia_client {
+        return;
+    }
+
     if ctx.source.contains("400") || ctx.source.contains("422") {
         return;
     }
@@ -54,19 +61,27 @@ mod tests {
 
     #[test]
     fn flags_schema_without_400() {
-        let src = "import { Elysia, t } from 'elysia';\ntest('create', () => { app.post('/x', () => {}, { body: t.Object({ a: t.String() }) }); expect(r.status).toBe(200); });";
+        let src = "import { Elysia, t } from 'elysia';\nconst app = new Elysia();\ntest('create', async () => { const r = await app.handle(new Request('/x', { method: 'POST', body: '{}' })); expect(r.status).toBe(200); });\n// body: t.Object({ a: t.String() })";
         assert_eq!(run_on_test(src).len(), 1);
     }
 
     #[test]
     fn allows_schema_with_400() {
-        let src = "import { Elysia, t } from 'elysia';\ntest('create rejects', () => { app.post('/x', () => {}, { body: t.Object({ a: t.String() }) }); expect(r.status).toBe(400); });";
+        let src = "import { Elysia, t } from 'elysia';\nconst app = new Elysia();\ntest('create rejects', async () => { const r = await app.handle(new Request('/x', { method: 'POST', body: '{}' })); expect(r.status).toBe(400); });\n// body: t.Object({ a: t.String() })";
         assert!(run_on_test(src).is_empty());
     }
 
     #[test]
     fn ignores_test_without_schema() {
         let src = "import { Elysia } from 'elysia';\ntest('hello', () => { expect(r.status).toBe(200); });";
+        assert!(run_on_test(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_static_analysis_sweep_without_elysia_client() {
+        // Regression for #105: filesystem-sweep tests over handler source files
+        // mention `body:` in strings/comments but never make Elysia requests.
+        let src = "describe('no inline z.object in Elysia .body() / .response()', () => {\n  it('every handler wires the canonical schema', async () => {\n    const offenders = await findAllOffenders();\n    expect(offenders).toEqual([]);\n  });\n});";
         assert!(run_on_test(src).is_empty());
     }
 }
