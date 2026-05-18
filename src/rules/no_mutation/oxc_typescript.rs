@@ -91,6 +91,14 @@ impl OxcCheck for Check {
                     if let Expression::Identifier(obj) = &member.object
                         && obj.name.as_str() == "Object"
                             && let Some(first_arg) = call.arguments.first() {
+                                // Skip `Object.assign(fn, { ...literal })` — attaching a
+                                // static property to a function. JS has no immutable
+                                // alternative; see rbaumier/comply#154.
+                                if method == "assign"
+                                    && is_assign_static_to_function(call, semantic)
+                                {
+                                    return;
+                                }
                                 let root = match first_arg.as_expression() {
                                     Some(Expression::Identifier(ident)) => {
                                         Some(ident.name.as_str())
@@ -288,6 +296,38 @@ fn is_inside_result_gen(
     false
 }
 
+/// True when `call` is `Object.assign(fn, { ...literal })` where `fn` is
+/// an identifier bound to a `const`-declared function/arrow expression.
+/// Recognises the JS-canonical "attach static prop to a function" pattern.
+fn is_assign_static_to_function(
+    call: &oxc_ast::ast::CallExpression,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let Some(first) = call.arguments.first() else { return false };
+    let Some(second) = call.arguments.get(1) else { return false };
+
+    if !matches!(second, oxc_ast::ast::Argument::ObjectExpression(_)) {
+        return false;
+    }
+
+    let oxc_ast::ast::Argument::Identifier(ident) = first else { return false };
+    let Some(ref_id) = ident.reference_id.get() else { return false };
+    let scoping = semantic.scoping();
+    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else { return false };
+    let decl_node_id = scoping.symbol_declaration(sym_id);
+    let nodes = semantic.nodes();
+    for kind in std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id)) {
+        if let AstKind::VariableDeclarator(decl) = kind {
+            return matches!(
+                decl.init,
+                Some(Expression::ArrowFunctionExpression(_))
+                    | Some(Expression::FunctionExpression(_)),
+            );
+        }
+    }
+    false
+}
+
 fn is_result_gen_callee(callee: &Expression) -> bool {
     let Expression::StaticMemberExpression(member) = callee else {
         return false;
@@ -337,6 +377,27 @@ mod tests {
             }
         "#;
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_object_assign_attaching_static_to_function() {
+        // Regression for rbaumier/comply#154 — Object.assign on a function
+        // const with an object literal is the canonical static-prop pattern.
+        let src = r#"
+            const defaults = { mode: "strict" };
+            const parser = (input: unknown) => input;
+            return Object.assign(parser, { defaults });
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_object_assign_on_plain_const() {
+        let src = r#"
+            const target = { a: 1 };
+            Object.assign(target, { b: 2 });
+        "#;
+        assert_eq!(run(src).len(), 1);
     }
 }
 

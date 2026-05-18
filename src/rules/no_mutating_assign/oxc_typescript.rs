@@ -21,7 +21,7 @@ impl OxcCheck for Check {
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
+        semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let AstKind::CallExpression(call) = node.kind() else { return };
@@ -46,6 +46,15 @@ impl OxcCheck for Check {
                 return;
             }
 
+        // Allow `Object.assign(fn, { ...literal })` — attaching a static
+        // property to a function. JS has no immutable alternative:
+        // spreading a function strips its callable nature, and a cast +
+        // direct assignment still mutates. The pattern is canonical for
+        // exposing parser/builder metadata alongside the function.
+        if is_assign_static_to_function(call, semantic) {
+            return;
+        }
+
         let (line, column) = byte_offset_to_line_col(ctx.source, call.span.start as usize);
         diagnostics.push(Diagnostic {
             path: Arc::clone(&ctx.path_arc),
@@ -58,5 +67,90 @@ impl OxcCheck for Check {
             severity: Severity::Warning,
             span: None,
         });
+    }
+}
+
+/// True when `call` is `Object.assign(fn, { ...literal })` where `fn` is
+/// an identifier bound to a `const`-declared function/arrow expression.
+/// Recognises the JS-canonical "attach static prop to a function" pattern.
+fn is_assign_static_to_function(
+    call: &oxc_ast::ast::CallExpression,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let Some(first) = call.arguments.first() else { return false };
+    let Some(second) = call.arguments.get(1) else { return false };
+
+    // Second arg must be a fresh object literal.
+    if !matches!(second, oxc_ast::ast::Argument::ObjectExpression(_)) {
+        return false;
+    }
+
+    // First arg must be an identifier resolving to a function-typed const.
+    let oxc_ast::ast::Argument::Identifier(ident) = first else { return false };
+    let Some(ref_id) = ident.reference_id.get() else { return false };
+    let scoping = semantic.scoping();
+    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else { return false };
+    let decl_node_id = scoping.symbol_declaration(sym_id);
+    let nodes = semantic.nodes();
+    // Walk up from the declaration name to the VariableDeclarator and inspect its initializer.
+    for kind in std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id)) {
+        if let AstKind::VariableDeclarator(decl) = kind {
+            return matches!(
+                decl.init,
+                Some(oxc_ast::ast::Expression::ArrowFunctionExpression(_))
+                    | Some(oxc_ast::ast::Expression::FunctionExpression(_)),
+            );
+        }
+    }
+    false
+}
+
+#[cfg(test)]
+mod oxc_tests {
+    use super::*;
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(src, &Check)
+    }
+
+    #[test]
+    fn allows_attaching_static_to_arrow_function() {
+        // Regression for rbaumier/comply#154 — Object.assign on a function
+        // const with an object literal is the canonical static-prop pattern.
+        let src = r#"
+            const defaults = { mode: "strict" };
+            const parser = (input: unknown) => input;
+            const withDefaults = Object.assign(parser, { defaults });
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_attaching_static_to_function_expression() {
+        let src = r#"
+            const fn = function (x: number) { return x + 1; };
+            const withMeta = Object.assign(fn, { version: 1 });
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_assign_on_non_function_const() {
+        let src = r#"
+            const target = { a: 1 };
+            Object.assign(target, { b: 2 });
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_assign_on_function_with_identifier_source() {
+        // Source must be a fresh object literal — variable sources still fire.
+        let src = r#"
+            const extras = { defaults: 1 };
+            const parser = (input: unknown) => input;
+            Object.assign(parser, extras);
+        "#;
+        assert_eq!(run(src).len(), 1);
     }
 }
