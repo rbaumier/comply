@@ -129,9 +129,16 @@ impl OxcCheck for Check {
                 // bounded, escape-free pattern. The structurally
                 // correct alternative (`Result.all`) is missing from
                 // better-result: tracking dmmulroy/better-result#32.
+                //
+                // Same exemption inside a `Result.gen(function*() { ... })`
+                // block — the generator body is the canonical
+                // accumulator site for sequencing `yield*` results,
+                // and the spread alternative breaks short-circuiting
+                // on the first error.
                 if matches!(method, "push" | "unshift")
                     && matches!(&member.object, Expression::Identifier(_))
-                    && is_inside_loop_body(node, semantic)
+                    && (is_inside_loop_body(node, semantic)
+                        || is_inside_result_gen(node, semantic))
                 {
                     return;
                 }
@@ -243,6 +250,94 @@ fn is_inside_loop_body(
         }
     }
     false
+}
+
+/// True when `node` lives inside the generator function passed to
+/// `Result.gen(function*() { ... })` (or an arrow form). The generator
+/// body sequences `yield*` results into a local array — that's the
+/// canonical accumulator site, and the spread alternative breaks
+/// short-circuiting on the first error.
+fn is_inside_result_gen(
+    node: &oxc_semantic::AstNode,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let nodes = semantic.nodes();
+    for ancestor in nodes.ancestors(node.id()) {
+        match ancestor.kind() {
+            AstKind::Function(func) if func.generator => {
+                let parent = nodes.parent_node(ancestor.id());
+                if let AstKind::CallExpression(call) = parent.kind()
+                    && is_result_gen_callee(&call.callee)
+                {
+                    return true;
+                }
+                return false;
+            }
+            AstKind::ArrowFunctionExpression(_) => {
+                let parent = nodes.parent_node(ancestor.id());
+                if let AstKind::CallExpression(call) = parent.kind()
+                    && is_result_gen_callee(&call.callee)
+                {
+                    return true;
+                }
+                return false;
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+fn is_result_gen_callee(callee: &Expression) -> bool {
+    let Expression::StaticMemberExpression(member) = callee else {
+        return false;
+    };
+    let Expression::Identifier(obj) = &member.object else {
+        return false;
+    };
+    obj.name.as_str() == "Result" && member.property.name.as_str() == "gen"
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(src, &Check)
+    }
+
+    #[test]
+    fn ignores_push_inside_result_gen_with_loop() {
+        // Regression for rbaumier/comply#23 — canonical Result.gen accumulator.
+        let src = r#"
+            function mapResults(items, fn) {
+                return Result.gen(function* () {
+                    const mapped = [];
+                    for (const item of items) {
+                        mapped.push(yield* fn(item));
+                    }
+                    return mapped;
+                });
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_push_inside_result_gen_without_loop() {
+        // Regression for rbaumier/comply#23 — sequential yields inside Result.gen.
+        let src = r#"
+            function fetchAll() {
+                return Result.gen(function* () {
+                    const out = [];
+                    out.push(yield* loadUser());
+                    out.push(yield* loadOrders());
+                    return out;
+                });
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
 }
 
 fn report(diagnostics: &mut Vec<Diagnostic>, ctx: &CheckCtx, span_start: u32, root: &str, kind: &str) {
