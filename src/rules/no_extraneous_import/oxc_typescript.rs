@@ -101,3 +101,115 @@ fn is_bare_specifier(spec: &str) -> bool {
         && !spec.starts_with('/')
         && !spec.starts_with("node:")
 }
+
+#[cfg(test)]
+mod tests {
+    //! Regression tests for issue #101: false positives on devDependencies
+    //! (vitest, @testing-library/*) imported from `*.test.{ts,tsx}` and
+    //! `vitest.config.*` files.
+
+    use super::Check;
+    use crate::config::Config;
+    use crate::diagnostic::Diagnostic;
+    use crate::files::{Language, SourceFile};
+    use crate::project::ProjectCtx;
+    use crate::rules::backend::{CheckCtx, OxcCheck};
+    use oxc_allocator::Allocator;
+    use oxc_parser::Parser as OxcParser;
+    use oxc_semantic::SemanticBuilder;
+    use oxc_span::SourceType;
+    use std::fs;
+    use tempfile::TempDir;
+
+    fn run_with_pkg_at_path(pkg_json: &str, rel_path: &str, source: &str) -> Vec<Diagnostic> {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("package.json"), pkg_json).unwrap();
+        let file_path = dir.path().join(rel_path);
+        fs::create_dir_all(file_path.parent().unwrap()).unwrap();
+        fs::write(&file_path, source).unwrap();
+        let lang = Language::from_path(&file_path).unwrap();
+        let source_file = SourceFile {
+            path: file_path.clone(),
+            language: lang,
+        };
+        let refs = vec![&source_file];
+        let config = Config::default();
+        let project = ProjectCtx::load(&refs, &config);
+        let canon = fs::canonicalize(&file_path).unwrap();
+
+        let source_type = match lang {
+            Language::Tsx => SourceType::tsx(),
+            Language::JavaScript => SourceType::cjs(),
+            _ => SourceType::ts(),
+        };
+        let allocator = Allocator::default();
+        let parse_ret = OxcParser::new(&allocator, source, source_type).parse();
+        let semantic = SemanticBuilder::new().build(&parse_ret.program).semantic;
+        let ctx = CheckCtx::for_test_with_project(&canon, source, &project);
+
+        let mut diagnostics = Vec::new();
+        let kinds = Check.interested_kinds();
+        for node in semantic.nodes().iter() {
+            if kinds.contains(&node.kind().ty()) {
+                Check.run(node, &ctx, &semantic, &mut diagnostics);
+            }
+        }
+        diagnostics
+    }
+
+    #[test]
+    fn allows_vitest_in_dot_test_tsx_file() {
+        // Issue #101: `src/app/features/auth/components/login-form.test.tsx`
+        // importing vitest + @testing-library/* must not flag.
+        let pkg = r#"{
+            "dependencies": {"react": "^19"},
+            "devDependencies": {
+                "vitest": "^1",
+                "@testing-library/react": "^14",
+                "@testing-library/user-event": "^14"
+            }
+        }"#;
+        let src = r#"
+import { describe, expect, it, vi } from "vitest";
+import { screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+"#;
+        let d = run_with_pkg_at_path(
+            pkg,
+            "src/app/features/auth/components/login-form.test.tsx",
+            src,
+        );
+        assert!(d.is_empty(), "test file should not flag devDeps: {d:?}");
+    }
+
+    #[test]
+    fn allows_vitest_in_dot_test_ts_file() {
+        // Issue #101: `src/app/lib/form-server-errors.test.ts`
+        let pkg = r#"{"devDependencies":{"vitest":"^1"}}"#;
+        let src = r#"import { describe, expect, it } from "vitest";"#;
+        let d = run_with_pkg_at_path(pkg, "src/app/lib/form-server-errors.test.ts", src);
+        assert!(d.is_empty(), "test file should not flag devDeps: {d:?}");
+    }
+
+    #[test]
+    fn allows_vitest_in_vitest_config_file() {
+        // Issue #101: vitest.config.{ts,mts} importing from "vitest/config"
+        // must not flag — `*.config.*` is treated as tooling.
+        let pkg = r#"{"devDependencies":{"vitest":"^1"}}"#;
+        let src = r#"import { defineConfig } from "vitest/config";
+export default defineConfig({});"#;
+        let d = run_with_pkg_at_path(pkg, "vitest.config.ts", src);
+        assert!(d.is_empty(), "vitest.config.ts should not flag devDeps: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_dev_dep_in_production_code() {
+        // Guard against over-relaxing: production code outside test/config
+        // paths must still flag devDependency imports.
+        let pkg = r#"{"devDependencies":{"vitest":"^1"}}"#;
+        let src = r#"import { describe } from "vitest";"#;
+        let d = run_with_pkg_at_path(pkg, "src/app/features/auth/login.ts", src);
+        assert_eq!(d.len(), 1, "production code should still flag: {d:?}");
+        assert!(d[0].message.contains("vitest"));
+    }
+}
