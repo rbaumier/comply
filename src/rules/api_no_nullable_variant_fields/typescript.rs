@@ -21,6 +21,26 @@ fn is_optional_property(member: tree_sitter::Node) -> bool {
     false
 }
 
+/// True when the property's type annotation is the `never` keyword.
+/// Used to skip phantom / mutually-exclusive-props patterns such as
+/// `{ page?: never; pageSize?: never }`, which are type-level
+/// exclusions, not state-variant clusters.
+fn has_never_annotation(member: tree_sitter::Node, source: &[u8]) -> bool {
+    let Some(annotation) = member.child_by_field_name("type") else {
+        return false;
+    };
+    // annotation is `type_annotation` wrapping the actual type node.
+    let mut cursor = annotation.walk();
+    for child in annotation.children(&mut cursor) {
+        if child.kind() == "predefined_type"
+            && std::str::from_utf8(&source[child.byte_range()]).unwrap_or("") == "never"
+        {
+            return true;
+        }
+    }
+    false
+}
+
 /// Return a 4-character lowercase prefix bucket for `name`, so close
 /// variants such as `cancelReason` and `cancelledAt` collide on the
 /// same bucket (`canc`). Returns the empty string when the name has
@@ -48,6 +68,9 @@ fn collect_optional_prefixes(body: tree_sitter::Node, source: &[u8]) -> HashMap<
             continue;
         }
         if !is_optional_property(member) {
+            continue;
+        }
+        if has_never_annotation(member, source) {
             continue;
         }
         let Some(name_node) = member.child_by_field_name("name") else {
@@ -166,5 +189,19 @@ mod tests {
     #[test]
     fn allows_single_optional_field() {
         assert!(run("interface Order { id: string; cancelReason?: string }").is_empty());
+    }
+
+    #[test]
+    fn allows_phantom_never_props() {
+        // Regression for #120: `{ page?: never; pageSize?: never; q?: never; sort?: never }`
+        // is a mutually-exclusive-props / phantom-key pattern, not a
+        // state-variant cluster. The optional `?: never` declares the
+        // key MUST be absent — opposite of an optional state flag.
+        assert!(
+            run(
+                "type Phantom = { page?: never; pageSize?: never; q?: never; sort?: never };"
+            )
+            .is_empty()
+        );
     }
 }

@@ -3,6 +3,10 @@
 //! `cancelledAt?`, `cancelledBy?`). This pattern encodes a state machine
 //! in optional flags, which forces clients to guess invariants instead
 //! of relying on a discriminated union.
+//!
+//! Optional members typed as `never` (`page?: never`) are skipped —
+//! that is the mutually-exclusive-props / phantom-key pattern, where
+//! the key MUST be absent, the opposite of a state flag.
 
 mod oxc_typescript;
 #[cfg(test)]
