@@ -3,7 +3,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::{byte_offset_to_line_col, name_is_generic_type_param_in_scope};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{Expression, TSType, TSTypeName};
+use oxc_ast::ast::{Expression, TSArrayType, TSType, TSTypeName};
 use oxc_span::GetSpan;
 use std::sync::Arc;
 
@@ -27,6 +27,21 @@ impl OxcCheck for Check {
         let type_span = as_expr.type_annotation.span();
         let type_text = &ctx.source[type_span.start as usize..type_span.end as usize];
         if type_text == "const" {
+            return;
+        }
+
+        // Allow `as never` and `as never[]` — explicit type-system escape
+        // hatches used to bridge generic-table erasure (e.g. Drizzle's
+        // `tx.insert(table).values(values as never[])`). These are not
+        // narrowings; they're acknowledgements that the call site can't be
+        // typed precisely against a generic library helper.
+        if matches!(as_expr.type_annotation, TSType::TSNeverKeyword(_)) {
+            return;
+        }
+        if let TSType::TSArrayType(arr) = &as_expr.type_annotation
+            && let TSArrayType { element_type, .. } = &**arr
+            && matches!(element_type, TSType::TSNeverKeyword(_))
+        {
             return;
         }
 
@@ -120,6 +135,25 @@ mod tests {
         // PascalCase looks like a generic param but isn't declared in scope.
         let diags = run_on("function f() { return x as MyType; }");
         assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn allows_as_never_array_for_drizzle_generic_table() {
+        // Regression for #127: `as never[]` bridges generic-table erasure
+        // when calling a generic Drizzle helper from a generic wrapper —
+        // an explicit type-system escape hatch, not a narrowing.
+        let src = "async function replaceRows<TRow>(tx: any, table: any, values: readonly TRow[]) {\n\
+                   tx.insert(table).values(values as never[]);\n}";
+        let diags = run_on(src);
+        assert!(diags.is_empty(), "unexpected diags: {:?}", diags);
+    }
+
+    #[test]
+    fn allows_as_never() {
+        // `as never` is the canonical "this branch is unreachable" /
+        // generic-bridge escape hatch.
+        let diags = run_on("const x = foo as never;");
+        assert!(diags.is_empty(), "unexpected diags: {:?}", diags);
     }
 
     #[test]
