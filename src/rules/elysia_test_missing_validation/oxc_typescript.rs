@@ -31,6 +31,13 @@ impl OxcCheck for Check {
             return Vec::new();
         }
 
+        let uses_elysia_client = ctx.source.contains("app.handle(")
+            || ctx.source.contains("treaty(")
+            || ctx.source.contains("new Elysia(");
+        if !uses_elysia_client {
+            return Vec::new();
+        }
+
         if ctx.source.contains("400") || ctx.source.contains("422") {
             return Vec::new();
         }
