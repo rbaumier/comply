@@ -16,7 +16,6 @@ const DEPRECATED: &[(&str, &str)] = &[
     ("flex-shrink-0", "shrink-0"),
     ("flex-shrink", "shrink"),
     ("overflow-ellipsis", "text-ellipsis"),
-    ("overflow-clip", "text-clip"),
     ("decoration-slice", "box-decoration-slice"),
     ("decoration-clone", "box-decoration-clone"),
 ];
@@ -130,5 +129,12 @@ mod tests {
         let diags = run(r#"const x = <div class="flex-shrink-0" />;"#);
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("shrink-0"));
+    }
+
+    #[test]
+    fn allows_overflow_clip() {
+        // overflow-clip is a valid Tailwind utility (overflow: clip), not deprecated.
+        // It is distinct from text-clip (text-overflow: clip).
+        assert!(run(r#"const x = <div className="overflow-clip" />;"#).is_empty());
     }
 }
