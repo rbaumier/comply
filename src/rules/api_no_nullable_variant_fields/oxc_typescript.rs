@@ -34,6 +34,14 @@ fn collect_optional_prefixes(members: &oxc_allocator::Vec<'_, oxc_ast::ast::TSSi
         if !prop.optional {
             continue;
         }
+        // Skip phantom / mutually-exclusive-props patterns where the
+        // annotation is `never` — those keys MUST be absent, opposite
+        // of an optional state flag. (Regression: #120.)
+        if let Some(annot) = &prop.type_annotation
+            && matches!(annot.type_annotation, oxc_ast::ast::TSType::TSNeverKeyword(_))
+        {
+            continue;
+        }
         let name = match &prop.key {
             oxc_ast::ast::PropertyKey::StaticIdentifier(id) => id.name.as_str(),
             _ => continue,
@@ -102,5 +110,30 @@ impl OxcCheck for Check {
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+    #[test]
+    fn flags_two_optional_fields_sharing_prefix() {
+        let src = "interface Order { id: string; cancelReason?: string; cancelledAt?: string }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_phantom_never_props() {
+        // Regression for #120: `{ page?: never; pageSize?: never; q?: never; sort?: never }`
+        // is a mutually-exclusive-props / phantom-key pattern. `?: never`
+        // declares the key MUST be absent — opposite of an optional
+        // state flag, so the cluster heuristic must skip it.
+        let src = "type Phantom = { page?: never; pageSize?: never; q?: never; sort?: never };";
+        assert!(run_on(src).is_empty());
     }
 }
