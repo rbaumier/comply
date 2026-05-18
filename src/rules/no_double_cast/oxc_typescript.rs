@@ -3,7 +3,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::Expression;
+use oxc_ast::ast::{Expression, TSType};
 use std::sync::Arc;
 
 pub struct Check;
@@ -28,7 +28,20 @@ impl OxcCheck for Check {
         }
 
         // The inner expression of `x as A as B` is itself a TSAsExpression.
-        if !matches!(&as_expr.expression, Expression::TSAsExpression(_)) {
+        let Expression::TSAsExpression(inner) = &as_expr.expression else {
+            return;
+        };
+
+        // `x as unknown as T` is the canonical contravariant-boundary escape
+        // hatch (TypeScript itself recommends it for genuine type-erasure
+        // cases). Flagging it produces noise on TanStack Router / library
+        // bridges where the user has no other option.
+        // Only skip if the inner cast's own expression is NOT itself a
+        // TSAsExpression — a triple cast `((x as A) as unknown) as B` still
+        // contains a real `as A as unknown` inner pair that should fire.
+        if matches!(inner.type_annotation, TSType::TSUnknownKeyword(_))
+            && !matches!(inner.expression, Expression::TSAsExpression(_))
+        {
             return;
         }
 
@@ -46,5 +59,34 @@ impl OxcCheck for Check {
             severity: Severity::Error,
             span: None,
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+    #[test]
+    fn flags_as_any_as_t() {
+        assert_eq!(run_on("const x = value as any as User;").len(), 1);
+    }
+
+    #[test]
+    fn allows_as_unknown_as_t() {
+        // `as unknown as T` is the canonical contravariant-boundary escape
+        // hatch — required by TanStack Router etc. for generic type bridging.
+        let src = "const navigate = routeApi.useNavigate() as unknown as \
+                   (options: { search: (p: TSearch) => TSearch }) => void;";
+        let diags = run_on(src);
+        assert!(diags.is_empty(), "unexpected diags: {:?}", diags);
+    }
+
+    #[test]
+    fn allows_single_cast() {
+        assert!(run_on("const x = value as MyType;").is_empty());
     }
 }

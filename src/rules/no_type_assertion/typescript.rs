@@ -7,6 +7,21 @@ crate::ast_check! { on ["as_expression"] => |node, source, ctx, diagnostics|
         return;
     }
 
+    // Allow `x as unknown as T` — canonical contravariant-boundary escape
+    // hatch. Skip both halves: the outer cast (whose inner ends with
+    // `as unknown`) and the inner `as unknown` itself (whose parent is
+    // another as_expression).
+    if node_text.contains(" as unknown as ") {
+        return;
+    }
+    if node_text.trim_end().ends_with("as unknown") {
+        if let Some(parent) = node.parent() {
+            if parent.kind() == "as_expression" {
+                return;
+            }
+        }
+    }
+
     let pos = node.start_position();
     diagnostics.push(Diagnostic {
         path: std::sync::Arc::clone(&ctx.path_arc),
@@ -47,9 +62,9 @@ mod tests {
     }
 
     #[test]
-    fn flags_double_assertion() {
+    fn allows_as_unknown_as_t_double_assertion() {
         let diags = run_on("const x = foo as unknown as Bar;");
-        assert_eq!(diags.len(), 2);
+        assert!(diags.is_empty(), "unexpected diags: {:?}", diags);
     }
 
     #[test]
