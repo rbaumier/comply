@@ -32,6 +32,22 @@ impl OxcCheck for Check {
         if intersection.types.len() < 2 {
             return;
         }
+        // Reject intersections containing shapes that `interface … extends` can't handle:
+        // `Record<K, V>`, mapped types, or type literals with an index signature.
+        if intersection.types.iter().any(|ty| match ty {
+            TSType::TSTypeReference(ref_ty) => matches!(
+                &ref_ty.type_name,
+                oxc_ast::ast::TSTypeName::IdentifierReference(ident) if ident.name == "Record"
+            ),
+            TSType::TSMappedType(_) => true,
+            TSType::TSTypeLiteral(lit) => lit
+                .members
+                .iter()
+                .any(|m| matches!(m, oxc_ast::ast::TSSignature::TSIndexSignature(_))),
+            _ => false,
+        }) {
+            return;
+        }
         if !intersection.types.iter().all(is_named_type_ref) {
             return;
         }
@@ -50,5 +66,61 @@ impl OxcCheck for Check {
             severity: Severity::Warning,
             span: None,
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+    #[test]
+    fn flags_intersection_of_named_types() {
+        let diags = run_on("type X = A & B;");
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn flags_intersection_of_generic_types() {
+        let diags = run_on("type X = Base<T> & Mixin;");
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn allows_intersection_with_object_literal() {
+        assert!(run_on("type X = A & { extra: string };").is_empty());
+    }
+
+    #[test]
+    fn allows_plain_type_alias() {
+        assert!(run_on("type X = string;").is_empty());
+    }
+
+    /// Regression for #112 — `Record<K, V>` directly in the intersection
+    /// would produce an `interface … extends Record<…>` rewrite that TS
+    /// rejects (TS2310: index-signature aliases can't be extended).
+    #[test]
+    fn allows_intersection_with_record() {
+        assert!(
+            run_on("type AllowedFilters = Record<string, ZodType<unknown>> & ReservedFilterKeys;")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_intersection_with_mapped_type() {
+        assert!(
+            run_on("type X = { [K in keyof T]: T[K] } & Y;").is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_intersection_with_index_signature_literal() {
+        assert!(
+            run_on("type X = { [key: string]: number } & Y;").is_empty()
+        );
     }
 }
