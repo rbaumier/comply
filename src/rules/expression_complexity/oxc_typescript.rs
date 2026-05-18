@@ -30,6 +30,9 @@ fn count_operators(line: &str) -> usize {
         } else if bytes[i] == b'?' {
             if i + 1 < len && bytes[i + 1] == b'.' {
                 i += 2;
+            } else if i + 1 < len && bytes[i + 1] == b':' {
+                // TypeScript optional property marker (e.g. `key?: T`), not a ternary.
+                i += 2;
             } else {
                 count += 1;
                 i += 1;
@@ -69,5 +72,53 @@ impl OxcCheck for Check {
             }
         }
         diagnostics
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+    #[test]
+    fn flags_line_with_four_operators() {
+        let src = "const x = a && b || c ?? d ? e : f;";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_three_operators() {
+        let src = "const x = a && b || c ? d : e;";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_optional_chaining() {
+        let src = "const x = a?.b && c?.d || e;";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_optional_property_markers_in_type_literal() {
+        // Phantom-key marker type — each `?: never` is the constraint, not a ternary.
+        let src = "type ReservedFilterKeys = { page?: never; pageSize?: never; q?: never; sort?: never };";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_optional_function_parameter_markers() {
+        // `?:` in a function signature marks optional params, not ternaries.
+        let src = "function f(a?: T, b?: T, c?: T, d?: T): void {}";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_conditional_type_with_three_extra_operators() {
+        // Conditional type `?` counts as ternary; adding `&&`, `||`, `??` gives 4 total.
+        let src = "type T<X> = X extends string ? A && B || C ?? D : E;";
+        assert_eq!(run_on(src).len(), 1);
     }
 }
