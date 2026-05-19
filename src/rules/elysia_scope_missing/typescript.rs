@@ -128,6 +128,17 @@ mod tests {
     }
 
     #[test]
+    fn ignores_use_mutation_on_error_object_property() {
+        // Regression for #202: `useMutation({ onError: ... })` is a TanStack
+        // Query callback, not an Elysia plugin hook member call.
+        let src = "import { useMutation } from '@tanstack/react-query';\n\
+            export const useFormMutation = () => useMutation({\n\
+              onError: (error, variables, context, mutation) => { console.log(error); }\n\
+            });";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
     fn ignores_root_app_in_create_app_file() {
         use crate::project::ProjectCtx;
         use crate::rules::test_helpers::run_ts_with_project_and_path;

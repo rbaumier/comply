@@ -52,3 +52,34 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_framework(source, &Check, "elysia")
+    }
+
+    #[test]
+    fn flags_elysia_onerror_without_validation() {
+        let src = "import { Elysia } from 'elysia';\nnew Elysia().onError(({ error }) => 'oops');";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_elysia_onerror_with_validation_branch() {
+        let src = "import { Elysia } from 'elysia';\nnew Elysia().onError(({ code, error }) => code === 'VALIDATION' ? error.message : 'oops');";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_use_mutation_on_error_object_property() {
+        // Regression for #202: `useMutation({ onError: ... })` is a TanStack
+        // Query callback, not an Elysia lifecycle hook. The rule must only
+        // fire on `.onError(...)` member-call form.
+        let src = "import { useMutation } from '@tanstack/react-query';\n\
+            useMutation({ onError: (error, variables, context, mutation) => { console.log(error); } });";
+        assert!(run_on(src).is_empty());
+    }
+}

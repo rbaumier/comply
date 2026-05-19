@@ -65,4 +65,13 @@ mod tests {
         let src = "app.onError(() => 'oops');";
         assert!(crate::rules::test_helpers::run_ts(src, &Check).is_empty());
     }
+
+    #[test]
+    fn ignores_use_mutation_on_error_object_property() {
+        // Regression for #202: `useMutation({ onError: ... })` is a TanStack
+        // Query callback, not an Elysia `.onError()` member call.
+        let src = "import { useMutation } from '@tanstack/react-query';\n\
+            useMutation({ onError: (error, variables, context, mutation) => { console.log(error); } });";
+        assert!(run_on(src).is_empty());
+    }
 }
