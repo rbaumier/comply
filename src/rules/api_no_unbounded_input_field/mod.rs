@@ -1,6 +1,8 @@
 //! api-no-unbounded-input-field — flag zod fields used as request body
 //! that lack a `.max(...)` constraint. An unbounded `z.string()` is a
-//! resource-exhaustion vector.
+//! resource-exhaustion vector. Response/output shapes and config/env
+//! shapes (recognised by name suffix) are skipped — they are not HTTP
+//! request inputs.
 
 mod typescript;
 
