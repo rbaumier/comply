@@ -41,7 +41,7 @@ fn is_test_file(path: &std::path::Path) -> bool {
 /// response/output shapes (server-emitted) or config/env shapes (parsed from
 /// `process.env` / static files, not from untrusted clients).
 const NON_INPUT_NAME_MARKERS: &[&str] = &[
-    "Response", "Output", "Return", "Detail", "Select", "Config", "Env",
+    "Response", "Output", "Return", "Detail", "Select", "Config", "EnvSchema",
 ];
 
 /// Walk up from `node`, looking for a `variable_declarator` ancestor whose
@@ -223,6 +223,14 @@ mod tests {
     fn ignores_env_schema_by_name() {
         let src = "export const AppEnvSchema = z.object({ apiUrl: z.string() });";
         assert!(run_at(src, "src/api/env.ts").is_empty());
+    }
+
+    #[test]
+    fn flags_envelope_schema_in_api_path() {
+        // Regression: `WebhookEnvelopeSchema` contains "Env" but must not be
+        // exempted — only "EnvSchema" is the non-input marker.
+        let src = "export const WebhookEnvelopeSchema = z.object({ id: z.string() });";
+        assert_eq!(run_at(src, "src/api/webhooks.ts").len(), 1);
     }
 
     #[test]
