@@ -61,8 +61,9 @@ fn is_assignment_target(
 ) -> bool {
     use oxc_span::GetSpan;
     let nodes = semantic.nodes();
-    // Walk up at most 2 parents — the member may sit directly under an
-    // AssignmentExpression or under a thin AssignmentTarget wrapper.
+    // Walk up at most 3 parents to handle a parenthesised LHS like
+    // `(ref.current) = x`, where the member sits under a
+    // ParenthesizedExpression which sits under AssignmentExpression.
     let mut current = node_id;
     for _ in 0..3 {
         let parent_id = nodes.parent_id(current);
@@ -303,6 +304,14 @@ mod tests {
     #[test]
     fn flags_read_in_if_condition() {
         let src = "function C() { const r = useRef(0); if (r.current) { return null; } return null; }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // Regression for issue #179 — only the WRITE on the LHS should be
+    // suppressed; the READ on the RHS still flags.
+    #[test]
+    fn still_flags_read_in_self_assignment_rhs() {
+        let src = "function C() { const r = useRef(0); r.current = r.current + 1; return null; }";
         assert_eq!(run(src).len(), 1);
     }
 }
