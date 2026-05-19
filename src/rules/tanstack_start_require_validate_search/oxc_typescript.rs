@@ -19,6 +19,16 @@ impl OxcCheck for Check {
         semantic: &'a oxc_semantic::Semantic<'a>,
         ctx: &CheckCtx,
     ) -> Vec<Diagnostic> {
+        // Skip lazy-route files (*.lazy.{ts,tsx,js,jsx}) — validateSearch is not expected here.
+        let path_str = ctx.path.to_string_lossy();
+        if path_str.ends_with(".lazy.tsx")
+            || path_str.ends_with(".lazy.ts")
+            || path_str.ends_with(".lazy.jsx")
+            || path_str.ends_with(".lazy.js")
+        {
+            return Vec::new();
+        }
+
         // Bail early if source already contains `validateSearch`
         if ctx.source.contains("validateSearch") {
             return Vec::new();
@@ -56,5 +66,52 @@ impl OxcCheck for Check {
         }
 
         Vec::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rules::test_helpers::{run_oxc_ts, run_oxc_ts_with_path};
+
+    #[test]
+    fn flags_use_search_without_validate() {
+        assert_eq!(run_oxc_ts("const { page } = Route.useSearch()", &Check).len(), 1);
+    }
+
+    #[test]
+    fn allows_with_validate_search() {
+        assert!(run_oxc_ts(
+            "const { page } = Route.useSearch()\nconst route = createFileRoute('/posts')({ validateSearch: z.object({ page: z.number() }) })",
+            &Check,
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn skips_lazy_route_files() {
+        // Lazy-route files must not be flagged.
+        assert!(
+            run_oxc_ts_with_path(
+                "export const Route = createLazyFileRoute('/login')({ component: () => null })\nconst { redirect } = Route.useSearch()",
+                &Check,
+                "src/routes/login.lazy.tsx",
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn still_flags_non_lazy_route_files() {
+        // Positive control — the paired eager `login.tsx` must still be flagged.
+        assert_eq!(
+            run_oxc_ts_with_path(
+                "export const Route = createFileRoute('/login')({ component: () => null })\nconst { redirect } = Route.useSearch()",
+                &Check,
+                "src/routes/login.tsx",
+            )
+            .len(),
+            1,
+        );
     }
 }
