@@ -3,8 +3,10 @@
 //! For each `call_expression` whose callee text is `z.string` / `z.number`
 //! / `z.array`, walk the surrounding member-call chain to see if it ends in
 //! `.max(...)`. If not, and the file lives in a route/api path and is not a
-//! test file and the enclosing top-level declaration is not a response-shaped
-//! schema (`*Response*Schema`, `*Select*Schema`, etc.), emit a diagnostic.
+//! test file and the enclosing top-level declaration is not a non-input
+//! schema (response/output shapes like `*Response*Schema` / `*Select*Schema`,
+//! or config/env shapes like `*Config*Schema` / `*Env*Schema` parsed from
+//! `process.env`), emit a diagnostic.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
@@ -35,19 +37,23 @@ fn is_test_file(path: &std::path::Path) -> bool {
     })
 }
 
-/// Substrings that mark a schema as a response/output (not an input).
-const RESPONSE_NAME_MARKERS: &[&str] = &["Response", "Output", "Return", "Detail", "Select"];
+/// Substrings that mark a schema as something other than an HTTP request input:
+/// response/output shapes (server-emitted) or config/env shapes (parsed from
+/// `process.env` / static files, not from untrusted clients).
+const NON_INPUT_NAME_MARKERS: &[&str] = &[
+    "Response", "Output", "Return", "Detail", "Select", "Config", "Env",
+];
 
 /// Walk up from `node`, looking for a `variable_declarator` ancestor whose
-/// `name` field contains one of `RESPONSE_NAME_MARKERS`. Returns true if
-/// found. Used to skip top-level response-schema declarations.
-fn enclosed_in_response_schema(node: tree_sitter::Node, source: &[u8]) -> bool {
+/// `name` field contains one of `NON_INPUT_NAME_MARKERS`. Returns true if
+/// found. Used to skip top-level response/config-schema declarations.
+fn enclosed_in_non_input_schema(node: tree_sitter::Node, source: &[u8]) -> bool {
     let mut cur = node;
     while let Some(parent) = cur.parent() {
         if parent.kind() == "variable_declarator"
             && let Some(name_node) = parent.child_by_field_name("name")
             && let Ok(name) = name_node.utf8_text(source)
-            && RESPONSE_NAME_MARKERS.iter().any(|m| name.contains(m))
+            && NON_INPUT_NAME_MARKERS.iter().any(|m| name.contains(m))
         {
             return true;
         }
@@ -120,7 +126,7 @@ crate::ast_check! { on ["call_expression"] prefilter = ["z.string", "z.number", 
     if chain_has_max(node, source) {
         return;
     }
-    if enclosed_in_response_schema(node, source) {
+    if enclosed_in_non_input_schema(node, source) {
         return;
     }
 
@@ -202,6 +208,21 @@ mod tests {
         // as a single string node; no `call_expression` for `z.string()` exists
         // inside it.
         assert!(run_at(src, "src/api/inline.ts").is_empty());
+    }
+
+    #[test]
+    fn ignores_env_config_schema() {
+        // Regression for #187 — schemas whose name marks them as config/env
+        // are parsed against `process.env`, not HTTP request bodies. They
+        // are not a resource-exhaustion vector.
+        let src = "export const observabilityConfigSchema = z.object({\n  otelServiceName: z.string().trim().min(1).default(\"amadeo\"),\n});";
+        assert!(run_at(src, "src/api/observability/config.ts").is_empty());
+    }
+
+    #[test]
+    fn ignores_env_schema_by_name() {
+        let src = "export const AppEnvSchema = z.object({ apiUrl: z.string() });";
+        assert!(run_at(src, "src/api/env.ts").is_empty());
     }
 
     #[test]
