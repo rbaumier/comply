@@ -117,7 +117,9 @@ const TANSTACK_QUERY_CALLBACK_KEYS: &[&str] = &[
 ///
 /// Recognises:
 /// 1. `node` is the value of an object property in an object literal.
-/// 2. That object literal is the first argument of a CallExpression.
+/// 2. That object literal is one of the arguments of a CallExpression
+///    (any position — TanStack Query v4 accepts
+///    `useQuery(queryKey, queryFn, options)`).
 /// 3. The CallExpression's callee identifier is one of
 ///    [`TANSTACK_QUERY_FACTORIES`].
 /// 4. The property name is one of [`TANSTACK_QUERY_CALLBACK_KEYS`].
@@ -197,15 +199,16 @@ pub fn is_fixed_signature_library_callback<'a>(
         return false;
     };
 
-    // First argument must be this ObjectExpression.
-    let Some(first_arg) = call.arguments.first() else {
-        return false;
-    };
-    let Some(first_arg_expr) = first_arg.as_expression() else {
-        return false;
-    };
+    // Any argument may be this ObjectExpression — TanStack Query v4 supports
+    // the overloaded `useQuery(queryKey, queryFn, options)` shape where the
+    // options object is the third argument.
     use oxc_span::GetSpan;
-    if first_arg_expr.span() != obj_expr.span() {
+    let obj_expr_span = obj_expr.span();
+    let matches_any_arg = call.arguments.iter().any(|arg| {
+        arg.as_expression()
+            .is_some_and(|expr| expr.span() == obj_expr_span)
+    });
+    if !matches_any_arg {
         return false;
     }
 
