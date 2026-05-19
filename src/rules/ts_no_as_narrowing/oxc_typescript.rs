@@ -5,7 +5,7 @@ use std::sync::Arc;
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::{byte_offset_to_line_col, name_is_generic_type_param_in_scope};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{TSType, TSTypeName};
+use oxc_ast::ast::{Expression, TSType, TSTypeName};
 use oxc_span::GetSpan;
 
 pub struct Check;
@@ -82,6 +82,17 @@ impl OxcCheck for Check {
             }
         }
 
+        // Skip the outer half of `x as unknown as T` — the canonical
+        // contravariant-boundary escape hatch (e.g. Drizzle relational types
+        // invariant in `TablesRelationalConfig`). The inner cast must be to
+        // the `unknown` keyword specifically; `x as Foo as Bar` is NOT
+        // exempted.
+        if let Expression::TSAsExpression(inner) = &as_expr.expression
+            && matches!(inner.type_annotation, TSType::TSUnknownKeyword(_))
+        {
+            return;
+        }
+
         let (line, column) = byte_offset_to_line_col(ctx.source, as_expr.span.start as usize);
         diagnostics.push(Diagnostic {
             path: Arc::clone(&ctx.path_arc),
@@ -134,6 +145,41 @@ mod tests {
     #[test]
     fn flags_pascal_cased_when_not_generic_param() {
         let diags = run_on("function f() { return x as MyType; }");
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn allows_outer_cast_of_as_unknown_as_chain_drizzle_repro() {
+        // Regression for #178: Drizzle's relational types are invariant in
+        // `TablesRelationalConfig`, so a structural relabel of a deeply-
+        // generic filter requires `as unknown as <Type>`. The outer half
+        // must not be flagged as a narrowing.
+        let src = "type AnyRelationsFilter = unknown;\n\
+                   declare const where: object;\n\
+                   const widenedWhere = where as unknown as AnyRelationsFilter;";
+        let diags = run_on(src);
+        assert!(diags.is_empty(), "unexpected diags: {:?}", diags);
+    }
+
+    #[test]
+    fn allows_simple_as_unknown_as_t() {
+        let diags = run_on("const y = x as unknown as Foo;");
+        assert!(diags.is_empty(), "unexpected diags: {:?}", diags);
+    }
+
+    #[test]
+    fn flags_single_cast_to_pascal_type() {
+        // Negative: a plain `x as Foo` is still a narrowing.
+        let diags = run_on("const y = x as Foo;");
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn flags_double_cast_without_unknown_middle() {
+        // Negative: `x as any as Foo` is NOT the canonical escape hatch —
+        // the middle must be `unknown` for the exemption to apply. The
+        // outer cast (target `Foo`) must still flag as a narrowing.
+        let diags = run_on("const y = x as any as Foo;");
         assert_eq!(diags.len(), 1);
     }
 }
