@@ -2,6 +2,57 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
+/// Browser/DOM globals that are legitimately absent at SSR runtime. The
+/// canonical `typeof X === 'undefined'` SSR-detection idiom must not be
+/// rewritten to `=== undefined` because TypeScript's lib.dom declares these
+/// globals as never-undefined (which makes `no-unnecessary-condition` fire).
+const DOM_GLOBALS: &[&str] = &[
+    "window",
+    "document",
+    "navigator",
+    "location",
+    "history",
+    "localStorage",
+    "sessionStorage",
+    "IntersectionObserver",
+    "ResizeObserver",
+    "MutationObserver",
+    "requestAnimationFrame",
+    "MediaQueryList",
+    "matchMedia",
+    "crypto",
+    "performance",
+    "indexedDB",
+    "WebSocket",
+    "Worker",
+    "SharedWorker",
+];
+
+const GLOBAL_PROXIES: &[&str] = &["globalThis", "window", "self", "global"];
+
+fn is_dom_global_ssr_check(arg: tree_sitter::Node, source: &[u8]) -> bool {
+    match arg.kind() {
+        "identifier" => {
+            let name = arg.utf8_text(source).unwrap_or("");
+            DOM_GLOBALS.contains(&name)
+        }
+        "member_expression" => {
+            let Some(prop) = arg.child_by_field_name("property") else { return false };
+            let prop_name = prop.utf8_text(source).unwrap_or("");
+            if !DOM_GLOBALS.contains(&prop_name) {
+                return false;
+            }
+            let Some(obj) = arg.child_by_field_name("object") else { return false };
+            if obj.kind() != "identifier" {
+                return false;
+            }
+            let obj_name = obj.utf8_text(source).unwrap_or("");
+            GLOBAL_PROXIES.contains(&obj_name)
+        }
+        _ => false,
+    }
+}
+
 crate::ast_check! { on ["binary_expression"] prefilter = ["typeof"] => |node, source, ctx, diagnostics|
     // One side must be a `typeof` unary expression, the other must be "undefined" string.
     let Some(left) = node.child_by_field_name("left") else { return };
@@ -30,6 +81,13 @@ crate::ast_check! { on ["binary_expression"] prefilter = ["typeof"] => |node, so
     };
 
     if !is_undefined_string(left) && !is_undefined_string(right) {
+        return;
+    }
+
+    // SSR-detection idiom: `typeof globalThis.window === 'undefined'`,
+    // `typeof window === 'undefined'`, etc. Keep `typeof` so the rewrite
+    // does not collide with `no-unnecessary-condition`.
+    if is_dom_global_ssr_check(arg, source) {
         return;
     }
 
@@ -102,5 +160,65 @@ mod tests {
     fn allows_typeof_for_other_types() {
         let d = crate::rules::test_helpers::run_ts("if (typeof x === 'string') {}", &Check);
         assert!(d.is_empty());
+    }
+
+    // Regression for #209 — SSR guards on DOM globals must not fire.
+    #[test]
+    fn allows_typeof_globalthis_window() {
+        let d = crate::rules::test_helpers::run_ts(
+            "if (typeof globalThis.window === 'undefined') {}",
+            &Check,
+        );
+        assert!(d.is_empty(), "{d:?}");
+    }
+
+    #[test]
+    fn allows_typeof_bare_window() {
+        let d =
+            crate::rules::test_helpers::run_ts("if (typeof window === 'undefined') {}", &Check);
+        assert!(d.is_empty(), "{d:?}");
+    }
+
+    #[test]
+    fn allows_typeof_bare_document() {
+        let d =
+            crate::rules::test_helpers::run_ts("if (typeof document === 'undefined') {}", &Check);
+        assert!(d.is_empty(), "{d:?}");
+    }
+
+    #[test]
+    fn allows_typeof_navigator_negated() {
+        let d = crate::rules::test_helpers::run_ts(
+            "if (typeof navigator !== 'undefined') {}",
+            &Check,
+        );
+        assert!(d.is_empty(), "{d:?}");
+    }
+
+    #[test]
+    fn allows_typeof_globalthis_document() {
+        let d = crate::rules::test_helpers::run_ts(
+            "if (typeof globalThis.document === 'undefined') {}",
+            &Check,
+        );
+        assert!(d.is_empty(), "{d:?}");
+    }
+
+    #[test]
+    fn flags_typeof_non_dom_property_access() {
+        let d = crate::rules::test_helpers::run_ts(
+            "if (typeof someObj.someProp === 'undefined') {}",
+            &Check,
+        );
+        assert_eq!(d.len(), 1, "{d:?}");
+    }
+
+    #[test]
+    fn flags_typeof_globalthis_non_dom() {
+        let d = crate::rules::test_helpers::run_ts(
+            "if (typeof globalThis.myCustomGlobal === 'undefined') {}",
+            &Check,
+        );
+        assert_eq!(d.len(), 1, "{d:?}");
     }
 }
