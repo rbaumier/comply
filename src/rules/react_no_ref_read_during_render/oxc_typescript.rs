@@ -50,6 +50,35 @@ fn collect_ref_bindings<'a>(
     refs
 }
 
+/// Check if a `ref.current` member expression is the LHS of an
+/// assignment (`ref.current = x`, `ref.current += x`, `ref.current ??= x`,
+/// etc.). The latest-ref pattern writes during render; only reads are the
+/// antipattern.
+fn is_assignment_target(
+    member_span: oxc_span::Span,
+    node_id: oxc_semantic::NodeId,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_span::GetSpan;
+    let nodes = semantic.nodes();
+    // Walk up at most 2 parents — the member may sit directly under an
+    // AssignmentExpression or under a thin AssignmentTarget wrapper.
+    let mut current = node_id;
+    for _ in 0..3 {
+        let parent_id = nodes.parent_id(current);
+        if parent_id == current {
+            return false;
+        }
+        let parent = nodes.get_node(parent_id);
+        if let AstKind::AssignmentExpression(assign) = parent.kind() {
+            return assign.left.span().start == member_span.start
+                && assign.left.span().end == member_span.end;
+        }
+        current = parent_id;
+    }
+    false
+}
+
 /// Check if a node is inside a nested function (arrow, function expr/decl,
 /// method) relative to the component body. If so, the `.current` read is OK.
 fn is_inside_nested_function(
@@ -161,6 +190,11 @@ impl OxcCheck for Check {
                 if is_inside_nested_function(inner_node.id(), body_span, semantic) {
                     continue;
                 }
+                // Skip writes to `ref.current` (latest-ref pattern, etc.).
+                // Only reads of `ref.current` during render are flagged.
+                if is_assignment_target(member.span, inner_node.id(), semantic) {
+                    continue;
+                }
 
                 let (line, column) =
                     byte_offset_to_line_col(ctx.source, member.span.start as usize);
@@ -182,5 +216,93 @@ impl OxcCheck for Check {
         }
 
         diagnostics
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diagnostic::Diagnostic;
+
+    fn run(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(source, &Check)
+    }
+
+    #[test]
+    fn flags_ref_read_in_render() {
+        let src =
+            "function C() { const r = useRef(0); const v = r.current; return <div>{v}</div>; }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_ref_read_in_effect() {
+        let src = "function C() { const r = useRef(0); useEffect(() => { console.log(r.current); }, []); return null; }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_ref_read_in_handler() {
+        let src = "function C() { const r = useRef(0); return <button onClick={() => console.log(r.current)} />; }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_non_component_function() {
+        let src = "function helper() { const r = useRef(0); return r.current; }";
+        assert!(run(src).is_empty());
+    }
+
+    // Regression for issue #179 — latest-ref pattern: write during render is
+    // not a read and must not be flagged.
+    #[test]
+    fn allows_latest_ref_pattern_assignment() {
+        let src = "function MyComponent({ value, onChange }) { \
+                   const valueRef = useRef(value); \
+                   valueRef.current = value; \
+                   useEffect(() => {}, []); \
+                   return null; \
+                   }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_latest_ref_pattern_callback_assignment() {
+        let src = "function MyComponent({ onChange }) { \
+                   const onChangeRef = useRef(onChange); \
+                   onChangeRef.current = onChange; \
+                   return null; \
+                   }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_compound_assignment_to_ref_current() {
+        let src = "function C() { const r = useRef(0); r.current += 1; return null; }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_logical_assignment_to_ref_current() {
+        let src = "function C({ value }) { const r = useRef(null); r.current ??= value; return null; }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_read_in_variable_declaration() {
+        let src = "function C() { const r = useRef(0); const v = r.current; return null; }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_read_in_call_argument() {
+        let src = "function C() { const r = useRef(0); console.log(r.current); return null; }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_read_in_if_condition() {
+        let src = "function C() { const r = useRef(0); if (r.current) { return null; } return null; }";
+        assert_eq!(run(src).len(), 1);
     }
 }
