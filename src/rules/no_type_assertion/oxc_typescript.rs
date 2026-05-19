@@ -9,6 +9,14 @@ use std::sync::Arc;
 
 pub struct Check;
 
+fn peel_parens<'a>(expr: &'a Expression<'a>) -> &'a Expression<'a> {
+    let mut current = expr;
+    while let Expression::ParenthesizedExpression(p) = current {
+        current = &p.expression;
+    }
+    current
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[AstType::TSAsExpression]
@@ -65,19 +73,32 @@ impl OxcCheck for Check {
         // and the inner `as unknown` still fire even though `no-double-cast`
         // correctly stays silent.
         //  - Outer half: `x as unknown as T` whose inner is `_ as unknown`.
-        if let Expression::TSAsExpression(inner) = &as_expr.expression
+        //    Peel any parentheses so `(x as unknown) as T` is treated the
+        //    same as `x as unknown as T`.
+        if let Expression::TSAsExpression(inner) = peel_parens(&as_expr.expression)
             && matches!(inner.type_annotation, TSType::TSUnknownKeyword(_))
         {
             return;
         }
         //  - Inner half: `_ as unknown` whose parent is another TSAsExpression.
-        if matches!(as_expr.type_annotation, TSType::TSUnknownKeyword(_))
-            && matches!(
-                semantic.nodes().parent_node(node.id()).kind(),
-                AstKind::TSAsExpression(_)
-            )
-        {
-            return;
+        //    Walk past any ParenthesizedExpression parents so `(x as unknown)`
+        //    inside a double-cast is still exempted.
+        if matches!(as_expr.type_annotation, TSType::TSUnknownKeyword(_)) {
+            let nodes = semantic.nodes();
+            let mut cur = node.id();
+            loop {
+                let parent_id = nodes.parent_id(cur);
+                if parent_id == cur {
+                    break;
+                }
+                match nodes.kind(parent_id) {
+                    AstKind::TSAsExpression(_) => return,
+                    AstKind::ParenthesizedExpression(_) => {
+                        cur = parent_id;
+                    }
+                    _ => break,
+                }
+            }
         }
 
         let (line, column) = byte_offset_to_line_col(ctx.source, as_expr.span.start as usize);
@@ -185,5 +206,24 @@ mod tests {
         // the middle must be `unknown` for the exemption to apply.
         let diags = run_on("const y = x as any as Foo;");
         assert!(!diags.is_empty(), "expected at least one diag");
+    }
+
+    #[test]
+    fn allows_parenthesised_unknown_in_double_cast() {
+        // Issue #178 follow-up — `(x as unknown) as Foo` is semantically
+        // identical to `x as unknown as Foo`.
+        let src = "declare const x: unknown; const y = (x as unknown) as Foo;";
+        let diags = run_on(src);
+        assert!(diags.is_empty(), "unexpected diags: {:?}", diags);
+    }
+
+    #[test]
+    fn still_flags_triple_parenthesised_as_chain() {
+        // `((x as A) as unknown) as B` — the middle isn't a plain `as unknown`
+        // of the original value; the inner `as A` is the suspect cast. We
+        // don't auto-exempt arbitrary triple casts.
+        let src = "declare const x: unknown; const y = ((x as A) as unknown) as B;";
+        let diags = run_on(src);
+        assert!(!diags.is_empty(), "expected at least one diag for inner `as A` cast");
     }
 }
