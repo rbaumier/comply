@@ -52,10 +52,16 @@ pub fn parse_ignores(path: &Path, source: &str) -> IgnoreResult {
         }
     }
 
+    // Pass 1.5 — compute lines fully contained in a JSDoc block
+    // (`/** ... */`). Above-line markers walk past these in pass 2 so
+    // a marker sitting above the doc comment still resolves to the
+    // function below it (rbaumier/comply#185).
+    let jsdoc_lines = collect_jsdoc_lines(source);
+
     // Pass 2 — apply each parse. Above-line markers whose immediate
-    // target is itself a marker line walk past those siblings to the
-    // first real code line, so stacked markers union their rules onto
-    // the same eventual target.
+    // target is itself a marker line or a JSDoc line walk past those
+    // siblings to the first real code line, so stacked markers union
+    // their rules onto the same eventual target.
     for (line_num, parsed) in parses {
         if let Some(d) = parsed.bad_ignore {
             bad_ignores.push(d);
@@ -64,7 +70,9 @@ pub fn parse_ignores(path: &Path, source: &str) -> IgnoreResult {
             None => None,
             Some(t) if t == line_num => Some(t), // trailing marker
             Some(mut t) => {
-                while t <= last_line && marker_lines.contains(&t) {
+                while t <= last_line
+                    && (marker_lines.contains(&t) || jsdoc_lines.contains(&t))
+                {
                     t += 1;
                 }
                 Some(t)
@@ -90,6 +98,39 @@ pub fn parse_ignores(path: &Path, source: &str) -> IgnoreResult {
         file_suppressions,
         bad_ignores,
     }
+}
+
+/// Return the set of 1-based line numbers that lie inside a JSDoc block
+/// (`/** ... */`). A line counts as inside the block when its first
+/// non-whitespace content is either the opening `/**`, the closing `*/`,
+/// or a `*` continuation. Used by `parse_ignores` to forward above-line
+/// markers past intervening doc comments onto the declaration below.
+fn collect_jsdoc_lines(source: &str) -> HashSet<usize> {
+    let mut lines = HashSet::new();
+    let mut in_block = false;
+    for (idx, raw_line) in source.lines().enumerate() {
+        let line_num = idx + 1;
+        let trimmed = raw_line.trim_start();
+        if !in_block {
+            // A JSDoc block opens when the first non-whitespace is `/**`.
+            if trimmed.starts_with("/**") {
+                lines.insert(line_num);
+                // Single-line JSDoc (`/** ... */` on one line) opens and
+                // closes immediately. Only enter multi-line mode if the
+                // closing `*/` is not on this same line after the open.
+                let after_open = &trimmed[3..];
+                if !after_open.contains("*/") {
+                    in_block = true;
+                }
+            }
+        } else {
+            lines.insert(line_num);
+            if trimmed.contains("*/") {
+                in_block = false;
+            }
+        }
+    }
+    lines
 }
 
 /// Filter diagnostics by removing suppressed ones, then append bad-ignore diagnostics.
@@ -291,5 +332,58 @@ mod tests {
             s,
         );
         assert!(kept.is_empty());
+    }
+
+    #[test]
+    fn marker_above_jsdoc_targets_declaration_below() {
+        // Regression for rbaumier/comply#185 — the marker sits above a
+        // JSDoc block which itself sits above a declaration. The walk
+        // must skip the JSDoc lines and land on the declaration.
+        let s = "// comply-ignore: cyclomatic-complexity — exhaustive dispatch.\n\
+                 /**\n * JSDoc.\n */\n\
+                 export function authorize() {}\n";
+        // The function declaration is on line 5.
+        let r = parse_ignores(Path::new("t.ts"), s);
+        assert!(
+            r.suppressions
+                .get(&5)
+                .is_some_and(|s| s.contains("cyclomatic-complexity")),
+            "suppression should target the function line; got {:?}",
+            r.suppressions
+        );
+    }
+
+    #[test]
+    fn marker_above_single_line_jsdoc_targets_declaration_below() {
+        // A one-line JSDoc still counts — opens and closes on the same line.
+        let s = "// comply-ignore: cyclomatic-complexity — reason.\n\
+                 /** inline doc */\n\
+                 export function authorize() {}\n";
+        let r = parse_ignores(Path::new("t.ts"), s);
+        assert!(
+            r.suppressions
+                .get(&3)
+                .is_some_and(|s| s.contains("cyclomatic-complexity")),
+            "single-line JSDoc must also be walked past; got {:?}",
+            r.suppressions
+        );
+    }
+
+    #[test]
+    fn marker_above_jsdoc_does_not_silence_unrelated_line_below_block() {
+        // The JSDoc walk only applies to forwarding from a marker — code on
+        // lines other than the resolved target stays unaffected.
+        let s = "// comply-ignore: rule-a — A\n\
+                 /**\n * JSDoc.\n */\n\
+                 throw err;\n\
+                 throw err;\n";
+        // Line 5 should be suppressed for rule-a; line 6 should not.
+        let kept = apply_suppressions(
+            vec![diag(5, "rule-a"), diag(6, "rule-a")],
+            Path::new("t.ts"),
+            s,
+        );
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].line, 6);
     }
 }
