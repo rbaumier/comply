@@ -53,7 +53,6 @@ impl OxcCheck for Check {
             return;
         }
 
-        // Common case: parameter compared against a third-party type that widens to plain `string` (e.g. Better Auth `session.userId`).
         if is_comparison_only_usage(ident.symbol_id.get(), semantic) {
             return;
         }
@@ -291,7 +290,8 @@ mod tests {
                 return ((entry.userId) === (userId));
             }
         "#;
-        assert!(run(src).is_empty(), "{:?}", run(src));
+        let diagnostics = run(src);
+        assert!(diagnostics.is_empty(), "{:?}", diagnostics);
     }
 
     #[test]
@@ -348,8 +348,7 @@ mod tests {
 
     #[test]
     fn flags_when_parameter_is_member_accessed() {
-        // A string parameter has no members, but the user might have widened
-        // its type elsewhere. Member access still escapes "pure comparison".
+        // Member access escapes comparison-only — widened-string params still flag.
         let src = r#"
             export function check(userId: string): number {
                 return userId.length;
