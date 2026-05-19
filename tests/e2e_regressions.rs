@@ -5,6 +5,8 @@ mod common;
 use assert_cmd::Command;
 use common::write_ts_file;
 use predicates::prelude::*;
+use std::fs;
+use tempfile::TempDir;
 
 #[test]
 fn marker_inside_string_literal_is_not_honored() {
@@ -115,4 +117,35 @@ fn comply_ignore_above_jsdoc_suppresses_function_below() {
         .arg(&path)
         .assert()
         .stdout(predicate::str::contains("cyclomatic-complexity").not());
+}
+
+#[test]
+fn comply_ignore_file_suppresses_unused_file_on_plugin_resolved_entry() {
+    // A `.tsx` file unreachable from any static entry point (e.g. a TanStack
+    // Start client entry whose
+    // import is emitted by the Vite plugin's boot module, not user
+    // source) must be excluded from `unused-file` when it starts with
+    // `// comply-ignore-file: unused-file — <reason>`. The file-level
+    // directive runs in the post-pass over diagnostics keyed by path,
+    // so cross-file rules honour it the same way per-file rules do.
+    let dir = TempDir::new().expect("failed to create temp dir");
+    fs::create_dir_all(dir.path().join("src/app")).unwrap();
+    fs::write(
+        dir.path().join("index.ts"),
+        "export const ENTRY = 1;\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("src/app/client.tsx"),
+        "// comply-ignore-file: unused-file — Vite plugin emits the import\n\
+         import { hydrateRoot } from \"react-dom/client\";\n\
+         export const HYDRATE = hydrateRoot;\n",
+    )
+    .unwrap();
+
+    Command::cargo_bin("comply")
+        .unwrap()
+        .arg(dir.path())
+        .assert()
+        .stdout(predicate::str::contains("unused-file").not());
 }
