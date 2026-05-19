@@ -388,6 +388,12 @@ pub struct ProjectCtx {
     // when YAML files are in the input set; empty (still queryable)
     // otherwise — the same lazy-fallback pattern as `import_index`.
     k8s_index: OnceLock<K8sIndex>,
+
+    // True when `project_root` contains a Cloudflare marker file
+    // (`wrangler.toml`, `wrangler.jsonc`, `wrangler.json`, `.dev.vars`,
+    // `_routes.json`). Lazily probed on first access — Cloudflare-only
+    // rules need it to skip non-CF projects.
+    cloudflare_target: OnceLock<bool>,
 }
 
 impl ProjectCtx {
@@ -499,6 +505,27 @@ impl ProjectCtx {
 
     pub fn has_framework(&self, name: &str) -> bool {
         self.detected_frameworks.iter().any(|f| f.name == name)
+    }
+
+    /// True when the project root contains a Cloudflare marker file —
+    /// `wrangler.toml`, `wrangler.jsonc`, `wrangler.json`, `.dev.vars`,
+    /// or `_routes.json`. Used by Cloudflare-specific rules to skip
+    /// projects that don't deploy to Workers / Pages. Result is cached
+    /// for the lifetime of the run.
+    pub fn is_cloudflare_target(&self) -> bool {
+        let Some(root) = self.project_root.as_deref() else {
+            return false;
+        };
+        *self.cloudflare_target.get_or_init(|| {
+            const MARKERS: &[&str] = &[
+                "wrangler.toml",
+                "wrangler.jsonc",
+                "wrangler.json",
+                ".dev.vars",
+                "_routes.json",
+            ];
+            MARKERS.iter().any(|name| root.join(name).metadata().is_ok())
+        })
     }
 
     pub fn framework_entry_dirs(&self) -> impl Iterator<Item = &str> {
