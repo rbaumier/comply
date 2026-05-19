@@ -22,13 +22,22 @@ impl OxcCheck for Check {
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
+        semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         match node.kind() {
             AstKind::TemplateLiteral(tpl) => {
                 // Only flag template literals with interpolation.
                 if tpl.expressions.is_empty() {
+                    return;
+                }
+                // Skip tagged template literals: `pg`SELECT … ${x}`` and
+                // `sql`SELECT … ${x}`` are parameterised-query APIs
+                // (postgres-js, Drizzle, Slonik, etc.) — interpolated
+                // values are bound as `$1`/`$2` on the wire, not
+                // concatenated into the SQL string.
+                let parent = semantic.nodes().parent_node(node.id());
+                if matches!(parent.kind(), AstKind::TaggedTemplateExpression(_)) {
                     return;
                 }
                 let static_text: String = tpl
@@ -191,5 +200,42 @@ mod tests {
     fn does_not_flag_prose_template_literal_with_sql_substring() {
         let src = r#"const msg = `please update the user record ${userId}`;"#;
         assert!(run_on(src).is_empty());
+    }
+
+    // Regression: issue #186 — postgres-js tagged template literals
+    // (`` pg`SELECT … ${value}` ``) are a parameterised-query API,
+    // structurally identical to Drizzle's `sql` tag. The interpolated
+    // value is bound as `$1` on the wire, never concatenated into the
+    // SQL string.
+    #[test]
+    fn does_not_flag_postgres_js_tagged_template() {
+        let src = r#"
+            import type { Sql } from "postgres";
+            async function lockTeamRow(pg: Sql, teamId: string) {
+              await pg`SELECT id FROM team WHERE id = ${teamId} FOR UPDATE`;
+            }
+        "#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn does_not_flag_drizzle_sql_tagged_template() {
+        let src = r#"await db.execute(sql`SELECT * FROM users WHERE id = ${userId}`);"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    // Targeted-fix guard: plain template-literal SQL concat (no tag)
+    // must still be flagged. Proves the tagged-template skip didn't
+    // turn the rule off wholesale.
+    #[test]
+    fn still_flags_untagged_template_literal_with_interpolated_sql() {
+        let src = r#"const q = `SELECT * FROM users WHERE id = ${userId}`;"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_binary_concat_sql() {
+        let src = r#"const q = "SELECT * FROM users WHERE id = " + userId;"#;
+        assert_eq!(run_on(src).len(), 1);
     }
 }
