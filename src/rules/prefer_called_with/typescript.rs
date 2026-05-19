@@ -19,6 +19,20 @@ crate::ast_check! { on ["call_expression"] prefilter = ["toHaveBeenCalled"] => |
         return;
     }
 
+    // Skip negated assertions.
+    let mut cursor = callee.child_by_field_name("object");
+    while let Some(obj) = cursor {
+        if obj.kind() != "member_expression" {
+            break;
+        }
+        if let Some(p) = obj.child_by_field_name("property") {
+            if p.utf8_text(source).unwrap_or("") == "not" {
+                return;
+            }
+        }
+        cursor = obj.child_by_field_name("object");
+    }
+
     let pos = prop.start_position();
     diagnostics.push(Diagnostic {
         path: std::sync::Arc::clone(&ctx.path_arc),
@@ -59,5 +73,26 @@ mod tests {
     fn flags_chained_expect_to_have_been_called() {
         let d = run_ts("expect(fn).toHaveBeenCalled();", &Check);
         assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn skips_negated_to_have_been_called() {
+        let d = run_ts(
+            "expect(CAPTURE_EXCEPTION_MOCK).not.toHaveBeenCalled();",
+            &Check,
+        );
+        assert!(d.is_empty());
+    }
+
+    #[test]
+    fn skips_resolves_not_to_have_been_called() {
+        let d = run_ts("expect(mock).resolves.not.toHaveBeenCalled();", &Check);
+        assert!(d.is_empty());
+    }
+
+    #[test]
+    fn skips_rejects_not_to_have_been_called() {
+        let d = run_ts("expect(mock).rejects.not.toHaveBeenCalled();", &Check);
+        assert!(d.is_empty());
     }
 }
