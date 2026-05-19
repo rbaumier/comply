@@ -35,9 +35,30 @@ fn is_inside_expect_argument(trimmed: &str, prop_pos: usize) -> bool {
                     {
                         j -= 1;
                     }
-                    return &trimmed[j..i] == "expect";
+                    if &trimmed[j..i] == "expect" {
+                        return true;
+                    }
+                    // Not `expect` — keep walking outward past this call.
+                    // depth stays 0; continue the outer loop.
+                } else {
+                    depth -= 1;
                 }
-                depth -= 1;
+            }
+            // Structural boundaries at depth 0 mean we left the expression.
+            b',' | b';' | b'{' | b'}' if depth == 0 => return false,
+            b'=' if depth == 0 => {
+                // `==`, `!=`, `>=`, `<=` are comparisons, not assignments.
+                if i + 1 < bytes.len()
+                    && (bytes[i + 1] == b'=' || bytes[i + 1] == b'>')
+                {
+                    // comparison operator — not a boundary
+                } else if i > 0
+                    && (bytes[i - 1] == b'!' || bytes[i - 1] == b'<' || bytes[i - 1] == b'>')
+                {
+                    // part of !=, <=, >= — not a boundary
+                } else {
+                    return false;
+                }
             }
             _ => {}
         }
@@ -233,5 +254,25 @@ mod tests {
     #[test]
     fn allows_expect_to_equal() {
         assert!(run_on("expect(arr.length).toEqual(0);").is_empty());
+    }
+
+    #[test]
+    fn allows_length_inside_nested_call_inside_expect() {
+        // Real-world pattern: filter then check length non-empty.
+        let src = "expect(arr.filter(x => x.foo).length).toBeGreaterThan(0);";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_length_inside_object_keys_inside_expect() {
+        let src = "expect(Object.keys(obj).length).toBe(3);";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_length_in_unrelated_call() {
+        // `notExpect` is a regular function — still flags.
+        let src = "notExpect(arr.length);";
+        assert_eq!(run_on(src).len(), 1);
     }
 }
