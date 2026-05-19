@@ -13,6 +13,25 @@ const ROUTE_METHODS: &[&str] = &[
     "get", "post", "put", "patch", "delete", "all", "head", "options",
 ];
 
+/// Returns true if the identifier resolves to a binding imported from `"msw"` or `"msw/*"`.
+fn ident_is_from_msw<'a>(
+    ident: &oxc_ast::ast::IdentifierReference<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    let Some(ref_id) = ident.reference_id.get() else { return false };
+    let scoping = semantic.scoping();
+    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else { return false };
+    let decl_node_id = scoping.symbol_declaration(sym_id);
+    let nodes = semantic.nodes();
+    for kind in std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id)) {
+        if let AstKind::ImportDeclaration(import) = kind {
+            let src = import.source.value.as_str();
+            return src == "msw" || src.starts_with("msw/");
+        }
+    }
+    false
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[AstType::CallExpression]
@@ -22,7 +41,7 @@ impl OxcCheck for Check {
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
+        semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         if !ctx.project.has_framework("elysia") {
@@ -33,6 +52,13 @@ impl OxcCheck for Check {
         let Expression::StaticMemberExpression(member) = &call.callee else { return };
         let prop = member.property.name.as_str();
         if !ROUTE_METHODS.contains(&prop) {
+            return;
+        }
+
+        // Skip http.<method>(...) when the receiver binding is imported from msw.
+        if let Expression::Identifier(obj) = &member.object
+            && ident_is_from_msw(obj, semantic)
+        {
             return;
         }
 
@@ -70,5 +96,70 @@ impl OxcCheck for Check {
             severity: Severity::Warning,
             span: None,
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_framework(source, &Check, "elysia")
+    }
+
+    #[test]
+    fn ignores_msw_http_handlers() {
+        let src = r#"
+import { http, HttpResponse } from "msw";
+import { mswServer } from "./test-helpers/setup-msw";
+mswServer.use(
+  http.get("*/api/v1/teams", () => HttpResponse.json({ items: [] })),
+);
+"#;
+        assert!(
+            run_on(src).is_empty(),
+            "MSW http.get handlers must not be flagged"
+        );
+    }
+
+    #[test]
+    fn ignores_msw_http_handler_by_reference() {
+        let src = r#"
+import { http } from "msw";
+import { listTeamsHandler } from "./handlers";
+mswServer.use(http.post("*/api/v1/teams", listTeamsHandler));
+"#;
+        assert!(
+            run_on(src).is_empty(),
+            "MSW http.post by reference must not be flagged"
+        );
+    }
+
+    #[test]
+    fn ignores_msw_http_alias() {
+        // `http` imported as `mockHttp` from msw — alias must still be exempted via binding.
+        let src = r#"
+import { http as mockHttp } from "msw";
+import { listTeamsHandler } from "./handlers";
+mswServer.use(mockHttp.get("*/api/v1/teams", listTeamsHandler));
+"#;
+        assert!(
+            run_on(src).is_empty(),
+            "aliased MSW http must not be flagged"
+        );
+    }
+
+    #[test]
+    fn flags_http_identifier_not_from_msw() {
+        // `http` is imported from a local module, not msw — binding check must still flag it.
+        let src = r#"
+import { http } from "./elysia-routes";
+http.get("/", handleFn);
+"#;
+        assert_eq!(
+            run_on(src).len(),
+            1,
+            "http.get with non-msw binding must still be flagged"
+        );
     }
 }
