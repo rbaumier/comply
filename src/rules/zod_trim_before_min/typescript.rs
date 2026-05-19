@@ -5,6 +5,60 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
+/// Field names where leading/trailing whitespace is meaningful and trimming
+/// would silently corrupt the value. The schema is typically a probe over the
+/// raw payload (passwords forwarded to an auth lib, tokens compared verbatim,
+/// secrets used as opaque bytes). Adding `.trim()` would diverge the validated
+/// value from the stored/compared value and break authentication.
+const WHITESPACE_SENSITIVE_SUBSTRINGS: &[&str] = &[
+    "password",
+    "token",
+    "secret",
+    "apikey",
+    "api_key",
+    "jwt",
+    "signature",
+    "otp",
+    "passcode",
+    "pincode",
+    "twofactor",
+    "two_factor",
+    "2fa",
+    "mfa",
+    "verificationcode",
+    "verification_code",
+];
+
+fn is_whitespace_sensitive_key(name: &str) -> bool {
+    let lower = name.to_lowercase();
+    WHITESPACE_SENSITIVE_SUBSTRINGS
+        .iter()
+        .any(|needle| lower.contains(needle))
+}
+
+/// Strip matching surrounding quote characters from a property key.
+fn unquote(s: &str) -> &str {
+    s.trim_matches(|c: char| c == '"' || c == '\'' || c == '`')
+}
+
+/// True when the nearest enclosing `pair` ancestor has a key whose name
+/// matches a whitespace-sensitive pattern. Trimming such fields would be
+/// a correctness bug.
+fn enclosing_pair_key_is_whitespace_sensitive(node: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut cur = node.parent();
+    while let Some(p) = cur {
+        if p.kind() == "pair" {
+            let Some(key_node) = p.child_by_field_name("key") else {
+                return false;
+            };
+            let key_text = unquote(key_node.utf8_text(source).unwrap_or(""));
+            return is_whitespace_sensitive_key(key_text);
+        }
+        cur = p.parent();
+    }
+    false
+}
+
 /// Walk back through a method-chain (call_expression → member_expression
 /// whose object is itself a call_expression …) and collect every method
 /// name encountered. Returns `None` if the chain does not bottom out at a
@@ -51,6 +105,11 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     // If `.trim()` appears anywhere in the chain (before `.min`), no warning.
     if methods.iter().any(|m| *m == "trim") { return; }
 
+    // Skip schema fields whose key name implies whitespace is meaningful
+    // (passwords, tokens, secrets, ...). Trimming would diverge the validated
+    // value from the value stored/compared downstream.
+    if enclosing_pair_key_is_whitespace_sensitive(node, source) { return; }
+
     diagnostics.push(Diagnostic::at_node(
         ctx.path,
         &node,
@@ -76,5 +135,61 @@ mod tests {
     #[test]
     fn allows_trim_before_min() {
         assert!(run("z.string().trim().min(1)").is_empty());
+    }
+
+    #[test]
+    fn skips_new_password_field_from_issue_176() {
+        // Repro from the issue: trimming would diverge the validated value
+        // from the value Better Auth stores verbatim.
+        let src = r#"
+            const NewPasswordBodySchema = z.looseObject({
+                newPassword: z.string().min(1).max(128),
+            });
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn skips_password_field() {
+        let src = "const s = z.object({ password: z.string().min(8) });";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn skips_whitespace_sensitive_variants() {
+        for field in &[
+            "currentPassword",
+            "confirmPassword",
+            "passwordHash",
+            "apiKey",
+            "accessToken",
+            "refreshToken",
+            "idToken",
+            "secret",
+            "clientSecret",
+            "jwt",
+            "signature",
+            "otp",
+            "twoFactorCode",
+        ] {
+            let src = format!("const s = z.object({{ {field}: z.string().min(1) }});");
+            assert!(
+                run(&src).is_empty(),
+                "expected no diagnostic for field `{field}`, got: {:?}",
+                run(&src),
+            );
+        }
+    }
+
+    #[test]
+    fn still_flags_regular_text_field_named_name() {
+        let src = "const s = z.object({ name: z.string().min(1) });";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_email_field() {
+        let src = "const s = z.object({ email: z.string().min(1).max(255) });";
+        assert_eq!(run(src).len(), 1);
     }
 }
