@@ -146,6 +146,34 @@ mod oxc_tests {
     }
 
     #[test]
+    fn allows_use_infinite_query_v4_three_arg_overload() {
+        // Regression for rbaumier/comply#207 — TanStack Query v4 supports
+        // the `useInfiniteQuery(queryKey, queryFn, options)` overload where
+        // the options object (and its fixed-signature callbacks) is the
+        // third argument, not the first.
+        let src = r#"
+            import { useInfiniteQuery } from "@tanstack/react-query";
+            useInfiniteQuery(["k"], () => fetch("/x"), {
+                getNextPageParam: (lastPage, allPages, lastPageParam, allPageParams) => null,
+            });
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_use_query_v4_three_arg_overload_on_error() {
+        // v4 `useQuery(queryKey, queryFn, options)` overload — onError lives
+        // in the third argument.
+        let src = r#"
+            import { useQuery } from "@tanstack/react-query";
+            useQuery(["k"], () => fetch("/x"), {
+                onError: (error, variables, context, mutation) => {},
+            });
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
     fn allows_namespace_import_use_mutation_on_error() {
         // Regression: namespace-import call `RQ.useMutation(...)` must be
         // recognised via StaticMemberExpression callee matching.
