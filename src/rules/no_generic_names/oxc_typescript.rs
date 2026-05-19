@@ -450,6 +450,41 @@ mod tests {
     }
 
     #[test]
+    fn ignores_result_default_import() {
+        // Regression for #214 — default imports.
+        let src = r#"import Result from "better-result";"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_result_namespace_import() {
+        // Regression for #214 — namespace imports.
+        let src = r#"import * as Result from "better-result";"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_renamed_named_import_to_result() {
+        // Regression for #214 — renamed local binding.
+        let src = r#"import { Foo as Result } from "lib";"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_user_declared_result_const() {
+        // Negative: user-declared, not imported — must still flag.
+        let src = r#"const Result = somethingElse;"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_user_declared_result_function() {
+        // Negative: user-declared function — must still flag.
+        let src = r#"function Result() { return 1; }"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
     fn ignores_result_when_typed_as_Result() {
         // Regression for rbaumier/comply#39 case 2 — canonical Result name.
         let src = r#"
