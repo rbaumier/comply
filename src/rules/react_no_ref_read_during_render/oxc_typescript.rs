@@ -52,8 +52,11 @@ fn collect_ref_bindings<'a>(
 
 /// Check if a `ref.current` member expression is the LHS of an
 /// assignment (`ref.current = x`, `ref.current += x`, `ref.current ??= x`,
-/// etc.). The latest-ref pattern writes during render; only reads are the
-/// antipattern.
+/// etc.) or the operand of an `UpdateExpression` (`ref.current++`,
+/// `--ref.current`, etc.). The latest-ref pattern writes during render;
+/// only reads are the antipattern. UpdateExpression cases are handled by a
+/// dedicated visitor pass (issue #197) since they ARE read-then-write — we
+/// just need to avoid double-flagging them here.
 fn is_assignment_target(
     member_span: oxc_span::Span,
     node_id: oxc_semantic::NodeId,
@@ -74,6 +77,10 @@ fn is_assignment_target(
         if let AstKind::AssignmentExpression(assign) = parent.kind() {
             return assign.left.span().start == member_span.start
                 && assign.left.span().end == member_span.end;
+        }
+        if let AstKind::UpdateExpression(update) = parent.kind() {
+            return update.argument.span().start == member_span.start
+                && update.argument.span().end == member_span.end;
         }
         current = parent_id;
     }
@@ -214,6 +221,57 @@ impl OxcCheck for Check {
                     span: None,
                 });
             }
+
+            // Second pass: `ref.current++`, `--ref.current`, etc. An
+            // `UpdateExpression` argument is typed as `SimpleAssignmentTarget`,
+            // which does not surface as `AstKind::StaticMemberExpression` in
+            // the semantic walk. These are read-then-write — same antipattern
+            // as a plain read during render.
+            for inner_node in semantic.nodes().iter() {
+                let AstKind::UpdateExpression(update) = inner_node.kind() else {
+                    continue;
+                };
+                let oxc_ast::ast::SimpleAssignmentTarget::StaticMemberExpression(member) =
+                    &update.argument
+                else {
+                    continue;
+                };
+                if member.property.name.as_str() != "current" {
+                    continue;
+                }
+                // Must be inside the body
+                if update.span.start < body_span.start || update.span.end > body_span.end {
+                    continue;
+                }
+                // Object must be an identifier that's a ref
+                let oxc_ast::ast::Expression::Identifier(obj) = &member.object else {
+                    continue;
+                };
+                if !refs.contains(obj.name.as_str()) {
+                    continue;
+                }
+                // Must NOT be inside a nested function
+                if is_inside_nested_function(inner_node.id(), body_span, semantic) {
+                    continue;
+                }
+
+                let (line, column) =
+                    byte_offset_to_line_col(ctx.source, update.span.start as usize);
+                diagnostics.push(Diagnostic {
+                    path: Arc::clone(&ctx.path_arc),
+                    line,
+                    column,
+                    rule_id: super::META.id.into(),
+                    message: format!(
+                        "`{}.current` is read during render — refs are designed for handlers and \
+                         effects. Move the read into a handler or `useEffect`, or use state if you need \
+                         the value during render.",
+                        obj.name.as_str()
+                    ),
+                    severity: Severity::Warning,
+                    span: None,
+                });
+            }
         }
 
         diagnostics
@@ -313,5 +371,51 @@ mod tests {
     fn still_flags_read_in_self_assignment_rhs() {
         let src = "function C() { const r = useRef(0); r.current = r.current + 1; return null; }";
         assert_eq!(run(src).len(), 1);
+    }
+
+    // Regression for issue #197 — UpdateExpression on `ref.current` is a
+    // read-then-write during render and must be flagged. The argument of an
+    // UpdateExpression is a SimpleAssignmentTarget, not surfaced as
+    // StaticMemberExpression, so the original visitor missed it.
+    #[test]
+    fn flags_postfix_increment_on_ref_current() {
+        let src = "function C() { const r = useRef(0); r.current++; return null; }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_prefix_increment_on_ref_current() {
+        let src = "function C() { const r = useRef(0); ++r.current; return null; }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_postfix_decrement_on_ref_current() {
+        let src = "function C() { const r = useRef(0); r.current--; return null; }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_prefix_decrement_on_ref_current() {
+        let src = "function C() { const r = useRef(0); --r.current; return null; }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_update_on_ref_current_in_effect() {
+        let src = "function C() { const r = useRef(0); useEffect(() => { r.current++; }, []); return null; }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_update_on_non_ref_current() {
+        let src = "function C() { const nonRef = { current: 0 }; nonRef.current++; return null; }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_allows_plain_assignment_to_ref_current() {
+        let src = "function C() { const r = useRef(0); r.current = 1; return null; }";
+        assert!(run(src).is_empty());
     }
 }
