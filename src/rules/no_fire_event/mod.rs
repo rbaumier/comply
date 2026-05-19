@@ -1,4 +1,13 @@
-//! no-fire-event — prefer `userEvent` over `fireEvent` in tests.
+//! no-fire-event — prefer `userEvent.click` over `fireEvent.click` in tests.
+//!
+//! Flags `fireEvent.click(...)` calls inside test files and suggests
+//! `userEvent.click(...)` instead, which dispatches the full pointer/focus
+//! sequence a real browser would fire.
+//!
+//! Other `fireEvent.*` methods (`focus`, `blur`, `keyDown`, `change`,
+//! `pointerDown`, ...) are intentionally not flagged: their `userEvent`
+//! counterparts either do not exist or add extra events that defeat tests
+//! targeting low-level focus/keyboard/debounce behaviour.
 
 mod oxc_typescript;
 #[cfg(test)]
@@ -11,12 +20,13 @@ use crate::rules::{RuleDef, TS_FAMILY};
 
 pub const META: RuleMeta = RuleMeta {
     id: "no-fire-event",
-    description: "`fireEvent` dispatches a single synthetic event — `userEvent` reproduces the full browser event sequence.",
-    remediation: "Replace `fireEvent.click()` / `fireEvent.change()` with \
-                  `userEvent.click()` / `userEvent.type()` from \
-                  `@testing-library/user-event`. `fireEvent` skips the \
-                  intermediate events (keydown, keypress, input) that real \
-                  browsers fire, so tests pass but miss event-handler bugs.",
+    description: "`fireEvent.click` dispatches a single synthetic click — `userEvent.click` reproduces the full pointer/focus sequence a real browser fires.",
+    remediation: "Replace `fireEvent.click(el)` with `userEvent.click(el)` \
+                  from `@testing-library/user-event`. Other `fireEvent.*` \
+                  methods (`focus`, `blur`, `keyDown`, `change`, pointer \
+                  events, ...) are left alone — they have no clean \
+                  `userEvent` equivalent and are the right tool for testing \
+                  low-level focus, keyboard or debounce behaviour.",
     severity: Severity::Warning,
     doc_url: None,
     categories: &["testing"],
