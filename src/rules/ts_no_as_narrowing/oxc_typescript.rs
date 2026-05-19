@@ -41,6 +41,14 @@ fn target_is_narrowing(ty: &TSType, _source: &str) -> bool {
     }
 }
 
+fn peel_parens<'a>(expr: &'a Expression<'a>) -> &'a Expression<'a> {
+    let mut current = expr;
+    while let Expression::ParenthesizedExpression(p) = current {
+        current = &p.expression;
+    }
+    current
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[AstType::TSAsExpression]
@@ -86,8 +94,10 @@ impl OxcCheck for Check {
         // contravariant-boundary escape hatch (e.g. Drizzle relational types
         // invariant in `TablesRelationalConfig`). The inner cast must be to
         // the `unknown` keyword specifically; `x as Foo as Bar` is NOT
-        // exempted.
-        if let Expression::TSAsExpression(inner) = &as_expr.expression
+        // exempted. Peel any parentheses wrapping the inner expression so
+        // that `(x as unknown) as T` is treated identically to
+        // `x as unknown as T`.
+        if let Expression::TSAsExpression(inner) = peel_parens(&as_expr.expression)
             && matches!(inner.type_annotation, TSType::TSUnknownKeyword(_))
         {
             return;
@@ -181,5 +191,24 @@ mod tests {
         // outer cast (target `Foo`) must still flag as a narrowing.
         let diags = run_on("const y = x as any as Foo;");
         assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn allows_parenthesised_unknown_in_double_cast() {
+        // Issue #178 follow-up — `(x as unknown) as Foo` is semantically
+        // identical to `x as unknown as Foo`.
+        let src = "declare const x: unknown; const y = (x as unknown) as Foo;";
+        let diags = run_on(src);
+        assert!(diags.is_empty(), "unexpected diags: {:?}", diags);
+    }
+
+    #[test]
+    fn still_flags_triple_parenthesised_as_chain() {
+        // `((x as A) as unknown) as B` — the middle isn't a plain `as unknown`
+        // of the original value; the inner `as A` is the suspect cast. We
+        // don't auto-exempt arbitrary triple casts.
+        let src = "declare const x: unknown; const y = ((x as A) as unknown) as B;";
+        let diags = run_on(src);
+        assert!(!diags.is_empty(), "expected at least one diag for inner `as A` cast");
     }
 }
