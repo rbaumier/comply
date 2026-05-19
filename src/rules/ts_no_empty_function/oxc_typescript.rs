@@ -6,9 +6,51 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::FunctionBody;
+use oxc_span::GetSpan;
 use std::sync::Arc;
 
 pub struct Check;
+
+fn is_test_file(path: &std::path::Path) -> bool {
+    let s = path.to_string_lossy();
+    s.contains(".test.") || s.contains(".spec.") || s.contains("__tests__") || s.contains("_test.")
+}
+
+/// Returns true when the function expression sits in a JSX expression container
+/// or as an argument to a call/new expression (including parenthesized).
+fn is_placeholder_callback_position(
+    nodes: &oxc_semantic::AstNodes,
+    node_id: oxc_semantic::NodeId,
+) -> bool {
+    let parent_id = nodes.parent_id(node_id);
+    if parent_id == node_id {
+        return false;
+    }
+    match nodes.kind(parent_id) {
+        AstKind::JSXExpressionContainer(_) => true,
+        AstKind::CallExpression(call) => {
+            let node_span = nodes.kind(node_id).span();
+            call.arguments.iter().any(|arg| arg.span() == node_span)
+        }
+        AstKind::NewExpression(new_expr) => {
+            let node_span = nodes.kind(node_id).span();
+            new_expr.arguments.iter().any(|arg| arg.span() == node_span)
+        }
+        AstKind::ParenthesizedExpression(_) => {
+            let grandparent_id = nodes.parent_id(parent_id);
+            if grandparent_id == parent_id {
+                return false;
+            }
+            matches!(
+                nodes.kind(grandparent_id),
+                AstKind::CallExpression(_)
+                    | AstKind::NewExpression(_)
+                    | AstKind::JSXExpressionContainer(_)
+            )
+        }
+        _ => false,
+    }
+}
 
 /// Returns true when the function body is empty (no statements, no directives)
 /// and contains no comments in the source text between the braces.
@@ -70,6 +112,12 @@ impl OxcCheck for Check {
             return;
         }
 
+        if is_test_file(ctx.path)
+            && is_placeholder_callback_position(semantic.nodes(), node.id())
+        {
+            return;
+        }
+
         // Skip constructors with parameter properties (accessibility modifiers).
         if is_method
             && let AstKind::MethodDefinition(method) = semantic.nodes().parent_node(node.id()).kind()
@@ -92,5 +140,73 @@ impl OxcCheck for Check {
             severity: Severity::Warning,
             span: None,
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rules::test_helpers::{run_oxc_tsx, run_oxc_tsx_with_path};
+
+    #[test]
+    fn allows_empty_arrow_in_jsx_prop_in_test_file() {
+        let src = r#"
+            const x = <Foo onClose={() => {}} />;
+        "#;
+        assert!(run_oxc_tsx_with_path(src, &Check, "Foo.test.tsx").is_empty());
+    }
+
+    #[test]
+    fn allows_empty_function_expression_in_jsx_prop_in_test_file() {
+        let src = r#"
+            const x = <Foo onClose={function () {}} />;
+        "#;
+        assert!(run_oxc_tsx_with_path(src, &Check, "Foo.test.tsx").is_empty());
+    }
+
+    #[test]
+    fn allows_empty_arrow_as_call_argument_in_test_file() {
+        let src = r#"
+            useEffect(() => {}, []);
+        "#;
+        assert!(run_oxc_tsx_with_path(src, &Check, "Foo.test.tsx").is_empty());
+    }
+
+    #[test]
+    fn allows_parenthesized_empty_arrow_as_call_argument_in_test_file() {
+        // Regression: useEffect((() => {}), []) — ParenthesizedExpression parent
+        // must not fall through to the `_ => false` arm.
+        let src = r#"
+            useEffect((() => {}), []);
+        "#;
+        assert!(run_oxc_tsx_with_path(src, &Check, "Foo.test.tsx").is_empty());
+    }
+
+    #[test]
+    fn flags_empty_arrow_in_variable_assignment_in_test_file() {
+        // Negative control: direct assignment is not a placeholder callback position.
+        let src = r#"
+            const handler = () => {};
+        "#;
+        let diags = run_oxc_tsx_with_path(src, &Check, "Foo.test.tsx");
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn flags_named_function_declaration_in_test_file() {
+        let src = r#"
+            function doNothing() {}
+        "#;
+        let diags = run_oxc_tsx_with_path(src, &Check, "Foo.test.tsx");
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn flags_empty_arrow_in_jsx_prop_in_non_test_file() {
+        let src = r#"
+            const x = <Foo onClose={() => {}} />;
+        "#;
+        let diags = run_oxc_tsx(src, &Check);
+        assert_eq!(diags.len(), 1);
     }
 }
