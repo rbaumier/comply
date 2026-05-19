@@ -79,6 +79,142 @@ where
     f(&semantic)
 }
 
+/// TanStack Query / Solid Query / Vue Query factory calls whose options
+/// object accepts callbacks with library-dictated signatures (`onError`
+/// gets `(error, variables, context, mutation)`, `queryFn` gets a context
+/// object, etc.). When the user writes those callbacks they have no say
+/// over the arity — flagging them with `max-params` is a guaranteed false
+/// positive.
+pub const TANSTACK_QUERY_FACTORIES: &[&str] = &[
+    "useMutation",
+    "useQuery",
+    "useInfiniteQuery",
+    "useQueries",
+    "useSuspenseQuery",
+    "useSuspenseInfiniteQuery",
+    "useSuspenseQueries",
+    "createMutation",
+    "createQuery",
+    "createInfiniteQuery",
+];
+
+/// Option-keys inside a TanStack Query factory call whose value is a
+/// callback with a fixed signature dictated by the library types.
+pub const TANSTACK_QUERY_CALLBACK_KEYS: &[&str] = &[
+    "onError",
+    "onSuccess",
+    "onSettled",
+    "onMutate",
+    "mutationFn",
+    "queryFn",
+];
+
+/// True when `node` is a function expression / arrow function being passed
+/// as a known third-party callback whose signature is dictated by the
+/// outer call's type — e.g. `useMutation({ onError: (a, b, c, d) => ... })`.
+///
+/// Recognises:
+/// 1. `node` is the value of an object property in an object literal.
+/// 2. That object literal is the first argument of a CallExpression.
+/// 3. The CallExpression's callee identifier is one of
+///    [`TANSTACK_QUERY_FACTORIES`].
+/// 4. The property name is one of [`TANSTACK_QUERY_CALLBACK_KEYS`].
+///
+/// All four must hold. The match is purely name-based — hand-rolled
+/// look-alikes are out of scope (the user can rename their helper or open
+/// an issue to add it to the allowlist).
+#[must_use]
+pub fn is_fixed_signature_library_callback<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    use oxc_ast::AstKind;
+    use oxc_ast::ast::{Expression, PropertyKey};
+
+    let nodes = semantic.nodes();
+    let node_span = {
+        use oxc_span::GetSpan;
+        match node.kind() {
+            AstKind::Function(f) => f.span(),
+            AstKind::ArrowFunctionExpression(a) => a.span(),
+            _ => return false,
+        }
+    };
+
+    // Walk up to the enclosing ObjectProperty.
+    let mut current_id = node.id();
+    let object_property_key: &str;
+    let object_property_node_id;
+    loop {
+        let parent_id = nodes.parent_id(current_id);
+        if parent_id == current_id {
+            return false;
+        }
+        let parent = nodes.get_node(parent_id);
+        if let AstKind::ObjectProperty(prop) = parent.kind() {
+            // The function must be the property's *value*, not nested
+            // somewhere deeper (e.g. a default expression).
+            use oxc_span::GetSpan;
+            let value_span = prop.value.span();
+            if value_span != node_span {
+                return false;
+            }
+            object_property_key = match &prop.key {
+                PropertyKey::StaticIdentifier(id) => id.name.as_str(),
+                PropertyKey::StringLiteral(s) => s.value.as_str(),
+                _ => return false,
+            };
+            object_property_node_id = parent_id;
+            break;
+        }
+        current_id = parent_id;
+    }
+
+    if !TANSTACK_QUERY_CALLBACK_KEYS.contains(&object_property_key) {
+        return false;
+    }
+
+    // The property's parent must be an ObjectExpression that is the first
+    // argument of a CallExpression whose callee identifier is in the
+    // factory allowlist.
+    let obj_parent_id = nodes.parent_id(object_property_node_id);
+    if obj_parent_id == object_property_node_id {
+        return false;
+    }
+    let obj_parent = nodes.get_node(obj_parent_id);
+    let AstKind::ObjectExpression(obj_expr) = obj_parent.kind() else {
+        return false;
+    };
+
+    let call_parent_id = nodes.parent_id(obj_parent_id);
+    if call_parent_id == obj_parent_id {
+        return false;
+    }
+    let call_parent = nodes.get_node(call_parent_id);
+    let AstKind::CallExpression(call) = call_parent.kind() else {
+        return false;
+    };
+
+    // First argument must be this ObjectExpression.
+    let Some(first_arg) = call.arguments.first() else {
+        return false;
+    };
+    let Some(first_arg_expr) = first_arg.as_expression() else {
+        return false;
+    };
+    use oxc_span::GetSpan;
+    if first_arg_expr.span() != obj_expr.span() {
+        return false;
+    }
+
+    // Callee identifier in allowlist.
+    let callee_name = match &call.callee {
+        Expression::Identifier(id) => id.name.as_str(),
+        _ => return false,
+    };
+    TANSTACK_QUERY_FACTORIES.contains(&callee_name)
+}
+
 /// True when `name` matches a generic type parameter declared on any enclosing
 /// function, method, class, interface, or type alias of `node`.
 #[must_use]
