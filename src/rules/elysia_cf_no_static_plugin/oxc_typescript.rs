@@ -9,6 +9,62 @@ use std::sync::Arc;
 
 pub struct Check;
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::project::ProjectCtx;
+    use std::path::Path;
+    use tempfile::TempDir;
+
+    fn cf_project_with_marker(dir: &Path, marker: &str) -> ProjectCtx {
+        std::fs::write(dir.join(marker), "name = \"x\"\n").unwrap();
+        let mut ctx = ProjectCtx::for_test_with_framework("elysia");
+        ctx.project_root = Some(dir.to_path_buf());
+        ctx
+    }
+
+    fn cf_project(dir: &Path) -> ProjectCtx {
+        cf_project_with_marker(dir, "wrangler.toml")
+    }
+
+    fn non_cf_project(dir: &Path) -> ProjectCtx {
+        let mut ctx = ProjectCtx::for_test_with_framework("elysia");
+        ctx.project_root = Some(dir.to_path_buf());
+        ctx
+    }
+
+    fn run_in_project(source: &str, project: &ProjectCtx) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx_with_project(source, &Check, project)
+    }
+
+    #[test]
+    fn ignores_bun_k8s_project_without_wrangler() {
+        let dir = TempDir::new().unwrap();
+        let project = non_cf_project(dir.path());
+        let src = "import { staticPlugin } from \"@elysiajs/static\";\nconst staticApp = new Elysia().use(\n  staticPlugin({ assets: \"dist/client/assets\", prefix: \"/assets\" })\n);";
+        assert!(
+            run_in_project(src, &project).is_empty(),
+            "Bun + K8s projects without a wrangler.toml must not be flagged"
+        );
+    }
+
+    #[test]
+    fn flags_when_wrangler_toml_present() {
+        let dir = TempDir::new().unwrap();
+        let project = cf_project(dir.path());
+        let src = "import { staticPlugin } from '@elysiajs/static';\napp.use(staticPlugin());";
+        assert_eq!(run_in_project(src, &project).len(), 1);
+    }
+
+    #[test]
+    fn flags_when_wrangler_jsonc_present() {
+        let dir = TempDir::new().unwrap();
+        let project = cf_project_with_marker(dir.path(), "wrangler.jsonc");
+        let src = "import { staticPlugin } from '@elysiajs/static';\napp.use(staticPlugin());";
+        assert_eq!(run_in_project(src, &project).len(), 1);
+    }
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[AstType::CallExpression]
@@ -26,6 +82,9 @@ impl OxcCheck for Check {
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         if !ctx.project.has_framework("elysia") {
+            return;
+        }
+        if !ctx.project.is_cloudflare_target() {
             return;
         }
 
