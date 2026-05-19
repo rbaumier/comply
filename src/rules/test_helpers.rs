@@ -495,6 +495,36 @@ pub fn run_oxc_ts_with_path_and_framework(
     diagnostics
 }
 
+/// Run an `OxcCheck` against `source` parsed as TSX with a custom path.
+/// Seeds a `ProjectCtx` whose `has_framework(name)` returns true.
+#[must_use]
+pub fn run_oxc_tsx_with_path_and_framework(
+    source: &str,
+    check: &dyn OxcCheck,
+    fake_path: &str,
+    framework: &str,
+) -> Vec<Diagnostic> {
+    let allocator = Allocator::default();
+    let parse_ret = OxcParser::new(&allocator, source, SourceType::tsx()).parse();
+    let semantic = SemanticBuilder::new().build(&parse_ret.program).semantic;
+    let project = ProjectCtx::for_test_with_framework(framework);
+    let ctx = CheckCtx::for_test_with_project(Path::new(fake_path), source, &project);
+
+    let kinds = check.interested_kinds();
+    if kinds.is_empty() {
+        return check.run_on_semantic(&semantic, &ctx);
+    }
+
+    let mut diagnostics = Vec::new();
+    for node in semantic.nodes().iter() {
+        let ty = node.kind().ty();
+        if kinds.contains(&ty) {
+            check.run(node, &ctx, &semantic, &mut diagnostics);
+        }
+    }
+    diagnostics
+}
+
 fn run_oxc_with_source_type(
     source: &str,
     check: &dyn OxcCheck,
