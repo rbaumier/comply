@@ -5,9 +5,14 @@ use std::sync::Arc;
 
 pub struct Check;
 
+// `delete` is intentionally omitted: `Map.prototype.delete`,
+// `Set.prototype.delete`, `WeakMap.prototype.delete`, `WeakSet.prototype.delete`
+// all return `boolean`, and no idiomatic JS/TS API exposes a Promise-returning
+// `.delete(...)` method. Flagging `cache.delete(key)` produces noisy false
+// positives.
 const ASYNC_LOOKING_METHODS: &[&str] = &[
     "send", "save", "load", "fetch", "query", "emit", "publish", "write", "insert", "update",
-    "delete", "close", "connect", "dispatch", "sync", "flush", "commit", "rollback", "run", "exec",
+    "close", "connect", "dispatch", "sync", "flush", "commit", "rollback", "run", "exec",
     "execute", "process", "handle",
 ];
 
@@ -93,4 +98,61 @@ fn is_async_looking_member_call(call: &CallExpression) -> bool {
     };
     let method = member.property.name.as_str();
     ASYNC_LOOKING_METHODS.contains(&method)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diagnostic::Diagnostic;
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+    #[test]
+    fn flags_async_looking_method() {
+        let d = run_on("db.save(user);");
+        assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn allows_then_chain() {
+        assert!(run_on("api.fetch(url).then(handleResult);").is_empty());
+    }
+
+    // Regression tests for issue #183: `.delete(...)` on Map/Set/WeakMap/WeakSet
+    // returns `boolean`, not a Promise, and must not be flagged.
+
+    #[test]
+    fn allows_map_delete_in_for_of() {
+        let src = "\
+const cache = new Map<string, number>();
+cache.set('a', 1);
+for (const [key] of cache) {
+  cache.delete(key);
+}
+";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_set_delete() {
+        assert!(run_on("set.delete(value);").is_empty());
+    }
+
+    #[test]
+    fn allows_weakmap_delete() {
+        assert!(run_on("weakMap.delete(obj);").is_empty());
+    }
+
+    #[test]
+    fn allows_weakset_delete() {
+        assert!(run_on("weakSet.delete(obj);").is_empty());
+    }
+
+    #[test]
+    fn still_flags_genuine_promise_returning_member_call() {
+        let d = run_on("repo.save(entity);");
+        assert_eq!(d.len(), 1);
+    }
 }

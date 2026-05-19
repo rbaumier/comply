@@ -10,9 +10,13 @@
 //!     flag (top-level promise literal).
 //!   - The callee is a member whose method name is in a short "looks
 //!     async" list: `send`, `save`, `load`, `fetch`, `query`, `emit`,
-//!     `publish`, `write`, `insert`, `update`, `delete`, `close`,
-//!     `connect`, `dispatch` — flag.
+//!     `publish`, `write`, `insert`, `update`, `close`, `connect`,
+//!     `dispatch` — flag.
 //!   - Otherwise skip.
+//!
+//! `delete` is intentionally omitted from the heuristic: `Map`, `Set`,
+//! `WeakMap`, `WeakSet` `.delete(...)` all return `boolean`, and no
+//! idiomatic JS/TS API exposes a Promise-returning `.delete(...)`.
 //!
 //! This intentionally misses cases (the spec mentions "skip if too
 //! complex") rather than producing noisy false positives. Type-aware
@@ -22,7 +26,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 
 const ASYNC_LOOKING_METHODS: &[&str] = &[
     "send", "save", "load", "fetch", "query", "emit", "publish", "write", "insert", "update",
-    "delete", "close", "connect", "dispatch", "sync", "flush", "commit", "rollback", "run", "exec",
+    "close", "connect", "dispatch", "sync", "flush", "commit", "rollback", "run", "exec",
     "execute", "process", "handle",
 ];
 
@@ -169,5 +173,41 @@ mod tests {
     fn allows_void_expression() {
         // `void p;` parses as expression_statement → unary_expression, not a bare call.
         assert!(run_on("void api.fetch(url);").is_empty());
+    }
+
+    // Regression tests for issue #183: `.delete(...)` on Map/Set/WeakMap/WeakSet
+    // returns `boolean`, not a Promise, and must not be flagged.
+
+    #[test]
+    fn allows_map_delete_in_for_of() {
+        let src = "\
+const cache = new Map();
+for (const [key] of cache) {
+  cache.delete(key);
+}
+";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_set_delete() {
+        assert!(run_on("set.delete(value);").is_empty());
+    }
+
+    #[test]
+    fn allows_weakmap_delete() {
+        assert!(run_on("weakMap.delete(obj);").is_empty());
+    }
+
+    #[test]
+    fn allows_weakset_delete() {
+        assert!(run_on("weakSet.delete(obj);").is_empty());
+    }
+
+    #[test]
+    fn still_flags_genuine_promise_returning_member_call() {
+        // Negative: a method name that genuinely looks async stays flagged.
+        let d = run_on("repo.save(entity);");
+        assert_eq!(d.len(), 1);
     }
 }
