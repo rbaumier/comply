@@ -55,7 +55,7 @@ fn collect_ref_bindings<'a>(
 /// etc.) or the operand of an `UpdateExpression` (`ref.current++`,
 /// `--ref.current`, etc.). The latest-ref pattern writes during render;
 /// only reads are the antipattern. UpdateExpression cases are handled by a
-/// dedicated visitor pass (issue #197) since they ARE read-then-write — we
+/// dedicated visitor pass since they ARE read-then-write — we
 /// just need to avoid double-flagging them here.
 fn is_assignment_target(
     member_span: oxc_span::Span,
