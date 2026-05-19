@@ -3,10 +3,14 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
+use oxc_ast::ast::Expression;
 use oxc_span::GetSpan;
 use std::sync::Arc;
 
 pub struct Check;
+
+/// Callee names whose argument is treated as a handled Result.
+const TERMINAL_SINK_CALLEES: &[&str] = &["unwrapOrThrow"];
 
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
@@ -38,6 +42,13 @@ impl OxcCheck for Check {
             return;
         }
 
+        if let Some(parent_call) = nearest_enclosing_call(node, semantic)
+            && let Expression::Identifier(callee_id) = &parent_call.callee
+            && TERMINAL_SINK_CALLEES.contains(&callee_id.name.as_str())
+        {
+            return;
+        }
+
         // Only flag if the call is an expression statement (result is ignored).
         let parent = semantic.nodes().parent_node(node.id());
         if !matches!(parent.kind(), AstKind::ExpressionStatement(_)) {
@@ -56,5 +67,76 @@ impl OxcCheck for Check {
             severity: Severity::Warning,
             span: None,
         });
+    }
+}
+
+/// Returns the immediately-enclosing call expression, transparent to parens, await, and TS type wrappers. None if no enclosing call exists.
+fn nearest_enclosing_call<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> Option<&'a oxc_ast::ast::CallExpression<'a>> {
+    let nodes = semantic.nodes();
+    let mut current_id = node.id();
+    loop {
+        let parent_id = nodes.parent_id(current_id);
+        if parent_id == current_id {
+            return None;
+        }
+        let parent = nodes.get_node(parent_id);
+        match parent.kind() {
+            AstKind::ParenthesizedExpression(_)
+            | AstKind::AwaitExpression(_)
+            | AstKind::TSAsExpression(_)
+            | AstKind::TSSatisfiesExpression(_)
+            | AstKind::TSTypeAssertion(_)
+            | AstKind::TSNonNullExpression(_) => {
+                current_id = parent_id;
+            }
+            AstKind::CallExpression(call) => return Some(call),
+            _ => return None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diagnostic::Diagnostic;
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(src, &Check)
+    }
+
+    #[test]
+    fn flags_ignored_result_gen_statement() {
+        let src = "import { Result } from 'better-result';\nResult.gen(function* () { return Result.ok(1); });\n";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn accepts_unwrap_or_throw_wrapping_result_gen_in_handler() {
+        let src = r#"
+            import { Result, unwrapOrThrow } from 'better-result';
+            import { Elysia } from 'elysia';
+
+            new Elysia().post("/things", ({ body }) =>
+                unwrapOrThrow(
+                    Result.gen(async function* () {
+                        const row = yield* Result.await(tryDatabaseQuery(() => db.insert(thing).values(body).returning()));
+                        return Result.ok(firstOrError(row, "INSERT RETURNING yielded no row"));
+                    }),
+                ),
+            );
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn accepts_unwrap_or_throw_wrapping_result_gen_statement() {
+        let src = r#"
+            import { Result, unwrapOrThrow } from 'better-result';
+            unwrapOrThrow(Result.gen(function* () { return Result.ok(1); }));
+        "#;
+        assert!(run(src).is_empty());
     }
 }
