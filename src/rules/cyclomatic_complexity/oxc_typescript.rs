@@ -119,3 +119,84 @@ fn nearest_function_span(
     }
     None
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rules::test_helpers::run_oxc_ts;
+
+    // The cyclomatic-complexity behaviour itself is exercised by the
+    // tree-sitter test module (see `typescript.rs`). The OXC-backend tests
+    // below focus on the diagnostic line landing on the actual function
+    // declaration, since comply-ignore suppression is keyed by line.
+
+    const TWELVE_IF_BODY: &str = "    if (intent.kind === 'a') return 1;\n    \
+        if (intent.kind === 'b') return 2;\n    \
+        if (intent.kind === 'c') return 3;\n    \
+        if (intent.kind === 'd') return 4;\n    \
+        if (intent.kind === 'e') return 5;\n    \
+        if (intent.kind === 'f') return 6;\n    \
+        if (intent.kind === 'g') return 7;\n    \
+        if (intent.kind === 'h') return 8;\n    \
+        if (intent.kind === 'i') return 9;\n    \
+        if (intent.kind === 'j') return 10;\n    \
+        if (intent.kind === 'k') return 11;\n    \
+        return 12;";
+
+    fn fixture(prelude: &str) -> String {
+        format!(
+            "{prelude}export function authorize(intent: any) {{\n{TWELVE_IF_BODY}\n}}\n",
+        )
+    }
+
+    /// Regression for rbaumier/comply#185 — the per-function `comply-ignore`
+    /// marker must suppress the diagnostic even when a JSDoc block sits
+    /// between it and the function declaration. Without the JSDoc-skip in
+    /// the suppression resolver, the marker would target the JSDoc's first
+    /// line and miss the function on the line below.
+    #[test]
+    fn comply_ignore_above_jsdoc_suppresses_function_below() {
+        let src = fixture(
+            "// comply-ignore: cyclomatic-complexity — exhaustive dispatch.\n\
+             /**\n * JSDoc.\n */\n",
+        );
+        let diags = run_oxc_ts(&src, &Check);
+        assert_eq!(diags.len(), 1, "rule should flag the function pre-suppression");
+        let kept = crate::ignore_comments::apply_suppressions(
+            diags,
+            std::path::Path::new("t.ts"),
+            &src,
+        );
+        assert!(kept.is_empty(), "comply-ignore above JSDoc must suppress; kept = {kept:?}");
+    }
+
+    /// Sibling case from the same issue — marker between JSDoc and the
+    /// declaration. Documented in the bug report as already working; kept
+    /// here as a guard against regression of the pre-existing behaviour.
+    #[test]
+    fn comply_ignore_between_jsdoc_and_function_suppresses() {
+        let src = fixture(
+            "/**\n * JSDoc.\n */\n\
+             // comply-ignore: cyclomatic-complexity — exhaustive dispatch.\n",
+        );
+        let diags = run_oxc_ts(&src, &Check);
+        assert_eq!(diags.len(), 1);
+        let kept = crate::ignore_comments::apply_suppressions(
+            diags,
+            std::path::Path::new("t.ts"),
+            &src,
+        );
+        assert!(kept.is_empty());
+    }
+
+    /// Without any comply-ignore the rule must still flag the high-complexity
+    /// function. Guards against an over-broad JSDoc-skip silently dropping
+    /// real diagnostics.
+    #[test]
+    fn high_complexity_function_with_jsdoc_still_flagged() {
+        let src = fixture("/**\n * JSDoc.\n */\n");
+        let diags = run_oxc_ts(&src, &Check);
+        assert_eq!(diags.len(), 1, "no ignore → diagnostic must remain");
+        assert!(diags[0].message.contains("authorize"));
+    }
+}

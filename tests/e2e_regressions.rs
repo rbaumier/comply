@@ -86,3 +86,33 @@ fn bom_prefixed_file_honors_line_one_ignore() {
         .assert()
         .stdout(predicate::str::contains("no-nested-ternary").not());
 }
+
+#[test]
+fn comply_ignore_above_jsdoc_suppresses_function_below() {
+    // Regression for rbaumier/comply#185 — a per-function comply-ignore
+    // marker sitting above a JSDoc block must still suppress the rule on
+    // the function declaration below the doc comment. The suppression walk
+    // must skip JSDoc lines to land on the actual declaration.
+    let source = "// comply-ignore: cyclomatic-complexity — exhaustive dispatch over a union.\n\
+        /**\n * Authorize a caller against an intent.\n */\n\
+        export function authorize(intent: { kind: string }) {\n\
+            if (intent.kind === 'a') return 1;\n\
+            if (intent.kind === 'b') return 2;\n\
+            if (intent.kind === 'c') return 3;\n\
+            if (intent.kind === 'd') return 4;\n\
+            if (intent.kind === 'e') return 5;\n\
+            if (intent.kind === 'f') return 6;\n\
+            if (intent.kind === 'g') return 7;\n\
+            if (intent.kind === 'h') return 8;\n\
+            if (intent.kind === 'i') return 9;\n\
+            if (intent.kind === 'j') return 10;\n\
+            if (intent.kind === 'k') return 11;\n\
+            return 12;\n\
+        }\n";
+    let (_dir, path) = write_ts_file("authorize.ts", source);
+    Command::cargo_bin("comply")
+        .unwrap()
+        .arg(&path)
+        .assert()
+        .stdout(predicate::str::contains("cyclomatic-complexity").not());
+}
