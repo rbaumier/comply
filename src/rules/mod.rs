@@ -980,7 +980,6 @@ pub mod tanstack_query_prefer_suspense_query;
 pub mod tanstack_query_require_stale_time;
 pub mod tanstack_query_stable_client;
 pub mod tanstack_start_require_validate_search;
-pub mod tanstack_start_server_fn_file_convention;
 pub mod tanstack_start_server_fn_requires_auth;
 pub mod tanstack_start_server_fn_requires_validation;
 pub mod timeout_on_external_command;
@@ -3026,7 +3025,6 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         // v3.0 — Skill-driven rules: Batch 6 (TanStack Start)
         tanstack_start_server_fn_requires_validation::register(),
         tanstack_start_server_fn_requires_auth::register(),
-        tanstack_start_server_fn_file_convention::register(),
         tanstack_start_require_validate_search::register(),
         // v3.0 — Skill-driven rules: Batch 8 (API Design)
         api_no_array_root_response::register(),
