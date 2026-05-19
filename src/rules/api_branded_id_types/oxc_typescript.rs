@@ -53,12 +53,7 @@ impl OxcCheck for Check {
             return;
         }
 
-        // Relaxation: if the parameter is only used as an equality-comparison
-        // operand inside the function body (never returned, stored, passed on,
-        // or read for any other purpose), the brand provides no extra safety
-        // — the value flows nowhere downstream. This matches the common case
-        // of filtering by an ID coming from a third-party type that widens
-        // to plain `string` (e.g. Better Auth's `session.userId: string`).
+        // Common case: parameter compared against a third-party type that widens to plain `string` (e.g. Better Auth `session.userId`).
         if is_comparison_only_usage(ident.symbol_id.get(), semantic) {
             return;
         }
@@ -119,20 +114,19 @@ fn is_comparison_only_usage(
     let scoping = semantic.scoping();
     let nodes = semantic.nodes();
 
-    let mut saw_reference = false;
+    let mut has_reference = false;
     for reference in scoping.get_resolved_references(symbol_id) {
-        saw_reference = true;
+        has_reference = true;
         let ref_id = reference.node_id();
         if !is_equality_operand(ref_id, nodes) {
             return false;
         }
     }
-    saw_reference
+    has_reference
 }
 
-/// Walk parents past any `ParenthesizedExpression` and return `true` if the
-/// first non-parenthesised ancestor is a `BinaryExpression` whose operator is
-/// `===`, `!==`, `==`, or `!=`.
+/// Returns `true` when `ref_id` is a direct operand of an equality comparison
+/// (`===`, `!==`, `==`, `!=`), transparent to parenthesised wrappers.
 fn is_equality_operand(ref_id: oxc_semantic::NodeId, nodes: &oxc_semantic::AstNodes) -> bool {
     let mut current = ref_id;
     loop {
@@ -264,7 +258,8 @@ mod tests {
                 }
             }
         "#;
-        assert!(run(src).is_empty(), "{:?}", run(src));
+        let diagnostics = run(src);
+        assert!(diagnostics.is_empty(), "{:?}", diagnostics);
     }
 
     #[test]
@@ -274,7 +269,8 @@ mod tests {
                 return current.userId == userId;
             }
         "#;
-        assert!(run(src).is_empty(), "{:?}", run(src));
+        let diagnostics = run(src);
+        assert!(diagnostics.is_empty(), "{:?}", diagnostics);
     }
 
     #[test]
@@ -284,7 +280,8 @@ mod tests {
                 return other.userId !== userId;
             }
         "#;
-        assert!(run(src).is_empty(), "{:?}", run(src));
+        let diagnostics = run(src);
+        assert!(diagnostics.is_empty(), "{:?}", diagnostics);
     }
 
     #[test]
