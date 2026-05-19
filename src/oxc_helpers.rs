@@ -85,7 +85,7 @@ where
 /// object, etc.). When the user writes those callbacks they have no say
 /// over the arity — flagging them with `max-params` is a guaranteed false
 /// positive.
-pub const TANSTACK_QUERY_FACTORIES: &[&str] = &[
+const TANSTACK_QUERY_FACTORIES: &[&str] = &[
     "useMutation",
     "useQuery",
     "useInfiniteQuery",
@@ -100,13 +100,15 @@ pub const TANSTACK_QUERY_FACTORIES: &[&str] = &[
 
 /// Option-keys inside a TanStack Query factory call whose value is a
 /// callback with a fixed signature dictated by the library types.
-pub const TANSTACK_QUERY_CALLBACK_KEYS: &[&str] = &[
+const TANSTACK_QUERY_CALLBACK_KEYS: &[&str] = &[
     "onError",
     "onSuccess",
     "onSettled",
     "onMutate",
     "mutationFn",
     "queryFn",
+    "getNextPageParam",
+    "getPreviousPageParam",
 ];
 
 /// True when `node` is a function expression / arrow function being passed
@@ -207,9 +209,12 @@ pub fn is_fixed_signature_library_callback<'a>(
         return false;
     }
 
-    // Callee identifier in allowlist.
+    // Callee identifier in allowlist. Handles both bare calls (`useMutation`)
+    // and namespace-import calls (`RQ.useMutation`) — the receiver is not
+    // verified to be a namespace import; property name is sufficient.
     let callee_name = match &call.callee {
         Expression::Identifier(id) => id.name.as_str(),
+        Expression::StaticMemberExpression(member) => member.property.name.as_str(),
         _ => return false,
     };
     TANSTACK_QUERY_FACTORIES.contains(&callee_name)

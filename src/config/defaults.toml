@@ -47,7 +47,7 @@ max_elements = 3
 # ---------------------------------------------------------------
 
 [rules.max-params]
-max = 4
+max = 3
 
 [rules.max-depth]
 max = 3

@@ -82,9 +82,9 @@ mod oxc_tests {
     }
 
     #[test]
-    fn flags_top_level_function_with_five_params() {
-        // `max-params` default is 4 — 5 params triggers the rule.
-        let src = "function foo(a: number, b: number, c: number, d: number, e: number) {}";
+    fn flags_top_level_function_with_four_params() {
+        // `max-params` default is 3 — 4 params triggers the rule.
+        let src = "function foo(a: number, b: number, c: number, d: number) {}";
         assert_eq!(run(src).len(), 1);
     }
 
@@ -95,13 +95,14 @@ mod oxc_tests {
     }
 
     #[test]
-    fn allows_use_mutation_on_error_callback_with_five_params() {
+    fn allows_use_mutation_on_error_callback_with_four_params() {
         // Regression for rbaumier/comply#203 — TanStack Query callback
-        // signatures are dictated by the library types.
+        // signatures are dictated by the library types. 4 params exceeds
+        // the default max=3 threshold, so the exemption must fire.
         let src = r#"
             import { useMutation } from "@tanstack/react-query";
             useMutation({
-                onError: (error, variables, context, mutation, extra) => {
+                onError: (error, variables, context, mutation) => {
                     console.log(error);
                 },
             });
@@ -121,13 +122,39 @@ mod oxc_tests {
     }
 
     #[test]
-    fn still_flags_unknown_factory_callback_with_five_params() {
+    fn still_flags_unknown_factory_callback_with_four_params() {
         // `myFn` is not in the allowlist — the callback is still flagged.
         let src = r#"
             myFn({
-                onError: (a, b, c, d, e) => 1,
+                onError: (a, b, c, d) => 1,
             });
         "#;
         assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_use_infinite_query_get_next_page_param() {
+        // Regression: getNextPageParam / getPreviousPageParam are v5 infinite-query
+        // callbacks with a 4-arg signature dictated by TanStack Query.
+        let src = r#"
+            import { useInfiniteQuery } from "@tanstack/react-query";
+            useInfiniteQuery({
+                getNextPageParam: (lastPage, allPages, lastPageParam, allPageParams) => null,
+            });
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_namespace_import_use_mutation_on_error() {
+        // Regression: namespace-import call `RQ.useMutation(...)` must be
+        // recognised via StaticMemberExpression callee matching.
+        let src = r#"
+            import * as RQ from "@tanstack/react-query";
+            RQ.useMutation({
+                onError: (a, b, c, d) => {},
+            });
+        "#;
+        assert!(run(src).is_empty());
     }
 }
