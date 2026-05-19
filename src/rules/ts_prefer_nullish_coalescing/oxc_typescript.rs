@@ -22,6 +22,11 @@ const BOOLEAN_METHODS: &[&str] = &[
     "isSafeInteger",
     "test",
     "equals",
+    "some",
+    "every",
+    "hasOwnProperty",
+    "isPrototypeOf",
+    "propertyIsEnumerable",
 ];
 
 /// Syntactic heuristic: is `expr` very likely to evaluate to a boolean?
@@ -184,5 +189,29 @@ mod tests {
         // LHS isn't syntactically boolean → still warns.
         let src = r#"const x = maybeStr || "default";"#;
         assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_length_compare_or_some_chain() {
+        // Issue #180 reproducer.
+        let src = r#"
+            const hasAnyFilter =
+                localSearch.length > 0 ||
+                Object.values(state.filters).some((v) => v !== null && v.length > 0);
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_every_chain() {
+        let src = r#"const ok = xs.every((v) => v > 0) || ys.every((v) => v > 0);"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_boolean_literal_or_literal() {
+        // RHS is BooleanLiteral → not default-like, skipped early.
+        let src = r#"const ok = true || false;"#;
+        assert!(run(src).is_empty());
     }
 }
