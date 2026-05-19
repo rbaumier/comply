@@ -52,11 +52,29 @@ pub fn parse_ignores(path: &Path, source: &str) -> IgnoreResult {
         }
     }
 
-    // Pass 1.5 — compute lines fully contained in a JSDoc block
-    // (`/** ... */`). Above-line markers walk past these in pass 2 so
-    // a marker sitting above the doc comment still resolves to the
-    // function below it (rbaumier/comply#185).
-    let jsdoc_lines = collect_jsdoc_lines(source);
+    // Skip JSDoc lines when forwarding above-line markers so a `// comply-ignore` above `/** ... */` still reaches the declaration below (#185).
+    let mut jsdoc_lines: HashSet<usize> = HashSet::new();
+    {
+        let mut in_block = false;
+        for (idx, raw_line) in source.lines().enumerate() {
+            let line_num = idx + 1;
+            let trimmed = raw_line.trim_start();
+            if !in_block {
+                if trimmed.starts_with("/**") {
+                    jsdoc_lines.insert(line_num);
+                    let after_open = &trimmed[3..];
+                    if !after_open.contains("*/") {
+                        in_block = true;
+                    }
+                }
+            } else {
+                jsdoc_lines.insert(line_num);
+                if trimmed.contains("*/") {
+                    in_block = false;
+                }
+            }
+        }
+    }
 
     // Pass 2 — apply each parse. Above-line markers whose immediate
     // target is itself a marker line or a JSDoc line walk past those
@@ -98,39 +116,6 @@ pub fn parse_ignores(path: &Path, source: &str) -> IgnoreResult {
         file_suppressions,
         bad_ignores,
     }
-}
-
-/// Return the set of 1-based line numbers that lie inside a JSDoc block
-/// (`/** ... */`). A line counts as inside the block when its first
-/// non-whitespace content is either the opening `/**`, the closing `*/`,
-/// or a `*` continuation. Used by `parse_ignores` to forward above-line
-/// markers past intervening doc comments onto the declaration below.
-fn collect_jsdoc_lines(source: &str) -> HashSet<usize> {
-    let mut lines = HashSet::new();
-    let mut in_block = false;
-    for (idx, raw_line) in source.lines().enumerate() {
-        let line_num = idx + 1;
-        let trimmed = raw_line.trim_start();
-        if !in_block {
-            // A JSDoc block opens when the first non-whitespace is `/**`.
-            if trimmed.starts_with("/**") {
-                lines.insert(line_num);
-                // Single-line JSDoc (`/** ... */` on one line) opens and
-                // closes immediately. Only enter multi-line mode if the
-                // closing `*/` is not on this same line after the open.
-                let after_open = &trimmed[3..];
-                if !after_open.contains("*/") {
-                    in_block = true;
-                }
-            }
-        } else {
-            lines.insert(line_num);
-            if trimmed.contains("*/") {
-                in_block = false;
-            }
-        }
-    }
-    lines
 }
 
 /// Filter diagnostics by removing suppressed ones, then append bad-ignore diagnostics.
