@@ -210,4 +210,40 @@ for (const [key] of cache) {
         let d = run_on("repo.save(entity);");
         assert_eq!(d.len(), 1);
     }
+
+    // Regression tests for issue #208: URLSearchParams mutator methods
+    // (`delete`, `set`, `append`, `sort`) return `void` per WHATWG URL spec.
+
+    #[test]
+    fn allows_urlsearchparams_delete() {
+        let src = "\
+const params = new URLSearchParams(\"?a=1\");
+params.delete(\"a\");
+";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_urlsearchparams_set() {
+        assert!(run_on("params.set(\"a\", \"b\");").is_empty());
+    }
+
+    #[test]
+    fn allows_urlsearchparams_append() {
+        assert!(run_on("params.append(\"x\", \"y\");").is_empty());
+    }
+
+    #[test]
+    fn allows_urlsearchparams_sort() {
+        assert!(run_on("params.sort();").is_empty());
+    }
+
+    #[test]
+    fn allows_url_searchparams_chain_delete() {
+        let src = "\
+const parsed = new URL(\"https://example.com/?a=1\");
+parsed.searchParams.delete(\"a\");
+";
+        assert!(run_on(src).is_empty());
+    }
 }

@@ -155,4 +155,55 @@ for (const [key] of cache) {
         let d = run_on("repo.save(entity);");
         assert_eq!(d.len(), 1);
     }
+
+    // Regression tests for issue #208: URLSearchParams mutator methods
+    // (`delete`, `set`, `append`, `sort`) return `void` per WHATWG URL spec —
+    // none should be flagged. `delete` was dropped from the heuristic in #183;
+    // the others were never on the list. These tests lock that contract in.
+
+    #[test]
+    fn allows_urlsearchparams_delete() {
+        let src = "\
+const params = new URLSearchParams(\"?a=1\");
+params.delete(\"a\");
+";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_urlsearchparams_set() {
+        let src = "\
+const params = new URLSearchParams(\"?a=1\");
+params.set(\"a\", \"b\");
+";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_urlsearchparams_append() {
+        let src = "\
+const params = new URLSearchParams(\"?a=1\");
+params.append(\"x\", \"y\");
+";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_urlsearchparams_sort() {
+        let src = "\
+const params = new URLSearchParams(\"?b=1&a=2\");
+params.sort();
+";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_url_searchparams_chain_delete() {
+        // Real-world pattern from the issue's repro file: parsed.searchParams.delete(key).
+        let src = "\
+const parsed = new URL(\"https://example.com/?a=1\");
+parsed.searchParams.delete(\"a\");
+";
+        assert!(run_on(src).is_empty());
+    }
 }
