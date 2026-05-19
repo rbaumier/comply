@@ -166,4 +166,24 @@ mod tests {
         let diags = run_on(src);
         assert!(diags.is_empty(), "unexpected diags: {:?}", diags);
     }
+
+    #[test]
+    fn allows_drizzle_relations_filter_as_unknown_as_chain() {
+        // Regression for #178: Drizzle relational types are invariant in
+        // `TablesRelationalConfig`; structural relabel requires
+        // `as unknown as <Type>`.
+        let src = "type AnyRelationsFilter = unknown;\n\
+                   declare const where: object;\n\
+                   const widenedWhere = where as unknown as AnyRelationsFilter;";
+        let diags = run_on(src);
+        assert!(diags.is_empty(), "unexpected diags: {:?}", diags);
+    }
+
+    #[test]
+    fn flags_double_cast_without_unknown_middle() {
+        // Negative: `x as any as Foo` is NOT the canonical escape hatch —
+        // the middle must be `unknown` for the exemption to apply.
+        let diags = run_on("const y = x as any as Foo;");
+        assert!(!diags.is_empty(), "expected at least one diag");
+    }
 }
