@@ -6,6 +6,42 @@ use crate::rules::backend::{AstCheck, CheckCtx};
 #[derive(Debug)]
 pub struct Check;
 
+/// Returns true if the `.length`/`.size` access starting at `prop_pos` in `trimmed`
+/// is the direct argument of an `expect(...)` call (Vitest/Jest matcher form),
+/// in which case the matcher (`.toBe`, `.toBeGreaterThan`, ...) performs the
+/// explicit comparison and the rule should not flag.
+fn is_inside_expect_argument(trimmed: &str, prop_pos: usize) -> bool {
+    let bytes = trimmed.as_bytes();
+    let mut i = prop_pos;
+    let mut depth: i32 = 0;
+    while i > 0 {
+        i -= 1;
+        let c = bytes[i];
+        match c {
+            b')' | b']' => depth += 1,
+            b'(' | b'[' => {
+                if depth == 0 {
+                    if c == b'[' {
+                        return false;
+                    }
+                    let mut j = i;
+                    while j > 0
+                        && (bytes[j - 1].is_ascii_alphanumeric()
+                            || bytes[j - 1] == b'_'
+                            || bytes[j - 1] == b'$')
+                    {
+                        j -= 1;
+                    }
+                    return &trimmed[j..i] == "expect";
+                }
+                depth -= 1;
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
 /// Check if a line has a bare `.length`/`.size` in a boolean context
 /// (no explicit comparison like `> 0`, `=== 0`, `!== 0`, etc.).
 fn has_implicit_length_check(line: &str) -> bool {
@@ -108,6 +144,11 @@ fn has_implicit_length_check(line: &str) -> bool {
                     continue;
                 }
 
+                if is_inside_expect_argument(trimmed, abs_pos) {
+                    search_from = after_prop;
+                    continue;
+                }
+
                 return true;
             }
 
@@ -166,5 +207,20 @@ mod tests {
     #[test]
     fn allows_assignment() {
         assert!(run_on("const len = arr.length;").is_empty());
+    }
+
+    #[test]
+    fn allows_expect_to_be_greater_than() {
+        assert!(run_on("expect(value.length).toBeGreaterThan(0);").is_empty());
+    }
+
+    #[test]
+    fn allows_expect_to_be() {
+        assert!(run_on("expect(arr.length).toBe(3);").is_empty());
+    }
+
+    #[test]
+    fn allows_expect_to_equal() {
+        assert!(run_on("expect(arr.length).toEqual(0);").is_empty());
     }
 }
