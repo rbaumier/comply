@@ -49,16 +49,10 @@ pub fn register_all() -> Vec<RuleDef> {
             "Remove the `else` after a `return` and de-indent the trailing \
              block. Early returns keep the happy path at the leftmost level.",
         ),
-        entry_with_clippy(
-            "max-params",
-            "max-params",
-            "clippy::too_many_arguments",
-            Severity::Error,
-            "Functions should take at most 3 positional arguments.",
-            "If you need more than 3 parameters, pack them into an options \
-             object — named fields carry intent where positional arguments \
-             don't.",
-        ),
+        // `max-params` is handled natively — see `src/rules/max_params/`.
+        // The native version exempts fixed-signature library callbacks
+        // (TanStack Query `onError`/`queryFn`/etc.) and keeps the same
+        // clippy delegation for Rust.
         entry_with_clippy(
             "max-depth",
             "max-depth",

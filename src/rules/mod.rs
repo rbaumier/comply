@@ -1138,6 +1138,7 @@ pub mod jsx_no_new_function_as_prop;
 pub mod jsx_no_undef;
 pub mod justify_inaction;
 pub mod max_call_chain_depth;
+pub mod max_params;
 pub mod max_union_size;
 pub mod nested_control_flow;
 pub mod no_arguments_usage;
@@ -1874,7 +1875,7 @@ pub fn oxlint_delegate(meta: RuleMeta, rule: &'static str, languages: &[Language
 
 /// Helper for rules bound to BOTH oxlint (TS-family) and clippy (Rust).
 /// Used when the same coding standard has direct enforcement on both
-/// sides: `max-params` → oxlint `max-params` + clippy `too_many_arguments`.
+/// sides: `max-depth` → oxlint `max-depth` + clippy `excessive_nesting`.
 pub fn oxlint_and_clippy(
     meta: RuleMeta,
     oxlint_rule: &'static str,
@@ -2263,6 +2264,7 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         inverted_assertion_arguments::register(),
         jsx_no_leaked_render::register(),
         max_call_chain_depth::register(),
+        max_params::register(),
         max_union_size::register(),
         nested_control_flow::register(),
         no_arguments_usage::register(),

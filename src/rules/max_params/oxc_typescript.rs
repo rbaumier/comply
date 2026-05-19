@@ -1,4 +1,10 @@
-//! ts-max-params OXC backend.
+//! max-params OXC backend.
+//!
+//! Mirrors `ts-max-params` but reads its threshold from `[rules.max-params]`
+//! and applies to TS/JS/TSX uniformly. Skips function expressions / arrow
+//! functions passed as fixed-signature library callbacks (TanStack Query
+//! `onError` / `queryFn` / etc.) since the user has no control over those
+//! arities.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::{byte_offset_to_line_col, is_fixed_signature_library_callback};
@@ -15,9 +21,10 @@ fn count_params(params: &oxc_ast::ast::FormalParameters) -> usize {
         .filter(|p| {
             // Skip TS `this` parameter
             if let oxc_ast::ast::BindingPattern::BindingIdentifier(id) = &p.pattern
-                && id.name.as_str() == "this" {
-                    return false;
-                }
+                && id.name.as_str() == "this"
+            {
+                return false;
+            }
             true
         })
         .count()
@@ -29,10 +36,7 @@ fn func_name<'a>(func: &'a oxc_ast::ast::Function<'a>) -> &'a str {
 
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
-        &[
-            AstType::Function,
-            AstType::ArrowFunctionExpression,
-        ]
+        &[AstType::Function, AstType::ArrowFunctionExpression]
     }
 
     fn run<'a>(
@@ -42,12 +46,10 @@ impl OxcCheck for Check {
         semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
-        let max_params = ctx.config.threshold("ts-max-params", "max", ctx.lang);
+        let max_params = ctx.config.threshold("max-params", "max", ctx.lang);
 
         let (count, name, span) = match node.kind() {
-            AstKind::Function(func) => {
-                (count_params(&func.params), func_name(func), func.span())
-            }
+            AstKind::Function(func) => (count_params(&func.params), func_name(func), func.span()),
             AstKind::ArrowFunctionExpression(arrow) => {
                 (count_params(&arrow.params), "<anonymous>", arrow.span())
             }
@@ -55,8 +57,7 @@ impl OxcCheck for Check {
         };
 
         if count > max_params && !is_fixed_signature_library_callback(node, semantic) {
-            let (line, column) =
-                byte_offset_to_line_col(ctx.source, span.start as usize);
+            let (line, column) = byte_offset_to_line_col(ctx.source, span.start as usize);
             diagnostics.push(Diagnostic {
                 path: Arc::clone(&ctx.path_arc),
                 line,
@@ -65,7 +66,7 @@ impl OxcCheck for Check {
                 message: format!(
                     "Function `{name}` has {count} parameters (maximum allowed is {max_params})."
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }
@@ -81,19 +82,26 @@ mod oxc_tests {
     }
 
     #[test]
-    fn flags_top_level_function_with_four_params() {
-        let src = "function foo(a: number, b: number, c: number, d: number) {}";
+    fn flags_top_level_function_with_five_params() {
+        // `max-params` default is 4 — 5 params triggers the rule.
+        let src = "function foo(a: number, b: number, c: number, d: number, e: number) {}";
         assert_eq!(run(src).len(), 1);
     }
 
     #[test]
-    fn allows_use_mutation_on_error_callback_with_four_params() {
+    fn allows_three_params() {
+        let src = "function foo(a: number, b: string, c: boolean) {}";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_use_mutation_on_error_callback_with_five_params() {
         // Regression for rbaumier/comply#203 — TanStack Query callback
         // signatures are dictated by the library types.
         let src = r#"
             import { useMutation } from "@tanstack/react-query";
             useMutation({
-                onError: (error, variables, context, mutation) => {
+                onError: (error, variables, context, mutation, extra) => {
                     console.log(error);
                 },
             });
@@ -102,25 +110,22 @@ mod oxc_tests {
     }
 
     #[test]
-    fn allows_use_query_query_fn_with_many_params() {
-        // `queryFn` receives a single context object in real TanStack, but
-        // users sometimes destructure positional helpers in test
-        // doubles — exempt them too since the signature is library-driven.
+    fn allows_use_query_query_fn_with_five_params() {
         let src = r#"
             import { useQuery } from "@tanstack/react-query";
             useQuery({
-                queryFn: (a, b, c, d) => 1,
+                queryFn: (a, b, c, d, e) => 1,
             });
         "#;
         assert!(run(src).is_empty());
     }
 
     #[test]
-    fn still_flags_unknown_factory_with_callback_at_arity_violation() {
-        // `myFn` is not in the TanStack factory allowlist — still flagged.
+    fn still_flags_unknown_factory_callback_with_five_params() {
+        // `myFn` is not in the allowlist — the callback is still flagged.
         let src = r#"
             myFn({
-                onError: (a, b, c, d) => 1,
+                onError: (a, b, c, d, e) => 1,
             });
         "#;
         assert_eq!(run(src).len(), 1);
