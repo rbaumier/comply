@@ -3,7 +3,9 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{AssignmentTarget, Expression, UnaryOperator, VariableDeclarationKind};
+use oxc_ast::ast::{
+    AssignmentTarget, Expression, IdentifierReference, UnaryOperator, VariableDeclarationKind,
+};
 use std::sync::Arc;
 
 const MUTATING_ARRAY_METHODS: &[&str] = &[
@@ -51,6 +53,11 @@ impl OxcCheck for Check {
                 if is_current_target(&assign.left) {
                     return;
                 }
+                if let Some(id) = root_identifier_of_target(&assign.left)
+                    && is_created_dom_element(id, semantic)
+                {
+                    return;
+                }
                 let Some(root) = root_name_of_target(&assign.left) else {
                     return;
                 };
@@ -60,6 +67,11 @@ impl OxcCheck for Check {
             }
             // obj.count++, --obj.count
             AstKind::UpdateExpression(update) => {
+                if let Some(id) = root_identifier_of_simple_target(&update.argument)
+                    && is_created_dom_element(id, semantic)
+                {
+                    return;
+                }
                 let Some(root) = root_name_of_simple_target(&update.argument) else {
                     return;
                 };
@@ -70,6 +82,11 @@ impl OxcCheck for Check {
             // delete obj.prop
             AstKind::UnaryExpression(unary) => {
                 if unary.operator != UnaryOperator::Delete {
+                    return;
+                }
+                if let Some(id) = root_identifier_of_expr(&unary.argument)
+                    && is_created_dom_element(id, semantic)
+                {
                     return;
                 }
                 let Some(root) = root_name_of_expr(&unary.argument) else {
@@ -207,6 +224,70 @@ fn root_name_of_expr<'a>(expr: &'a Expression<'a>) -> Option<&'a str> {
         Expression::ComputedMemberExpression(member) => root_name_of_expr(&member.object),
         _ => None,
     }
+}
+
+fn root_identifier_of_target<'a>(
+    target: &'a AssignmentTarget<'a>,
+) -> Option<&'a IdentifierReference<'a>> {
+    match target {
+        AssignmentTarget::StaticMemberExpression(m) => root_identifier_of_expr(&m.object),
+        AssignmentTarget::ComputedMemberExpression(m) => root_identifier_of_expr(&m.object),
+        _ => None,
+    }
+}
+
+fn root_identifier_of_simple_target<'a>(
+    target: &'a oxc_ast::ast::SimpleAssignmentTarget<'a>,
+) -> Option<&'a IdentifierReference<'a>> {
+    match target {
+        oxc_ast::ast::SimpleAssignmentTarget::StaticMemberExpression(m) => {
+            root_identifier_of_expr(&m.object)
+        }
+        oxc_ast::ast::SimpleAssignmentTarget::ComputedMemberExpression(m) => {
+            root_identifier_of_expr(&m.object)
+        }
+        _ => None,
+    }
+}
+
+fn root_identifier_of_expr<'a>(expr: &'a Expression<'a>) -> Option<&'a IdentifierReference<'a>> {
+    match expr {
+        Expression::Identifier(id) => Some(id),
+        Expression::StaticMemberExpression(m) => root_identifier_of_expr(&m.object),
+        Expression::ComputedMemberExpression(m) => root_identifier_of_expr(&m.object),
+        _ => None,
+    }
+}
+
+/// True when `ident` resolves to a binding initialised via `document.createElement(...)`
+/// or `document.createElementNS(...)`. A freshly created DOM element is unattached and
+/// must be configured by property assignment before insertion — not a state mutation.
+fn is_created_dom_element(
+    ident: &IdentifierReference,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let Some(ref_id) = ident.reference_id.get() else { return false };
+    let scoping = semantic.scoping();
+    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else { return false };
+    let decl_node_id = scoping.symbol_declaration(sym_id);
+    let nodes = semantic.nodes();
+    for kind in std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id))
+    {
+        if let AstKind::VariableDeclarator(decl) = kind {
+            let Some(init) = &decl.init else { return false };
+            return is_create_element_call(init);
+        }
+    }
+    false
+}
+
+fn is_create_element_call(expr: &Expression) -> bool {
+    let Expression::CallExpression(call) = expr else { return false };
+    let Expression::StaticMemberExpression(member) = &call.callee else { return false };
+    let Expression::Identifier(obj) = &member.object else { return false };
+    if obj.name.as_str() != "document" { return false }
+    let method = member.property.name.as_str();
+    method == "createElement" || method == "createElementNS"
 }
 
 /// Check if a name is declared as `const` in the current scope chain.
@@ -396,6 +477,42 @@ mod tests {
         let src = r#"
             const target = { a: 1 };
             Object.assign(target, { b: 2 });
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_property_assignment_on_created_dom_element() {
+        let src = r#"
+            function download(objectUrl: string, filename: string) {
+                const anchor = document.createElement("a");
+                anchor.href = objectUrl;
+                anchor.download = filename;
+                anchor.rel = "noopener";
+                document.body.append(anchor);
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_property_assignment_on_created_svg_element() {
+        let src = r#"
+            function build() {
+                const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+                svg.id = "chart";
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_mutation_on_unrelated_const() {
+        let src = r#"
+            function set(objectUrl: string) {
+                const anchor = getAnchorFromDom();
+                anchor.href = objectUrl;
+            }
         "#;
         assert_eq!(run(src).len(), 1);
     }

@@ -86,6 +86,78 @@ fn declared_as_const(start: tree_sitter::Node, source: &[u8], name: &str) -> boo
     false
 }
 
+/// True when `name` is bound via `const name = document.createElement(...)` (or `createElementNS`).
+/// DOM elements created this way are unattached and must be configured by property assignment
+/// before insertion — that's not a state mutation.
+fn is_created_dom_element_binding(start: tree_sitter::Node, source: &[u8], name: &str) -> bool {
+    let mut ancestor = start.parent();
+    while let Some(scope) = ancestor {
+        let mut cursor = scope.walk();
+        for child in scope.named_children(&mut cursor) {
+            if decl_initializer_is_create_element(child, source, name) {
+                return true;
+            }
+            if child.kind() == "export_statement"
+                && let Some(decl) = child.child_by_field_name("declaration")
+                && decl_initializer_is_create_element(decl, source, name)
+            {
+                return true;
+            }
+        }
+        ancestor = scope.parent();
+    }
+    false
+}
+
+fn decl_initializer_is_create_element(node: tree_sitter::Node, source: &[u8], name: &str) -> bool {
+    if node.kind() != "lexical_declaration" && node.kind() != "variable_declaration" {
+        return false;
+    }
+    let mut cursor = node.walk();
+    for decl in node.named_children(&mut cursor) {
+        if decl.kind() != "variable_declarator" {
+            continue;
+        }
+        let Some(pat) = decl.child_by_field_name("name") else {
+            continue;
+        };
+        if pat.kind() != "identifier" || pat.utf8_text(source).unwrap_or("") != name {
+            continue;
+        }
+        let Some(value) = decl.child_by_field_name("value") else {
+            continue;
+        };
+        if is_create_element_call(value, source) {
+            return true;
+        }
+    }
+    false
+}
+
+fn is_create_element_call(node: tree_sitter::Node, source: &[u8]) -> bool {
+    if node.kind() != "call_expression" {
+        return false;
+    }
+    let Some(callee) = node.child_by_field_name("function") else {
+        return false;
+    };
+    if callee.kind() != "member_expression" {
+        return false;
+    }
+    let obj = callee
+        .child_by_field_name("object")
+        .and_then(|o| o.utf8_text(source).ok())
+        .unwrap_or("");
+    if obj != "document" {
+        return false;
+    }
+    let method = callee
+        .child_by_field_name("property")
+        .and_then(|p| p.utf8_text(source).ok())
+        .unwrap_or("");
+    method == "createElement" || method == "createElementNS"
+}
+
 fn is_const_decl_of(node: tree_sitter::Node, source: &[u8], name: &str) -> bool {
     if node.kind() != "lexical_declaration" {
         return false;
@@ -155,6 +227,7 @@ match node.kind() {
                 if prop == "current" { return; }
             }
             let Some(root) = root_identifier_of_member_chain(left, source) else { return };
+            if is_created_dom_element_binding(node, source, root) { return; }
             if declared_as_const(node, source, root) {
                 report(diagnostics, ctx.path, &node, root, "Mutating property of");
             }
@@ -163,6 +236,7 @@ match node.kind() {
         "update_expression" => {
             let Some(arg) = node.child_by_field_name("argument") else { return };
             let Some(root) = root_identifier_of_member_chain(arg, source) else { return };
+            if is_created_dom_element_binding(node, source, root) { return; }
             if declared_as_const(node, source, root) {
                 report(diagnostics, ctx.path, &node, root, "Mutating property of");
             }
@@ -173,6 +247,7 @@ match node.kind() {
             if op.utf8_text(source).unwrap_or("") != "delete" { return }
             let Some(arg) = node.child_by_field_name("argument") else { return };
             let Some(root) = root_identifier_of_member_chain(arg, source) else { return };
+            if is_created_dom_element_binding(node, source, root) { return; }
             if declared_as_const(node, source, root) {
                 report(diagnostics, ctx.path, &node, root, "Deleting property of");
             }
@@ -402,5 +477,35 @@ mod tests {
         assert!(
             run_on("const obj = {}; const next = Object.assign({}, obj, { a: 1 });").is_empty()
         );
+    }
+
+    #[test]
+    fn allows_property_assignment_on_created_dom_element() {
+        let src = r#"
+            const anchor = document.createElement("a");
+            anchor.href = objectUrl;
+            anchor.download = filename;
+            anchor.rel = "noopener";
+            document.body.append(anchor);
+        "#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_property_assignment_on_created_svg_element() {
+        let src = r#"
+            const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+            svg.id = "chart";
+        "#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_mutation_on_unrelated_const() {
+        let src = r#"
+            const anchor = getAnchorFromDom();
+            anchor.href = objectUrl;
+        "#;
+        assert_eq!(run_on(src).len(), 1);
     }
 }

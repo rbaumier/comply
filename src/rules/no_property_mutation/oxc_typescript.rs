@@ -22,6 +22,48 @@ fn root_object_name<'a>(expr: &'a Expression<'a>) -> Option<&'a str> {
     }
 }
 
+/// Get the root `IdentifierReference` from a member-access chain. Used to resolve
+/// the binding via semantic and inspect its declaration.
+fn root_identifier_of_expr<'a>(expr: &'a Expression<'a>) -> Option<&'a IdentifierReference<'a>> {
+    match expr {
+        Expression::Identifier(id) => Some(id),
+        Expression::StaticMemberExpression(m) => root_identifier_of_expr(&m.object),
+        Expression::ComputedMemberExpression(m) => root_identifier_of_expr(&m.object),
+        _ => None,
+    }
+}
+
+/// True when `ident` resolves to a binding initialised via `document.createElement(...)`
+/// or `document.createElementNS(...)`. A freshly created DOM element is unattached and
+/// must be configured by property assignment before insertion — not a state mutation.
+fn is_created_dom_element(
+    ident: &IdentifierReference,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let Some(ref_id) = ident.reference_id.get() else { return false };
+    let scoping = semantic.scoping();
+    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else { return false };
+    let decl_node_id = scoping.symbol_declaration(sym_id);
+    let nodes = semantic.nodes();
+    for kind in std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id))
+    {
+        if let AstKind::VariableDeclarator(decl) = kind {
+            let Some(init) = &decl.init else { return false };
+            return is_create_element_call(init);
+        }
+    }
+    false
+}
+
+fn is_create_element_call(expr: &Expression) -> bool {
+    let Expression::CallExpression(call) = expr else { return false };
+    let Expression::StaticMemberExpression(member) = &call.callee else { return false };
+    let Expression::Identifier(obj) = &member.object else { return false };
+    if obj.name.as_str() != "document" { return false }
+    let method = member.property.name.as_str();
+    method == "createElement" || method == "createElementNS"
+}
+
 fn is_inside_test_hook<'a>(
     node: &oxc_semantic::AstNode<'a>,
     semantic: &'a oxc_semantic::Semantic<'a>,
@@ -85,6 +127,8 @@ impl OxcCheck for Check {
                         if obj_text == "document" && prop_text == "cookie" { return; }
                         if root_object_name(&m.object) == Some("set") { return; }
                         if is_test_setup_for_expr(node, &m.object, ctx, semantic) { return; }
+                        if let Some(id) = root_identifier_of_expr(&m.object)
+                            && is_created_dom_element(id, semantic) { return; }
 
                         let (line, column) = byte_offset_to_line_col(ctx.source, assign.span.start as usize);
                         diagnostics.push(Diagnostic {
@@ -104,6 +148,8 @@ impl OxcCheck for Check {
                         if obj_text == "module" || obj_text == "exports" { return; }
                         if root_object_name(&m.object) == Some("set") { return; }
                         if is_test_setup_for_expr(node, &m.object, ctx, semantic) { return; }
+                        if let Some(id) = root_identifier_of_expr(&m.object)
+                            && is_created_dom_element(id, semantic) { return; }
 
                         let (line, column) = byte_offset_to_line_col(ctx.source, assign.span.start as usize);
                         diagnostics.push(Diagnostic {
@@ -125,6 +171,8 @@ impl OxcCheck for Check {
                 match &update.argument {
                     SimpleAssignmentTarget::StaticMemberExpression(m) => {
                         if is_test_setup_for_expr(node, &m.object, ctx, semantic) { return; }
+                        if let Some(id) = root_identifier_of_expr(&m.object)
+                            && is_created_dom_element(id, semantic) { return; }
                         let (line, column) = byte_offset_to_line_col(ctx.source, update.span.start as usize);
                         diagnostics.push(Diagnostic {
                             path: Arc::clone(&ctx.path_arc),
@@ -138,6 +186,8 @@ impl OxcCheck for Check {
                     }
                     SimpleAssignmentTarget::ComputedMemberExpression(m) => {
                         if is_test_setup_for_expr(node, &m.object, ctx, semantic) { return; }
+                        if let Some(id) = root_identifier_of_expr(&m.object)
+                            && is_created_dom_element(id, semantic) { return; }
                         let (line, column) = byte_offset_to_line_col(ctx.source, update.span.start as usize);
                         diagnostics.push(Diagnostic {
                             path: Arc::clone(&ctx.path_arc),
@@ -159,9 +209,13 @@ impl OxcCheck for Check {
                 match &unary.argument {
                     Expression::StaticMemberExpression(m) => {
                         if is_test_setup_for_expr(node, &m.object, ctx, semantic) { return; }
+                        if let Some(id) = root_identifier_of_expr(&m.object)
+                            && is_created_dom_element(id, semantic) { return; }
                     }
                     Expression::ComputedMemberExpression(m) => {
                         if is_test_setup_for_expr(node, &m.object, ctx, semantic) { return; }
+                        if let Some(id) = root_identifier_of_expr(&m.object)
+                            && is_created_dom_element(id, semantic) { return; }
                     }
                     _ => return,
                 }
@@ -179,5 +233,50 @@ impl OxcCheck for Check {
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(src, &Check)
+    }
+
+    #[test]
+    fn allows_property_assignment_on_created_dom_element() {
+        let src = r#"
+            function download(objectUrl: string, filename: string) {
+                const anchor = document.createElement("a");
+                anchor.href = objectUrl;
+                anchor.download = filename;
+                anchor.rel = "noopener";
+                document.body.append(anchor);
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_property_assignment_on_created_svg_element() {
+        let src = r#"
+            function build() {
+                const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+                svg.id = "chart";
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_mutation_on_unrelated_const() {
+        let src = r#"
+            function set(objectUrl: string) {
+                const anchor = getAnchorFromDom();
+                anchor.href = objectUrl;
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
     }
 }
