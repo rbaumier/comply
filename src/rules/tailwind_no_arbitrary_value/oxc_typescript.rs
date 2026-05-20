@@ -80,4 +80,40 @@ mod tests {
         let src = r#"const x = <div className="aria-[expanded=true]:bg-red-500" />;"#;
         assert!(run(src).is_empty());
     }
+
+    #[test]
+    fn ignores_var_composition() {
+        let src = r#"const x = <div className="rounded-[var(--radius)]" />;"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_arbitrary_variant_double_bracket() {
+        let src = r#"const x = <span className="in-[[data-slot=item][data-checked]]:opacity-100" />;"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_canonical_unit_ch() {
+        let src = r#"const x = <p className="max-w-[30ch]" />;"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_function_composition() {
+        let src = r#"const x = <div className="bg-[radial-gradient(circle_at_top,oklch(from_var(--color-primary)_calc(l+0.1)_c_h)_0%,transparent_70%)]" />;"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_hex_color() {
+        let src = r#"const x = <div className="bg-[#abc]" />;"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_px_value() {
+        let src = r#"const x = <div className="w-[42px]" />;"#;
+        assert_eq!(run(src).len(), 1);
+    }
 }
