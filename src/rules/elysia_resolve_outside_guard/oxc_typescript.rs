@@ -155,6 +155,22 @@ mod tests {
         assert!(run_on(src).is_empty(), "Promise.resolve(42) must not be flagged");
     }
 
+    // Regression for #235: a no-op `await Promise.resolve()` inside an async
+    // object-method (needed to satisfy promise-function-async on a sync body)
+    // is the JS built-in, not an Elysia `.resolve()`.
+    #[test]
+    fn ignores_promise_resolve_in_async_object_method() {
+        let src = r#"
+            const sender = {
+                send: async (email) => {
+                    await Promise.resolve();
+                    return Result.ok();
+                },
+            };
+        "#;
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
     // ── Fix 1: globalThis.Promise / window.Promise / self.Promise / this.Promise ──
 
     #[test]
