@@ -59,3 +59,24 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(src, &Check)
+    }
+
+    #[test]
+    fn flags_camel_case_hungarian() {
+        assert_eq!(run("const strValue = 'x';").len(), 1);
+    }
+
+    // Regression for #279: SCREAMING_SNAKE domain constants are not Hungarian.
+    #[test]
+    fn allows_screaming_snake_domain_constants() {
+        assert!(run("const PROMPTS_DIR = '/p';").is_empty());
+        assert!(run("const PROMPT_FILE = 'p.txt';").is_empty());
+    }
+}
