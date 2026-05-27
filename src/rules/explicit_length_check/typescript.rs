@@ -128,12 +128,14 @@ fn has_implicit_length_check(line: &str) -> bool {
                 continue;
             }
 
+            // A trailing `,` always means a value position (argument, array
+            // element, object property value, declarator) — never a boolean
+            // coercion — so it is deliberately not a flagging context.
             if rest.is_empty()
                 || rest.starts_with(')')
                 || rest.starts_with("&&")
                 || rest.starts_with("||")
                 || rest.starts_with('?')
-                || rest.starts_with(',')
                 || rest.starts_with(';')
                 || rest.starts_with('}')
                 || rest.starts_with(']')
@@ -263,5 +265,12 @@ mod tests {
         // `notExpect` is a regular function — still flags.
         let src = "notExpect(arr.length);";
         assert_eq!(run_on(src).len(), 1);
+    }
+
+    // Regression for #259: `.length` read as an object-property value is a
+    // numeric use, not a boolean coercion.
+    #[test]
+    fn allows_length_as_object_property_value() {
+        assert!(run_on("count: list.length,").is_empty());
     }
 }
