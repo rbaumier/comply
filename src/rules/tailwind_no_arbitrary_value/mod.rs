@@ -168,6 +168,14 @@ mod arbitrary_tests {
         assert!(!has_arbitrary_value("bg-[oklch(0.5_0.2_200)]"));
     }
 
+    // Regression for #261: a viewport-conditional ceiling mixing a viewport
+    // unit with a fixed length cannot be expressed by a single token.
+    #[test]
+    fn ignores_viewport_conditional_min_max() {
+        assert!(!has_arbitrary_value("max-w-[min(90vw,32rem)]"));
+        assert!(!has_arbitrary_value("w-[max(50vw,20rem)]"));
+    }
+
     #[test]
     fn still_flags_magic_numbers() {
         assert!(has_arbitrary_value("bg-[#abc]"));
