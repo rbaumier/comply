@@ -44,6 +44,25 @@ const NON_INPUT_NAME_MARKERS: &[&str] = &[
     "Response", "Output", "Return", "Detail", "Select", "Config", "EnvSchema",
 ];
 
+/// True when `node` sits inside the value of a `response:` property — an
+/// Elysia/route-descriptor output contract, not a request input. Capping the
+/// server's own output would truncate legitimate large payloads (e.g. CSV).
+fn enclosed_in_response_field(node: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut cur = node;
+    while let Some(parent) = cur.parent() {
+        if parent.kind() == "pair"
+            && parent.child_by_field_name("value").map(|v| v.id()) == Some(cur.id())
+            && let Some(key) = parent.child_by_field_name("key")
+            && let Ok(key_text) = key.utf8_text(source)
+            && key_text.trim_matches(|c| matches!(c, '"' | '\'' | '`')) == "response"
+        {
+            return true;
+        }
+        cur = parent;
+    }
+    false
+}
+
 /// Walk up from `node`, looking for a `variable_declarator` ancestor whose
 /// `name` field contains one of `NON_INPUT_NAME_MARKERS`. Returns true if
 /// found. Used to skip top-level response/config-schema declarations.
@@ -127,6 +146,9 @@ crate::ast_check! { on ["call_expression"] prefilter = ["z.string", "z.number", 
         return;
     }
     if enclosed_in_non_input_schema(node, source) {
+        return;
+    }
+    if enclosed_in_response_field(node, source) {
         return;
     }
 
@@ -231,6 +253,21 @@ mod tests {
         // exempted — only "EnvSchema" is the non-input marker.
         let src = "export const WebhookEnvelopeSchema = z.object({ id: z.string() });";
         assert_eq!(run_at(src, "src/api/webhooks.ts").len(), 1);
+    }
+
+    #[test]
+    fn ignores_response_field_on_route_descriptor() {
+        // Regression for #285 — `response:` is the server's output contract, not
+        // a request input. Capping it would truncate legitimate large payloads.
+        let src = "app.get('/extract', handler, {\n  query: ExtractQuerySchema,\n  response: z.string(),\n  detail: { tags: ['x'] },\n});";
+        assert!(run_at(src, "src/api/features/laboratories/extract.ts").is_empty());
+    }
+
+    #[test]
+    fn still_flags_query_field_on_route_descriptor() {
+        let src = "app.get('/extract', handler, {\n  query: z.object({ q: z.string() }),\n  response: z.string(),\n});";
+        let diags = run_at(src, "src/api/features/laboratories/extract.ts");
+        assert_eq!(diags.len(), 1, "{diags:?}");
     }
 
     #[test]
