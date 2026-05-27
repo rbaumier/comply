@@ -18,8 +18,11 @@ impl TextCheck for Check {
             return vec![];
         }
 
-        // Valid hashbang must start with `#!/usr/bin/env node` (possibly with flags).
-        if first_line.starts_with("#!/usr/bin/env ") && first_line.contains("node") {
+        // Valid hashbang runs a JS runtime via `env` (possibly with flags):
+        // node or bun.
+        if first_line.starts_with("#!/usr/bin/env ")
+            && (first_line.contains("node") || first_line.contains("bun"))
+        {
             return vec![];
         }
 
@@ -59,6 +62,12 @@ mod tests {
     #[test]
     fn allows_correct_hashbang() {
         assert!(run("#!/usr/bin/env node\nconsole.log('hi');").is_empty());
+    }
+
+    // Regression for #278: bun is a legitimate JS runtime.
+    #[test]
+    fn allows_bun_hashbang() {
+        assert!(run("#!/usr/bin/env bun\nconsole.log('hi');").is_empty());
     }
 
     #[test]
