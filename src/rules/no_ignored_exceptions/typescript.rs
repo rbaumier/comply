@@ -5,22 +5,23 @@ use crate::diagnostic::{Diagnostic, Severity};
 crate::ast_check! { on ["catch_clause"] => |node, source, ctx, diagnostics|
     let Some(body) = node.child_by_field_name("body") else { return };
 
-    // Check if the body is empty (only whitespace/comments).
+    // A real statement (anything but a comment / bare `;`) means the catch
+    // handles the error — not our concern.
     let named_count = body.named_child_count();
-    let mut has_real_statement = false;
-
     for i in 0..named_count {
         let Some(child) = body.named_child(i) else { continue };
-        match child.kind() {
-            "comment" | "empty_statement" => continue,
-            _ => {
-                has_real_statement = true;
-                break;
-            }
+        if !matches!(child.kind(), "comment" | "empty_statement") {
+            return;
         }
     }
 
-    if has_real_statement {
+    // Otherwise-empty catch: a comment documents intentional suppression (the
+    // ESLint `no-empty` convention) — e.g. parse-and-fall-back. Only a bare
+    // empty block silently swallows the exception.
+    if body
+        .utf8_text(source)
+        .is_ok_and(|t| t.contains("//") || t.contains("/*"))
+    {
         return;
     }
 
@@ -50,8 +51,10 @@ mod tests {
         assert_eq!(run_on(src).len(), 1);
     }
 
+    // Regression for #267: a comment documents intentional suppression — the
+    // ESLint `no-empty` convention — so a comment-only catch is allowed.
     #[test]
-    fn flags_catch_with_only_comments() {
+    fn allows_catch_with_only_comments() {
         let src = r#"
 try {
   doSomething();
@@ -59,7 +62,7 @@ try {
   // intentionally empty
 }
 "#;
-        assert_eq!(run_on(src).len(), 1);
+        assert!(run_on(src).is_empty());
     }
 
     #[test]
