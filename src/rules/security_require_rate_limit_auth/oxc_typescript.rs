@@ -70,6 +70,15 @@ impl OxcCheck for Check {
             return;
         }
 
+        // MSW request mocks (`http.post("*/api/...", handler)`) are in-process
+        // test doubles, not a real network surface — there is nothing to
+        // rate-limit. MSW's callee object is `http`.
+        if let Expression::Identifier(obj) = &member.object
+            && obj.name.as_str() == "http"
+        {
+            return;
+        }
+
         // First argument must be a string literal with an auth path.
         let Some(first_arg) = call.arguments.first() else {
             return;
@@ -78,6 +87,10 @@ impl OxcCheck for Check {
             Argument::StringLiteral(s) => s.value.as_str(),
             _ => return,
         };
+        // A leading `*` is an MSW URL wildcard, never valid Elysia route syntax.
+        if path_text.starts_with('*') {
+            return;
+        }
         if !is_auth_path(path_text) {
             return;
         }
@@ -107,5 +120,38 @@ impl OxcCheck for Check {
             severity: Severity::Error,
             span: None,
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run_tsx(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(src, &Check)
+    }
+
+    #[test]
+    fn flags_auth_route_without_rate_limit() {
+        let src = r#"app.post("/api/auth/login", handler);"#;
+        assert_eq!(run_tsx(src).len(), 1);
+    }
+
+    // Regression for #236: an MSW `http.post` mock of an auth endpoint is a
+    // test double, not a real route — nothing to rate-limit.
+    #[test]
+    fn allows_msw_http_post_mock() {
+        let src = r#"
+            mswServer.use(
+                http.post("*/api/v1/auth/sign-in/email", () => HttpResponse.json({ token: "x" })),
+            );
+        "#;
+        assert!(run_tsx(src).is_empty(), "{:?}", run_tsx(src));
+    }
+
+    #[test]
+    fn allows_wildcard_path_on_other_callee() {
+        let src = r#"server.post("*/auth/login", handler);"#;
+        assert!(run_tsx(src).is_empty(), "{:?}", run_tsx(src));
     }
 }
