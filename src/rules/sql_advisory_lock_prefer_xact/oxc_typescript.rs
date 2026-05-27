@@ -63,4 +63,13 @@ mod tests {
         let src = r#"const q = "SELECT pg_advisory_xact_lock(123)";"#;
         assert!(run_on(src).is_empty());
     }
+
+    // Regression for #287: a session-level lock is the only variant that can
+    // span a CREATE DATABASE (which cannot run inside a transaction block) — an
+    // xact lock would be released before it runs.
+    #[test]
+    fn allows_session_lock_spanning_create_database() {
+        let src = r#"const q = `psql -c "SELECT pg_advisory_lock(6210)" -c "CREATE DATABASE worker_db TEMPLATE shared_template"`;"#;
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
 }
