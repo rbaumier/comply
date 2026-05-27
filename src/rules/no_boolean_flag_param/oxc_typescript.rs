@@ -84,3 +84,34 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(src, &Check)
+    }
+
+    #[test]
+    fn flags_bare_boolean_param() {
+        assert_eq!(run("function send(urgent: boolean) {}").len(), 1);
+    }
+
+    #[test]
+    fn allows_predicate_prefix() {
+        assert!(run("function f(isReady: boolean) {}").is_empty());
+        assert!(run("function f(hasAccess: boolean) {}").is_empty());
+    }
+
+    // Regression for #272: a `can*` authz-gate flag is predicate-prefixed and
+    // exempt — a column factory's `canEdit` must not be flagged (in either the
+    // bare or destructured form).
+    #[test]
+    fn allows_can_prefix_authz_flag() {
+        assert!(run("function getTeamsColumns(canEdit: boolean) {}").is_empty());
+        assert!(
+            run("function getTeamsColumns({ canEdit }: { canEdit: boolean }) {}").is_empty()
+        );
+    }
+}
