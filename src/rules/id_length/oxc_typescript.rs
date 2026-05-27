@@ -24,6 +24,50 @@ fn binding_name<'a>(pat: &'a BindingPattern<'a>) -> Option<(&'a str, oxc_span::S
     }
 }
 
+/// True when `param_node` is a parameter of a comparator callback passed to
+/// `.sort()` / `.toSorted()` — `(a, b) => …`, where the one-letter names are
+/// the idiomatic, universally-understood convention.
+fn is_sort_comparator_param(
+    param_node: &oxc_semantic::AstNode,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let nodes = semantic.nodes();
+    // Walk up to the enclosing function (the comparator callback itself).
+    let mut id = param_node.id();
+    let fn_id = loop {
+        let parent_id = nodes.parent_id(id);
+        if parent_id == id {
+            return false;
+        }
+        match nodes.kind(parent_id) {
+            AstKind::ArrowFunctionExpression(_) | AstKind::Function(_) => break parent_id,
+            _ => id = parent_id,
+        }
+    };
+    // That function must be a direct argument of a `.sort(...)` / `.toSorted(...)` call.
+    let parent_id = nodes.parent_id(fn_id);
+    let call_id = match nodes.kind(parent_id) {
+        AstKind::CallExpression(_) => parent_id,
+        _ => {
+            let gp_id = nodes.parent_id(parent_id);
+            if gp_id == parent_id {
+                return false;
+            }
+            match nodes.kind(gp_id) {
+                AstKind::CallExpression(_) => gp_id,
+                _ => return false,
+            }
+        }
+    };
+    let AstKind::CallExpression(call) = nodes.kind(call_id) else {
+        return false;
+    };
+    let Expression::StaticMemberExpression(member) = &call.callee else {
+        return false;
+    };
+    matches!(member.property.name.as_str(), "sort" | "toSorted")
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[
@@ -43,7 +87,7 @@ impl OxcCheck for Check {
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
+        semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let min = ctx.config.threshold("id-length", "min", ctx.lang);
@@ -90,6 +134,9 @@ impl OxcCheck for Check {
                 }
             }
             AstKind::FormalParameter(param) => {
+                if is_sort_comparator_param(node, semantic) {
+                    return;
+                }
                 if let Some((name, span)) = binding_name(&param.pattern) {
                     vec![(name, span)]
                 } else {
@@ -136,5 +183,35 @@ impl OxcCheck for Check {
                 span: None,
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(src, &Check)
+    }
+
+    // Regression for #292: `a`/`b` in a `.sort()` comparator are the idiomatic,
+    // universally-understood convention — not a readability problem.
+    #[test]
+    fn allows_sort_comparator_params() {
+        let src = "const xs = dirs.sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs);";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn allows_to_sorted_comparator_params() {
+        let src = "const xs = arr.toSorted((a, b) => a - b);";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // A short parameter outside a sort comparator is still flagged.
+    #[test]
+    fn flags_short_param_in_plain_function() {
+        let src = "function helper(a) { return a; }";
+        assert_eq!(run(src).len(), 1, "{:?}", run(src));
     }
 }
