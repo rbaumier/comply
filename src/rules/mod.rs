@@ -1404,6 +1404,7 @@ pub mod no_static_only_class;
 pub mod no_thenable;
 pub mod no_this_assignment;
 pub mod no_this_mutation;
+pub mod no_typeof_prefer_schema;
 pub mod no_typeof_undefined;
 pub mod no_unknown_property;
 pub mod no_unnecessary_array_flat_depth;
@@ -2667,6 +2668,7 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         no_static_only_class::register(),
         no_thenable::register(),
         no_this_assignment::register(),
+        no_typeof_prefer_schema::register(),
         no_typeof_undefined::register(),
         no_unnecessary_array_flat_depth::register(),
         no_unnecessary_array_splice_count::register(),
