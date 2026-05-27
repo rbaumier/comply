@@ -24,6 +24,17 @@ const SECRET_NAMES: &[&str] = &[
     "csrfToken",
 ];
 
+/// `null` / `undefined` / `""` — comparing a secret against one of these is an
+/// absence check, not a byte-by-byte secret comparison, so it leaks nothing.
+fn is_absence_sentinel(expr: &Expression) -> bool {
+    match expr {
+        Expression::NullLiteral(_) => true,
+        Expression::Identifier(id) => id.name.as_str() == "undefined",
+        Expression::StringLiteral(s) => s.value.is_empty(),
+        _ => false,
+    }
+}
+
 fn name_is_secret(expr: &Expression) -> bool {
     match expr {
         Expression::Identifier(id) => {
@@ -60,6 +71,9 @@ impl OxcCheck for Check {
                 | BinaryOperator::Inequality
                 | BinaryOperator::StrictInequality
         ) {
+            return;
+        }
+        if is_absence_sentinel(&bin.left) || is_absence_sentinel(&bin.right) {
             return;
         }
         if !name_is_secret(&bin.left) && !name_is_secret(&bin.right) {
@@ -105,5 +119,23 @@ mod tests {
     fn allows_non_secret_equality() {
         let src = r#"if (status === "active") {}"#;
         assert!(run(src).is_empty());
+    }
+
+    // Regression for #262: comparing a secret-looking field against an absence
+    // sentinel checks presence, not a secret value.
+    #[test]
+    fn allows_secret_vs_null() {
+        let src = r#"if (input.password !== null) {}"#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn allows_secret_vs_undefined() {
+        assert!(run(r#"if (token === undefined) {}"#).is_empty());
+    }
+
+    #[test]
+    fn allows_secret_vs_empty_string() {
+        assert!(run(r#"if (password === "") {}"#).is_empty());
     }
 }
