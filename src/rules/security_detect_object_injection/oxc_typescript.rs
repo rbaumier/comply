@@ -3,12 +3,15 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{Expression, TSType, TSTypeOperatorOperator};
+use oxc_ast::ast::{Expression, TSLiteral, TSType, TSTypeName, TSTypeOperatorOperator};
 use std::sync::Arc;
 
 const ITER_METHODS: &[&str] = &[
     "map", "forEach", "flatMap", "filter", "find", "reduce", "some", "every",
 ];
+
+/// Bound on type-alias resolution recursion (`type A = B`, `type B = "x" | A`).
+const MAX_ALIAS_DEPTH: usize = 8;
 
 /// Max parent nodes walked from a callback arrow function up to its `CallExpression`:
 /// `ArrowFunction` → `Argument` (wrapper) → `Arguments` (list) → `CallExpression` ≤ 3 hops.
@@ -53,6 +56,7 @@ impl OxcCheck for Check {
             let decl_id = semantic.scoping().symbol_declaration(sym_id);
             if param_type_has_keyof(decl_id, semantic)
                 || is_iterator_callback_over_keyof_array(decl_id, semantic)
+                || key_type_is_closed_literal_union(decl_id, semantic)
             {
                 return;
             }
@@ -75,48 +79,109 @@ impl OxcCheck for Check {
     }
 }
 
-/// True when `decl_id` resolves to a formal parameter whose type
-/// annotation contains a `keyof X` operator anywhere in the type tree.
-fn param_type_has_keyof(
+/// Resolve `decl_id` to its declared TS type annotation (formal parameter or
+/// variable declarator, walking up through nested binding patterns) and test
+/// it with `pred`. Untyped bindings and function/program boundaries yield
+/// `false`. oxc points `symbol_declaration` at the FormalParameter node for
+/// parameter bindings; for nested binding patterns we walk up.
+fn decl_type_annotation_satisfies(
     decl_id: oxc_semantic::NodeId,
     semantic: &oxc_semantic::Semantic<'_>,
+    pred: impl Fn(&TSType) -> bool,
 ) -> bool {
     let nodes = semantic.nodes();
-    // oxc points `symbol_declaration` at the FormalParameter node for
-    // parameter bindings; for nested binding patterns we walk up.
-    if let AstKind::FormalParameter(param) = nodes.kind(decl_id) {
-        return param
-            .type_annotation
-            .as_ref()
-            .is_some_and(|ann| ts_type_has_keyof(&ann.type_annotation));
-    }
-    // Variable binding: `const ks: (keyof Foo)[] = …` — check the declarator's
-    // explicit type annotation. Untyped declarators fall through to `false`.
-    if let AstKind::VariableDeclarator(decl) = nodes.kind(decl_id) {
-        return decl
-            .type_annotation
-            .as_ref()
-            .is_some_and(|ann| ts_type_has_keyof(&ann.type_annotation));
+    let check = |ann: &Option<oxc_allocator::Box<'_, oxc_ast::ast::TSTypeAnnotation<'_>>>| {
+        ann.as_ref().is_some_and(|a| pred(&a.type_annotation))
+    };
+    match nodes.kind(decl_id) {
+        AstKind::FormalParameter(param) => return check(&param.type_annotation),
+        AstKind::VariableDeclarator(decl) => return check(&decl.type_annotation),
+        _ => {}
     }
     for kind in nodes.ancestor_kinds(decl_id) {
         match kind {
-            AstKind::FormalParameter(param) => {
-                return param
-                    .type_annotation
-                    .as_ref()
-                    .is_some_and(|ann| ts_type_has_keyof(&ann.type_annotation));
-            }
-            AstKind::VariableDeclarator(decl) => {
-                return decl
-                    .type_annotation
-                    .as_ref()
-                    .is_some_and(|ann| ts_type_has_keyof(&ann.type_annotation));
-            }
+            AstKind::FormalParameter(param) => return check(&param.type_annotation),
+            AstKind::VariableDeclarator(decl) => return check(&decl.type_annotation),
             AstKind::Function(_)
             | AstKind::ArrowFunctionExpression(_)
             | AstKind::Program(_)
             | AstKind::VariableDeclaration(_) => return false,
             _ => continue,
+        }
+    }
+    false
+}
+
+/// True when `decl_id` resolves to a binding whose type annotation contains a
+/// `keyof X` operator anywhere in the type tree.
+fn param_type_has_keyof(
+    decl_id: oxc_semantic::NodeId,
+    semantic: &oxc_semantic::Semantic<'_>,
+) -> bool {
+    decl_type_annotation_satisfies(decl_id, semantic, ts_type_has_keyof)
+}
+
+/// True when `decl_id` resolves to a binding whose type annotation is a closed
+/// union of string/number literals — `"a" | "b"` — directly or via a type
+/// alias. Such a key can never carry an out-of-set value without a type
+/// assertion (flagged separately), so the bracket access is safe by
+/// construction.
+fn key_type_is_closed_literal_union(
+    decl_id: oxc_semantic::NodeId,
+    semantic: &oxc_semantic::Semantic<'_>,
+) -> bool {
+    decl_type_annotation_satisfies(decl_id, semantic, |ty| {
+        is_closed_literal_key_type(ty, semantic, MAX_ALIAS_DEPTH)
+    })
+}
+
+/// True when `ty` is a string/number literal, a union of such, or a type-alias
+/// reference resolving to one. `depth` bounds alias-chain recursion.
+fn is_closed_literal_key_type(
+    ty: &TSType,
+    semantic: &oxc_semantic::Semantic<'_>,
+    depth: usize,
+) -> bool {
+    if depth == 0 {
+        return false;
+    }
+    match ty {
+        TSType::TSLiteralType(lit) => matches!(
+            &lit.literal,
+            TSLiteral::StringLiteral(_) | TSLiteral::NumericLiteral(_)
+        ),
+        TSType::TSUnionType(u) => u
+            .types
+            .iter()
+            .all(|t| is_closed_literal_key_type(t, semantic, depth)),
+        TSType::TSParenthesizedType(p) => {
+            is_closed_literal_key_type(&p.type_annotation, semantic, depth)
+        }
+        TSType::TSTypeReference(r) => match &r.type_name {
+            TSTypeName::IdentifierReference(id) => {
+                resolve_alias_is_literal_union(id.name.as_str(), semantic, depth - 1)
+            }
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+/// Find a `type <name> = …` alias declaration and test whether its definition
+/// is a closed literal union.
+fn resolve_alias_is_literal_union(
+    name: &str,
+    semantic: &oxc_semantic::Semantic<'_>,
+    depth: usize,
+) -> bool {
+    if depth == 0 {
+        return false;
+    }
+    for node in semantic.nodes().iter() {
+        if let AstKind::TSTypeAliasDeclaration(alias) = node.kind()
+            && alias.id.name.as_str() == name
+        {
+            return is_closed_literal_key_type(&alias.type_annotation, semantic, depth);
         }
     }
     false
@@ -294,5 +359,37 @@ mod tests {
             diags.is_empty(),
             "expected no diagnostics, got {diags:#?}"
         );
+    }
+
+    // Regression for #264: a key typed as a string-literal-union alias
+    // (`type SessionRole = "admin" | "read"`) is closed — `obj[role]` can't
+    // escape the set without an assertion, so it must not flag.
+    #[test]
+    fn issue_264_literal_union_alias_key() {
+        let src = r#"
+            type SessionRole = "admin" | "read";
+            const ROLE_LABEL: Record<SessionRole, string> = { admin: "A", read: "L" };
+            function roleLabel(role: SessionRole): string {
+                return ROLE_LABEL[role];
+            }
+        "#;
+        let diags = run(src);
+        assert!(diags.is_empty(), "expected no diagnostics, got {diags:#?}");
+    }
+
+    #[test]
+    fn allows_inline_literal_union_key() {
+        let src = r#"
+            const m: Record<string, number> = {};
+            function f(k: "a" | "b"): number { return m[k]; }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    // Negative: a plainly `string`-typed key is still an injection vector.
+    #[test]
+    fn still_flags_string_typed_key() {
+        let src = r#"function f(obj: Record<string, number>, key: string) { return obj[key]; }"#;
+        assert_eq!(run(src).len(), 1);
     }
 }
