@@ -206,7 +206,9 @@ fn starts_nested_function(rest: &str) -> bool {
 }
 
 fn is_yield_at(code: &str, i: usize) -> bool {
-    let rest = &code[i..];
+    let Some(rest) = code.get(i..) else {
+        return false;
+    };
     if !rest.starts_with("yield") {
         return false;
     }
@@ -296,6 +298,15 @@ mod tests {
     fn allows_regular_function_without_tag() {
         let src = "/**\n * ok\n */\nfunction f() { return 1; }";
         assert!(run(src).is_empty());
+    }
+
+    // Multi-byte chars in the body (e.g. Unicode combining marks in a regex
+    // char class) must not panic the byte-indexed yield scanner.
+    #[test]
+    fn handles_multibyte_chars_in_body() {
+        let src = "/**\n * Slugify a name.\n */\nexport function slugifyName(input: string): string {\n  return input\n    .toLowerCase()\n    .normalize(\"NFD\")\n    .replaceAll(/[\u{300}-\u{36f}]/g, \"\")\n    .replaceAll(/[^a-z0-9]+/g, \"-\")\n    .slice(0, 255);\n}";
+        let diags = run(src);
+        assert!(diags.is_empty(), "diagnostics: {:?}", diags);
     }
 
     // Regression for #107: JSDoc on a type alias must not look at unrelated
