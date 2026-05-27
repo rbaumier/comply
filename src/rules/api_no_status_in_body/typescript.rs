@@ -139,7 +139,9 @@ fn has_field_at_depth0(body: &str, name: &str) -> bool {
             }
             _ => {
                 // Only match at depth 0 (direct siblings of status).
-                if depth == 0 && i + name.len() <= bytes.len() && body[i..].starts_with(name) {
+                if depth == 0
+                    && body.get(i..).is_some_and(|s| s.starts_with(name))
+                {
                     let pre_ok = i == 0
                         || !{
                             let c = bytes[i - 1];
@@ -441,6 +443,15 @@ mod tests {
             return Problem;
         "#;
         assert!(run_at(src, "src/api/errors/index.ts").is_empty());
+    }
+
+    // Multi-byte chars (em dash in a comment) inside the object body must not
+    // panic the byte-indexed field scanner.
+    #[test]
+    fn handles_multibyte_chars_in_object_body() {
+        let src = "return {\n  type: \"notFound\",\n  // comply-ignore: api-no-status-in-body \u{2014} fixture for a Problem body.\n  status: 404,\n  title: \"Not Found\",\n};";
+        let diags = run_at(src, "src/api/x.ts");
+        assert!(diags.is_empty(), "diagnostics: {:?}", diags);
     }
 
     #[test]
