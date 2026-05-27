@@ -53,5 +53,27 @@ pub(super) fn uses_session_advisory_lock(text: &str) -> bool {
     if text.contains("pg_advisory_xact_lock(") || text.contains("pg_try_advisory") {
         return false;
     }
+    // A session-level lock is the ONLY variant that can serialize a statement
+    // which cannot run inside a transaction block (CREATE/DROP DATABASE,
+    // CREATE/DROP TABLESPACE): an `xact` lock would already be released before
+    // that statement runs, so don't suggest it here.
+    if spans_non_transactional_statement(text) {
+        return false;
+    }
     true
+}
+
+/// True if `text` contains a PostgreSQL statement that cannot run inside a
+/// transaction block (and so cannot be covered by a transaction-level lock).
+pub(super) fn spans_non_transactional_statement(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    let normalized: String = lower.split_whitespace().collect::<Vec<_>>().join(" ");
+    [
+        "create database",
+        "drop database",
+        "create tablespace",
+        "drop tablespace",
+    ]
+    .iter()
+    .any(|kw| normalized.contains(kw))
 }

@@ -7,6 +7,11 @@ pub struct Check;
 impl TextCheck for Check {
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
         let mut diags = Vec::new();
+        // A session lock is required when the source also runs a statement that
+        // cannot live in a transaction block — the xact variant can't span it.
+        if super::spans_non_transactional_statement(ctx.source) {
+            return diags;
+        }
         for (i, line) in ctx.source.lines().enumerate() {
             if !line.contains("pg_advisory_lock(") {
                 continue;
@@ -52,5 +57,13 @@ mod tests {
     #[test]
     fn allows_try_lock() {
         assert!(run("SELECT pg_try_advisory_lock(123);").is_empty());
+    }
+
+    // Regression for #287: a CREATE DATABASE elsewhere in the source forces the
+    // session-level lock — the xact variant can't span a non-transactional stmt.
+    #[test]
+    fn allows_session_lock_when_source_creates_database() {
+        let src = "SELECT pg_advisory_lock(6210);\nCREATE DATABASE worker_db TEMPLATE shared_template;";
+        assert!(run(src).is_empty(), "{:?}", run(src));
     }
 }
