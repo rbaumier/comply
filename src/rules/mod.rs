@@ -863,6 +863,7 @@ pub mod rust_unit_error_result;
 pub mod rust_unsafe_ffi_isolation;
 pub mod rust_unsafe_impl_without_comment;
 pub mod rust_vec_with_capacity;
+pub mod test_assertion_helpers;
 #[cfg(test)]
 pub mod test_helpers;
 #[cfg(test)]

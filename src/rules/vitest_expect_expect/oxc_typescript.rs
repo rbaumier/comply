@@ -80,7 +80,7 @@ impl OxcCheck for Check {
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
+        semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         if !is_test_file(ctx.path) {
@@ -123,6 +123,11 @@ impl OxcCheck for Check {
         // `assertResponse(…)`, in line with eslint-plugin-vitest's
         // `assertFunctionNames` defaults.
         if has_assertion_prefixed_call(body_text) {
+            return;
+        }
+        // The test delegates to a caller-supplied callback (`it(name, () =>
+        // fn())` inside a wrapper whose `fn` param carries the assertions).
+        if crate::rules::test_assertion_helpers::delegates_to_outer_param(node, semantic) {
             return;
         }
         let (line, column) = byte_offset_to_line_col(ctx.source, call.span.start as usize);
@@ -202,5 +207,29 @@ mod tests {
         // `assertType<T>(value)` — same generic-call shape as expectTypeOf.
         let src = r#"it("ok", () => { assertType<string>(getValue()); });"#;
         assert!(run(src).is_empty());
+    }
+
+    // Regression for #260: a test factory delegates its body to a
+    // caller-supplied callback parameter — the inline `it` has no assertion
+    // but the wrapper's callers provide one.
+    #[test]
+    fn allows_factory_delegating_to_wrapper_param() {
+        let src = r#"
+            function txIt(name: string, fn: () => Promise<void>): void {
+                it(name, async () => {
+                    await fn();
+                });
+            }
+        "#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn still_flags_call_to_module_helper_without_assertion() {
+        let src = r#"
+            function setup() {}
+            it("x", () => { setup(); });
+        "#;
+        assert_eq!(run(src).len(), 1);
     }
 }
