@@ -29,12 +29,40 @@ const BOOLEAN_METHODS: &[&str] = &[
     "propertyIsEnumerable",
 ];
 
+/// Conventional boolean naming: `is*` / `has*` / `can*` / `should*` … prefixes
+/// (followed by an uppercase letter, so `island` / `issued` don't match) or a
+/// boolean-state suffix (`*Disabled`, `*Changed`, `*Loading`, …). Lets the
+/// syntactic heuristic recognise `isSubmitting`, `submitDisabled`,
+/// `networksChanged`, `form.formState.isDirty` as booleans without type info.
+fn is_boolean_named(name: &str) -> bool {
+    const PREFIXES: &[&str] = &[
+        "is", "has", "can", "should", "will", "did", "was", "were", "are", "allow",
+        "enable", "disable", "must", "needs", "contains",
+    ];
+    const SUFFIXES: &[&str] = &[
+        "Disabled", "Enabled", "Changed", "Loading", "Pending", "Dirty", "Valid",
+        "Invalid", "Visible", "Hidden", "Active", "Checked", "Selected", "Open",
+        "Opened", "Closed", "Ready", "Done", "Required", "Optional", "Empty",
+        "Expanded", "Collapsed", "Focused", "Touched", "Submitting",
+    ];
+    if PREFIXES.iter().any(|p| {
+        name.strip_prefix(p)
+            .and_then(|rest| rest.chars().next())
+            .is_some_and(|c| c.is_ascii_uppercase())
+    }) {
+        return true;
+    }
+    SUFFIXES.iter().any(|s| name.ends_with(s))
+}
+
 /// Syntactic heuristic: is `expr` very likely to evaluate to a boolean?
 /// Conservative — only patterns whose result is *always* boolean qualify,
 /// so that we never silence a legitimate `x || "default"` warning.
 fn looks_boolean(expr: &Expression) -> bool {
     match expr.without_parentheses() {
         Expression::BooleanLiteral(_) => true,
+        Expression::Identifier(id) => is_boolean_named(id.name.as_str()),
+        Expression::StaticMemberExpression(m) => is_boolean_named(m.property.name.as_str()),
         Expression::UnaryExpression(u) => u.operator == UnaryOperator::LogicalNot,
         Expression::BinaryExpression(b) => matches!(
             b.operator,
@@ -182,6 +210,27 @@ mod tests {
     fn allows_mixed_boolean_logical_chain() {
         let src = r#"const ok = (a > 0 && b < 5) || c.startsWith("x");"#;
         assert!(run(src).is_empty());
+    }
+
+    // Regression for #282/#268: boolean OR of boolean-named flags is logical
+    // disjunction, not a nullish fallback — `??` would short-circuit on `false`.
+    #[test]
+    fn allows_boolean_named_flag_or() {
+        let src = r#"const d = isSubmitting || submitDisabled;"#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn allows_boolean_named_member_or_chain() {
+        let src = r#"const isDirty = form.formState.isDirty || networksChanged || speciesChanged;"#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn still_flags_non_boolean_named_identifier() {
+        // `userName` is not boolean-named — a string fallback is the intent.
+        let src = r#"const x = userName || "anonymous";"#;
+        assert_eq!(run(src).len(), 1, "{:?}", run(src));
     }
 
     #[test]
