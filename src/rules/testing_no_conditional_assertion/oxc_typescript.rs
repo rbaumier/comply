@@ -6,7 +6,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{BinaryExpression, BinaryOperator, Expression, UnaryOperator};
+use oxc_ast::ast::{BinaryExpression, BinaryOperator, Expression, Statement, UnaryOperator};
 use std::sync::Arc;
 
 fn is_type_narrowing(expr: &Expression) -> bool {
@@ -47,6 +47,57 @@ fn is_nullish_literal(expr: &Expression) -> bool {
         || matches!(expr.without_parentheses(), Expression::Identifier(id) if id.name.as_str() == "undefined")
 }
 
+/// Source text of the `expect(ARG)` argument when `stmt` is an unconditional
+/// truthiness assertion (`expect(ARG).toBe(true)` / `expect(ARG).toBeTruthy()`),
+/// else `None`. Negated forms (`expect(ARG).not.toBe(true)`) return `None`.
+fn truthy_assertion_target<'a>(stmt: &Statement<'a>, source: &'a str) -> Option<&'a str> {
+    use oxc_span::GetSpan;
+    let Statement::ExpressionStatement(es) = stmt else { return None };
+    let Expression::CallExpression(call) = &es.expression else { return None };
+    let Expression::StaticMemberExpression(matcher) = &call.callee else { return None };
+    let asserts_truthy = match matcher.property.name.as_str() {
+        "toBeTruthy" => true,
+        "toBe" | "toEqual" | "toStrictEqual" => matches!(
+            call.arguments.first().and_then(|a| a.as_expression()),
+            Some(Expression::BooleanLiteral(b)) if b.value
+        ),
+        _ => false,
+    };
+    if !asserts_truthy {
+        return None;
+    }
+    let Expression::CallExpression(expect_call) = &matcher.object else { return None };
+    let Expression::Identifier(id) = &expect_call.callee else { return None };
+    if id.name.as_str() != "expect" {
+        return None;
+    }
+    let arg = expect_call.arguments.first()?.as_expression()?;
+    let span = arg.span();
+    Some(source[span.start as usize..span.end as usize].trim())
+}
+
+/// True when a statement preceding the `if` in the same block unconditionally
+/// asserts the condition is truthy (`expect(cond).toBe(true)`), so the branch
+/// is guaranteed taken — the `if` only narrows the type for the compiler.
+fn block_has_truthy_guard<'a>(
+    stmts: &oxc_allocator::Vec<'a, Statement<'a>>,
+    if_stmt: &oxc_ast::ast::IfStatement<'a>,
+    source: &'a str,
+) -> bool {
+    use oxc_span::GetSpan;
+    let test = if_stmt.test.span();
+    let cond_text = source[test.start as usize..test.end as usize].trim();
+    for stmt in stmts.iter() {
+        if stmt.span().start >= if_stmt.span.start {
+            break;
+        }
+        if truthy_assertion_target(stmt, source) == Some(cond_text) {
+            return true;
+        }
+    }
+    false
+}
+
 pub struct Check;
 
 impl OxcCheck for Check {
@@ -81,8 +132,16 @@ impl OxcCheck for Check {
             match parent_kind {
                 AstKind::IfStatement(if_stmt) => {
                     use oxc_span::GetSpan;
-                    if is_type_narrowing(&if_stmt.test) {
-                        // Type narrowing (result.isErr(), instanceof, !== null) — not conditional logic.
+                    let guarded = match nodes.kind(nodes.parent_id(cur_id)) {
+                        AstKind::BlockStatement(b) => block_has_truthy_guard(&b.body, if_stmt, ctx.source),
+                        AstKind::FunctionBody(b) => block_has_truthy_guard(&b.statements, if_stmt, ctx.source),
+                        AstKind::Program(p) => block_has_truthy_guard(&p.body, if_stmt, ctx.source),
+                        _ => false,
+                    };
+                    if is_type_narrowing(&if_stmt.test) || guarded {
+                        // Type narrowing (result.isErr(), instanceof, !== null) or a
+                        // preceding unconditional assertion guarantees the branch —
+                        // not conditional logic.
                     } else {
                         let test_span = if_stmt.test.span();
                         let call_span = call.span;
@@ -119,5 +178,47 @@ impl OxcCheck for Check {
                 span: None,
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(src, &Check)
+    }
+
+    #[test]
+    fn flags_expect_inside_plain_if() {
+        let src = "test('a', () => {\n  if (x > 0) { expect(x).toBeGreaterThan(0); }\n});";
+        assert_eq!(run(src).len(), 1, "{:?}", run(src));
+    }
+
+    // Regression for #293: an `if` whose condition is guaranteed by a preceding
+    // unconditional `expect(cond).toBe(true)` only narrows the type — the branch
+    // is always taken, so the assertions inside it are not conditional.
+    #[test]
+    fn allows_expect_when_guarded_by_preceding_assertion() {
+        let src = "test('a', () => {\n\
+                     const exit = run(parseRouterOutput(raw));\n\
+                     expect(Exit.isSuccess(exit)).toBe(true);\n\
+                     if (Exit.isSuccess(exit)) {\n\
+                       expect(exit.value).toHaveLength(2);\n\
+                       expect(exit.value[0]).toEqual({ name: 'funnel-l1' });\n\
+                     }\n\
+                   });";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // A `.not.toBe(true)` (or any non-truthy matcher) does not guarantee the
+    // branch — the assertion inside the `if` stays flagged.
+    #[test]
+    fn negated_assertion_is_not_a_guard() {
+        let src = "test('a', () => {\n\
+                     expect(cond).not.toBe(true);\n\
+                     if (cond) { expect(value).toBe(1); }\n\
+                   });";
+        assert_eq!(run(src).len(), 1, "{:?}", run(src));
     }
 }
