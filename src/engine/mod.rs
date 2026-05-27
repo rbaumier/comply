@@ -530,6 +530,7 @@ mod tests {
     use crate::config::default_static_config;
     use crate::engine::lint_in_memory;
     use crate::files::Language;
+    use crate::project::ProjectCtx;
 
     #[test]
     fn skips_ui_a11y_tailwind_fixture_rules_in_test_files() {
@@ -603,5 +604,179 @@ fn handler() {
                 .all(|diagnostic| diagnostic.rule_id != "structured-api-error"),
             "expected relaxed benches to suppress API rules, got: {diagnostics:?}",
         );
+    }
+
+    /// Every rule must survive multi-byte UTF-8 input without panicking.
+    /// Byte-indexed text scanners are easy to write with a raw cursor that
+    /// slices the `&str` mid-character (inside a combining mark, an em dash,
+    /// an emoji…), which panics with "byte index N is not a char boundary".
+    /// This feeds a multi-byte torture corpus through every registered rule,
+    /// per language; a panic here names the offending rule's source location.
+    ///
+    /// The corpus packs the trigger tokens of the big rule families — regex
+    /// literals (the largest char-by-char scanner family), JSDoc tags, React
+    /// hooks/JSX, and the framework APIs (zod, hono, elysia, drizzle,
+    /// tanstack, …) — with multi-byte content placed right next to them, so
+    /// the scanners actually run rather than short-circuiting at the prefilter.
+    #[test]
+    fn no_rule_panics_on_multibyte_source() {
+        // Accents (2-byte), em dash (3-byte), CJK (3-byte), emoji (4-byte)
+        // and RTL text sit inside strings, comments and regex char classes —
+        // any of them lands a byte cursor off a char boundary.
+        const TS: &str = r#"
+/**
+ * Résumé — convertit héÉ 日本語 💡.
+ * @param {Stríng} x — la donnée à slugifier.
+ * @returns {número} le résultat.
+ * @template Té
+ * @yields {número}
+ * @throws {Erreur} si échec — 💡.
+ */
+export function* slugí(x: string): string {
+  // comply-ignore: api-no-status-in-body — fixture é 💡 العربية
+  const obj = {
+    type: "notFound",
+    // problème é — 💡 日本語
+    status: 404,
+    title: "Pás trouvé 💡",
+  };
+  const patterns = [
+    /[à-ÿ]+/gu,
+    /(?<nomé>\d+)—(\d+)/,
+    /日本語+/u,
+    /💡{2,3}/u,
+    /(héllo|wörld)?/i,
+    /^—\s*$/m,
+    /[^a-z0-9é]+/g,
+    new RegExp("héllo (💡)+ 日本語", "gu"),
+  ];
+  const tpl = `héllo ${x} 日本語 \x41`;
+  yield x.normalize("NFD").replaceAll(patterns[0], "");
+  return obj.type + tpl + patterns.length;
+}
+
+const schéma = z.object({ clé: z.string().min(1), válue: z.number().optional() });
+const app = new Hono().get("/résumé", (c) => c.json({ status: 200, data: "é 💡" }));
+const elysiaApp = new Elysia().get("/é", () => "héllo 💡 日本語");
+const table = pgTable("usérs", { id: serial("id"), nom: text("nóm") });
+const q = useQuery({ queryKey: ["é", "💡"], queryFn: async () => fetch("/日本語") });
+const auth = betterAuth({ secret: "héllo-💡-日本語" });
+const machine = createMachine({ id: "é", initial: "idlé", states: {} });
+
+@Component({ selector: "app-é", template: "<div>💡 日本語</div>" })
+class MonComposant {
+  constructor() {}
+}
+
+async function chargé(): Promise<void> {
+  const r = await fetch("/é-💡");
+  if (!r.ok) {
+    throw new Error("échec — 💡 日本語");
+  }
+}
+"#;
+        const TSX: &str = r#"
+import { useEffect, useState, useMemo, useCallback, useRef } from "react";
+
+/** Composant résumé — affiche 💡 日本語. @param {Props} props — les props. */
+export function Carte({ titré }: { titré: string }): JSX.Element {
+  const [état, setÉtat] = useState(0);
+  const mémo = useMemo(() => "héllo 💡 " + titré, [titré]);
+  const rappel = useCallback(() => setÉtat((n) => n + 1), []);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    // effet é — 💡 日本語
+    document.title = `Résumé ${état}`;
+  }, [état]);
+  return (
+    <div ref={ref} className="carté-💡 text-sm" onClick={rappel} title="héllo — 日本語">
+      <span>{mémo}</span>
+      {état > 0 && <p>válue é 💡 {état}</p>}
+      <button type="button">Cliqué 日本語</button>
+    </div>
+  );
+}
+"#;
+        const RUST: &str = r#"
+//! Module résumé — 日本語 💡 العربية.
+use std::collections::HashMap;
+
+/// Doc é à ü — convertit héllo.
+pub fn slugï(input: &str) -> Result<String, String> {
+    // commentaire é 💡 — TODO: rien à faire
+    let re = "[à-ÿ]+— 日本語";
+    let map: HashMap<&str, i32> = HashMap::new();
+    let s = format!("héllo {} 日本語 {} {}", input, re, map.len());
+    let parts: Vec<&str> = s.split('—').collect();
+    for (i, part) in parts.iter().enumerate() {
+        let _ = (i, part.len());
+    }
+    if s.is_empty() {
+        return Err("échec — 💡".to_string());
+    }
+    Ok(s)
+}
+
+#[derive(Debug, Clone)]
+pub struct Donnée {
+    pub nom: String,
+    pub valeur: i32,
+}
+
+pub async fn charger() -> anyhow::Result<()> {
+    let _x = std::fs::read_to_string("résumé.txt")?;
+    Ok(())
+}
+"#;
+        // Kitchen sink of trigger tokens for the text-only languages, laced
+        // with multi-byte content.
+        const TEXT: &str = r#"
+# résumé — é 💡 日本語
+FROM node:20
+ENV NAME="héllo 💡"
+RUN curl https://x | sh && wget https://y
+USER 1000
+SELECT * FROM "usérs" WHERE name = 'héllo 💡' LIMIT 10;
+CREATE INDEX idx_é ON usérs (nom);
+type Query { résumé: String @deprecated } # commentaire é — 日本語
+<template><div class="é">{{ válue }} 💡</div></template>
+<script setup>const x = "héllo 日本語"</script>
+.foo { font-family: "Hélvetica 💡"; color: #fff; }
+@media (min-width: 600px) { .bar { content: "é — 💡"; } }
+{ "clé": "válue — 💡 日本語", "nömbre": 42 }
+name = "héllo — 💡"
+[section]
+key = "válue é 💡"
+"#;
+
+        // A project context that reports every framework as present, so the
+        // framework-scoped rules (skipped on an empty project) run too.
+        let mut project = ProjectCtx::empty();
+        project.detected_frameworks = crate::frameworks::all();
+
+        let cases: &[(Language, &str, &str)] = &[
+            (Language::TypeScript, "src/api/torture.ts", TS),
+            (Language::JavaScript, "src/api/torture.js", TS),
+            (Language::Tsx, "src/components/torture.tsx", TSX),
+            (Language::Rust, "src/torture.rs", RUST),
+            (Language::Vue, "src/torture.vue", TEXT),
+            (Language::Toml, "src/torture.toml", TEXT),
+            (Language::Json, "src/torture.json", TEXT),
+            (Language::Css, "src/torture.css", TEXT),
+            (Language::Yaml, "src/torture.yaml", TEXT),
+            (Language::Dockerfile, "Dockerfile", TEXT),
+            (Language::Sql, "src/torture.sql", TEXT),
+            (Language::GraphQl, "src/torture.graphql", TEXT),
+        ];
+
+        for (language, path, source) in cases {
+            let _ = lint_in_memory(
+                Path::new(path),
+                *language,
+                source,
+                default_static_config(),
+                Some(&project),
+            );
+        }
     }
 }

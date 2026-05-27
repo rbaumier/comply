@@ -98,6 +98,13 @@ pub fn get_framework(name: &str) -> Option<&'static FrameworkDef> {
     registry().iter().find(|def| def.name == name)
 }
 
+/// Every registered framework — lets tests build a `ProjectCtx` that
+/// unlocks all framework-scoped rules without enumerating names by hand.
+#[cfg(test)]
+pub fn all() -> Vec<&'static FrameworkDef> {
+    registry().iter().collect()
+}
+
 pub fn detect_frameworks(
     pkg: &PackageJson,
     project_root: Option<&Path>,
