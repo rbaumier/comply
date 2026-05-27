@@ -64,6 +64,14 @@ fn strip_marker(line: &str) -> &str {
     trimmed
 }
 
+/// True for a `comply-ignore` / `comply-ignore-file` directive line (after its
+/// comment marker is stripped). Those lines reference rule identifiers and
+/// carry meta-explanations, not the file's prose — the linter skips them, so a
+/// weasel word *inside a rule id* (`too-many-break-or-continue`) never fires.
+fn is_comply_directive(stripped_trimmed: &str) -> bool {
+    stripped_trimmed.starts_with("comply-ignore")
+}
+
 /// Word-boundary, case-insensitive substring match.
 fn contains_word(haystack: &str, needle: &str) -> bool {
     let lower = haystack.to_lowercase();
@@ -116,6 +124,12 @@ pub(crate) fn lint_comment_nodes(
                 continue;
             }
             if in_code_block || (is_doc_comment && trimmed.starts_with("    ")) {
+                continue;
+            }
+            if is_comply_directive(trimmed) {
+                prev_last_word = None;
+                prev_line = None;
+                text_of_prev_line = None;
                 continue;
             }
 
@@ -224,6 +238,12 @@ pub(crate) fn lint_comment_spans(
                 continue;
             }
             if in_code_block || (is_doc_comment && trimmed.starts_with("    ")) {
+                continue;
+            }
+            if is_comply_directive(trimmed) {
+                prev_last_word = None;
+                prev_line = None;
+                text_of_prev_line = None;
                 continue;
             }
 
