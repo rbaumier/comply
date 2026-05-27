@@ -96,8 +96,26 @@ fn is_async_looking_member_call(call: &CallExpression) -> bool {
     let Expression::StaticMemberExpression(member) = &call.callee else {
         return false;
     };
+    if is_process_std_stream_write(member) {
+        return false;
+    }
     let method = member.property.name.as_str();
     ASYNC_LOOKING_METHODS.contains(&method)
+}
+
+/// `process.stdout.write(...)` / `process.stderr.write(...)` return `boolean`
+/// (the backpressure signal), not a Promise — there is nothing to await.
+fn is_process_std_stream_write(member: &StaticMemberExpression) -> bool {
+    if member.property.name.as_str() != "write" {
+        return false;
+    }
+    let Expression::StaticMemberExpression(stream) = &member.object else {
+        return false;
+    };
+    if !matches!(stream.property.name.as_str(), "stdout" | "stderr") {
+        return false;
+    }
+    matches!(&stream.object, Expression::Identifier(id) if id.name.as_str() == "process")
 }
 
 #[cfg(test)]
@@ -195,6 +213,18 @@ const params = new URLSearchParams(\"?b=1&a=2\");
 params.sort();
 ";
         assert!(run_on(src).is_empty());
+    }
+
+    // Regression for #291: process.stdout/stderr.write() return `boolean`
+    // (backpressure), not a Promise — nothing to await.
+    #[test]
+    fn allows_process_stderr_write() {
+        assert!(run_on("process.stderr.write(\"oops\\n\");").is_empty());
+    }
+
+    #[test]
+    fn allows_process_stdout_write() {
+        assert!(run_on("process.stdout.write(`${label} done\\n`);").is_empty());
     }
 
     #[test]
