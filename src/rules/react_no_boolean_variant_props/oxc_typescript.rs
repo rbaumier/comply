@@ -8,15 +8,30 @@ use std::sync::Arc;
 
 pub struct Check;
 
+/// Independent observable state flags: a single bit of truth that can hold
+/// simultaneously with the others (a form is dirty AND submitting AND
+/// disabled). These are NOT mutually-exclusive variants and must not be
+/// collapsed into a union. Style/intent variants (`isPrimary`, `isGhost`) and
+/// request-status flags (`isLoading`, `isError`, `isSuccess`) are deliberately
+/// absent — collapsing *those* is the boolean-blindness smell the rule targets.
+const INDEPENDENT_OBSERVABLE_FLAGS: &[&str] = &[
+    "Dirty", "Submitting", "Submitted", "Saving", "Saved", "Editing", "Open",
+    "Opened", "Closed", "Visible", "Hidden", "Valid", "Invalid", "Checked",
+    "Unchecked", "Selected", "Deselected", "Disabled", "Enabled", "Active",
+    "Inactive", "Focused", "Blurred", "Touched", "Untouched", "Expanded",
+    "Collapsed", "Hovered", "Pressed", "Dragging", "Animating", "ReadOnly",
+    "Required", "Optional", "Mounted", "Ready", "Deleting",
+];
+
 fn looks_like_variant_prop(name: &str) -> bool {
-    let check = |prefix: &str| -> bool {
-        if !name.starts_with(prefix) {
-            return false;
+    for prefix in ["is", "has"] {
+        if let Some(rest) = name.strip_prefix(prefix)
+            && rest.chars().next().is_some_and(|c| c.is_ascii_uppercase())
+        {
+            return !INDEPENDENT_OBSERVABLE_FLAGS.contains(&rest);
         }
-        let rest = &name[prefix.len()..];
-        rest.chars().next().is_some_and(|c| c.is_ascii_uppercase())
-    };
-    check("is") || check("has")
+    }
+    false
 }
 
 fn function_name_is_component(name: &str) -> bool {
@@ -122,5 +137,43 @@ impl OxcCheck for Check {
             severity: Severity::Warning,
             span: None,
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(src, &Check)
+    }
+
+    #[test]
+    fn flags_two_style_variants() {
+        let src = r#"function Button({ isPrimary, isGhost }) { return <button />; }"#;
+        assert_eq!(run(src).len(), 1, "{:?}", run(src));
+    }
+
+    #[test]
+    fn flags_status_family() {
+        let src = r#"function Status({ isLoading, isError, isSuccess }) { return <div />; }"#;
+        assert_eq!(run(src).len(), 1, "{:?}", run(src));
+    }
+
+    // Regression for #281: independent observable form/UI flags coexist by
+    // design — they are not mutually-exclusive variants, so collapsing them
+    // into a union would be wrong. `submitDisabled` lacks an is/has prefix and
+    // was never counted; `isDirty`/`isSubmitting` are observables.
+    #[test]
+    fn allows_independent_observable_flags() {
+        let src = r#"function Form({ isDirty, isSubmitting, submitDisabled }) { return <form />; }"#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn allows_observables_mixed_with_single_variant() {
+        // One real variant + observables → below the 2-variant threshold.
+        let src = r#"function Panel({ isPrimary, isOpen, isValid }) { return <div />; }"#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
     }
 }
