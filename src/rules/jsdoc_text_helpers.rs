@@ -177,6 +177,24 @@ pub fn has_tag(tags: &[JsdocTag], name: &str) -> bool {
     tags.iter().any(|t| t.name == name)
 }
 
+/// True when `code` contains a generator passed directly to a monadic
+/// `*.gen(...)` constructor (`Effect.gen`, `Result.gen`, `Stream.gen`, …).
+/// Those generators `yield*` effect binds and are an effect-ts idiom never
+/// documented with `@yields`, so the JSDoc yields rules must skip them.
+pub fn is_monadic_gen_generator(code: &str) -> bool {
+    let mut start = 0;
+    while let Some(rel) = code[start..].find(".gen(") {
+        let after = start + rel + ".gen(".len();
+        let tail = code[after..].trim_start();
+        let tail = tail.strip_prefix("async").map(str::trim_start).unwrap_or(tail);
+        if tail.starts_with("function*") || tail.starts_with("function *") {
+            return true;
+        }
+        start = after;
+    }
+    false
+}
+
 /// Heuristic: the first non-empty, non-comment code line following the JSDoc
 /// block. Used by rules that need to inspect the attached symbol (async fn,
 /// generator, throwing fn, …).
