@@ -15,6 +15,7 @@
 
 mod elysia_post_filter;
 mod equal_probe_post_filter;
+mod promise_function_async_post_filter;
 mod strict_void_return_post_filter;
 mod options;
 mod remap;
@@ -108,6 +109,7 @@ pub fn lint_files(
 
     elysia_post_filter::apply(&mut all);
     equal_probe_post_filter::apply(&mut all);
+    promise_function_async_post_filter::apply(&mut all);
     strict_void_return_post_filter::apply(&mut all);
 
     Ok(all)
