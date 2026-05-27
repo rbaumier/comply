@@ -31,12 +31,12 @@ pub fn register_all() -> Vec<RuleDef> {
             "`await` on a non-thenable value has no effect.",
             "Remove the `await` or ensure the value is a Promise.",
         ),
-        entry(
-            "require-await",
-            "require-await",
-            "Async function has no `await` — either add one or remove `async`.",
-            "Add an `await` expression or convert to a regular function.",
-        ),
+        // `require-await` is intentionally NOT delegated: comply ships the
+        // native `no-async-without-await` rule, which carries the contract-case
+        // exceptions (explicit `Promise<…>` return type, concise-body arrows)
+        // that keep it from contradicting `promise-function-async` on no-op
+        // `Promise<void>` stubs. The raw tsgolint variant lacks those and
+        // re-introduces an unsatisfiable rule pair. See #283.
         entry(
             "promise-function-async",
             "promise-function-async",

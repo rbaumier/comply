@@ -221,6 +221,21 @@ mod tests {
         assert!(run_on("const f = async () => [];").is_empty());
     }
 
+    // Regression for #283: a no-op `Promise<void>` stub must be expressible as
+    // an async function without tripping this rule — otherwise it contradicts
+    // `promise-function-async` (which mandates the `async`). The delegated
+    // `require-await`, which lacked these exceptions, was dropped in favour of
+    // this rule.
+    #[test]
+    fn allows_empty_async_promise_void_stub() {
+        assert!(run_on("async function noopAsync(): Promise<void> {}").is_empty());
+    }
+
+    #[test]
+    fn allows_async_arrow_promise_void_stub() {
+        assert!(run_on("const noopAsync = async (): Promise<void> => undefined;").is_empty());
+    }
+
     #[test]
     fn still_flags_async_function_body_without_await() {
         let src = "async function f() { return 42; }";
