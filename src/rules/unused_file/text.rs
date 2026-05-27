@@ -89,23 +89,49 @@ fn is_entry_point(path: &Path, project: &ProjectCtx) -> bool {
         return true;
     }
 
-    if let Some(root) = project.project_root.as_deref()
-        && let Some(parent) = path.parent()
-    {
-        let canon_parent = std::fs::canonicalize(parent).unwrap_or_else(|_| parent.to_path_buf());
-        let canon_root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
-        if canon_parent == canon_root {
-            if stem == "main" || stem == "index" {
-                return true;
-            }
-            // Framework root file stems (e.g. "next.config" matches next.config.ts).
-            if project.framework_root_files().any(|s| s == stem) {
-                return true;
-            }
-        }
+    let Some(root) = project.project_root.as_deref() else {
+        return false;
+    };
+    let canon_root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+
+    // CLIs and smoke/build tools are run directly, never imported. They live in
+    // a top-level `scripts/` or `bin/` directory.
+    if in_top_level_dir(path, &canon_root, &["scripts", "bin"]) {
+        return true;
+    }
+
+    let Some(parent) = path.parent() else {
+        return false;
+    };
+    let canon_parent = std::fs::canonicalize(parent).unwrap_or_else(|_| parent.to_path_buf());
+    let at_root = canon_parent == canon_root;
+    // A bundler/CLI entry conventionally sits at the project root *or* directly
+    // under the source root — `main.ts`, `index.ts`, `src/main.ts`.
+    let under_src = canon_parent.parent() == Some(canon_root.as_path())
+        && canon_parent.file_name().and_then(|n| n.to_str()) == Some("src");
+
+    if (stem == "main" || stem == "index") && (at_root || under_src) {
+        return true;
+    }
+    // Framework root file stems (e.g. "next.config" matches next.config.ts).
+    if at_root && project.framework_root_files().any(|s| s == stem) {
+        return true;
     }
 
     false
+}
+
+/// True when `path` lives anywhere inside one of `dirs` taken as a top-level
+/// directory of the project (e.g. `<root>/scripts/cli.ts`).
+fn in_top_level_dir(path: &Path, canon_root: &Path, dirs: &[&str]) -> bool {
+    let canon_path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let Ok(rel) = canon_path.strip_prefix(canon_root) else {
+        return false;
+    };
+    rel.components()
+        .next()
+        .and_then(|c| c.as_os_str().to_str())
+        .is_some_and(|first| dirs.contains(&first))
 }
 
 fn is_declaration_file(path: &Path) -> bool {
@@ -232,5 +258,28 @@ mod tests {
         ];
         let (_dir, diags) = run_on_project(&files);
         assert!(diags.is_empty(), "test files are exempt");
+    }
+
+    // Regression for #277: `src/main.ts` is an entry point, so its transitive
+    // imports are reachable and must not be flagged.
+    #[test]
+    fn treats_src_main_as_entry_point() {
+        let files: Vec<(&str, &str)> = vec![
+            ("src/main.ts", "import { run } from './session/tmux';\nrun();\n"),
+            ("src/session/tmux.ts", "export const run = () => {};\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files);
+        assert!(diags.is_empty(), "src/main.ts and its imports are reachable: {diags:?}");
+    }
+
+    // Regression for #277: CLIs/smoke tools under `scripts/` are run directly.
+    #[test]
+    fn treats_scripts_dir_files_as_entry_points() {
+        let files: Vec<(&str, &str)> = vec![
+            ("src/main.ts", "export const x = 1;\n"),
+            ("scripts/cli.ts", "console.log('run me');\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files);
+        assert!(diags.is_empty(), "scripts/ files are entry points: {diags:?}");
     }
 }
