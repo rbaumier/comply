@@ -23,6 +23,13 @@ impl OxcCheck for Check {
                 continue;
             };
 
+            // oxc normalises a concise-body arrow (`x => cond ? a : b`) into a
+            // FunctionBody holding one ExpressionStatement. That statement IS
+            // the arrow's return value, not a discarded expression.
+            if is_concise_arrow_body(node, semantic) {
+                continue;
+            }
+
             let expr = &stmt.expression;
 
             // String literals in expression position are allowed (directive prologues)
@@ -49,6 +56,25 @@ impl OxcCheck for Check {
 
         diagnostics
     }
+}
+
+/// True when `node` (an ExpressionStatement) is the synthetic body of a
+/// concise-body arrow function — i.e. its grandparent is an
+/// `ArrowFunctionExpression` with `expression == true` (the value is returned).
+fn is_concise_arrow_body(
+    node: &oxc_semantic::AstNode,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let parent = semantic.nodes().parent_node(node.id());
+    let arrow_node = match parent.kind() {
+        AstKind::FunctionBody(_) => semantic.nodes().parent_node(parent.id()),
+        AstKind::ArrowFunctionExpression(_) => parent,
+        _ => return false,
+    };
+    matches!(
+        arrow_node.kind(),
+        AstKind::ArrowFunctionExpression(arrow) if arrow.expression
+    )
 }
 
 fn has_side_effects(expr: &Expression) -> bool {
@@ -131,5 +157,19 @@ mod tests {
     #[test]
     fn allows_short_circuit_with_call() {
         assert!(run_on("const x = true; x && console.log('y');").is_empty());
+    }
+
+    // Regression for #276: an arrow with an expression body whose value is a
+    // conditional/logical is the function's return, not an unused statement.
+    #[test]
+    fn allows_arrow_conditional_body() {
+        let src = r#"const issueOf = (state) => ("issue" in state ? state.issue : null);"#;
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn allows_arrow_ternary_body() {
+        let src = r#"const clamp = (text, max) => text.length <= max ? text : text.slice(0, max);"#;
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
     }
 }
