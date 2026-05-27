@@ -1,7 +1,9 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{CheckCtx, OxcCheck};
-use crate::rules::jsdoc_text_helpers::{find_jsdoc_blocks, has_tag, parse_tags};
+use crate::rules::jsdoc_text_helpers::{
+    find_jsdoc_blocks, has_tag, is_monadic_gen_generator, parse_tags,
+};
 use std::sync::Arc;
 
 pub struct Check;
@@ -23,7 +25,12 @@ fn classify_entity(source: &str, block_raw: &str) -> DocumentedEntity {
         Some(i) => &after[..i],
         None => after,
     };
-    if head.contains("function*") || head.contains("function *") {
+    // `const program = Effect.gen(function* () { … })` documents an effect-ts
+    // value, not a generator — its `function*` is the monadic callback, never
+    // documented with `@yields`.
+    if is_monadic_gen_generator(head) {
+        DocumentedEntity::Other
+    } else if head.contains("function*") || head.contains("function *") {
         DocumentedEntity::Generator
     } else if head.contains("function") || head.contains("=>") || head.contains("(") {
         DocumentedEntity::Function
@@ -325,6 +332,14 @@ function* g() {
         let src = "/**\n * Slugify a name.\n */\nexport function slugifyName(input: string): string {\n  return input\n    .toLowerCase()\n    .normalize(\"NFD\")\n    .replaceAll(/[\u{300}-\u{36f}]/g, \"\")\n    .replaceAll(/[^a-z0-9]+/g, \"-\")\n    .slice(0, 255);\n}";
         let diags = run(src);
         assert!(diags.is_empty(), "diagnostics: {:?}", diags);
+    }
+
+    // Regression for #274: an `Effect.gen(function* () { … })` program is an
+    // effect-ts value, not a documented generator — no `@yields` expected.
+    #[test]
+    fn allows_effect_gen_program() {
+        let src = "/**\n * Run the program.\n */\nconst program = Effect.gen(function* () {\n  yield* doThing();\n});";
+        assert!(run(src).is_empty(), "{:?}", run(src));
     }
 
     // Regression for #107: an async function whose body uses an inner

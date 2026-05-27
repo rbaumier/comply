@@ -5,7 +5,9 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstType, CheckCtx, OxcCheck};
-use crate::rules::jsdoc_text_helpers::{find_jsdoc_blocks, following_code, has_tag, parse_tags};
+use crate::rules::jsdoc_text_helpers::{
+    find_jsdoc_blocks, following_code, has_tag, is_monadic_gen_generator, parse_tags,
+};
 use std::sync::Arc;
 
 fn is_generator(code: &str) -> bool {
@@ -53,6 +55,11 @@ impl OxcCheck for Check {
                 if !is_generator(code) {
                     continue;
                 }
+                // effect-ts `Effect.gen(function* () { … })` programs yield*
+                // monadic binds and are never documented with `@yields`.
+                if is_monadic_gen_generator(code) {
+                    continue;
+                }
                 diagnostics.push(Diagnostic {
                     path: Arc::clone(&ctx.path_arc),
                     line: block.start_line + 1 + line_offset,
@@ -68,5 +75,28 @@ impl OxcCheck for Check {
         }
 
         diagnostics
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(src, &Check)
+    }
+
+    #[test]
+    fn flags_generator_missing_yields() {
+        let src = "/**\n * A counter.\n */\nfunction* g() { yield 1; }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // Regression for #274: an `Effect.gen(function* () { … })` program is an
+    // effect-ts idiom, not a documented generator — never wants `@yields`.
+    #[test]
+    fn allows_effect_gen_program() {
+        let src = "/**\n * Run the program.\n */\nconst program = Effect.gen(function* () {\n  yield* doThing();\n});";
+        assert!(run(src).is_empty(), "{:?}", run(src));
     }
 }
