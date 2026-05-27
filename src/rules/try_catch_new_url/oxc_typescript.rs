@@ -47,6 +47,10 @@ impl OxcCheck for Check {
             return;
         }
 
+        if arg_is_trusted(new_expr) {
+            return;
+        }
+
         let (line, column) = byte_offset_to_line_col(ctx.source, new_expr.span.start as usize);
         diagnostics.push(Diagnostic {
             path: Arc::clone(&ctx.path_arc),
@@ -59,6 +63,36 @@ impl OxcCheck for Check {
             severity: Severity::Warning,
             span: None,
         });
+    }
+}
+
+/// True when the `new URL(arg)` argument is author-controlled and not raw
+/// untrusted input: a string literal, or a template literal whose every
+/// interpolation roots in an env-validated config object (`config.…` / `env.…`).
+/// Those cannot fail at runtime in a way the author hasn't already controlled.
+fn arg_is_trusted(new_expr: &oxc_ast::ast::NewExpression) -> bool {
+    use oxc_ast::ast::Expression;
+    let Some(arg) = new_expr.arguments.first().and_then(|a| a.as_expression()) else {
+        return false;
+    };
+    match arg {
+        Expression::StringLiteral(_) => true,
+        Expression::TemplateLiteral(tpl) => {
+            tpl.expressions.iter().all(expr_roots_in_trusted_config)
+        }
+        _ => false,
+    }
+}
+
+/// True when `expr` is a (possibly nested) member access rooted at an
+/// identifier named `config` or `env` — the boot-validated config conventions.
+fn expr_roots_in_trusted_config(expr: &oxc_ast::ast::Expression) -> bool {
+    use oxc_ast::ast::Expression;
+    match expr {
+        Expression::StaticMemberExpression(m) => expr_roots_in_trusted_config(&m.object),
+        Expression::ComputedMemberExpression(m) => expr_roots_in_trusted_config(&m.object),
+        Expression::Identifier(id) => matches!(id.name.as_str(), "config" | "env"),
+        _ => false,
     }
 }
 
@@ -199,6 +233,25 @@ mod tests {
             }
         "#;
         assert!(run_on(src).is_empty());
+    }
+
+    // Regression for #285: `new URL(`${config.client.VITE_BASE_URL}/path`)` —
+    // the base is an env-validated config constant, not raw user input.
+    #[test]
+    fn allows_template_rooted_in_config() {
+        let src = r#"const url = new URL(`${config.client.VITE_BASE_URL}/api/v1/laboratories/extract`);"#;
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn allows_plain_string_literal() {
+        assert!(run_on(r#"const u = new URL("https://example.com/x");"#).is_empty());
+    }
+
+    #[test]
+    fn still_flags_template_with_untrusted_interpolation() {
+        let src = r#"const u = new URL(`${req.query.target}/x`);"#;
+        assert_eq!(run_on(src).len(), 1, "{:?}", run_on(src));
     }
 
     #[test]

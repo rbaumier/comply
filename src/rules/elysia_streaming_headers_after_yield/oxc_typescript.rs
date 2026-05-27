@@ -3,32 +3,46 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
+use oxc_ast::ast::Expression;
 use std::sync::Arc;
 
 pub struct Check;
 
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
-        &[AstType::Function, AstType::ArrowFunctionExpression]
+        &[AstType::Function]
     }
 
     fn run<'a>(
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
+        semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         if !ctx.project.has_framework("elysia") {
             return;
         }
 
-        let span = match node.kind() {
-            AstKind::Function(f) => f.span,
-            AstKind::ArrowFunctionExpression(f) => f.span,
-            _ => return,
+        // Elysia streams via generator handlers. An arrow function can never be
+        // a generator, and a `yield` inside a non-generator function belongs to
+        // a nested generator (visited on its own) — so only generator functions
+        // can be the streaming handler under scrutiny.
+        let AstKind::Function(f) = node.kind() else {
+            return;
         };
+        if !f.generator {
+            return;
+        }
 
+        // A generator passed to `Result.gen()` / `Effect.gen()` is a monadic
+        // generator: its `yield*` are binds, not stream chunks, and the handler
+        // returns a buffered value — headers commit at `return`, not mid-yield.
+        if is_monadic_gen_callback(node, semantic) {
+            return;
+        }
+
+        let span = f.span;
         let start = span.start as usize;
         let end = span.end as usize;
         let body_text = &ctx.source[start..end.min(ctx.source.len())];
@@ -54,5 +68,68 @@ impl OxcCheck for Check {
             severity: Severity::Error,
             span: None,
         });
+    }
+}
+
+/// True when `node` (a generator function) is the callback argument of a
+/// `Result.gen(...)` / `Effect.gen(...)` (or any `*.gen(...)`) call — a monadic
+/// generator, not an Elysia streaming handler.
+fn is_monadic_gen_callback<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    let nodes = semantic.nodes();
+    let parent_id = nodes.parent_id(node.id());
+    let call = match nodes.kind(parent_id) {
+        AstKind::CallExpression(c) => Some(c),
+        _ => match nodes.kind(nodes.parent_id(parent_id)) {
+            AstKind::CallExpression(c) => Some(c),
+            _ => None,
+        },
+    };
+    let Some(call) = call else { return false };
+    matches!(
+        &call.callee,
+        Expression::StaticMemberExpression(m) if m.property.name.as_str() == "gen"
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rules::test_helpers::run_oxc_ts_with_framework;
+
+    // Regression for #285: a `Result.gen(async function* () { … })` nested in an
+    // arrow handler is a monadic generator — its `yield*` are binds, and the
+    // handler returns a buffered value. No streaming, nothing to flag.
+    #[test]
+    fn allows_result_gen_generator_in_arrow_handler() {
+        let src = r#"
+            app.get("/csv", async ({ session, set }) =>
+                unwrapOrThrow(Result.gen(async function* () {
+                    yield* authorize(session, { kind: "x" });
+                    const rows = yield* Result.await(query());
+                    const csv = stringify(rows);
+                    set.headers["content-type"] = "text/csv";
+                    return Result.ok(csv);
+                }))
+            );
+        "#;
+        let d = run_oxc_ts_with_framework(src, &Check, "elysia");
+        assert!(d.is_empty(), "monadic generator must not flag: {d:?}");
+    }
+
+    // A genuine streaming generator handler that writes headers after the first
+    // yield is still flagged — that is the bug the rule exists to catch.
+    #[test]
+    fn flags_headers_after_yield_in_generator_handler() {
+        let src = r#"
+            app.get("/sse", async function* ({ set }) {
+                yield "data: start\n\n";
+                set.headers["content-type"] = "text/event-stream";
+            });
+        "#;
+        let d = run_oxc_ts_with_framework(src, &Check, "elysia");
+        assert_eq!(d.len(), 1, "headers after yield in a stream must flag: {d:?}");
     }
 }
