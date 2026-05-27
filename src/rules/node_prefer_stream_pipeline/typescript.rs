@@ -9,9 +9,10 @@ use std::sync::Arc;
 #[derive(Debug)]
 pub struct Check;
 
-/// Heuristic gate: only fire on files that look like they touch Node streams.
-/// We require an import from `node:stream`, `stream`, `node:fs`, `fs`, or
-/// `node:http`, `http` — the realistic source of `Readable`/`Writable`.
+/// Heuristic gate: only fire on files that genuinely touch Node streams.
+/// Importing `fs` alone is not enough (`readFileSync` etc. are far more common
+/// than streaming), so we require an explicit stream import or a stream-factory
+/// call — the realistic source of a pipeable `Readable`/`Writable`.
 fn touches_node_streams(source: &str) -> bool {
     const NEEDLES: &[&str] = &[
         "from 'stream'",
@@ -20,14 +21,22 @@ fn touches_node_streams(source: &str) -> bool {
         "from \"node:stream\"",
         "require('stream')",
         "require(\"stream\")",
-        "from 'fs'",
-        "from \"fs\"",
-        "from 'node:fs'",
-        "from \"node:fs\"",
         "createReadStream",
         "createWriteStream",
     ];
     NEEDLES.iter().any(|n| source.contains(n))
+}
+
+/// True when the first argument of a `.pipe(` call is a functional combinator
+/// (`Effect.map`, `Stream.tap`, `pipe(...)`, …). effect-ts uses `.pipe()` as
+/// its core combinator — those calls have nothing to do with Node streams.
+fn first_arg_is_functional_combinator(rest_after_paren: &str) -> bool {
+    let t = rest_after_paren.trim_start();
+    const COMBINATORS: &[&str] = &[
+        "Effect.", "Stream.", "Sink.", "Layer.", "Schedule.", "Chunk.",
+        "Option.", "Either.", "Exit.", "Fiber.", "STM.", "pipe(",
+    ];
+    COMBINATORS.iter().any(|c| t.starts_with(c))
 }
 
 impl TextCheck for Check {
@@ -53,11 +62,12 @@ impl TextCheck for Check {
                     // Must be followed by `(`.
                     let after = i + 5;
                     if after < bytes.len() && bytes[after] == b'(' {
-                        // Word boundary on the left — `.pipe` must be a call,
-                        // not part of `.pipeline` or `.piped`.
-                        let next_after_paren = after + 1;
-                        let _ = next_after_paren;
-                        // Reject `.pipeline(` — already handled by token length.
+                        // effect-ts `.pipe(Effect.map(...), ...)` is a functional
+                        // pipeline, not a Node stream — skip it.
+                        if first_arg_is_functional_combinator(&line[after + 1..]) {
+                            i = after + 1;
+                            continue;
+                        }
                         diagnostics.push(Diagnostic {
                             path: Arc::clone(&ctx.path_arc),
                             line: idx + 1,
@@ -118,5 +128,25 @@ mod tests {
     fn skips_files_without_streams() {
         let src = "obs.pipe(map(x => x + 1));";
         assert!(run(src).is_empty());
+    }
+
+    // Regression for #275: a file importing `fs` for non-stream reasons
+    // (readFileSync) that uses Effect's `.pipe()` must not be flagged.
+    #[test]
+    fn skips_effect_pipe_with_plain_fs_import() {
+        let src = "import { readFileSync } from 'fs';\n\
+                   import { Effect } from 'effect';\n\
+                   const p = eff.pipe(Effect.map(f), Effect.catchAll(g));";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // Regression for #275: even in a genuine stream file, Effect's `.pipe()`
+    // combinator calls are spared — only the real stream pipe is flagged.
+    #[test]
+    fn flags_only_stream_pipe_alongside_effect() {
+        let src = "import { createReadStream, createWriteStream } from 'node:fs';\n\
+                   const program = eff.pipe(Effect.map(x => x), Effect.catchAll(h));\n\
+                   createReadStream('a').pipe(createWriteStream('b'));";
+        assert_eq!(run(src).len(), 1, "{:?}", run(src));
     }
 }
