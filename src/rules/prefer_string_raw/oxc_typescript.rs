@@ -42,6 +42,14 @@ impl OxcCheck for Check {
                 continue;
             }
 
+            // `String.raw` cannot represent a value ending in a backslash — the
+            // trailing `\` escapes the closing backtick (`String.raw`\`` is a
+            // syntax error). The closing quote is a single-byte ASCII char, so
+            // stripping it is boundary-safe.
+            if raw[1..raw.len().saturating_sub(1)].ends_with('\\') {
+                continue;
+            }
+
             if count_escaped_backslashes(raw) >= 2 {
                 let (line, column) = byte_offset_to_line_col(ctx.source, lit.span.start as usize);
                 diagnostics.push(Diagnostic {
@@ -56,5 +64,34 @@ impl OxcCheck for Check {
             }
         }
         diagnostics
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+    #[test]
+    fn flags_multi_backslash_string() {
+        // `"\d\w+"` — two escaped backslashes, String.raw is a readability win.
+        assert_eq!(run_on(r#"const re = "\\d\\w+";"#).len(), 1);
+    }
+
+    // Regression for #234: a single-backslash LIKE-escape constant needs no
+    // String.raw, and String.raw can't carry a trailing backslash anyway.
+    #[test]
+    fn ignores_single_backslash() {
+        assert!(run_on(r#"const LIKE_ESCAPE = "\\";"#).is_empty());
+    }
+
+    // Regression for #234: a value ending in a backslash cannot be a String.raw
+    // literal even with 2+ escapes.
+    #[test]
+    fn ignores_string_ending_in_backslash() {
+        assert!(run_on(r#"const x = "\\d\\";"#).is_empty());
     }
 }
