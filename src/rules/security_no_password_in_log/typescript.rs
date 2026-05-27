@@ -60,6 +60,53 @@ fn args_slice(line: &str, args_start: usize) -> &str {
     &line[args_start..]
 }
 
+/// Drop the static (non-interpolated) text of any template literal in `args`,
+/// keeping only the `${…}` expression contents. A human-readable status
+/// message that merely mentions "password" then no longer matches — the scan
+/// fires on interpolated identifiers, not on prose.
+fn strip_template_static_text(args: &str) -> String {
+    let mut out = String::with_capacity(args.len());
+    let mut chars = args.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '`' {
+            out.push(c);
+            continue;
+        }
+        // Inside a template literal: emit only interpolation contents.
+        while let Some(&c2) = chars.peek() {
+            if c2 == '`' {
+                chars.next();
+                break;
+            }
+            if c2 == '$' {
+                chars.next();
+                if chars.peek() == Some(&'{') {
+                    chars.next();
+                    out.push(' ');
+                    let mut depth = 1i32;
+                    for c3 in chars.by_ref() {
+                        match c3 {
+                            '{' => depth += 1,
+                            '}' => {
+                                depth -= 1;
+                                if depth == 0 {
+                                    break;
+                                }
+                            }
+                            _ => {}
+                        }
+                        out.push(c3);
+                    }
+                    out.push(' ');
+                }
+            } else {
+                chars.next(); // static template char — drop it.
+            }
+        }
+    }
+    out
+}
+
 /// Word-boundary check: `password` should match `password` and `.password`
 /// and `[password]`, but NOT `passwordless` or `passwordHash`.
 fn mentions_sensitive(args: &str) -> bool {
@@ -117,7 +164,7 @@ impl TextCheck for Check {
                 continue;
             };
             let args = args_slice(line, args_start);
-            if !mentions_sensitive(args) {
+            if !mentions_sensitive(&strip_template_static_text(args)) {
                 continue;
             }
             diagnostics.push(Diagnostic {
@@ -167,6 +214,14 @@ mod tests {
     fn allows_log_without_sensitive_field() {
         let src = "console.log('user logged in', user.id);";
         assert!(run(src).is_empty());
+    }
+
+    // Regression for #263: the word "password" sits in the static text of a
+    // template literal whose only interpolation is a non-secret identifier.
+    #[test]
+    fn allows_sensitive_word_in_static_template_text() {
+        let src = r#"console.log(`   → password set, sign in with ${adminUser.email}\n`);"#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
     }
 
     #[test]
