@@ -64,6 +64,14 @@ fn catch_routes_through_typed_handler(handler: &CatchClause) -> bool {
     false
 }
 
+/// True when the try block wraps a TanStack Query `*.mutateAsync(...)` call.
+/// `mutateAsync` throws on error and has no `Result`-based variant at the React
+/// call site, so a try/catch around it is legitimate library-boundary control
+/// flow (bail out before running post-success effects), not a Result smell.
+fn try_wraps_throwing_library_call(block_text: &str) -> bool {
+    block_text.contains(".mutateAsync(")
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[AstType::TryStatement]
@@ -86,6 +94,11 @@ impl OxcCheck for Check {
         if let Some(handler) = &stmt.handler
             && catch_routes_through_typed_handler(handler)
         {
+            return;
+        }
+        let block_text = &ctx.source
+            [stmt.block.span.start as usize..(stmt.block.span.end as usize).min(ctx.source.len())];
+        if try_wraps_throwing_library_call(block_text) {
             return;
         }
         let (line, column) = byte_offset_to_line_col(ctx.source, stmt.span.start as usize);
@@ -191,6 +204,26 @@ mod tests {
             try { foo(); } catch (e) {\n\
               if (!(e instanceof KnownError)) handle(e);\n\
             }\n";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    /// Regression for #271 — TanStack Query `mutateAsync` throws and has no
+    /// Result variant at the React call site; a try/catch bail-out around it is
+    /// legitimate library-boundary control flow.
+    #[test]
+    fn skips_try_wrapping_mutate_async() {
+        let src = "\
+            try {\n\
+              await editMutation.mutateAsync({ id });\n\
+            } catch {\n\
+              return;\n\
+            }\n";
+        assert!(run(src).is_empty(), "mutateAsync boundary try should be skipped");
+    }
+
+    #[test]
+    fn still_flags_plain_try_without_mutate_async() {
+        let src = "try { await save(); } catch { return; }";
         assert_eq!(run(src).len(), 1);
     }
 }
