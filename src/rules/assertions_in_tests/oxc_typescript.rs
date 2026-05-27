@@ -163,6 +163,12 @@ impl OxcCheck for Check {
             };
 
             if !has_assertion.contains(&cb_id) {
+                // The test delegates to a caller-supplied callback (`it(name,
+                // () => fn())` inside a wrapper whose `fn` param carries the
+                // assertions) — the inline body legitimately has none.
+                if crate::rules::test_assertion_helpers::delegates_to_outer_param(node, semantic) {
+                    continue;
+                }
                 let name = extract_test_name(&call.arguments);
                 let (line, column) = byte_offset_to_line_col(ctx.source, call.span.start as usize);
                 diagnostics.push(Diagnostic {
@@ -252,5 +258,19 @@ mod tests {
             });
         "#;
         assert!(run(src).is_empty());
+    }
+
+    // Regression for #260: a test factory delegates its body to a
+    // caller-supplied callback parameter.
+    #[test]
+    fn allows_factory_delegating_to_wrapper_param() {
+        let src = r#"
+            function txIt(name: string, fn: () => Promise<void>): void {
+                it(name, async () => {
+                    await fn();
+                });
+            }
+        "#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
     }
 }
