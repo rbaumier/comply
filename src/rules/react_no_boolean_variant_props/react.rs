@@ -6,15 +6,30 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
+/// Independent observable state flags: a single bit of truth that can hold
+/// simultaneously with the others (a form is dirty AND submitting AND
+/// disabled). These are NOT mutually-exclusive variants and must not be
+/// collapsed into a union. Style/intent variants (`isPrimary`, `isGhost`) and
+/// request-status flags (`isLoading`, `isError`, `isSuccess`) are deliberately
+/// absent — collapsing *those* is the boolean-blindness smell the rule targets.
+const INDEPENDENT_OBSERVABLE_FLAGS: &[&str] = &[
+    "Dirty", "Submitting", "Submitted", "Saving", "Saved", "Editing", "Open",
+    "Opened", "Closed", "Visible", "Hidden", "Valid", "Invalid", "Checked",
+    "Unchecked", "Selected", "Deselected", "Disabled", "Enabled", "Active",
+    "Inactive", "Focused", "Blurred", "Touched", "Untouched", "Expanded",
+    "Collapsed", "Hovered", "Pressed", "Dragging", "Animating", "ReadOnly",
+    "Required", "Optional", "Mounted", "Ready", "Deleting",
+];
+
 fn looks_like_variant_prop(name: &str) -> bool {
-    let check = |prefix: &str| -> bool {
-        if !name.starts_with(prefix) {
-            return false;
+    for prefix in ["is", "has"] {
+        if let Some(rest) = name.strip_prefix(prefix)
+            && rest.chars().next().is_some_and(|c| c.is_ascii_uppercase())
+        {
+            return !INDEPENDENT_OBSERVABLE_FLAGS.contains(&rest);
         }
-        let rest = &name[prefix.len()..];
-        rest.chars().next().is_some_and(|c| c.is_ascii_uppercase())
-    };
-    check("is") || check("has")
+    }
+    false
 }
 
 fn function_name_is_component(name: &str) -> bool {
