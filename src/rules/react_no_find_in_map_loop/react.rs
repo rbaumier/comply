@@ -113,8 +113,27 @@ fn map_callback_param_name(map_call: tree_sitter::Node<'_>, source: &[u8]) -> Op
     }
 }
 
+/// The rule's rationale is render-path (O(n²)) cost, so it only applies to
+/// React code: `.tsx`/`.jsx` files (JSX implies React) or a `.ts`/`.js` module
+/// that imports React. Plain backend/server TypeScript is out of scope.
+fn in_react_context(ctx: &crate::rules::backend::CheckCtx, source: &[u8]) -> bool {
+    matches!(ctx.lang, crate::files::Language::Tsx)
+        || std::str::from_utf8(source).is_ok_and(imports_react)
+}
+
+fn imports_react(source: &str) -> bool {
+    source.contains("from \"react\"")
+        || source.contains("from 'react'")
+        || source.contains("from \"react/")
+        || source.contains("from 'react/")
+        || source.contains("require(\"react\")")
+        || source.contains("require('react')")
+}
+
 crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
-    let _ = ctx;
+    if !in_react_context(ctx, source) {
+        return;
+    }
     if !is_member_call(node, "find", source) && !is_member_call(node, "filter", source) {
         return;
     }
