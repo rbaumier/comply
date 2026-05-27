@@ -9,6 +9,27 @@ use oxc_ast::ast::{Argument, Expression};
 
 pub struct Check;
 
+/// True when the awaited expression is a React-Testing-Library `findBy*` /
+/// `findAllBy*` query. Those reject (throw) on not-found with RTL's own
+/// diagnostic message, so `expect(await screen.findByText(...))` already fails
+/// helpfully — rewriting to `.resolves` is no improvement and breaks the
+/// canonical RTL idiom.
+fn awaited_is_rtl_find_query(expr: &Expression) -> bool {
+    let Expression::CallExpression(call) = expr.without_parentheses() else {
+        return false;
+    };
+    let name = match &call.callee {
+        Expression::StaticMemberExpression(m) => m.property.name.as_str(),
+        Expression::Identifier(id) => id.name.as_str(),
+        _ => return false,
+    };
+    ["findBy", "findAllBy"].iter().any(|prefix| {
+        name.strip_prefix(prefix)
+            .and_then(|rest| rest.chars().next())
+            .is_some_and(|c| c.is_ascii_uppercase())
+    })
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[AstType::CallExpression]
@@ -33,7 +54,12 @@ impl OxcCheck for Check {
         if call.arguments.len() != 1 {
             return;
         }
-        let Argument::AwaitExpression(_) = &call.arguments[0] else { return };
+        let Argument::AwaitExpression(await_expr) = &call.arguments[0] else { return };
+
+        // RTL `findBy*` queries already reject on miss — no `.resolves` gain.
+        if awaited_is_rtl_find_query(&await_expr.argument) {
+            return;
+        }
 
         let (line, column) = byte_offset_to_line_col(ctx.source, call.span.start as usize);
         diagnostics.push(Diagnostic {
@@ -45,5 +71,38 @@ impl OxcCheck for Check {
             severity: Severity::Warning,
             span: Some((call.span.start as usize, (call.span.end - call.span.start) as usize)),
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(src, &Check)
+    }
+
+    #[test]
+    fn flags_expect_await_value() {
+        assert_eq!(run("expect(await getValue()).toEqual(1);").len(), 1);
+    }
+
+    // Regression for #270: RTL `findBy*`/`findAllBy*` queries reject on miss,
+    // so `expect(await screen.findByText(...))` is the canonical idiom.
+    #[test]
+    fn skips_rtl_find_by_query() {
+        let src = r#"expect(await screen.findByText("Mot de passe trop court.")).toBeInTheDocument();"#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn skips_rtl_find_all_by_query() {
+        let src = r#"expect(await screen.findAllByRole("button")).toHaveLength(2);"#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn skips_bare_find_by_import() {
+        assert!(run(r#"expect(await findByTestId("x")).toBeVisible();"#).is_empty());
     }
 }
