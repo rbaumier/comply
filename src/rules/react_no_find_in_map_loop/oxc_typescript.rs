@@ -1,12 +1,29 @@
 //! react-no-find-in-map-loop OxcCheck backend.
 
 use crate::diagnostic::{Diagnostic, Severity};
+use crate::files::Language;
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::Expression;
 use std::sync::Arc;
 
 pub struct Check;
+
+/// The rule's rationale is render-path (O(n²)) cost, so it only applies to
+/// React code: `.tsx`/`.jsx` files (JSX implies React) or a `.ts`/`.js` module
+/// that imports React. Plain backend/server TypeScript is out of scope.
+fn in_react_context(ctx: &CheckCtx) -> bool {
+    matches!(ctx.lang, Language::Tsx) || imports_react(ctx.source)
+}
+
+fn imports_react(source: &str) -> bool {
+    source.contains("from \"react\"")
+        || source.contains("from 'react'")
+        || source.contains("from \"react/")
+        || source.contains("from 'react/")
+        || source.contains("require(\"react\")")
+        || source.contains("require('react')")
+}
 
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
@@ -24,6 +41,10 @@ impl OxcCheck for Check {
         semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
+        if !in_react_context(ctx) {
+            return;
+        }
+
         let AstKind::CallExpression(call) = node.kind() else {
             return;
         };
@@ -129,5 +150,31 @@ fn receiver_root_identifier(expr: &Expression) -> Option<String> {
         Expression::ComputedMemberExpression(mem) => receiver_root_identifier(&mem.object),
         Expression::CallExpression(call) => receiver_root_identifier(&call.callee),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rules::test_helpers::{run_oxc_ts_with_path, run_oxc_tsx};
+
+    const NESTED: &str = r#"items.map(i => others.find(o => o.id === i.id));"#;
+
+    #[test]
+    fn flags_in_tsx() {
+        assert_eq!(run_oxc_tsx(NESTED, &Check).len(), 1);
+    }
+
+    // Regression for #280: a plain `.ts` module with no React import is not
+    // render-path code — the rule must stay silent there.
+    #[test]
+    fn allows_plain_ts_without_react() {
+        assert!(run_oxc_ts_with_path(NESTED, &Check, "service.ts").is_empty());
+    }
+
+    #[test]
+    fn flags_ts_that_imports_react() {
+        let src = format!("import {{ useMemo }} from \"react\";\n{NESTED}");
+        assert_eq!(run_oxc_ts_with_path(&src, &Check, "hook.ts").len(), 1);
     }
 }
