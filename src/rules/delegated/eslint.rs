@@ -16,14 +16,6 @@ pub fn register_all() -> Vec<RuleDef> {
              triggers implicit coercion rules that hide bugs.",
         ),
         entry(
-            "curly",
-            "curly",
-            Severity::Error,
-            "Require curly braces on every control-flow block.",
-            "Wrap single-statement bodies in `{ ... }`. Missing braces make \
-             future edits error-prone.",
-        ),
-        entry(
             "no-var",
             "no-var",
             Severity::Error,
