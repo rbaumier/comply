@@ -78,9 +78,48 @@ pub fn matched_camel_case(name: &str) -> Option<&'static str> {
         if !bytes[..plen].eq_ignore_ascii_case(prefix.as_bytes()) {
             continue;
         }
-        if bytes[plen].is_ascii_uppercase() {
-            return Some(prefix);
+        if !bytes[plen].is_ascii_uppercase() {
+            continue;
         }
+        // A genuine camelCase boundary is `prefix` + a single uppercase letter
+        // then lowercase (`strName`). An all-caps run after the prefix is part
+        // of one word or acronym, not a Hungarian prefix — `PROMPTS`/`STRATEGY`/
+        // `ARRAY` in a SCREAMING_SNAKE constant must not match `prom`/`str`/`arr`.
+        if bytes.get(plen + 1).is_some_and(u8::is_ascii_uppercase) {
+            continue;
+        }
+        return Some(prefix);
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn matches_genuine_camel_case_hungarian() {
+        assert_eq!(matched_camel_case("strName"), Some("str"));
+        assert_eq!(matched_camel_case("arrItems"), Some("arr"));
+        assert_eq!(matched_camel_case("boolFlag"), Some("bool"));
+        assert_eq!(matched_camel_case("strX"), Some("str")); // boundary at end
+    }
+
+    #[test]
+    fn ignores_plain_english_words() {
+        assert_eq!(matched_camel_case("promise"), None);
+        assert_eq!(matched_camel_case("strawberry"), None);
+        assert_eq!(matched_camel_case("Prompt"), None);
+    }
+
+    // Regression for #279: SCREAMING_SNAKE constants are all-caps words, not
+    // camelCase Hungarian prefixes. The run after the prefix is part of the
+    // word/acronym (`PROM`+`PTS`, `STR`+`ATEGY`, `ARR`+`AY`).
+    #[test]
+    fn ignores_screaming_snake_domain_words() {
+        assert_eq!(matched_camel_case("PROMPTS_DIR"), None);
+        assert_eq!(matched_camel_case("PROMPT_FILE"), None);
+        assert_eq!(matched_camel_case("STRATEGY_MAP"), None);
+        assert_eq!(matched_camel_case("ARRAY_SIZE"), None);
+    }
 }
