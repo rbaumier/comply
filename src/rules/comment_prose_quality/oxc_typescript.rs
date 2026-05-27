@@ -65,4 +65,17 @@ mod tests {
     fn skips_doc_comments_weasel() {
         assert!(run("/// This is basically a wrapper.").is_empty());
     }
+
+    // Regression for #266: a weasel word inside a rule id cited by a
+    // `comply-ignore-file` directive must not trip the prose linter.
+    #[test]
+    fn skips_comply_ignore_directive() {
+        let src = "// comply-ignore-file: too-many-break-or-continue — each continue logs a skip reason.";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn skips_comply_ignore_inline_directive() {
+        assert!(run("// comply-ignore: various-rule — many cases handled here").is_empty());
+    }
 }
