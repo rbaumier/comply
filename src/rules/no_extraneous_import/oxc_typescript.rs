@@ -35,6 +35,9 @@ impl OxcCheck for Check {
         if crate::rules::path_utils::is_config_file(ctx.path) {
             return;
         }
+        if is_build_script(ctx.path) {
+            return;
+        }
 
         let specifier = import.source.value.as_str();
         if !is_bare_specifier(specifier) {
@@ -93,6 +96,15 @@ fn is_test_file(path: &Path) -> bool {
         || path_str.contains("/test/")
         || path_str.contains("/tests/")
         || path_str.contains("/e2e/")
+}
+
+/// Build/codegen scripts under a `scripts/` directory run at dev/CI time and
+/// are not part of the shipped bundle, so importing a devDependency from them
+/// is the correct classification — promoting the tool to `dependencies` would
+/// wrongly bloat the production dependency closure.
+fn is_build_script(path: &Path) -> bool {
+    let s = path.to_string_lossy().replace('\\', "/");
+    s.contains("/scripts/") || s.starts_with("scripts/")
 }
 
 fn is_bare_specifier(spec: &str) -> bool {
@@ -200,6 +212,16 @@ import userEvent from "@testing-library/user-event";
 export default defineConfig({});"#;
         let d = run_with_pkg_at_path(pkg, "vitest.config.ts", src);
         assert!(d.is_empty(), "vitest.config.ts should not flag devDeps: {d:?}");
+    }
+
+    #[test]
+    fn allows_dev_dep_in_build_script() {
+        // Issue #286: a codegen script under `scripts/` runs at dev/CI time and
+        // is not part of the shipped bundle — importing a devDependency is correct.
+        let pkg = r#"{"devDependencies":{"@tanstack/router-generator":"^1"}}"#;
+        let src = r#"import { Generator, getConfig } from "@tanstack/router-generator";"#;
+        let d = run_with_pkg_at_path(pkg, "scripts/generate-routes.ts", src);
+        assert!(d.is_empty(), "build script should not flag devDeps: {d:?}");
     }
 
     #[test]
