@@ -3,9 +3,10 @@
 //!
 //! Exemptions:
 //! - test files (path heuristic);
-//! - Vitest setup files (convention path `test-helpers/setup-*.{ts,tsx,js,jsx}`,
-//!   or content shape where every top-level call is a Vitest hook with a
-//!   `"vitest"` import present);
+//! - test-runner setup files matched by convention path/name (`*.setup.*`,
+//!   `setup.*`, `setup-*`, `*-setup`, `globalSetup`, or anything under
+//!   `test-helpers/`), or by content shape where every top-level call is a
+//!   Vitest hook with a `"vitest"` import present;
 //! - framework entry points reported by `is_framework_entry_point`;
 //! - TanStack Start entry files (`app/{client,router,server}.{ts,tsx}` or
 //!   `src/app/…`) when the `tanstack-router` framework is detected;
@@ -31,15 +32,32 @@ fn is_test_file(path: &std::path::Path) -> bool {
         .any(|m| s.contains(m))
 }
 
-fn is_vitest_setup_path(path: &std::path::Path) -> bool {
+/// Test-runner setup files (Vitest `setupFiles`/`globalSetup`, Jest
+/// `setupFilesAfterEnv`, …) run their top-level side effects *by contract* —
+/// the runner imports them precisely to mutate `process.env`, provision a
+/// database, or install matchers. They are never tree-shaken. Matched by
+/// convention path/name so a regular module that merely has "setup" inside a
+/// longer identifier (e.g. `setupRouter.ts`) is still flagged.
+fn is_test_setup_path(path: &std::path::Path) -> bool {
     let s = path.to_string_lossy().replace('\\', "/");
-    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-    if !(name.starts_with("setup-") || name == "setup.ts" || name == "setup.tsx"
-        || name == "setup.js" || name == "setup.jsx")
-    {
-        return false;
+    if s.contains("/test-helpers/") || s.starts_with("test-helpers/") {
+        return true;
     }
-    s.contains("/test-helpers/") || s.starts_with("test-helpers/")
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    // `*.setup.*` — vitest.setup.ts, jest.setup.ts, app.setup.ts, …
+    if name.contains(".setup.") {
+        return true;
+    }
+    let stem = name.split('.').next().unwrap_or("");
+    stem == "setup"
+        || stem.starts_with("setup-")
+        || stem.ends_with("-setup")
+        || stem == "globalsetup"
+        || stem == "global-setup"
 }
 
 const VITEST_HOOK_IDENTS: &[&str] =
@@ -203,7 +221,7 @@ impl OxcCheck for Check {
 
         let program = semantic.nodes().program();
 
-        if is_vitest_setup_path(ctx.path) || shape_is_vitest_setup(program) {
+        if is_test_setup_path(ctx.path) || shape_is_vitest_setup(program) {
             return Vec::new();
         }
 
@@ -303,6 +321,33 @@ mod tests {
             diags.is_empty(),
             "vitest setup file by convention path should be exempt, got {diags:?}"
         );
+    }
+
+    // Regression for #288: a runner setup file's top-level side effect IS its
+    // contract — the runner imports it to run exactly those effects.
+    #[test]
+    fn allows_vitest_setup_file_at_root() {
+        let diags = run_oxc_ts_with_path("ensureWorkerDatabase();", &Check, "vitest.setup.ts");
+        assert!(diags.is_empty(), "vitest.setup.ts should be exempt, got {diags:?}");
+    }
+
+    #[test]
+    fn allows_jest_setup_file() {
+        let diags = run_oxc_ts_with_path("installMatchers();", &Check, "jest.setup.ts");
+        assert!(diags.is_empty(), "jest.setup.ts should be exempt, got {diags:?}");
+    }
+
+    #[test]
+    fn allows_bare_setup_file() {
+        let diags = run_oxc_ts_with_path("provisionDb();", &Check, "test/setup.ts");
+        assert!(diags.is_empty(), "setup.ts should be exempt, got {diags:?}");
+    }
+
+    #[test]
+    fn still_flags_regular_module_with_setup_in_name() {
+        // `setupRouter.ts` is an ordinary module, not a runner setup file.
+        let diags = run_oxc_ts_with_path("buildRouter();", &Check, "src/setupRouter.ts");
+        assert_eq!(diags.len(), 1, "setupRouter.ts must still be flagged, got {diags:?}");
     }
 
     #[test]
