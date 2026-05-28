@@ -24,6 +24,7 @@ use anyhow::{Context, Result};
 use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::io::Read;
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -240,6 +241,7 @@ pub fn lint_files_with_project(
     }
 
     diagnostics.retain(|d| !is_self_reference(d));
+    dedup_mutation_family(&mut diagnostics);
 
     Ok(diagnostics)
 }
@@ -512,6 +514,46 @@ fn lint_one_file_with_dispatch(
     Ok(diagnostics)
 }
 
+/// Mutation-family rules that all flag the same `.sort()` / `.push()` /
+/// `.reverse()` site from a different angle. Most-specific first; at a given
+/// (path, line, column) only the lowest-index member survives. See #290.
+const MUTATION_FAMILY_PRIORITY: &[&str] = &[
+    "no-array-sort-mutation",
+    "no-mutating-methods",
+    "no-mutation",
+];
+
+/// Collapse mutation-family duplicates at the same location to the most
+/// specific diagnostic. Non-family diagnostics are untouched.
+fn dedup_mutation_family(diagnostics: &mut Vec<Diagnostic>) {
+    fn priority(rule_id: &str) -> Option<usize> {
+        MUTATION_FAMILY_PRIORITY
+            .iter()
+            .position(|id| *id == rule_id)
+    }
+    let mut best: FxHashMap<(Arc<Path>, usize, usize), usize> = FxHashMap::default();
+    for (idx, d) in diagnostics.iter().enumerate() {
+        let Some(prio) = priority(&d.rule_id) else {
+            continue;
+        };
+        let key = (Arc::clone(&d.path), d.line, d.column);
+        let cur_prio = best
+            .get(&key)
+            .map(|&cur| priority(&diagnostics[cur].rule_id).unwrap_or(usize::MAX));
+        if cur_prio.is_none_or(|cur| prio < cur) {
+            best.insert(key, idx);
+        }
+    }
+    let kept: FxHashSet<usize> = best.values().copied().collect();
+    let mut idx = 0usize;
+    diagnostics.retain(|d| {
+        let in_family = priority(&d.rule_id).is_some();
+        let keep = !in_family || kept.contains(&idx);
+        idx += 1;
+        keep
+    });
+}
+
 /// True if the diagnostic's rule fires on its OWN source directory,
 /// i.e. `rule_id = "banned-comment-words"` firing on a path containing
 /// `src/rules/banned_comment_words/`.
@@ -526,11 +568,66 @@ fn is_self_reference(d: &Diagnostic) -> bool {
 #[cfg(test)]
 mod tests {
     use std::path::Path;
+    use std::sync::Arc;
 
     use crate::config::default_static_config;
-    use crate::engine::lint_in_memory;
+    use crate::diagnostic::{Diagnostic, Severity};
+    use crate::engine::{dedup_mutation_family, lint_in_memory};
     use crate::files::Language;
     use crate::project::ProjectCtx;
+
+    fn mk(rule_id: &'static str, line: usize, col: usize) -> Diagnostic {
+        Diagnostic {
+            path: Arc::from(Path::new("src/foo.ts")),
+            line,
+            column: col,
+            rule_id: rule_id.into(),
+            message: rule_id.into(),
+            severity: Severity::Warning,
+            span: None,
+        }
+    }
+
+    #[test]
+    fn dedup_mutation_family_keeps_most_specific() {
+        let mut diags = vec![
+            mk("no-mutation", 30, 18),
+            mk("no-mutating-methods", 30, 18),
+            mk("no-array-sort-mutation", 30, 18),
+        ];
+        dedup_mutation_family(&mut diags);
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].rule_id, "no-array-sort-mutation");
+    }
+
+    #[test]
+    fn dedup_mutation_family_collapses_push_pair() {
+        // no-array-sort-mutation doesn't fire on .push() — pair of
+        // no-mutating-methods + no-mutation collapses to the more specific.
+        let mut diags = vec![
+            mk("no-mutation", 30, 3),
+            mk("no-mutating-methods", 30, 3),
+        ];
+        dedup_mutation_family(&mut diags);
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].rule_id, "no-mutating-methods");
+    }
+
+    #[test]
+    fn dedup_mutation_family_leaves_unrelated_rules_alone() {
+        let mut diags = vec![
+            mk("no-mutation", 30, 18),
+            mk("no-array-sort-mutation", 30, 18),
+            mk("explicit-length-check", 30, 18), // unrelated, same loc
+            mk("no-mutation", 31, 18),           // different line — stays
+        ];
+        dedup_mutation_family(&mut diags);
+        let ids: Vec<&str> = diags.iter().map(|d| d.rule_id.as_ref()).collect();
+        assert_eq!(
+            ids,
+            vec!["no-array-sort-mutation", "explicit-length-check", "no-mutation"]
+        );
+    }
 
     #[test]
     fn skips_ui_a11y_tailwind_fixture_rules_in_test_files() {

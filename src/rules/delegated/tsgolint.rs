@@ -445,12 +445,10 @@ pub fn register_all() -> Vec<RuleDef> {
         // ══════════════════════════════════════════════════════════════════
         // STYLE — CONSISTENCY
         // ══════════════════════════════════════════════════════════════════
-        entry(
-            "array-type",
-            "array-type",
-            "Use `T[]` syntax for array types consistently.",
-            "Replace `Array<T>` with `T[]`.",
-        ),
+        // `array-type` is a syntactic check (no type info needed) and is
+        // already provided as `typescript/array-type` via the oxlint path in
+        // delegated/ts.rs. Registering it again here emitted the same
+        // diagnostic twice at the same location — see #289.
         entry(
             "consistent-generic-constructors",
             "consistent-generic-constructors",
