@@ -633,7 +633,6 @@ fn handler() {
  * @throws {Erreur} si échec — 💡.
  */
 export function* slugí(x: string): string {
-  // comply-ignore: api-no-status-in-body — fixture é 💡 العربية
   const obj = {
     type: "notFound",
     // problème é — 💡 日本語
