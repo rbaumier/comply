@@ -1764,7 +1764,6 @@ pub use registry::build_rust_only_rule;
 
 pub mod a11y_button_without_accessible_name;
 pub mod a11y_dialog_missing_aria_labelledby;
-pub mod api_no_status_in_body;
 pub mod api_no_unbounded_input_field;
 pub mod api_response_envelope_consistency;
 pub mod drizzle_decimal_for_money;
@@ -3722,7 +3721,6 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         // --- batch-2 new rules ---
         a11y_button_without_accessible_name::register(),
         a11y_dialog_missing_aria_labelledby::register(),
-        api_no_status_in_body::register(),
         api_no_unbounded_input_field::register(),
         api_response_envelope_consistency::register(),
         drizzle_decimal_for_money::register(),
