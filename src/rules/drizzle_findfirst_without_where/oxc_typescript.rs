@@ -88,3 +88,47 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(src: &str) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(src, &Check)
+    }
+
+    #[test]
+    fn flags_findfirst_no_where_inline() {
+        assert_eq!(
+            run("const u = await db.query.users.findFirst({ columns: { id: true } });").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn allows_findfirst_with_where_value() {
+        assert!(
+            run("const u = await db.query.users.findFirst({ where: eq(users.id, id) });").is_empty()
+        );
+    }
+
+    // Regression for rbaumier/comply#81 — shorthand `where` must be recognised
+    // by the OXC backend, not just the tree-sitter backend.
+    #[test]
+    fn allows_findfirst_with_shorthand_where() {
+        assert!(
+            run("const u = await db.query.users.findFirst({ where, with: { posts: true } });")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_findfirst_with_spread() {
+        assert!(run("const u = await db.query.users.findFirst({ ...opts });").is_empty());
+    }
+
+    #[test]
+    fn ignores_non_drizzle_findfirst() {
+        assert!(run("arr.findFirst({ where: eq() });").is_empty());
+    }
+}
