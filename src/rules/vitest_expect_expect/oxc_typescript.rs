@@ -131,6 +131,12 @@ impl OxcCheck for Check {
         if has_assertion_prefixed_call(body_text) {
             return;
         }
+        // `@ts-expect-error` is TypeScript's compile-time assertion: the
+        // compiler itself fails the build if the expected type error is absent.
+        // Tests that rely solely on this directive have a valid assertion.
+        if body_text.contains("@ts-expect-error") {
+            return;
+        }
         // The test delegates to a caller-supplied callback (`it(name, () =>
         // fn())` inside a wrapper whose `fn` param carries the assertions).
         if crate::rules::test_assertion_helpers::delegates_to_outer_param(node, semantic) {
@@ -252,5 +258,53 @@ mod tests {
     fn allows_assert_type_with_object_type_param() {
         let src = r#"it("ok", () => { assertType<{ id: number; name: string }>(getValue()); });"#;
         assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // Regression for #358 — tests that verify TypeScript type errors via
+    // `@ts-expect-error` have no runtime assertions but are still valid tests.
+    // The TypeScript compiler itself enforces the expected error.
+    #[test]
+    fn allows_test_with_ts_expect_error_only() {
+        let src = r#"
+            it("rejects invalid defaultSort", () => {
+                createListQuerySchema({
+                    sortColumns: ["id"],
+                    // @ts-expect-error — name:asc is not a valid sort column.
+                    defaultSort: "name:asc",
+                });
+            });
+        "#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn allows_test_with_multiple_ts_expect_errors() {
+        let src = r#"
+            it("rejects reserved filter keys", () => {
+                createListQuerySchema({
+                    filters: {
+                        // @ts-expect-error — sort is reserved.
+                        sort: z.string(),
+                    },
+                });
+                createListQuerySchema({
+                    filters: {
+                        // @ts-expect-error — page is reserved.
+                        page: z.string(),
+                    },
+                });
+            });
+        "#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn still_flags_test_with_no_assertion_and_no_ts_expect_error() {
+        let src = r#"
+            it("no assertion here", () => {
+                createListQuerySchema({ sortColumns: ["id"], defaultSort: "id:asc" });
+            });
+        "#;
+        assert_eq!(run(src).len(), 1);
     }
 }
