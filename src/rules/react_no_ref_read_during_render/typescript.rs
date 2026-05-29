@@ -44,6 +44,24 @@ fn collect_ref_bindings(body: tree_sitter::Node, source: &[u8]) -> HashSet<Strin
     refs
 }
 
+/// Returns true if `node` is the direct LHS of an assignment or augmented
+/// assignment (`=`, `+=`, `??=`, etc.), so that writes to `ref.current` during
+/// render (the latest-ref pattern) are not flagged.
+fn is_assignment_lhs(node: tree_sitter::Node) -> bool {
+    let Some(parent) = node.parent() else {
+        return false;
+    };
+    if matches!(
+        parent.kind(),
+        "assignment_expression" | "augmented_assignment_expression"
+    ) {
+        if let Some(left) = parent.child_by_field_name("left") {
+            return left.id() == node.id();
+        }
+    }
+    false
+}
+
 fn walk_for_current_reads(
     body: tree_sitter::Node,
     source: &[u8],
@@ -67,7 +85,7 @@ fn walk_for_current_reads(
             if let (Some(prop), Some(obj)) = (prop, obj) {
                 if prop.utf8_text(source).unwrap_or("") == "current" && obj.kind() == "identifier" {
                     if let Ok(name) = obj.utf8_text(source) {
-                        if refs.contains(name) {
+                        if refs.contains(name) && !is_assignment_lhs(node) {
                             let pos = node.start_position();
                             out.push((pos.row + 1, pos.column + 1, name.to_string()));
                         }
@@ -159,6 +177,31 @@ mod tests {
     #[test]
     fn ignores_non_component_function() {
         let src = "function helper() { const r = useRef(0); return r.current; }";
+        assert!(run(src).is_empty());
+    }
+
+    // Regression for issue #374 — write during render (latest-ref pattern) must
+    // not be flagged.
+    #[test]
+    fn allows_write_during_render() {
+        let src = "function MyComponent({ onChange }) { \
+                   const onChangeRef = useRef(onChange); \
+                   onChangeRef.current = onChange; \
+                   return null; \
+                   }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_latest_ref_write_with_usecallback_read() {
+        let src = "function MyComponent({ value, onChange }) { \
+                   const latestOnChange = useRef(onChange); \
+                   latestOnChange.current = onChange; \
+                   const handleClick = useCallback(() => { \
+                     latestOnChange.current?.(value); \
+                   }, [value]); \
+                   return null; \
+                   }";
         assert!(run(src).is_empty());
     }
 }
