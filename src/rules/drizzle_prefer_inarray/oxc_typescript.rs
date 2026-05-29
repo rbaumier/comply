@@ -34,6 +34,14 @@ impl OxcCheck for Check {
         if !has_in {
             return;
         }
+        // PL/pgSQL DO blocks use dollar-quoting (`DO $$` or `DO $tag$`).
+        // inArray() cannot be used inside them, so skip.
+        let is_do_block = tagged.quasi.quasis.iter().any(|q| {
+            q.value.raw.to_ascii_uppercase().contains("DO $")
+        });
+        if is_do_block {
+            return;
+        }
         let (line, column) = byte_offset_to_line_col(ctx.source, tagged.span.start as usize);
         diagnostics.push(Diagnostic {
             path: Arc::clone(&ctx.path_arc),
