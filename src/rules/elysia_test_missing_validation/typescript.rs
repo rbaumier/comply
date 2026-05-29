@@ -30,6 +30,11 @@ crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
         return;
     }
 
+    // Static-analysis sweep tests inspect app.routes / app.stack — not HTTP responses.
+    if ctx.source.contains("app.routes") || ctx.source.contains("app.stack") {
+        return;
+    }
+
     if ctx.source.contains("400") || ctx.source.contains("422") {
         return;
     }
@@ -82,6 +87,21 @@ mod tests {
         // Regression for #105: filesystem-sweep tests over handler source files
         // mention `body:` in strings/comments but never make Elysia requests.
         let src = "describe('no inline z.object in Elysia .body() / .response()', () => {\n  it('every handler wires the canonical schema', async () => {\n    const offenders = await findAllOffenders();\n    expect(offenders).toEqual([]);\n  });\n});";
+        assert!(run_on_test(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_on_app_routes_sweep() {
+        // Regression for #367: tests iterating app.routes to verify schema presence
+        // are static-analysis sweeps, not HTTP request tests.
+        let src = "import { app } from '../app';\nimport { Elysia, t } from 'elysia';\nconst _app = new Elysia();\nit('all routes have validation schemas', () => {\n  const routes = app.routes;\n  for (const route of routes) {\n    expect(route.schema).toBeDefined();\n  }\n});\n// body: t.Object({ a: t.String() })";
+        assert!(run_on_test(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_on_app_stack_sweep() {
+        // Regression for #367: tests iterating app.stack also count as static-analysis sweeps.
+        let src = "import { app } from '../app';\nimport { Elysia, t } from 'elysia';\nconst _app = new Elysia();\nit('all handlers have body validation', () => {\n  const stack = app.stack;\n  for (const entry of stack) {\n    expect(entry.hooks.body).toBeDefined();\n  }\n});\n// body: t.Object({ a: t.String() })";
         assert!(run_on_test(src).is_empty());
     }
 }
