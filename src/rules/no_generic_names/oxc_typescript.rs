@@ -191,6 +191,18 @@ fn ts_type_is_descriptive(ty: &TSType) -> bool {
             if matches!(name, Some("Result")) {
                 return true;
             }
+            // TypeScript generic type parameter convention: single capital
+            // letter (T, R, E, K, V) or T followed by uppercase (TData,
+            // TResult, TVariables). These carry type information via the
+            // caller's generic instantiation.
+            if let Some(n) = name {
+                let b = n.as_bytes();
+                if (b.len() == 1 && b[0].is_ascii_uppercase())
+                    || (b.len() >= 2 && b[0] == b'T' && b[1].is_ascii_uppercase())
+                {
+                    return true;
+                }
+            }
             // `Promise<Result<...>>` / `Readonly<Foo[]>` / `Array<T>` —
             // recurse into the type argument.
             if matches!(name, Some("Promise") | Some("Readonly") | Some("Array") | Some("ReadonlyArray")) {
@@ -264,6 +276,34 @@ fn is_iterator_callback_param<'a>(
         cur = next;
     }
     false
+}
+
+/// True when the identifier is a function parameter inside an arrow function
+/// or function expression that is used as an object property value.
+/// Covers TanStack Query callbacks like `useMutation({ onSuccess: (data) => {} })`
+/// where the library's own API prescribes the parameter name.
+fn is_in_callback_property<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    let nodes = semantic.nodes();
+    let mut func_node_id = None;
+    for (kind, nid) in nodes.ancestor_kinds(node.id()).zip(nodes.ancestor_ids(node.id())) {
+        match kind {
+            AstKind::ArrowFunctionExpression(_) | AstKind::Function(_) => {
+                func_node_id = Some(nid);
+                break;
+            }
+            AstKind::FormalParameter(_) | AstKind::FormalParameters(_) => continue,
+            _ => break,
+        }
+    }
+    let Some(fid) = func_node_id else { return false };
+    let parent_id = nodes.parent_id(fid);
+    if parent_id == fid {
+        return false;
+    }
+    matches!(nodes.kind(parent_id), AstKind::ObjectProperty(_))
 }
 
 /// True when the identifier is a property key in an object literal.
@@ -409,6 +449,17 @@ impl OxcCheck for Check {
             }) {
                 return;
             }
+            // A descriptive type annotation (e.g. `data: TData`) carries
+            // the domain information the identifier name would otherwise need.
+            if type_annotation_is_descriptive(node, semantic) {
+                return;
+            }
+            // The function is a property value in an object literal
+            // (e.g. TanStack Query's `onSuccess: (data) => {}`). The
+            // library's own API prescribes `data` as the parameter name.
+            if is_in_callback_property(node, semantic) {
+                return;
+            }
             let (line, column) = byte_offset_to_line_col(ctx.source, span.start as usize);
             diagnostics.push(Diagnostic {
                 path: Arc::clone(&ctx.path_arc),
@@ -536,5 +587,39 @@ mod tests {
         // canonical UI primitives.
         let src = r#"const dataSource = 1; const DataObject = {}; const DataValue = 2;"#;
         assert_eq!(run(src).len(), 3);
+    }
+
+    #[test]
+    fn no_fp_data_param_typed_with_generic_type_param() {
+        // Regression for #337 — TanStack Query type aliases annotate the
+        // `data` parameter with a generic type parameter like `TData`.
+        let src = r#"
+            type InvalidateOption<TData, TVariables> =
+              | ((data: TData, variables: TVariables) => string[])
+              | null;
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_data_param_in_tanstack_mutation_callback() {
+        // Regression for #337 — TanStack Query's onSuccess callback has
+        // `data` as its first parameter per the library's own type signature.
+        let src = r#"
+            useMutation({
+                onSuccess: (data, variables) => {
+                    console.log(data);
+                },
+            });
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_data_param_untyped_in_function_declaration() {
+        // `data` without a type annotation in a named function declaration
+        // is still vague — no library convention prescribes it there.
+        let src = r#"function myFunc(data) { return data; }"#;
+        assert_eq!(run(src).len(), 1);
     }
 }
