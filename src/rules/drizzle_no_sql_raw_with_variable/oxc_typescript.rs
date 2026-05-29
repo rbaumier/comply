@@ -3,10 +3,24 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::Expression;
+use oxc_ast::ast::{Argument, Expression};
 use std::sync::Arc;
 
 pub struct Check;
+
+/// Returns true when every template expression is wrapped in SQL double-quote
+/// identifier syntax — `"${expr}"`. Such calls are safe DDL-identifier
+/// patterns; bare `${expr}` interpolations remain flagged.
+fn all_expressions_double_quoted(tpl: &oxc_ast::ast::TemplateLiteral) -> bool {
+    for (i, _) in tpl.expressions.iter().enumerate() {
+        let before = tpl.quasis[i].value.raw.as_str();
+        let after = tpl.quasis[i + 1].value.raw.as_str();
+        if !before.ends_with('"') || !after.starts_with('"') {
+            return false;
+        }
+    }
+    true
+}
 
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
@@ -34,9 +48,16 @@ impl OxcCheck for Check {
         }
 
         let Some(first_arg) = call.arguments.first() else { return };
-        // If the first argument is a string literal, it's safe.
-        if matches!(first_arg, oxc_ast::ast::Argument::StringLiteral(_)) {
+        // String literal → safe.
+        if matches!(first_arg, Argument::StringLiteral(_)) {
             return;
+        }
+        // Template literal → safe when no expressions (static string) or all
+        // expressions are wrapped in SQL double-quote identifier syntax.
+        if let Argument::TemplateLiteral(tpl) = first_arg {
+            if all_expressions_double_quoted(tpl) {
+                return;
+            }
         }
 
         let (line, column) = byte_offset_to_line_col(ctx.source, call.span.start as usize);
@@ -49,5 +70,54 @@ impl OxcCheck for Check {
             severity: Severity::Error,
             span: None,
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+    #[test]
+    fn flags_variable_argument() {
+        assert_eq!(run("sql.raw(userInput)").len(), 1);
+    }
+
+    #[test]
+    fn flags_unquoted_template_substitution() {
+        assert_eq!(run("sql.raw(`SELECT * FROM ${tableName}`)").len(), 1);
+    }
+
+    #[test]
+    fn flags_mixed_quoted_and_unquoted() {
+        assert_eq!(
+            run(r#"sql.raw(`"${id}" WHERE col = ${value}`)"#).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn allows_string_literal() {
+        assert!(run(r#"sql.raw("SELECT 1")"#).is_empty());
+    }
+
+    #[test]
+    fn allows_static_template_literal() {
+        assert!(run("sql.raw(`SELECT 1`)").is_empty());
+    }
+
+    /// Regression for issue #344: sql.raw with a DDL identifier from pg_class
+    /// must not be flagged when the identifier is properly double-quoted.
+    #[test]
+    fn allows_double_quoted_identifier_in_template() {
+        assert!(run(r#"sql.raw(`DROP INDEX IF EXISTS "${row.name}"`)"#).is_empty());
+    }
+
+    #[test]
+    fn allows_multiple_double_quoted_identifiers() {
+        assert!(run(r#"sql.raw(`ALTER TABLE "${schema}"."${table}" ADD COLUMN id int`)"#).is_empty());
     }
 }
