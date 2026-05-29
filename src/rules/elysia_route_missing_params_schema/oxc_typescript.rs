@@ -142,4 +142,26 @@ http.get("/users/:id", ({ params }) => params);
             "http.get with non-msw binding must still be flagged"
         );
     }
+
+    /// Regression for issue #341: MSW handlers with `:param` paths inside Vitest .test.tsx
+    /// component tests must not be flagged.
+    #[test]
+    fn ignores_msw_handler_in_tsx_test_file() {
+        let src = r#"
+import { http, HttpResponse } from "msw";
+import { mswServer } from "@/app/test-helpers/msw-server";
+
+it("fetches data", () => {
+  mswServer.use(
+    http.get("*/api/v1/organizations/:organizationId", () =>
+      HttpResponse.json({ id: "1", name: "Foo" }),
+    ),
+  );
+});
+"#;
+        assert!(
+            crate::rules::test_helpers::run_oxc_tsx_with_framework(src, &Check, "elysia").is_empty(),
+            "issue #341: MSW http.get with :param in .test.tsx must not be flagged by elysia-route-missing-params-schema"
+        );
+    }
 }

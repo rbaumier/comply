@@ -162,4 +162,26 @@ http.get("/", handleFn);
             "http.get with non-msw binding must still be flagged"
         );
     }
+
+    /// Regression for issue #341: MSW handlers inside Vitest component tests (.test.tsx) must
+    /// not be flagged even when the URL contains `:param` placeholders.
+    #[test]
+    fn ignores_msw_handler_in_tsx_test_file() {
+        let src = r#"
+import { http, HttpResponse } from "msw";
+import { mswServer } from "@/app/test-helpers/msw-server";
+
+it("fetches data", () => {
+  mswServer.use(
+    http.get("*/api/v1/organizations/:organizationId", () =>
+      HttpResponse.json({ id: "1", name: "Foo" }),
+    ),
+  );
+});
+"#;
+        assert!(
+            crate::rules::test_helpers::run_oxc_tsx_with_framework(src, &Check, "elysia").is_empty(),
+            "issue #341: MSW http.get in .test.tsx must not be flagged by elysia-inline-handlers"
+        );
+    }
 }
