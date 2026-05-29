@@ -88,6 +88,34 @@ impl OxcCheck for Check {
                     }
                 }
 
+        // Check for <label htmlFor="<id>"> or <label for="<id>"> anywhere in the file
+        let maybe_id = opening.attributes.iter().find_map(|attr_item| {
+            let JSXAttributeItem::Attribute(attr) = attr_item else { return None; };
+            let JSXAttributeName::Identifier(name_ident) = &attr.name else { return None; };
+            if name_ident.name.as_str() != "id" { return None; }
+            let Some(JSXAttributeValue::StringLiteral(lit)) = &attr.value else { return None; };
+            Some(lit.value.clone())
+        });
+
+        if let Some(id) = maybe_id {
+            let has_associated_label = semantic.nodes().iter().any(|n| {
+                let AstKind::JSXOpeningElement(label_opening) = n.kind() else { return false; };
+                let JSXElementName::Identifier(label_name) = &label_opening.name else { return false; };
+                if label_name.name.as_str() != "label" { return false; }
+                label_opening.attributes.iter().any(|attr_item| {
+                    let JSXAttributeItem::Attribute(attr) = attr_item else { return false; };
+                    let JSXAttributeName::Identifier(name_ident) = &attr.name else { return false; };
+                    let attr_name = name_ident.name.as_str();
+                    if attr_name != "htmlFor" && attr_name != "for" { return false; }
+                    let Some(JSXAttributeValue::StringLiteral(lit)) = &attr.value else { return false; };
+                    lit.value.as_str() == id.as_str()
+                })
+            });
+            if has_associated_label {
+                return;
+            }
+        }
+
         let (line, column) =
             byte_offset_to_line_col(ctx.source, opening.span.start as usize);
         diagnostics.push(Diagnostic {
@@ -99,5 +127,60 @@ impl OxcCheck for Check {
             severity: Severity::Warning,
             span: None,
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(source, &Check)
+    }
+
+    #[test]
+    fn flags_select_without_label() {
+        assert_eq!(run_on(r#"const x = <select />;"#).len(), 1);
+    }
+
+    #[test]
+    fn allows_select_with_aria_label() {
+        assert!(run_on(r#"const x = <select aria-label="Fruit" />;"#).is_empty());
+    }
+
+    #[test]
+    fn allows_hidden_input() {
+        assert!(run_on(r#"const x = <input type="hidden" />;"#).is_empty());
+    }
+
+    // Regression for #330: select inside conditional render, label outside
+    #[test]
+    fn allows_select_with_associated_label_htmlfor_outside_conditional() {
+        assert!(run_on(r#"
+            const C = ({ isLoading }) => (
+                <div>
+                    <label htmlFor="add-centrale-id">Centrale d'achat</label>
+                    {isLoading ? (
+                        <span>Loading</span>
+                    ) : (
+                        <select id="add-centrale-id">
+                            <option value="a">A</option>
+                        </select>
+                    )}
+                </div>
+            );
+        "#).is_empty());
+    }
+
+    #[test]
+    fn still_flags_select_with_unrelated_label() {
+        assert_eq!(run_on(r#"
+            const C = () => (
+                <div>
+                    <label htmlFor="other-id">Other</label>
+                    <select id="my-select" />
+                </div>
+            );
+        "#).len(), 1);
     }
 }
