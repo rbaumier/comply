@@ -34,6 +34,11 @@ crate::ast_check! { on ["template_string"] => |node, source, ctx, diagnostics|
     if !upper.contains(" IN (") && !upper.contains("\nIN (") && !upper.contains("\tIN (") {
         return;
     }
+    // PL/pgSQL DO blocks use dollar-quoting (`DO $$` or `DO $tag$`).
+    // inArray() cannot be used inside them, so skip.
+    if upper.contains("DO $") {
+        return;
+    }
     diagnostics.push(Diagnostic::at_node(
         ctx.path,
         &node,
@@ -66,6 +71,24 @@ mod tests {
     #[test]
     fn allows_sql_template_without_in() {
         let src = "const q = sql`SELECT * FROM u WHERE id = ${id}`";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_plpgsql_do_block_with_in() {
+        // PL/pgSQL DO blocks cannot use inArray() — false positive from #345.
+        let src = r#"database.execute(sql`
+DO $$
+DECLARE idx_name TEXT;
+BEGIN
+  FOR idx_name IN
+    SELECT cls.relname FROM pg_class cls
+    WHERE cls.relname NOT IN ('idx_foo', 'idx_bar')
+  LOOP
+    EXECUTE format('DROP INDEX IF EXISTS %I', idx_name);
+  END LOOP;
+END;
+$$`)"#;
         assert!(run(src).is_empty());
     }
 }
