@@ -22,7 +22,9 @@ crate::ast_check! { on ["pair"] prefilter = ["z.coerce"] => |node, source, ctx, 
     if !is_financial_key(key_text) { return; }
 
     let Ok(value_text) = value_node.utf8_text(source) else { return };
-    if !value_text.contains("z.coerce.") { return; }
+    // Only flag numeric coercions — date/string/boolean coercions on a
+    // field whose name contains a financial keyword are not financial risks.
+    if !value_text.contains("z.coerce.number") && !value_text.contains("z.coerce.bigint") { return; }
 
     let pos = key_node.start_position();
     diagnostics.push(Diagnostic {
@@ -75,5 +77,13 @@ mod tests {
     #[test]
     fn ignores_non_financial_field() {
         assert!(run("const S = z.object({ count: z.coerce.number() });").is_empty());
+    }
+
+    #[test]
+    fn no_fp_on_price_updated_at_with_coerce_date() {
+        // Regression for #331: priceUpdatedAt is a timestamp, not a financial amount.
+        assert!(
+            run("const S = z.object({ priceUpdatedAt: z.coerce.date().nullable() });").is_empty()
+        );
     }
 }
