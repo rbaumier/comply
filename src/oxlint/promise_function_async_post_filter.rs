@@ -1,13 +1,21 @@
-//! Post-filter for `promise-function-async` false positives on functions whose
-//! explicit return type is not a Promise.
+//! Post-filter for `promise-function-async` false positives.
 //!
+//! Two categories of false positives are suppressed:
+//!
+//! **1. Explicit non-Promise return type** (`Effect.Effect<…>`, etc.)
 //! `promise-function-async` mandates the `async` keyword on Promise-returning
 //! functions. In an effect-ts codebase, functions return `Effect.Effect<…>`,
 //! which is *not* a Promise — making them `async` would wrap the Effect in a
 //! Promise and break the program. When a function carries an explicit return
 //! type annotation that does not mention `Promise`/`PromiseLike`, the
-//! diagnostic is dropped. Functions with no annotation (the type-aware checker
-//! knows best) and genuine `Promise<…>` returns are left untouched.
+//! diagnostic is dropped.
+//!
+//! **2. Concise pass-through arrow callbacks** (`(api) => api.get()`)
+//! Arrow functions with no explicit return type annotation and a concise body
+//! (no `{`) forward an already-pending Promise to a caller that handles it.
+//! Adding `async` wraps the Promise in an extra microtask
+//! (`async () => p` ≡ `Promise.resolve(p)`) with no semantic benefit.
+//! Single-`return`-statement block arrows with no `await` are also exempt.
 
 use crate::diagnostic::Diagnostic;
 use rustc_hash::FxHashMap;
@@ -26,6 +34,7 @@ pub fn apply(diagnostics: &mut Vec<Diagnostic>) {
             return true;
         };
         !returns_explicit_non_promise(src, d.line, d.column)
+            && !is_passthrough_arrow(src, d.line, d.column)
     });
 }
 
@@ -109,6 +118,148 @@ fn return_type_annotation(after: &str) -> Option<String> {
         j += 1;
     }
     Some(after[start..j].trim().to_string())
+}
+
+/// True when the arrow function at the diagnostic location is a concise
+/// pass-through with no explicit return type annotation. Two shapes qualify:
+/// - Concise body: `(params) => expr` — no `await` is possible.
+/// - Single-return block: `(params) => { return expr; }` with no `await`.
+///
+/// In both cases adding `async` only wraps the already-pending Promise in
+/// `Promise.resolve(p)`, which is semantically equivalent.
+fn is_passthrough_arrow(src: &str, line: usize, col: usize) -> bool {
+    let Some(offset) = byte_offset(src, line, col) else {
+        return false;
+    };
+    if !src.is_char_boundary(offset) {
+        return false;
+    }
+    let after = &src[offset..];
+    let bytes = after.as_bytes();
+
+    let Some(open) = after.find('(') else {
+        return false;
+    };
+
+    // Balance the parameter-list parens to find the closing ')'
+    let mut depth = 0i32;
+    let mut i = open;
+    let mut close = None;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'(' => depth += 1,
+            b')' => {
+                depth -= 1;
+                if depth == 0 {
+                    close = Some(i);
+                    break;
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    let Some(close) = close else {
+        return false;
+    };
+
+    let mut j = close + 1;
+    while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+        j += 1;
+    }
+
+    // Explicit return type annotation — let returns_explicit_non_promise handle it
+    if bytes.get(j) == Some(&b':') {
+        return false;
+    }
+
+    // Must be an arrow function
+    if bytes.get(j) != Some(&b'=') || bytes.get(j + 1) != Some(&b'>') {
+        return false;
+    }
+    j += 2;
+
+    while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+        j += 1;
+    }
+
+    // Concise body (no '{') — no await is syntactically possible in a non-async arrow
+    if bytes.get(j) != Some(&b'{') {
+        return true;
+    }
+
+    is_single_return_block_no_await(&after[j..])
+}
+
+/// True when the block `{ … }` contains exactly one `return` statement and no
+/// `await` keyword. Nested braces are tracked so inner objects/functions do not
+/// terminate the scan early.
+fn is_single_return_block_no_await(block: &str) -> bool {
+    let bytes = block.as_bytes();
+    if bytes.first() != Some(&b'{') {
+        return false;
+    }
+
+    let mut depth = 0i32;
+    let mut content_start = None;
+    let mut content_end = None;
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'{' => {
+                depth += 1;
+                if depth == 1 {
+                    content_start = Some(i + 1);
+                }
+            }
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    content_end = Some(i);
+                    break;
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    let (start, end) = match (content_start, content_end) {
+        (Some(s), Some(e)) => (s, e),
+        _ => return false,
+    };
+    let content = block[start..end].trim();
+
+    if content.contains("await") {
+        return false;
+    }
+
+    // Must start with `return` followed by whitespace or `;`
+    if !content.starts_with("return") {
+        return false;
+    }
+    let after_return = &content["return".len()..];
+    if !after_return.starts_with(|c: char| c.is_whitespace() || c == ';') {
+        return false;
+    }
+
+    // One semicolon at depth-0 (the trailing `;`) means single statement
+    let (mut angle, mut paren, mut bracket, mut brace) = (0i32, 0i32, 0i32, 0i32);
+    let mut semicolons = 0usize;
+    for b in after_return.bytes() {
+        match b {
+            b'<' => angle += 1,
+            b'>' if angle > 0 => angle -= 1,
+            b'(' => paren += 1,
+            b')' if paren > 0 => paren -= 1,
+            b'[' => bracket += 1,
+            b']' if bracket > 0 => bracket -= 1,
+            b'{' => brace += 1,
+            b'}' if brace > 0 => brace -= 1,
+            b';' if angle == 0 && paren == 0 && bracket == 0 && brace == 0 => semicolons += 1,
+            _ => {}
+        }
+    }
+    semicolons <= 1
 }
 
 #[cfg(test)]
@@ -220,5 +371,61 @@ mod tests {
         let mut diags = vec![fake_diag(&nonexistent, 1, 1, "promise-function-async")];
         apply(&mut diags);
         assert_eq!(diags.len(), 1);
+    }
+
+    // Regression for #342: concise callback arrow is a pass-through — no FP.
+    // Oxlint reports the diagnostic at the '(' of the arrow's parameter list
+    // (e.g. column 18 for `  return apiCall((api) => api.get());`).
+    #[test]
+    fn drops_concise_callback_arrow_passthrough() {
+        let src = "apiCall((api) => api.get())\n";
+        let path = write_temp("callback_passthrough.ts", src);
+        let (line, col) = line_col_of(src, "(api)");
+        let mut diags = vec![fake_diag(&path, line, col, "promise-function-async")];
+        apply(&mut diags);
+        assert!(diags.is_empty(), "expected drop, got: {diags:?}");
+    }
+
+    #[test]
+    fn drops_concise_callback_arrow_multiline() {
+        let src = "apiCall(\n  (api) =>\n    api.v1.products.get({ query })\n)\n";
+        let path = write_temp("callback_multiline.ts", src);
+        let (line, col) = line_col_of(src, "(api)");
+        let mut diags = vec![fake_diag(&path, line, col, "promise-function-async")];
+        apply(&mut diags);
+        assert!(diags.is_empty(), "expected drop, got: {diags:?}");
+    }
+
+    #[test]
+    fn drops_single_return_block_callback_arrow() {
+        let src = "apiCall((api) => { return api.get(); })\n";
+        let path = write_temp("block_callback.ts", src);
+        let (line, col) = line_col_of(src, "(api)");
+        let mut diags = vec![fake_diag(&path, line, col, "promise-function-async")];
+        apply(&mut diags);
+        assert!(diags.is_empty(), "expected drop, got: {diags:?}");
+    }
+
+    // The outer function wrapping an apiCall must still be flagged.
+    #[test]
+    fn keeps_outer_fn_returning_promise_indirectly() {
+        let src =
+            "function productsQueryOptions() {\n  return apiCall((api) => api.get());\n}\n";
+        let path = write_temp("outer_fn.ts", src);
+        let (line, col) = line_col_of(src, "function");
+        let mut diags = vec![fake_diag(&path, line, col, "promise-function-async")];
+        apply(&mut diags);
+        assert_eq!(diags.len(), 1, "outer block function must be kept");
+    }
+
+    // Arrow with multiple statements is not a simple pass-through — keep.
+    #[test]
+    fn keeps_multi_statement_block_arrow() {
+        let src = "apiCall((api) => { const r = api.get(); return r; })\n";
+        let path = write_temp("multi_stmt_block.ts", src);
+        let (line, col) = line_col_of(src, "(api)");
+        let mut diags = vec![fake_diag(&path, line, col, "promise-function-async")];
+        apply(&mut diags);
+        assert_eq!(diags.len(), 1, "multi-statement block arrow must be kept");
     }
 }
