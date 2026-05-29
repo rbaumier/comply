@@ -24,6 +24,26 @@ fn is_sql_raw_callee(call: tree_sitter::Node, source: &[u8]) -> bool {
     obj.utf8_text(source).unwrap_or("") == "sql" && prop.utf8_text(source).unwrap_or("") == "raw"
 }
 
+/// Returns true when every `${...}` substitution in the template string is
+/// wrapped in SQL double-quote identifier syntax — `"${expr}"`. Such calls
+/// are safe DDL-identifier patterns; bare `${expr}` interpolations remain
+/// flagged.
+fn template_literal_is_safe(node: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if child.kind() == "template_substitution" {
+            let start = child.start_byte();
+            let end = child.end_byte();
+            let char_before = start.checked_sub(1).and_then(|i| source.get(i)).copied();
+            let char_after = source.get(end).copied();
+            if char_before != Some(b'"') || char_after != Some(b'"') {
+                return false;
+            }
+        }
+    }
+    true
+}
+
 crate::ast_check! { on ["call_expression"] prefilter = ["sql.raw"] => |node, source, ctx, diagnostics|
     if !is_sql_raw_callee(node, source) {
         return;
@@ -31,7 +51,13 @@ crate::ast_check! { on ["call_expression"] prefilter = ["sql.raw"] => |node, sou
     let Some(args) = node.child_by_field_name("arguments") else { return };
     let mut cursor = args.walk();
     let Some(first) = args.named_children(&mut cursor).next() else { return };
+    // String literal → safe.
     if first.kind() == "string" {
+        return;
+    }
+    // Template literal → safe when no substitutions or all substitutions are
+    // wrapped in SQL double-quote identifier syntax.
+    if first.kind() == "template_string" && template_literal_is_safe(first, source) {
         return;
     }
     diagnostics.push(Diagnostic::at_node(
@@ -62,6 +88,11 @@ mod tests {
     }
 
     #[test]
+    fn flags_mixed_quoted_and_unquoted() {
+        assert_eq!(run(r#"sql.raw(`"${id}" WHERE col = ${value}`)"#).len(), 1);
+    }
+
+    #[test]
     fn allows_string_literal_double_quote() {
         assert!(run("sql.raw(\"SELECT 1\")").is_empty());
     }
@@ -74,5 +105,22 @@ mod tests {
     #[test]
     fn allows_tagged_template() {
         assert!(run("sql`WHERE id = ${userId}`").is_empty());
+    }
+
+    #[test]
+    fn allows_static_template_literal() {
+        assert!(run("sql.raw(`SELECT 1`)").is_empty());
+    }
+
+    /// Regression for issue #344: sql.raw with a DDL identifier from pg_class
+    /// must not be flagged when the identifier is properly double-quoted.
+    #[test]
+    fn allows_double_quoted_identifier_in_template() {
+        assert!(run(r#"sql.raw(`DROP INDEX IF EXISTS "${row.name}"`)"#).is_empty());
+    }
+
+    #[test]
+    fn allows_multiple_double_quoted_identifiers() {
+        assert!(run(r#"sql.raw(`ALTER TABLE "${schema}"."${table}" ADD COLUMN id int`)"#).is_empty());
     }
 }
