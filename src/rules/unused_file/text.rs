@@ -74,7 +74,7 @@ impl TextCheck for Check {
 fn detect_entry_points<'a>(index: &'a ImportIndex, project: &ProjectCtx) -> Vec<&'a Path> {
     index
         .indexed_paths()
-        .filter(|p| is_entry_point(p, project))
+        .filter(|p| is_entry_point(p, project) || is_test_file(p))
         .collect()
 }
 
@@ -270,6 +270,28 @@ mod tests {
         ];
         let (_dir, diags) = run_on_project(&files);
         assert!(diags.is_empty(), "src/main.ts and its imports are reachable: {diags:?}");
+    }
+
+    // Regression for #336: a test helper imported only from *.test.tsx files must
+    // not be flagged. Test files are now BFS roots, so their imports are reachable.
+    #[test]
+    fn test_helper_imported_from_test_file_is_not_flagged() {
+        let files: Vec<(&str, &str)> = vec![
+            ("index.ts", "export const x = 1;\n"),
+            (
+                "src/app/test-helpers/mount-columns-table.tsx",
+                "export const mountColumnsTable = () => {};\n",
+            ),
+            (
+                "src/app/features/laboratories/laboratories-columns.test.tsx",
+                "import { mountColumnsTable } from '../../test-helpers/mount-columns-table';\n",
+            ),
+        ];
+        let (_dir, diags) = run_on_project(&files);
+        assert!(
+            diags.is_empty(),
+            "test helper imported from a test file must not be flagged: {diags:?}"
+        );
     }
 
     // Regression for #277: CLIs/smoke tools under `scripts/` are run directly.
