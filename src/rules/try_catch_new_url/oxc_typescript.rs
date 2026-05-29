@@ -67,8 +67,9 @@ impl OxcCheck for Check {
 }
 
 /// True when the `new URL(arg)` argument is author-controlled and not raw
-/// untrusted input: a string literal, or a template literal whose every
-/// interpolation roots in an env-validated config object (`config.…` / `env.…`).
+/// untrusted input: a string literal, a template literal whose every
+/// interpolation roots in an env-validated config object (`config.…` / `env.…`),
+/// or a direct member access rooted in `config` / `env`.
 /// Those cannot fail at runtime in a way the author hasn't already controlled.
 fn arg_is_trusted(new_expr: &oxc_ast::ast::NewExpression) -> bool {
     use oxc_ast::ast::Expression;
@@ -79,6 +80,9 @@ fn arg_is_trusted(new_expr: &oxc_ast::ast::NewExpression) -> bool {
         Expression::StringLiteral(_) => true,
         Expression::TemplateLiteral(tpl) => {
             tpl.expressions.iter().all(expr_roots_in_trusted_config)
+        }
+        Expression::StaticMemberExpression(_) | Expression::ComputedMemberExpression(_) => {
+            expr_roots_in_trusted_config(arg)
         }
         _ => false,
     }
@@ -263,5 +267,21 @@ mod tests {
             }
         "#;
         assert_eq!(run_on(src).len(), 1);
+    }
+
+    // Regression for rbaumier/comply#30 (adjacent FP): `new URL(config.BASE_URL)` —
+    // direct member access on a boot-validated config object is as safe as a
+    // string literal or a template rooted in config.
+    #[test]
+    fn allows_direct_config_member_expression() {
+        assert!(run_on("const u = new URL(config.BASE_URL);").is_empty());
+        assert!(run_on("const u = new URL(config.client.VITE_API_URL);").is_empty());
+        assert!(run_on("const u = new URL(env.API_BASE_URL);").is_empty());
+    }
+
+    #[test]
+    fn still_flags_non_config_member_expression() {
+        assert_eq!(run_on("const u = new URL(process.env.USER_INPUT);").len(), 1);
+        assert_eq!(run_on("const u = new URL(req.query.target);").len(), 1);
     }
 }
