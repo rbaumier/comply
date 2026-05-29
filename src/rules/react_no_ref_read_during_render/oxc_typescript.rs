@@ -418,4 +418,20 @@ mod tests {
         let src = "function C() { const r = useRef(0); r.current = 1; return null; }";
         assert!(run(src).is_empty());
     }
+
+    // Regression for issue #374 — latest-ref pattern with useCallback: the write
+    // during render must not be flagged even when the ref is called inside a
+    // useCallback handler with optional chaining.
+    #[test]
+    fn allows_latest_ref_write_with_usecallback_read() {
+        let src = "function MyComponent({ value, onChange }) { \
+                   const latestOnChange = useRef(onChange); \
+                   latestOnChange.current = onChange; \
+                   const handleClick = useCallback(() => { \
+                     latestOnChange.current?.(value); \
+                   }, [value]); \
+                   return null; \
+                   }";
+        assert!(run(src).is_empty());
+    }
 }
