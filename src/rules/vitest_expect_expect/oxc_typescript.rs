@@ -46,16 +46,22 @@ fn has_assertion_prefixed_call(text: &str) -> bool {
                 }
                 if bytes.get(j) == Some(&b'<') {
                     // expectTypeOf<X>() / assertType<Y>() — look for `>(`
-                    // in a bounded window after the `<`, bailing at `;`
-                    // (statement end) so we don't cross unrelated code.
+                    // in a bounded window after the `<`. Track brace depth
+                    // so that `;` inside object types like `{ a: string; b: number }`
+                    // does not prematurely terminate the scan.
                     let scan_end = (j + 256).min(bytes.len());
                     let mut k = j + 1;
+                    let mut brace_depth: i32 = 0;
                     while k + 1 < scan_end {
-                        if bytes[k] == b';' {
-                            break;
-                        }
-                        if bytes[k] == b'>' && bytes[k + 1] == b'(' {
-                            return true;
+                        match bytes[k] {
+                            b'{' => brace_depth += 1,
+                            b'}' => brace_depth -= 1,
+                            // `;` only ends the statement when outside braces.
+                            b';' if brace_depth == 0 => break,
+                            b'>' if brace_depth == 0 && bytes[k + 1] == b'(' => {
+                                return true;
+                            }
+                            _ => {}
                         }
                         k += 1;
                     }
@@ -231,5 +237,20 @@ mod tests {
             it("x", () => { setup(); });
         "#;
         assert_eq!(run(src).len(), 1);
+    }
+
+    // Regression for rbaumier/comply#88 (adjacent FP): `expectTypeOf<{ a: string; b: number }>()`
+    // — object type parameters contain `;` which previously caused the generic
+    // scan to bail early, treating the call as if it had no `>(`.
+    #[test]
+    fn allows_expect_type_of_with_object_type_param() {
+        let src = r#"it("ok", () => { expectTypeOf<{ a: string; b: number }>().toEqualTypeOf<{ a: string; b: number }>(); });"#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn allows_assert_type_with_object_type_param() {
+        let src = r#"it("ok", () => { assertType<{ id: number; name: string }>(getValue()); });"#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
     }
 }
