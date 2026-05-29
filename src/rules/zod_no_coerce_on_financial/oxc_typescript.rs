@@ -50,11 +50,14 @@ impl OxcCheck for Check {
             return;
         }
 
-        // Check if value text contains `z.coerce.`
         let value_span = prop.value.span();
         let value_text =
             &ctx.source[value_span.start as usize..value_span.end as usize];
-        if !value_text.contains("z.coerce.") {
+        // Only flag numeric coercions — date/string/boolean coercions on a
+        // field whose name contains a financial keyword are not financial risks.
+        if !value_text.contains("z.coerce.number")
+            && !value_text.contains("z.coerce.bigint")
+        {
             return;
         }
 
@@ -72,5 +75,58 @@ impl OxcCheck for Check {
             severity: Severity::Warning,
             span: None,
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(src, &Check)
+    }
+
+    #[test]
+    fn flags_coerce_number_on_price() {
+        assert_eq!(
+            run("const S = z.object({ price: z.coerce.number() });").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn flags_coerce_number_on_amount() {
+        assert_eq!(
+            run("const S = z.object({ amount: z.coerce.number() });").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn no_fp_on_price_updated_at_with_coerce_date() {
+        // Regression for #331: priceUpdatedAt is a timestamp, not a financial amount.
+        assert!(
+            run("const S = z.object({ priceUpdatedAt: z.coerce.date().nullable() });").is_empty()
+        );
+    }
+
+    #[test]
+    fn no_fp_on_coerce_date_with_financial_name() {
+        assert!(
+            run("const S = z.object({ feeDate: z.coerce.date() });").is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_explicit_parse() {
+        assert!(
+            run(r#"const S = z.object({ price: z.string().regex(/^\d+$/).transform(Number) });"#)
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn ignores_non_financial_field() {
+        assert!(run("const S = z.object({ count: z.coerce.number() });").is_empty());
     }
 }
