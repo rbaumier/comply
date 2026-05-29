@@ -38,6 +38,11 @@ impl OxcCheck for Check {
             return Vec::new();
         }
 
+        // Static-analysis sweep tests inspect app.routes / app.stack — not HTTP responses.
+        if ctx.source.contains("app.routes") || ctx.source.contains("app.stack") {
+            return Vec::new();
+        }
+
         if ctx.source.contains("400") || ctx.source.contains("422") {
             return Vec::new();
         }
