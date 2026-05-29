@@ -64,6 +64,16 @@ impl OxcCheck for Check {
                 continue;
             }
 
+            // If the type argument explicitly declares a void or undefined return type,
+            // undefined is the correct return value — no configuration needed.
+            if let Some(type_args) = &call.type_arguments {
+                let ta_src =
+                    &ctx.source[type_args.span.start as usize..type_args.span.end as usize];
+                if ta_src.contains("=> void") || ta_src.contains("=> undefined") {
+                    continue;
+                }
+            }
+
             let oxc_ast::ast::BindingPattern::BindingIdentifier(binding) =
                 &declarator.id
             else {
@@ -168,5 +178,27 @@ mod tests {
     #[test]
     fn ignores_non_test_file() {
         assert!(run_non_test("const m = vi.fn();").is_empty());
+    }
+
+    // Regression for #335: vi.fn<T>() with a void return type must not be flagged.
+    #[test]
+    fn allows_void_return_type_parameter() {
+        assert!(run(
+            "const onStateChange = vi.fn<(next: DataTableState) => void>();"
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn allows_undefined_return_type_parameter() {
+        assert!(run("const cb = vi.fn<() => undefined>();").is_empty());
+    }
+
+    #[test]
+    fn flags_non_void_return_type_parameter() {
+        assert_eq!(
+            run("const fetcher = vi.fn<() => string>();").len(),
+            1
+        );
     }
 }
