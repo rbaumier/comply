@@ -93,17 +93,16 @@ fn looks_boolean(expr: &Expression) -> bool {
     }
 }
 
-/// True if `expr` is a literal that's NOT null/undefined — the `||`
-/// shape `foo || "default"` is the canonical case we want to flag.
-/// Skip when the RHS is a boolean literal (those usually intentionally
-/// short-circuit on any falsy LHS) or a numeric `0`/`1` (likely
-/// arithmetic identity).
+/// True if `expr` is a clearly typed default value — the canonical `||`
+/// shapes we want to flag: `foo || "string"`, `foo || []`, `foo || fn()`.
+/// Plain identifiers are excluded: without type information we cannot tell
+/// `boolA || boolB` from `nullable || fallback`, so requiring a strongly-
+/// typed RHS avoids false positives on boolean-OR chains.
 fn rhs_is_default_like(expr: &Expression) -> bool {
     match expr {
         Expression::StringLiteral(_) | Expression::TemplateLiteral(_) => true,
         Expression::ArrayExpression(_) | Expression::ObjectExpression(_) => true,
         Expression::NumericLiteral(n) => n.value != 0.0 && n.value != 1.0,
-        Expression::Identifier(_) => true,
         Expression::CallExpression(_) => true,
         _ => false,
     }
@@ -262,5 +261,24 @@ mod tests {
         // RHS is BooleanLiteral → not default-like, skipped early.
         let src = r#"const ok = true || false;"#;
         assert!(run(src).is_empty());
+    }
+
+    // Regression for #340: boolean || boolean should not fire even when the
+    // identifiers are not conventionally boolean-named.
+    #[test]
+    fn allows_plain_identifier_or_chain() {
+        let src = r#"
+            const a: boolean = x !== null;
+            const b: boolean = y !== null;
+            const c: boolean = z !== null;
+            const result = a || b || c;
+        "#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn allows_slug_depends_on_chain() {
+        let src = r#"const ok = slugDependsOnName || slugDependsOnYear || slugDependsOnLabId;"#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
     }
 }
