@@ -9,6 +9,33 @@ use std::sync::Arc;
 
 pub struct Check;
 
+/// Returns `true` if the source line at `byte_offset` (or the immediately
+/// preceding line) contains `// comply-ignore-reason: utility-type-constraint`.
+///
+/// This exempts single `as T` casts that work around deferred conditional
+/// types in third-party libraries (e.g. Drizzle ORM's `TableLikeHasEmptySelection`)
+/// where TypeScript cannot evaluate the conditional against a generic bound.
+fn has_utility_type_constraint_comment(source: &str, byte_offset: usize) -> bool {
+    const MARKER: &str = "// comply-ignore-reason: utility-type-constraint";
+    let safe = byte_offset.min(source.len());
+    let line_start = source[..safe].rfind('\n').map(|p| p + 1).unwrap_or(0);
+    let line_end = source[safe..]
+        .find('\n')
+        .map(|p| safe + p)
+        .unwrap_or(source.len());
+    if source[line_start..line_end].contains(MARKER) {
+        return true;
+    }
+    if line_start > 0 {
+        let prev_end = line_start - 1;
+        let prev_start = source[..prev_end].rfind('\n').map(|p| p + 1).unwrap_or(0);
+        if source[prev_start..prev_end].contains(MARKER) {
+            return true;
+        }
+    }
+    false
+}
+
 fn peel_parens<'a>(expr: &'a Expression<'a>) -> &'a Expression<'a> {
     let mut current = expr;
     while let Expression::ParenthesizedExpression(p) = current {
@@ -99,6 +126,13 @@ impl OxcCheck for Check {
                     _ => break,
                 }
             }
+        }
+
+        // Allow single `as T` when the line or the preceding line carries
+        // `// comply-ignore-reason: utility-type-constraint` — an acknowledged
+        // workaround for third-party deferred conditional types (e.g. Drizzle).
+        if has_utility_type_constraint_comment(ctx.source, as_expr.span.start as usize) {
+            return;
         }
 
         let (line, column) = byte_offset_to_line_col(ctx.source, as_expr.span.start as usize);
@@ -225,5 +259,39 @@ mod tests {
         let src = "declare const x: unknown; const y = ((x as A) as unknown) as B;";
         let diags = run_on(src);
         assert!(!diags.is_empty(), "expected at least one diag for inner `as A` cast");
+    }
+
+    // Regression #388 — single `as T` with comply-ignore-reason: utility-type-constraint
+    #[test]
+    fn allows_utility_type_constraint_inline_comment() {
+        // Drizzle deferred conditional type: `as AnyPgTable` with inline reason comment.
+        let src = "const x = junctionTable as AnyPgTable; // comply-ignore-reason: utility-type-constraint";
+        let diags = run_on(src);
+        assert!(diags.is_empty(), "unexpected diags: {:?}", diags);
+    }
+
+    #[test]
+    fn allows_utility_type_constraint_preceding_comment() {
+        // comply-ignore-reason on the preceding line.
+        let src = "// comply-ignore-reason: utility-type-constraint\nconst x = junctionTable as AnyPgTable;";
+        let diags = run_on(src);
+        assert!(diags.is_empty(), "unexpected diags: {:?}", diags);
+    }
+
+    #[test]
+    fn still_flags_without_utility_type_constraint_comment() {
+        // No comment → still flagged.
+        let src = "const x = junctionTable as AnyPgTable;";
+        let diags = run_on(src);
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn allows_utility_type_constraint_multiline_cast() {
+        // Regression #388: multi-cast pattern from Drizzle query chain.
+        let src = "// comply-ignore-reason: utility-type-constraint\n\
+                   const cols = getColumns(refTable) as Record<string, PgColumn>;";
+        let diags = run_on(src);
+        assert!(diags.is_empty(), "unexpected diags: {:?}", diags);
     }
 }
