@@ -1,5 +1,6 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use std::path::Path;
+use std::path::Component;
 
 fn is_locale_separator(inner: &str) -> bool {
     let trimmed = inner.trim();
@@ -20,6 +21,56 @@ fn is_wire_format_path(path: &Path) -> bool {
     name.starts_with("stringify-search")
         || name.starts_with("serialize")
         || name.starts_with("wire-format")
+}
+
+/// True for files under a developer-only directory (scripts, bin, migrations).
+fn is_developer_script_path(path: &Path) -> bool {
+    path.components().any(|c| {
+        if let Component::Normal(s) = c {
+            matches!(s.to_str(), Some("scripts") | Some("bin") | Some("migrations"))
+        } else {
+            false
+        }
+    })
+}
+
+/// True when `call_node` is a `console.X(...)` invocation.
+fn is_console_call(call_node: tree_sitter::Node<'_>, source: &[u8]) -> bool {
+    if let Some(func) = call_node.child_by_field_name("function") {
+        if func.kind() == "member_expression" {
+            if let Some(obj) = func.child_by_field_name("object") {
+                return obj.utf8_text(source).ok() == Some("console");
+            }
+        }
+    }
+    false
+}
+
+/// True when the join sits in a developer-only context:
+/// - any ancestor is a `throw_statement`
+/// - any ancestor is a `console.*` call
+/// - the result is assigned to a variable immediately before a `throw_statement`
+fn is_developer_facing_join(node: tree_sitter::Node<'_>, source: &[u8]) -> bool {
+    let mut cursor = node.parent();
+    while let Some(parent) = cursor {
+        match parent.kind() {
+            "throw_statement" => return true,
+            "call_expression" if is_console_call(parent, source) => return true,
+            "lexical_declaration" | "variable_declaration" => {
+                if let Some(next) = parent.next_named_sibling() {
+                    if next.kind() == "throw_statement" {
+                        return true;
+                    }
+                }
+                return false;
+            }
+            "function_declaration" | "function_expression" | "arrow_function"
+            | "method_definition" => return false,
+            _ => {}
+        }
+        cursor = parent.parent();
+    }
+    false
 }
 
 /// True when the enclosing function name signals wire-format encoding.
@@ -130,10 +181,12 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     if !is_locale_separator(inner) { return; }
 
     if is_wire_format_path(ctx.path) { return; }
+    if is_developer_script_path(ctx.path) { return; }
     if let Some(name) = enclosing_fn_name(node, source) {
         if is_wire_format_fn_name(&name) { return; }
     }
     if is_url_wire_join(node, source) { return; }
+    if is_developer_facing_join(node, source) { return; }
 
     diagnostics.push(Diagnostic::at_node(
         ctx.path,
@@ -242,5 +295,55 @@ mod tests {
             }
         "#;
         assert!(run(src).is_empty());
+    }
+
+    // #429 — FP on developer-facing diagnostic messages
+
+    #[test]
+    fn no_fp_in_scripts_directory() {
+        let src = r#"
+            const detail = `Email groups with >2 legacy rows: ${emailGroups
+              .map((row: { email: string; count: number }) => `${row.email} (${row.count})`)
+              .join(", ")}`;
+        "#;
+        assert!(run_with_path(src, "scripts/import-legacy-data.ts").is_empty());
+    }
+
+    #[test]
+    fn no_fp_join_directly_in_throw() {
+        let src = r#"
+            throw new Error(`vite-manifest: keys not found. Sample: ${keys.join(", ")}`);
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_join_assigned_before_throw() {
+        let src = r#"
+            function checkManifest(manifest: Record<string, string>, key: string) {
+              const sample = Object.keys(manifest).slice(0, 5).join(", ");
+              throw new Error(`Key "${key}" not found. Sample keys: ${sample}`);
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_join_in_console_log() {
+        let src = r#"
+            console.log(`Invalid rows: ${rows.map((r: { id: string }) => r.id).join(", ")}`);
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_join_assigned_then_displayed() {
+        let src = r#"
+            function formatList(items: string[]) {
+              const label = items.join(", ");
+              return label;
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
     }
 }
