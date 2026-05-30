@@ -75,6 +75,13 @@ impl OxcCheck for Check {
             return;
         }
 
+        // Skip if the alias name appears ≥ 3 times in the file (declaration + 2+ uses).
+        // An alias reused this many times is a semantic anchor; flagging it contradicts `use-type-alias`.
+        let alias_name = alias.id.name.as_str();
+        if count_identifier_occurrences(ctx.source, alias_name) >= 3 {
+            return;
+        }
+
         let (line, column) = byte_offset_to_line_col(ctx.source, alias.span.start as usize);
         diagnostics.push(Diagnostic {
             path: Arc::clone(&ctx.path_arc),
@@ -86,6 +93,35 @@ impl OxcCheck for Check {
             span: None,
         });
     }
+}
+
+/// Counts non-overlapping whole-word occurrences of `name` in `source`.
+fn count_identifier_occurrences(source: &str, name: &str) -> usize {
+    let src = source.as_bytes();
+    let nm = name.as_bytes();
+    let nm_len = nm.len();
+    if nm_len == 0 {
+        return 0;
+    }
+    let mut count = 0;
+    let mut pos = 0;
+    while pos + nm_len <= src.len() {
+        if src[pos..pos + nm_len] == *nm {
+            let before_ok = pos == 0 || {
+                let b = src[pos - 1];
+                !b.is_ascii_alphanumeric() && b != b'_'
+            };
+            let after_ok = pos + nm_len == src.len() || {
+                let b = src[pos + nm_len];
+                !b.is_ascii_alphanumeric() && b != b'_'
+            };
+            if before_ok && after_ok {
+                count += 1;
+            }
+        }
+        pos += 1;
+    }
+    count
 }
 
 /// Returns true when the byte range immediately before `decl_start` ends with
@@ -179,6 +215,26 @@ mod tests {
     fn still_flags_block_comment_non_jsdoc() {
         // `/* */` (single star) is not JSDoc — should not suppress.
         let src = "/* not jsdoc */\ntype Alias = Original;";
+        assert_eq!(run_oxc_ts(src, &Check).len(), 1);
+    }
+
+    #[test]
+    fn skips_reused_alias_regression_371() {
+        // Non-exported, no JSDoc, but used ≥ 3 times — semantic anchor used across the file.
+        // Flagging this would contradict `use-type-alias`.
+        let src = r#"
+type ListFilterValues = string;
+function applyFilter(v: ListFilterValues) {}
+function validateFilter(v: ListFilterValues) {}
+function resetFilter(v: ListFilterValues) {}
+"#;
+        assert!(run_oxc_ts(src, &Check).is_empty());
+    }
+
+    #[test]
+    fn still_flags_alias_used_only_once() {
+        // Declaration + 1 use = 2 occurrences — still a redundant rename.
+        let src = "type Alias = string;\nfunction foo(v: Alias) {}";
         assert_eq!(run_oxc_ts(src, &Check).len(), 1);
     }
 }
