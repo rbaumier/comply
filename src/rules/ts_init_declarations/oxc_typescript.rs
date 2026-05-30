@@ -25,8 +25,11 @@ impl OxcCheck for Check {
             if decl.kind == VariableDeclarationKind::Const {
                 continue;
             }
-            // Skip `declare` contexts.
-            if decl.declare {
+            // Skip `declare` contexts, including `var` inside `declare global`
+            // / `declare module` blocks, which are ambient type-level bindings.
+            if decl.declare
+                || crate::oxc_helpers::is_in_ambient_declaration(node.id(), semantic)
+            {
                 continue;
             }
             for declarator in &decl.declarations {
@@ -56,5 +59,29 @@ impl OxcCheck for Check {
             }
         }
         diagnostics
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(s, &Check)
+    }
+
+    #[test]
+    fn no_fp_on_var_in_declare_global() {
+        // `var` inside `declare global` is an ambient type-level binding —
+        // it never has an initializer and must not be flagged. (Closes #339)
+        assert!(
+            run("declare global {\n  var BASE_UI_ANIMATIONS_DISABLED: boolean;\n}\nexport {};")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn still_flags_uninitialized_let_at_runtime() {
+        assert_eq!(run("let x: number;").len(), 1);
     }
 }

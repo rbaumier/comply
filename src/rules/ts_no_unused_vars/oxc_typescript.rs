@@ -52,6 +52,7 @@ impl OxcCheck for Check {
                     AstKind::TSTypeAliasDeclaration(_)
                         | AstKind::TSInterfaceDeclaration(_)
                         | AstKind::TSModuleDeclaration(_)
+                        | AstKind::TSGlobalDeclaration(_)
                         | AstKind::TSFunctionType(_)
                 )
             });
@@ -73,5 +74,29 @@ impl OxcCheck for Check {
         }
 
         diagnostics
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(s, &Check)
+    }
+
+    #[test]
+    fn no_fp_on_var_in_declare_global() {
+        // `declare global` augments the global scope; its bindings are used by
+        // consumers elsewhere and must not be reported as unused. (Closes #339)
+        assert!(
+            run("declare global {\n  var BASE_UI_ANIMATIONS_DISABLED: boolean;\n}\nexport {};")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn still_flags_unused_local() {
+        assert_eq!(run("const unusedThing = 1;\nexport {};").len(), 1);
     }
 }

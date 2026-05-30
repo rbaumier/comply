@@ -49,9 +49,15 @@ impl OxcCheck for Check {
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
+        semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
+        // Ambient bindings inside `declare global` / `declare module` are
+        // type-level only — there is no runtime variable to name.
+        if crate::oxc_helpers::is_in_ambient_declaration(node.id(), semantic) {
+            return;
+        }
+
         let (name, span, is_bool) = match node.kind() {
             AstKind::VariableDeclarator(decl) => {
                 let BindingPattern::BindingIdentifier(ref id) = decl.id else {
@@ -118,5 +124,29 @@ impl OxcCheck for Check {
             severity: Severity::Warning,
             span: None,
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(s, &Check)
+    }
+
+    #[test]
+    fn no_fp_on_boolean_var_in_declare_global() {
+        // Ambient binding inside `declare global` is type-level only — there
+        // is no runtime variable to name with a predicate prefix. (Closes #339)
+        assert!(
+            run("declare global {\n  var BASE_UI_ANIMATIONS_DISABLED: boolean;\n}\nexport {};")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn still_flags_boolean_var_at_runtime() {
+        assert_eq!(run("const enabledFlag: boolean = true;").len(), 1);
     }
 }
