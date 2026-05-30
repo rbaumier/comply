@@ -86,7 +86,9 @@ crate::ast_check! { |node, source, ctx, diagnostics|
 
     let Some(base_dir) = ctx.path.parent() else { return };
 
-    if !resolve_and_check(base_dir, &import_spec) {
+    if !resolve_and_check(base_dir, &import_spec)
+        && !crate::rules::path_utils::is_relative_specifier_gitignored(base_dir, &import_spec)
+    {
         let pos = node.start_position();
         diagnostics.push(Diagnostic {
             path: std::sync::Arc::clone(&ctx.path_arc),
@@ -118,5 +120,34 @@ mod tests {
         // This is tested via the is_relative_path check
         assert!(!is_relative_path("react"));
         assert!(!is_relative_path("@tanstack/react-query"));
+    }
+
+    // Regression test for issue #487: auto-generated gitignored files (e.g.
+    // TanStack Router's routeTree.gen.ts) must not trigger require-path-exists.
+    #[test]
+    fn no_fp_on_gitignored_generated_file() {
+        use crate::rules::test_helpers::run_ts_with_project_and_path;
+        use crate::config::Config;
+        use crate::files::{Language, SourceFile};
+        use crate::project::ProjectCtx;
+        use std::fs;
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join(".gitignore"), "routeTree.gen.ts\n").unwrap();
+        fs::write(dir.path().join(".git"), "").unwrap();
+        let router_path = dir.path().join("router.ts");
+        fs::write(&router_path, "import { routeTree } from './routeTree.gen';").unwrap();
+        let source_file = SourceFile {
+            path: router_path.clone(),
+            language: Language::TypeScript,
+        };
+        let refs = vec![&source_file];
+        let config = Config::default();
+        let project = ProjectCtx::load(&refs, &config);
+        let canon = fs::canonicalize(&router_path).unwrap();
+        let source = "import { routeTree } from './routeTree.gen';";
+        let diags = run_ts_with_project_and_path(source, &Check, &project, &canon);
+        assert!(diags.is_empty(), "expected no diagnostic on gitignored import, got: {diags:?}");
     }
 }

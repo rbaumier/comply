@@ -7,6 +7,64 @@ use std::path::Path;
 
 use crate::project::ProjectCtx;
 
+/// Returns true when the resolved target of a relative import specifier would
+/// be matched by a `.gitignore` pattern found anywhere up the directory tree
+/// from `base_dir`. Suppresses false positives on auto-generated files
+/// (e.g. TanStack Router's `routeTree.gen.ts`) that are intentionally absent
+/// from source control but exist at dev/build time.
+pub fn is_relative_specifier_gitignored(base_dir: &Path, specifier: &str) -> bool {
+    use ignore::gitignore::Gitignore;
+
+    if !specifier.starts_with('.') {
+        return false;
+    }
+
+    // Normalize out `.` and `..` components so `base_dir.join("./foo")` becomes
+    // `base_dir/foo` — required for `ignore::Gitignore::matched` to strip the
+    // root prefix correctly when comparing against gitignore patterns.
+    let raw = base_dir.join(specifier);
+    let mut components = Vec::new();
+    for c in raw.components() {
+        match c {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                components.pop();
+            }
+            c => components.push(c),
+        }
+    }
+    let resolved: std::path::PathBuf = components.into_iter().collect();
+
+    // Append extensions with string concatenation, not `with_extension`, because
+    // `with_extension` replaces the existing extension (e.g. `foo.gen` + `.ts` →
+    // `foo.ts`) while we need to append (→ `foo.gen.ts`).
+    let base = resolved.to_string_lossy().into_owned();
+    let candidates = [
+        resolved.clone(),
+        std::path::PathBuf::from(format!("{base}.ts")),
+        std::path::PathBuf::from(format!("{base}.tsx")),
+        std::path::PathBuf::from(format!("{base}.js")),
+        std::path::PathBuf::from(format!("{base}.jsx")),
+    ];
+
+    let mut dir: Option<&Path> = Some(base_dir);
+    while let Some(d) = dir {
+        let gitignore_path = d.join(".gitignore");
+        if gitignore_path.exists() {
+            let (gi, _) = Gitignore::new(&gitignore_path);
+            if candidates.iter().any(|c| gi.matched(c, false).is_ignore()) {
+                return true;
+            }
+        }
+        if d.join(".git").exists() {
+            break;
+        }
+        dir = d.parent();
+    }
+
+    false
+}
+
 /// True if `path` is a build/tooling config file. Matches `*.config.*`
 /// (e.g. `vite.config.ts`, `jest.config.js`) and dotfile-rc entries
 /// (e.g. `.eslintrc.js`, `.babelrc.ts`).

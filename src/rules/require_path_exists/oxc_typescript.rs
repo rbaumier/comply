@@ -105,7 +105,9 @@ impl OxcCheck for Check {
 
         let Some(base_dir) = ctx.path.parent() else { return };
 
-        if !resolve_and_check(base_dir, &import_spec) {
+        if !resolve_and_check(base_dir, &import_spec)
+            && !crate::rules::path_utils::is_relative_specifier_gitignored(base_dir, &import_spec)
+        {
             let span = match node.kind() {
                 AstKind::ImportDeclaration(d) => d.span,
                 AstKind::ExportNamedDeclaration(d) => d.span,

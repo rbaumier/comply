@@ -11,6 +11,7 @@ crate::ast_check! { on ["program"] => |node, _source, ctx, diagnostics|
     }
 
     let canon = std::fs::canonicalize(ctx.path).unwrap_or_else(|_| ctx.path.to_path_buf());
+    let base_dir = ctx.path.parent().unwrap_or(ctx.path);
 
     // Deduplicate by (specifier, line) in case the index exposes the same
     // import twice (defensive — a single `import` statement should produce
@@ -23,6 +24,9 @@ crate::ast_check! { on ["program"] => |node, _source, ctx, diagnostics|
             continue;
         }
         if imp.source_path.is_some() {
+            continue;
+        }
+        if crate::rules::path_utils::is_relative_specifier_gitignored(base_dir, &imp.specifier) {
             continue;
         }
         if !seen.insert((imp.specifier.clone(), imp.line)) {
@@ -119,5 +123,27 @@ mod tests {
         let source = "import { x } from '../missing';";
         let diags = run_ts_with_project_and_path(source, &Check, &project, &paths[0]);
         assert_eq!(diags.len(), 1);
+    }
+
+    // Regression test for issue #487: auto-generated gitignored files (e.g.
+    // TanStack Router's routeTree.gen.ts) must not trigger import-no-unresolved.
+    #[test]
+    fn no_fp_on_gitignored_generated_file() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join(".gitignore"), "routeTree.gen.ts\n").unwrap();
+        fs::write(dir.path().join(".git"), "").unwrap();
+        let router_path = dir.path().join("router.ts");
+        fs::write(&router_path, "import { routeTree } from './routeTree.gen';").unwrap();
+        let source_file = SourceFile {
+            path: router_path.clone(),
+            language: Language::TypeScript,
+        };
+        let refs = vec![&source_file];
+        let config = Config::default();
+        let project = ProjectCtx::load(&refs, &config);
+        let canon = fs::canonicalize(&router_path).unwrap();
+        let source = "import { routeTree } from './routeTree.gen';";
+        let diags = run_ts_with_project_and_path(source, &Check, &project, &canon);
+        assert!(diags.is_empty(), "expected no diagnostic on gitignored import, got: {diags:?}");
     }
 }

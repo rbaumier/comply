@@ -23,6 +23,7 @@ impl OxcCheck for Check {
         }
 
         let canon = std::fs::canonicalize(ctx.path).unwrap_or_else(|_| ctx.path.to_path_buf());
+        let base_dir = ctx.path.parent().unwrap_or(ctx.path);
         let mut seen: HashSet<(String, usize)> = HashSet::new();
         let mut diagnostics = Vec::new();
 
@@ -32,6 +33,12 @@ impl OxcCheck for Check {
                 continue;
             }
             if imp.source_path.is_some() {
+                continue;
+            }
+            if crate::rules::path_utils::is_relative_specifier_gitignored(
+                base_dir,
+                &imp.specifier,
+            ) {
                 continue;
             }
             if !seen.insert((imp.specifier.clone(), imp.line)) {
