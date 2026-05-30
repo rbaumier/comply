@@ -224,26 +224,35 @@ fn merge_and_emit(
     }
 
     // Phase 2 — suppress symmetric sibling pairs.
-    // For each (reporter, canonical) file pair, count the tokens in the reporter
-    // file that are NOT covered by any matching window.  A small non-zero gap
-    // signals that the two files share the same structure but differ in one
-    // load-bearing block (e.g. deactivate vs. reactivate handlers).  Such pairs
-    // are intentional symmetric siblings — not accidental copy-paste — and must
-    // not be flagged.
+    // Two suppression criteria, either is sufficient:
+    //
+    // A) Small-gap: the tokens NOT covered by any matching window in the
+    //    reporter file are few (> 0, ≤ SYMMETRIC_SIBLING_GAP_THRESHOLD).  A
+    //    small non-zero gap signals one load-bearing difference surrounded by
+    //    identical structure (e.g. the `.set()` argument between two handlers).
+    //
+    // B) Named complement: the two files live in the same directory and their
+    //    stems form a known domain complement pair (deactivate/reactivate,
+    //    enable/disable, …).  These implement symmetric operations that
+    //    intentionally share query structure — the shared block is not
+    //    accidental copy-paste.
     let mut suppressed = std::collections::HashSet::<usize>::new();
     {
         let mut by_pair: FxHashMap<(usize, usize), Vec<usize>> = FxHashMap::default();
         for (idx, s) in spans.iter().enumerate() {
             by_pair.entry((s.rfi, s.cfi)).or_default().push(idx);
         }
-        for ((rfi, _), idxs) in &by_pair {
+        for ((rfi, cfi), idxs) in &by_pair {
             let total = file_data[*rfi].as_ref().map_or(0, |ft| ft.tokens.len());
             let covered: usize = idxs
                 .iter()
                 .map(|&i| spans[i].last_rstart - spans[i].rstart + MIN_TOKENS)
                 .sum();
             let gap = total.saturating_sub(covered);
-            if gap > 0 && gap <= SYMMETRIC_SIBLING_GAP_THRESHOLD {
+            let small_gap = gap > 0 && gap <= SYMMETRIC_SIBLING_GAP_THRESHOLD;
+            let name_siblings = gap > 0
+                && are_symmetric_name_pair(&files[*rfi].path, &files[*cfi].path);
+            if small_gap || name_siblings {
                 suppressed.extend(idxs);
             }
         }
@@ -291,6 +300,69 @@ fn clone_line_span(
         ft.tokens.last().map_or(first_line, |t| t.line)
     };
     last_line.saturating_sub(first_line) + 1
+}
+
+// --- Symmetric-sibling detection ---
+
+/// Returns true if `word` appears in `text` surrounded by non-alphanumeric
+/// characters (or string boundaries), using byte-level comparison.
+fn contains_word(text: &str, word: &str) -> bool {
+    let tb = text.as_bytes();
+    let wb = word.as_bytes();
+    let wlen = wb.len();
+    if wlen > tb.len() {
+        return false;
+    }
+    for i in 0..=(tb.len() - wlen) {
+        if &tb[i..i + wlen] == wb {
+            let before_ok = i == 0 || !tb[i - 1].is_ascii_alphanumeric();
+            let after_ok = i + wlen == tb.len() || !tb[i + wlen].is_ascii_alphanumeric();
+            if before_ok && after_ok {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Returns true when two paths are in the same directory and their stems form
+/// a known complement pair (e.g. `deactivate-product` / `reactivate-product`).
+/// Such pairs implement symmetric domain operations and intentionally share
+/// query structure — their shared block must not be flagged as a clone.
+fn are_symmetric_name_pair(a: &std::path::Path, b: &std::path::Path) -> bool {
+    if a.parent() != b.parent() {
+        return false;
+    }
+    let stem_a = a
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_ascii_lowercase())
+        .unwrap_or_default();
+    let stem_b = b
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_ascii_lowercase())
+        .unwrap_or_default();
+    const PAIRS: &[(&str, &str)] = &[
+        ("deactivate", "reactivate"),
+        ("enable", "disable"),
+        ("publish", "unpublish"),
+        ("lock", "unlock"),
+        ("start", "stop"),
+        ("open", "close"),
+        ("add", "remove"),
+        ("show", "hide"),
+        ("mount", "unmount"),
+        ("create", "delete"),
+    ];
+    for &(x, y) in PAIRS {
+        if (contains_word(&stem_a, x) && contains_word(&stem_b, y))
+            || (contains_word(&stem_a, y) && contains_word(&stem_b, x))
+        {
+            return true;
+        }
+    }
+    false
 }
 
 // --- Tokenization ---
@@ -752,6 +824,41 @@ mod tests {
             let text = std::str::from_utf8(&ft.source[t.start_byte..t.end_byte]).unwrap();
             assert!(!text.starts_with("//"));
         }
+    }
+
+    #[test]
+    fn no_false_positive_on_symmetric_suffix_siblings() {
+        // Regression test for issue #338.
+        // deactivate/reactivate handlers share an identical suffix (CTE + JOIN
+        // block) but their setup and UPDATE call differ — the gap is larger
+        // than SYMMETRIC_SIBLING_GAP_THRESHOLD.  Name-based suppression must
+        // kick in because both files live in the same directory and their stems
+        // contain a known complement pair (deactivate / reactivate).
+        let dir = tempfile::tempdir().unwrap();
+
+        let suffix = large_ts_block(20); // identical in both files
+        let setup_a: String = (1..=15)
+            .map(|i| format!("const setupA_{i} = initDeactivate({i}, \"a_{i}\");"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let setup_b: String = (1..=15)
+            .map(|i| format!("const setupB_{i} = initReactivate({i}, \"b_{i}\");"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let deactivate_content = format!("{setup_a}\n{suffix}");
+        let reactivate_content = format!("{setup_b}\n{suffix}");
+
+        let pa = dir.path().join("deactivate-product.ts");
+        let pb = dir.path().join("reactivate-product.ts");
+        std::fs::write(&pa, &deactivate_content).unwrap();
+        std::fs::write(&pb, &reactivate_content).unwrap();
+        let fa = SourceFile { path: pa, language: Language::TypeScript };
+        let fb = SourceFile { path: pb, language: Language::TypeScript };
+        assert!(
+            lint_files(&[&fa, &fb]).is_empty(),
+            "symmetric suffix siblings (deactivate/reactivate) must not be flagged as clones"
+        );
     }
 
     #[test]
