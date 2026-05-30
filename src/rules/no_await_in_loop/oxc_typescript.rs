@@ -5,7 +5,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{BindingPattern, Expression};
+use oxc_ast::ast::{BindingPattern, Expression, PropertyKey};
 use std::sync::Arc;
 
 pub struct Check;
@@ -65,22 +65,43 @@ fn enclosing_loop_and_fn_name<'a>(
                 if !saw_loop {
                     return None;
                 }
-                let name = func.id.as_ref().map(|id| id.name.as_str());
-                return Some(name);
+                // Named function declarations/expressions have their own id.
+                if let Some(id) = &func.id {
+                    return Some(Some(id.name.as_str()));
+                }
+                // Class methods (`async method() {}`) have no func.id — the
+                // name lives on the parent MethodDefinition's key.
+                let gp_id = nodes.parent_id(parent_id);
+                if gp_id != parent_id {
+                    if let AstKind::MethodDefinition(method) = nodes.get_node(gp_id).kind() {
+                        if let PropertyKey::StaticIdentifier(id) = &method.key {
+                            return Some(Some(id.name.as_str()));
+                        }
+                    }
+                }
+                return Some(None);
             }
             AstKind::ArrowFunctionExpression(_) => {
                 if !saw_loop {
                     return None;
                 }
-                // Arrow functions are nameless at the syntax level, but
-                // `const foo = async () => {}` is conventionally named
-                // after the binding. Walk one more step to recover it.
+                // Arrow functions are nameless at the syntax level. Try to
+                // recover the conventional name from the parent binding.
                 let gp_id = nodes.parent_id(parent_id);
-                if gp_id != parent_id
-                    && let AstKind::VariableDeclarator(decl) = nodes.get_node(gp_id).kind()
-                    && let BindingPattern::BindingIdentifier(id) = &decl.id
-                {
-                    return Some(Some(id.name.as_str()));
+                if gp_id != parent_id {
+                    let gp_kind = nodes.get_node(gp_id).kind();
+                    // `const foo = async () => {}` — VariableDeclarator binding.
+                    if let AstKind::VariableDeclarator(decl) = gp_kind
+                        && let BindingPattern::BindingIdentifier(id) = &decl.id
+                    {
+                        return Some(Some(id.name.as_str()));
+                    }
+                    // `foo = async () => {}` as a class property — PropertyDefinition key.
+                    if let AstKind::PropertyDefinition(prop) = gp_kind
+                        && let PropertyKey::StaticIdentifier(id) = &prop.key
+                    {
+                        return Some(Some(id.name.as_str()));
+                    }
                 }
                 return Some(None);
             }

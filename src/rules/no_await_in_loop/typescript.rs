@@ -173,4 +173,53 @@ mod tests {
         // the arrow function — it doesn't serialize the outer loop.
         assert!(run(src).is_empty());
     }
+
+    /// Regression for #366 — class method self-recursion via `this.method()`
+    /// inside a loop must be exempt. `func.id` is None for class methods; the
+    /// name must be recovered from the parent MethodDefinition.
+    #[test]
+    fn ignores_recursive_await_in_class_method() {
+        let src = r"
+            class TreeWalker {
+                async traverse(nodes: ASTNode[]): Promise<void> {
+                    for (const node of nodes) {
+                        await this.traverse(node.children);
+                    }
+                }
+            }
+        ";
+        assert!(run(src).is_empty());
+    }
+
+    /// Class method calling a *different* method must still be flagged —
+    /// only self-recursion is exempt.
+    #[test]
+    fn flags_await_this_other_method_in_class_loop() {
+        let src = r"
+            class Processor {
+                async processAll(items: Item[]): Promise<void> {
+                    for (const item of items) {
+                        await this.processItem(item);
+                    }
+                }
+            }
+        ";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    /// Regression for #366 — class property arrow function self-recursion via
+    /// `this.method()` must be exempt (PropertyDefinition key recovery).
+    #[test]
+    fn ignores_recursive_await_in_class_property_arrow() {
+        let src = r"
+            class TreeWalker {
+                traverse = async (nodes: ASTNode[]): Promise<void> => {
+                    for (const node of nodes) {
+                        await this.traverse(node.children);
+                    }
+                };
+            }
+        ";
+        assert!(run(src).is_empty());
+    }
 }
