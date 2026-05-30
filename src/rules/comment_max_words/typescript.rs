@@ -2,6 +2,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 
 crate::ast_check! { on ["comment"] => |node, source, ctx, diagnostics|
     let Ok(raw) = node.utf8_text(source) else { return };
+    if raw.starts_with("/**") { return; }
     let body = super::strip_markers(raw);
     if !super::has_long_sentence(&body) { return; }
     diagnostics.push(Diagnostic::at_node(
@@ -37,5 +38,17 @@ mod tests {
     #[test]
     fn allows_two_short_sentences() {
         assert!(run("// first thing happens. second thing happens.").is_empty());
+    }
+
+    // Regression for #460: JSDoc blocks are entirely exempt from the word limit.
+    #[test]
+    fn allows_jsdoc_block_with_long_description() {
+        let src = r#"/**
+ * This JSDoc block explains the loader integration pattern in thorough detail,
+ * covering the relationship between the preload mechanism and the form dialog
+ * lifecycle across multiple rendering phases and async boundary contexts here.
+ */
+export function preloadFormDialog() {}"#;
+        assert!(run(src).is_empty(), "diagnostics: {:?}", run(src));
     }
 }
