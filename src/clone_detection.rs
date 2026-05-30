@@ -24,6 +24,14 @@ const BUCKET_SATURATED: usize = 64;
 /// subsequences. Genuine duplicated logic — each statement carrying fresh
 /// identifiers — yields many more distinct trigrams than this threshold.
 const MIN_DISTINCT_TRIGRAMS: usize = 145;
+/// Maximum non-covered token gap that marks a file pair as "symmetric siblings"
+/// rather than accidental duplicates.  When two files are identical except for
+/// one small load-bearing block (e.g. deactivate vs. reactivate handlers), the
+/// tokens in that block are not part of any matching window.  If the reporter
+/// file has fewer than this many uncovered tokens, the pair is suppressed.
+/// Must be strictly less than the gap produced by the `merge_refuses_non_adjacent_canonical`
+/// test (52 tokens with the current test parameters).
+const SYMMETRIC_SIBLING_GAP_THRESHOLD: usize = MIN_TOKENS / 2; // 50
 
 struct Token {
     kind_id: u16,
@@ -169,7 +177,18 @@ fn merge_and_emit(
     raw.sort_unstable();
     raw.dedup();
 
-    let mut out = Vec::new();
+    struct Span {
+        rfi: usize,
+        rstart: usize,
+        last_rstart: usize,
+        rline: usize,
+        cfi: usize,
+        cstart: usize,
+        cline: usize,
+    }
+
+    // Phase 1 — merge adjacent windows into spans, apply diversity gate.
+    let mut spans: Vec<Span> = Vec::new();
     let mut i = 0;
     while i < raw.len() {
         let (rfi, rstart, rline, cfi, cstart, cline) = raw[i];
@@ -190,31 +209,68 @@ fn merge_and_emit(
             }
             break;
         }
-
-        // Identifier-diversity gate, applied to the merged span. Filters
-        // low-entropy boilerplate clones (e.g. registration tables) without
-        // breaking the adjacency-merge of contiguous real clones.
+        // Identifier-diversity gate — filters low-entropy boilerplate clones.
         let keep = file_data[rfi]
             .as_ref()
             .is_some_and(|ft| has_enough_distinct_texts(ft, rstart, last_rstart));
         if keep {
-            let lines_in_clone = clone_line_span(file_data, rfi, rstart, last_rstart);
-            out.push(Diagnostic {
-                path: std::sync::Arc::from(files[rfi].path.as_path()),
-                line: rline,
-                column: 1,
-                rule_id: RULE_ID.into(),
-                message: format!(
-                    "Duplicated block ({lines_in_clone} lines) — also in `{}` at line {cline}.",
-                    files[cfi].path.display(),
-                ),
-                severity: Severity::Warning,
-                span: None,
-            });
+            spans.push(Span { rfi, rstart, last_rstart, rline, cfi, cstart, cline });
         }
         i = j;
     }
-    out
+
+    if spans.is_empty() {
+        return vec![];
+    }
+
+    // Phase 2 — suppress symmetric sibling pairs.
+    // For each (reporter, canonical) file pair, count the tokens in the reporter
+    // file that are NOT covered by any matching window.  A small non-zero gap
+    // signals that the two files share the same structure but differ in one
+    // load-bearing block (e.g. deactivate vs. reactivate handlers).  Such pairs
+    // are intentional symmetric siblings — not accidental copy-paste — and must
+    // not be flagged.
+    let mut suppressed = std::collections::HashSet::<usize>::new();
+    {
+        let mut by_pair: FxHashMap<(usize, usize), Vec<usize>> = FxHashMap::default();
+        for (idx, s) in spans.iter().enumerate() {
+            by_pair.entry((s.rfi, s.cfi)).or_default().push(idx);
+        }
+        for ((rfi, _), idxs) in &by_pair {
+            let total = file_data[*rfi].as_ref().map_or(0, |ft| ft.tokens.len());
+            let covered: usize = idxs
+                .iter()
+                .map(|&i| spans[i].last_rstart - spans[i].rstart + MIN_TOKENS)
+                .sum();
+            let gap = total.saturating_sub(covered);
+            if gap > 0 && gap <= SYMMETRIC_SIBLING_GAP_THRESHOLD {
+                suppressed.extend(idxs);
+            }
+        }
+    }
+
+    // Phase 3 — emit diagnostics for non-suppressed spans.
+    spans
+        .iter()
+        .enumerate()
+        .filter(|(idx, _)| !suppressed.contains(idx))
+        .map(|(_, s)| {
+            let lines = clone_line_span(file_data, s.rfi, s.rstart, s.last_rstart);
+            Diagnostic {
+                path: std::sync::Arc::from(files[s.rfi].path.as_path()),
+                line: s.rline,
+                column: 1,
+                rule_id: RULE_ID.into(),
+                message: format!(
+                    "Duplicated block ({lines} lines) — also in `{}` at line {}.",
+                    files[s.cfi].path.display(),
+                    s.cline,
+                ),
+                severity: Severity::Warning,
+                span: None,
+            }
+        })
+        .collect()
 }
 
 fn clone_line_span(
@@ -696,6 +752,41 @@ mod tests {
             let text = std::str::from_utf8(&ft.source[t.start_byte..t.end_byte]).unwrap();
             assert!(!text.starts_with("//"));
         }
+    }
+
+    #[test]
+    fn no_false_positive_on_symmetric_siblings() {
+        // Regression test for issue #343.
+        // Two symmetric sibling handlers (deactivate / reactivate) — identical
+        // structure, one load-bearing difference: the argument passed to .set().
+        // The files must NOT be flagged as clones.
+        let dir = tempfile::tempdir().unwrap();
+
+        // Shared prefix and suffix (20 unique statements each) give the handler
+        // enough tokens to exceed MIN_TOKENS on both sides of the diff.
+        let prefix = large_ts_block(20);
+        let suffix: String = (1..=20)
+            .map(|i| format!("const alpha_{i} = processResult({i}, \"item_{i}\");"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let deactivate = format!(
+            "{prefix}\nconst r = db.update(table).set({{ deactivatedAt: sql`coalesce(${{entity.deactivatedAt}}, now())`, updatedAt: sql`now()` }}).returning();\n{suffix}"
+        );
+        let reactivate = format!(
+            "{prefix}\nconst r = db.update(table).set({{ deactivatedAt: null, updatedAt: sql`now()` }}).returning();\n{suffix}"
+        );
+
+        let pa = dir.path().join("deactivate.ts");
+        let pb = dir.path().join("reactivate.ts");
+        std::fs::write(&pa, &deactivate).unwrap();
+        std::fs::write(&pb, &reactivate).unwrap();
+        let fa = SourceFile { path: pa, language: Language::TypeScript };
+        let fb = SourceFile { path: pb, language: Language::TypeScript };
+        assert!(
+            lint_files(&[&fa, &fb]).is_empty(),
+            "symmetric sibling handlers should not be flagged as clones"
+        );
     }
 
     #[test]
