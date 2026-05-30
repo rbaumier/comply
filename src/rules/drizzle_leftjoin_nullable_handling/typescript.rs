@@ -1,6 +1,9 @@
 //! drizzle-leftjoin-nullable-handling — when a Drizzle chain uses
 //! `.leftJoin(<table>, ...)`, flag the call if no `null` / `?? ` /
 //! `?.` handling is visible textually within the surrounding statement.
+//! Exception: explicit select object (`select({`) combined with a Zod
+//! `.nullable()` declaration elsewhere in the file signals that the joined
+//! field is intentionally nullable per the response schema.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
@@ -40,6 +43,12 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
         || stmt_text.contains("isNotNull(")
         || stmt_text.contains("if (") && stmt_text.contains("!= null")
     {
+        return;
+    }
+    // When the statement uses an explicit select object AND the file declares
+    // nullable fields (e.g. Zod `.nullable()`), the developer intentionally
+    // projected a nullable field from the joined table — not a bug.
+    if stmt_text.contains("select({") && ctx.source.contains(".nullable()") {
         return;
     }
     let pos = node.start_position();
@@ -84,5 +93,36 @@ mod tests {
     fn ignores_innerjoin() {
         let src = "const rows = await db.select().from(users).innerJoin(posts, eq(posts.userId, users.id));";
         assert!(run(src).is_empty());
+    }
+
+    // Issue #527: explicit select object + Zod .nullable() schema = intentionally nullable
+    #[test]
+    fn no_fp_when_explicit_select_and_nullable_schema_in_file() {
+        let src = r#"
+const responseSchema = z.object({ extraField: z.string().nullable() });
+const rows = db
+  .select({
+    id: mainTable.id,
+    extraField: joinedView.someNullableField,
+  })
+  .from(mainTable)
+  .leftJoin(joinedView, eq(joinedView.id, mainTable.joinedId));
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_wildcard_select_even_with_nullable_schema_in_file() {
+        let src = r#"
+const schema = z.object({ name: z.string().nullable() });
+const rows = await db.select().from(users).leftJoin(posts, eq(posts.userId, users.id));
+"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_explicit_select_without_nullable_schema_in_file() {
+        let src = "const rows = db.select({ userId: posts.userId }).from(users).leftJoin(posts, eq(posts.userId, users.id));";
+        assert_eq!(run(src).len(), 1);
     }
 }
