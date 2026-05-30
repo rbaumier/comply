@@ -102,6 +102,43 @@ fn is_wire_format_fn_name(name: &str) -> bool {
     )
 }
 
+/// True when the join result is used as a CSS media query string:
+/// - directly passed to `matchMedia(...)`
+/// - OR assigned to a variable whose name contains "media"
+fn is_css_media_join(node: tree_sitter::Node<'_>, source: &[u8]) -> bool {
+    let mut cursor = node.parent();
+    while let Some(parent) = cursor {
+        match parent.kind() {
+            "call_expression" => {
+                if let Some(func) = parent.child_by_field_name("function") {
+                    let method_name = if func.kind() == "member_expression" {
+                        func.child_by_field_name("property")
+                            .and_then(|p| p.utf8_text(source).ok())
+                    } else {
+                        func.utf8_text(source).ok()
+                    };
+                    if matches!(method_name, Some("matchMedia")) {
+                        return true;
+                    }
+                }
+            }
+            "variable_declarator" => {
+                if let Some(name_node) = parent.child_by_field_name("name") {
+                    if let Ok(name) = name_node.utf8_text(source) {
+                        return name.to_ascii_lowercase().contains("media");
+                    }
+                }
+                return false;
+            }
+            "function_declaration" | "function_expression" | "arrow_function"
+            | "method_definition" => return false,
+            _ => {}
+        }
+        cursor = parent.parent();
+    }
+    false
+}
+
 /// True when the join call is in a URL-wire context:
 /// - directly in a template string whose text contains `?` or `//`
 /// - OR assigned to a variable whose name ends with "ids"
@@ -185,6 +222,7 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     if let Some(name) = enclosing_fn_name(node, source) {
         if is_wire_format_fn_name(&name) { return; }
     }
+    if is_css_media_join(node, source) { return; }
     if is_url_wire_join(node, source) { return; }
     if is_developer_facing_join(node, source) { return; }
 
@@ -343,6 +381,34 @@ mod tests {
               const label = items.join(", ");
               return label;
             }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // #579 — FP on CSS media query builder
+    #[test]
+    fn no_fp_join_assigned_to_media_query_variable() {
+        let src = r#"
+            const parts = ["(min-width: 1024px)", "(max-width: 1279px)"];
+            const mediaQuery = parts.join(" and ");
+            window.matchMedia(mediaQuery);
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_join_directly_in_match_media() {
+        let src = r#"
+            const parts = ["(min-width: 1024px)", "(max-width: 1279px)"];
+            window.matchMedia(parts.join(" and "));
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_and_join_outside_media_context() {
+        let src = r#"
+            const label = items.join(" and ");
         "#;
         assert_eq!(run(src).len(), 1);
     }
