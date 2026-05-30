@@ -34,7 +34,22 @@ const KEYWORDS: &[&str] = &["workaround", "hack", "compat"];
 
 pub(crate) fn has_keyword(text: &str) -> bool {
     let lower = text.to_lowercase();
-    KEYWORDS.iter().any(|kw| lower.contains(kw))
+    for &kw in KEYWORDS {
+        if kw == "compat" {
+            // "compat" in "compatible"/"incompatible" is a type-system term, not a workaround marker.
+            let mut start = 0;
+            while let Some(pos) = lower[start..].find("compat") {
+                let abs = start + pos;
+                if !lower[abs + "compat".len()..].starts_with("ible") {
+                    return true;
+                }
+                start = abs + 1;
+            }
+        } else if lower.contains(kw) {
+            return true;
+        }
+    }
+    false
 }
 
 pub(crate) fn has_reference(line: &str) -> bool {
