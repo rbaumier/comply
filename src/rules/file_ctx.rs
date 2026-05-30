@@ -226,9 +226,13 @@ fn scan_path(path: &Path) -> PathSegments {
         in_test_dir: lower.contains("/tests/")
             || lower.contains("/test/")
             || lower.contains("/tests-")
+            || lower.contains("/test-helpers/")
+            || lower.contains("/test-helper/")
             || lower.starts_with("tests/")
             || lower.starts_with("test/")
             || lower.starts_with("tests-")
+            || lower.starts_with("test-helpers/")
+            || lower.starts_with("test-helper/")
             || lower.contains("/__tests__/")
             || lower.starts_with("__tests__/")
             || lower.contains("/fixtures/")
@@ -341,6 +345,10 @@ mod tests {
         assert!(scan_path(&PathBuf::from("src/foo.test.ts")).in_test_dir);
         assert!(scan_path(&PathBuf::from("src/foo.spec.ts")).in_test_dir);
         assert!(scan_path(&PathBuf::from("__tests__/foo.ts")).in_test_dir);
+        // Test-helper infrastructure directories (issue #481).
+        assert!(scan_path(&PathBuf::from("src/api/test-helpers/als-proxy.ts")).in_test_dir);
+        assert!(scan_path(&PathBuf::from("src/test-helper/db.ts")).in_test_dir);
+        assert!(scan_path(&PathBuf::from("test-helpers/setup.ts")).in_test_dir);
     }
 
     #[test]
