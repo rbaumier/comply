@@ -158,6 +158,60 @@ fn is_create_element_call(node: tree_sitter::Node, source: &[u8]) -> bool {
     method == "createElement" || method == "createElementNS"
 }
 
+/// True when `name` is bound to a function expression, arrow function, or
+/// function declaration in an ancestor scope.
+fn is_function_binding(start: tree_sitter::Node, source: &[u8], name: &str) -> bool {
+    let mut ancestor = start.parent();
+    while let Some(scope) = ancestor {
+        let mut cursor = scope.walk();
+        for child in scope.named_children(&mut cursor) {
+            if node_binds_function(child, source, name) {
+                return true;
+            }
+            if child.kind() == "export_statement"
+                && let Some(decl) = child.child_by_field_name("declaration")
+                && node_binds_function(decl, source, name)
+            {
+                return true;
+            }
+        }
+        ancestor = scope.parent();
+    }
+    false
+}
+
+fn node_binds_function(node: tree_sitter::Node, source: &[u8], name: &str) -> bool {
+    if matches!(
+        node.kind(),
+        "function_declaration" | "generator_function_declaration"
+    ) {
+        return node
+            .child_by_field_name("name")
+            .map_or(false, |id| id.utf8_text(source).unwrap_or("") == name);
+    }
+    if matches!(node.kind(), "lexical_declaration" | "variable_declaration") {
+        let mut cursor = node.walk();
+        return node.named_children(&mut cursor).any(|decl| {
+            if decl.kind() != "variable_declarator" {
+                return false;
+            }
+            let Some(pat) = decl.child_by_field_name("name") else {
+                return false;
+            };
+            if pat.kind() != "identifier" || pat.utf8_text(source).unwrap_or("") != name {
+                return false;
+            }
+            decl.child_by_field_name("value").map_or(false, |v| {
+                matches!(
+                    v.kind(),
+                    "arrow_function" | "function_expression" | "generator_function"
+                )
+            })
+        });
+    }
+    false
+}
+
 fn is_const_decl_of(node: tree_sitter::Node, source: &[u8], name: &str) -> bool {
     if node.kind() != "lexical_declaration" {
         return false;
@@ -270,6 +324,7 @@ match node.kind() {
                     && let Some(root) = root_identifier_of_member_chain(first_arg, source)
                         .or_else(|| (first_arg.kind() == "identifier").then(|| first_arg.utf8_text(source).ok()).flatten())
                     && declared_as_const(node, source, root)
+                    && !is_function_binding(node, source, root)
                 {
                     report(diagnostics, ctx.path, &node, root, "Mutating");
                 }
@@ -476,6 +531,34 @@ mod tests {
     fn allows_object_assign_to_new_object() {
         assert!(
             run_on("const obj = {}; const next = Object.assign({}, obj, { a: 1 });").is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_object_assign_on_const_arrow_function() {
+        // Attaching metadata to a named handler — not a data mutation (issue #364).
+        assert!(run_on(
+            r#"const handler = async (ctx) => { return ctx.body; };
+Object.assign(handler, { displayName: "myHandler" });"#
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn allows_object_assign_on_const_function_declaration() {
+        assert!(run_on(
+            r#"function handler(ctx) { return ctx.body; }
+Object.assign(handler, { displayName: "myHandler" });"#
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn still_flags_object_assign_on_const_plain_object() {
+        // Object target — must still be flagged.
+        assert_eq!(
+            run_on("const obj = {}; Object.assign(obj, { a: 1 });").len(),
+            1
         );
     }
 
