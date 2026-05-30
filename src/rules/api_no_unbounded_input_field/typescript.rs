@@ -46,14 +46,35 @@ const NON_INPUT_NAME_MARKERS: &[&str] = &[
 ];
 
 /// Known keys that mark a schema as the server's output contract rather than a
-/// request input. Fields under any of these keys must not be capped — they are
-/// response shapes emitted by the server, not user-supplied values.
+/// request input. Fields under any of these keys must not be capped — server-emitted
+/// response shapes in Elysia route descriptors or custom middleware.
 const OUTPUT_CONTRACT_KEYS: &[&str] = &["response", "output", "returns", "result"];
 
+/// True when `pair_node`'s parent object is itself an argument to a Zod schema
+/// call (`z.*`). Distinguishes route-descriptor keys from same-named schema fields
+/// (e.g. `body: z.object({ result: z.string() })`).
+fn pair_inside_schema_call(pair_node: tree_sitter::Node, source: &[u8]) -> bool {
+    let Some(obj) = pair_node.parent() else { return false };
+    if obj.kind() != "object" {
+        return false;
+    }
+    let Some(args) = obj.parent() else { return false };
+    if args.kind() != "arguments" {
+        return false;
+    }
+    let Some(call) = args.parent() else { return false };
+    if call.kind() != "call_expression" {
+        return false;
+    }
+    let Some(func) = call.child_by_field_name("function") else { return false };
+    let Ok(func_text) = func.utf8_text(source) else { return false };
+    func_text.starts_with("z.")
+}
+
 /// True when `node` sits inside the value of a known output-contract property
-/// (`response:`, `output:`, `returns:`, `result:`). These are server-emitted
-/// shapes in Elysia route descriptors or custom middleware; capping them would
-/// truncate legitimate large payloads (e.g. CSV exports).
+/// (`response:`, `output:`, `returns:`, `result:`) at route-descriptor level.
+/// Server-emitted shapes in Elysia route descriptors or custom middleware.
+/// Capping truncates legitimate large payloads (e.g. CSV exports).
 fn enclosed_in_response_field(node: tree_sitter::Node, source: &[u8]) -> bool {
     let mut cur = node;
     while let Some(parent) = cur.parent() {
@@ -64,6 +85,7 @@ fn enclosed_in_response_field(node: tree_sitter::Node, source: &[u8]) -> bool {
             && OUTPUT_CONTRACT_KEYS
                 .iter()
                 .any(|&k| key_text.trim_matches(|c| matches!(c, '"' | '\'' | '`')) == k)
+            && !pair_inside_schema_call(parent, source)
         {
             return true;
         }
@@ -322,6 +344,16 @@ mod tests {
         // Ensure that only known output-contract keys are exempted; request body
         // fields must still be flagged.
         let src = "app.post('/create', handler, {\n  body: z.object({ name: z.string() }),\n  response: z.string(),\n});";
+        let diags = run_at(src, "src/api/features/create.ts");
+        assert_eq!(diags.len(), 1, "{diags:?}");
+    }
+
+    #[test]
+    fn still_flags_body_field_named_result() {
+        // Regression for #383 — a request body field named `result` (or `output`,
+        // `returns`) must still be flagged. Only top-level route-descriptor
+        // output-contract keys are exempt, not schema fields with coincident names.
+        let src = "app.post('/create', handler, {\n  body: z.object({ result: z.string() }),\n  response: z.string(),\n});";
         let diags = run_at(src, "src/api/features/create.ts");
         assert_eq!(diags.len(), 1, "{diags:?}");
     }
