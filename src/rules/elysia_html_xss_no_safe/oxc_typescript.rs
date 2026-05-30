@@ -2,6 +2,8 @@
 //!
 //! Flag JSX elements that interpolate user input (body, query, params)
 //! without a `safe` attribute on the surrounding element.
+//! Only applies to files that import from `@elysiajs/html` or `elysia/html`;
+//! React JSX files are skipped because React escapes string interpolations by default.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -10,6 +12,13 @@ use oxc_ast::ast::{JSXAttributeItem, JSXAttributeName, JSXChild};
 use std::sync::Arc;
 
 pub struct Check;
+
+fn file_imports_elysia_html(source: &str) -> bool {
+    source.contains("from '@elysiajs/html'")
+        || source.contains("from \"@elysiajs/html\"")
+        || source.contains("from 'elysia/html'")
+        || source.contains("from \"elysia/html\"")
+}
 
 /// Returns true when `text` contains `body`, `query`, or `params` as a
 /// standalone identifier.
@@ -54,13 +63,16 @@ impl OxcCheck for Check {
         if !ctx.project.has_framework("elysia") {
             return;
         }
+        if !file_imports_elysia_html(ctx.source) {
+            return;
+        }
 
         let AstKind::JSXOpeningElement(opening) = node.kind() else {
             return;
         };
 
         // Walk up to parent JSXElement to inspect children.
-        let Some(parent) = semantic.nodes().ancestors(node.id()).nth(1) else {
+        let Some(parent) = semantic.nodes().ancestors(node.id()).next() else {
             return;
         };
         let AstKind::JSXElement(element) = parent.kind() else {
@@ -110,5 +122,47 @@ impl OxcCheck for Check {
             severity: Severity::Error,
             span: None,
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run_on(source: &str) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx_with_framework(source, &Check, "elysia")
+    }
+
+    #[test]
+    fn flags_elysia_html_jsx_with_body_no_safe() {
+        let src = "import { html } from '@elysiajs/html';\nconst v = <div>{body.name}</div>;";
+        assert!(!run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_elysia_html_jsx_with_safe() {
+        let src = "import { html } from '@elysiajs/html';\nconst v = <div safe>{body.name}</div>;";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_elysia_html_slash_import() {
+        let src = "import { html } from 'elysia/html';\nconst v = <div safe>{body.name}</div>;";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_on_react_jsx_with_body_prop() {
+        // React JSX in an Elysia project — file imports from 'react', not '@elysiajs/html'.
+        // React escapes string interpolations by default, so `safe` is meaningless here.
+        // Closes #426.
+        let src = "import React from 'react';\nfunction ErrorScreen({ body }: { body: string }) {\n  return <div>{body}</div>;\n}";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_on_react_jsx_with_query_prop() {
+        let src = "import React from 'react';\nfunction Search({ query }: { query: string }) {\n  return <p>{query}</p>;\n}";
+        assert!(run_on(src).is_empty());
     }
 }
