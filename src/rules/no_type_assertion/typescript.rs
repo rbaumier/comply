@@ -42,7 +42,14 @@ crate::ast_check! { on ["as_expression"] => |node, source, ctx, diagnostics|
         return;
     }
 
+    // Allow single `as T` when the line or the preceding line carries
+    // `// comply-ignore-reason: utility-type-constraint` — an acknowledged
+    // workaround for third-party deferred conditional types (e.g. Drizzle).
     let pos = node.start_position();
+    if line_or_prev_has_ignore_reason(source, pos.row) {
+        return;
+    }
+
     diagnostics.push(Diagnostic {
         path: std::sync::Arc::clone(&ctx.path_arc),
         line: pos.row + 1,
@@ -52,6 +59,21 @@ crate::ast_check! { on ["as_expression"] => |node, source, ctx, diagnostics|
         severity: Severity::Error,
         span: None,
     });
+}
+
+/// Returns `true` if source line `row` (0-based) or the preceding line contains
+/// `// comply-ignore-reason: utility-type-constraint`.
+fn line_or_prev_has_ignore_reason(source: &[u8], row: usize) -> bool {
+    const MARKER: &[u8] = b"// comply-ignore-reason: utility-type-constraint";
+    let lines: Vec<&[u8]> = source.split(|&b| b == b'\n').collect();
+    let check = |line: &[u8]| line.windows(MARKER.len()).any(|w| w == MARKER);
+    if lines.get(row).is_some_and(|l| check(l)) {
+        return true;
+    }
+    if row > 0 && lines.get(row - 1).is_some_and(|l| check(l)) {
+        return true;
+    }
+    false
 }
 
 /// Returns `true` when `node` is `(expr as unknown)` — the inner cast of a
@@ -205,6 +227,27 @@ mod tests {
     fn still_flags_non_tanstack_plain_cast() {
         // Non-TanStack calls must still be flagged
         let diags = run_on("const x = someOtherFn() as AdminUser;");
+        assert_eq!(diags.len(), 1);
+    }
+
+    // Regression #388 — single `as T` with comply-ignore-reason: utility-type-constraint
+    #[test]
+    fn allows_utility_type_constraint_inline_comment() {
+        let src = "const x = junctionTable as AnyPgTable; // comply-ignore-reason: utility-type-constraint";
+        let diags = run_on(src);
+        assert!(diags.is_empty(), "unexpected diags: {:?}", diags);
+    }
+
+    #[test]
+    fn allows_utility_type_constraint_preceding_comment() {
+        let src = "// comply-ignore-reason: utility-type-constraint\nconst x = junctionTable as AnyPgTable;";
+        let diags = run_on(src);
+        assert!(diags.is_empty(), "unexpected diags: {:?}", diags);
+    }
+
+    #[test]
+    fn still_flags_without_utility_type_constraint_comment() {
+        let diags = run_on("const x = junctionTable as AnyPgTable;");
         assert_eq!(diags.len(), 1);
     }
 }
