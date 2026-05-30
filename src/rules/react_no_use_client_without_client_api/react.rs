@@ -18,6 +18,11 @@ const CLIENT_GLOBALS: &[&str] = &[
     "fetch",
 ];
 
+const CLIENT_ONLY_PACKAGE_PREFIXES: &[&str] = &[
+    "@base-ui/react",
+    "@radix-ui/",
+];
+
 fn has_use_client_directive(program: tree_sitter::Node<'_>, source: &[u8]) -> bool {
     let mut cursor = program.walk();
     for child in program.children(&mut cursor) {
@@ -42,6 +47,32 @@ fn has_use_client_directive(program: tree_sitter::Node<'_>, source: &[u8]) -> bo
             return true;
         }
         // Any other directive: keep scanning for "use client".
+    }
+    false
+}
+
+/// Returns true if any import in the program comes from a known client-only package.
+fn imports_from_client_only_package(program: tree_sitter::Node<'_>, source: &[u8]) -> bool {
+    let mut cursor = program.walk();
+    for child in program.children(&mut cursor) {
+        if child.kind() != "import_statement" {
+            continue;
+        }
+        // The import source is a `string` node — last named child or child named "source"
+        let mut inner = child.walk();
+        for part in child.children(&mut inner) {
+            if part.kind() == "string" {
+                if let Ok(text) = part.utf8_text(source) {
+                    let pkg = text.trim_matches(|c| c == '"' || c == '\'');
+                    if CLIENT_ONLY_PACKAGE_PREFIXES
+                        .iter()
+                        .any(|prefix| pkg.starts_with(prefix))
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
     }
     false
 }
@@ -93,6 +124,9 @@ fn scan_client_apis(node: tree_sitter::Node<'_>, source: &[u8], found: &mut bool
 crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
     let _ = ctx;
     if !has_use_client_directive(node, source) {
+        return;
+    }
+    if imports_from_client_only_package(node, source) {
         return;
     }
     let mut found = false;
@@ -165,6 +199,47 @@ export function H() { const h = window.location.href; return <div>{h}</div>; }
         // does not actually need to be a client component.
         let src = r#""use client";
 import { useState } from "react";
+export function Title() { return <h1>Hi</h1>; }
+"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // Regression tests for #458 — wrappers around client-only UI primitives
+    #[test]
+    fn no_fp_for_base_ui_wrapper() {
+        // @base-ui/react primitives use focus management and event listeners internally.
+        let src = r#""use client";
+import * as AlertDialog from "@base-ui/react/alert-dialog";
+export const Root = AlertDialog.Root;
+export const Trigger = AlertDialog.Trigger;
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_for_base_ui_root_package() {
+        let src = r#""use client";
+import { Tabs } from "@base-ui/react";
+export { Tabs };
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_for_radix_ui_wrapper() {
+        // @radix-ui/* primitives use keyboard nav and pointer events internally.
+        let src = r#""use client";
+import * as Tooltip from "@radix-ui/react-tooltip";
+export const Provider = Tooltip.Provider;
+export const Root = Tooltip.Root;
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_unrelated_bare_use_client() {
+        // A file with no client-only package imports should still be flagged.
+        let src = r#""use client";
 export function Title() { return <h1>Hi</h1>; }
 "#;
         assert_eq!(run(src).len(), 1);
