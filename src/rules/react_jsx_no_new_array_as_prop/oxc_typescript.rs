@@ -30,6 +30,13 @@ impl OxcCheck for Check {
             return;
         }
 
+        // When the React Compiler is enabled it auto-memoises inline prop
+        // references, so manual hoisting is redundant noise and can interfere
+        // with the compiler's optimisation analysis.
+        if ctx.project.has_dependency("babel-plugin-react-compiler") {
+            return;
+        }
+
         let AstKind::JSXOpeningElement(opening) = node.kind() else {
             return;
         };
@@ -70,8 +77,19 @@ impl OxcCheck for Check {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::project::ProjectCtx;
     use crate::rules::file_ctx::{FileCtx, PathSegments};
-    use crate::rules::test_helpers::{run_oxc_tsx, run_oxc_tsx_with_file_ctx};
+    use crate::rules::test_helpers::{
+        run_oxc_tsx, run_oxc_tsx_with_file_ctx, run_oxc_tsx_with_project,
+    };
+
+    fn react_compiler_project() -> ProjectCtx {
+        let mut project = ProjectCtx::empty();
+        project
+            .dev_dependencies
+            .insert("babel-plugin-react-compiler".to_string(), "^1.0.0".to_string());
+        project
+    }
 
     fn test_file_ctx() -> FileCtx {
         FileCtx {
@@ -122,5 +140,22 @@ mod tests {
     fn allows_identifier_in_prod_file() {
         let src = "const x = <Comp items={items} />;";
         assert!(run_oxc_tsx(src, &Check).is_empty());
+    }
+
+    #[test]
+    fn no_fp_when_react_compiler_enabled() {
+        // Regression: issue #442 — the React Compiler auto-memoises inline
+        // references, so hoisting is redundant noise.
+        let src = "const x = <AsyncMultiSelect options={[{ value: 'a', label: 'A' }]} />;";
+        assert!(run_oxc_tsx_with_project(src, &Check, &react_compiler_project()).is_empty());
+    }
+
+    #[test]
+    fn still_flags_without_react_compiler() {
+        let src = "const x = <DataTable data={[row1, row2]} />;";
+        assert_eq!(
+            run_oxc_tsx_with_project(src, &Check, &ProjectCtx::empty()).len(),
+            1
+        );
     }
 }
