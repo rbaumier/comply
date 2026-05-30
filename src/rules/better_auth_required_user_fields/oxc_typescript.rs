@@ -7,6 +7,13 @@ use crate::rules::backend::{AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{Expression, ObjectPropertyKind, PropertyKey};
 use std::sync::Arc;
 
+const TEST_MARKERS: &[&str] = &[".test.", ".spec.", "__tests__", "_test.", ".e2e.", ".integration."];
+
+fn is_test_file(path: &std::path::Path) -> bool {
+    let s = path.to_string_lossy();
+    TEST_MARKERS.iter().any(|m| s.contains(m))
+}
+
 /// Recursively check if an object expression contains a property with the given key name.
 fn has_property_key(expr: &Expression<'_>, name: &str) -> bool {
     let Expression::ObjectExpression(obj) = expr else { return false };
@@ -43,6 +50,9 @@ impl OxcCheck for Check {
         semantic: &'a oxc_semantic::Semantic<'a>,
         ctx: &CheckCtx,
     ) -> Vec<Diagnostic> {
+        if is_test_file(ctx.path) {
+            return Vec::new();
+        }
         use oxc_ast::AstKind;
         let mut diagnostics = Vec::new();
 
@@ -81,5 +91,56 @@ impl OxcCheck for Check {
         }
 
         diagnostics
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Check;
+    use crate::diagnostic::Diagnostic;
+
+    fn run(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+    fn run_with_path(source: &str, path: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_path(source, &Check, path)
+    }
+
+    #[test]
+    fn flags_missing_both_in_prod_file() {
+        let src = "betterAuth({ user: { additionalFields: { role: { type: 'string' } } } })";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_with_email_and_name() {
+        let src = "betterAuth({ user: { additionalFields: { email: {}, name: {} } } })";
+        assert!(run(src).is_empty());
+    }
+
+    // Regression for #448: partial fixtures in test files must not trigger the rule.
+    #[test]
+    fn no_fp_on_partial_object_in_test_file() {
+        let src = "const testUser = { id: crypto.randomUUID(), email: 'test@example.com' };";
+        assert!(run_with_path(src, "auth.test.ts").is_empty());
+    }
+
+    #[test]
+    fn no_fp_on_partial_object_in_spec_file() {
+        let src = "const testUser = { id: crypto.randomUUID(), email: 'test@example.com' };";
+        assert!(run_with_path(src, "auth.spec.ts").is_empty());
+    }
+
+    #[test]
+    fn no_fp_on_partial_object_in_integration_test_file() {
+        let src = "const testUser = { id: crypto.randomUUID(), email: 'test@example.com' };";
+        assert!(run_with_path(src, "user.integration.test.ts").is_empty());
+    }
+
+    #[test]
+    fn still_flags_prod_file_with_user_config_missing_fields() {
+        let src = "betterAuth({ user: { additionalFields: { role: { type: 'string' } } } })";
+        assert_eq!(run_with_path(src, "auth.config.ts").len(), 1);
     }
 }
