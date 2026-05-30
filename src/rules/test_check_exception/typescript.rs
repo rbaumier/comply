@@ -29,6 +29,16 @@ crate::ast_check! { on ["call_expression"] prefilter = ["toThrow"] => |node, sou
     if prop_text != b"toThrow" {
         return;
     }
+    // Skip `.not.toThrow()` — asserts no error is thrown; no argument needed or meaningful
+    if let Some(obj) = func.child_by_field_name("object") {
+        if obj.kind() == "member_expression" {
+            if let Some(obj_prop) = obj.child_by_field_name("property") {
+                if &source[obj_prop.byte_range()] == b"not" {
+                    return;
+                }
+            }
+        }
+    }
     // Check arguments are empty
     let Some(args) = node.child_by_field_name("arguments") else {
         return;
@@ -88,5 +98,11 @@ mod tests {
         // Use run_ts which defaults to "t.ts" (not a test file)
         let d = crate::rules::test_helpers::run_ts("expect(() => doThing()).toThrow();", &Check);
         assert!(d.is_empty());
+    }
+
+    #[test]
+    fn no_fp_on_not_to_throw() {
+        // .not.toThrow() asserts no error is thrown — no argument needed (Closes #440)
+        assert!(run_on("expect(() => fn()).not.toThrow();").is_empty());
     }
 }

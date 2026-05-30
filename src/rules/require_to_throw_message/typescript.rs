@@ -15,6 +15,17 @@ crate::ast_check! { on ["call_expression"] prefilter = ["toThrow"] => |node, sou
         return;
     }
 
+    // Skip `.not.toThrow()` / `.not.toThrowError()` — asserts no error; no argument needed
+    if let Some(obj) = callee.child_by_field_name("object") {
+        if obj.kind() == "member_expression" {
+            if let Some(obj_prop) = obj.child_by_field_name("property") {
+                if obj_prop.utf8_text(source).unwrap_or("") == "not" {
+                    return;
+                }
+            }
+        }
+    }
+
     let Some(args) = node.child_by_field_name("arguments") else { return };
     // `arguments` node contains parentheses + commas; count named children only.
     if args.named_child_count() != 0 {
@@ -64,5 +75,16 @@ mod tests {
     #[test]
     fn ignores_unrelated_member_calls() {
         assert!(run_on("expect(x).toBe();").is_empty());
+    }
+
+    #[test]
+    fn no_fp_on_not_to_throw() {
+        // .not.toThrow() asserts no error is thrown — no argument needed (Closes #440)
+        assert!(run_on("expect(() => fn()).not.toThrow();").is_empty());
+    }
+
+    #[test]
+    fn no_fp_on_not_to_throw_error() {
+        assert!(run_on("expect(() => fn()).not.toThrowError();").is_empty());
     }
 }
