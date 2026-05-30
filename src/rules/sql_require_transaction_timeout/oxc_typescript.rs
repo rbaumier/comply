@@ -8,6 +8,39 @@ use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::Expression;
 use std::sync::Arc;
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rules::file_ctx::{FileCtx, PathSegments};
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx_with_file_ctx(src, &Check, &FileCtx::default())
+    }
+
+    fn run_in_test_file(src: &str) -> Vec<Diagnostic> {
+        let file = FileCtx {
+            path_segments: PathSegments { in_test_dir: true, ..PathSegments::default() },
+            ..Default::default()
+        };
+        crate::rules::test_helpers::run_oxc_tsx_with_file_ctx(src, &Check, &file)
+    }
+
+    #[test]
+    fn flags_drizzle_without_timeout() {
+        assert_eq!(run("const db = drizzle({ connectionString: url });").len(), 1);
+    }
+
+    #[test]
+    fn no_fp_drizzle_in_test_file() {
+        // Regression: drizzle() wrapping a proxied test connection — issue #546
+        let src = r#"const legacyDb = drizzle({
+  client: legacyClient,
+  relations: legacySchema.relations,
+});"#;
+        assert!(run_in_test_file(src).is_empty());
+    }
+}
+
 pub struct Check;
 
 fn callee_name<'a>(expr: &'a Expression<'a>) -> Option<&'a str> {
@@ -29,6 +62,9 @@ impl OxcCheck for Check {
         _semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
+        if ctx.file.path_segments.in_test_dir {
+            return;
+        }
         // File-level guard.
         if ctx.source.contains("statement_timeout") {
             return;

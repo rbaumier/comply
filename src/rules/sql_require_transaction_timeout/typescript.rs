@@ -16,6 +16,9 @@ fn callee_name<'a>(call: tree_sitter::Node, source: &'a [u8]) -> &'a str {
 }
 
 crate::ast_check! { |node, source, ctx, diagnostics|
+    if ctx.file.path_segments.in_test_dir {
+        return;
+    }
     // File-level guard.
     if ctx.source.contains("statement_timeout") {
         return;
@@ -69,5 +72,21 @@ mod tests {
     #[test]
     fn ignores_non_pool_files() {
         assert!(run("const x = 1;").is_empty());
+    }
+
+    #[test]
+    fn no_fp_drizzle_in_test_file() {
+        // Regression: drizzle() wrapping a proxied test connection — issue #546
+        use crate::rules::file_ctx::{FileCtx, PathSegments};
+        let src = r#"const legacyDb = drizzle({
+  client: legacyClient,
+  relations: legacySchema.relations,
+});"#;
+        let file = FileCtx {
+            path_segments: PathSegments { in_test_dir: true, ..PathSegments::default() },
+            ..Default::default()
+        };
+        let diags = crate::rules::test_helpers::run_ts_with_file_ctx(src, &Check, &file);
+        assert!(diags.is_empty());
     }
 }
