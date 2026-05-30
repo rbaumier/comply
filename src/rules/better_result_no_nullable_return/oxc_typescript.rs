@@ -11,6 +11,18 @@ fn imports_better_result(source: &str) -> bool {
     source.contains("better-result") || source.contains("@better-result")
 }
 
+fn is_helper_path(path: &std::path::Path) -> bool {
+    let s = path.to_string_lossy();
+    s.contains("/lib/") || s.contains("/utils/") || s.contains("/helpers/")
+}
+
+fn is_helper_function_name(name: &str) -> bool {
+    name.starts_with("to")
+        || name.starts_with("from")
+        || name.starts_with("map")
+        || name.starts_with("transform")
+}
+
 /// Returns true if the function body (identified by its byte range) contains
 /// any node that disqualifies it from being a "pure sync composer":
 /// - any AwaitExpression
@@ -95,6 +107,32 @@ impl OxcCheck for Check {
                 continue;
             }
 
+            // Exempt helper paths (lib/, utils/, helpers/) and helper function names
+            // (to*, from*, map*, transform*) — these are building-block composers,
+            // not route handlers with observable HTTP responses.
+            if is_helper_path(ctx.path) {
+                continue;
+            }
+            let func_name: Option<&str> = match node.kind() {
+                AstKind::Function(func) => func.id.as_ref().map(|id| id.name.as_str()),
+                AstKind::ArrowFunctionExpression(_) => {
+                    let parent = semantic.nodes().parent_node(node.id());
+                    if let AstKind::VariableDeclarator(decl) = parent.kind() {
+                        if let oxc_ast::ast::BindingPattern::BindingIdentifier(id) = &decl.id {
+                            Some(id.name.as_str())
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            };
+            if func_name.is_some_and(|name| is_helper_function_name(name)) {
+                continue;
+            }
+
             // Async functions always have error semantics — flag immediately.
             if is_async {
                 let (line, column) = byte_offset_to_line_col(ctx.source, span.start as usize);
@@ -139,7 +177,7 @@ impl OxcCheck for Check {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rules::test_helpers::run_oxc_ts;
+    use crate::rules::test_helpers::{run_oxc_ts, run_oxc_ts_with_path};
 
     #[test]
     fn flags_nullable_return() {
@@ -223,6 +261,106 @@ function loadUser(id: string): User | undefined {
     Result.err(new NotFoundError());
   }
   return undefined;
+}
+"#;
+        assert_eq!(run_oxc_ts(src, &Check).len(), 1);
+    }
+
+    // Issue #372 regression: helper function names (to*, from*, map*, transform*)
+    // must not be flagged even when they are async or have error semantics.
+
+    #[test]
+    fn allows_to_prefixed_async_helper() {
+        let src = r#"
+import { Result } from 'better-result';
+export async function toNullable<T>(result: Result<T, unknown>): Promise<T | null> {
+  const r = await result;
+  return r.ok ? r.value : null;
+}
+"#;
+        assert!(run_oxc_ts(src, &Check).is_empty());
+    }
+
+    #[test]
+    fn allows_from_prefixed_sync_helper_with_throw() {
+        let src = r#"
+import { Result } from 'better-result';
+export function fromNullable<T>(value: T | null): T | null {
+  if (value === undefined) throw new Error("unexpected");
+  return value;
+}
+"#;
+        assert!(run_oxc_ts(src, &Check).is_empty());
+    }
+
+    #[test]
+    fn allows_map_prefixed_arrow_function() {
+        let src = r#"
+import { Result } from 'better-result';
+export const mapToOption = async <T>(value: T | null): Promise<T | undefined> => {
+  const x = await fetchSomething();
+  return value ?? undefined;
+};
+"#;
+        assert!(run_oxc_ts(src, &Check).is_empty());
+    }
+
+    #[test]
+    fn allows_transform_prefixed_function() {
+        let src = r#"
+import { Result } from 'better-result';
+export async function transformToNullable<T>(id: string): Promise<T | null> {
+  const data = await fetch(id);
+  return data ? data.value : null;
+}
+"#;
+        assert!(run_oxc_ts(src, &Check).is_empty());
+    }
+
+    #[test]
+    fn allows_helper_path_lib() {
+        let src = r#"
+import { Result } from 'better-result';
+export async function loadData(id: string): Promise<User | null> {
+  const x = await db.find(id);
+  return x ?? null;
+}
+"#;
+        assert!(run_oxc_ts_with_path(src, &Check, "src/api/lib/result-helpers.ts").is_empty());
+    }
+
+    #[test]
+    fn allows_helper_path_utils() {
+        let src = r#"
+import { Result } from 'better-result';
+export async function getData(id: string): Promise<User | undefined> {
+  return await db.find(id);
+}
+"#;
+        assert!(run_oxc_ts_with_path(src, &Check, "src/utils/query.ts").is_empty());
+    }
+
+    #[test]
+    fn allows_helper_path_helpers() {
+        let src = r#"
+import { Result } from 'better-result';
+export function getUser(id: string): User | null {
+  if (!id) throw new Error("bad");
+  return null;
+}
+"#;
+        assert!(run_oxc_ts_with_path(src, &Check, "src/helpers/user.ts").is_empty());
+    }
+
+    #[test]
+    fn still_flags_non_helper_named_function_with_error_semantics() {
+        // A regular function (not to/from/map/transform, not in lib/utils/helpers)
+        // with error semantics must still be flagged.
+        let src = r#"
+import { Result } from 'better-result';
+export async function loadUser(id: string): Promise<User | null> {
+  const x = await db.find(id);
+  return x ?? null;
 }
 "#;
         assert_eq!(run_oxc_ts(src, &Check).len(), 1);
