@@ -19,6 +19,13 @@ impl AstCheck for Check {
     }
 
     fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
+        let public_patterns =
+            ctx.config
+                .string_list("jsdoc-missing-example", "public_patterns", ctx.lang);
+        if !public_patterns.is_empty() && !path_matches_any(ctx.path, &public_patterns) {
+            return Vec::new();
+        }
+
         let source = ctx.source.as_bytes();
         let root = tree.root_node();
         let mut diagnostics = Vec::new();
@@ -56,6 +63,16 @@ impl AstCheck for Check {
         }
         diagnostics
     }
+}
+
+fn path_matches_any(path: &std::path::Path, patterns: &[String]) -> bool {
+    let path_str = path.to_string_lossy();
+    patterns.iter().any(|pat| {
+        globset::Glob::new(pat)
+            .ok()
+            .map(|g| g.compile_matcher().is_match(path_str.as_ref()))
+            .unwrap_or(false)
+    })
 }
 
 fn is_exported_function(export: tree_sitter::Node) -> bool {
@@ -96,9 +113,43 @@ fn extract_exported_name<'a>(export: tree_sitter::Node, source: &'a [u8]) -> Opt
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::path::Path;
+    use tempfile::TempDir;
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_ts(source, &Check)
+    }
+
+    fn run_with_public_patterns(source: &str, fake_path: &str, patterns: &[&str]) -> Vec<Diagnostic> {
+        let tmp = TempDir::new().expect("tempdir");
+        let patterns_toml = patterns
+            .iter()
+            .map(|p| format!("\"{p}\""))
+            .collect::<Vec<_>>()
+            .join(", ");
+        fs::write(
+            tmp.path().join("comply.toml"),
+            format!("[rules.jsdoc-missing-example]\npublic_patterns = [{patterns_toml}]\n"),
+        )
+        .expect("write cfg");
+        let cfg = crate::config::Config::load_from(tmp.path()).expect("load cfg");
+
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into())
+            .expect("grammar");
+        let tree = parser.parse(source, None).expect("parse");
+        let ctx = crate::rules::backend::CheckCtx {
+            path: Path::new(fake_path),
+            path_arc: std::sync::Arc::from(Path::new(fake_path)),
+            source,
+            config: &cfg,
+            project: crate::project::default_static_project_ctx(),
+            file: crate::rules::file_ctx::default_static_file_ctx(),
+            lang: crate::files::Language::TypeScript,
+        };
+        Check.check(&ctx, &tree)
     }
 
     #[test]
@@ -123,5 +174,42 @@ mod tests {
     fn ignores_non_exported_function() {
         let source = "/** Helper. */\nfunction helper() {}";
         assert!(run_on(source).is_empty());
+    }
+
+    // --- regression tests for issue #461 ---
+
+    #[test]
+    fn no_fp_on_internal_file_when_public_patterns_set() {
+        // Internal utilities (e.g. authorization.ts, policy.ts) must not fire
+        // when public_patterns is configured and the file doesn't match.
+        let source = "/** Converts a raw role string to a MemberRole enum value. */\nexport function toMemberRole(role: string) { return role; }";
+        let diags = run_with_public_patterns(source, "src/shared/authorization.ts", &["src/public/**"]);
+        assert!(
+            diags.is_empty(),
+            "internal file should not fire when public_patterns restricts the rule: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn fires_on_matching_public_file_when_public_patterns_set() {
+        let source = "/** Does foo. */\nexport function foo() {}";
+        let diags = run_with_public_patterns(source, "src/public/api.ts", &["src/public/**"]);
+        assert_eq!(
+            diags.len(),
+            1,
+            "public file should still fire when it matches public_patterns"
+        );
+    }
+
+    #[test]
+    fn empty_public_patterns_fires_everywhere() {
+        // Default empty list: current behaviour is preserved — fires on all files.
+        let source = "/** Does foo. */\nexport function foo() {}";
+        let diags = run_with_public_patterns(source, "src/shared/authorization.ts", &[]);
+        assert_eq!(
+            diags.len(),
+            1,
+            "empty public_patterns should fire everywhere (backward-compatible)"
+        );
     }
 }

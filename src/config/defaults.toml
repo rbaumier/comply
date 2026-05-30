@@ -116,6 +116,13 @@ min_indent = 4
 max_comment_tokens = 6
 overlap_threshold = 0.80
 
+# When non-empty, jsdoc-missing-example only fires on files whose path matches
+# at least one of these glob patterns. Leave empty (the default) to require
+# @example on every exported function with JSDoc regardless of file location.
+# Example: public_patterns = ["src/public/**", "packages/*/src/index.ts"]
+[rules.jsdoc-missing-example]
+public_patterns = []
+
 [rules.sql-index-needs-rationale-comment]
 min_rationale_words = 3
 lookback_lines = 3
