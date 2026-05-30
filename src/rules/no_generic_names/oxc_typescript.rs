@@ -156,27 +156,51 @@ fn is_in_import_declaration<'a>(
 /// - A type reference named `Promise<Result<…>>` (the awaited form).
 /// - An array type (`readonly TRow[]`, `User[]`, `Array<User>`) — for
 ///   helpers like `firstOrError<TRow>(rows: readonly TRow[], …)`.
+/// - A type assertion on the initializer (`const rows = expr as T[]`) —
+///   covers generic DB helpers where the cast carries the type information.
 fn type_annotation_is_descriptive<'a>(
     node: &oxc_semantic::AstNode<'a>,
     semantic: &'a oxc_semantic::Semantic<'a>,
 ) -> bool {
     let nodes = semantic.nodes();
     for kind in nodes.ancestor_kinds(node.id()) {
-        let annotation = match kind {
-            AstKind::FormalParameter(p) => p.type_annotation.as_ref(),
-            AstKind::VariableDeclarator(d) => d.type_annotation.as_ref(),
+        match kind {
+            AstKind::FormalParameter(p) => {
+                let Some(ann) = p.type_annotation.as_ref() else {
+                    return false;
+                };
+                return ts_type_is_descriptive(&ann.type_annotation);
+            }
+            AstKind::VariableDeclarator(d) => {
+                if let Some(ann) = d.type_annotation.as_ref() {
+                    return ts_type_is_descriptive(&ann.type_annotation);
+                }
+                // No explicit annotation: accept a type assertion on the
+                // initializer (`const rows = expr as InferSelectModel<TRef>[]`).
+                return init_has_descriptive_type_assertion(d.init.as_ref());
+            }
             // Stop walking when we leave the binding's surroundings.
             AstKind::Function(_)
             | AstKind::ArrowFunctionExpression(_)
             | AstKind::Program(_) => return false,
             _ => continue,
-        };
-        let Some(ann) = annotation else {
-            return false;
-        };
-        return ts_type_is_descriptive(&ann.type_annotation);
+        }
     }
     false
+}
+
+/// True when `init` is a `TSAsExpression` (or parenthesized wrapper) whose
+/// asserted type passes `ts_type_is_descriptive`. Handles:
+///   `expr as T[]`  →  TSAsExpression { type_annotation: TSArrayType }
+fn init_has_descriptive_type_assertion(init: Option<&Expression>) -> bool {
+    let Some(expr) = init else { return false };
+    match expr {
+        Expression::TSAsExpression(as_expr) => ts_type_is_descriptive(&as_expr.type_annotation),
+        Expression::ParenthesizedExpression(paren) => {
+            init_has_descriptive_type_assertion(Some(&paren.expression))
+        }
+        _ => false,
+    }
 }
 
 fn ts_type_is_descriptive(ty: &TSType) -> bool {
@@ -620,6 +644,38 @@ mod tests {
         // `data` without a type annotation in a named function declaration
         // is still vague — no library convention prescribes it there.
         let src = r#"function myFunc(data) { return data; }"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn no_fp_rows_with_type_assertion_in_generic_db_helper() {
+        // Regression for #389 — `rows` cast to a generic array type in a
+        // generic database helper where no domain-specific name is possible.
+        let src = r#"
+            export async function replaceTeamJunction<
+                TJunction extends PgTable,
+                TRef extends PgTable,
+            >(tx: DatabaseTransaction): Promise<void> {
+                return Result.gen(async function* () {
+                    const rows = (yield* Result.await(
+                        tryDatabaseQuery(() => tx.select().from(junctionTable)),
+                    )) as InferSelectModel<TRef>[];
+                    return Result.ok(rows);
+                });
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_rows_without_type_assertion() {
+        // No `as T[]` — must still flag.
+        let src = r#"
+            async function genericHelper<TRef extends PgTable>(tx: any): Promise<void> {
+                const rows = await tx.select().from(table);
+                return rows;
+            }
+        "#;
         assert_eq!(run(src).len(), 1);
     }
 }
