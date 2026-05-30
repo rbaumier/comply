@@ -7,35 +7,68 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::jsdoc_text_helpers::{find_jsdoc_blocks, following_code, has_tag, parse_tags};
 
-/// Detect a `<T, U>` generics block at the start of a function / class
-/// signature. Returns true when present.
-fn has_generics(code: &str) -> bool {
+/// Extract the content between `<` and `>` in a generic signature, or `None`
+/// if the code has no valid generic block.
+fn extract_generics_between<'a>(code: &'a str) -> Option<&'a str> {
     let first_line = code
         .lines()
         .map(str::trim_start)
         .find(|l| !l.is_empty())
         .unwrap_or("");
-    // Find the first `(` (function) — everything before it may contain generics.
     let head = match first_line.find('(') {
         Some(i) => &first_line[..i],
         None => first_line,
     };
-    // Only treat `<...>` as generics when it sits directly after an identifier
-    // (e.g. `foo<T>(` or `function foo<T>(`). Skip JSX.
-    let open = match head.rfind('<') {
-        Some(i) => i,
-        None => return false,
-    };
-    let close = match head[open..].find('>') {
-        Some(i) => open + i,
-        None => return false,
-    };
+    let open = head.rfind('<')?;
+    let close = open + head[open..].find('>')?;
     let between = &head[open + 1..close];
-    !between.trim().is_empty()
-        && between.chars().all(|c| {
-            c.is_ascii_alphanumeric()
-                || matches!(c, ',' | ' ' | '_' | '=' | '|' | '{' | '}' | ':' | '<' | '>')
-        })
+    if between.trim().is_empty() {
+        return None;
+    }
+    if between.chars().all(|c| {
+        c.is_ascii_alphanumeric()
+            || matches!(c, ',' | ' ' | '_' | '=' | '|' | '{' | '}' | ':' | '<' | '>')
+    }) {
+        Some(between)
+    } else {
+        None
+    }
+}
+
+/// Detect a `<T, U>` generics block at the start of a function / class
+/// signature. Returns true when present.
+fn has_generics(code: &str) -> bool {
+    extract_generics_between(code).is_some()
+}
+
+/// Returns true when every top-level comma-separated type parameter has an
+/// explicit `extends` constraint. When true, the type-signature already
+/// documents the parameter and a `@template` tag would be redundant.
+fn all_params_constrained(code: &str) -> bool {
+    let Some(between) = extract_generics_between(code) else {
+        return false;
+    };
+    let mut depth = 0usize;
+    let mut start = 0;
+    for (i, ch) in between.char_indices() {
+        match ch {
+            '<' => depth += 1,
+            '>' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                if !between[start..i]
+                    .split_whitespace()
+                    .any(|w| w == "extends")
+                {
+                    return false;
+                }
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    between[start..]
+        .split_whitespace()
+        .any(|w| w == "extends")
 }
 
 fn starts_with_function_or_class(code: &str) -> bool {
@@ -69,6 +102,9 @@ crate::ast_check! { on ["comment"] prefilter = ["/**"] => |node, source, ctx, di
             continue;
         }
         if !has_generics(code) {
+            continue;
+        }
+        if all_params_constrained(code) {
             continue;
         }
         diagnostics.push(Diagnostic {
@@ -106,6 +142,31 @@ mod tests {
     #[test]
     fn allows_non_generic_fn() {
         let src = "/**\n * add\n */\nfunction add(a: number, b: number): number { return a + b; }";
+        assert!(run(src).is_empty());
+    }
+
+    // Regression: #430 — no FP when every type param has an `extends` constraint.
+    #[test]
+    fn no_fp_when_all_params_have_extends_constraint() {
+        let src = r#"/**
+ * Bridge between search params and state.
+ * @example useListSearchSync<UsersSearch>(Route, opts)
+ */
+export function useListSearchSync<TSearch extends ListRouteSearch>(
+  routeApi: ListRouteApi<TSearch>,
+): void {}"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_when_some_params_lack_constraint() {
+        let src = "/**\n * mixed\n */\nfunction mix<T, U extends Foo>(a: T, b: U): void {}";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn no_fp_when_multiple_params_all_constrained() {
+        let src = "/**\n * multi\n */\nfunction multi<T extends Foo, U extends Bar>(): void {}";
         assert!(run(src).is_empty());
     }
 }
