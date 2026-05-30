@@ -2,6 +2,27 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
+/// Returns true if `node` is nested inside an `.onError()` callback.
+/// In `.onError()`, setting `set.status` separately from the return value
+/// is the idiomatic Elysia pattern — the `status()` helper is not usable there.
+fn inside_on_error_handler(mut node: tree_sitter::Node, source: &[u8]) -> bool {
+    while let Some(parent) = node.parent() {
+        if parent.kind() == "call_expression" {
+            if let Some(func) = parent.child_by_field_name("function") {
+                if func.kind() == "member_expression" {
+                    if let Some(prop) = func.child_by_field_name("property") {
+                        if prop.utf8_text(source).unwrap_or("") == "onError" {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        node = parent;
+    }
+    false
+}
+
 crate::ast_check! { on ["assignment_expression"] => |node, source, ctx, diagnostics|
     if !ctx.project.has_framework("elysia") {
         return;
@@ -18,6 +39,10 @@ crate::ast_check! { on ["assignment_expression"] => |node, source, ctx, diagnost
         return;
     }
     if property.utf8_text(source).unwrap_or("") != "status" {
+        return;
+    }
+
+    if inside_on_error_handler(node, source) {
         return;
     }
 
@@ -64,5 +89,24 @@ mod tests {
     fn ignores_non_elysia_files() {
         let src = "function h(set) { set.status = 401; }";
         assert!(crate::rules::test_helpers::run_ts(src, &Check).is_empty());
+    }
+
+    #[test]
+    fn no_fp_in_on_error_handler() {
+        // Issue #534: set.status in .onError() is idiomatic — status() helper
+        // is not usable when also mutating headers and returning a computed body.
+        let src = r#"import { Elysia } from 'elysia';
+app.onError({ as: 'global' }, ({ error, code, set }) => {
+  set.status = apiError.status;
+  return errorToProblem(apiError, requestId);
+});"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_set_status_outside_on_error() {
+        let src = r#"import { Elysia } from 'elysia';
+app.get('/', ({ set }) => { set.status = 404; return 'not found'; });"#;
+        assert_eq!(run_on(src).len(), 1);
     }
 }
