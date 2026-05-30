@@ -16,9 +16,12 @@ const CLIENT_HOOKS: &[&str] = &[
     "useImperativeHandle",
 ];
 
-fn is_functions_file(ctx: &CheckCtx) -> bool {
+fn is_server_fn_file(ctx: &CheckCtx) -> bool {
     let file_name = ctx.path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-    file_name.ends_with(".functions.ts") || file_name.ends_with(".functions.tsx")
+    file_name.ends_with(".functions.ts")
+        || file_name.ends_with(".functions.tsx")
+        || file_name.ends_with(".server.ts")
+        || file_name.ends_with(".server.tsx")
 }
 
 pub struct Check;
@@ -42,7 +45,7 @@ impl OxcCheck for Check {
         let AstKind::ImportDeclaration(import) = node.kind() else {
             return;
         };
-        if !is_functions_file(ctx) {
+        if !is_server_fn_file(ctx) {
             return;
         }
 

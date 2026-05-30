@@ -1,7 +1,7 @@
 //! tanstack-start-no-client-import-in-server-fn backend — only fires on
-//! `*.functions.ts(x)` files. Walks `import_statement` nodes and flags
-//! either a `react-dom` import or an import that pulls a client-only
-//! React hook (`useState`, `useEffect`, …).
+//! `*.functions.ts(x)` and `*.server.ts(x)` files. Walks `import_statement`
+//! nodes and flags either a `react-dom` import or an import that pulls a
+//! client-only React hook (`useState`, `useEffect`, …).
 
 use crate::diagnostic::{Diagnostic, Severity};
 
@@ -16,9 +16,12 @@ const CLIENT_HOOKS: &[&str] = &[
     "useImperativeHandle",
 ];
 
-fn is_functions_file(ctx: &crate::rules::backend::CheckCtx) -> bool {
+fn is_server_fn_file(ctx: &crate::rules::backend::CheckCtx) -> bool {
     let file_name = ctx.path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-    file_name.ends_with(".functions.ts") || file_name.ends_with(".functions.tsx")
+    file_name.ends_with(".functions.ts")
+        || file_name.ends_with(".functions.tsx")
+        || file_name.ends_with(".server.ts")
+        || file_name.ends_with(".server.tsx")
 }
 
 /// Strip a single layer of surrounding quotes from a string literal's
@@ -37,7 +40,7 @@ fn strip_quotes(s: &str) -> &str {
 }
 
 crate::ast_check! { on ["import_statement"] prefilter = ["createServerFn"] => |node, source, ctx, diagnostics|
-    if !is_functions_file(ctx) { return; }
+    if !is_server_fn_file(ctx) { return; }
 
     // Resolve the imported module path.
     let Some(source_node) = node.child_by_field_name("source") else { return };
@@ -130,5 +133,31 @@ mod tests {
             "import { useState, useEffect } from 'react'",
         );
         assert_eq!(diags.len(), 1);
+    }
+
+    // Regression for rbaumier/comply#375 — .server.ts files are also server-function
+    // boundaries and must be checked like .functions.ts.
+    #[test]
+    fn flags_use_state_in_server_file() {
+        let diags = run(
+            "src/users/foo.server.ts",
+            "import { useState } from 'react'",
+        );
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn flags_react_dom_in_server_file() {
+        let diags = run(
+            "src/users/bar.server.tsx",
+            "import ReactDOM from 'react-dom'",
+        );
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn allows_safe_import_in_server_file() {
+        let diags = run("src/users/foo.server.ts", "import { z } from 'zod'");
+        assert!(diags.is_empty());
     }
 }
