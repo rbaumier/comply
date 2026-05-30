@@ -132,8 +132,8 @@ fn has_nullish_or_logical_fallback(node: tree_sitter::Node, source: &[u8]) -> bo
     false
 }
 
-/// True if the statement immediately preceding the one containing `node`
-/// is `expect(<object_str>).toHaveLength(N)` — a Vitest/Jest assertion
+/// True if any preceding sibling statement in the same block contains
+/// `expect(<object_str>).toHaveLength(N)` — a Vitest/Jest assertion
 /// that guarantees the array has at least one element.
 fn has_expect_have_length_guard(
     node: tree_sitter::Node,
@@ -151,14 +151,17 @@ fn has_expect_have_length_guard(
         }
         cur = parent;
     }
-    let Some(prev) = cur.prev_named_sibling() else {
-        return false;
-    };
-    let Ok(prev_text) = prev.utf8_text(source) else {
-        return false;
-    };
     let needle = format!("expect({object_str}).toHaveLength(");
-    prev_text.contains(&needle)
+    let mut prev = cur.prev_named_sibling();
+    while let Some(p) = prev {
+        if let Ok(text) = p.utf8_text(source) {
+            if text.contains(&needle) {
+                return true;
+            }
+        }
+        prev = p.prev_named_sibling();
+    }
+    false
 }
 
 /// Heuristic guard check: any ancestor `if_statement` whose condition
@@ -316,5 +319,21 @@ mod tests {
         // expect(other).toHaveLength(1) does not guard rows[0]
         let src = "expect(other).toHaveLength(1);\nconst first = rows[0];";
         assert_eq!(run_on(src).len(), 1);
+    }
+
+    // Regression #584: guard need not be the immediately preceding statement
+    #[test]
+    fn no_fp_expect_have_length_guard_with_statements_between() {
+        // In real test files, other statements appear between the toHaveLength
+        // guard and later accesses to the same array.
+        let src = "expect(spy.mock.calls).toHaveLength(1);\nconst call = spy.mock.calls[0];\nconsole.log(call);\nconst args = spy.mock.calls[0];";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_expect_have_length_guard_member_expr_object() {
+        // spy.mock.calls[0] — object is a member_expression, not a plain identifier
+        let src = "expect(spy.mock.calls).toHaveLength(1);\nconst call = spy.mock.calls[0];";
+        assert!(run_on(src).is_empty());
     }
 }
