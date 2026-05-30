@@ -1,7 +1,9 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{CheckCtx, OxcCheck};
+use oxc_ast::AstKind;
 use oxc_ast::ast::*;
+use oxc_semantic::SymbolId;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -16,8 +18,11 @@ impl OxcCheck for Check {
         let program = semantic.nodes().program();
         let mut diagnostics = Vec::new();
 
-        // Phase 1: collect named imports as `local_name -> module_specifier`.
-        let mut imports: HashMap<&str, &str> = HashMap::new();
+        let scoping = semantic.scoping();
+        let nodes = semantic.nodes();
+
+        // Phase 1: collect named imports as `local_name -> (module_specifier, symbol_id)`.
+        let mut imports: HashMap<&str, (&str, Option<SymbolId>)> = HashMap::new();
         for stmt in &program.body {
             let Statement::ImportDeclaration(import) = stmt else {
                 continue;
@@ -31,7 +36,8 @@ impl OxcCheck for Check {
                     continue;
                 };
                 let local_name = named.local.name.as_str();
-                imports.insert(local_name, specifier);
+                let symbol_id = named.local.symbol_id.get();
+                imports.insert(local_name, (specifier, symbol_id));
             }
         }
 
@@ -54,7 +60,20 @@ impl OxcCheck for Check {
             }
             for spec in &export.specifiers {
                 let local_name = spec.local.name().as_str();
-                if let Some(module_specifier) = imports.get(local_name) {
+                if let Some((module_specifier, sym_id)) = imports.get(local_name) {
+                    // Skip if the symbol is also used locally — converting to a
+                    // re-export would remove the local binding.
+                    if let Some(symbol_id) = sym_id {
+                        let has_local_usage =
+                            scoping.get_resolved_references(*symbol_id).any(|reference| {
+                                !nodes.ancestor_kinds(reference.node_id()).any(|k| {
+                                    matches!(k, AstKind::ExportNamedDeclaration(_))
+                                })
+                            });
+                        if has_local_usage {
+                            continue;
+                        }
+                    }
                     let (line, column) =
                         byte_offset_to_line_col(ctx.source, spec.span.start as usize);
                     diagnostics.push(Diagnostic {
@@ -74,5 +93,44 @@ impl OxcCheck for Check {
         }
 
         diagnostics
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+    #[test]
+    fn flags_import_then_reexport() {
+        let d = run("import { foo } from './mod';\nexport { foo };");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("export { foo } from './mod'"));
+    }
+
+    #[test]
+    fn allows_direct_export_from() {
+        assert!(run("export { foo } from './mod';").is_empty());
+    }
+
+    #[test]
+    fn allows_export_of_local() {
+        assert!(run("const bar = 1;\nexport { bar };").is_empty());
+    }
+
+    #[test]
+    fn no_fp_when_import_used_locally_and_exported() {
+        // Symbol imported, used locally, and exported — cannot be converted to re-export.
+        let src = "import { GammeSchema } from './gamme-schema';\nconst x = GammeSchema.parse({});\nexport { GammeSchema };";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_when_import_aliased_used_locally_and_exported() {
+        let src = "import { foo as bar } from './m';\nconsole.log(bar);\nexport { bar };";
+        assert!(run(src).is_empty());
     }
 }
