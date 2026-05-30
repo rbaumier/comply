@@ -75,10 +75,10 @@ exceptions = ["_", "t", "T"]
 # ---------------------------------------------------------------
 
 [rules.cyclomatic-complexity]
-max = 10
+max = 15
 
 [rules.cognitive-complexity]
-max = 10
+max = 30
 
 [rules.halstead-complexity]
 max_volume = 1500

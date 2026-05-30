@@ -31,10 +31,14 @@ fn compute_stmt(stmt: &Statement, nesting: u32) -> u32 {
             1 + nesting + compute_body(&d.body, nesting + 1)
         }
         Statement::SwitchStatement(sw) => {
+            // The switch itself adds +1 (+ nesting penalty), but its case arms
+            // do NOT get an extra nesting increment. Exhaustive switches enumerate
+            // predetermined paths; penalising each arm's body with deeper nesting
+            // produces FPs on domain error-mappers and locale maps.
             let mut score = 1 + nesting;
             for case in &sw.cases {
                 for s in &case.consequent {
-                    score += compute_stmt(s, nesting + 1);
+                    score += compute_stmt(s, nesting);
                 }
             }
             score

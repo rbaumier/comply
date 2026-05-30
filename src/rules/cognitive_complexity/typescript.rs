@@ -5,7 +5,9 @@ use crate::diagnostic::{Diagnostic, Severity};
 
 // Per SonarSource Cognitive Complexity: only the `switch` STATEMENT adds +1
 // — individual `case` clauses are continuations and don't count on their own.
-// Nesting still applies to whatever lives inside a case body.
+// The switch does NOT increase the nesting level for its case bodies: exhaustive
+// discriminated-union switches enumerate unavoidable paths and should not penalise
+// nested logic inside each arm with an extra nesting increment.
 const FLOW_KINDS: &[&str] = &[
     "if_statement",
     "else_clause",
@@ -56,6 +58,9 @@ fn compute(node: tree_sitter::Node, source: &[u8], nesting: u32) -> u32 {
     }
 
     // Nesting increases for blocks that are children of flow control.
+    // switch_statement is intentionally excluded: its case arms enumerate
+    // predetermined paths and must not penalise code inside them with an
+    // extra nesting level.
     let nest_increase = matches!(
         kind,
         "if_statement"
@@ -63,7 +68,6 @@ fn compute(node: tree_sitter::Node, source: &[u8], nesting: u32) -> u32 {
             | "for_in_statement"
             | "while_statement"
             | "do_statement"
-            | "switch_statement"
             | "catch_clause"
     );
 
@@ -171,19 +175,34 @@ mod tests {
 
     #[test]
     fn flags_when_complexity_exceeds_threshold() {
-        // Symmetric to the Rust backend test: nested if/for/if/if/switch.
+        // Deeply nested if/for structure (no switch):
+        // if        +1 (nesting 0)
+        // for       +1 (nesting 0) → nesting 1
+        //   if      +2 (nesting 1) → nesting 2
+        //     if    +3 (nesting 2) → nesting 3
+        //       if  +4 (nesting 3) → nesting 4
+        //       for +5 (nesting 4) → nesting 5
+        //         if  +6 (nesting 5) → nesting 6
+        //           if  +7 (nesting 6) → nesting 7
+        //             if  +8 (nesting 7)
+        // Total: 1+1+2+3+4+5+6+7+8 = 37 (threshold 30)
         let src = r#"function process(items) {
   if (items.length === 0) {
     return;
   }
   for (const item of items) {
     if (item.active) {
-      if (item.value > 10) {
-        switch (item.type) {
-          case 'a':
-            break;
-          case 'b':
-            break;
+      if (item.value > 5) {
+        if (item.value > 10) {
+          for (const sub of item.subs) {
+            if (sub.ok) {
+              if (sub.valid) {
+                if (sub.ready) {
+                  return sub.result;
+                }
+              }
+            }
+          }
         }
       }
     }
@@ -191,12 +210,46 @@ mod tests {
 }"#;
         let d = run_on(src);
         assert_eq!(d.len(), 1);
-        assert!(d[0].message.contains("11"), "got: {}", d[0].message);
+        assert!(d[0].message.contains("37"), "got: {}", d[0].message);
     }
 
     #[test]
     fn clean_function_below_threshold_is_not_flagged() {
         let src = "function add(a, b) { return a + b; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_on_exhaustive_switch_with_per_case_logic() {
+        // Regression for #586: exhaustive error-map switches with conditional logic
+        // per case must not trigger cognitive-complexity. The switch no longer
+        // increases the nesting level for its case bodies.
+        let src = r#"function zodErrorMap(issue) {
+  switch (issue.code) {
+    case 'invalid_type':
+      if (issue.received === 'undefined') return 'Required';
+      return 'Invalid type';
+    case 'too_small':
+      if (issue.type === 'array') return 'Too few items';
+      if (issue.type === 'string') return 'Too short';
+      return 'Value too small';
+    case 'too_big':
+      if (issue.type === 'string') return 'Too long';
+      return 'Value too large';
+    case 'invalid_string':
+      if (issue.validation === 'email') return 'Invalid email';
+      if (issue.validation === 'url') return 'Invalid URL';
+      return 'Invalid string';
+    case 'invalid_enum_value':
+      return 'Invalid option';
+    case 'invalid_literal':
+      return 'Wrong value';
+    case 'custom':
+      return issue.params?.message ?? 'Invalid value';
+    default:
+      return 'Invalid value';
+  }
+}"#;
         assert!(run_on(src).is_empty());
     }
 }
