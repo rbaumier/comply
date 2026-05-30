@@ -13,14 +13,13 @@ fn callee_is_findfirst(callee: tree_sitter::Node<'_>, source: &[u8]) -> bool {
     if prop.utf8_text(source).unwrap_or("") != "findFirst" {
         return false;
     }
-    // Object should look like `db.query.<table>` to keep this Drizzle-specific.
+    // Accept any `<db>.query.<table>` shape — `db`, `database`, `tx`, `trx`,
+    // `args.database`, `handle.database`, etc. are all valid Drizzle db handles.
     let Some(object) = callee.child_by_field_name("object") else {
         return false;
     };
     let obj_text = object.utf8_text(source).unwrap_or("");
-    obj_text.starts_with("db.query.")
-        || obj_text.starts_with("tx.query.")
-        || obj_text.starts_with("trx.query.")
+    obj_text.contains(".query.")
 }
 
 crate::ast_check! { on ["call_expression"] prefilter = ["findFirst"] => |node, source, ctx, diagnostics|
@@ -121,5 +120,26 @@ mod tests {
     fn allows_findfirst_with_spread() {
         let src = "const u = await db.query.users.findFirst({ ...opts });";
         assert!(run(src).is_empty());
+    }
+
+    // Regression for rbaumier/comply#357 — `database.query.*` handle with shorthand `where`.
+    #[test]
+    fn allows_database_handle_with_shorthand_where() {
+        let src = "database.query.organization.findFirst({ where, with: { teams: true } })";
+        assert!(run(src).is_empty());
+    }
+
+    // Regression for rbaumier/comply#357 — nested handle `args.database.query.*`.
+    #[test]
+    fn allows_nested_database_handle_with_shorthand_where() {
+        let src = "args.database.query.team.findFirst({ where, columns: { id: true } })";
+        assert!(run(src).is_empty());
+    }
+
+    // Regression for rbaumier/comply#357 — `database.query.*` without `where` must be flagged.
+    #[test]
+    fn flags_database_handle_without_where() {
+        let src = "database.query.organization.findFirst({ columns: { id: true } })";
+        assert_eq!(run(src).len(), 1);
     }
 }

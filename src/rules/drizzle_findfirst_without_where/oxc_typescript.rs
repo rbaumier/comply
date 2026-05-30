@@ -15,11 +15,11 @@ fn callee_is_findfirst(callee: &Expression, source: &str) -> bool {
     if member.property.name.as_str() != "findFirst" {
         return false;
     }
+    // Accept any `<db>.query.<table>` shape — `db`, `database`, `tx`, `trx`,
+    // `args.database`, `handle.database`, etc. are all valid Drizzle db handles.
     let obj_span = member.object.span();
     let obj_text = &source[obj_span.start as usize..obj_span.end as usize];
-    obj_text.starts_with("db.query.")
-        || obj_text.starts_with("tx.query.")
-        || obj_text.starts_with("trx.query.")
+    obj_text.contains(".query.")
 }
 
 impl OxcCheck for Check {
@@ -130,5 +130,34 @@ mod tests {
     #[test]
     fn ignores_non_drizzle_findfirst() {
         assert!(run("arr.findFirst({ where: eq() });").is_empty());
+    }
+
+    // Regression for rbaumier/comply#357 — `database.query.*` handle (not `db.query.*`)
+    // with shorthand `where` must not be flagged.
+    #[test]
+    fn allows_database_handle_with_shorthand_where() {
+        assert!(
+            run("database.query.organization.findFirst({ where, with: { teams: true } });")
+                .is_empty()
+        );
+    }
+
+    // Regression for rbaumier/comply#357 — nested handle `args.database.query.*`
+    // with shorthand `where` must not be flagged.
+    #[test]
+    fn allows_nested_database_handle_with_shorthand_where() {
+        assert!(
+            run("args.database.query.team.findFirst({ where, columns: { id: true } });")
+                .is_empty()
+        );
+    }
+
+    // Regression for rbaumier/comply#357 — `database.query.*` without `where` must be flagged.
+    #[test]
+    fn flags_database_handle_without_where() {
+        assert_eq!(
+            run("database.query.organization.findFirst({ columns: { id: true } });").len(),
+            1
+        );
     }
 }
