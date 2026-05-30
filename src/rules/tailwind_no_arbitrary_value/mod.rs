@@ -28,11 +28,15 @@ const CSS_FN_MARKERS: &[&str] = &[
     "radial-gradient(",
     "linear-gradient(",
     "conic-gradient(",
+    "--theme(",
 ];
 
 /// Canonical CSS units that have semantic meaning (typographic scale,
 /// container queries, responsive viewport) and have no equivalent Tailwind token scale.
+/// `%` is included because percentage values beyond what Tailwind's fraction utilities
+/// cover (e.g. `200%` for pseudo-element height overlays) have no token equivalent.
 const CANONICAL_UNIT_SUFFIXES: &[&str] = &[
+    "%",
     "ch", "cap", "lh", "cqi", "cqb", "cqw", "cqh", "cqmin", "cqmax",
     "svh", "svw", "dvh", "dvw", "lvh", "lvw", "rlh",
 ];
@@ -88,6 +92,12 @@ pub(crate) fn has_arbitrary_value(s: &str) -> bool {
 
         // CSS custom properties and function compositions are legitimate uses.
         if CSS_FN_MARKERS.iter().any(|marker| inner.contains(marker)) {
+            continue;
+        }
+
+        // Multi-property compound lists (e.g. `transition-[top,left,right,bottom,transform]`)
+        // cannot be expressed as a single Tailwind utility.
+        if inner.contains(',') {
             continue;
         }
 
@@ -198,6 +208,30 @@ mod arbitrary_tests {
     #[test]
     fn multi_dot_numeric_is_rejected() {
         assert!(!is_canonical_unit_value("1.2.3ch"));
+    }
+
+    // Regression #486: percentage arbitrary values have no token equivalent
+    #[test]
+    fn ignores_percentage_values() {
+        assert!(!has_arbitrary_value("before:h-[200%]"));
+        assert!(!has_arbitrary_value("w-[50%]"));
+        assert!(!has_arbitrary_value("h-[150%]"));
+    }
+
+    // Regression #486: Tailwind v4 --theme() function is a CSS function
+    #[test]
+    fn ignores_theme_function() {
+        assert!(!has_arbitrary_value(
+            "before:shadow-[0_1px_--theme(--color-black/4%)]"
+        ));
+    }
+
+    // Regression #486: compound transition property lists cannot be a single utility
+    #[test]
+    fn ignores_compound_property_list() {
+        assert!(!has_arbitrary_value(
+            "transition-[top,left,right,bottom,transform]"
+        ));
     }
 
     // Fix 4: modern responsive-viewport units
