@@ -41,18 +41,28 @@ fn unquote(s: &str) -> &str {
     s.trim_matches(|c: char| c == '"' || c == '\'' || c == '`')
 }
 
-/// True when the nearest enclosing `pair` ancestor has a key whose name
-/// matches a whitespace-sensitive pattern. Trimming such fields would be
-/// a correctness bug.
-fn enclosing_pair_key_is_whitespace_sensitive(node: tree_sitter::Node, source: &[u8]) -> bool {
+/// True when the nearest naming context (object `pair` key or `variable_declarator`
+/// binding name) implies that whitespace is meaningful. Stops at the first relevant
+/// ancestor so property keys take precedence over outer variable names.
+fn schema_context_is_whitespace_sensitive(node: tree_sitter::Node, source: &[u8]) -> bool {
     let mut cur = node.parent();
     while let Some(p) = cur {
-        if p.kind() == "pair" {
-            let Some(key_node) = p.child_by_field_name("key") else {
-                return false;
-            };
-            let key_text = unquote(key_node.utf8_text(source).unwrap_or(""));
-            return is_whitespace_sensitive_key(key_text);
+        match p.kind() {
+            "pair" => {
+                let Some(key_node) = p.child_by_field_name("key") else {
+                    return false;
+                };
+                let key_text = unquote(key_node.utf8_text(source).unwrap_or(""));
+                return is_whitespace_sensitive_key(key_text);
+            }
+            "variable_declarator" => {
+                let Some(name_node) = p.child_by_field_name("name") else {
+                    return false;
+                };
+                let name_text = name_node.utf8_text(source).unwrap_or("");
+                return is_whitespace_sensitive_key(name_text);
+            }
+            _ => {}
         }
         cur = p.parent();
     }
@@ -105,10 +115,10 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     // If `.trim()` appears anywhere in the chain (before `.min`), no warning.
     if methods.iter().any(|m| *m == "trim") { return; }
 
-    // Skip schema fields whose key name implies whitespace is meaningful
-    // (passwords, tokens, secrets, ...). Trimming would diverge the validated
-    // value from the value stored/compared downstream.
-    if enclosing_pair_key_is_whitespace_sensitive(node, source) { return; }
+    // Skip when the naming context (property key or variable name) implies
+    // whitespace is meaningful (passwords, tokens, secrets, ...). Trimming
+    // would diverge the validated value from what is stored/compared downstream.
+    if schema_context_is_whitespace_sensitive(node, source) { return; }
 
     diagnostics.push(Diagnostic::at_node(
         ctx.path,
@@ -190,6 +200,24 @@ mod tests {
     #[test]
     fn still_flags_email_field() {
         let src = "const s = z.object({ email: z.string().min(1).max(255) });";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn skips_standalone_password_schema_from_issue_507() {
+        let src = "export const PasswordFieldSchema = z.string().min(10).max(128);";
+        assert!(run(src).is_empty(), "got {:?}", run(src));
+    }
+
+    #[test]
+    fn skips_standalone_token_schema_by_variable_name() {
+        let src = "const accessTokenSchema = z.string().min(20);";
+        assert!(run(src).is_empty(), "got {:?}", run(src));
+    }
+
+    #[test]
+    fn still_flags_standalone_schema_with_regular_name() {
+        let src = "const UsernameSchema = z.string().min(3);";
         assert_eq!(run(src).len(), 1);
     }
 }
