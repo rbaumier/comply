@@ -6,7 +6,8 @@
 //! test file and the enclosing top-level declaration is not a non-input
 //! schema (response/output shapes like `*Response*Schema` / `*Select*Schema`,
 //! or config/env shapes like `*Config*Schema` / `*Env*Schema` parsed from
-//! `process.env`), emit a diagnostic.
+//! `process.env`), and the field is not under a known output-contract key
+//! (`response:`, `output:`, `returns:`, `result:`), emit a diagnostic.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
@@ -44,9 +45,36 @@ const NON_INPUT_NAME_MARKERS: &[&str] = &[
     "Response", "Output", "Return", "Detail", "Select", "Config", "EnvSchema",
 ];
 
-/// True when `node` sits inside the value of a `response:` property — an
-/// Elysia/route-descriptor output contract, not a request input. Capping the
-/// server's own output would truncate legitimate large payloads (e.g. CSV).
+/// Known keys that mark a schema as the server's output contract rather than a
+/// request input. Fields under any of these keys must not be capped — server-emitted
+/// response shapes in Elysia route descriptors or custom middleware.
+const OUTPUT_CONTRACT_KEYS: &[&str] = &["response", "output", "returns", "result"];
+
+/// True when `pair_node`'s parent object is itself an argument to a Zod schema
+/// call (`z.*`). Distinguishes route-descriptor keys from same-named schema fields
+/// (e.g. `body: z.object({ result: z.string() })`).
+fn pair_inside_schema_call(pair_node: tree_sitter::Node, source: &[u8]) -> bool {
+    let Some(obj) = pair_node.parent() else { return false };
+    if obj.kind() != "object" {
+        return false;
+    }
+    let Some(args) = obj.parent() else { return false };
+    if args.kind() != "arguments" {
+        return false;
+    }
+    let Some(call) = args.parent() else { return false };
+    if call.kind() != "call_expression" {
+        return false;
+    }
+    let Some(func) = call.child_by_field_name("function") else { return false };
+    let Ok(func_text) = func.utf8_text(source) else { return false };
+    func_text.starts_with("z.")
+}
+
+/// True when `node` sits inside the value of a known output-contract property
+/// (`response:`, `output:`, `returns:`, `result:`) at route-descriptor level.
+/// Server-emitted shapes in Elysia route descriptors or custom middleware.
+/// Capping truncates legitimate large payloads (e.g. CSV exports).
 fn enclosed_in_response_field(node: tree_sitter::Node, source: &[u8]) -> bool {
     let mut cur = node;
     while let Some(parent) = cur.parent() {
@@ -54,7 +82,10 @@ fn enclosed_in_response_field(node: tree_sitter::Node, source: &[u8]) -> bool {
             && parent.child_by_field_name("value").map(|v| v.id()) == Some(cur.id())
             && let Some(key) = parent.child_by_field_name("key")
             && let Ok(key_text) = key.utf8_text(source)
-            && key_text.trim_matches(|c| matches!(c, '"' | '\'' | '`')) == "response"
+            && OUTPUT_CONTRACT_KEYS
+                .iter()
+                .any(|&k| key_text.trim_matches(|c| matches!(c, '"' | '\'' | '`')) == k)
+            && !pair_inside_schema_call(parent, source)
         {
             return true;
         }
@@ -277,5 +308,53 @@ mod tests {
         assert!(run_at(src, "src/api/features/no-inline-wire-schemas.test.ts").is_empty());
         assert!(run_at(src, "src/api/foo.spec.ts").is_empty());
         assert!(run_at(src, "src/api/__tests__/foo.ts").is_empty());
+    }
+
+    #[test]
+    fn ignores_response_field_with_async_handler() {
+        // Regression for #383 — amadeo CSV routes use async handlers.
+        let src = "new Elysia().get(\n  '/extract',\n  async ({ query, set }) => handler(),\n  {\n    query: FiltersSchema,\n    response: z.string(),\n    detail: { tags: ['x'] },\n  },\n);";
+        assert!(run_at(src, "src/api/features/products/extract-products-csv.ts").is_empty());
+    }
+
+    #[test]
+    fn ignores_output_field_on_route_descriptor() {
+        // Regression for #383 — `output:` is another naming convention for the
+        // server's response contract used in some Elysia middleware variants.
+        let src = "app.get('/items', handler, {\n  body: ItemBodySchema,\n  output: z.string(),\n});";
+        assert!(run_at(src, "src/api/features/items.ts").is_empty());
+    }
+
+    #[test]
+    fn ignores_returns_field_on_route_descriptor() {
+        // Regression for #383 — `returns:` mirrors `response:` semantics.
+        let src = "app.post('/send', handler, {\n  body: SendBodySchema,\n  returns: z.string(),\n});";
+        assert!(run_at(src, "src/api/features/send.ts").is_empty());
+    }
+
+    #[test]
+    fn ignores_result_field_on_route_descriptor() {
+        // Regression for #383 — `result:` is used in some custom middleware stacks.
+        let src = "app.get('/fetch', handler, {\n  query: FetchQuerySchema,\n  result: z.string(),\n});";
+        assert!(run_at(src, "src/api/features/fetch.ts").is_empty());
+    }
+
+    #[test]
+    fn still_flags_body_field_on_route_descriptor() {
+        // Ensure that only known output-contract keys are exempted; request body
+        // fields must still be flagged.
+        let src = "app.post('/create', handler, {\n  body: z.object({ name: z.string() }),\n  response: z.string(),\n});";
+        let diags = run_at(src, "src/api/features/create.ts");
+        assert_eq!(diags.len(), 1, "{diags:?}");
+    }
+
+    #[test]
+    fn still_flags_body_field_named_result() {
+        // Regression for #383 — a request body field named `result` (or `output`,
+        // `returns`) must still be flagged. Only top-level route-descriptor
+        // output-contract keys are exempt, not schema fields with coincident names.
+        let src = "app.post('/create', handler, {\n  body: z.object({ result: z.string() }),\n  response: z.string(),\n});";
+        let diags = run_at(src, "src/api/features/create.ts");
+        assert_eq!(diags.len(), 1, "{diags:?}");
     }
 }
