@@ -23,6 +23,13 @@ impl OxcCheck for Check {
         _semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
+        // In test files a component is rendered once and never re-rendered,
+        // so the "new reference every render" cost does not apply.
+        // Storybook stories are also single-render by nature.
+        if ctx.file.path_segments.in_test_dir || ctx.file.path_segments.in_storybook {
+            return;
+        }
+
         let AstKind::JSXOpeningElement(opening) = node.kind() else {
             return;
         };
@@ -57,5 +64,63 @@ impl OxcCheck for Check {
                 span: None,
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rules::file_ctx::{FileCtx, PathSegments};
+    use crate::rules::test_helpers::{run_oxc_tsx, run_oxc_tsx_with_file_ctx};
+
+    fn test_file_ctx() -> FileCtx {
+        FileCtx {
+            path_segments: PathSegments { in_test_dir: true, ..Default::default() },
+            ..Default::default()
+        }
+    }
+
+    fn storybook_file_ctx() -> FileCtx {
+        FileCtx {
+            path_segments: PathSegments { in_storybook: true, ..Default::default() },
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn flags_array_literal_in_prod_file() {
+        let src = "const x = <DataTable data={[row1, row2]} />;";
+        assert_eq!(run_oxc_tsx(src, &Check).len(), 1);
+    }
+
+    #[test]
+    fn no_fp_in_test_file_dot_test_tsx() {
+        // Regression: issue #442 — render() in tests is a single render, no re-render cost.
+        let src = "render(<DataTable data={[row1, row2]} columns={columns} />);";
+        assert!(run_oxc_tsx_with_file_ctx(src, &Check, &test_file_ctx()).is_empty());
+    }
+
+    #[test]
+    fn no_fp_in_spec_file() {
+        let src = "render(<AsyncMultiSelect options={[{ value: 'a', label: 'A' }]} />);";
+        assert!(run_oxc_tsx_with_file_ctx(src, &Check, &test_file_ctx()).is_empty());
+    }
+
+    #[test]
+    fn no_fp_in_tests_dir() {
+        let src = "render(<Comp items={[1, 2, 3]} />);";
+        assert!(run_oxc_tsx_with_file_ctx(src, &Check, &test_file_ctx()).is_empty());
+    }
+
+    #[test]
+    fn no_fp_in_storybook_file() {
+        let src = "export const Default = () => <Comp items={['a', 'b']} />;";
+        assert!(run_oxc_tsx_with_file_ctx(src, &Check, &storybook_file_ctx()).is_empty());
+    }
+
+    #[test]
+    fn allows_identifier_in_prod_file() {
+        let src = "const x = <Comp items={items} />;";
+        assert!(run_oxc_tsx(src, &Check).is_empty());
     }
 }
