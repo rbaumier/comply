@@ -41,6 +41,18 @@ crate::ast_check! { on ["call_expression"] prefilter = ["BETTER_AUTH_URL"] => |n
 
     let Some(pair) = find_pair_with_key(obj, source, "baseURL") else { return };
 
+    // Only flag when the baseURL value itself references BETTER_AUTH_URL.
+    // If baseURL uses a different expression (e.g. config.auth.url as a
+    // security-hardened override validated at startup), it is intentional and
+    // must not be removed — see issue #537.
+    let value_text = pair
+        .child_by_field_name("value")
+        .and_then(|v| v.utf8_text(source).ok())
+        .unwrap_or("");
+    if !value_text.contains("BETTER_AUTH_URL") {
+        return;
+    }
+
     diagnostics.push(Diagnostic::at_node(
         ctx.path,
         &pair,
@@ -61,7 +73,7 @@ mod tests {
 
     #[test]
     fn flags_baseurl_in_config() {
-        let src = "const url = process.env.BETTER_AUTH_URL;\nbetterAuth({ baseURL: \"https://app.example.com\" })";
+        let src = "betterAuth({ baseURL: process.env.BETTER_AUTH_URL })";
         assert_eq!(run(src).len(), 1);
     }
 
@@ -79,5 +91,19 @@ mod tests {
     #[test]
     fn allows_baseurl_when_no_env_var_referenced() {
         assert!(run("betterAuth({ baseURL: \"https://app.example.com\" })").is_empty());
+    }
+
+    #[test]
+    fn allows_baseurl_with_config_value_security_override() {
+        // issue #537: baseURL: config.auth.url is a validated security override,
+        // not a duplicate of BETTER_AUTH_URL — must not be flagged.
+        let src = "const u = process.env.BETTER_AUTH_URL;\nbetterAuth({ baseURL: config.auth.url })";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_baseurl_that_is_the_env_var_itself() {
+        let src = "betterAuth({ baseURL: process.env.BETTER_AUTH_URL })";
+        assert_eq!(run(src).len(), 1);
     }
 }
