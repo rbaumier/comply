@@ -16,6 +16,13 @@ const CLIENT_GLOBALS: &[&str] = &[
     "fetch",
 ];
 
+/// Packages whose re-exports implicitly use client APIs (hooks, event listeners,
+/// resize observers, etc.) that are invisible to static analysis.
+const CLIENT_ONLY_PACKAGE_PREFIXES: &[&str] = &[
+    "@base-ui/react",
+    "@radix-ui/",
+];
+
 pub struct Check;
 
 impl OxcCheck for Check {
@@ -31,6 +38,20 @@ impl OxcCheck for Check {
         let source = ctx.source;
         if !has_use_client_directive(source) {
             return Vec::new();
+        }
+
+        // Suppress if the file re-exports from a known client-only package —
+        // their primitives use hooks/observers/event listeners internally.
+        for node in semantic.nodes().iter() {
+            if let AstKind::ImportDeclaration(decl) = node.kind() {
+                let pkg = decl.source.value.as_str();
+                if CLIENT_ONLY_PACKAGE_PREFIXES
+                    .iter()
+                    .any(|prefix| pkg.starts_with(prefix))
+                {
+                    return Vec::new();
+                }
+            }
         }
 
         // Scan all nodes (excluding imports) for client API usage
@@ -125,4 +146,40 @@ fn is_client_api_name(name: &str) -> bool {
         return true;
     }
     CLIENT_GLOBALS.contains(&name)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(source, &Check)
+    }
+
+    // Regression tests for #458
+    #[test]
+    fn no_fp_for_base_ui_wrapper_oxc() {
+        let src = r#""use client";
+import * as AlertDialog from "@base-ui/react/alert-dialog";
+export const Root = AlertDialog.Root;
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_for_radix_ui_wrapper_oxc() {
+        let src = r#""use client";
+import * as Tooltip from "@radix-ui/react-tooltip";
+export const Provider = Tooltip.Provider;
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_bare_use_client_oxc() {
+        let src = r#""use client";
+export function Title() { return <div>Hi</div>; }
+"#;
+        assert_eq!(run(src).len(), 1);
+    }
 }
