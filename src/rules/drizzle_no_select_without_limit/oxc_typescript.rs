@@ -3,7 +3,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::Expression;
+use oxc_ast::ast::{Argument, Expression};
 use std::sync::Arc;
 
 pub struct Check;
@@ -80,10 +80,90 @@ fn check_select_chain(call: &oxc_ast::ast::CallExpression, source: &str) -> Opti
     let has_where = chain_text.contains(".where(");
 
     if has_from && !has_limit && !has_where {
+        if is_insert_returning_cte_select(call, chain_text, source, start) {
+            return None;
+        }
         Some(call.span.start)
     } else {
         None
     }
+}
+
+/// Extracts a simple identifier from a `.from(X)` call in `chain_text`.
+fn extract_from_identifier(chain_text: &str) -> Option<&str> {
+    let from_pos = chain_text.find(".from(")?;
+    let arg_start = from_pos + ".from(".len();
+    let remaining = &chain_text[arg_start..];
+    let arg_end = remaining.find(|c: char| c != '_' && c != '$' && !c.is_alphanumeric())?;
+    if arg_end == 0 {
+        return None;
+    }
+    Some(&remaining[..arg_end])
+}
+
+/// Returns true when `var_name` is declared as a `$with(...).as(insert(...).returning())`
+/// CTE somewhere in `source` before byte `before_pos`.
+fn is_insert_returning_definition(var_name: &str, source: &str, before_pos: usize) -> bool {
+    let preceding = &source[..before_pos.min(source.len())];
+    let mut pos = 0;
+    while pos < preceding.len() {
+        let Some(idx) = preceding[pos..].find(var_name) else { break };
+        let abs = pos + idx;
+        let rest = &preceding[abs + var_name.len()..];
+        let trimmed = rest.trim_start_matches(|c: char| c == ' ' || c == '\t');
+        if trimmed.starts_with('=') && !trimmed.starts_with("==") && !trimmed.starts_with("=>") {
+            let end = (abs + 1000).min(preceding.len());
+            let window = &preceding[abs..end];
+            if window.contains("$with(") && window.contains(".returning()") {
+                return true;
+            }
+        }
+        pos = abs + 1;
+    }
+    false
+}
+
+/// Returns true when the `.select()` chain reads from a CTE that is defined as
+/// INSERT...RETURNING — meaning the result is structurally bounded to ≤ 1 row.
+fn is_insert_returning_cte_select(
+    call: &oxc_ast::ast::CallExpression,
+    chain_text: &str,
+    source: &str,
+    span_start: usize,
+) -> bool {
+    // The receiver of .select() must be a .with(...) call
+    let Expression::StaticMemberExpression(member) = &call.callee else { return false };
+    let Expression::CallExpression(with_call) = &member.object else { return false };
+    let Expression::StaticMemberExpression(with_member) = &with_call.callee else { return false };
+    if with_member.property.name.as_str() != "with" {
+        return false;
+    }
+
+    // Collect CTE variable names from .with(a, b, ...)
+    let cte_names: Vec<&str> = with_call
+        .arguments
+        .iter()
+        .filter_map(|arg| {
+            if let Argument::Identifier(ident) = arg {
+                Some(ident.name.as_str())
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    if cte_names.is_empty() {
+        return false;
+    }
+
+    // The .from(X) argument must be one of the .with() CTE variables
+    let Some(from_arg) = extract_from_identifier(chain_text) else { return false };
+    if !cte_names.contains(&from_arg) {
+        return false;
+    }
+
+    // Confirm the CTE variable is defined as INSERT...RETURNING
+    is_insert_returning_definition(from_arg, source, span_start)
 }
 
 impl OxcCheck for Check {
@@ -142,6 +222,30 @@ mod tests {
         assert_eq!(floor_char_boundary(s, 4), 2);
         assert_eq!(floor_char_boundary(s, 5), 5);
         assert_eq!(floor_char_boundary(s, 999), s.len());
+    }
+
+    // Regression for #532: SELECT from an INSERT RETURNING CTE is bounded to <= 1 row.
+    #[test]
+    fn allows_select_from_insert_returning_cte() {
+        let src = r#"
+const insertedUser = tx.$with('inserted_user').as(
+  tx.insert(user).values({ email: 'test@test.com' }).returning()
+);
+const rows = await tx.with(insertedUser).select().from(insertedUser);
+"#;
+        assert!(run(src).is_empty(), "should not flag CTE from INSERT RETURNING");
+    }
+
+    #[test]
+    fn flags_select_from_regular_table_even_with_cte_in_scope() {
+        // .with() is present but .from() uses a table schema, not the CTE variable
+        let src = r#"
+const insertedUser = tx.$with('inserted_user').as(
+  tx.insert(user).values({ email: 'test@test.com' }).returning()
+);
+const rows = await tx.with(insertedUser).select().from(usersTable);
+"#;
+        assert_eq!(run(src).len(), 1, "should flag when .from() is not the INSERT RETURNING CTE");
     }
 
     // Regression for #265: an em-dash straddling the 500-byte scan window must
