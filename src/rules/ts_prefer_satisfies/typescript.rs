@@ -40,6 +40,15 @@ impl AstCheck for Check {
         if node_text.trim_end().ends_with("as const") {
             return;
         }
+        // `as React.CSSProperties` on an object containing CSS custom property
+        // keys (`--*`) is the documented workaround: @types/react removed the
+        // index signature, so `satisfies React.CSSProperties` would fail to
+        // compile when any key starts with `--`.
+        if node_text.contains("as React.CSSProperties")
+            && (node_text.contains("\"--") || node_text.contains("'--"))
+        {
+            return;
+        }
         let pos = node.start_position();
         diagnostics.push(Diagnostic {
             path: std::sync::Arc::clone(&ctx.path_arc),
@@ -83,5 +92,30 @@ mod tests {
     #[test]
     fn allows_satisfies() {
         assert!(run("const x = { a: 1 } satisfies Config;").is_empty());
+    }
+
+    // Regression test for #569: `as React.CSSProperties` on an object with
+    // CSS custom properties is necessary — `satisfies` would fail to compile
+    // because @types/react has no index signature for `--*` keys.
+    #[test]
+    fn allows_css_custom_props_as_react_css_properties() {
+        assert!(run(r#"const s = { "--my-var": "100px" } as React.CSSProperties;"#).is_empty());
+    }
+
+    #[test]
+    fn allows_css_custom_props_with_spread() {
+        assert!(run(
+            r#"const s = {
+    "--sidebar-width": "200px",
+    "--sidebar-width-icon": "48px",
+    ...extra,
+} as React.CSSProperties;"#
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn still_flags_react_css_properties_without_custom_props() {
+        assert_eq!(run("const s = { color: 'red' } as React.CSSProperties;").len(), 1);
     }
 }
