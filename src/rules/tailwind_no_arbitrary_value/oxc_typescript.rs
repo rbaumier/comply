@@ -116,4 +116,32 @@ mod tests {
         let src = r#"const x = <div className="w-[42px]" />;"#;
         assert_eq!(run(src).len(), 1);
     }
+
+    // Regression #486: percentage heights (e.g. gradient overlay at 200%)
+    #[test]
+    fn ignores_percentage_height() {
+        let src = r#"const x = <div className="before:h-[200%]" />;"#;
+        assert!(run(src).is_empty());
+    }
+
+    // Regression #486: calc() with design token is already exempt, confirmed here
+    #[test]
+    fn ignores_calc_with_design_token() {
+        let src = r#"const x = <div className="before:rounded-t-[calc(var(--radius-lg)-1px)]" />;"#;
+        assert!(run(src).is_empty());
+    }
+
+    // Regression #486: Tailwind v4 --theme() function in shadow
+    #[test]
+    fn ignores_theme_fn_in_shadow() {
+        let src = r#"const x = <div className="before:shadow-[0_1px_--theme(--color-black/4%)]" />;"#;
+        assert!(run(src).is_empty());
+    }
+
+    // Regression #486: compound transition property list
+    #[test]
+    fn ignores_compound_transition_list() {
+        let src = r#"const x = <div className="transition-[top,left,right,bottom,transform]" />;"#;
+        assert!(run(src).is_empty());
+    }
 }
