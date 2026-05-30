@@ -9,11 +9,16 @@
 //! `globalThis.Promise.resolve()`, `window.Promise.resolve()`,
 //! `self.Promise.resolve()`, and `this.Promise.resolve()` — since these are
 //! the standard JavaScript promise constructor, not an Elysia chain.
+//!
+//! Variables assigned from `Promise.withResolvers()` are also exempt: their
+//! `.resolve` property is the deferred-promise resolver function, not an Elysia
+//! chain method.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::Expression;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 pub struct Check;
@@ -40,6 +45,34 @@ fn is_promise_receiver(expr: &Expression) -> bool {
         }
         _ => false,
     }
+}
+
+/// Collect the names of all variables assigned from `Promise.withResolvers()`.
+///
+/// Matches `const/let/var x = Promise.withResolvers()` (with or without type
+/// arguments). Their `.resolve` property is the deferred-promise resolver, not
+/// an Elysia chain method.
+fn collect_with_resolvers_var_names(semantic: &oxc_semantic::Semantic<'_>) -> HashSet<String> {
+    let mut names = HashSet::new();
+    for node in semantic.nodes().iter() {
+        let oxc_ast::AstKind::VariableDeclarator(decl) = node.kind() else {
+            continue;
+        };
+        let oxc_ast::ast::BindingPattern::BindingIdentifier(ident) = &decl.id else {
+            continue;
+        };
+        let Some(init) = &decl.init else { continue };
+        let Expression::CallExpression(call) = init else { continue };
+        let Expression::StaticMemberExpression(member) = &call.callee else { continue };
+        if member.property.name.as_str() != "withResolvers" {
+            continue;
+        }
+        if !is_promise_receiver(&member.object) {
+            continue;
+        }
+        names.insert(ident.name.as_str().to_owned());
+    }
+    names
 }
 
 /// Return true when any `.guard(...)` call expression exists in the program.
@@ -82,6 +115,7 @@ impl OxcCheck for Check {
             return Vec::new();
         }
 
+        let with_resolvers_vars = collect_with_resolvers_var_names(semantic);
         let mut diagnostics = Vec::new();
 
         for node in semantic.nodes().iter() {
@@ -98,6 +132,13 @@ impl OxcCheck for Check {
             // Skip global `Promise.resolve(...)` in all its forms.
             if is_promise_receiver(&member.object) {
                 continue;
+            }
+
+            // Skip `.resolve()` on variables assigned from `Promise.withResolvers()`.
+            if let Expression::Identifier(ident) = &member.object {
+                if with_resolvers_vars.contains(ident.name.as_str()) {
+                    continue;
+                }
             }
 
             let (line, column) = byte_offset_to_line_col(ctx.source, call.span.start as usize);
@@ -249,5 +290,66 @@ mod tests {
             1,
             ".guard( inside a comment must not exempt .resolve()"
         );
+    }
+
+    // Regression for #386: `Promise.resolve()` inside a vi.fn() async callback
+    // (get-session.test.ts pattern) must not be flagged.
+    #[test]
+    fn ignores_promise_resolve_in_vi_fn_callback() {
+        let src = r#"
+            import { vi } from "vitest";
+            function makeAuth(implementation) {
+                const getSession = vi.fn(async (input) => {
+                    await Promise.resolve();
+                    return implementation(input);
+                });
+                return { auth: { api: { getSession } }, getSession };
+            }
+        "#;
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    // Regression for #386: `Promise.resolve()` inside an async method of an
+    // object returned from a function (authorization.test.ts pattern).
+    #[test]
+    fn ignores_promise_resolve_in_returned_object_method() {
+        let src = r#"
+            import { Elysia } from "elysia";
+            function makeAuthReturningNoSession() {
+                return {
+                    api: {
+                        getSession: async () => {
+                            await Promise.resolve();
+                            return null;
+                        },
+                    },
+                };
+            }
+            async function run() {
+                const app = new Elysia().get("/protected", () => ({ ok: true }));
+            }
+        "#;
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    // Regression for #386: `.resolve()` on the result of `Promise.withResolvers()`
+    // is the JS standard deferred-promise API, not Elysia's `.resolve()`.
+    #[test]
+    fn ignores_with_resolvers_resolve() {
+        let src = r#"
+            const gate = Promise.withResolvers();
+            gate.resolve(true);
+        "#;
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    // Regression for #386: destructured `.resolve` from `Promise.withResolvers()`.
+    #[test]
+    fn ignores_destructured_with_resolvers_resolve() {
+        let src = r#"
+            const { promise, resolve, reject } = Promise.withResolvers();
+            resolve("done");
+        "#;
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
     }
 }
