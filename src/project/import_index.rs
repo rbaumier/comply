@@ -1434,6 +1434,26 @@ fn probe_path(raw: &Path, known: &std::collections::HashSet<PathBuf>) -> Option<
         return None;
     }
 
+    // When the raw path already ends with an unknown "extension" component
+    // (e.g., `$cabinetId` in TanStack Router filenames like
+    // `cabinets_.$cabinetId`), `with_extension` would replace that segment
+    // and produce the wrong candidate (`cabinets_.tsx`).  Try appending the
+    // TS/JS extension to the full path first so that `./cabinets_.$cabinetId`
+    // resolves to `cabinets_.$cabinetId.tsx`.
+    let has_unknown_ext = raw.extension().is_some();
+    if has_unknown_ext {
+        for ext in EXTS {
+            if let Some(raw_str) = raw.to_str() {
+                let candidate = PathBuf::from(format!("{raw_str}.{ext}"));
+                if let Ok(c) = std::fs::canonicalize(&candidate)
+                    && known.contains(&c)
+                {
+                    return Some(c);
+                }
+            }
+        }
+    }
+
     for ext in EXTS {
         let candidate = raw.with_extension(ext);
         if let Ok(c) = std::fs::canonicalize(&candidate)
