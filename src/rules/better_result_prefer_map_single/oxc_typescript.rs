@@ -59,6 +59,25 @@ fn count_yield_stars_in_range<'a>(
     count
 }
 
+/// Return true if the generator body contains any `if` statement — a sign
+/// that the logic after the single `yield*` is conditional and cannot be
+/// expressed as a plain `.map()` / `.andThen()` chain.
+fn has_if_in_range<'a>(
+    semantic: &'a oxc_semantic::Semantic<'a>,
+    start: u32,
+    end: u32,
+) -> bool {
+    for node in semantic.nodes().iter() {
+        let AstKind::IfStatement(if_stmt) = node.kind() else {
+            continue;
+        };
+        if if_stmt.span.start >= start && if_stmt.span.end <= end {
+            return true;
+        }
+    }
+    false
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[AstType::CallExpression]
@@ -101,6 +120,11 @@ impl OxcCheck for Check {
         }
         let yields = count_yield_stars_in_range(semantic, func.span.start, func.span.end);
         if yields != 1 {
+            return;
+        }
+        // Conditional logic after the yield* (if/else branches) means the
+        // generator cannot be mechanically replaced with .map()/.andThen().
+        if has_if_in_range(semantic, func.span.start, func.span.end) {
             return;
         }
 
@@ -159,6 +183,23 @@ mod tests {
                     yield* scopeFilterOrganizations(session);
                     return tryPaginatedQuery();
                 }));
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_single_yield_with_conditional_after() {
+        // Regression for rbaumier/comply#539 — a single yield* followed by
+        // conditional logic (if/return) cannot be expressed as plain
+        // .map()/.andThen() and must not be flagged.
+        let src = r#"
+            return Result.gen(async function* () {
+                const row = yield* Result.await(tryDatabaseQuery(() => db.query.user.findFirst({})));
+                if (row === undefined) {
+                    return internalError('user disappeared');
+                }
+                return dispatchSessionScope({ ...row });
+            });
         "#;
         assert!(run(src).is_empty());
     }
