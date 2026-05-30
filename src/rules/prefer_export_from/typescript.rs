@@ -1,5 +1,5 @@
 use crate::diagnostic::{Diagnostic, Severity};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Collect named imports as `local_name -> module_specifier` so a later pass
 /// can recognise re-exports of the same local name.
@@ -57,6 +57,37 @@ fn collect_named_imports(program: tree_sitter::Node<'_>, source: &[u8]) -> HashM
     map
 }
 
+/// Collect identifiers referenced in the program body outside of import and
+/// export statements.  A symbol in this set cannot be converted to a re-export
+/// because it is consumed locally.
+fn collect_locally_used_identifiers(
+    program: tree_sitter::Node<'_>,
+    source: &[u8],
+) -> HashSet<String> {
+    fn visit(node: tree_sitter::Node<'_>, source: &[u8], out: &mut HashSet<String>) {
+        if node.kind() == "identifier" {
+            if let Ok(name) = std::str::from_utf8(&source[node.byte_range()]) {
+                out.insert(name.to_string());
+            }
+        }
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            visit(child, source, out);
+        }
+    }
+
+    let mut used = HashSet::new();
+    let mut cursor = program.walk();
+    for child in program.children(&mut cursor) {
+        // Skip import_statement (declarations) and export_statement (re-exports).
+        if child.kind() == "import_statement" || child.kind() == "export_statement" {
+            continue;
+        }
+        visit(child, source, &mut used);
+    }
+    used
+}
+
 crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
     // Anchor on `program` so the import-collection pass runs once per file
     // and we can correlate exports against it.
@@ -64,6 +95,7 @@ crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
     if imports.is_empty() {
         return;
     }
+    let locally_used = collect_locally_used_identifiers(node, source);
 
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
@@ -96,6 +128,11 @@ crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
                     continue;
                 };
                 if let Some(specifier) = imports.get(local_name) {
+                    // Skip if the symbol is also used locally — converting to a
+                    // re-export would remove the local binding.
+                    if locally_used.contains(local_name) {
+                        continue;
+                    }
                     diagnostics.push(Diagnostic::at_node(
                         ctx.path,
                         &spec,
@@ -156,5 +193,19 @@ mod tests {
         let d = run_ts(src);
         assert_eq!(d.len(), 1);
         assert!(d[0].message.contains("bar"));
+    }
+
+    #[test]
+    fn no_fp_when_import_used_locally_and_exported() {
+        // GammeSchema is imported, used locally (GammeSchema.parse), and also
+        // exported — cannot be converted to a re-export.
+        let src = "import { GammeSchema } from './gamme-schema';\nconst x = GammeSchema.parse({});\nexport { GammeSchema };";
+        assert!(run_ts(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_when_import_aliased_used_locally_and_exported() {
+        let src = "import { foo as bar } from './m';\nconsole.log(bar);\nexport { bar };";
+        assert!(run_ts(src).is_empty());
     }
 }
