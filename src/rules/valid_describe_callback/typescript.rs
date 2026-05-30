@@ -39,6 +39,29 @@ fn is_async_fn(node: tree_sitter::Node, source: &[u8]) -> bool {
     false
 }
 
+/// Return true if this is a `describe.each(...)('title', cb)` call — the cb
+/// must declare parameters (they receive the table row), so the params check
+/// must be skipped.
+fn is_each_variant(node: tree_sitter::Node, source: &[u8]) -> bool {
+    let Some(callee) = node.child_by_field_name("function") else {
+        return false;
+    };
+    if callee.kind() != "call_expression" {
+        return false;
+    }
+    let Some(inner_fn) = callee.child_by_field_name("function") else {
+        return false;
+    };
+    let prop = match inner_fn.kind() {
+        "member_expression" => inner_fn
+            .child_by_field_name("property")
+            .and_then(|p| p.utf8_text(source).ok())
+            .unwrap_or(""),
+        _ => return false,
+    };
+    prop == "each"
+}
+
 /// Return true if the function node declares any parameters.
 fn has_parameters(node: tree_sitter::Node) -> bool {
     // Arrow functions may use a single identifier as the parameter (no
@@ -110,7 +133,7 @@ fn check_callback(
     }
 
     let async_flag = is_async_fn(*cb, source);
-    let params_flag = has_parameters(*cb);
+    let params_flag = !is_each_variant(call, source) && has_parameters(*cb);
     let return_flag = match cb.child_by_field_name("body") {
         // Arrow with expression body (implicit return): any non-empty body
         // returns a value.
@@ -222,6 +245,34 @@ mod tests {
     #[test]
     fn flags_describe_only_with_async_callback() {
         let d = run("describe.only('suite', async () => {});");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("async"));
+    }
+
+    // Regression #566 — describe.each callback must declare parameters (that's
+    // the whole point of .each); the rule must not flag it.
+    #[test]
+    fn allows_describe_each_with_params() {
+        let d = run(
+            "const CASES = [{ action: 'deactivate' }]; \
+             describe.each(CASES)('$action category', ({ action }) => { it('x', () => {}); });",
+        );
+        assert!(d.is_empty(), "unexpected diagnostics: {d:?}");
+    }
+
+    #[test]
+    fn allows_describe_each_with_multiple_params() {
+        let d = run(
+            "describe.each([[1, 2]])('sum', (a, b) => { it('x', () => {}); });",
+        );
+        assert!(d.is_empty(), "unexpected diagnostics: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_describe_each_with_async_callback() {
+        let d = run(
+            "describe.each([{}])('suite', async ({ x }) => { it('x', () => {}); });",
+        );
         assert_eq!(d.len(), 1);
         assert!(d[0].message.contains("async"));
     }
