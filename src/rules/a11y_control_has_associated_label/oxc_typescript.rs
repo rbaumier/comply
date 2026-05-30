@@ -55,6 +55,12 @@ impl OxcCheck for Check {
             }
         }
 
+        // Skip primitive components that spread props — callers supply labels via the spread
+        let has_spread = opening.attributes.iter().any(|a| matches!(a, JSXAttributeItem::SpreadAttribute(_)));
+        if has_spread {
+            return;
+        }
+
         // Check for aria-label or aria-labelledby
         let has_label_attr = opening.attributes.iter().any(|attr_item| {
             let JSXAttributeItem::Attribute(attr) = attr_item else {
@@ -182,5 +188,16 @@ mod tests {
                 </div>
             );
         "#).len(), 1);
+    }
+
+    // Regression #485: base UI primitive spreading restProps — caller provides label
+    #[test]
+    fn no_fp_on_input_with_spread_props() {
+        assert!(run_on(r#"const x = <input className="x" data-slot="input" {...restProps} />;"#).is_empty());
+    }
+
+    #[test]
+    fn no_fp_on_select_with_spread_props() {
+        assert!(run_on(r#"const x = <select {...props} />;"#).is_empty());
     }
 }

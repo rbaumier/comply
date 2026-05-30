@@ -38,6 +38,17 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         }
     }
 
+    // Skip primitive components that spread props — callers supply labels via the spread
+    {
+        let mut sc = tag_node.walk();
+        let has_spread = tag_node.children(&mut sc).any(|child| {
+            if child.kind() != "jsx_expression" { return false; }
+            let mut ic = child.walk();
+            child.children(&mut ic).any(|inner| inner.kind() == "spread_element")
+        });
+        if has_spread { return; }
+    }
+
     // Check for aria-label or aria-labelledby
     let mut cursor2 = tag_node.walk();
     let has_label_attr = tag_node.children(&mut cursor2).any(|child| {
@@ -105,5 +116,11 @@ mod tests {
     #[test]
     fn allows_button_with_text_content() {
         assert!(run_on(r#"const x = <button>Submit</button>;"#).is_empty());
+    }
+
+    // Regression #485: base UI primitive spreading restProps — caller provides label
+    #[test]
+    fn no_fp_on_input_with_spread_props() {
+        assert!(run_on(r#"const x = <input className="x" data-slot="input" {...restProps} />;"#).is_empty());
     }
 }
