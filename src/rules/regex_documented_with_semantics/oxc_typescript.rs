@@ -3,6 +3,13 @@ use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use std::sync::Arc;
 
+const TEST_FILE_MARKERS: &[&str] = &[".test.", ".spec.", "__tests__", "_test."];
+
+fn is_test_file(path: &std::path::Path) -> bool {
+    let s = path.to_string_lossy();
+    TEST_FILE_MARKERS.iter().any(|m| s.contains(m))
+}
+
 pub struct Check;
 
 impl OxcCheck for Check {
@@ -17,6 +24,10 @@ impl OxcCheck for Check {
         semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
+        if is_test_file(ctx.path) {
+            return;
+        }
+
         let (span, pattern) = match node.kind() {
             AstKind::RegExpLiteral(re) => {
                 (re.span, re.regex.pattern.text.as_str().to_string())
@@ -153,5 +164,27 @@ mod tests {
             ];
         "#;
         assert!(run(src).is_empty());
+    }
+
+    fn run_with_path(src: &str, path: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_path(src, &Check, path)
+    }
+
+    #[test]
+    fn skips_complex_regex_in_test_file() {
+        // Regression for #384 — regexes in test files (grep args, toMatch, etc.)
+        // are test-internal and should not require JSDoc.
+        let src = r#"const result = execSync("grep -r 'x' src/").toString();
+expect(result).toMatch(/^[a-z]+@[a-z]+\.[a-z]{2,4}$/);"#;
+        assert!(run_with_path(src, "src/auth.test.ts").is_empty());
+        assert!(run_with_path(src, "src/auth.spec.ts").is_empty());
+        assert!(run_with_path(src, "__tests__/auth.ts").is_empty());
+        assert!(run_with_path(src, "src/auth_test.ts").is_empty());
+    }
+
+    #[test]
+    fn still_flags_in_non_test_file() {
+        let src = r#"const r = /^[a-z]+@[a-z]+\.[a-z]{2,4}$/;"#;
+        assert_eq!(run_with_path(src, "src/auth.ts").len(), 1);
     }
 }
