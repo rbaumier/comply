@@ -22,6 +22,25 @@ fn is_config_file(ctx: &CheckCtx) -> bool {
     stem.to_ascii_lowercase().ends_with(".config")
 }
 
+/// Returns true when `node` is nested inside a `.parse()` or `.safeParse()`
+/// call — the Zod centralized-env-reader pattern.
+fn is_inside_schema_parse_call<'a>(
+    semantic: &'a oxc_semantic::Semantic<'a>,
+    node: &oxc_semantic::AstNode<'a>,
+) -> bool {
+    for ancestor in semantic.nodes().ancestors(node.id()) {
+        if let AstKind::CallExpression(call) = ancestor.kind() {
+            let oxc_ast::ast::Expression::StaticMemberExpression(member) = &call.callee else {
+                continue;
+            };
+            if matches!(member.property.name.as_str(), "parse" | "safeParse") {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 impl OxcCheck for Check {
     fn prefilter(&self) -> Option<&'static [&'static str]> {
         Some(&["process"])
@@ -43,6 +62,10 @@ impl OxcCheck for Check {
             }
             let oxc_ast::ast::Expression::Identifier(obj) = &member.object else { continue };
             if obj.name.as_str() != "process" {
+                continue;
+            }
+
+            if is_inside_schema_parse_call(semantic, node) {
                 continue;
             }
 
@@ -137,6 +160,46 @@ mod tests {
     #[test]
     fn still_flags_in_non_config_ts() {
         let d = run_on_path("const x = process.env.FOO;", "app.config-helper.ts");
+        assert_eq!(d.len(), 1);
+    }
+
+    // Regression: #501 — centralized env-reader pattern using Zod .parse()
+    #[test]
+    fn allows_process_env_inside_schema_parse() {
+        let src = r#"
+const SentryEnvSchema = z.object({
+  sentryDsn: z.string().optional(),
+  nodeEnv: z.enum(['development', 'production']).default('development'),
+});
+function readSentryEnv() {
+  return SentryEnvSchema.parse({
+    sentryDsn: process.env['API_OBSERVABILITY_SENTRY_DSN'],
+    nodeEnv: process.env['API_SERVER_NODE_ENV'],
+  });
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_process_env_inside_safe_parse() {
+        let src = r#"
+function readEnv() {
+  return EnvSchema.safeParse({ port: process.env.PORT });
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_process_env_outside_parse() {
+        let src = r#"
+function readSentryEnv() {
+  return SentryEnvSchema.parse({ dsn: process.env.DSN });
+}
+const scattered = process.env.SCATTERED;
+"#;
+        let d = run_on(src);
         assert_eq!(d.len(), 1);
     }
 }
