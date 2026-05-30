@@ -85,6 +85,8 @@ fn looks_boolean(expr: &Expression) -> bool {
         Expression::CallExpression(call) => {
             if let Expression::StaticMemberExpression(member) = &call.callee {
                 BOOLEAN_METHODS.contains(&member.property.name.as_str())
+            } else if let Expression::Identifier(id) = &call.callee {
+                is_boolean_named(id.name.as_str())
             } else {
                 false
             }
@@ -279,6 +281,18 @@ mod tests {
     #[test]
     fn allows_slug_depends_on_chain() {
         let src = r#"const ok = slugDependsOnName || slugDependsOnYear || slugDependsOnLabId;"#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // Regression for #551: free-function calls with boolean-named identifiers
+    // (isRedirect, isNotFound) are boolean type predicates — not nullish fallbacks.
+    #[test]
+    fn allows_boolean_named_free_function_call_chain() {
+        let src = r#"
+            if (isRedirect(error) || isNotFound(error)) {
+                return;
+            }
+        "#;
         assert!(run(src).is_empty(), "{:?}", run(src));
     }
 }
