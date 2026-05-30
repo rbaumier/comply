@@ -25,6 +25,13 @@ impl OxcCheck for Check {
         semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
+        let public_patterns = ctx
+            .config
+            .string_list("jsdoc-missing-example", "public_patterns", ctx.lang);
+        if !public_patterns.is_empty() && !path_matches_any(ctx.path, &public_patterns) {
+            return;
+        }
+
         let AstKind::ExportNamedDeclaration(export) = node.kind() else {
             return;
         };
@@ -70,6 +77,17 @@ impl OxcCheck for Check {
             span: None,
         });
     }
+}
+
+/// True if `path` matches at least one glob pattern from `patterns`.
+fn path_matches_any(path: &std::path::Path, patterns: &[String]) -> bool {
+    let path_str = path.to_string_lossy();
+    patterns.iter().any(|pat| {
+        globset::Glob::new(pat)
+            .ok()
+            .map(|g| g.compile_matcher().is_match(path_str.as_ref()))
+            .unwrap_or(false)
+    })
 }
 
 /// Find a JSDoc comment (`/** ... */`) immediately above a given byte position.
