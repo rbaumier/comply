@@ -58,6 +58,12 @@ const SCENARIOS: &[Scenario] = &[
         ts: r#"const ns = "http://www.w3.org/2000/svg";"#,
         rust: r#"fn f() { let ns = "http://www.w3.org/2000/svg"; }"#,
     },
+    Scenario {
+        name: ".test TLD (RFC 2606 reserved, Vitest setup env) — not flagged",
+        expected_flagged: false,
+        ts: r#"process.env['API_SERVER_CORS_ORIGIN'] = 'http://example.test:3000';"#,
+        rust: r#"fn f() { let u = "http://example.test:3000"; }"#,
+    },
 ];
 
 fn run_ts(src: &str) -> Vec<Diagnostic> {

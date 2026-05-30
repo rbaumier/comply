@@ -111,6 +111,11 @@ pub(super) fn is_clear_text_url(content: &str) -> Option<&'static str> {
             if DUMMY_HOSTS.contains(&hostname) {
                 return None;
             }
+            // RFC 2606 reserves the .test TLD for testing — no real HTTP
+            // connection is ever made to it.
+            if hostname.ends_with(".test") {
+                return None;
+            }
             return Some(prefix);
         }
     }
@@ -218,5 +223,12 @@ mod helper_tests {
     #[test]
     fn does_not_flag_xml_schema_namespace_uri() {
         assert!(is_clear_text_url("\"http://www.w3.org/2001/XMLSchema\"").is_none());
+    }
+
+    #[test]
+    fn does_not_flag_dot_test_tld() {
+        // .test is reserved by RFC 2606 — Vitest setup files use it as a fake origin.
+        assert!(is_clear_text_url("\"http://example.test:3000\"").is_none());
+        assert!(is_clear_text_url("\"http://api.example.test\"").is_none());
     }
 }
