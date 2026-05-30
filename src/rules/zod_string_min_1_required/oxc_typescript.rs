@@ -20,6 +20,31 @@ fn is_test_file(path: &std::path::Path) -> bool {
     })
 }
 
+/// Variable-name substrings that mark a schema as a response/wire-contract
+/// (server-emitted) shape rather than a user-input schema. The server controls
+/// the wire format, so `z.string()` fields need not be non-empty.
+const RESPONSE_SCHEMA_MARKERS: &[&str] = &[
+    "Response", "Output", "Result", "Reply", "Wire",
+    "Dto", "DTO", "Error", "Problem",
+];
+
+/// True when `z.string()` lives inside a variable whose name contains a
+/// response/wire-contract marker (e.g. `ProblemSchema`, `FooResponseSchema`).
+fn is_inside_response_schema(
+    node: &oxc_semantic::AstNode,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    for ancestor in semantic.nodes().ancestors(node.id()) {
+        if let AstKind::VariableDeclarator(decl) = ancestor.kind() {
+            let oxc_ast::ast::BindingPattern::BindingIdentifier(id) = &decl.id else {
+                return false;
+            };
+            return RESPONSE_SCHEMA_MARKERS.iter().any(|m| id.name.contains(m));
+        }
+    }
+    false
+}
+
 const VALID_CONTINUATIONS: &[&str] = &[
     "min",
     "max",
@@ -87,6 +112,10 @@ impl OxcCheck for Check {
         let AstKind::CallExpression(call) = node.kind() else { return };
 
         if is_test_file(ctx.path) {
+            return;
+        }
+
+        if is_inside_response_schema(node, semantic) {
             return;
         }
 
@@ -177,5 +206,37 @@ mod tests {
         assert!(run_at(code, "tests/foo.ts").is_empty());
         assert!(run_at(code, "src/foo.e2e-spec.ts").is_empty());
         assert!(run_at(code, "src/foo_test.ts").is_empty());
+    }
+
+    #[test]
+    fn no_fp_on_response_wire_contract_schema() {
+        // Regression for issue #513: RFC 7807 Problem JSON response schema —
+        // z.string() fields in response/wire-contract schemas must not require
+        // .min(1) because the server may legitimately emit empty strings.
+        let rfc7807 = r#"
+            export const ProblemSchema = z.object({
+                type: z.string(),
+                title: z.string(),
+                status: z.number(),
+                detail: z.string(),
+                instance: z.string(),
+            });
+        "#;
+        assert!(run(rfc7807).is_empty());
+
+        // Other common response-schema naming conventions.
+        assert!(run("const FooResponseSchema = z.object({ name: z.string() });").is_empty());
+        assert!(run("const FooResponse = z.object({ name: z.string() });").is_empty());
+        assert!(run("const FooOutputSchema = z.object({ name: z.string() });").is_empty());
+        assert!(run("const UserDto = z.object({ name: z.string() });").is_empty());
+        assert!(run("const ApiErrorSchema = z.object({ message: z.string() });").is_empty());
+        assert!(run("const SearchResult = z.object({ label: z.string() });").is_empty());
+    }
+
+    #[test]
+    fn still_flags_bare_string_in_input_schema() {
+        // Ensure response-schema exemption does not apply to input schemas.
+        assert_eq!(run("const loginSchema = z.object({ username: z.string() });").len(), 1);
+        assert_eq!(run("const CreateUserInput = z.object({ name: z.string() });").len(), 1);
     }
 }
