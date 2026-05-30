@@ -55,8 +55,12 @@ impl OxcCheck for Check {
     }
 }
 
-/// Walk ancestors to check if this node is inside a `Result.try(...)` or
-/// `Result.tryPromise(...)` call — where throwing is the expected pattern.
+/// Walk ancestors to check if this node is inside a context where throwing is
+/// the expected pattern:
+/// - `Result.try(...)` / `Result.tryPromise(...)` — static constructors
+/// - `result.match({ ok: ..., err: ... })` — instance combinator whose `err`
+///   callback may need to throw to satisfy a third-party API contract
+///   (e.g. Better Auth hooks that require throwing APIError).
 fn inside_result_try_callback<'a>(
     node: &oxc_semantic::AstNode<'a>,
     semantic: &'a oxc_semantic::Semantic<'a>,
@@ -70,6 +74,9 @@ fn inside_result_try_callback<'a>(
                         && obj.name.as_str() == "Result" {
                             return true;
                         }
+                if prop == "match" {
+                    return true;
+                }
             }
     }
     false
@@ -114,6 +121,25 @@ mod tests {
                 }
                 return result.value;
             }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_throw_inside_match_err_callback() {
+        // Regression for #540 — Better Auth hooks require throwing APIError
+        // inside the `.match()` err callback; Result-based return is impossible.
+        let src = r#"
+            import { Result } from "better-result";
+            scopeResult.match({
+              ok: (scope) => ({ data: { ...session, ...scope } }),
+              err: (apiError) => {
+                throw new APIError(
+                  apiError.status === 403 ? 'FORBIDDEN' : 'INTERNAL_SERVER_ERROR',
+                  { ...apiError }
+                );
+              },
+            });
         "#;
         assert!(run(src).is_empty());
     }

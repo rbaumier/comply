@@ -5,9 +5,11 @@ fn imports_better_result(source: &str) -> bool {
     source.contains("better-result") || source.contains("@better-result")
 }
 
-/// True if `node` is contained inside the `try` callback of a `Result.try(...)`
-/// or `Result.tryPromise(...)` call — where throwing is the expected migration
-/// pattern.
+/// True if `node` is inside a context where throwing is the expected pattern:
+/// - `Result.try(...)` / `Result.tryPromise(...)` — static constructors
+/// - `result.match({ ok: ..., err: ... })` — instance combinator whose `err`
+///   callback may need to throw to satisfy a third-party API contract
+///   (e.g. Better Auth hooks that require throwing APIError).
 fn inside_result_try_callback(node: Node<'_>, source: &[u8]) -> bool {
     let mut current = node.parent();
     while let Some(n) = current {
@@ -15,7 +17,10 @@ fn inside_result_try_callback(node: Node<'_>, source: &[u8]) -> bool {
             && let Some(callee) = n.child_by_field_name("function")
         {
             let callee_text = callee.utf8_text(source).unwrap_or("");
-            if callee_text == "Result.try" || callee_text == "Result.tryPromise" {
+            if callee_text == "Result.try"
+                || callee_text == "Result.tryPromise"
+                || callee_text.ends_with(".match")
+            {
                 return true;
             }
         }
@@ -66,6 +71,14 @@ mod tests {
     #[test]
     fn allows_throw_inside_result_try_promise_callback() {
         let src = "import { Result } from 'better-result';\nconst r = Result.tryPromise({ try: async () => { throw new Error('x'); }, catch: (e) => new MyError({ cause: e }) });";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_throw_inside_match_err_callback() {
+        // Regression for #540 — Better Auth hooks require throwing APIError
+        // inside the `.match()` err callback; Result-based return is impossible.
+        let src = "import { Result } from 'better-result';\nscopeResult.match({ ok: (scope) => ({ data: scope }), err: (apiError) => { throw new APIError('FORBIDDEN', {}); } });";
         assert!(run(src).is_empty());
     }
 }
