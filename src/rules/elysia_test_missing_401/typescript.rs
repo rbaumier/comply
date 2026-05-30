@@ -22,9 +22,46 @@ const AUTH_INVOCATION_MARKERS_CI: &[&str] = &[
     "jwt(",
 ];
 
+/// Keywords that indicate the test exercises a cross-cutting concern (CORS,
+/// rate-limiting, request-ID propagation, etc.) rather than auth itself.
+/// Matched case-insensitively against the file path and describe/test descriptions.
+const COMPOSITION_CONCERN_MARKERS: &[&str] = &[
+    "cors",
+    "rate-limit",
+    "ratelimit",
+    "rate_limit",
+    "composition",
+    "request-id",
+    "requestid",
+    "x-request-id",
+    "logging",
+];
+
 fn is_test_file(path: &std::path::Path) -> bool {
     let s = path.to_string_lossy();
     TEST_MARKERS.iter().any(|m| s.contains(m))
+}
+
+fn has_composition_concern(path: &std::path::Path, source: &str) -> bool {
+    let path_str = path.to_string_lossy().to_lowercase();
+    if COMPOSITION_CONCERN_MARKERS
+        .iter()
+        .any(|m| path_str.contains(m))
+    {
+        return true;
+    }
+    source
+        .lines()
+        .filter(|l| {
+            let t = l.trim_start();
+            t.starts_with("describe(")
+                || t.starts_with("test(")
+                || t.starts_with("it(")
+        })
+        .any(|l| {
+            let lower = l.to_lowercase();
+            COMPOSITION_CONCERN_MARKERS.iter().any(|m| lower.contains(m))
+        })
 }
 
 crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
@@ -58,6 +95,10 @@ crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
         return;
     }
 
+    if has_composition_concern(ctx.path, ctx.source) {
+        return;
+    }
+
     if ctx.source.contains("401") || lower.contains("unauthorized") {
         return;
     }
@@ -87,6 +128,16 @@ mod tests {
         )
     }
 
+    fn run_on_path(source: &str, path: &str) -> Vec<Diagnostic> {
+        let project = crate::project::ProjectCtx::for_test_with_framework("elysia");
+        crate::rules::test_helpers::run_ts_with_project_and_path(
+            source,
+            &Check,
+            &project,
+            std::path::Path::new(path),
+        )
+    }
+
     #[test]
     fn flags_auth_test_without_401() {
         let src = "import { Elysia } from 'elysia';\nconst app = new Elysia().use(bearer()).get('/me', requireAuth, () => 'ok');\ntest('bearer token works', () => { const r = app.handle(new Request('/me')); });";
@@ -109,6 +160,54 @@ mod tests {
     fn still_flags_capitalized_bearer_invocation() {
         let src = "import { Elysia } from 'elysia';\nconst app = new Elysia().use(Bearer()).get('/', requireAuth(), () => 'x');\ntest('auth required', () => { const r = app.handle(new Request('/')); });";
         assert_eq!(run_on_test(src).len(), 1);
+    }
+
+    /// Regression for rbaumier/comply#360 — composition test file whose path
+    /// contains "cors": full middleware stack includes authPlugin but the test
+    /// asserts CORS behaviour only.
+    #[test]
+    fn ignores_authplugin_composition_when_cors_in_path() {
+        let src = r#"import { authPlugin } from './auth';
+import { corsPlugin } from './cors';
+describe('cors headers', () => {
+  test('includes access-control-allow-origin', async () => {
+    const app = new Elysia().use(authPlugin()).use(corsPlugin({ origin: 'https://example.com' }));
+    const res = await app.handle(new Request('http://localhost/health'));
+    expect(res.headers.get('access-control-allow-origin')).toBe('https://example.com');
+  });
+});
+"#;
+        assert!(run_on_path(src, "cors.test.ts").is_empty());
+    }
+
+    /// Regression for rbaumier/comply#360 — betterAuth in composition but
+    /// describe label says "cors headers": not an auth test.
+    #[test]
+    fn ignores_betterauth_when_describe_says_cors() {
+        let src = r#"import { betterAuth } from 'better-auth';
+describe('cors headers propagation', () => {
+  test('exposes ratelimit headers', async () => {
+    const app = new Elysia().use(betterAuth()).get('/ping', () => 'ok');
+    const res = await app.handle(new Request('http://localhost/ping'));
+    expect(res.headers.get('access-control-expose-headers')).toContain('ratelimit-limit');
+  });
+});
+"#;
+        assert!(run_on_test(src).is_empty());
+    }
+
+    /// Regression for rbaumier/comply#360 — authPlugin present in composition
+    /// but test description mentions "rate-limit": not an auth test.
+    #[test]
+    fn ignores_authplugin_when_test_says_rate_limit() {
+        let src = r#"import { authPlugin } from './auth';
+test('rate-limit headers are present on all responses', async () => {
+  const app = new Elysia().use(authPlugin()).get('/ping', () => 'ok');
+  const res = await app.handle(new Request('http://localhost/ping'));
+  expect(res.headers.get('ratelimit-limit')).toBeTruthy();
+});
+"#;
+        assert!(run_on_test(src).is_empty());
     }
 
     /// Regression for rbaumier/comply#92 — CORS exposeHeaders test that puts
