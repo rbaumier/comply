@@ -240,4 +240,24 @@ mod tests {
         "#;
         assert!(run(src).is_empty());
     }
+
+    #[test]
+    fn ignores_typed_accumulator_two_step_yield_in_result_gen() {
+        // Regression for rbaumier/comply#363 — exact amadeo pattern:
+        // type-annotated const, two-step (separate yield + push), Result.ok wrapper.
+        let src = r#"
+            type User = { id: string };
+            function getUsers(rows: unknown[], orgId: string) {
+                return Result.gen(function* () {
+                    const items: User[] = [];
+                    for (const row of rows) {
+                        const user = yield* rowToUser(row as any, orgId);
+                        items.push(user);
+                    }
+                    return Result.ok({ items, total: items.length });
+                });
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
 }
