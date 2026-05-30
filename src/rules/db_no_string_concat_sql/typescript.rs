@@ -43,6 +43,25 @@ impl AstCheck for Check {
                 if !template_has_interpolation(node) {
                     return;
                 }
+                // Skip tagged template literals: `` sql`SELECT … ${x}` `` and
+                // similar are parameterised-query APIs — values are bound as
+                // positional parameters on the wire, not concatenated into SQL.
+                //
+                // In tree-sitter-typescript, a tagged template `` tag`…` `` is
+                // represented as a `call_expression` whose `arguments` field is
+                // the `template_string` directly (no parenthesised argument
+                // list). A regular call `f(\`…\`)` puts the template inside an
+                // `arguments` node, so its parent is `arguments`, not
+                // `call_expression`.
+                if let Some(parent) = node.parent() {
+                    if parent.kind() == "call_expression"
+                        && parent
+                            .child_by_field_name("arguments")
+                            .is_some_and(|a| a.id() == node.id())
+                    {
+                        return;
+                    }
+                }
                 let static_text = template_static_text(node, source_bytes);
                 if !is_sql_string(&static_text) {
                     return;
@@ -241,5 +260,32 @@ mod tests {
         // combination — is_sql_string rejects it.
         let src = r#"const msg = `please update the user record ${userId}`;"#;
         assert!(run_on(src).is_empty());
+    }
+
+    // Regression: issue #376 — postgres-js `sql` tagged template literals
+    // (`` sql`SELECT … ${value}` ``) are a parameterised-query API.
+    // The interpolated value is bound as a positional parameter on the wire,
+    // never concatenated into the SQL string.
+    #[test]
+    fn does_not_flag_postgres_js_sql_tagged_template() {
+        let src = r#"
+            import { sql } from "postgres";
+            const result = await db.execute(
+              sql`SELECT * FROM users WHERE id = ${userId}`
+            );
+        "#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn does_not_flag_generic_sql_tagged_template() {
+        let src = r#"await db.execute(sql`SELECT * FROM users WHERE id = ${userId}`);"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_untagged_template_literal_with_interpolated_sql() {
+        let src = r#"const q = `SELECT * FROM users WHERE id = ${userId}`;"#;
+        assert_eq!(run_on(src).len(), 1);
     }
 }
