@@ -132,6 +132,35 @@ fn has_nullish_or_logical_fallback(node: tree_sitter::Node, source: &[u8]) -> bo
     false
 }
 
+/// True if the statement immediately preceding the one containing `node`
+/// is `expect(<object_str>).toHaveLength(N)` — a Vitest/Jest assertion
+/// that guarantees the array has at least one element.
+fn has_expect_have_length_guard(
+    node: tree_sitter::Node,
+    object_str: &str,
+    source: &[u8],
+) -> bool {
+    // Walk up to find the statement that is a direct child of a block/program.
+    let mut cur = node;
+    loop {
+        let Some(parent) = cur.parent() else {
+            return false;
+        };
+        if matches!(parent.kind(), "statement_block" | "program") {
+            break;
+        }
+        cur = parent;
+    }
+    let Some(prev) = cur.prev_named_sibling() else {
+        return false;
+    };
+    let Ok(prev_text) = prev.utf8_text(source) else {
+        return false;
+    };
+    let needle = format!("expect({object_str}).toHaveLength(");
+    prev_text.contains(&needle)
+}
+
 /// Heuristic guard check: any ancestor `if_statement` whose condition
 /// text contains `.length` is treated as a guard.
 fn has_length_guard_ancestor(node: tree_sitter::Node, source: &[u8]) -> bool {
@@ -176,6 +205,9 @@ crate::ast_check! { on ["subscript_expression"] => |node, source, ctx, diagnosti
         return;
     }
     if has_length_guard_ancestor(node, source) {
+        return;
+    }
+    if has_expect_have_length_guard(node, object_str, source) {
         return;
     }
 
@@ -264,5 +296,25 @@ mod tests {
     fn does_not_flag_when_length_ident_mismatches() {
         // `arr[other.length - 1]` — not a self-referential last index.
         assert!(run_on("const x = arr[other.length - 1];").is_empty());
+    }
+
+    // Regression #506: expect(arr).toHaveLength(N) is a Vitest/Jest guard
+    #[test]
+    fn no_fp_expect_have_length_before_subscript_in_expect() {
+        let src = "expect(rows).toHaveLength(1);\nexpect(rows[0]).toMatchObject({ role: 'admin' });";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_expect_have_length_before_direct_access() {
+        let src = "expect(rows).toHaveLength(1);\nconst first = rows[0];";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_when_expect_have_length_is_for_different_var() {
+        // expect(other).toHaveLength(1) does not guard rows[0]
+        let src = "expect(other).toHaveLength(1);\nconst first = rows[0];";
+        assert_eq!(run_on(src).len(), 1);
     }
 }
