@@ -182,6 +182,18 @@ impl Config {
         panic!("config key `[rules.\"{rule_id}\"] {key}` must be a number, got {value:?}");
     }
 
+    /// Read a boolean flag for `rule_id`. Panics if the key is missing
+    /// from the merged config — same contract as `threshold`: add the
+    /// key to `src/config/defaults.toml` as the authoritative default.
+    #[must_use]
+    pub fn bool_flag(&self, rule_id: &str, key: &str, lang: Language) -> bool {
+        let value = self.extra_value(rule_id, key, lang);
+        let Some(b) = value.as_bool() else {
+            panic!("config key `[rules.\"{rule_id}\"] {key}` must be a boolean, got {value:?}");
+        };
+        b
+    }
+
     /// Shared lookup for `threshold` / `float`. Panics with a
     /// uniform "missing key" message so the two public APIs don't
     /// duplicate the same boilerplate.
