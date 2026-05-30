@@ -135,6 +135,11 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     }
     let Ok(arg_name) = first_arg.utf8_text(source) else { return };
 
+    // `default*` props are initial-value props (controlled/uncontrolled pattern) — not derived state.
+    if arg_name.starts_with("default") {
+        return;
+    }
+
     let prop_names = find_component_prop_names(node, source);
     if !prop_names.contains(&arg_name) {
         return;
@@ -242,6 +247,34 @@ function useCustomHook(value) {
 function UserCard(props) {
     const [name, setName] = useState(props.name);
     return <div>{name}</div>;
+}
+"#)
+            .is_empty()
+        );
+    }
+
+    // Regression test for #483: controlled/uncontrolled pattern with default* props.
+    #[test]
+    fn allows_default_prefix_prop_as_initial_value() {
+        assert!(
+            run(r#"
+function Sidebar({ defaultOpen, openProp }) {
+    const [_open, _setOpen] = React.useState(defaultOpen);
+    const open = openProp ?? _open;
+    return <div>{open}</div>;
+}
+"#)
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_default_value_prop() {
+        assert!(
+            run(r#"
+function Input({ defaultValue }) {
+    const [val, setVal] = useState(defaultValue);
+    return <input value={val} />;
 }
 "#)
             .is_empty()
