@@ -185,4 +185,34 @@ mod oxc_tests {
         "#;
         assert!(run(src).is_empty());
     }
+
+    #[test]
+    fn allows_mutate_on_error_callback() {
+        // Regression for rbaumier/comply#378 — mutation.mutate() accepts the
+        // same fixed-signature callbacks as useMutation() options.
+        let src = r#"
+            import { useMutation } from "@tanstack/react-query";
+            const mutation = useMutation({ mutationFn: async (d) => d });
+            mutation.mutate(data, {
+                onError: (error, variables, context, extra) => {
+                    handleError(error);
+                },
+            });
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_mutate_async_on_settled_callback() {
+        // Regression for rbaumier/comply#378 — mutateAsync follows the same
+        // pattern; onSettled has 4 params in the TanStack Query API.
+        let src = r#"
+            import { useMutation } from "@tanstack/react-query";
+            const mutation = useMutation({ mutationFn: async (d) => d });
+            mutation.mutateAsync(data, {
+                onSettled: (data, error, variables, context) => {},
+            });
+        "#;
+        assert!(run(src).is_empty());
+    }
 }
