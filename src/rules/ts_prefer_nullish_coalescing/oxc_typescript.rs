@@ -8,6 +8,39 @@ use std::sync::Arc;
 
 pub struct Check;
 
+/// Global functions that return `number` (which can be `NaN` — falsy but not
+/// nullish). `Number(undefined)` = `NaN`, so `Number(...) || fallback` is
+/// correct; replacing with `??` would propagate `NaN`.
+const NUMBER_FUNCTIONS: &[&str] = &["Number", "parseInt", "parseFloat"];
+
+/// Methods whose return type is `string` (which can be `""` — falsy but not
+/// nullish). `str.replace(...) || "root"` is intentional; `??` would pass
+/// through the empty string instead of using the fallback.
+const STRING_METHODS: &[&str] = &[
+    "replace",
+    "replaceAll",
+    "trim",
+    "trimStart",
+    "trimEnd",
+    "trimLeft",
+    "trimRight",
+    "toLowerCase",
+    "toUpperCase",
+    "toLocaleLowerCase",
+    "toLocaleUpperCase",
+    "substring",
+    "slice",
+    "padStart",
+    "padEnd",
+    "repeat",
+    "normalize",
+    "concat",
+    "join",
+    "toString",
+    "toFixed",
+    "toPrecision",
+];
+
 /// Methods whose return type is reliably `boolean`. Used to recognise a
 /// boolean-producing call without full type inference.
 const BOOLEAN_METHODS: &[&str] = &[
@@ -95,6 +128,22 @@ fn looks_boolean(expr: &Expression) -> bool {
     }
 }
 
+/// True if `expr` can produce a non-nullish falsy value — `NaN` from a
+/// `Number`/`parseInt`/`parseFloat` call, or `""` from a string method call.
+/// In these cases `||` is semantically correct and `??` would be wrong.
+fn lhs_may_produce_non_nullish_falsy(expr: &Expression) -> bool {
+    let Expression::CallExpression(call) = expr.without_parentheses() else {
+        return false;
+    };
+    match &call.callee {
+        Expression::Identifier(id) => NUMBER_FUNCTIONS.contains(&id.name.as_str()),
+        Expression::StaticMemberExpression(member) => {
+            STRING_METHODS.contains(&member.property.name.as_str())
+        }
+        _ => false,
+    }
+}
+
 /// True if `expr` is a clearly typed default value — the canonical `||`
 /// shapes we want to flag: `foo || "string"`, `foo || []`, `foo || fn()`.
 /// Plain identifiers are excluded: without type information we cannot tell
@@ -135,6 +184,13 @@ impl OxcCheck for Check {
         // `flag || isReady()`) are an intentional disjunction, not a
         // nullish fallback — both sides already evaluate to `boolean`.
         if looks_boolean(&logical.left) && looks_boolean(&logical.right) {
+            return;
+        }
+        // `Number(...)`, `parseInt(...)`, `parseFloat(...)` can return `NaN`
+        // (falsy but not nullish): `Number(x) ?? 3000` would pass `NaN` through.
+        // String methods (`.replace()`, `.replaceAll()`, `.trim()`, …) can return
+        // `""` (falsy but not nullish): `str.trim() ?? "root"` would pass `""` through.
+        if lhs_may_produce_non_nullish_falsy(&logical.left) {
             return;
         }
         let (line, column) = byte_offset_to_line_col(ctx.source, logical.span.start as usize);
@@ -293,6 +349,58 @@ mod tests {
                 return;
             }
         "#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // Regression for #550: Number(...) can return NaN which is falsy but not
+    // nullish — `Number(x) ?? 3000` would pass NaN through instead of using 3000.
+    #[test]
+    fn allows_number_nan_fallback() {
+        let src = r#"const port = Number(process.env["PORT"]) || 3000;"#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn allows_number_nan_fallback_e2e() {
+        let src = r#"const port = Number(process.env["E2E_PORT"]) || 3100;"#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn allows_parseint_nan_fallback() {
+        let src = r#"const n = parseInt(str, 10) || 3000;"#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn allows_parsefloat_nan_fallback() {
+        let src = r#"const x = parseFloat(str) || 1.5;"#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // Regression for #550: string methods return "" (falsy but not nullish) —
+    // `str.replace(...) ?? "root"` would pass "" through instead of "root".
+    #[test]
+    fn allows_replace_empty_string_fallback() {
+        let src = r#"const field = path.replace(/\[(\d+)\]/, ".$1") || "root";"#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn allows_replaceall_chain_empty_string_fallback() {
+        let src = r#"const field = issue.path.replace(/x/, "").replaceAll(".", "_") || "root";"#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn allows_trim_empty_string_fallback() {
+        let src = r#"const label = raw.trim() || "unknown";"#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn allows_join_empty_string_fallback() {
+        let src = r#"const path = parts.join(".") || "root";"#;
         assert!(run(src).is_empty(), "{:?}", run(src));
     }
 }
