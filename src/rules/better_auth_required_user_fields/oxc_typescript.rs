@@ -3,7 +3,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
-use crate::rules::backend::{AstType, CheckCtx, OxcCheck};
+use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{Expression, ObjectPropertyKind, PropertyKey};
 use std::sync::Arc;
 
@@ -38,6 +38,47 @@ fn property_key_matches(key: &PropertyKey<'_>, name: &str) -> bool {
     }
 }
 
+/// True when the `user` ObjectProperty is anywhere inside a `defineRelationsPart(...)` call.
+/// Drizzle's `defineRelationsPart` uses a `user` key to declare relations — not a BA schema.
+fn inside_define_relations_part(
+    node: &oxc_semantic::AstNode<'_>,
+    semantic: &oxc_semantic::Semantic<'_>,
+) -> bool {
+    for ancestor in semantic.nodes().ancestors(node.id()).skip(1) {
+        if let AstKind::CallExpression(call) = ancestor.kind() {
+            if let Expression::Identifier(id) = &call.callee {
+                if id.name == "defineRelationsPart" {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+/// True when the `user` ObjectProperty is a **direct** property of the object
+/// passed to `betterAuth(...)`. That config block does not require `email`/`name`
+/// because Better Auth provides them as built-in schema fields.
+///
+/// "Direct" means no ObjectProperty ancestor exists between `user` and the
+/// betterAuth call — i.e., `user` is not nested inside another config key.
+fn is_direct_better_auth_user_prop(
+    node: &oxc_semantic::AstNode<'_>,
+    semantic: &oxc_semantic::Semantic<'_>,
+) -> bool {
+    for ancestor in semantic.nodes().ancestors(node.id()).skip(1) {
+        match ancestor.kind() {
+            // Another ObjectProperty between us and betterAuth → nested, not direct.
+            AstKind::ObjectProperty(_) => return false,
+            AstKind::CallExpression(call) => {
+                return matches!(&call.callee, Expression::Identifier(id) if id.name == "betterAuth");
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
 pub struct Check;
 
 impl OxcCheck for Check {
@@ -62,6 +103,13 @@ impl OxcCheck for Check {
                 continue;
             }
             let Expression::ObjectExpression(_) = &prop.value else { continue };
+
+            if inside_define_relations_part(node, semantic) {
+                continue;
+            }
+            if is_direct_better_auth_user_prop(node, semantic) {
+                continue;
+            }
 
             let has_email = has_property_key(&prop.value, "email");
             let has_name = has_property_key(&prop.value, "name");
@@ -108,14 +156,35 @@ mod tests {
     }
 
     #[test]
-    fn flags_missing_both_in_prod_file() {
-        let src = "betterAuth({ user: { additionalFields: { role: { type: 'string' } } } })";
+    fn flags_missing_both_in_standalone_schema() {
+        let src = "const schema = { user: { additionalFields: { role: { type: 'string' } } } };";
         assert_eq!(run(src).len(), 1);
     }
 
     #[test]
     fn allows_with_email_and_name() {
-        let src = "betterAuth({ user: { additionalFields: { email: {}, name: {} } } })";
+        let src = "const schema = { user: { additionalFields: { email: {}, name: {} } } };";
+        assert!(run(src).is_empty());
+    }
+
+    // Regression for #538: betterAuth config user block must not flag — email/name are BA built-ins.
+    #[test]
+    fn no_fp_on_better_auth_user_config_block() {
+        let src = "betterAuth({ user: { additionalFields: { firstName: {} }, deleteUser: { enabled: true } } })";
+        assert!(run(src).is_empty());
+    }
+
+    // Regression for #538: betterAuth config without additionalFields should also not flag.
+    #[test]
+    fn no_fp_on_better_auth_user_config_no_additional_fields() {
+        let src = "betterAuth({ user: { deleteUser: { enabled: true } } })";
+        assert!(run(src).is_empty());
+    }
+
+    // Regression for #538: Drizzle defineRelationsPart must not flag.
+    #[test]
+    fn no_fp_on_define_relations_part() {
+        let src = "defineRelationsPart(schema, (rel) => ({ user: { organizationMembers: rel.many.organizationMember() } }))";
         assert!(run(src).is_empty());
     }
 
@@ -139,8 +208,8 @@ mod tests {
     }
 
     #[test]
-    fn still_flags_prod_file_with_user_config_missing_fields() {
-        let src = "betterAuth({ user: { additionalFields: { role: { type: 'string' } } } })";
+    fn still_flags_standalone_schema_missing_fields() {
+        let src = "const schema = { user: { additionalFields: { role: { type: 'string' } } } };";
         assert_eq!(run_with_path(src, "auth.config.ts").len(), 1);
     }
 }
