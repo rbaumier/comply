@@ -60,6 +60,17 @@ fn leading_prefix(name: &str) -> String {
     buf
 }
 
+fn is_inside_ambient_declaration(node: tree_sitter::Node) -> bool {
+    let mut cur = node.parent();
+    while let Some(n) = cur {
+        if n.kind() == "ambient_declaration" {
+            return true;
+        }
+        cur = n.parent();
+    }
+    false
+}
+
 fn collect_optional_prefixes(body: tree_sitter::Node, source: &[u8]) -> HashMap<String, usize> {
     let mut counts: HashMap<String, usize> = HashMap::new();
     let mut cursor = body.walk();
@@ -115,7 +126,8 @@ fn check_decl(
 }
 
 crate::ast_check! { on ["interface_declaration", "type_alias_declaration"] => |node, source, ctx, diagnostics|
-match node.kind() {
+    if is_inside_ambient_declaration(node) { return; }
+    match node.kind() {
         "interface_declaration" => {
             let Some(name_node) = node.child_by_field_name("name") else { return };
             let Ok(name) = std::str::from_utf8(&source[name_node.byte_range()]) else { return };
@@ -200,6 +212,24 @@ mod tests {
         assert!(
             run(
                 "type Phantom = { page?: never; pageSize?: never; q?: never; sort?: never };"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_declare_module_augmentation() {
+        // Regression for #544: module augmentations are not API response types;
+        // optional fields are intentional route metadata, not state-variant clusters.
+        assert!(
+            run(
+                "declare module '@tanstack/react-router' {\
+  interface StaticDataRouteOption {\
+    title?: string;\
+    breadcrumbParent?: string;\
+    breadcrumbAncestors?: { title: string; pathname: string }[];\
+  }\
+}"
             )
             .is_empty()
         );
