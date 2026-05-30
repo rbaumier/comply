@@ -2,6 +2,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
+use crate::project::Framework;
 use crate::rules::backend::{CheckCtx, OxcCheck};
 use oxc_ast::ast::{
     Declaration, ExportDefaultDeclarationKind, ExportNamedDeclaration, Statement,
@@ -20,6 +21,11 @@ impl OxcCheck for Check {
         semantic: &'a oxc_semantic::Semantic<'a>,
         ctx: &CheckCtx,
     ) -> Vec<Diagnostic> {
+        // TanStack Start uses Vite HMR — React Fast Refresh constraints don't apply.
+        if ctx.project.framework == Framework::TanStackStart {
+            return Vec::new();
+        }
+
         // Only check .tsx/.jsx files.
         let path_str = ctx.path.to_string_lossy();
         if !path_str.ends_with(".tsx") && !path_str.ends_with(".jsx") {
@@ -126,9 +132,16 @@ fn extract_default_export_name(decl: &ExportDefaultDeclarationKind) -> Option<St
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::project::{Framework, ProjectCtx};
 
     fn run(source: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_oxc_tsx(source, &Check)
+    }
+
+    fn run_tanstack(source: &str) -> Vec<Diagnostic> {
+        let mut project = ProjectCtx::default();
+        project.framework = Framework::TanStackStart;
+        crate::rules::test_helpers::run_oxc_tsx_with_project(source, &Check, &project)
     }
 
     #[test]
@@ -159,5 +172,37 @@ export interface Config { debug: boolean }
 export function MyComponent() { return <div />; }
 "#;
         assert!(run(source).is_empty());
+    }
+
+    // Regression tests for issue #457 — TanStack Start / Vite HMR co-location patterns.
+
+    #[test]
+    fn no_fp_tanstack_start_utility_function_with_component() {
+        // getProductsColumns co-located with DataTableHeader (issue #457)
+        let source = r#"
+export function getProductsColumns(t) { return []; }
+export function DataTableHeader() { return <div />; }
+"#;
+        assert!(run_tanstack(source).is_empty());
+    }
+
+    #[test]
+    fn no_fp_tanstack_start_cva_variant_with_component() {
+        // badgeVariants CVA co-located with Badge (issue #457)
+        let source = r#"
+export const badgeVariants = cva("badge", { variants: {} });
+export function Badge({ className }) { return <div className={className} />; }
+"#;
+        assert!(run_tanstack(source).is_empty());
+    }
+
+    #[test]
+    fn no_fp_tanstack_start_context_hook_with_provider() {
+        // useSidebar hook co-located with SidebarProvider (issue #457)
+        let source = r#"
+export function useSidebar() { return useContext(SidebarContext); }
+export function SidebarProvider({ children }) { return <div>{children}</div>; }
+"#;
+        assert!(run_tanstack(source).is_empty());
     }
 }
