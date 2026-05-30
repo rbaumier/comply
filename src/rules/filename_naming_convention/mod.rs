@@ -44,6 +44,17 @@ fn is_tanstack_pathless_route(path: &std::path::Path, file_name: &str) -> bool {
         .any(|c| c.as_os_str() == std::ffi::OsStr::new("routes"))
 }
 
+/// Returns `true` for TanStack Router splat/catch-all routes: a file named
+/// `$.tsx`, `$.ts`, `$.jsx`, or `$.js` living under any `routes/` ancestor
+/// directory. See https://tanstack.com/router/latest/docs/framework/react/routing/file-based-routing#splat--catch-all-routes.
+fn is_tanstack_splat_route(path: &std::path::Path, file_name: &str) -> bool {
+    if !matches!(file_name, "$.tsx" | "$.ts" | "$.jsx" | "$.js") {
+        return false;
+    }
+    path.components()
+        .any(|c| c.as_os_str() == std::ffi::OsStr::new("routes"))
+}
+
 pub fn register() -> RuleDef {
     RuleDef {
         meta: META,
