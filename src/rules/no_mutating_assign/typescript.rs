@@ -70,6 +70,48 @@ fn node_binds_function(node: tree_sitter::Node, source: &[u8], name: &str) -> bo
     false
 }
 
+/// True when `name` is a formal parameter of the enclosing function.
+fn is_param_binding(start: tree_sitter::Node, source: &[u8], name: &str) -> bool {
+    let mut ancestor = start.parent();
+    while let Some(node) = ancestor {
+        if matches!(
+            node.kind(),
+            "function_declaration"
+                | "function_expression"
+                | "method_definition"
+                | "arrow_function"
+        ) {
+            if let Some(params) = node.child_by_field_name("parameters") {
+                let mut cursor = params.walk();
+                for param in params.named_children(&mut cursor) {
+                    let pattern = match param.kind() {
+                        "required_parameter" | "optional_parameter" => {
+                            param.child_by_field_name("pattern")
+                        }
+                        "identifier" => Some(param),
+                        _ => None,
+                    };
+                    if let Some(pat) = pattern {
+                        if pat.kind() == "identifier"
+                            && pat.utf8_text(source).unwrap_or("") == name
+                        {
+                            return true;
+                        }
+                    }
+                }
+            }
+            // Arrow function with a single bare-identifier parameter: `x => body`
+            if let Some(param) = node.child_by_field_name("parameter") {
+                if param.kind() == "identifier" && param.utf8_text(source).unwrap_or("") == name {
+                    return true;
+                }
+            }
+        }
+        ancestor = node.parent();
+    }
+    false
+}
+
 crate::ast_check! { on ["call_expression"] prefilter = ["Object.assign"] => |node, source, ctx, diagnostics|
     let Some(callee) = node.child_by_field_name("function") else { return };
     if callee.kind() != "member_expression" {
@@ -103,6 +145,14 @@ crate::ast_check! { on ["call_expression"] prefilter = ["Object.assign"] => |nod
     if first.kind() == "identifier" {
         let name = first.utf8_text(source).unwrap_or("");
         if is_function_binding(node, source, name) {
+            return;
+        }
+        // `Object.assign(param, { begin })` — patching a library-owned object
+        // passed as a parameter is the only option when no constructor is
+        // accessible. Require the source to be a fresh object literal so that
+        // `Object.assign(cfg, updates)` (two variables) still fires.
+        let second = args.named_children(&mut args.walk()).nth(1);
+        if second.map_or(false, |s| s.kind() == "object") && is_param_binding(node, source, name) {
             return;
         }
     }
@@ -184,5 +234,33 @@ Object.assign(handler, { displayName: "myHandler" });"#
     fn still_flags_plain_object_identifier() {
         // No function binding in scope — must still be flagged.
         assert_eq!(run_on("Object.assign(foo, bar);").len(), 1);
+    }
+
+    // === Parameter target with literal source (issue #583) ===
+
+    #[test]
+    fn allows_parameter_target_with_literal_source() {
+        // Regression for #583 — patching a library instance passed as a
+        // parameter is the only option when no constructor is accessible.
+        let src = r#"
+export function patchReservedBegin(reserved: ReservedSql): ReservedSql {
+    const begin = async (...args: unknown[]): Promise<unknown> => {};
+    Object.assign(reserved, { begin });
+    return reserved;
+}
+        "#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_parameter_with_variable_source() {
+        // Two-variable merge — still a mutation smell.
+        let src = r#"
+function merge(target: Config, updates: Partial<Config>): Config {
+    Object.assign(target, updates);
+    return target;
+}
+        "#;
+        assert_eq!(run_on(src).len(), 1);
     }
 }
