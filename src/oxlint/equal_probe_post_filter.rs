@@ -9,8 +9,14 @@
 //!
 //! tsgolint reports `<T>` as "used only once" — technically correct but the
 //! generic is required for the idiom to work. Drop the diagnostic when the
-//! same line carries the canonical pattern: a conditional return whose two
-//! branches are unit literals (numeric, string, boolean, null, or undefined).
+//! same line (or, for multi-line probes, the next few lines) carries the
+//! canonical pattern: a conditional return whose two branches are unit
+//! literals (numeric, string, boolean, null, or undefined).
+//!
+//! Additionally, tsgolint sometimes misses the second occurrence of a type
+//! parameter when a multi-line function signature splits parameters across
+//! lines. In that case the diagnostic is dropped when the parameter name
+//! appears on at least two separate lines after the declaration line.
 
 use crate::diagnostic::Diagnostic;
 use rustc_hash::FxHashMap;
@@ -28,34 +34,127 @@ pub fn apply(diagnostics: &mut Vec<Diagnostic>) {
         let Some(src) = entry.as_deref() else {
             return true;
         };
-        !is_equal_probe_fp(src, d.line)
+        !is_equal_probe_fp(src, d.line) && !is_multiline_param_fp(src, d.line)
     });
 }
 
-/// True when the diagnostic line carries a function-type conditional whose
-/// branches are both unit literals — the canonical type-challenges Equal probe.
+/// True when the diagnostic line (or a following continuation line for
+/// multi-line probes) carries a function-type conditional whose branches are
+/// both unit literals — the canonical type-challenges Equal probe.
 fn is_equal_probe_fp(src: &str, line_1based: usize) -> bool {
     if line_1based == 0 {
         return false;
     }
-    let Some(line) = src.lines().nth(line_1based - 1) else {
+    let lines: Vec<&str> = src.lines().collect();
+    let Some(&line) = lines.get(line_1based - 1) else {
         return false;
     };
-    // Look for `extends <X> ? <unit> : <unit>` on the same line as the
-    // flagged type parameter. The Equal idiom always fits on one line.
-    has_unit_conditional(line)
+
+    // Single-line case: `<T>() => T extends X ? 1 : 2` all on one line.
+    if has_unit_conditional(line) {
+        return true;
+    }
+
+    // Multi-line probe: `<T>()` is on the diagnostic line but the conditional
+    // `T extends X ? 1 : 2` is on the next line(s). Check up to 3 more lines.
+    if has_generic_arrow_fn(line) {
+        for next_line in lines.iter().skip(line_1based).take(3) {
+            if has_unit_conditional_expr(next_line) {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
+/// True when the diagnostic fires on a multi-line function/type signature
+/// where tsgolint only sees the first occurrence of the type parameter — a
+/// known tsgolint limitation when parameters span multiple lines. The check
+/// suppresses the diagnostic when the type parameter name appears on at least
+/// two separate lines after the declaration line, making it clear the
+/// parameter is actually used more than once.
+fn is_multiline_param_fp(src: &str, line_1based: usize) -> bool {
+    if line_1based == 0 {
+        return false;
+    }
+    let lines: Vec<&str> = src.lines().collect();
+    let Some(&decl_line) = lines.get(line_1based - 1) else {
+        return false;
+    };
+
+    // Extract the first type parameter name from the declaration line.
+    let Some(param_name) = extract_type_param_name(decl_line) else {
+        return false;
+    };
+
+    // Walk the lines following the declaration, counting distinct lines that
+    // mention `param_name` as a whole identifier. Stop when the parameter
+    // list closes (paren_depth < 0 after processing a line) or when a `{`
+    // is seen at depth 0 (function body opens), or after 15 lines.
+    let mut paren_depth: i32 = 0;
+    // Account for any `(` already on the declaration line.
+    for b in decl_line.bytes() {
+        match b {
+            b'(' => paren_depth += 1,
+            b')' => {
+                paren_depth -= 1;
+                if paren_depth < 0 {
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut lines_with_param: usize = 0;
+    for next_line in lines.iter().skip(line_1based).take(15) {
+        if contains_word(next_line, &param_name) {
+            lines_with_param += 1;
+            if lines_with_param >= 2 {
+                return true;
+            }
+        }
+
+        let mut hit_body = false;
+        for b in next_line.bytes() {
+            match b {
+                b'(' => paren_depth += 1,
+                b')' => {
+                    paren_depth -= 1;
+                    if paren_depth < 0 {
+                        break;
+                    }
+                }
+                b'{' if paren_depth <= 0 => {
+                    hit_body = true;
+                    break;
+                }
+                _ => {}
+            }
+        }
+        if hit_body || paren_depth < 0 {
+            break;
+        }
+    }
+
+    false
 }
 
 fn has_unit_conditional(line: &str) -> bool {
-    // The Equal probe is specifically a function-generic arrow: `<T>() => …`.
+    // The Equal probe is specifically a function-generic arrow: `<T>()`.
     // Without this guard a nested conditional type like
     // `type A<T> = T extends (U extends V ? 1 : 2) ? 3 : 4` would match the
     // unit-conditional check and suppress a legitimate diagnostic on `T`.
     if !has_generic_arrow_fn(line) {
         return false;
     }
-    // Find an `extends` keyword followed by a `?` then `:` with unit-typed
-    // expressions on each side.
+    has_unit_conditional_expr(line)
+}
+
+/// Check for `extends X ? <unit> : <unit>` without requiring `<T>()` on the
+/// same line. Used for continuation lines in multi-line probe detection.
+fn has_unit_conditional_expr(line: &str) -> bool {
     let bytes = line.as_bytes();
     let mut i = 0;
     while i + 7 <= bytes.len() {
@@ -65,10 +164,6 @@ fn has_unit_conditional(line: &str) -> bool {
         {
             // After `extends`, find the next `?` (not `??`) on this line, then `:`.
             if let Some((q_pos, c_pos)) = find_ternary_after(line, i + 7) {
-                let then_branch = line[i + 7..q_pos].trim_end();
-                // then_branch holds the `X` in `T extends X` — ignore. We care
-                // about the two arms.
-                let _ = then_branch;
                 let arm1 = line[q_pos + 1..c_pos].trim();
                 // For the else arm, stop at a closing `)` or end-of-line.
                 let rest = &line[c_pos + 1..];
@@ -86,9 +181,13 @@ fn has_unit_conditional(line: &str) -> bool {
     false
 }
 
-/// True when the line contains a generic arrow-function pattern: `<Ident>()`.
-/// This is the fingerprint of the type-challenges Equal probe:
-/// `<T>() => T extends X ? 1 : 2`.
+/// True when the line contains a generic arrow-function type pattern: `<T>()`,
+/// `<T extends X>()`, `<T, U>()`, etc. This is the fingerprint of the
+/// type-challenges Equal probe: `<T>() => T extends X ? 1 : 2`.
+///
+/// The check accepts any non-empty type parameter list between `<` and `>`,
+/// including constraints (`extends Something`) and multiple parameters, as
+/// long as the immediately following characters are `()`.
 fn has_generic_arrow_fn(line: &str) -> bool {
     let bytes = line.as_bytes();
     let mut i = 0;
@@ -99,23 +198,19 @@ fn has_generic_arrow_fn(line: &str) -> bool {
             continue;
         }
         let start = i + 1;
-        // Require at least one identifier-start char.
+        // Require at least one identifier-start char after `<`.
         if start >= bytes.len() || !is_ident_start(bytes[start]) {
             i += 1;
             continue;
         }
-        // Consume identifier chars.
-        let mut j = start;
-        while j < bytes.len() && is_ident_byte(bytes[j]) {
-            j += 1;
-        }
-        // Must be followed immediately by `>`.
-        if j >= bytes.len() || bytes[j] != b'>' {
+        // Find the matching `>` that closes this type-parameter list,
+        // skipping nested angle brackets (e.g. `Array<T>`).
+        let Some(close) = find_matching_angle(bytes, i + 1) else {
             i += 1;
             continue;
-        }
+        };
         // Must be followed immediately by `(`.
-        let after_gt = j + 1;
+        let after_gt = close + 1;
         if after_gt >= bytes.len() || bytes[after_gt] != b'(' {
             i += 1;
             continue;
@@ -127,6 +222,73 @@ fn has_generic_arrow_fn(line: &str) -> bool {
             continue;
         }
         return true;
+    }
+    false
+}
+
+/// Find the index of the `>` that matches the opening `<` whose interior
+/// starts at `start`. Tracks nested angle brackets.
+fn find_matching_angle(bytes: &[u8], start: usize) -> Option<usize> {
+    let mut depth: i32 = 1;
+    let mut i = start;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'<' => depth += 1,
+            b'>' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(i);
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Extract the first type-parameter name from a declaration line.
+/// Finds the first `<Ident` sequence and returns the identifier.
+fn extract_type_param_name(line: &str) -> Option<String> {
+    let bytes = line.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'<' {
+            let start = i + 1;
+            if start < bytes.len() && is_ident_start(bytes[start]) {
+                let mut j = start;
+                while j < bytes.len() && is_ident_byte(bytes[j]) {
+                    j += 1;
+                }
+                if j > start {
+                    return Some(String::from_utf8_lossy(&bytes[start..j]).into_owned());
+                }
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+/// True when `word` appears in `line` as a whole identifier (surrounded by
+/// non-identifier characters or line boundaries).
+fn contains_word(line: &str, word: &str) -> bool {
+    let word_bytes = word.as_bytes();
+    let line_bytes = line.as_bytes();
+    if word_bytes.is_empty() || line_bytes.len() < word_bytes.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i + word_bytes.len() <= line_bytes.len() {
+        if &line_bytes[i..i + word_bytes.len()] == word_bytes {
+            let before_ok = i == 0 || !is_ident_byte(line_bytes[i - 1]);
+            let after_pos = i + word_bytes.len();
+            let after_ok = after_pos >= line_bytes.len() || !is_ident_byte(line_bytes[after_pos]);
+            if before_ok && after_ok {
+                return true;
+            }
+        }
+        i += 1;
     }
     false
 }
@@ -286,6 +448,79 @@ mod tests {
         assert!(diags.is_empty());
     }
 
+    // ── New: adjacent probe patterns ──────────────────────────────────────────
+
+    #[test]
+    fn drops_probe_with_constrained_type_param() {
+        // `<T extends unknown>()` — has_generic_arrow_fn previously required
+        // exactly `<Ident>()` with no constraint.
+        let src = "type P<X> = <T extends unknown>() => T extends X ? 1 : 2;\n";
+        let path = write_temp("constrained_probe.ts", src);
+        let mut diags = vec![fake_diag(&path, 1, "no-unnecessary-type-parameters")];
+        apply(&mut diags);
+        assert!(diags.is_empty(), "constrained probe must be suppressed");
+    }
+
+    #[test]
+    fn drops_probe_with_two_type_params() {
+        // `<T, U>()` — previously only `<Ident>()` (single bare param) matched.
+        let src = "type P<X, Y> = <T, U>() => T extends X ? 1 : 2;\n";
+        let path = write_temp("two_param_probe.ts", src);
+        let line = line_of(src, "<T, U>()");
+        let mut diags = vec![fake_diag(&path, line, "no-unnecessary-type-parameters")];
+        apply(&mut diags);
+        assert!(diags.is_empty(), "two-param probe must be suppressed");
+    }
+
+    #[test]
+    fn drops_multi_line_probe() {
+        // The `<T>()` is on one line, `T extends X ? 1 : 2` is on the next.
+        // Use distinct type params (<T> and <U>) so `line_of` finds each line
+        // uniquely — `line_of` matches single-line substrings.
+        let src = concat!(
+            "export type Equal<X, Y> =\n",
+            "  (<T>()\n",
+            "    => T extends X ? 1 : 2\n",
+            "  ) extends\n",
+            "  (<U>()\n",
+            "    => U extends Y ? 1 : 2\n",
+            "  ) ? true : false;\n",
+        );
+        let path = write_temp("multiline_probe.ts", src);
+        // Diagnostics fire on the lines with `<T>()` and `<U>()`.
+        let l1 = line_of(src, "<T>()");
+        let l2 = line_of(src, "<U>()");
+        let mut diags = vec![
+            fake_diag(&path, l1, "no-unnecessary-type-parameters"),
+            fake_diag(&path, l2, "no-unnecessary-type-parameters"),
+        ];
+        apply(&mut diags);
+        assert!(diags.is_empty(), "multi-line probe must be suppressed");
+    }
+
+    #[test]
+    fn drops_multiline_signature_fp() {
+        // Mirrors the amadeo `useListSearchSync` pattern: tsgolint only sees
+        // the first occurrence of `TSearch` even though it appears in two
+        // separate parameter type annotations across multiple lines.
+        let src = concat!(
+            "export function useListSearchSync<TSearch extends ListRouteSearch>(\n",
+            "  routeApi: ListRouteApi<TSearch>,\n",
+            "  { filterKeys }: UseListSearchSyncOptions<TSearch>,\n",
+            "): void {}\n",
+        );
+        let path = write_temp("multiline_sig.ts", src);
+        let line = line_of(src, "useListSearchSync");
+        let mut diags = vec![fake_diag(&path, line, "no-unnecessary-type-parameters")];
+        apply(&mut diags);
+        assert!(
+            diags.is_empty(),
+            "multi-line signature with param in two separate args must be suppressed"
+        );
+    }
+
+    // ── Existing negative tests — must still fire ─────────────────────────────
+
     #[test]
     fn keeps_real_unused_type_parameter() {
         // `T` is genuinely unused — not a probe.
@@ -349,5 +584,21 @@ mod tests {
         let mut diags = vec![fake_diag(&path, line, "no-unnecessary-type-parameters")];
         apply(&mut diags);
         assert_eq!(diags.len(), 1, "diagnostic on T must be kept — no <T>() probe present");
+    }
+
+    #[test]
+    fn keeps_single_param_multiline_signature() {
+        // Type param is only used ONCE even across multiple lines — keep diagnostic.
+        let src = concat!(
+            "function f<T>(\n",
+            "  x: number,\n",
+            "  y: string,\n",
+            "): void {}\n",
+        );
+        let path = write_temp("single_param_multiline.ts", src);
+        let line = line_of(src, "function f<T>");
+        let mut diags = vec![fake_diag(&path, line, "no-unnecessary-type-parameters")];
+        apply(&mut diags);
+        assert_eq!(diags.len(), 1, "T appears on no param lines — must be kept");
     }
 }
