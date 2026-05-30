@@ -9,6 +9,15 @@ use std::sync::Arc;
 
 pub struct Check;
 
+fn is_process_env(expr: &Expression) -> bool {
+    let Expression::StaticMemberExpression(member) = expr else { return false };
+    if member.property.name.as_str() != "env" {
+        return false;
+    }
+    let Expression::Identifier(obj) = &member.object else { return false };
+    obj.name.as_str() == "process"
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[AstType::UnaryExpression]
@@ -30,6 +39,11 @@ impl OxcCheck for Check {
         let Expression::ComputedMemberExpression(member) = &unary.argument else {
             return;
         };
+
+        // Allow `delete process.env[key]` — only way to unset an env var in Node.js.
+        if is_process_env(&member.object) {
+            return;
+        }
 
         // Allow literal string/number keys.
         match &member.expression {
@@ -56,5 +70,71 @@ impl OxcCheck for Check {
             severity: Severity::Warning,
             span: None,
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+    #[test]
+    fn flags_dynamic_delete() {
+        let diags = run_on("delete obj[key];");
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn allows_static_string_delete() {
+        assert!(run_on(r#"delete obj["foo"];"#).is_empty());
+    }
+
+    #[test]
+    fn allows_static_number_delete() {
+        assert!(run_on("delete obj[42];").is_empty());
+    }
+
+    #[test]
+    fn allows_dot_property_delete() {
+        assert!(run_on("delete obj.foo;").is_empty());
+    }
+
+    // Regression #558 — process.env teardown in tests
+    #[test]
+    fn allows_delete_process_env_dynamic_key() {
+        assert!(run_on("delete process.env[key];").is_empty());
+    }
+
+    #[test]
+    fn allows_delete_process_env_string_literal_key() {
+        assert!(run_on(r#"delete process.env['MY_VAR'];"#).is_empty());
+    }
+
+    #[test]
+    fn still_flags_non_process_env_dynamic_delete() {
+        let diags = run_on("delete obj[key];");
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn allows_process_env_teardown_pattern() {
+        let src = r#"
+const backup: Record<string, string | undefined> = {};
+beforeEach(() => {
+  backup['MY_VAR'] = process.env['MY_VAR'];
+  delete process.env['MY_VAR'];
+});
+afterEach(() => {
+  if (backup['MY_VAR'] === undefined) {
+    delete process.env['MY_VAR'];
+  } else {
+    process.env['MY_VAR'] = backup['MY_VAR'];
+  }
+});
+"#;
+        assert!(run_on(src).is_empty());
     }
 }
