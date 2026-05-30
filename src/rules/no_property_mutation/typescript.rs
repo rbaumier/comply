@@ -1,5 +1,96 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
+const SENTRY_HOOKS: &[&str] = &["beforeSend", "beforeBreadcrumb", "beforeSendTransaction"];
+
+/// True when the mutation is inside a Sentry hook callback — either an inline
+/// lambda assigned to `beforeSend`/`beforeBreadcrumb`, or a named function that
+/// is registered as one of those hooks somewhere in the same file.
+fn is_inside_sentry_hook(node: tree_sitter::Node, source: &[u8]) -> bool {
+    // Walk up: if we pass through a pair/method_definition with a Sentry hook
+    // key, the mutation is inside an inline callback.
+    let mut cur = node.parent();
+    while let Some(parent) = cur {
+        match parent.kind() {
+            // { beforeSend: (event) => { ... } }
+            "pair" => {
+                if let Some(key) = parent.child_by_field_name("key") {
+                    let key_text = key.utf8_text(source).unwrap_or("");
+                    if SENTRY_HOOKS.contains(&key_text) {
+                        return true;
+                    }
+                }
+            }
+            // { beforeSend(event) { ... } }
+            "method_definition" => {
+                if let Some(name) = parent.child_by_field_name("name") {
+                    let name_text = name.utf8_text(source).unwrap_or("");
+                    if SENTRY_HOOKS.contains(&name_text) {
+                        return true;
+                    }
+                }
+            }
+            _ => {}
+        }
+        cur = parent.parent();
+    }
+
+    // Named function case: find the nearest enclosing function_declaration name,
+    // then scan the file for that name used as a Sentry hook value.
+    if let Some(fn_name) = nearest_enclosing_function_name(node, source) {
+        let root = {
+            let mut n = node;
+            while let Some(p) = n.parent() {
+                n = p;
+            }
+            n
+        };
+        return function_is_sentry_hook(root, source, fn_name);
+    }
+    false
+}
+
+fn nearest_enclosing_function_name<'a>(
+    node: tree_sitter::Node,
+    source: &'a [u8],
+) -> Option<&'a str> {
+    let mut cur = node.parent();
+    while let Some(parent) = cur {
+        if parent.kind() == "function_declaration" {
+            return parent
+                .child_by_field_name("name")
+                .and_then(|n| n.utf8_text(source).ok());
+        }
+        cur = parent.parent();
+    }
+    None
+}
+
+/// Scan `root` recursively for `pair` nodes where the key is a Sentry hook
+/// and the value is an identifier equal to `fn_name`.
+fn function_is_sentry_hook(root: tree_sitter::Node, source: &[u8], fn_name: &str) -> bool {
+    if root.kind() == "pair" {
+        if let (Some(key), Some(value)) = (
+            root.child_by_field_name("key"),
+            root.child_by_field_name("value"),
+        ) {
+            let key_text = key.utf8_text(source).unwrap_or("");
+            if SENTRY_HOOKS.contains(&key_text) && value.kind() == "identifier" {
+                let value_text = value.utf8_text(source).unwrap_or("");
+                if value_text == fn_name {
+                    return true;
+                }
+            }
+        }
+    }
+    let mut cursor = root.walk();
+    for child in root.named_children(&mut cursor) {
+        if function_is_sentry_hook(child, source, fn_name) {
+            return true;
+        }
+    }
+    false
+}
+
 fn root_object_name<'a>(node: tree_sitter::Node<'a>, source: &'a [u8]) -> Option<&'a str> {
     let mut cur = node;
     loop {
@@ -134,6 +225,7 @@ match node.kind() {
             if obj_text == "module" || obj_text == "exports" { return; }
 
             if is_test_setup_mutation(node, left, source, ctx) { return; }
+            if is_inside_sentry_hook(node, source) { return; }
 
             // Allow: ref.current = ... (React useRef pattern)
             let prop_text = left.child_by_field_name("property")
@@ -168,6 +260,7 @@ match node.kind() {
             let Some(arg) = node.named_child(0) else { return; };
             if !matches!(arg.kind(), "member_expression" | "subscript_expression") { return; }
             if is_test_setup_mutation(node, arg, source, ctx) { return; }
+            if is_inside_sentry_hook(node, source) { return; }
             if let Some(root) = root_object_name(arg, source)
                 && is_created_dom_element_binding(node, source, root)
             { return; }
@@ -193,6 +286,7 @@ match node.kind() {
             let Some(arg) = node.child_by_field_name("argument") else { return; };
             if !matches!(arg.kind(), "member_expression" | "subscript_expression") { return; }
             if is_test_setup_mutation(node, arg, source, ctx) { return; }
+            if is_inside_sentry_hook(node, source) { return; }
             if let Some(root) = root_object_name(arg, source)
                 && is_created_dom_element_binding(node, source, root)
             { return; }
@@ -343,6 +437,73 @@ mod tests {
         let src = r#"
             const anchor = getAnchorFromDom();
             anchor.href = objectUrl;
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // Sentry beforeSend/beforeBreadcrumb — issue #581
+
+    #[test]
+    fn allows_mutation_inside_inline_before_send_arrow() {
+        // Sentry.init({ beforeSend: (event) => { event.request.url = scrub(url); } })
+        let src = r#"
+            Sentry.init({
+                beforeSend: (event) => {
+                    event.request.url = scrubSensitiveQueryFromUrl(url);
+                    return event;
+                },
+            });
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_mutation_inside_inline_before_breadcrumb_method() {
+        // { beforeBreadcrumb(breadcrumb) { breadcrumb.data = {}; } }
+        let src = r#"
+            Sentry.init({
+                beforeBreadcrumb(breadcrumb) {
+                    breadcrumb.data = sanitize(breadcrumb.data);
+                    return breadcrumb;
+                },
+            });
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_mutation_in_named_function_registered_as_before_send() {
+        // Named function passed by reference to beforeSend — issue #581
+        let src = r#"
+            function scrubEventRequestUrl(event) {
+                event.request.url = scrubSensitiveQueryFromUrl(event.request.url);
+                return event;
+            }
+            Sentry.init({ beforeSend: scrubEventRequestUrl });
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_subscript_mutation_in_named_function_registered_as_before_breadcrumb() {
+        // Subscript mutation inside named helper for beforeBreadcrumb — issue #581
+        let src = r#"
+            function scrubStringField(bag, key) {
+                bag[key] = scrubSensitiveQueryFromUrl(bag[key]);
+            }
+            Sentry.init({ beforeBreadcrumb: scrubStringField });
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_mutation_outside_sentry_hook() {
+        // A function with the same shape but NOT registered as a Sentry hook
+        // must still be flagged.
+        let src = r#"
+            function scrubStringField(bag, key) {
+                bag[key] = scrubSensitiveQueryFromUrl(bag[key]);
+            }
         "#;
         assert_eq!(run(src).len(), 1);
     }
