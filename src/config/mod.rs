@@ -115,7 +115,11 @@ impl Config {
         {
             return false;
         }
-        for idx in self.glob_matcher.matches(file_path) {
+        // File paths arrive with a `./` prefix (the engine walks from
+        // `.`), while override globs are written without one. Strip the
+        // prefix so a key like `src/foo.ts` matches `./src/foo.ts`.
+        let relative = file_path.strip_prefix("./").unwrap_or(file_path);
+        for idx in self.glob_matcher.matches(relative) {
             if self.disable_lists[idx].iter().any(|d| d == rule_id) {
                 return false;
             }
@@ -231,7 +235,11 @@ impl Config {
         let mut builder = GlobSetBuilder::new();
         let mut disable_lists: Vec<Vec<String>> = Vec::new();
         for (pattern, override_cfg) in &raw.overrides {
-            let glob = Glob::new(pattern)
+            // Normalize keys the same way as the paths they match against:
+            // a leading `./` is dropped so both `./src/**` and `src/**`
+            // resolve to the same glob.
+            let normalized = pattern.strip_prefix("./").unwrap_or(pattern);
+            let glob = Glob::new(normalized)
                 .with_context(|| format!("invalid glob in [overrides.\"{pattern}\"]"))?;
             builder.add(glob);
             disable_lists.push(override_cfg.disable.clone());
@@ -507,6 +515,62 @@ mod tests {
         let cfg = Config::load_from(tmp.path()).unwrap();
         assert!(!cfg.is_rule_enabled("rust-no-unwrap", Path::new("tests/foo.rs")));
         assert!(cfg.is_rule_enabled("rust-no-unwrap", Path::new("src/foo.rs")));
+    }
+
+    #[test]
+    fn override_matches_regardless_of_dot_slash_prefix() {
+        let tmp = TempDir::new().unwrap();
+        let cfg_path = tmp.path().join("comply.toml");
+        fs::write(
+            &cfg_path,
+            r#"
+            [overrides."src/api/errors/from-database.ts"]
+            disable = ["intermediate-variables"]
+
+            [overrides."src/api/test-helpers/**"]
+            disable = ["rust-no-unwrap"]
+            "#,
+        )
+        .unwrap();
+        let cfg = Config::load_from(tmp.path()).unwrap();
+        // Engine reports paths with a `./` prefix; the unprefixed override
+        // key must still match (the issue's reproducer).
+        assert!(!cfg.is_rule_enabled(
+            "intermediate-variables",
+            Path::new("./src/api/errors/from-database.ts")
+        ));
+        assert!(!cfg.is_rule_enabled(
+            "rust-no-unwrap",
+            Path::new("./src/api/test-helpers/setup-env.ts")
+        ));
+        // The previously-working prefixed form keeps matching too.
+        assert!(!cfg.is_rule_enabled(
+            "intermediate-variables",
+            Path::new("src/api/errors/from-database.ts")
+        ));
+    }
+
+    #[test]
+    fn dot_slash_prefixed_override_key_still_matches() {
+        let tmp = TempDir::new().unwrap();
+        let cfg_path = tmp.path().join("comply.toml");
+        fs::write(
+            &cfg_path,
+            r#"
+            [overrides."./src/api/errors/from-database.ts"]
+            disable = ["intermediate-variables"]
+            "#,
+        )
+        .unwrap();
+        let cfg = Config::load_from(tmp.path()).unwrap();
+        assert!(!cfg.is_rule_enabled(
+            "intermediate-variables",
+            Path::new("./src/api/errors/from-database.ts")
+        ));
+        assert!(!cfg.is_rule_enabled(
+            "intermediate-variables",
+            Path::new("src/api/errors/from-database.ts")
+        ));
     }
 
     #[test]
