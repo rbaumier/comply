@@ -97,6 +97,9 @@ pub(super) fn is_clear_text_url(content: &str) -> Option<&'static str> {
             if DEV_PREFIXES.iter().any(|d| trimmed.starts_with(d)) {
                 return None;
             }
+            if XML_NAMESPACE_PREFIXES.iter().any(|ns| trimmed.starts_with(ns)) {
+                return None;
+            }
             let host = &trimmed[prefix.len()..];
             let host_end = host
                 .find(['/', ':', '?', '#'])
@@ -115,6 +118,11 @@ pub(super) fn is_clear_text_url(content: &str) -> Option<&'static str> {
 }
 
 const DUMMY_HOSTS: &[&str] = &["example.com", "example.org", "example.net", "test.local"];
+
+// XML namespace URIs are frozen spec identifiers, not network endpoints.
+// The browser never makes an HTTP request to these; they are syntax-level
+// identifiers (xmlns="http://www.w3.org/2000/svg" etc.).
+const XML_NAMESPACE_PREFIXES: &[&str] = &["http://www.w3.org/"];
 
 fn trim_string_quotes(s: &str) -> &str {
     // TS strings: leading `"`, `'`, or backtick.
@@ -195,5 +203,20 @@ mod helper_tests {
     #[test]
     fn does_not_flag_example_org() {
         assert!(is_clear_text_url("\"http://example.org/path\"").is_none());
+    }
+
+    #[test]
+    fn does_not_flag_svg_namespace_uri() {
+        assert!(is_clear_text_url("\"http://www.w3.org/2000/svg\"").is_none());
+    }
+
+    #[test]
+    fn does_not_flag_xhtml_namespace_uri() {
+        assert!(is_clear_text_url("\"http://www.w3.org/1999/xhtml\"").is_none());
+    }
+
+    #[test]
+    fn does_not_flag_xml_schema_namespace_uri() {
+        assert!(is_clear_text_url("\"http://www.w3.org/2001/XMLSchema\"").is_none());
     }
 }

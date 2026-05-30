@@ -52,6 +52,12 @@ const SCENARIOS: &[Scenario] = &[
         ts: "// see http://example.com\nconst x = 1;",
         rust: "// see http://example.com\nfn f() {}",
     },
+    Scenario {
+        name: "SVG xmlns namespace URI — not flagged",
+        expected_flagged: false,
+        ts: r#"const ns = "http://www.w3.org/2000/svg";"#,
+        rust: r#"fn f() { let ns = "http://www.w3.org/2000/svg"; }"#,
+    },
 ];
 
 fn run_ts(src: &str) -> Vec<Diagnostic> {
