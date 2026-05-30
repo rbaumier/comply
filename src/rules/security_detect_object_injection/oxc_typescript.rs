@@ -128,12 +128,48 @@ fn decl_type_annotation_satisfies(
 }
 
 /// True when `decl_id` resolves to a binding whose type annotation contains a
-/// `keyof X` operator anywhere in the type tree.
+/// `keyof X` operator anywhere in the type tree, resolving named type-alias
+/// references (`type Breakpoint = keyof typeof X`) along the way.
 fn param_type_has_keyof(
     decl_id: oxc_semantic::NodeId,
     semantic: &oxc_semantic::Semantic<'_>,
 ) -> bool {
-    decl_type_annotation_satisfies(decl_id, semantic, ts_type_has_keyof)
+    decl_type_annotation_satisfies(decl_id, semantic, |ty| {
+        ts_type_has_keyof_resolving_aliases(ty, semantic, MAX_ALIAS_DEPTH)
+    })
+}
+
+/// Like [`ts_type_has_keyof`], but also follows named type-alias references and
+/// recurses into their definitions — so a key typed `Breakpoint` where
+/// `type Breakpoint = keyof typeof BREAKPOINTS` is recognised as keyof-bounded.
+/// `depth` bounds alias-chain recursion.
+fn ts_type_has_keyof_resolving_aliases(
+    ty: &TSType,
+    semantic: &oxc_semantic::Semantic<'_>,
+    depth: usize,
+) -> bool {
+    if depth == 0 {
+        return false;
+    }
+    if ts_type_has_keyof(ty) {
+        return true;
+    }
+    if let TSType::TSTypeReference(r) = ty
+        && let TSTypeName::IdentifierReference(id) = &r.type_name
+    {
+        for node in semantic.nodes().iter() {
+            if let AstKind::TSTypeAliasDeclaration(alias) = node.kind()
+                && alias.id.name.as_str() == id.name.as_str()
+            {
+                return ts_type_has_keyof_resolving_aliases(
+                    &alias.type_annotation,
+                    semantic,
+                    depth - 1,
+                );
+            }
+        }
+    }
+    false
 }
 
 /// True when `decl_id` resolves to a binding whose type annotation is a closed
@@ -342,6 +378,16 @@ fn ts_type_has_keyof(ty: &TSType) -> bool {
                 || ts_type_has_keyof(&c.extends_type)
                 || ts_type_has_keyof(&c.true_type)
                 || ts_type_has_keyof(&c.false_type)
+        }
+        // `T[keyof T]` — indexed-access used to derive a key type.
+        TSType::TSIndexedAccessType(i) => {
+            ts_type_has_keyof(&i.object_type) || ts_type_has_keyof(&i.index_type)
+        }
+        // `{ [K in keyof T]: … }` — mapped type whose `in` constraint is keyof.
+        TSType::TSMappedType(m) => {
+            ts_type_has_keyof(&m.constraint)
+                || m.name_type.as_ref().is_some_and(ts_type_has_keyof)
+                || m.type_annotation.as_ref().is_some_and(ts_type_has_keyof)
         }
         _ => false,
     }
@@ -562,6 +608,35 @@ mod tests {
             diags.is_empty(),
             "key as keyof NamedType assertion should not flag, got {diags:#?}"
         );
+    }
+
+    // Regression #444 — key typed via a `keyof typeof X` alias is keyof-bounded
+    // and must not flag, even though the annotation is a bare alias reference.
+    #[test]
+    fn issue_444_keyof_typeof_alias_param() {
+        let src = r#"
+            const BREAKPOINTS = { sm: 640, md: 768, lg: 1024 } as const;
+            type Breakpoint = keyof typeof BREAKPOINTS;
+            function getBreakpointPx(bp: Breakpoint): number {
+                return BREAKPOINTS[bp];
+            }
+        "#;
+        let diags = run(src);
+        assert!(diags.is_empty(), "keyof-typeof alias key should not flag, got {diags:#?}");
+    }
+
+    // Regression #444 — key typed via a generic alias that derives its key set
+    // through a mapped + indexed-access type (`{ [K in keyof T]: K }[keyof T]`).
+    #[test]
+    fn issue_444_mapped_indexed_alias_key() {
+        let src = r#"
+            type Keys<T> = { [K in keyof T]: K }[keyof T];
+            function pick<T>(obj: T, key: Keys<T>) {
+                return obj[key];
+            }
+        "#;
+        let diags = run(src);
+        assert!(diags.is_empty(), "mapped/indexed-derived key should not flag, got {diags:#?}");
     }
 
     // Regression #365 — forEach callback over Object.keys() cast to keyof array.
