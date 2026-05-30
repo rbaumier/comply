@@ -126,4 +126,19 @@ mod tests {
         let src = "new Elysia().use(plugin).onError(() => {});";
         assert!(crate::rules::test_helpers::run_oxc_ts(src, &Check).is_empty());
     }
+
+    #[test]
+    fn ignores_use_mutation_optional_onerror_forwarding() {
+        // Regression for #377: a useMutation wrapper that forwards the
+        // caller's optional `onError` callback must not be flagged.
+        let src = "import { useMutation } from '@tanstack/react-query';\n\
+            export function useFormMutation(options) {\n\
+              return useMutation({\n\
+                onError: (error, variables, context, mutation) => {\n\
+                  options.onError?.(error, variables, context, mutation);\n\
+                },\n\
+              });\n\
+            }";
+        assert!(run_on(src).is_empty());
+    }
 }

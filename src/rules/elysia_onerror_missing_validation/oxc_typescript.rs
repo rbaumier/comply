@@ -35,6 +35,12 @@ impl OxcCheck for Check {
             return;
         }
 
+        // Skip optional calls (`options.onError?.()`) — those invoke stored
+        // TanStack Query callbacks, not Elysia lifecycle hook registrations.
+        if call.optional {
+            return;
+        }
+
         let args_text = &ctx.source[call.span.start as usize..call.span.end as usize];
         if args_text.contains("VALIDATION") {
             return;
@@ -80,6 +86,23 @@ mod tests {
         // fire on `.onError(...)` member-call form.
         let src = "import { useMutation } from '@tanstack/react-query';\n\
             useMutation({ onError: (error, variables, context, mutation) => { console.log(error); } });";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_use_mutation_optional_onerror_forwarding() {
+        // Regression for #377: a useMutation wrapper that forwards the
+        // caller's optional `onError` callback via `options.onError?.()`
+        // must not be flagged — it's a TanStack Query invocation pattern,
+        // not an Elysia hook registration.
+        let src = "import { useMutation } from '@tanstack/react-query';\n\
+            export function useFormMutation(options) {\n\
+              return useMutation({\n\
+                onError: (error, variables, context, mutation) => {\n\
+                  options.onError?.(error, variables, context, mutation);\n\
+                },\n\
+              });\n\
+            }";
         assert!(run_on(src).is_empty());
     }
 }
