@@ -58,6 +58,12 @@ impl OxcCheck for Check {
             return;
         }
 
+        // Test files use idiomatic boolean state flags (`initialized`,
+        // `serveRenamed`) that don't benefit from the prefix rule.
+        if ctx.file.path_segments.in_test_dir {
+            return;
+        }
+
         let (name, span, is_bool) = match node.kind() {
             AstKind::VariableDeclarator(decl) => {
                 let BindingPattern::BindingIdentifier(ref id) = decl.id else {
@@ -130,9 +136,18 @@ impl OxcCheck for Check {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rules::file_ctx::{FileCtx, PathSegments};
 
     fn run(s: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_oxc_tsx(s, &Check)
+    }
+
+    fn run_in_test_file(s: &str) -> Vec<Diagnostic> {
+        let file = FileCtx {
+            path_segments: PathSegments { in_test_dir: true, ..PathSegments::default() },
+            ..FileCtx::default()
+        };
+        crate::rules::test_helpers::run_oxc_tsx_with_file_ctx(s, &Check, &file)
     }
 
     #[test]
@@ -148,5 +163,19 @@ mod tests {
     #[test]
     fn still_flags_boolean_var_at_runtime() {
         assert_eq!(run("const enabledFlag: boolean = true;").len(), 1);
+    }
+
+    #[test]
+    fn no_fp_on_test_idiomatic_boolean_state_var() {
+        // Test files use short boolean flags to control test state and mock
+        // behavior. (Closes #525)
+        assert!(run_in_test_file("let initialized = false;").is_empty());
+        assert!(run_in_test_file("let serveRenamed = false;").is_empty());
+    }
+
+    #[test]
+    fn still_flags_in_non_test_file() {
+        assert_eq!(run("let initialized = false;").len(), 1);
+        assert_eq!(run("let serveRenamed = false;").len(), 1);
     }
 }
