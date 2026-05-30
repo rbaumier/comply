@@ -55,6 +55,14 @@ impl OxcCheck for Check {
             return;
         }
 
+        // Allow `Object.assign(param, { begin })` — patching a library-owned
+        // object passed as a parameter when no constructor is accessible.
+        // Require the source to be a fresh object literal so that
+        // `Object.assign(cfg, updates)` (two identifiers) still fires.
+        if is_assign_to_parameter(call, semantic) {
+            return;
+        }
+
         let (line, column) = byte_offset_to_line_col(ctx.source, call.span.start as usize);
         diagnostics.push(Diagnostic {
             path: Arc::clone(&ctx.path_arc),
@@ -68,6 +76,43 @@ impl OxcCheck for Check {
             span: None,
         });
     }
+}
+
+/// True when `call` is `Object.assign(param, { ...literal })` where `param`
+/// is an identifier bound to a formal function parameter and the source is a
+/// fresh object literal.
+fn is_assign_to_parameter(
+    call: &oxc_ast::ast::CallExpression,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let Some(first) = call.arguments.first() else { return false };
+    let Some(second) = call.arguments.get(1) else { return false };
+
+    // Second arg must be a fresh object literal.
+    if !matches!(second, oxc_ast::ast::Argument::ObjectExpression(_)) {
+        return false;
+    }
+
+    // First arg must be an identifier bound to a formal parameter.
+    let oxc_ast::ast::Argument::Identifier(ident) = first else { return false };
+    let Some(ref_id) = ident.reference_id.get() else { return false };
+    let scoping = semantic.scoping();
+    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else { return false };
+    let decl_node_id = scoping.symbol_declaration(sym_id);
+    let nodes = semantic.nodes();
+
+    for kind in std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id))
+    {
+        match kind {
+            AstKind::FormalParameter(_) => return true,
+            // Stop at function/program boundaries — no match.
+            AstKind::Function(_)
+            | AstKind::ArrowFunctionExpression(_)
+            | AstKind::Program(_) => return false,
+            _ => {}
+        }
+    }
+    false
 }
 
 /// True when `call` is `Object.assign(fn, { ...literal })` where `fn` is
@@ -150,6 +195,34 @@ mod oxc_tests {
             const extras = { defaults: 1 };
             const parser = (input: unknown) => input;
             Object.assign(parser, extras);
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // === Parameter target with literal source (issue #583) ===
+
+    #[test]
+    fn allows_parameter_target_with_literal_source() {
+        // Regression for #583 — patching a library instance passed as a
+        // parameter is the only option when no constructor is accessible.
+        let src = r#"
+            export function patchReservedBegin(reserved: ReservedSql): ReservedSql {
+                const begin = async (...args: unknown[]): Promise<unknown> => {};
+                Object.assign(reserved, { begin });
+                return reserved;
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_parameter_with_variable_source() {
+        // Two-identifier merge — still a mutation smell.
+        let src = r#"
+            function merge(target: Config, updates: Partial<Config>): Config {
+                Object.assign(target, updates);
+                return target;
+            }
         "#;
         assert_eq!(run(src).len(), 1);
     }
