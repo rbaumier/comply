@@ -97,6 +97,18 @@ impl AstCheck for Check {
         let Ok(name) = left.utf8_text(source_bytes) else {
             return;
         };
+        // A typed identifier fallback (e.g. `param ?? otherParam`) is intentional
+        // domain logic, not a smell — the null comes from an external schema and
+        // the fallback is a business rule, not a silent default.
+        if let Some(right) = node.child_by_field_name("right") {
+            if right.kind() == "identifier" {
+                if let Ok(right_text) = right.utf8_text(source_bytes) {
+                    if right_text != "undefined" {
+                        return;
+                    }
+                }
+            }
+        }
         let pos = node.start_position();
         state.candidates.push(Candidate {
             op_text: op_text.to_string(),
@@ -174,5 +186,13 @@ mod tests {
     #[test]
     fn allows_nullish_on_property_access() {
         assert!(run_on("function f(opts: { x?: number }) { return opts.x ?? 0; }").is_empty());
+    }
+
+    #[test]
+    fn allows_typed_identifier_fallback() {
+        // `dateEntree ?? createdAt`: both are typed parameters; this is intentional domain logic.
+        assert!(run_on(
+            "function deriveEntryYear(dateEntree: Date | null, createdAt: Date): number { return (dateEntree ?? createdAt).getUTCFullYear(); }"
+        ).is_empty());
     }
 }

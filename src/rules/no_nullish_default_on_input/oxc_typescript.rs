@@ -63,6 +63,13 @@ fn check_logical(
     if !params.contains(name) {
         return;
     }
+    // A typed identifier fallback (e.g. `param ?? otherParam`) is intentional
+    // domain logic — skip.
+    if let Expression::Identifier(right_id) = &expr.right {
+        if right_id.name.as_str() != "undefined" {
+            return;
+        }
+    }
     let op_text = op.as_str();
     let (line, column) = byte_offset_to_line_col(ctx.source, expr.span.start as usize);
     diagnostics.push(Diagnostic {
@@ -112,5 +119,13 @@ mod tests {
     #[test]
     fn allows_nullish_on_property_access() {
         assert!(run_on("function f(opts: { x?: number }) { return opts.x ?? 0; }").is_empty());
+    }
+
+    #[test]
+    fn allows_typed_identifier_fallback() {
+        // `dateEntree ?? createdAt`: both are typed parameters; this is intentional domain logic.
+        assert!(run_on(
+            "function deriveEntryYear(dateEntree: Date | null, createdAt: Date): number { return (dateEntree ?? createdAt).getUTCFullYear(); }"
+        ).is_empty());
     }
 }
