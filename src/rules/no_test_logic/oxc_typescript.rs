@@ -170,7 +170,17 @@ fn collect_control_flow_stmt<'a>(
             out.push(("for", s.span.start));
         }
         Statement::ForOfStatement(s) => {
-            out.push(("for", s.span.start));
+            // Table-driven pattern: for-of whose body contains no nested
+            // control flow is iterating over a fixed set of test cases to
+            // register tests or run assertions — each iteration follows the
+            // same linear path, so no assertion is hidden. Only flag for-of
+            // loops whose body itself has if/for/while/switch inside, since
+            // those can silently skip assertions on some iterations.
+            let mut body_hits: Vec<(&str, u32)> = Vec::new();
+            collect_control_flow_stmt(&s.body, source, &mut body_hits);
+            if !body_hits.is_empty() {
+                out.push(("for", s.span.start));
+            }
         }
         Statement::WhileStatement(s) => {
             out.push(("while", s.span.start));
@@ -234,8 +244,36 @@ mod tests {
     }
 
     #[test]
-    fn flags_for_in_test() {
-        let source = "it('does stuff', () => {\n    for (const x of items) {\n        expect(x).toBeDefined();\n    }\n});";
+    fn flags_for_in_test_with_nested_condition() {
+        // for-of with an if inside can hide assertions — flag the for.
+        let source = "it('x', () => {\n    for (const x of items) {\n        if (x.active) { expect(x).toBeDefined(); }\n    }\n});";
+        let diags = run_test_file("src/utils.spec.ts", source);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("for"));
+    }
+
+    #[test]
+    fn does_not_flag_flat_for_of_in_test() {
+        // for-of with no nested control flow is the table-driven pattern —
+        // each iteration runs the same linear assertion path. Don't flag.
+        let source = "it('checks all cases', () => {\n    for (const x of CASES) {\n        expect(fn(x)).toBe(true);\n    }\n});";
+        let diags = run_test_file("src/utils.spec.ts", source);
+        assert!(diags.is_empty(), "expected no diagnostics, got {diags:?}");
+    }
+
+    #[test]
+    fn does_not_flag_outer_for_of_with_it_registration() {
+        // Outer for-of that registers it() calls — test-registration pattern,
+        // not logic inside a test body. The outer for is not inside any test.
+        let source = "for (const { input, expected } of CASES) {\n    it(`${input} -> ${expected}`, () => {\n        expect(fn(input)).toBe(expected);\n    });\n}";
+        let diags = run_test_file("src/utils.spec.ts", source);
+        assert!(diags.is_empty(), "expected no diagnostics, got {diags:?}");
+    }
+
+    #[test]
+    fn flags_traditional_for_in_test() {
+        // Traditional for loop — always flag.
+        let source = "it('x', () => {\n    for (let i = 0; i < 3; i++) {\n        expect(i).toBeLessThan(3);\n    }\n});";
         let diags = run_test_file("src/utils.spec.ts", source);
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("for"));
