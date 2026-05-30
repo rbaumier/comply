@@ -128,12 +128,55 @@ fn decl_type_annotation_satisfies(
 }
 
 /// True when `decl_id` resolves to a binding whose type annotation contains a
-/// `keyof X` operator anywhere in the type tree.
+/// `keyof X` operator anywhere in the type tree, including via a type alias.
 fn param_type_has_keyof(
     decl_id: oxc_semantic::NodeId,
     semantic: &oxc_semantic::Semantic<'_>,
 ) -> bool {
-    decl_type_annotation_satisfies(decl_id, semantic, ts_type_has_keyof)
+    decl_type_annotation_satisfies(decl_id, semantic, |ty| {
+        ts_type_has_keyof(ty) || type_ref_alias_has_keyof(ty, semantic, MAX_ALIAS_DEPTH)
+    })
+}
+
+/// True when `ty` is a plain type-reference (`Foo` or `Foo<T>`) whose alias
+/// definition contains a `keyof` operator. Handles both non-generic aliases
+/// (`type Breakpoint = keyof typeof BREAKPOINTS`) and generic ones
+/// (`type FilterKey<T> = keyof T & string`).
+fn type_ref_alias_has_keyof(
+    ty: &TSType,
+    semantic: &oxc_semantic::Semantic<'_>,
+    depth: usize,
+) -> bool {
+    if depth == 0 {
+        return false;
+    }
+    let TSType::TSTypeReference(r) = ty else {
+        return false;
+    };
+    let TSTypeName::IdentifierReference(id) = &r.type_name else {
+        return false;
+    };
+    resolve_alias_has_keyof(id.name.as_str(), semantic, depth - 1)
+}
+
+/// Find a `type <name> = …` alias declaration and test whether its definition
+/// contains a `keyof` operator.
+fn resolve_alias_has_keyof(
+    name: &str,
+    semantic: &oxc_semantic::Semantic<'_>,
+    depth: usize,
+) -> bool {
+    if depth == 0 {
+        return false;
+    }
+    for node in semantic.nodes().iter() {
+        if let AstKind::TSTypeAliasDeclaration(alias) = node.kind()
+            && alias.id.name.as_str() == name
+        {
+            return ts_type_has_keyof(&alias.type_annotation);
+        }
+    }
+    false
 }
 
 /// True when `decl_id` resolves to a binding whose type annotation is a closed
@@ -577,6 +620,43 @@ mod tests {
         assert!(
             diags.is_empty(),
             "forEach over Object.keys() as Array<keyof> should not flag, got {diags:#?}"
+        );
+    }
+
+    // Regression #444 — `type Breakpoint = keyof typeof BREAKPOINTS` is a type
+    // alias resolving to a `keyof` type; `bp: Breakpoint` is safe.
+    #[test]
+    fn issue_444_keyof_typeof_alias_parameter() {
+        let src = r#"
+            const BREAKPOINTS = { sm: 640, md: 768, lg: 1024 } as const;
+            type Breakpoint = keyof typeof BREAKPOINTS;
+
+            function getBreakpointPx(bp: Breakpoint): number {
+                return BREAKPOINTS[bp];
+            }
+        "#;
+        let diags = run(src);
+        assert!(
+            diags.is_empty(),
+            "keyof-typeof alias parameter should not flag, got {diags:#?}"
+        );
+    }
+
+    // Regression #444 — a generic alias `FilterKey<T> = keyof T & string` still
+    // has `keyof` in its body; `key: FilterKey<TSearch>` is a safe access.
+    #[test]
+    fn issue_444_generic_keyof_alias_parameter() {
+        let src = r#"
+            type FilterKey<TSearch> = keyof TSearch & string;
+            declare const search: { foo: string; bar: number };
+            function f(key: FilterKey<typeof search>): unknown {
+                return search[key];
+            }
+        "#;
+        let diags = run(src);
+        assert!(
+            diags.is_empty(),
+            "generic keyof alias parameter should not flag, got {diags:#?}"
         );
     }
 }
