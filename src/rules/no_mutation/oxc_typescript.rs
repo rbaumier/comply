@@ -416,7 +416,7 @@ fn is_result_gen_callee(callee: &Expression) -> bool {
     let Expression::Identifier(obj) = &member.object else {
         return false;
     };
-    obj.name.as_str() == "Result" && member.property.name.as_str() == "gen"
+    matches!(obj.name.as_str(), "Result" | "Effect") && member.property.name.as_str() == "gen"
 }
 
 #[cfg(test)]
@@ -474,6 +474,26 @@ mod tests {
                         items.push(user);
                     }
                     return Result.ok({ items, total: items.length });
+                });
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_push_inside_effect_gen_without_loop() {
+        // Effect.gen (effect-ts) uses the same sequential-yield accumulator
+        // pattern and must be treated the same as Result.gen.
+        let src = r#"
+            type User = { id: string };
+            function fetchTwo() {
+                return Effect.gen(function* () {
+                    const users: User[] = [];
+                    const u1 = yield* fetchUser("id1");
+                    users.push(u1);
+                    const u2 = yield* fetchUser("id2");
+                    users.push(u2);
+                    return users;
                 });
             }
         "#;
