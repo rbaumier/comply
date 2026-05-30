@@ -122,4 +122,12 @@ mod tests {
         let src = "// see http://api.acme.io for details\nconst x = 1;";
         assert!(run(src).is_empty());
     }
+
+    #[test]
+    fn does_not_flag_svg_xmlns_namespace_uri() {
+        // Regression: xmlns="http://www.w3.org/2000/svg" is a frozen spec
+        // namespace identifier, not a cleartext network connection.
+        let src = r#"const el = <svg aria-hidden="true" xmlns="http://www.w3.org/2000/svg"><path d="M5 12 10 18 19 5" /></svg>;"#;
+        assert!(run(src).is_empty());
+    }
 }
