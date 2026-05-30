@@ -227,6 +227,11 @@ fn matched_banned_prefix(name: &str) -> Option<&'static str> {
             bytes[plen].is_ascii_uppercase() || bytes[plen] == b'_'
         };
         if on_boundary {
+            // `runWith*` is the idiomatic AsyncLocalStorage wrapper pattern —
+            // the `run` comes from `AsyncLocalStorage.run()`, not a generic verb.
+            if prefix == "run" && name[plen..].starts_with("With") {
+                continue;
+            }
             return Some(prefix);
         }
     }
@@ -627,5 +632,23 @@ mod tests {
     #[test]
     fn still_flags_variable_with_banned_prefix() {
         assert!(!run_on("const processOrder = 1;").is_empty());
+    }
+
+    #[test]
+    fn no_fp_run_with_context_async_local_storage_wrapper() {
+        // Regression for #520 — `runWith*` is the idiomatic AsyncLocalStorage
+        // wrapper pattern; `run` comes from the Node.js API, not a generic verb.
+        let src = r#"
+            export function runWithRequestContext<T>(context: RequestContext, callback: () => T): T {
+                return requestContextStorage.run(context, callback);
+            }
+        "#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_run_task_generic_verb() {
+        // `runTask` uses `run` as a generic verb — must still flag.
+        assert!(!run_on("function runTask() {}").is_empty());
     }
 }
