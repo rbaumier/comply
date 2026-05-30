@@ -48,6 +48,19 @@ impl OxcCheck for Check {
         if matches!(&member.object, Expression::ArrayExpression(_)) {
             return;
         }
+        // Skip when the key expression itself carries a `keyof`-bounded type
+        // assertion: `obj[key as keyof typeof obj]` or `obj[<keyof T>key]`.
+        match &member.expression {
+            Expression::TSAsExpression(as_expr)
+                if ts_type_has_keyof(&as_expr.type_annotation) =>
+            {
+                return;
+            }
+            Expression::TSTypeAssertion(ta) if ts_type_has_keyof(&ta.type_annotation) => {
+                return;
+            }
+            _ => {}
+        }
         // Skip when the key's static type contains a `keyof` operator — bounded by TS at the call site.
         if let Expression::Identifier(id_ref) = &member.expression
             && let Some(ref_id) = id_ref.reference_id.get()
@@ -57,6 +70,8 @@ impl OxcCheck for Check {
             if param_type_has_keyof(decl_id, semantic)
                 || is_iterator_callback_over_keyof_array(decl_id, semantic)
                 || key_type_is_closed_literal_union(decl_id, semantic)
+                || is_for_in_variable(decl_id, semantic)
+                || is_for_of_over_keyof_iterable(decl_id, semantic)
             {
                 return;
             }
@@ -223,6 +238,10 @@ fn is_iterator_callback_over_keyof_array(
             if !ITER_METHODS.contains(&member.property.name.as_str()) {
                 return false;
             }
+            // Receiver is a type-asserted expression: `(keys as Array<keyof T>).forEach`.
+            if expression_type_has_keyof(&member.object) {
+                return true;
+            }
             let Expression::Identifier(recv) = &member.object else {
                 return false;
             };
@@ -242,6 +261,63 @@ fn is_iterator_callback_over_keyof_array(
         cur = next;
     }
     false
+}
+
+/// True when `decl_id` is the loop variable of a `for...in` statement.
+/// Such keys are string properties of the iterated object and are safe for
+/// bracket access on that same object.
+fn is_for_in_variable(
+    decl_id: oxc_semantic::NodeId,
+    semantic: &oxc_semantic::Semantic<'_>,
+) -> bool {
+    let nodes = semantic.nodes();
+    if !matches!(nodes.kind(decl_id), AstKind::VariableDeclarator(_)) {
+        return false;
+    }
+    for kind in nodes.ancestor_kinds(decl_id) {
+        match kind {
+            AstKind::VariableDeclaration(_) => continue,
+            AstKind::ForInStatement(_) => return true,
+            _ => return false,
+        }
+    }
+    false
+}
+
+/// True when `decl_id` is the loop variable of a `for...of` statement whose
+/// iterable expression carries a type assertion (`as T` or `<T>`) whose type
+/// contains a `keyof` operator — e.g.
+/// `for (const key of Object.keys(obj) as Array<keyof typeof obj>)`.
+fn is_for_of_over_keyof_iterable(
+    decl_id: oxc_semantic::NodeId,
+    semantic: &oxc_semantic::Semantic<'_>,
+) -> bool {
+    let nodes = semantic.nodes();
+    if !matches!(nodes.kind(decl_id), AstKind::VariableDeclarator(_)) {
+        return false;
+    }
+    for kind in nodes.ancestor_kinds(decl_id) {
+        match kind {
+            AstKind::VariableDeclaration(_) => continue,
+            AstKind::ForOfStatement(stmt) => {
+                return expression_type_has_keyof(&stmt.right);
+            }
+            _ => return false,
+        }
+    }
+    false
+}
+
+/// True when `expr` carries a type assertion (`as T` or `<T>`) whose type
+/// contains a `keyof` operator. Unwraps parentheses and non-null assertions.
+fn expression_type_has_keyof(expr: &Expression) -> bool {
+    match expr {
+        Expression::TSAsExpression(as_expr) => ts_type_has_keyof(&as_expr.type_annotation),
+        Expression::TSTypeAssertion(ta) => ts_type_has_keyof(&ta.type_annotation),
+        Expression::TSNonNullExpression(nn) => expression_type_has_keyof(&nn.expression),
+        Expression::ParenthesizedExpression(p) => expression_type_has_keyof(&p.expression),
+        _ => false,
+    }
 }
 
 /// Recursively check whether a TS type contains a `keyof X` operator.
@@ -391,5 +467,116 @@ mod tests {
     fn still_flags_string_typed_key() {
         let src = r#"function f(obj: Record<string, number>, key: string) { return obj[key]; }"#;
         assert_eq!(run(src).len(), 1);
+    }
+
+    // Regression #365 — for...in loop variable is a property of the iterated
+    // object and must not flag.
+    #[test]
+    fn issue_365_for_in_variable() {
+        let src = r#"
+            declare const myObj: Record<string, number>;
+            for (const key in myObj) {
+                const value = myObj[key];
+            }
+        "#;
+        let diags = run(src);
+        assert!(diags.is_empty(), "for...in key should not flag, got {diags:#?}");
+    }
+
+    // Regression #365 — for...in with object cast on the access site.
+    #[test]
+    fn issue_365_for_in_with_cast_object() {
+        let src = r#"
+            declare const myObj: Record<string, number>;
+            for (const key in myObj) {
+                const value = (myObj as Record<string, unknown>)[key];
+            }
+        "#;
+        let diags = run(src);
+        assert!(
+            diags.is_empty(),
+            "for...in key with cast object should not flag, got {diags:#?}"
+        );
+    }
+
+    // Regression #365 — for...of over Object.keys() cast to Array<keyof typeof obj>.
+    #[test]
+    fn issue_365_for_of_object_keys_cast_to_keyof_array() {
+        let src = r#"
+            declare const myObj: { a: number; b: string };
+            for (const key of Object.keys(myObj) as Array<keyof typeof myObj>) {
+                const value = myObj[key];
+            }
+        "#;
+        let diags = run(src);
+        assert!(
+            diags.is_empty(),
+            "for...of over Object.keys() as Array<keyof> should not flag, got {diags:#?}"
+        );
+    }
+
+    // Regression #365 — for...of over Object.keys() cast to (keyof typeof obj)[].
+    #[test]
+    fn issue_365_for_of_object_keys_cast_to_keyof_tuple() {
+        let src = r#"
+            declare const myObj: { x: number; y: string };
+            for (const key of Object.keys(myObj) as (keyof typeof myObj)[]) {
+                const value = myObj[key];
+            }
+        "#;
+        let diags = run(src);
+        assert!(
+            diags.is_empty(),
+            "for...of over Object.keys() as (keyof)[] should not flag, got {diags:#?}"
+        );
+    }
+
+    // Regression #365 — bracket key is a `key as keyof typeof obj` assertion.
+    #[test]
+    fn issue_365_key_as_keyof_assertion() {
+        let src = r#"
+            declare const myObj: { a: number; b: string };
+            function f(key: string): number {
+                return myObj[key as keyof typeof myObj];
+            }
+        "#;
+        let diags = run(src);
+        assert!(
+            diags.is_empty(),
+            "key as keyof T assertion should not flag, got {diags:#?}"
+        );
+    }
+
+    // Regression #365 — bracket key is a `key as keyof MyType` named-type assertion.
+    #[test]
+    fn issue_365_key_as_keyof_named_type_assertion() {
+        let src = r#"
+            interface MyConfig { host: string; port: number }
+            declare const config: MyConfig;
+            function getField(key: string): unknown {
+                return config[key as keyof MyConfig];
+            }
+        "#;
+        let diags = run(src);
+        assert!(
+            diags.is_empty(),
+            "key as keyof NamedType assertion should not flag, got {diags:#?}"
+        );
+    }
+
+    // Regression #365 — forEach callback over Object.keys() cast to keyof array.
+    #[test]
+    fn issue_365_foreach_over_object_keys_cast() {
+        let src = r#"
+            declare const myObj: { a: number; b: string };
+            (Object.keys(myObj) as Array<keyof typeof myObj>).forEach((key) => {
+                const value = myObj[key];
+            });
+        "#;
+        let diags = run(src);
+        assert!(
+            diags.is_empty(),
+            "forEach over Object.keys() as Array<keyof> should not flag, got {diags:#?}"
+        );
     }
 }
