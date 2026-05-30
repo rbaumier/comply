@@ -259,6 +259,51 @@ pub fn name_is_generic_type_param_in_scope(
     false
 }
 
+/// True when the `.then()` `call` node is the direct expression body of a
+/// non-async arrow function that is passed as an argument to `lazy()` or
+/// `React.lazy()`.
+///
+/// `React.lazy()` requires a **synchronous** factory that returns a Promise —
+/// passing an `async` arrow would violate the spec. The idiomatic module-
+/// reshaping pattern `lazy(() => import("...").then(mod => ({ default: mod.X })))`
+/// is therefore the only valid form, and flagging its `.then()` is a false
+/// positive.
+///
+/// The check is purely syntactic (callee name `"lazy"`); it does not resolve
+/// imports, so hand-rolled helpers that happen to be named `lazy` are also
+/// exempted — an acceptable trade-off for zero false positives on the real pattern.
+#[must_use]
+pub fn is_react_lazy_factory_then<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    use oxc_ast::AstKind;
+    use oxc_ast::ast::Expression;
+
+    let mut found_expression_arrow = false;
+    for ancestor in semantic.nodes().ancestors(node.id()) {
+        match ancestor.kind() {
+            AstKind::ArrowFunctionExpression(a) => {
+                if a.r#async || !a.expression {
+                    return false;
+                }
+                found_expression_arrow = true;
+            }
+            AstKind::Function(_) if found_expression_arrow => return false,
+            AstKind::CallExpression(call) if found_expression_arrow => {
+                let callee_name = match &call.callee {
+                    Expression::Identifier(id) => id.name.as_str(),
+                    Expression::StaticMemberExpression(m) => m.property.name.as_str(),
+                    _ => return false,
+                };
+                return callee_name == "lazy";
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
 /// True when `node_id` sits inside an ambient (`declare`) module context —
 /// `declare global { ... }` (parsed as `TSGlobalDeclaration`) or a `declare`
 /// module/namespace (`TSModuleDeclaration` with `declare`). Bindings inside

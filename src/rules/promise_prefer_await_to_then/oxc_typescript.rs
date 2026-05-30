@@ -70,6 +70,12 @@ impl OxcCheck for Check {
         if receiver_is_zod_chain(&member.object) {
             return;
         }
+        // React.lazy() requires a sync callback returning a Promise — the .then()
+        // reshapes the module object and cannot be replaced with await.
+        if crate::oxc_helpers::is_react_lazy_factory_then(node, semantic) {
+            return;
+        }
+
         // Only flag inside async functions — switching to await is
         // trivially possible there.
         if !inside_async_function(node, semantic) {

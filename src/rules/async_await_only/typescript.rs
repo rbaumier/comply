@@ -49,4 +49,29 @@ mod tests {
         let diags = run("const schema = z.string().then(v => v.trim());");
         assert!(diags.is_empty(), "expected no diagnostics, got {diags:?}");
     }
+
+    #[test]
+    fn allows_react_lazy_import_reshaping() {
+        // Regression for #427 — React.lazy() requires a sync callback returning a
+        // Promise; .then() reshapes the module and cannot be replaced with await.
+        let diags = run(
+            r#"import { lazy } from "react";
+const Dialog = lazy(() =>
+  import("@/features/dialog").then((module) => ({ default: module.Dialog }))
+);"#,
+        );
+        assert!(diags.is_empty(), "expected no diagnostics, got {diags:?}");
+    }
+
+    #[test]
+    fn allows_react_lazy_with_member_callee() {
+        // Regression for #427 — React.lazy(...) member-expression form.
+        let diags = run(
+            r#"import React from "react";
+const Dialog = React.lazy(() =>
+  import("@/features/dialog").then((module) => ({ default: module.Dialog }))
+);"#,
+        );
+        assert!(diags.is_empty(), "expected no diagnostics, got {diags:?}");
+    }
 }
