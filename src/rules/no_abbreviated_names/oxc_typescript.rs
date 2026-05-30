@@ -24,11 +24,7 @@ pub struct Check;
 
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
-        &[
-            AstType::BindingIdentifier,
-            AstType::IdentifierReference,
-            AstType::StaticMemberExpression,
-        ]
+        &[AstType::BindingIdentifier, AstType::StaticMemberExpression]
     }
 
     fn run<'a>(
@@ -40,7 +36,6 @@ impl OxcCheck for Check {
     ) {
         let (name, offset) = match node.kind() {
             oxc_ast::AstKind::BindingIdentifier(id) => (id.name.as_str(), id.span.start),
-            oxc_ast::AstKind::IdentifierReference(id) => (id.name.as_str(), id.span.start),
             oxc_ast::AstKind::StaticMemberExpression(expr) => {
                 let prop = expr.property.name.as_str();
                 if ALLOWED_METHOD_NAMES.contains(&prop) {
@@ -172,5 +167,24 @@ mod tests {
     #[test]
     fn does_not_flag_word_containing_abbreviation_letters() {
         assert!(run_on("const accountant = 1;").is_empty());
+    }
+
+    #[test]
+    fn no_fp_on_call_site_of_abbreviated_function() {
+        // insertBtn is declared elsewhere; calling it should not fire.
+        let diags = run_on("insertBtn(db);");
+        assert!(diags.is_empty(), "unexpected: {diags:?}");
+    }
+
+    #[test]
+    fn no_fp_on_identifier_reference_passed_as_argument() {
+        let diags = run_on("doSomething(usrHelper);");
+        assert!(diags.is_empty(), "unexpected: {diags:?}");
+    }
+
+    #[test]
+    fn still_flags_declaration_of_abbreviated_function() {
+        let diags = run_on("function insertBtn(db: unknown) {}");
+        assert!(diags.iter().any(|d| d.message.contains("btn")));
     }
 }
