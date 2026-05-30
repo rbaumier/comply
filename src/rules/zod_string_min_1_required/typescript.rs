@@ -68,6 +68,11 @@ crate::ast_check! { prefilter = ["z.string"] => |node, source, ctx, diagnostics|
             cur = parent;
             continue;
         }
+        // z.string() (or its chain) is a direct argument to a function call:
+        // the wrapper may apply constraints internally (e.g. refineNoControlChars).
+        if parent.kind() == "arguments" {
+            return;
+        }
         break;
     }
 
@@ -110,6 +115,20 @@ mod tests {
     #[test]
     fn allows_optional() {
         assert!(run("z.string().optional()").is_empty());
+    }
+
+    #[test]
+    fn no_fp_when_passed_to_wrapper_function() {
+        // Regression for issue #428: z.string() passed to a helper that applies .min(1) internally.
+        assert!(run("refineNoControlChars(z.string(), 'label')").is_empty());
+        assert!(run("refineNoControlChars(z.string(), fieldLabel)").is_empty());
+        assert!(run("const s = refineNoControlChars(z.string(), 'x')").is_empty());
+    }
+
+    #[test]
+    fn still_flags_bare_string_in_object() {
+        // z.string() inside an object literal is not passed directly to a wrapper — still flagged.
+        assert_eq!(run("z.object({ name: z.string() })").len(), 1);
     }
 
     #[test]
