@@ -2,6 +2,12 @@
 //!
 //! Computes Halstead metrics for each function body and flags those
 //! exceeding configured volume/difficulty/effort thresholds.
+//!
+//! Test files and script files are skipped: enumerating many test cases or
+//! iterating large data sets produces high Halstead volume without indicating
+//! a code-quality problem. Switch-case labels are also excluded from operand
+//! counting — they are routing labels, not algorithmic elements, analogous to
+//! how cyclomatic-complexity counts a switch as +1 regardless of arm count.
 
 use std::collections::HashSet;
 
@@ -11,6 +17,19 @@ use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::*;
 use oxc_span::GetSpan;
 use std::sync::Arc;
+
+fn is_test_or_script_file(path: &std::path::Path) -> bool {
+    let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+    if name.contains(".test.") || name.contains(".spec.") {
+        return true;
+    }
+    path.components().any(|c| {
+        matches!(
+            c.as_os_str().to_str(),
+            Some("__tests__") | Some("__test__") | Some("tests") | Some("test") | Some("scripts")
+        )
+    })
+}
 
 pub struct Check;
 
@@ -26,6 +45,9 @@ impl OxcCheck for Check {
         semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
+        if is_test_or_script_file(ctx.path) {
+            return;
+        }
         let (span_start, body_opt, is_method) = match node.kind() {
             AstKind::Function(func) => {
                 // Check if this is a trivial accessor (getter/setter with single statement)
@@ -232,9 +254,11 @@ fn visit_stmt(stmt: &Statement, source: &str, counts: &mut Counts) {
             }
         }
         Statement::SwitchStatement(s) => {
+            counts.add_op("switch_statement");
             visit_expr(&s.discriminant, source, counts);
             for case in &s.cases {
-                if let Some(test) = &case.test { visit_expr(test, source, counts); }
+                // Case labels are routing labels, not algorithmic operands — skip them.
+                // This mirrors how cyclomatic-complexity counts a switch as +1, not +N.
                 visit_stmts(&case.consequent, source, counts);
             }
         }
@@ -472,5 +496,129 @@ fn visit_for_init_expr(init: &ForStatementInit, source: &str, counts: &mut Count
             // It's an expression-like init; we can get the span and do basic counting
             // but for simplicity, these are rare enough to skip.
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rules::test_helpers::{run_oxc_ts, run_oxc_ts_with_path};
+
+    fn run_on(src: &str) -> Vec<Diagnostic> {
+        run_oxc_ts(src, &Check)
+    }
+
+    fn run_on_path(src: &str, path: &str) -> Vec<Diagnostic> {
+        run_oxc_ts_with_path(src, &Check, path)
+    }
+
+    #[test]
+    fn simple_function_is_not_flagged() {
+        let src = "function add(a, b) { return a + b; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn dense_function_is_flagged() {
+        // Wide vocabulary + heavy repetition to push Volume past 1500.
+        let src = r#"function compute(a, b, c, d, e, f, g, h, i, j) {
+  let r1 = (a + b) * (c - d) / (e + f) - (g * h) + (i - j);
+  let r2 = (b + c) * (d - e) / (f + g) - (h * i) + (j - a);
+  let r3 = (c + d) * (e - f) / (g + h) - (i * j) + (a - b);
+  let r4 = (d + e) * (f - g) / (h + i) - (j * a) + (b - c);
+  let r5 = (e + f) * (g - h) / (i + j) - (a * b) + (c - d);
+  let r6 = (f + g) * (h - i) / (j + a) - (b * c) + (d - e);
+  let r7 = (g + h) * (i - j) / (a + b) - (c * d) + (e - f);
+  let r8 = (h + i) * (j - a) / (b + c) - (d * e) + (f - g);
+  let r9 = (i + j) * (a - b) / (c + d) - (e * f) + (g - h);
+  let r10 = (j + a) * (b - c) / (d + e) - (f * g) + (h - i);
+  if (r1 > r2 && r3 < r4 || r5 === r6) {
+    r1 = r1 + r2 + r3 + r4 + r5;
+    r2 = r2 - r3 - r4 - r5 - r6;
+    r3 = r3 * r4 * r5 * r6 * r7;
+    r4 = r4 / r5 / r6 / r7 / r8;
+  }
+  return r1 + r2 + r3 + r4 + r5 + r6 + r7 + r8 + r9 + r10;
+}"#;
+        let d = run_on(src);
+        assert_eq!(d.len(), 1, "expected one diagnostic, got {d:?}");
+        assert!(d[0].message.contains("Halstead"), "unexpected message: {}", d[0].message);
+    }
+
+    #[test]
+    fn no_fp_on_large_function_in_test_file() {
+        // Regression for #585: test files enumerating many cases must not fire
+        // even when the function's Halstead volume exceeds the threshold.
+        let src = r#"function compute(a, b, c, d, e, f, g, h, i, j) {
+  let r1 = (a + b) * (c - d) / (e + f) - (g * h) + (i - j);
+  let r2 = (b + c) * (d - e) / (f + g) - (h * i) + (j - a);
+  let r3 = (c + d) * (e - f) / (g + h) - (i * j) + (a - b);
+  let r4 = (d + e) * (f - g) / (h + i) - (j * a) + (b - c);
+  let r5 = (e + f) * (g - h) / (i + j) - (a * b) + (c - d);
+  let r6 = (f + g) * (h - i) / (j + a) - (b * c) + (d - e);
+  let r7 = (g + h) * (i - j) / (a + b) - (c * d) + (e - f);
+  let r8 = (h + i) * (j - a) / (b + c) - (d * e) + (f - g);
+  let r9 = (i + j) * (a - b) / (c + d) - (e * f) + (g - h);
+  let r10 = (j + a) * (b - c) / (d + e) - (f * g) + (h - i);
+  if (r1 > r2 && r3 < r4 || r5 === r6) {
+    r1 = r1 + r2 + r3 + r4 + r5;
+    r2 = r2 - r3 - r4 - r5 - r6;
+  }
+  return r1 + r2 + r3 + r4 + r5 + r6 + r7 + r8 + r9 + r10;
+}"#;
+        assert!(
+            run_on_path(src, "src/shared/zod-i18n.test.ts").is_empty(),
+            "test files must not trigger halstead-complexity"
+        );
+        assert!(
+            run_on_path(src, "src/api/features/auth/query-session-scope.test.ts").is_empty(),
+            ".test.ts files must not trigger halstead-complexity"
+        );
+    }
+
+    #[test]
+    fn no_fp_on_large_function_in_script_file() {
+        // Regression for #585: script files iterating large data sets must not fire.
+        let src = r#"function compute(a, b, c, d, e, f, g, h, i, j) {
+  let r1 = (a + b) * (c - d) / (e + f) - (g * h) + (i - j);
+  let r2 = (b + c) * (d - e) / (f + g) - (h * i) + (j - a);
+  let r3 = (c + d) * (e - f) / (g + h) - (i * j) + (a - b);
+  let r4 = (d + e) * (f - g) / (h + i) - (j * a) + (b - c);
+  let r5 = (e + f) * (g - h) / (i + j) - (a * b) + (c - d);
+  let r6 = (f + g) * (h - i) / (j + a) - (b * c) + (d - e);
+  let r7 = (g + h) * (i - j) / (a + b) - (c * d) + (e - f);
+  let r8 = (h + i) * (j - a) / (b + c) - (d * e) + (f - g);
+  let r9 = (i + j) * (a - b) / (c + d) - (e * f) + (g - h);
+  let r10 = (j + a) * (b - c) / (d + e) - (f * g) + (h - i);
+  if (r1 > r2 && r3 < r4 || r5 === r6) {
+    r1 = r1 + r2 + r3 + r4 + r5;
+    r2 = r2 - r3 - r4 - r5 - r6;
+  }
+  return r1 + r2 + r3 + r4 + r5 + r6 + r7 + r8 + r9 + r10;
+}"#;
+        assert!(
+            run_on_path(src, "scripts/import-legacy-data.ts").is_empty(),
+            "scripts/ files must not trigger halstead-complexity"
+        );
+        assert!(
+            run_on_path(src, "scripts/seed-admin-cdr.ts").is_empty(),
+            "scripts/ files must not trigger halstead-complexity"
+        );
+    }
+
+    #[test]
+    fn no_fp_on_exhaustive_dispatch_switch() {
+        // Regression for #585: authorization dispatch with 50+ intent strings
+        // must not fire — case labels are routing labels, not algorithmic operands.
+        let cases: String = (0..50)
+            .map(|i| format!("    case \"intent_{i}\": handle_{i}(ctx); break;\n"))
+            .collect();
+        let src = format!(
+            "function authorize(intent, ctx) {{\n  switch (intent) {{\n{cases}  }}\n}}"
+        );
+        assert!(
+            run_on(&src).is_empty(),
+            "exhaustive dispatch switch must not trigger halstead-complexity"
+        );
     }
 }
