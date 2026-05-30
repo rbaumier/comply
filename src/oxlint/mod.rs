@@ -17,6 +17,7 @@ mod await_thenable_post_filter;
 mod elysia_post_filter;
 mod equal_probe_post_filter;
 mod no_unsafe_assignment_post_filter;
+mod no_unsafe_type_assertion_css_post_filter;
 mod promise_function_async_post_filter;
 mod strict_void_return_post_filter;
 mod options;
@@ -113,6 +114,7 @@ pub fn lint_files(
     elysia_post_filter::apply(&mut all);
     equal_probe_post_filter::apply(&mut all);
     no_unsafe_assignment_post_filter::apply(&mut all);
+    no_unsafe_type_assertion_css_post_filter::apply(&mut all);
     promise_function_async_post_filter::apply(&mut all);
     strict_void_return_post_filter::apply(&mut all);
 
