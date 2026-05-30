@@ -20,11 +20,11 @@ crate::ast_check! { on ["jsx_attribute"] => |node, source, ctx, diagnostics|
     let mut has_reduce = false;
 
     for tok in value.split_whitespace() {
-        if tok.starts_with("motion-reduce:") {
+        if tok.contains("motion-reduce:") {
             has_reduce = true;
             continue;
         }
-        if tok.starts_with("motion-safe:") {
+        if tok.contains("motion-safe:") {
             // `motion-safe:animate-*` means the animation is already opt-in,
             // which is also acceptable for the `prefers-reduced-motion` audience.
             has_reduce = true;
@@ -80,5 +80,18 @@ mod tests {
     #[test]
     fn allows_static_classes() {
         assert!(run(r#"export const A = () => <div className="p-4 bg-card" />;"#).is_empty());
+    }
+
+    #[test]
+    fn allows_motion_reduce_nested_in_data_attribute_variant() {
+        // motion-reduce: nested inside in-data-[...]: — both orderings must be accepted
+        assert!(run(r#"export const A = () => <Icon className="in-data-[type=loading]:animate-spin in-data-[type=loading]:motion-reduce:animate-none" />;"#).is_empty());
+        assert!(run(r#"export const A = () => <Icon className="in-data-[type=loading]:animate-spin motion-reduce:in-data-[type=loading]:animate-none" />;"#).is_empty());
+    }
+
+    #[test]
+    fn allows_motion_reduce_nested_in_arbitrary_variant() {
+        // **:data-current:motion-reduce:transition-none pattern
+        assert!(run(r#"export const A = () => <div className="**:data-current:transition-opacity **:data-current:motion-reduce:transition-none" />;"#).is_empty());
     }
 }
