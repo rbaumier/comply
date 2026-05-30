@@ -92,6 +92,28 @@ impl OxcCheck for Check {
                 continue;
             }
 
+            // Skip occurrences inside type alias declarations: each alias names
+            // a distinct domain concept regardless of structural identity, so
+            // counting them as duplicates produces false positives.
+            {
+                let mut cur_id = node.id();
+                let mut in_alias = false;
+                loop {
+                    let p = semantic.nodes().parent_node(cur_id);
+                    if p.id() == cur_id {
+                        break;
+                    }
+                    if matches!(p.kind(), AstKind::TSTypeAliasDeclaration(_)) {
+                        in_alias = true;
+                        break;
+                    }
+                    cur_id = p.id();
+                }
+                if in_alias {
+                    continue;
+                }
+            }
+
             let text = &ctx.source[span.start as usize..span.end as usize];
             if text.len() <= 5 {
                 continue;
@@ -177,14 +199,25 @@ mod tests {
     }
 
     #[test]
-    fn still_flags_nullable_with_complex_other_side() {
-        // `{ a: string } | null` is structurally distinctive — the
-        // object-literal side is what makes extraction worthwhile.
+    fn still_flags_complex_union_in_function_params() {
+        // `{ a: string } | null` in function parameters is a usage site, not
+        // a declaration — repeated usage still warrants extraction.
         let src = r#"
-            type A = { a: string } | null;
-            type B = { a: string } | null;
-            type C = { a: string } | null;
+            function a(x: { a: string } | null) {}
+            function b(x: { a: string } | null) {}
+            function c(x: { a: string } | null) {}
         "#;
         assert!(!run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_on_semantically_distinct_type_aliases() {
+        // Regression #379 — two type aliases sharing the same structural type
+        // must not be flagged; each alias names a distinct domain concept.
+        let src = r#"
+            type ApiResponse = string | number | boolean;
+            type CacheEntry = string | number | boolean;
+        "#;
+        assert!(run(src).is_empty());
     }
 }
