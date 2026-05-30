@@ -20,6 +20,18 @@ fn is_complex_type(kind: &str) -> bool {
     kind == "union_type" || kind == "intersection_type"
 }
 
+/// True when the node is nested inside a type alias declaration body.
+fn is_in_type_alias_declaration(node: tree_sitter::Node) -> bool {
+    let mut cur = node.parent();
+    while let Some(n) = cur {
+        if n.kind() == "type_alias_declaration" {
+            return true;
+        }
+        cur = n.parent();
+    }
+    false
+}
+
 #[derive(Default)]
 struct State {
     annotation_lines: HashMap<String, Vec<usize>>,
@@ -49,6 +61,10 @@ impl AstCheck for Check {
         if let Some(parent) = node.parent()
             && is_complex_type(parent.kind())
         {
+            return;
+        }
+        // Skip occurrences inside type alias declarations.
+        if is_in_type_alias_declaration(node) {
             return;
         }
         let text = match node.utf8_text(source) {
@@ -140,6 +156,16 @@ function bar(y: boolean | null) {}
         let src = r#"
 function foo(x: string) {}
 function bar(y: string) {}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_on_type_alias_declaration_bodies() {
+        // Regression #379 — union in type alias bodies must not be counted.
+        let src = r#"
+type ApiResponse = string | number;
+type CacheEntry = string | number;
 "#;
         assert!(run_on(src).is_empty());
     }
