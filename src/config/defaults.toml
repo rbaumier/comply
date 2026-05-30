@@ -230,6 +230,11 @@ disabled = true
 # Barrel / import hygiene.
 # ---------------------------------------------------------------
 
+# Set `allow_import_then_reexport = true` to silence prefer-export-from
+# when your project convention bans `export { x } from "path"` syntax.
+[rules.prefer-export-from]
+allow_import_then_reexport = false
+
 [rules.avoid-barrel-files]
 min_reexports = 3
 

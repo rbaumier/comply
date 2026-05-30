@@ -15,6 +15,9 @@ impl OxcCheck for Check {
         semantic: &'a oxc_semantic::Semantic<'a>,
         ctx: &CheckCtx,
     ) -> Vec<Diagnostic> {
+        if ctx.config.bool_flag("prefer-export-from", "allow_import_then_reexport", ctx.lang) {
+            return Vec::new();
+        }
         let program = semantic.nodes().program();
         let mut diagnostics = Vec::new();
 
@@ -99,9 +102,41 @@ impl OxcCheck for Check {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::Config;
+    use crate::rules::backend::CheckCtx;
+    use oxc_allocator::Allocator;
+    use oxc_parser::Parser as OxcParser;
+    use oxc_span::SourceType;
+    use std::fs;
+    use std::path::Path;
+    use tempfile::TempDir;
 
     fn run(source: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+    fn run_with_flag_enabled(source: &str) -> Vec<Diagnostic> {
+        let tmp = TempDir::new().expect("tempdir");
+        fs::write(
+            tmp.path().join("comply.toml"),
+            "[rules.prefer-export-from]\nallow_import_then_reexport = true\n",
+        )
+        .expect("write cfg");
+        let config = Config::load_from(tmp.path()).expect("load cfg");
+        let allocator = Allocator::default();
+        let parse_ret = OxcParser::new(&allocator, source, SourceType::ts()).parse();
+        let semantic = oxc_semantic::SemanticBuilder::new().build(&parse_ret.program).semantic;
+        let path = Path::new("t.ts");
+        let ctx = CheckCtx {
+            path,
+            path_arc: std::sync::Arc::from(path),
+            source,
+            config: &config,
+            project: crate::project::default_static_project_ctx(),
+            file: crate::rules::file_ctx::default_static_file_ctx(),
+            lang: crate::files::Language::TypeScript,
+        };
+        Check.run_on_semantic(&semantic, &ctx)
     }
 
     #[test]
@@ -132,5 +167,13 @@ mod tests {
     fn no_fp_when_import_aliased_used_locally_and_exported() {
         let src = "import { foo as bar } from './m';\nconsole.log(bar);\nexport { bar };";
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_when_allow_import_then_reexport_is_true() {
+        // Regression test for issue #575: projects that ban `export { x } from`
+        // can set `allow_import_then_reexport = true` to suppress the rule.
+        let src = "import { ForbiddenError } from './forbidden-error';\nexport { ForbiddenError };";
+        assert!(run_with_flag_enabled(src).is_empty());
     }
 }
