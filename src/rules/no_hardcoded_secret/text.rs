@@ -289,7 +289,12 @@ fn contains_keyed_literal(line: &str) -> bool {
         return false;
     }
     let inner: String = after.chars().skip(1).take_while(|c| *c != quote).collect();
-    inner.len() >= 16 && !inner.contains("${")
+    if inner.len() < 16 || inner.contains("${") {
+        return false;
+    }
+    // Values prefixed with `test_` are deliberately fake test credentials
+    // (e.g. Vitest setup files that satisfy schema validation without real secrets).
+    !inner.to_ascii_lowercase().starts_with("test_")
 }
 
 #[cfg(test)]
@@ -412,6 +417,24 @@ mod tests {
     fn still_flags_real_password_in_url() {
         assert_eq!(
             run(r#"const db = "postgres://admin:s3cretProd@db.example.com:5432/prod";"#).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn allows_test_prefixed_secret_in_vitest_setup() {
+        // Vitest setup files inject fake secrets with a test_ prefix to satisfy
+        // schema validation without using real credentials (Closes #505).
+        assert!(
+            run(r#"process.env['API_AUTH_SECRET'] = 'test_secret_padded_to_meet_min_length_xx';"#)
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn still_flags_real_secret_without_test_prefix() {
+        assert_eq!(
+            run(r#"const API_AUTH_SECRET = 'prod_secret_padded_to_meet_min_length_xx';"#).len(),
             1
         );
     }
