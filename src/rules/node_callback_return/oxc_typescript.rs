@@ -52,6 +52,17 @@ impl OxcCheck for Check {
             AstKind::ReturnStatement(_) => return,
             // Arrow body: `(err) => cb(err)`
             AstKind::ArrowFunctionExpression(_) => return,
+            // `const result = await callback(...)` or `return await callback(...)` —
+            // result captured for post-callback cleanup, or explicitly returned.
+            AstKind::AwaitExpression(_) => {
+                let grandparent = semantic.nodes().parent_node(parent.id());
+                if matches!(
+                    grandparent.kind(),
+                    AstKind::VariableDeclarator(_) | AstKind::ReturnStatement(_)
+                ) {
+                    return;
+                }
+            }
             AstKind::ExpressionStatement(expr_stmt) => {
                 let grandparent = semantic.nodes().parent_node(parent.id());
                 if let AstKind::FunctionBody(block) = grandparent.kind() {
@@ -267,5 +278,31 @@ mod tests {
         // to a call inside an implicit-return arrow must still be flagged.
         let src = "const outer = (x) => inner((y) => { cb(y); });";
         assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn no_fp_when_callback_result_is_awaited_and_captured() {
+        // Regression #547: `const result = await callback(conn)` followed by cleanup
+        // before `return result` must not be flagged.
+        let src = r#"
+            async function wrap(callback) {
+              try {
+                const result = await callback(conn);
+                await conn.unsafe("RELEASE SAVEPOINT sp");
+                return result;
+              } catch (err) {
+                await conn.unsafe("ROLLBACK TO SAVEPOINT sp");
+                throw err;
+              }
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_on_return_await_callback() {
+        // `return await callback(...)` — explicitly returned, not a Node FP.
+        let src = "async function wrap(callback) { return await callback(conn); }";
+        assert!(run(src).is_empty());
     }
 }
