@@ -8,12 +8,18 @@ use std::sync::Arc;
 
 pub struct Check;
 
-/// React hook synchronising state (e.g. `useListSearchSync`, `useStateSync`):
-/// starts with `use` followed by an uppercase letter, ends with `Sync`.
-pub(super) fn is_react_hook_sync(name: &str) -> bool {
-    name.starts_with("use")
-        && name.ends_with("Sync")
-        && name.as_bytes().get(3).is_some_and(|b| b.is_ascii_uppercase())
+/// Returns true when the identifier is a React hook or event-callback in the
+/// "state synchronisation" sense — not a Node.js sync-I/O name.
+///
+/// Patterns exempted:
+/// - `use[A-Z].*Sync` — React hooks (`useListSearchSync`, `useStateSync`)
+/// - `on[A-Z].*Sync`  — React event callbacks (`onSearchSync`, `onChangeSync`)
+pub(super) fn is_react_sync_name(name: &str) -> bool {
+    name.ends_with("Sync")
+        && ((name.starts_with("use")
+            && name.as_bytes().get(3).is_some_and(|b| b.is_ascii_uppercase()))
+            || (name.starts_with("on")
+                && name.as_bytes().get(2).is_some_and(|b| b.is_ascii_uppercase())))
 }
 
 impl OxcCheck for Check {
@@ -59,8 +65,8 @@ impl OxcCheck for Check {
             return;
         }
 
-        // Skip React hooks: `use[A-Z]...Sync` (synchronisation sense, not Node sync I/O).
-        if is_react_hook_sync(method_name) {
+        // Skip React hooks and event callbacks: `use[A-Z]…Sync` / `on[A-Z]…Sync`.
+        if is_react_sync_name(method_name) {
             return;
         }
 
