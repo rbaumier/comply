@@ -30,6 +30,37 @@ fn is_wire_format_path(path: &Path) -> bool {
         || name.starts_with("wire-format")
 }
 
+/// True when the join call sits inside a URL-wire context:
+/// - directly embedded in a template literal whose static parts contain `?` or `//`
+///   (e.g. `` `/api/items?ids=${arr.join(",")}` ``)
+/// - OR the result is assigned to a variable whose name ends with "ids"
+///   (e.g. `const ids = arr.join(",")`)
+fn is_url_wire_join<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    for ancestor in semantic.nodes().ancestors(node.id()) {
+        match ancestor.kind() {
+            AstKind::TemplateLiteral(tpl) => {
+                return tpl.quasis.iter().any(|q| {
+                    let s = q.value.raw.as_str();
+                    s.contains('?') || s.contains("//")
+                });
+            }
+            AstKind::VariableDeclarator(decl) => {
+                if let BindingPattern::BindingIdentifier(id) = &decl.id {
+                    let lower = id.name.as_str().to_ascii_lowercase();
+                    return lower.ends_with("ids") || lower.ends_with("keys");
+                }
+                return false;
+            }
+            AstKind::Function(_) | AstKind::ArrowFunctionExpression(_) => return false,
+            _ => {}
+        }
+    }
+    false
+}
+
 /// True when the enclosing function name signals wire-format encoding.
 ///
 /// Rules (tighter than the old `contains` approach):
@@ -129,6 +160,9 @@ impl OxcCheck for Check {
                 return;
             }
         }
+        if is_url_wire_join(node, semantic) {
+            return;
+        }
 
         let (line, column) = byte_offset_to_line_col(ctx.source, call.span.start as usize);
         diagnostics.push(Diagnostic {
@@ -202,5 +236,41 @@ mod tests {
             }
         "#;
         assert_eq!(run(src).len(), 1);
+    }
+
+    // #370 — FP on URL wire-format joins
+    #[test]
+    fn allows_join_directly_in_url_template_literal() {
+        let src = r#"
+            const url = `/api/items?ids=${selectedItems.map((item) => item.id).join(",")}`;
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_join_assigned_to_ids_variable() {
+        let src = r#"
+            const ids = selectedItems.map((item) => item.id).join(",");
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_join_assigned_to_generic_variable() {
+        // Not wire-format: variable name does not end with "ids"
+        let src = r#"
+            const label = items.join(", ");
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_join_in_url_template_with_query_separator() {
+        let src = r#"
+            function buildUrl(ids) {
+              return `/search?q=${ids.join(",")}`;
+            }
+        "#;
+        assert!(run(src).is_empty());
     }
 }

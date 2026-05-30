@@ -51,6 +51,37 @@ fn is_wire_format_fn_name(name: &str) -> bool {
     )
 }
 
+/// True when the join call is in a URL-wire context:
+/// - directly in a template string whose text contains `?` or `//`
+/// - OR assigned to a variable whose name ends with "ids"
+fn is_url_wire_join(node: tree_sitter::Node<'_>, source: &[u8]) -> bool {
+    let mut cursor = node.parent();
+    while let Some(parent) = cursor {
+        match parent.kind() {
+            "template_string" => {
+                if let Ok(text) = parent.utf8_text(source) {
+                    return text.contains('?') || text.contains("//");
+                }
+                return false;
+            }
+            "variable_declarator" => {
+                if let Some(name_node) = parent.child_by_field_name("name") {
+                    if let Ok(name) = name_node.utf8_text(source) {
+                        let lower = name.to_ascii_lowercase();
+                        return lower.ends_with("ids") || lower.ends_with("keys");
+                    }
+                }
+                return false;
+            }
+            "function_declaration" | "function_expression" | "arrow_function"
+            | "method_definition" => return false,
+            _ => {}
+        }
+        cursor = parent.parent();
+    }
+    false
+}
+
 /// Walk ancestors and return the nearest enclosing function-like name, if any.
 fn enclosing_fn_name<'a>(node: tree_sitter::Node<'a>, source: &'a [u8]) -> Option<String> {
     let mut cursor = node.parent();
@@ -102,6 +133,7 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     if let Some(name) = enclosing_fn_name(node, source) {
         if is_wire_format_fn_name(&name) { return; }
     }
+    if is_url_wire_join(node, source) { return; }
 
     diagnostics.push(Diagnostic::at_node(
         ctx.path,
@@ -175,5 +207,40 @@ mod tests {
             }
         "#;
         assert_eq!(run(src).len(), 1);
+    }
+
+    // #370 — FP on URL wire-format joins
+    #[test]
+    fn allows_join_directly_in_url_template_literal() {
+        let src = r#"
+            const url = `/api/items?ids=${selectedItems.map((item) => item.id).join(",")}`;
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_join_assigned_to_ids_variable() {
+        let src = r#"
+            const ids = selectedItems.map((item) => item.id).join(",");
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_join_assigned_to_generic_variable() {
+        let src = r#"
+            const label = items.join(", ");
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_join_in_url_template_with_query_separator() {
+        let src = r#"
+            function buildUrl(ids: string[]) {
+              return `/search?q=${ids.join(",")}`;
+            }
+        "#;
+        assert!(run(src).is_empty());
     }
 }
