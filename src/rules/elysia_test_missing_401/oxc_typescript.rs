@@ -24,9 +24,46 @@ const AUTH_INVOCATION_MARKERS_CI: &[&str] = &[
     "jwt(",
 ];
 
+/// Keywords that indicate the test exercises a cross-cutting concern (CORS,
+/// rate-limiting, request-ID propagation, etc.) rather than auth itself.
+/// Matched case-insensitively against the file path and describe/test descriptions.
+const COMPOSITION_CONCERN_MARKERS: &[&str] = &[
+    "cors",
+    "rate-limit",
+    "ratelimit",
+    "rate_limit",
+    "composition",
+    "request-id",
+    "requestid",
+    "x-request-id",
+    "logging",
+];
+
 fn is_test_file(path: &std::path::Path) -> bool {
     let s = path.to_string_lossy();
     TEST_MARKERS.iter().any(|m| s.contains(m))
+}
+
+fn has_composition_concern(path: &std::path::Path, source: &str) -> bool {
+    let path_str = path.to_string_lossy().to_lowercase();
+    if COMPOSITION_CONCERN_MARKERS
+        .iter()
+        .any(|m| path_str.contains(m))
+    {
+        return true;
+    }
+    source
+        .lines()
+        .filter(|l| {
+            let t = l.trim_start();
+            t.starts_with("describe(")
+                || t.starts_with("test(")
+                || t.starts_with("it(")
+        })
+        .any(|l| {
+            let lower = l.to_lowercase();
+            COMPOSITION_CONCERN_MARKERS.iter().any(|m| lower.contains(m))
+        })
 }
 
 pub struct Check;
@@ -63,6 +100,10 @@ impl OxcCheck for Check {
             || ctx.source.contains("\"/api/")
             || ctx.source.contains("'/api/");
         if !tests_http_routes {
+            return Vec::new();
+        }
+
+        if has_composition_concern(ctx.path, ctx.source) {
             return Vec::new();
         }
 
