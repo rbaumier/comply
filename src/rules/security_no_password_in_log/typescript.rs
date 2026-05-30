@@ -60,48 +60,62 @@ fn args_slice(line: &str, args_start: usize) -> &str {
     &line[args_start..]
 }
 
-/// Drop the static (non-interpolated) text of any template literal in `args`,
-/// keeping only the `${…}` expression contents. A human-readable status
-/// message that merely mentions "password" then no longer matches — the scan
-/// fires on interpolated identifiers, not on prose.
-fn strip_template_static_text(args: &str) -> String {
+/// Drop the content of all string literals in `args` (quoted strings and template
+/// literal static parts), keeping only: bare identifiers, object keys, and
+/// template interpolation expressions. A human-readable message that merely
+/// mentions "password" as a word then no longer matches — the scan fires on
+/// expressions named as credentials, not on prose inside string literals.
+fn strip_static_text(args: &str) -> String {
     let mut out = String::with_capacity(args.len());
     let mut chars = args.chars().peekable();
     while let Some(c) = chars.next() {
-        if c != '`' {
-            out.push(c);
-            continue;
-        }
-        // Inside a template literal: emit only interpolation contents.
-        while let Some(&c2) = chars.peek() {
-            if c2 == '`' {
-                chars.next();
-                break;
-            }
-            if c2 == '$' {
-                chars.next();
-                if chars.peek() == Some(&'{') {
-                    chars.next();
-                    out.push(' ');
-                    let mut depth = 1i32;
-                    for c3 in chars.by_ref() {
-                        match c3 {
-                            '{' => depth += 1,
-                            '}' => {
-                                depth -= 1;
-                                if depth == 0 {
-                                    break;
-                                }
-                            }
-                            _ => {}
-                        }
-                        out.push(c3);
+        match c {
+            '`' => {
+                // Inside a template literal: emit only interpolation contents.
+                while let Some(&c2) = chars.peek() {
+                    if c2 == '`' {
+                        chars.next();
+                        break;
                     }
-                    out.push(' ');
+                    if c2 == '$' {
+                        chars.next();
+                        if chars.peek() == Some(&'{') {
+                            chars.next();
+                            out.push(' ');
+                            let mut depth = 1i32;
+                            for c3 in chars.by_ref() {
+                                match c3 {
+                                    '{' => depth += 1,
+                                    '}' => {
+                                        depth -= 1;
+                                        if depth == 0 {
+                                            break;
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                                out.push(c3);
+                            }
+                            out.push(' ');
+                        }
+                    } else {
+                        chars.next(); // static template char — drop it.
+                    }
                 }
-            } else {
-                chars.next(); // static template char — drop it.
             }
+            '\'' | '"' => {
+                // Regular quoted string: drop its entire content.
+                let quote = c;
+                while let Some(&c2) = chars.peek() {
+                    chars.next();
+                    if c2 == '\\' {
+                        chars.next(); // skip escaped char
+                    } else if c2 == quote {
+                        break;
+                    }
+                }
+            }
+            _ => out.push(c),
         }
     }
     out
@@ -164,7 +178,7 @@ impl TextCheck for Check {
                 continue;
             };
             let args = args_slice(line, args_start);
-            if !mentions_sensitive(&strip_template_static_text(args)) {
+            if !mentions_sensitive(&strip_static_text(args)) {
                 continue;
             }
             diagnostics.push(Diagnostic {
@@ -221,6 +235,14 @@ mod tests {
     #[test]
     fn allows_sensitive_word_in_static_template_text() {
         let src = r#"console.log(`   → password set, sign in with ${adminUser.email}\n`);"#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // Regression for #431: "password" used as a noun in a plain string literal
+    // (no credential value interpolated) must not fire.
+    #[test]
+    fn allows_password_as_noun_in_plain_string_literal() {
+        let src = r#"console.log("Communicate this password through a private channel, then ask");"#;
         assert!(run(src).is_empty(), "{:?}", run(src));
     }
 
