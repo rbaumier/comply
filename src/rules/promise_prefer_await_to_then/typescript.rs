@@ -34,4 +34,19 @@ mod tests {
         );
         assert!(diags.is_empty(), "expected no diagnostics, got {diags:?}");
     }
+
+    #[test]
+    fn allows_react_lazy_import_reshaping_inside_async_fn() {
+        // Regression for #427 — React.lazy() requires a sync callback; the inner
+        // .then() cannot be replaced with await even when inside an async function.
+        let diags = run(
+            r#"import { lazy } from "react";
+async function setup() {
+    const Dialog = lazy(() =>
+      import("@/features/dialog").then((module) => ({ default: module.Dialog }))
+    );
+}"#,
+        );
+        assert!(diags.is_empty(), "expected no diagnostics, got {diags:?}");
+    }
 }

@@ -36,7 +36,7 @@ impl OxcCheck for Check {
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
+        semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let AstKind::CallExpression(call) = node.kind() else {
@@ -54,6 +54,12 @@ impl OxcCheck for Check {
 
         // Zod `.catch`/`.then` are schema combinators — flagging them is a false positive.
         if receiver_is_zod_chain(&member.object) {
+            return;
+        }
+
+        // React.lazy() requires a sync callback returning a Promise — the .then()
+        // reshapes the module object and cannot be replaced with await.
+        if crate::oxc_helpers::is_react_lazy_factory_then(node, semantic) {
             return;
         }
 
