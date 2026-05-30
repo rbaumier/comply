@@ -258,3 +258,20 @@ pub fn name_is_generic_type_param_in_scope(
     }
     false
 }
+
+/// True when `node_id` sits inside an ambient (`declare`) module context —
+/// `declare global { ... }` (parsed as `TSGlobalDeclaration`) or a `declare`
+/// module/namespace (`TSModuleDeclaration` with `declare`). Bindings inside
+/// these blocks are type-level ambient declarations with no runtime presence,
+/// so runtime-variable lints must not fire on them.
+#[must_use]
+pub fn is_in_ambient_declaration(
+    node_id: oxc_semantic::NodeId,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_ast::AstKind;
+    semantic.nodes().ancestors(node_id).any(|ancestor| {
+        matches!(ancestor.kind(), AstKind::TSGlobalDeclaration(_))
+            || matches!(ancestor.kind(), AstKind::TSModuleDeclaration(m) if m.declare)
+    })
+}
