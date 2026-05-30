@@ -19,6 +19,9 @@ impl OxcCheck for Check {
         _semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
+        if super::is_test_file(ctx.path) {
+            return;
+        }
         let AstKind::CallExpression(call) = node.kind() else {
             return;
         };
@@ -69,5 +72,17 @@ mod tests {
     #[test]
     fn allows_inarray_with_array_literal() {
         assert!(run_on("where(inArray(users.role, ['admin', 'editor']));").is_empty());
+    }
+
+    #[test]
+    fn no_fp_in_test_file() {
+        // Regression for #528: inArray(col, subquery) in test files is not a FP.
+        let src = "where(inArray(users.id, db.select({ id: orders.userId }).from(orders)));";
+        let diags = crate::rules::test_helpers::run_oxc_ts_with_path(
+            src,
+            &Check,
+            "src/features/users/users.integration.test.ts",
+        );
+        assert!(diags.is_empty());
     }
 }
