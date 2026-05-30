@@ -120,4 +120,24 @@ mod tests {
         let diags = run_ts_with_project_and_path(source, &Check, &project, &paths[0]);
         assert_eq!(diags.len(), 1);
     }
+
+    #[test]
+    fn no_fp_for_dollar_sign_in_filename_tanstack_router() {
+        // TanStack Router uses `$param` segments in filenames. A test file
+        // importing `./cabinets_.$cabinetId` (without extension) must not be
+        // flagged when `cabinets_.$cabinetId.tsx` exists on disk.
+        let (_dir, project, paths) = setup_project(&[
+            (
+                "routes/cabinets_.$cabinetId.tsx",
+                "export const Route = {};",
+            ),
+            (
+                "routes/cabinets_.$cabinetId.test.ts",
+                "import { Route } from './cabinets_.$cabinetId';",
+            ),
+        ]);
+        let source = "import { Route } from './cabinets_.$cabinetId';";
+        let diags = run_ts_with_project_and_path(source, &Check, &project, &paths[1]);
+        assert!(diags.is_empty(), "got unexpected diagnostics: {diags:?}");
+    }
 }
