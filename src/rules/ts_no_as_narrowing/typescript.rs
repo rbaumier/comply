@@ -48,16 +48,35 @@ const NARROWING_UTILITY_TYPES: &[&str] = &[
     "Lowercase",
 ];
 
+/// TanStack Router and TanStack Query framework types that require explicit
+/// `as` casts to bridge deeply-generic boundaries TypeScript cannot cross
+/// without assertion. Exempted from the PascalCase-narrowing heuristic.
+const TANSTACK_FRAMEWORK_TYPES: &[&str] = &[
+    "AnyRoute",
+    "AnyRouter",
+    "RouterContext",
+    "RegisteredRouter",
+    "RouteIds",
+    "RoutePaths",
+    "AnyRouteMatch",
+    "MutationCache",
+    "QueryCache",
+];
+
 fn target_is_narrowing(target: tree_sitter::Node<'_>, source: &[u8]) -> bool {
     match target.kind() {
         "literal_type" | "template_literal_type" => true,
         // `as TypeName` — flag PascalCase identifiers (likely user-defined
         // narrowing types), allow lowercase aliases (e.g. type aliases for
-        // primitives) which are widening or neutral.
+        // primitives) which are widening or neutral, and allow known
+        // TanStack Router/Query framework types that genuinely need `as`.
         "type_identifier" => {
             let Ok(name) = target.utf8_text(source) else {
                 return false;
             };
+            if TANSTACK_FRAMEWORK_TYPES.contains(&name) {
+                return false;
+            }
             name.chars().next().is_some_and(|c| c.is_ascii_uppercase())
         }
         // `as NonNullable<T>` / `as Exclude<T, U>` / `as Pick<T, K>`.
@@ -132,5 +151,37 @@ mod tests {
     #[test]
     fn allows_cast_to_lowercase_alias() {
         assert!(run("const x = value as myAlias;").is_empty());
+    }
+
+    // Regression #368 — TanStack Router/Query framework types must be exempt
+    #[test]
+    fn allows_cast_to_any_route() {
+        assert!(run("const r = route as AnyRoute;").is_empty());
+    }
+
+    #[test]
+    fn allows_cast_to_any_router() {
+        assert!(run("const r = router as AnyRouter;").is_empty());
+    }
+
+    #[test]
+    fn allows_cast_to_router_context() {
+        assert!(run("const ctx = x as RouterContext;").is_empty());
+    }
+
+    #[test]
+    fn allows_cast_to_registered_router() {
+        assert!(run("const r = x as RegisteredRouter;").is_empty());
+    }
+
+    #[test]
+    fn allows_cast_to_mutation_cache() {
+        assert!(run("const c = x as MutationCache;").is_empty());
+    }
+
+    #[test]
+    fn still_flags_non_framework_pascal_case() {
+        // Regular user-defined PascalCase types must still be flagged
+        assert_eq!(run("const x = value as AdminUser;").len(), 1);
     }
 }
