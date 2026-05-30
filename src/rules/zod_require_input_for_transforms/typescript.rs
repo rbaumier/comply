@@ -44,7 +44,10 @@ crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
                                     let Ok(schema_name) = q.utf8_text(source) else { continue };
                                     if let Some(init) = find_const_init(node, source, schema_name) {
                                         let init_text = init.utf8_text(source).unwrap_or("");
-                                        if init_text.contains(".transform(") {
+                                        if init_text.contains(".transform(")
+                                            && !init_text.starts_with("z.unknown(")
+                                            && !init_text.starts_with("z.any(")
+                                        {
                                             let pos = n.start_position();
                                             diagnostics.push(Diagnostic {
                                                 path: std::sync::Arc::clone(&ctx.path_arc),
@@ -100,6 +103,23 @@ mod tests {
     #[test]
     fn allows_infer_without_transform() {
         let src = "const S = z.object({ a: z.string() });\n\
+                   type T = z.infer<typeof S>;";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_z_unknown_transform_output_type() {
+        // Closes #510 — z.unknown().transform(...) is a parsing schema;
+        // z.infer is correct here (names the output type, not form input).
+        let src = "const PostgresErrorShapeSchema = z.unknown().transform((input, ctx) => {\
+                   \n  return { code: 'foo', constraint_name: 'bar' };\n});\n\
+                   type PostgresErrorShape = z.infer<typeof PostgresErrorShapeSchema>;";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_z_any_transform_output_type() {
+        let src = "const S = z.any().transform(v => ({ value: v }));\n\
                    type T = z.infer<typeof S>;";
         assert!(run(src).is_empty());
     }

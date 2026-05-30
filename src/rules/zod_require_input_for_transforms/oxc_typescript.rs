@@ -33,6 +33,8 @@ impl OxcCheck for Check {
                 let span = init.span();
                 let init_text = &ctx.source[span.start as usize..span.end as usize];
                 if init_text.contains(".transform(")
+                    && !init_text.starts_with("z.unknown(")
+                    && !init_text.starts_with("z.any(")
                     && let oxc_ast::ast::BindingPattern::BindingIdentifier(id) =
                         &declarator.id
                     {
@@ -85,5 +87,53 @@ impl OxcCheck for Check {
             }
         }
         out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rules::test_helpers::run_oxc_ts;
+
+    fn run(s: &str) -> Vec<crate::diagnostic::Diagnostic> {
+        run_oxc_ts(s, &Check)
+    }
+
+    #[test]
+    fn flags_infer_on_transformed_schema() {
+        let src = "const S = z.string().transform(v => v.trim());\n\
+                   type T = z.infer<typeof S>;";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_input_on_transformed_schema() {
+        let src = "const S = z.string().transform(v => v.trim());\n\
+                   type T = z.input<typeof S>;";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_infer_without_transform() {
+        let src = "const S = z.object({ a: z.string() });\n\
+                   type T = z.infer<typeof S>;";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_z_unknown_transform_output_type() {
+        // Closes #510 — z.unknown().transform(...) is a parsing schema;
+        // z.infer is correct here (names the output type, not form input).
+        let src = "const PostgresErrorShapeSchema = z.unknown().transform((input, ctx) => {\
+                   \n  return { code: 'foo', constraint_name: 'bar' };\n});\n\
+                   type PostgresErrorShape = z.infer<typeof PostgresErrorShapeSchema>;";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_z_any_transform_output_type() {
+        let src = "const S = z.any().transform(v => ({ value: v }));\n\
+                   type T = z.infer<typeof S>;";
+        assert!(run(src).is_empty());
     }
 }
