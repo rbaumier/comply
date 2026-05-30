@@ -70,6 +70,21 @@ fn is_exempt_input(opening: tree_sitter::Node, source: &[u8]) -> bool {
     false
 }
 
+fn has_spread_attribute(opening: tree_sitter::Node) -> bool {
+    let mut cursor = opening.walk();
+    for child in opening.children(&mut cursor) {
+        if child.kind() == "jsx_expression" {
+            let mut inner = child.walk();
+            for inner_child in child.children(&mut inner) {
+                if inner_child.kind() == "spread_element" {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
 fn is_inside_label(node: tree_sitter::Node, source: &[u8]) -> bool {
     let mut current = node.parent();
     while let Some(parent) = current {
@@ -156,6 +171,11 @@ crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
 
         // Skip exempt types
         if is_exempt_input(opening, source) {
+            continue;
+        }
+
+        // Skip primitive components that spread props — callers supply labels via the spread
+        if has_spread_attribute(opening) {
             continue;
         }
 
@@ -255,6 +275,13 @@ mod tests {
     #[test]
     fn allows_button_input() {
         let src = r#"const x = <input type="button" />;"#;
+        assert!(run(src).is_empty());
+    }
+
+    // Regression #485: base UI primitive spreading restProps — caller provides label
+    #[test]
+    fn no_fp_on_input_with_spread_props() {
+        let src = r#"const x = <input className="x" data-slot="input" {...restProps} />;"#;
         assert!(run(src).is_empty());
     }
 }

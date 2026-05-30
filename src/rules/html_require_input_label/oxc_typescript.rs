@@ -112,6 +112,12 @@ impl OxcCheck for Check {
                 continue;
             }
 
+            // Skip primitive components that spread props — callers supply labels via the spread
+            let has_spread = attrs.iter().any(|a| matches!(a, JSXAttributeItem::SpreadAttribute(_)));
+            if has_spread {
+                continue;
+            }
+
             // Check for aria-label/aria-labelledby.
             if has_aria_label(attrs) {
                 continue;
@@ -170,5 +176,35 @@ impl OxcCheck for Check {
         }
 
         diagnostics
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(source, &Check)
+    }
+
+    #[test]
+    fn flags_input_without_label() {
+        assert_eq!(run(r#"const x = <input type="text" />;"#).len(), 1);
+    }
+
+    #[test]
+    fn allows_input_with_aria_label() {
+        assert!(run(r#"const x = <input aria-label="Name" />;"#).is_empty());
+    }
+
+    #[test]
+    fn allows_hidden_input() {
+        assert!(run(r#"const x = <input type="hidden" />;"#).is_empty());
+    }
+
+    // Regression #485: base UI primitive spreading restProps — caller provides label
+    #[test]
+    fn no_fp_on_input_with_spread_props() {
+        assert!(run(r#"const x = <input className="x" data-slot="input" {...restProps} />;"#).is_empty());
     }
 }
