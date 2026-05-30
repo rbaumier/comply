@@ -9,7 +9,7 @@ fn is_type_narrowing(expr: &Expression) -> bool {
         Expression::CallExpression(call) => {
             if let Expression::StaticMemberExpression(member) = &call.callee {
                 let m = member.property.name.as_str();
-                return matches!(m, "isErr" | "isOk");
+                return matches!(m, "isErr" | "isOk" | "isSuccess" | "isFailure");
             }
             false
         }
@@ -40,6 +40,26 @@ fn is_nullish_check(bin: &BinaryExpression) -> bool {
 fn is_nullish_literal(expr: &Expression) -> bool {
     matches!(expr.without_parentheses(), Expression::NullLiteral(_))
         || matches!(expr.without_parentheses(), Expression::Identifier(id) if id.name.as_str() == "undefined")
+}
+
+/// An early-return guard skips the whole test when a precondition fails — it
+/// does not hide assertions on some code paths. Recognise: `if (…) { return; }`
+/// with no else branch, where the consequent is a bare `return` (no value).
+fn is_early_return_guard(s: &oxc_ast::ast::IfStatement) -> bool {
+    if s.alternate.is_some() {
+        return false;
+    }
+    is_bare_return(&s.consequent)
+}
+
+fn is_bare_return(stmt: &Statement) -> bool {
+    match stmt {
+        Statement::ReturnStatement(ret) => ret.argument.is_none(),
+        Statement::BlockStatement(block) => {
+            block.body.len() == 1 && is_bare_return(&block.body[0])
+        }
+        _ => false,
+    }
 }
 
 const TEST_MARKERS: &[&str] = &[".test.", ".spec.", "__tests__", "_test."];
@@ -159,7 +179,7 @@ fn collect_control_flow_stmt<'a>(
 ) {
     match stmt {
         Statement::IfStatement(s) => {
-            if !is_type_narrowing(&s.test) {
+            if !is_type_narrowing(&s.test) && !is_early_return_guard(s) {
                 out.push(("if", s.span.start));
             }
         }
@@ -283,5 +303,42 @@ mod tests {
     fn ignores_non_test_file() {
         let source = "if (condition) {\n    doSomething();\n}";
         assert!(run_test_file("src/utils.ts", source).is_empty());
+    }
+
+    #[test]
+    fn does_not_flag_exit_is_success_narrowing() {
+        let source = "test('x', () => {\n    const exit = run(f());\n    if (Exit.isSuccess(exit)) {\n        expect(exit.value).toHaveLength(2);\n    }\n});";
+        let diags = run_test_file("src/__tests__/foo.test.ts", source);
+        assert!(diags.is_empty(), "expected no diagnostics, got {diags:?}");
+    }
+
+    #[test]
+    fn does_not_flag_exit_is_failure_narrowing() {
+        let source = "test('x', () => {\n    const exit = run(f());\n    if (Exit.isFailure(exit)) {\n        expect(String(exit.cause)).toContain('err');\n    }\n});";
+        let diags = run_test_file("src/__tests__/foo.test.ts", source);
+        assert!(diags.is_empty(), "expected no diagnostics, got {diags:?}");
+    }
+
+    #[test]
+    fn does_not_flag_early_return_undefined_guard() {
+        let source = "test('x', async () => {\n    if (agent === undefined) { return; }\n    expect(agent).toBeDefined();\n});";
+        let diags = run_test_file("src/__tests__/foo.test.ts", source);
+        assert!(diags.is_empty(), "expected no diagnostics, got {diags:?}");
+    }
+
+    #[test]
+    fn does_not_flag_early_return_compound_guard() {
+        let source = "test('x', async () => {\n    if (spec.kind !== 'line-anchored' || spec.name === undefined) { return; }\n    expect(spec.name).toBeTruthy();\n});";
+        let diags = run_test_file("src/__tests__/foo.test.ts", source);
+        assert!(diags.is_empty(), "expected no diagnostics, got {diags:?}");
+    }
+
+    #[test]
+    fn flags_if_with_else_despite_return_in_consequent() {
+        // if/else with assertions in both branches is not a bail-out guard.
+        let source = "test('x', () => {\n    if (cond) {\n        expect(a).toBe(1);\n    } else {\n        expect(b).toBe(2);\n    }\n});";
+        let diags = run_test_file("src/__tests__/foo.test.ts", source);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("if"));
     }
 }
