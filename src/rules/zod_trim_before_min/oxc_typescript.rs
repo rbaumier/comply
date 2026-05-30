@@ -66,19 +66,28 @@ fn collect_chain<'a>(expr: &'a Expression<'a>, ctx: &CheckCtx) -> Option<Vec<&'a
     }
 }
 
-/// True when the nearest enclosing `ObjectProperty` ancestor has a key whose
-/// name matches a whitespace-sensitive pattern. Trimming such fields would be
-/// a correctness bug.
-fn enclosing_property_key_is_whitespace_sensitive(
+/// True when the nearest naming context (object-property key or variable
+/// binding name) implies that whitespace is meaningful. Stops at the first
+/// relevant ancestor so property keys take precedence over outer variable names.
+fn schema_context_is_whitespace_sensitive(
     node_id: oxc_semantic::NodeId,
     semantic: &oxc_semantic::Semantic,
 ) -> bool {
     for ancestor in semantic.nodes().ancestors(node_id) {
-        if let AstKind::ObjectProperty(prop) = ancestor.kind() {
-            if let Some(name) = prop_key_name(&prop.key) {
-                return is_whitespace_sensitive_key(name);
+        match ancestor.kind() {
+            AstKind::ObjectProperty(prop) => {
+                if let Some(name) = prop_key_name(&prop.key) {
+                    return is_whitespace_sensitive_key(name);
+                }
+                return false;
             }
-            return false;
+            AstKind::VariableDeclarator(decl) => {
+                if let oxc_ast::ast::BindingPattern::BindingIdentifier(id) = &decl.id {
+                    return is_whitespace_sensitive_key(id.name.as_str());
+                }
+                return false;
+            }
+            _ => {}
         }
     }
     false
@@ -110,10 +119,10 @@ impl OxcCheck for Check {
         // If `.trim()` appears anywhere in the chain (before `.min`), no warning.
         if methods.contains(&"trim") { return; }
 
-        // Skip schema fields whose key name implies whitespace is meaningful
-        // (passwords, tokens, secrets, ...). Trimming would diverge the
-        // validated value from the value stored/compared downstream.
-        if enclosing_property_key_is_whitespace_sensitive(node.id(), semantic) {
+        // Skip when the naming context (property key or variable name) implies
+        // whitespace is meaningful (passwords, tokens, secrets, ...). Trimming
+        // would diverge the validated value from what is stored/compared downstream.
+        if schema_context_is_whitespace_sensitive(node.id(), semantic) {
             return;
         }
 
@@ -200,6 +209,24 @@ mod tests {
     #[test]
     fn still_flags_email_field() {
         let src = "const s = z.object({ email: z.string().min(1).max(255) });";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn skips_standalone_password_schema_from_issue_507() {
+        let src = "export const PasswordFieldSchema = z.string().min(10).max(128);";
+        assert!(run(src).is_empty(), "got {:?}", run(src));
+    }
+
+    #[test]
+    fn skips_standalone_token_schema_by_variable_name() {
+        let src = "const accessTokenSchema = z.string().min(20);";
+        assert!(run(src).is_empty(), "got {:?}", run(src));
+    }
+
+    #[test]
+    fn still_flags_standalone_schema_with_regular_name() {
+        let src = "const UsernameSchema = z.string().min(3);";
         assert_eq!(run(src).len(), 1);
     }
 }
