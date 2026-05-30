@@ -96,6 +96,10 @@ const TANSTACK_QUERY_FACTORIES: &[&str] = &[
     "createMutation",
     "createQuery",
     "createInfiniteQuery",
+    // Per-call callback options on the mutation result object: these accept
+    // the same fixed-signature callbacks as the factory options object.
+    "mutate",
+    "mutateAsync",
 ];
 
 /// Option-keys inside a TanStack Query factory call whose value is a
