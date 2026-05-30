@@ -81,7 +81,7 @@ impl OxcCheck for Check {
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
+        semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let AstKind::CallExpression(call) = node.kind() else { return };
@@ -97,6 +97,12 @@ impl OxcCheck for Check {
 
         // Check if this z.string() is chained with a valid continuation.
         if is_chained_with_valid_continuation(call.span.end, ctx.source) {
+            return;
+        }
+
+        // z.string() passed directly as an argument to a function: the wrapper
+        // may apply constraints internally (e.g. refineNoControlChars adds .min(1)).
+        if matches!(semantic.nodes().parent_node(node.id()).kind(), AstKind::CallExpression(_)) {
             return;
         }
 
@@ -143,6 +149,20 @@ mod tests {
     #[test]
     fn allows_optional() {
         assert!(run("z.string().optional()").is_empty());
+    }
+
+    #[test]
+    fn no_fp_when_passed_to_wrapper_function() {
+        // Regression for issue #428: z.string() passed to a helper that applies .min(1) internally.
+        assert!(run("refineNoControlChars(z.string(), 'label')").is_empty());
+        assert!(run("refineNoControlChars(z.string(), fieldLabel)").is_empty());
+        assert!(run("const s = refineNoControlChars(z.string(), 'x')").is_empty());
+    }
+
+    #[test]
+    fn still_flags_bare_string_in_object() {
+        // z.string() inside an object literal is not passed to a wrapper — still flagged.
+        assert_eq!(run("z.object({ name: z.string() })").len(), 1);
     }
 
     #[test]
