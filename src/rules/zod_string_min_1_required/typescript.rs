@@ -16,6 +16,28 @@ fn is_test_file(path: &std::path::Path) -> bool {
     })
 }
 
+/// Variable-name substrings that mark a schema as a response/wire-contract shape.
+const RESPONSE_SCHEMA_MARKERS: &[&str] = &[
+    "Response", "Output", "Result", "Reply", "Wire",
+    "Dto", "DTO", "Error", "Problem",
+];
+
+fn enclosed_in_response_schema(node: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut cur = node;
+    while let Some(parent) = cur.parent() {
+        if parent.kind() == "variable_declarator" {
+            if let Some(name_node) = parent.child_by_field_name("name") {
+                if let Ok(name) = name_node.utf8_text(source) {
+                    return RESPONSE_SCHEMA_MARKERS.iter().any(|m| name.contains(m));
+                }
+            }
+            return false;
+        }
+        cur = parent;
+    }
+    false
+}
+
 const VALID_CONTINUATIONS: &[&str] = &[
     "min",
     "max",
@@ -36,6 +58,10 @@ const VALID_CONTINUATIONS: &[&str] = &[
 
 crate::ast_check! { prefilter = ["z.string"] => |node, source, ctx, diagnostics|
     if is_test_file(ctx.path) {
+        return;
+    }
+
+    if enclosed_in_response_schema(node, source) {
         return;
     }
 
@@ -143,5 +169,33 @@ mod tests {
         assert!(run_at(code, "tests/foo.ts").is_empty());
         assert!(run_at(code, "src/foo.e2e-spec.ts").is_empty());
         assert!(run_at(code, "src/foo_test.ts").is_empty());
+    }
+
+    #[test]
+    fn no_fp_on_response_wire_contract_schema() {
+        // Regression for issue #513.
+        let rfc7807 = r#"
+            export const ProblemSchema = z.object({
+                type: z.string(),
+                title: z.string(),
+                status: z.number(),
+                detail: z.string(),
+                instance: z.string(),
+            });
+        "#;
+        assert!(run(rfc7807).is_empty());
+
+        assert!(run("const FooResponseSchema = z.object({ name: z.string() });").is_empty());
+        assert!(run("const FooResponse = z.object({ name: z.string() });").is_empty());
+        assert!(run("const FooOutputSchema = z.object({ name: z.string() });").is_empty());
+        assert!(run("const UserDto = z.object({ name: z.string() });").is_empty());
+        assert!(run("const ApiErrorSchema = z.object({ message: z.string() });").is_empty());
+        assert!(run("const SearchResult = z.object({ label: z.string() });").is_empty());
+    }
+
+    #[test]
+    fn still_flags_bare_string_in_input_schema() {
+        assert_eq!(run("const loginSchema = z.object({ username: z.string() });").len(), 1);
+        assert_eq!(run("const CreateUserInput = z.object({ name: z.string() });").len(), 1);
     }
 }
