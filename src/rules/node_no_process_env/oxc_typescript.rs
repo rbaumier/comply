@@ -15,7 +15,11 @@ fn is_config_file(ctx: &CheckCtx) -> bool {
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("");
-    CONFIG_STEMS.iter().any(|s| stem.eq_ignore_ascii_case(s))
+    if CONFIG_STEMS.iter().any(|s| stem.eq_ignore_ascii_case(s)) {
+        return true;
+    }
+    // playwright.config.ts, vite.config.ts, drizzle.config.ts, vitest.config.ts, etc.
+    stem.to_ascii_lowercase().ends_with(".config")
 }
 
 impl OxcCheck for Check {
@@ -103,5 +107,36 @@ mod tests {
     #[test]
     fn allows_other_process_members() {
         assert!(run_on("process.exit(1);").is_empty());
+    }
+
+    // Regression tests for #443: *.config.ts files must be exempt
+    #[test]
+    fn allows_playwright_config() {
+        let src = "export default defineConfig({ use: { baseURL: process.env.BASE_URL ?? 'http://localhost:3000' } });";
+        assert!(run_on_path(src, "playwright.config.ts").is_empty());
+    }
+
+    #[test]
+    fn allows_vite_config() {
+        let src = "export default defineConfig({ define: { __API_URL__: JSON.stringify(process.env.API_URL) } });";
+        assert!(run_on_path(src, "vite.config.ts").is_empty());
+    }
+
+    #[test]
+    fn allows_drizzle_config() {
+        let src = "export default { connectionString: process.env.DATABASE_URL };";
+        assert!(run_on_path(src, "drizzle.config.ts").is_empty());
+    }
+
+    #[test]
+    fn allows_vitest_config() {
+        let src = "export default defineConfig({ test: { env: { BASE: process.env.BASE } } });";
+        assert!(run_on_path(src, "vitest.config.ts").is_empty());
+    }
+
+    #[test]
+    fn still_flags_in_non_config_ts() {
+        let d = run_on_path("const x = process.env.FOO;", "app.config-helper.ts");
+        assert_eq!(d.len(), 1);
     }
 }
