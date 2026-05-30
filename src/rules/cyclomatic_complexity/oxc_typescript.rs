@@ -58,7 +58,7 @@ impl OxcCheck for Check {
                 AstKind::WhileStatement(s) => s.span,
                 AstKind::DoWhileStatement(s) => s.span,
                 AstKind::CatchClause(s) => s.span,
-                AstKind::SwitchCase(s) => s.span,
+                AstKind::SwitchStatement(s) => s.span,
                 AstKind::ConditionalExpression(s) => s.span,
                 AstKind::LogicalExpression(s) => s.span,
                 _ => continue,
@@ -130,7 +130,8 @@ mod tests {
     // below focus on the diagnostic line landing on the actual function
     // declaration, since comply-ignore suppression is keyed by line.
 
-    const TWELVE_IF_BODY: &str = "    if (intent.kind === 'a') return 1;\n    \
+    // 16 if-branches → cyclomatic complexity 17 (threshold 15)
+    const SIXTEEN_IF_BODY: &str = "    if (intent.kind === 'a') return 1;\n    \
         if (intent.kind === 'b') return 2;\n    \
         if (intent.kind === 'c') return 3;\n    \
         if (intent.kind === 'd') return 4;\n    \
@@ -141,11 +142,16 @@ mod tests {
         if (intent.kind === 'i') return 9;\n    \
         if (intent.kind === 'j') return 10;\n    \
         if (intent.kind === 'k') return 11;\n    \
-        return 12;";
+        if (intent.kind === 'l') return 12;\n    \
+        if (intent.kind === 'm') return 13;\n    \
+        if (intent.kind === 'n') return 14;\n    \
+        if (intent.kind === 'o') return 15;\n    \
+        if (intent.kind === 'p') return 16;\n    \
+        return 17;";
 
     fn fixture(prelude: &str) -> String {
         format!(
-            "{prelude}export function authorize(intent: any) {{\n{TWELVE_IF_BODY}\n}}\n",
+            "{prelude}export function authorize(intent: any) {{\n{SIXTEEN_IF_BODY}\n}}\n",
         )
     }
 

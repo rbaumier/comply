@@ -7,7 +7,9 @@ use crate::diagnostic::{Diagnostic, Severity};
 
 // Per SonarSource Cognitive Complexity: only the match/switch EXPRESSION adds
 // +1 — the individual arms/cases are continuations and add nothing on their
-// own. Nesting still applies to whatever lives inside an arm.
+// own. The match does NOT increase the nesting level for its arm bodies: exhaustive
+// discriminated-union matches enumerate unavoidable paths and should not penalise
+// nested logic inside each arm with an extra nesting increment.
 const FLOW_KINDS: &[&str] = &[
     "if_expression",
     "else_clause",
@@ -50,13 +52,12 @@ fn compute(node: tree_sitter::Node, source: &[u8], nesting: u32) -> u32 {
     }
 
     // Nesting increases for blocks that are children of flow control.
+    // match_expression is intentionally excluded: its arms enumerate
+    // predetermined paths and must not penalise code inside them with an
+    // extra nesting level.
     let nest_increase = matches!(
         kind,
-        "if_expression"
-            | "for_expression"
-            | "while_expression"
-            | "loop_expression"
-            | "match_expression"
+        "if_expression" | "for_expression" | "while_expression" | "loop_expression"
     );
 
     // Don't recurse into nested function definitions.
@@ -139,21 +140,34 @@ mod tests {
 
     #[test]
     fn flags_when_complexity_exceeds_threshold() {
-        // for (+1, nesting 0) → nest 1
-        //   if (+1 + 1 = 2, nesting 1) → nest 2
-        //     if (+1 + 2 = 3, nesting 2) → nest 3
-        //       match (+1 + 3 = 4, nesting 3)
-        // Initial if at top level (+1) → total 1 + 1 + 2 + 3 + 4 = 11
+        // Deeply nested if/for structure (no switch/match):
+        // if        +1 (nesting 0)
+        // for       +1 (nesting 0) → nesting 1
+        //   if      +2 (nesting 1) → nesting 2
+        //     if    +3 (nesting 2) → nesting 3
+        //       if  +4 (nesting 3) → nesting 4
+        //       for +5 (nesting 4) → nesting 5
+        //         if  +6 (nesting 5) → nesting 6
+        //           if  +7 (nesting 6) → nesting 7
+        //             if  +8 (nesting 7)
+        // Total: 1+1+2+3+4+5+6+7+8 = 37 (threshold 30)
         let src = r#"fn process(items: &[i32]) {
     if items.is_empty() {
         return;
     }
     for item in items {
         if *item > 0 {
-            if *item > 10 {
-                match *item {
-                    1 => {},
-                    _ => {},
+            if *item > 5 {
+                if *item > 10 {
+                    for sub in 0..*item {
+                        if sub > 0 {
+                            if sub > 2 {
+                                if sub > 3 {
+                                    return;
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -161,7 +175,7 @@ mod tests {
 }"#;
         let d = run_on(src);
         assert_eq!(d.len(), 1);
-        assert!(d[0].message.contains("11"), "got: {}", d[0].message);
+        assert!(d[0].message.contains("37"), "got: {}", d[0].message);
     }
 
     #[test]

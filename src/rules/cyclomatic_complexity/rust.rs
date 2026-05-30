@@ -1,6 +1,6 @@
 //! cyclomatic-complexity Rust backend.
 //!
-//! Count decision points inside each `function_item`: if, match arm,
+//! Count decision points inside each `function_item`: if, match expression,
 //! for, while, loop, &&, ||.
 
 use crate::diagnostic::{Diagnostic, Severity};
@@ -12,7 +12,7 @@ const BRANCHING_KINDS: &[&str] = &[
     "for_expression",
     "while_expression",
     "loop_expression",
-    "match_arm",
+    "match_expression",
 ];
 
 const LOGICAL_OPS: &[&str] = &["&&", "||"];
@@ -104,7 +104,7 @@ fn simple(a: bool) -> i32 {
 
     #[test]
     fn flags_complex_function() {
-        // 1 base + 11 if = 12 complexity
+        // 1 base + 16 if = 17 complexity (threshold 15)
         let src = r#"
 fn complex(x: i32) {
     if x > 0 {}
@@ -118,11 +118,16 @@ fn complex(x: i32) {
     if x > 8 {}
     if x > 9 {}
     if x > 10 {}
+    if x > 11 {}
+    if x > 12 {}
+    if x > 13 {}
+    if x > 14 {}
+    if x > 15 {}
 }
 "#;
         let diags = run_on(src);
         assert_eq!(diags.len(), 1);
-        assert!(diags[0].message.contains("12"));
+        assert!(diags[0].message.contains("17"));
     }
 
     #[test]

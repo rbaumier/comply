@@ -16,6 +16,10 @@ const FUNCTION_KINDS: &[&str] = &[
 ];
 
 /// Node kinds that increment cyclomatic complexity.
+///
+/// Each switch statement counts as +1 (one decision point), regardless of how
+/// many cases it has. Counting per-case would penalise exhaustive discriminated-union
+/// switches for no real benefit.
 const BRANCHING_KINDS: &[&str] = &[
     "if_statement",
     "for_statement",
@@ -23,7 +27,7 @@ const BRANCHING_KINDS: &[&str] = &[
     "while_statement",
     "do_statement",
     "catch_clause",
-    "switch_case",
+    "switch_statement",
     "ternary_expression",
 ];
 
@@ -126,7 +130,7 @@ function simple() {
 
     #[test]
     fn flags_complex_function() {
-        // 1 base + 11 if = 12 complexity
+        // 1 base + 16 if = 17 complexity (threshold 15)
         let src = r#"
 function complex(x) {
     if (a) {}
@@ -140,11 +144,42 @@ function complex(x) {
     if (i) {}
     if (j) {}
     if (k) {}
+    if (l) {}
+    if (m) {}
+    if (n) {}
+    if (o) {}
+    if (p) {}
 }
 "#;
         let diags = run_on(src);
         assert_eq!(diags.len(), 1);
-        assert!(diags[0].message.contains("12"));
+        assert!(diags[0].message.contains("17"));
+    }
+
+    #[test]
+    fn no_fp_on_exhaustive_switch() {
+        // Regression for #586: exhaustive switches over discriminated unions must
+        // not trigger cyclomatic-complexity. The whole switch counts as +1,
+        // regardless of the number of cases.
+        let src = r#"
+function fromElysiaError(error) {
+    switch (error.code) {
+        case 'NOT_FOUND': return 404;
+        case 'UNAUTHORIZED': return 401;
+        case 'FORBIDDEN': return 403;
+        case 'BAD_REQUEST': return 400;
+        case 'CONFLICT': return 409;
+        case 'UNPROCESSABLE': return 422;
+        case 'TOO_MANY_REQUESTS': return 429;
+        case 'INTERNAL_SERVER_ERROR': return 500;
+        case 'SERVICE_UNAVAILABLE': return 503;
+        case 'VALIDATION': return 400;
+        case 'PARSE': return 400;
+        default: return 500;
+    }
+}
+"#;
+        assert!(run_on(src).is_empty());
     }
 
     #[test]
@@ -163,7 +198,7 @@ function check(a, b, c, d, e) {
 
     #[test]
     fn counts_ternary() {
-        // 1 base + 11 ternaries = 12
+        // 1 base + 16 ternaries = 17 (threshold 15)
         let src = r#"
 function ternaries(x) {
     const a = x ? 1 : 0;
@@ -177,6 +212,11 @@ function ternaries(x) {
     const i = x ? 1 : 0;
     const j = x ? 1 : 0;
     const k = x ? 1 : 0;
+    const l = x ? 1 : 0;
+    const m = x ? 1 : 0;
+    const n = x ? 1 : 0;
+    const o = x ? 1 : 0;
+    const p = x ? 1 : 0;
 }
 "#;
         let diags = run_on(src);
