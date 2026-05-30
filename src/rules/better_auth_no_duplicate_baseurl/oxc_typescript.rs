@@ -3,6 +3,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
+use oxc_span::GetSpan;
 use oxc_ast::ast::{Argument, Expression, ObjectPropertyKind, PropertyKey};
 use std::sync::Arc;
 
@@ -68,6 +69,15 @@ impl OxcCheck for Check {
         }) else {
             return;
         };
+
+        // Only flag when the baseURL value itself references BETTER_AUTH_URL.
+        // A different expression (e.g. config.auth.url validated at startup) is
+        // a security-hardened override, not a duplicate — see issue #537.
+        let value_src = &ctx.source[base_url_prop.value.span().start as usize
+            ..base_url_prop.value.span().end as usize];
+        if !value_src.contains("BETTER_AUTH_URL") {
+            return;
+        }
 
         let (line, column) =
             byte_offset_to_line_col(ctx.source, base_url_prop.span.start as usize);
