@@ -3,6 +3,25 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 
+const AUTH_PATTERNS: &[&str] = &["session", "token", "jwt", "auth", "sid"];
+
+fn is_auth_cookie_name(name: &str) -> bool {
+    let lower = name.to_lowercase();
+    // Split on word separators to avoid matching "sid" inside "sidebar_state"
+    let segments: Vec<&str> = lower.split(|c| c == '_' || c == '-').collect();
+    AUTH_PATTERNS.iter().any(|&p| {
+        segments.iter().any(|s| {
+            if p.len() <= 3 {
+                // Short patterns (sid, jwt) require exact segment match
+                *s == p
+            } else {
+                // Longer patterns (session, token, auth) allow substring within a segment
+                s.contains(p)
+            }
+        })
+    })
+}
+
 #[derive(Debug)]
 pub struct Check;
 
@@ -22,6 +41,10 @@ impl AstCheck for Check {
             if let Some(pos) = line.find(".set({") {
                 let before = &line[..pos];
                 if !before.contains("cookie") {
+                    continue;
+                }
+                let cookie_name = before.split('.').filter(|s| !s.is_empty()).last().unwrap_or("");
+                if !is_auth_cookie_name(cookie_name) {
                     continue;
                 }
             }
@@ -75,5 +98,18 @@ mod tests {
     fn ignores_non_elysia_files() {
         let src = "cookie.auth.set({ value: token });";
         assert!(crate::rules::test_helpers::run_ts(src, &Check).is_empty());
+    }
+
+    #[test]
+    fn no_fp_on_ui_state_cookie() {
+        // sidebar_state is a UI preference cookie — must be JS-readable, not an auth token
+        let src = "cookie.sidebar_state.set({ value: String(open) });";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_on_theme_cookie() {
+        let src = "cookie.theme.set({ value: 'dark', path: '/' });";
+        assert!(run_on(src).is_empty());
     }
 }
