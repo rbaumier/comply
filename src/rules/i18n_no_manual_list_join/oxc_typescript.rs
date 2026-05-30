@@ -3,7 +3,8 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{BindingPattern, Expression, PropertyKey};
+use oxc_ast::ast::{BindingPattern, Expression, PropertyKey, Statement};
+use oxc_span::GetSpan;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -90,6 +91,81 @@ fn is_wire_format_fn_name(name: &str) -> bool {
     )
 }
 
+/// True for files under a developer-only directory (scripts, bin, migrations).
+/// Joins here are diagnostic output, never user-facing prose.
+fn is_developer_script_path(path: &Path) -> bool {
+    path.components().any(|c| {
+        if let std::path::Component::Normal(s) = c {
+            matches!(s.to_str(), Some("scripts") | Some("bin") | Some("migrations"))
+        } else {
+            false
+        }
+    })
+}
+
+/// True when `call` is a `console.X(...)` invocation.
+fn is_console_call_expr(call: &oxc_ast::ast::CallExpression) -> bool {
+    if let Expression::StaticMemberExpression(member) = &call.callee {
+        if let Expression::Identifier(obj) = &member.object {
+            return obj.name.as_str() == "console";
+        }
+    }
+    false
+}
+
+/// True when `var_start` is the span-start of a `VariableDeclaration` that is
+/// immediately followed by a `ThrowStatement` in the same statement list.
+fn is_var_decl_followed_by_throw(stmts: &[Statement], var_start: u32) -> bool {
+    for pair in stmts.windows(2) {
+        if pair[0].span().start == var_start {
+            return matches!(pair[1], Statement::ThrowStatement(_));
+        }
+    }
+    false
+}
+
+/// True when the join sits in a developer-only context:
+/// - direct ancestor is a `throw` statement
+/// - direct ancestor is a `console.*` call
+/// - result is assigned to a variable immediately before a `throw` statement
+fn is_developer_facing_join<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    let mut pending_var_decl_start: Option<u32> = None;
+
+    for ancestor in semantic.nodes().ancestors(node.id()) {
+        match ancestor.kind() {
+            AstKind::ThrowStatement(_) => return true,
+            AstKind::CallExpression(call) if is_console_call_expr(call) => return true,
+            AstKind::VariableDeclaration(decl) => {
+                pending_var_decl_start = Some(decl.span.start);
+            }
+            AstKind::FunctionBody(body) => {
+                if let Some(start) = pending_var_decl_start {
+                    return is_var_decl_followed_by_throw(&body.statements, start);
+                }
+                return false;
+            }
+            AstKind::BlockStatement(block) => {
+                if let Some(start) = pending_var_decl_start {
+                    return is_var_decl_followed_by_throw(&block.body, start);
+                }
+                return false;
+            }
+            AstKind::Program(prog) => {
+                if let Some(start) = pending_var_decl_start {
+                    return is_var_decl_followed_by_throw(&prog.body, start);
+                }
+                return false;
+            }
+            AstKind::Function(_) | AstKind::ArrowFunctionExpression(_) => return false,
+            _ => {}
+        }
+    }
+    false
+}
+
 fn enclosing_fn_name<'a>(
     node: &oxc_semantic::AstNode<'a>,
     semantic: &'a oxc_semantic::Semantic<'a>,
@@ -155,12 +231,18 @@ impl OxcCheck for Check {
         if is_wire_format_path(ctx.path) {
             return;
         }
+        if is_developer_script_path(ctx.path) {
+            return;
+        }
         if let Some(name) = enclosing_fn_name(node, semantic) {
             if is_wire_format_fn_name(&name) {
                 return;
             }
         }
         if is_url_wire_join(node, semantic) {
+            return;
+        }
+        if is_developer_facing_join(node, semantic) {
             return;
         }
 
@@ -272,5 +354,59 @@ mod tests {
             }
         "#;
         assert!(run(src).is_empty());
+    }
+
+    // #429 — FP on developer-facing diagnostic messages
+
+    #[test]
+    fn no_fp_in_scripts_directory() {
+        // Operator/import scripts are never user-facing; all joins are exempt.
+        let src = r#"
+            const detail = `Email groups with >2 legacy rows: ${emailGroups
+              .map((row) => `${row.email} (${row.count})`)
+              .join(", ")}`;
+        "#;
+        assert!(run_with_path(src, "scripts/import-legacy-data.ts").is_empty());
+    }
+
+    #[test]
+    fn no_fp_join_directly_in_throw() {
+        // join embedded directly inside throw new Error(...)
+        let src = r#"
+            throw new Error(`vite-manifest: keys not found. Sample: ${keys.join(", ")}`);
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_join_assigned_before_throw() {
+        // Pattern from vite-manifest.ts: const x = arr.join(", "); throw new Error(...)
+        let src = r#"
+            function checkManifest(manifest, key) {
+              const sample = Object.keys(manifest).slice(0, 5).join(", ");
+              throw new Error(`Key "${key}" not found. Sample keys: ${sample}`);
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_join_in_console_log() {
+        let src = r#"
+            console.log(`Invalid rows: ${rows.map((r) => r.id).join(", ")}`);
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_join_assigned_then_displayed() {
+        // Assigned to a generic variable whose next statement is NOT a throw — still user-facing.
+        let src = r#"
+            function formatList(items) {
+              const label = items.join(", ");
+              return label;
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
     }
 }
