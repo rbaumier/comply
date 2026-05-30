@@ -15,6 +15,12 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     if callee.kind() != "member_expression" {
         return;
     }
+    let Some(object) = callee.child_by_field_name("object") else { return };
+    // Skip calls on well-known built-in objects (e.g. Reflect.get, Object.assign).
+    let object_text = object.utf8_text(source).unwrap_or("");
+    if matches!(object_text, "Reflect" | "Object" | "Array" | "Math" | "Promise" | "JSON") {
+        return;
+    }
     let Some(property) = callee.child_by_field_name("property") else { return };
     let prop_text = property.utf8_text(source).unwrap_or("");
     if !ROUTE_METHODS.contains(&prop_text) {
@@ -109,5 +115,18 @@ mod tests {
     fn ignores_non_elysia_files() {
         let src = "app.get('/', handleFn);";
         assert!(crate::rules::test_helpers::run_ts(src, &Check).is_empty());
+    }
+
+    #[test]
+    fn no_fp_on_reflect_get() {
+        // Reflect.get(source, prop) — second arg is a property key, not a route handler.
+        let src = r#"import { Elysia } from 'elysia';
+const handler: ProxyHandler<SomeType> = {
+  get(_target, prop) {
+    const result: unknown = Reflect.get(source, prop);
+    return result;
+  },
+};"#;
+        assert!(run_on(src).is_empty());
     }
 }
