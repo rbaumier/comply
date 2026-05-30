@@ -30,6 +30,17 @@ impl OxcCheck for Check {
             return;
         }
 
+        // If the import traverses out of the source tree entirely (e.g. into
+        // `scripts/` from `src/api/features/auth/`), it is not a cross-feature
+        // boundary violation — the destination has no public index to import from.
+        let parent_dir_depth = ctx.path
+            .parent()
+            .map(|p| p.components().count())
+            .unwrap_or(0);
+        if parent_count >= parent_dir_depth {
+            return;
+        }
+
         // A bare feature-root import (`../../users`) has exactly one
         // non-`..` segment — the feature name — and that *is* the public
         // index. Anything deeper (`../../users/db/queries`) has 2+ and is
@@ -65,5 +76,46 @@ impl OxcCheck for Check {
             severity: Severity::Warning,
             span: None,
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::rules::test_helpers::run_oxc_ts_with_path;
+
+    use super::Check;
+
+    #[test]
+    fn flags_deep_cross_feature_import() {
+        assert_eq!(
+            run_oxc_ts_with_path(
+                "import { query } from '../../users/db/queries'",
+                &Check,
+                "src/api/features/auth/handler.ts"
+            )
+            .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn allows_index_import() {
+        assert!(run_oxc_ts_with_path(
+            "import { User } from '../../users'",
+            &Check,
+            "src/api/features/auth/handler.ts"
+        )
+        .is_empty());
+    }
+
+    // Regression: import from scripts/ (outside src/) must not fire — issue #492
+    #[test]
+    fn allows_import_outside_src_tree() {
+        assert!(run_oxc_ts_with_path(
+            "import { seedAdminCdr } from '../../../../scripts/seed-admin-cdr'",
+            &Check,
+            "src/api/features/auth/seed-admin-cdr.integration.test.ts"
+        )
+        .is_empty());
     }
 }
