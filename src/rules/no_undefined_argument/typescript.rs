@@ -2,6 +2,18 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
+fn is_create_context_call(node: tree_sitter::Node, source: &[u8]) -> bool {
+    if let Some(parent) = node.parent() {
+        if parent.kind() == "call_expression" {
+            if let Some(func) = parent.child_by_field_name("function") {
+                let text = func.utf8_text(source).unwrap_or("");
+                return text == "createContext" || text.ends_with(".createContext");
+            }
+        }
+    }
+    false
+}
+
 fn is_in_assertion_chain(node: tree_sitter::Node, source: &[u8]) -> bool {
     let mut cur = node.parent();
     while let Some(n) = cur {
@@ -20,6 +32,7 @@ fn is_in_assertion_chain(node: tree_sitter::Node, source: &[u8]) -> bool {
 
 crate::ast_check! { on ["arguments"] prefilter = ["undefined"] => |node, source, ctx, diagnostics|
     if is_in_assertion_chain(node, source) { return; }
+    if is_create_context_call(node, source) { return; }
 
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
@@ -86,5 +99,23 @@ mod tests {
     fn still_flags_outside_expect() {
         let d = crate::rules::test_helpers::run_ts("doStuff(undefined);", &Check);
         assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn allows_react_create_context_undefined() {
+        let d = crate::rules::test_helpers::run_ts(
+            "const Ctx = React.createContext<Foo | undefined>(undefined);",
+            &Check,
+        );
+        assert!(d.is_empty());
+    }
+
+    #[test]
+    fn allows_bare_create_context_undefined() {
+        let d = crate::rules::test_helpers::run_ts(
+            "const Ctx = createContext<Foo | undefined>(undefined);",
+            &Check,
+        );
+        assert!(d.is_empty());
     }
 }

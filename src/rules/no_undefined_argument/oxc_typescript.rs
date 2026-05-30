@@ -9,6 +9,14 @@ use std::sync::Arc;
 
 pub struct Check;
 
+fn is_create_context_call(call: &oxc_ast::ast::CallExpression) -> bool {
+    match &call.callee {
+        Expression::Identifier(id) => id.name == "createContext",
+        Expression::StaticMemberExpression(m) => m.property.name == "createContext",
+        _ => false,
+    }
+}
+
 fn is_in_assertion_chain<'a>(
     node: &oxc_semantic::AstNode<'a>,
     semantic: &'a oxc_semantic::Semantic<'a>,
@@ -59,6 +67,10 @@ impl OxcCheck for Check {
             return;
         }
 
+        if is_create_context_call(call) {
+            return;
+        }
+
         for arg in &call.arguments {
             let is_undefined = match arg {
                 Argument::Identifier(id) => id.name == "undefined",
@@ -78,5 +90,39 @@ impl OxcCheck for Check {
                 });
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rules::test_helpers::run_oxc_ts;
+
+    #[test]
+    fn flags_sole_undefined_arg() {
+        assert_eq!(run_oxc_ts("foo(undefined);", &Check).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_outside_create_context() {
+        assert_eq!(run_oxc_ts("doStuff(undefined);", &Check).len(), 1);
+    }
+
+    #[test]
+    fn allows_react_create_context_undefined() {
+        assert!(run_oxc_ts(
+            "const Ctx = React.createContext<Foo | undefined>(undefined);",
+            &Check
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn allows_bare_create_context_undefined() {
+        assert!(run_oxc_ts(
+            "const Ctx = createContext<Foo | undefined>(undefined);",
+            &Check
+        )
+        .is_empty());
     }
 }
