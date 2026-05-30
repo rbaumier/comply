@@ -676,20 +676,26 @@ fn nearest<T>(
 ) -> Option<Arc<T>> {
     let start_dir = path.parent()?;
 
-    // Fast path: any cached ancestor.
-    {
-        let map = cache.lock().ok()?;
-        let mut cur = Some(start_dir);
-        while let Some(dir) = cur {
-            if let Some(hit) = map.get(dir) {
-                return Some(Arc::clone(hit));
-            }
-            cur = dir.parent();
-        }
+    // Resolve the *nearest* manifest on disk first, then cache keyed by that
+    // resolved dir. Caching by ancestor lookup instead would let a cached far
+    // ancestor shadow a closer, not-yet-parsed manifest — the monorepo case of
+    // a root tsconfig alongside per-package tsconfigs, where resolution order
+    // is arbitrary.
+    let manifest_dir = walk_up_finding(start_dir, filename)?;
+
+    if let Some(hit) = cache.lock().ok()?.get(&manifest_dir) {
+        return Some(Arc::clone(hit));
     }
 
-    // Slow path: walk disk.
-    let (manifest_dir, parsed) = walk_up_for(start_dir, filename, parse)?;
+    let candidate = manifest_dir.join(filename);
+    let raw = std::fs::read_to_string(&candidate).ok()?;
+    let parsed = match parse(&raw) {
+        Some(parsed) => parsed,
+        None => {
+            eprintln!("comply: ignoring malformed {}", candidate.display());
+            return None;
+        }
+    };
     let arc = Arc::new(parsed);
     if let Ok(mut map) = cache.lock() {
         map.entry(manifest_dir).or_insert_with(|| Arc::clone(&arc));
@@ -726,29 +732,6 @@ pub(crate) fn walk_up_finding(start: &Path, target: &str) -> Option<PathBuf> {
     while let Some(dir) = cur {
         if dir.join(target).exists() {
             return Some(dir.to_path_buf());
-        }
-        cur = dir.parent();
-    }
-    None
-}
-
-fn walk_up_for<T>(
-    start: &Path,
-    filename: &str,
-    parse: impl Fn(&str) -> Option<T>,
-) -> Option<(PathBuf, T)> {
-    let mut cur = Some(start);
-    while let Some(dir) = cur {
-        let candidate = dir.join(filename);
-        if candidate.is_file() {
-            let raw = std::fs::read_to_string(&candidate).ok()?;
-            match parse(&raw) {
-                Some(parsed) => return Some((dir.to_path_buf(), parsed)),
-                None => {
-                    eprintln!("comply: ignoring malformed {}", candidate.display());
-                    return None;
-                }
-            }
         }
         cur = dir.parent();
     }
@@ -886,6 +869,34 @@ mod tests {
             "sibling files should share the same cached Arc"
         );
         assert_eq!(first.name.as_deref(), Some("x"));
+    }
+
+    #[test]
+    fn nearest_prefers_closer_manifest_over_cached_ancestor() {
+        // Root tsconfig with no paths; a nested package tsconfig with an alias.
+        // Resolving a file under the root first caches the root dir. Resolving
+        // a file in the nested package must still return the *closer* tsconfig,
+        // not the cached ancestor.
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("tsconfig.json"),
+            r#"{"compilerOptions":{}}"#,
+        )
+        .unwrap();
+        let pkg = dir.path().join("packages").join("app");
+        std::fs::create_dir_all(&pkg).unwrap();
+        std::fs::write(
+            pkg.join("tsconfig.json"),
+            r#"{"compilerOptions":{"paths":{"~/*":["./src/*"]}}}"#,
+        )
+        .unwrap();
+
+        let ctx = ProjectCtx::empty();
+        let root_ts = ctx.nearest_tsconfig(&dir.path().join("root.ts")).unwrap();
+        assert!(root_ts.alias_prefixes().is_empty());
+
+        let pkg_ts = ctx.nearest_tsconfig(&pkg.join("src").join("t.ts")).unwrap();
+        assert_eq!(pkg_ts.alias_prefixes(), vec!["~".to_string()]);
     }
 
     #[test]
