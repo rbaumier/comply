@@ -32,6 +32,13 @@ impl OxcCheck for Check {
             return;
         }
 
+        // Skip `.not.toThrow()` / `.not.toThrowError()` — asserts no error; no argument needed
+        if let Expression::StaticMemberExpression(obj_member) = &member.object {
+            if obj_member.property.name.as_str() == "not" {
+                return;
+            }
+        }
+
         // Flag only when called with zero arguments.
         if !call.arguments.is_empty() {
             return;
