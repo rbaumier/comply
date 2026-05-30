@@ -24,8 +24,8 @@ crate::ast_check! { on ["call_expression"] prefilter = ["Sync"] => |node, source
         return;
     }
 
-    // Skip React hooks: `use[A-Z]...Sync` (synchronisation sense, not Node sync I/O).
-    if super::oxc_typescript::is_react_hook_sync(method_name) {
+    // Skip React hooks and event callbacks: `use[A-Z]…Sync` / `on[A-Z]…Sync`.
+    if super::oxc_typescript::is_react_sync_name(method_name) {
         return;
     }
 
@@ -113,5 +113,36 @@ mod tests {
     fn still_flags_lowercase_use_prefix() {
         // `users` is not a hook — must still be flagged if it ends in Sync.
         assert_eq!(run_on("const x = usersSync();").len(), 1);
+    }
+
+    #[test]
+    fn allows_react_on_callback_sync() {
+        // Issue #359 — `onSearchSync` is a React event-callback prop (sync search
+        // variant), not a Node sync I/O method.
+        let source = r#"
+            const { onSearchSync } = projection;
+            if (onSearchSync !== null) {
+                const results = onSearchSync(debouncedTerm);
+            }
+        "#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_other_on_callback_sync_variants() {
+        assert!(run_on("const x = onChangeSync(val);").is_empty());
+        assert!(run_on("const x = onStateSync(val);").is_empty());
+    }
+
+    #[test]
+    fn allows_on_callback_as_method() {
+        // Issue #359 — `obj.onSearchSync()` accessed via MemberExpression.
+        assert!(run_on("hooks.onSearchSync(term);").is_empty());
+    }
+
+    #[test]
+    fn still_flags_lowercase_on_prefix() {
+        // `once` is not a React callback — must still be flagged if it ends in Sync.
+        assert_eq!(run_on("const x = onceSync();").len(), 1);
     }
 }
