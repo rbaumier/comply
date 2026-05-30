@@ -91,9 +91,14 @@ impl OxcCheck for Check {
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
+        semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
+        // Module augmentations (`declare module 'foo' { ... }`) are not API
+        // response types — optional fields there are intentional metadata.
+        if crate::oxc_helpers::is_in_ambient_declaration(node.id(), semantic) {
+            return;
+        }
         match node.kind() {
             AstKind::TSInterfaceDeclaration(iface) => {
                 let name = iface.id.name.as_str();
@@ -134,6 +139,21 @@ mod tests {
         // declares the key MUST be absent — opposite of an optional
         // state flag, so the cluster heuristic must skip it.
         let src = "type Phantom = { page?: never; pageSize?: never; q?: never; sort?: never };";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_declare_module_augmentation() {
+        // Regression for #544: module augmentations (e.g. TanStack Router
+        // StaticDataRouteOption) are not API response types; optional fields
+        // there are intentional route metadata, not state-variant clusters.
+        let src = r#"declare module '@tanstack/react-router' {
+  interface StaticDataRouteOption {
+    title?: string;
+    breadcrumbParent?: string;
+    breadcrumbAncestors?: { title: string; pathname: string }[];
+  }
+}"#;
         assert!(run_on(src).is_empty());
     }
 }
