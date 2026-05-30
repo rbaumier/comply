@@ -24,6 +24,24 @@ fn is_test_file(path: &std::path::Path) -> bool {
     s.contains(".test.") || s.contains(".spec.") || s.contains("__tests__")
 }
 
+/// Extract the base function name from a call expression's callee.
+/// Returns `None` for patterns that don't resolve to a single identifier.
+fn callee_base_name<'a>(callee: &'a Expression<'a>) -> Option<&'a str> {
+    match callee {
+        Expression::Identifier(id) => Some(id.name.as_str()),
+        Expression::StaticMemberExpression(m) => {
+            if let Expression::Identifier(obj) = &m.object {
+                Some(obj.name.as_str())
+            } else {
+                None
+            }
+        }
+        // it.each(array)("title", cb) — callee is the result of `it.each(array)`
+        Expression::CallExpression(inner) => callee_base_name(&inner.callee),
+        _ => None,
+    }
+}
+
 /// Walk up ancestors looking for a CallExpression whose callee is one
 /// of the known test blocks. Returns true if found.
 fn inside_test_block<'a>(
@@ -32,19 +50,10 @@ fn inside_test_block<'a>(
 ) -> bool {
     for ancestor in semantic.nodes().ancestors(node.id()) {
         if let AstKind::CallExpression(call) = ancestor.kind() {
-            let name = match &call.callee {
-                Expression::Identifier(id) => id.name.as_str(),
-                Expression::StaticMemberExpression(m) => {
-                    if let Expression::Identifier(obj) = &m.object {
-                        obj.name.as_str()
-                    } else {
-                        continue;
-                    }
+            if let Some(name) = callee_base_name(&call.callee) {
+                if TEST_BLOCKS.contains(&name) {
+                    return true;
                 }
-                _ => continue,
-            };
-            if TEST_BLOCKS.contains(&name) {
-                return true;
             }
         }
     }
@@ -94,5 +103,54 @@ impl OxcCheck for Check {
             severity: Severity::Error,
             span: None,
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_path(src, &Check, "policy.test.ts")
+    }
+
+    #[test]
+    fn flags_expect_at_top_level() {
+        let src = r#"expect(1).toBe(1);"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_expect_inside_it() {
+        let src = r#"it("x", () => { expect(1).toBe(1); });"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_expect_inside_it_each() {
+        let src = r#"it.each([1, 2])("n=%i", (n) => { expect(n).toBeGreaterThan(0); });"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_expect_inside_test_each() {
+        let src = r#"test.each([1, 2])("n=%i", (n) => { expect(n).toBeGreaterThan(0); });"#;
+        assert!(run(src).is_empty());
+    }
+
+    // Regression for #347: it.each nested inside describe.each was falsely flagged.
+    #[test]
+    fn no_fp_it_each_nested_in_describe_each() {
+        let src = r#"
+            describe.each([["a"], ["b"]])("%s", (_label) => {
+                it("plain", () => {
+                    expect(true).toBe(true);
+                });
+                it.each([["x"], ["y"]])("each %s", (_s) => {
+                    expect(true).toBe(true);
+                });
+            });
+        "#;
+        assert!(run(src).is_empty());
     }
 }
