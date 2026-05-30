@@ -25,6 +25,32 @@ fn is_concurrent_callee(func: tree_sitter::Node, source: &[u8]) -> bool {
     matches!(obj_txt, "test" | "it") && prop_txt == "concurrent"
 }
 
+/// Returns true if the subtree rooted at `node` contains a direct `expect(...)`
+/// call, without descending into nested function/arrow function bodies.
+fn subtree_has_expect_call(node: tree_sitter::Node, source: &[u8]) -> bool {
+    if node.kind() == "call_expression" {
+        if let Some(func) = node.child_by_field_name("function") {
+            if func.kind() == "identifier" && func.utf8_text(source).unwrap_or("") == "expect" {
+                return true;
+            }
+        }
+    }
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        // Don't descend into nested function bodies.
+        if matches!(
+            child.kind(),
+            "arrow_function" | "function_expression" | "function"
+        ) {
+            continue;
+        }
+        if subtree_has_expect_call(child, source) {
+            return true;
+        }
+    }
+    false
+}
+
 /// Check whether the first parameter of a function/arrow destructures `expect`.
 fn first_param_destructures_expect(fn_node: tree_sitter::Node, source: &[u8]) -> bool {
     let Some(params) = fn_node.child_by_field_name("parameters") else {
@@ -82,7 +108,7 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     }
     let Some(cb) = callback else { return; };
 
-    if !first_param_destructures_expect(cb, source) {
+    if !first_param_destructures_expect(cb, source) && subtree_has_expect_call(cb, source) {
         diagnostics.push(Diagnostic::at_node(
             ctx.path,
             &cb,
@@ -133,5 +159,30 @@ mod tests {
             run("it.concurrent('works', async () => { expect(2).toBe(2); });").len(),
             1
         );
+    }
+
+    #[test]
+    fn no_fp_when_callback_delegates_to_external_fn() {
+        // Regression for #517: tx-test helper wraps fn; callback has no expect.
+        let src = r#"
+export function txTest(handle) {
+  return (name, fn) => {
+    it.concurrent(name, async () => {
+      const reserved = await handle.rawPg.reserve();
+      try {
+        await handle.txConn.run(reserved, fn);
+      } finally {
+        reserved.release();
+      }
+    });
+  };
+}
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_when_callback_body_is_empty() {
+        assert!(run("it.concurrent('noop', async () => {});").is_empty());
     }
 }
