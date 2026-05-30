@@ -18,6 +18,9 @@ impl OxcCheck for Check {
             let Some(raw) = ctx.source.get(start..end) else {
                 continue;
             };
+            if raw.starts_with("/**") {
+                continue;
+            }
             let body = super::strip_markers(raw);
             if !super::has_long_sentence(&body) {
                 continue;
@@ -64,32 +67,27 @@ mod tests {
         assert!(run("// first thing happens. second thing happens.").is_empty());
     }
 
-    // Regression for #107: `// =>` trailers inside `@example` blocks are
-    // source-as-prose and must not be counted as a long sentence.
+    // Regression for #460: JSDoc blocks (`/** */`) are entirely exempt from the
+    // word limit — documentation comments legitimately need 30-50 words.
     #[test]
-    fn ignores_jsdoc_example_block_with_result_trailer() {
+    fn allows_jsdoc_block_with_long_description() {
         let src = r#"/**
- * Atomically replace the child set of an N-N junction table for one parent.
- *
- * @example
- * const networks = yield* Result.await(replaceJunction({ a: 1 }));
- * // => [{ id: "n-1", name: "Pegas" }, { id: "n-2", name: "Cristal" }]
+ * This JSDoc block explains the loader integration pattern in thorough detail,
+ * covering the relationship between the preload mechanism and the form dialog
+ * lifecycle across multiple rendering phases and async boundary contexts here.
  */
-export function replaceJunction() {}"#;
+export function preloadFormDialog() {}"#;
         assert!(run(src).is_empty(), "diagnostics: {:?}", run(src));
     }
 
-    // Verify the `@example` skip ends when the next tag opens — long
-    // sentences in subsequent prose still get flagged.
+    // Regression for #460: JSDoc with @remarks containing a long sentence is also exempt.
     #[test]
-    fn still_flags_long_sentence_after_example_block() {
+    fn allows_jsdoc_block_with_long_remarks() {
         let src = r#"/**
- * @example
- * const x = 1;
  * @remarks
  * this remark goes on and on and on and on and on and on and on and on and on and on forever please stop right now and ever.
  */
 export function f() {}"#;
-        assert_eq!(run(src).len(), 1);
+        assert!(run(src).is_empty(), "diagnostics: {:?}", run(src));
     }
 }
