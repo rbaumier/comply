@@ -51,7 +51,7 @@ const HISTORY_PHRASES: &[&str] = &[
     "previously implemented",
 ];
 
-const HISTORY_WORDS_ALWAYS: &[&str] = &["refactored", "rewritten"];
+const HISTORY_WORDS_ALWAYS: &[&str] = &["refactored"];
 
 pub(crate) fn mentions_history(raw: &str) -> bool {
     if raw.starts_with("///") || raw.starts_with("//!") || raw.starts_with("/**") {

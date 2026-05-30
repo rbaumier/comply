@@ -26,7 +26,13 @@ mod tests {
 
     #[test]
     fn flags_rewritten() {
-        assert_eq!(run("// rewritten in v3").len(), 1);
+        assert_eq!(run("// was rewritten in v3").len(), 1);
+    }
+
+    #[test]
+    fn allows_rewritten_as_functional_verb() {
+        // "rewritten" describing runtime behaviour, not a code-change history
+        assert!(run("// non-string — should not be rewritten or crash").is_empty());
     }
 
     #[test]
