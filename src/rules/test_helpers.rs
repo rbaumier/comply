@@ -35,7 +35,6 @@ use crate::files::{Language, SourceFile};
 use crate::project::ProjectCtx;
 use crate::rules::RuleDef;
 use crate::rules::backend::{AstCheck, Backend, CheckCtx};
-use crate::project::ProjectCtx;
 use crate::rules::file_ctx::FileCtx;
 
 /// Run a tree-sitter `Check` against `source` parsed with the standard
@@ -575,35 +574,6 @@ pub fn run_oxc_tsx_with_file_ctx(
     let parse_ret = OxcParser::new(&allocator, source, SourceType::tsx()).parse();
     let semantic = SemanticBuilder::new().build(&parse_ret.program).semantic;
     let ctx = CheckCtx::for_test_with_file(Path::new("t.tsx"), source, file);
-
-    let kinds = check.interested_kinds();
-    if kinds.is_empty() {
-        return check.run_on_semantic(&semantic, &ctx);
-    }
-
-    let mut diagnostics = Vec::new();
-    for node in semantic.nodes().iter() {
-        let ty = node.kind().ty();
-        if kinds.contains(&ty) {
-            check.run(node, &ctx, &semantic, &mut diagnostics);
-        }
-    }
-    diagnostics
-}
-
-/// Run an `OxcCheck` against `source` parsed as TSX with a caller-supplied
-/// `ProjectCtx`. Use when the rule consults `ctx.project` (e.g.
-/// `has_dependency`).
-#[must_use]
-pub fn run_oxc_tsx_with_project(
-    source: &str,
-    check: &dyn OxcCheck,
-    project: &ProjectCtx,
-) -> Vec<Diagnostic> {
-    let allocator = Allocator::default();
-    let parse_ret = OxcParser::new(&allocator, source, SourceType::tsx()).parse();
-    let semantic = SemanticBuilder::new().build(&parse_ret.program).semantic;
-    let ctx = CheckCtx::for_test_with_project(Path::new("t.tsx"), source, project);
 
     let kinds = check.interested_kinds();
     if kinds.is_empty() {
