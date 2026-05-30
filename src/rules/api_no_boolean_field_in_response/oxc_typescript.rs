@@ -17,6 +17,14 @@ fn looks_like_response_type(name: &str) -> bool {
     RESPONSE_SUFFIXES.iter().any(|s| name.ends_with(s))
 }
 
+fn is_excluded_path(path: &std::path::Path) -> bool {
+    let s = path.to_string_lossy();
+    s.contains(".test.")
+        || s.contains(".spec.")
+        || s.contains("/scripts/")
+        || s.starts_with("scripts/")
+}
+
 fn is_plain_boolean(ts_type: &TSType) -> bool {
     matches!(ts_type, TSType::TSBooleanKeyword(_))
 }
@@ -51,6 +59,52 @@ fn check_members(
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rules::test_helpers::{run_oxc_ts_with_path, run_oxc_tsx_with_path};
+
+    #[test]
+    fn no_fp_in_test_file() {
+        let d = run_oxc_tsx_with_path(
+            "type LaboratoriesResponse = { items: string[]; replace: boolean };",
+            &Check,
+            "src/app/features/laboratories/components/laboratories-page.test.tsx",
+        );
+        assert!(d.is_empty(), "unexpected diagnostics in test file: {d:?}");
+    }
+
+    #[test]
+    fn no_fp_in_spec_file() {
+        let d = run_oxc_ts_with_path(
+            "type FooResult = { created: boolean };",
+            &Check,
+            "src/foo.spec.ts",
+        );
+        assert!(d.is_empty(), "unexpected diagnostics in spec file: {d:?}");
+    }
+
+    #[test]
+    fn no_fp_in_scripts_dir() {
+        let d = run_oxc_ts_with_path(
+            "type SeedAdminCdrResult = { user: string; created: boolean };",
+            &Check,
+            "scripts/seed-admin-cdr.ts",
+        );
+        assert!(d.is_empty(), "unexpected diagnostics in scripts dir: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_in_regular_source_file() {
+        let d = run_oxc_ts_with_path(
+            "type SeedAdminCdrResult = { user: string; created: boolean };",
+            &Check,
+            "src/api/seed-admin-cdr.ts",
+        );
+        assert_eq!(d.len(), 1);
+    }
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[AstType::TSInterfaceDeclaration, AstType::TSTypeAliasDeclaration]
@@ -63,6 +117,9 @@ impl OxcCheck for Check {
         _semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
+        if is_excluded_path(ctx.path) {
+            return;
+        }
         match node.kind() {
             AstKind::TSInterfaceDeclaration(decl) => {
                 if !looks_like_response_type(decl.id.name.as_str()) {
