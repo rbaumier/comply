@@ -133,6 +133,13 @@ mod tests {
         // Negated variant: `/[^]$]/`
         assert!(run_on(r#"const re = /[^]$]/;"#).is_empty());
     }
+
+    #[test]
+    fn allows_negated_char_class_in_lookahead_lookbehind() {
+        // Issue #385: [^\w] inside lookahead/lookbehind must not be flagged.
+        let src = r#"const pattern = /(?<=[^\w]|^)keyword(?=[^\w]|$)/;"#;
+        assert!(run_on(src).is_empty(), "[^\\w] inside lookahead is a char class, not a useless assertion");
+    }
 }
 
 impl OxcCheck for Check {
