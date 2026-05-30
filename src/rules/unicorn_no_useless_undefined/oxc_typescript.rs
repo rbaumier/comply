@@ -17,34 +17,62 @@ fn is_undefined_identifier(expr: &Expression) -> bool {
 /// functions, and `consistent-return`/`require-explicit-undefined` may require
 /// it. Also unwraps a single `Promise<T>` layer so that async functions
 /// declared as `Promise<T | undefined>` are recognised.
-fn type_includes_undefined(ty: &TSType) -> bool {
+/// Named type references (non-Promise) are resolved as type aliases via
+/// `semantic` — so `type Foo = Bar | undefined; function f(): Foo` is
+/// also recognised.
+fn type_includes_undefined<'a>(ty: &TSType<'a>, semantic: &oxc_semantic::Semantic<'a>) -> bool {
     match ty {
         TSType::TSUndefinedKeyword(_) => true,
         TSType::TSVoidKeyword(_) => true,
-        TSType::TSUnionType(union) => union.types.iter().any(type_includes_undefined),
+        TSType::TSUnionType(union) => {
+            union.types.iter().any(|t| type_includes_undefined(t, semantic))
+        }
         TSType::TSTypeReference(type_ref) => {
             let oxc_ast::ast::TSTypeName::IdentifierReference(id) = &type_ref.type_name else {
                 return false;
             };
-            if id.name.as_str() != "Promise" {
-                return false;
+            let name = id.name.as_str();
+            if name == "Promise" {
+                let Some(params) = &type_ref.type_arguments else {
+                    return false;
+                };
+                return params
+                    .params
+                    .iter()
+                    .any(|t| type_includes_undefined(t, semantic));
             }
-            let Some(params) = &type_ref.type_arguments else {
-                return false;
-            };
-            params.params.iter().any(type_includes_undefined)
+            // Resolve the name as a type alias declaration in this file.
+            resolve_alias_includes_undefined(name, semantic)
         }
         _ => false,
     }
+}
+
+/// Scan all nodes for a `type Name = ...` declaration and check whether
+/// its RHS includes `undefined`. Returns `false` when no matching alias
+/// is found (e.g. the type comes from an import — we can't inspect it).
+fn resolve_alias_includes_undefined<'a>(
+    name: &str,
+    semantic: &oxc_semantic::Semantic<'a>,
+) -> bool {
+    for node in semantic.nodes().iter() {
+        let AstKind::TSTypeAliasDeclaration(alias) = node.kind() else {
+            continue;
+        };
+        if alias.id.name.as_str() == name {
+            return type_includes_undefined(&alias.type_annotation, semantic);
+        }
+    }
+    false
 }
 
 /// Walk ancestors to find the enclosing function (`function`, arrow,
 /// or method) and return whether its declared return type already
 /// includes `undefined`. Returns `false` when no return type is
 /// annotated — the rule keeps its original behaviour there.
-fn enclosing_return_type_allows_undefined(
+fn enclosing_return_type_allows_undefined<'a>(
     node_id: oxc_semantic::NodeId,
-    semantic: &oxc_semantic::Semantic,
+    semantic: &oxc_semantic::Semantic<'a>,
 ) -> bool {
     for ancestor in semantic.nodes().ancestors(node_id) {
         let return_type = match ancestor.kind() {
@@ -53,7 +81,7 @@ fn enclosing_return_type_allows_undefined(
             _ => continue,
         };
         return return_type
-            .map(|ann| type_includes_undefined(&ann.type_annotation))
+            .map(|ann| type_includes_undefined(&ann.type_annotation, semantic))
             .unwrap_or(false);
     }
     false
@@ -228,5 +256,51 @@ mod tests {
             }
         ";
         assert!(run(src).is_empty());
+    }
+
+    /// Regression for #563 — return type is a type alias that resolves to
+    /// `T | undefined`. oxlint's `require-explicit-undefined` forces
+    /// `return undefined;` in functions with a non-void return type, so
+    /// comply must not flag it when the alias includes `undefined`.
+    #[test]
+    fn allows_return_undefined_when_return_type_is_alias_for_union_with_undefined() {
+        let src = "
+            type WhereClause = { sql: string; params: unknown[] };
+            type WhereResult = WhereClause | undefined;
+            function viewableTeamsWhere(scope: string): WhereResult {
+                switch (scope) {
+                    case 'all': return { sql: 'true', params: [] };
+                    case 'own': return { sql: 'member = $1', params: ['u'] };
+                    default: return undefined;
+                }
+            }
+        ";
+        assert!(run(src).is_empty());
+    }
+
+    /// Regression for #563 — same as above but with an arrow function
+    /// (matches the `customError` pattern from zod-i18n.ts in amadeo).
+    #[test]
+    fn allows_return_undefined_in_arrow_when_return_type_is_alias_for_union_with_undefined() {
+        let src = "
+            type DateOriginError = string | undefined;
+            const customError = (origin: string): DateOriginError => {
+                if (origin === 'custom') return 'custom error';
+                if (origin === 'relative') return 'relative error';
+                return undefined;
+            };
+        ";
+        assert!(run(src).is_empty());
+    }
+
+    /// Non-regression: a type alias that does NOT include `undefined` must
+    /// still be flagged.
+    #[test]
+    fn still_flags_return_undefined_when_alias_excludes_undefined() {
+        let src = "
+            type Name = string;
+            function f(): Name { return undefined; }
+        ";
+        assert_eq!(run(src).len(), 1);
     }
 }
