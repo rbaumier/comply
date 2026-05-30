@@ -12,12 +12,15 @@ fn is_undefined_identifier(expr: &Expression) -> bool {
     matches!(expr, Expression::Identifier(id) if id.name.as_str() == "undefined")
 }
 
-/// True if `ty` is (or contains as a union member) `undefined`. Also
-/// unwraps a single `Promise<T>` layer so that async functions declared
-/// as `Promise<T | undefined>` are recognised.
+/// True if `ty` is (or contains as a union member) `undefined` or `void`.
+/// `void` is included because TypeScript allows `return undefined` in `void`
+/// functions, and `consistent-return`/`require-explicit-undefined` may require
+/// it. Also unwraps a single `Promise<T>` layer so that async functions
+/// declared as `Promise<T | undefined>` are recognised.
 fn type_includes_undefined(ty: &TSType) -> bool {
     match ty {
         TSType::TSUndefinedKeyword(_) => true,
+        TSType::TSVoidKeyword(_) => true,
         TSType::TSUnionType(union) => union.types.iter().any(type_includes_undefined),
         TSType::TSTypeReference(type_ref) => {
             let oxc_ast::ast::TSTypeName::IdentifierReference(id) = &type_ref.type_name else {
@@ -187,7 +190,7 @@ mod tests {
 
     #[test]
     fn still_flags_return_undefined_when_return_type_excludes_undefined() {
-        let src = "function f(): void { return undefined; }";
+        let src = "function f(): string { return undefined; }";
         assert_eq!(run(src).len(), 1);
     }
 
@@ -195,5 +198,35 @@ mod tests {
     fn still_flags_return_undefined_without_return_type_annotation() {
         let src = "function f() { return undefined; }";
         assert_eq!(run(src).len(), 1);
+    }
+
+    /// Regression for #373 — `void | undefined` is the explicit-undefined
+    /// pattern required by `consistent-return`/`require-explicit-undefined`.
+    /// The union contains `undefined` so must not be flagged.
+    #[test]
+    fn allows_return_undefined_when_return_type_is_void_or_undefined() {
+        let src = "
+            function handler(): void | undefined {
+                if (Math.random() > 0.5) {
+                    return undefined;
+                }
+            }
+        ";
+        assert!(run(src).is_empty());
+    }
+
+    /// Regression for #373 — a plain `void` return type also means the
+    /// function may legitimately write `return undefined` to satisfy
+    /// `consistent-return` / `require-explicit-undefined`. Must not flag.
+    #[test]
+    fn allows_return_undefined_when_return_type_is_void() {
+        let src = "
+            function handler(): void {
+                if (Math.random() > 0.5) {
+                    return undefined;
+                }
+            }
+        ";
+        assert!(run(src).is_empty());
     }
 }
