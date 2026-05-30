@@ -32,8 +32,19 @@ fn mentions_dangerous_identifier(text: &str) -> bool {
     false
 }
 
+fn file_imports_elysia_html(source: &[u8]) -> bool {
+    let s = std::str::from_utf8(source).unwrap_or("");
+    s.contains("from '@elysiajs/html'")
+        || s.contains("from \"@elysiajs/html\"")
+        || s.contains("from 'elysia/html'")
+        || s.contains("from \"elysia/html\"")
+}
+
 crate::ast_check! { on ["jsx_element"] => |node, source, ctx, diagnostics|
     if !ctx.project.has_framework("elysia") {
+        return;
+    }
+    if !file_imports_elysia_html(source) {
         return;
     }
 
@@ -127,5 +138,26 @@ mod tests {
     fn fires_once_for_nested_jsx() {
         let src = "import { html } from '@elysiajs/html';\nconst v = <div><span>{body.name}</span></div>;";
         assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn no_fp_on_react_jsx_with_body_prop() {
+        // React JSX in an Elysia project — file imports from 'react', not '@elysiajs/html'.
+        // React escapes string interpolations by default, so `safe` is meaningless here.
+        // Closes #426.
+        let src = "import React from 'react';\nfunction ErrorScreen({ body }: { body: string }) {\n  return <div>{body}</div>;\n}";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_elysia_html_import_with_body() {
+        let src = "import { html } from '@elysiajs/html';\nconst v = <div>{body}</div>;";
+        assert!(!run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_elysia_html_slash_import() {
+        let src = "import { html } from 'elysia/html';\nconst v = <div safe>{body}</div>;";
+        assert!(run_on(src).is_empty());
     }
 }
