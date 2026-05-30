@@ -40,6 +40,19 @@ impl OxcCheck for Check {
         // Need at least one argument.
         let Some(first) = call.arguments.first() else { return };
 
+        // Allow in test files — building error fixtures via `Object.assign(new
+        // Error(), { code })` and patching test-infrastructure objects are
+        // idiomatic patterns with no non-mutating alternative.
+        if ctx.file.path_segments.in_test_dir {
+            return;
+        }
+
+        // Allow `Object.assign(new Ctor(...), ...)` — the target is a freshly
+        // constructed object; there is no pre-existing reference to mutate.
+        if matches!(first, oxc_ast::ast::Argument::NewExpression(_)) {
+            return;
+        }
+
         // Allow `Object.assign({}, ...)`.
         if let oxc_ast::ast::Argument::ObjectExpression(obj_expr) = first
             && obj_expr.properties.is_empty() {
@@ -153,9 +166,18 @@ fn is_assign_static_to_function(
 #[cfg(test)]
 mod oxc_tests {
     use super::*;
+    use crate::rules::file_ctx::{FileCtx, PathSegments};
 
     fn run(src: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_oxc_ts(src, &Check)
+    }
+
+    fn run_in_test_file(src: &str) -> Vec<Diagnostic> {
+        let file = FileCtx {
+            path_segments: PathSegments { in_test_dir: true, ..PathSegments::default() },
+            ..FileCtx::default()
+        };
+        crate::rules::test_helpers::run_oxc_tsx_with_file_ctx(src, &Check, &file)
     }
 
     #[test]
@@ -223,6 +245,53 @@ mod oxc_tests {
                 Object.assign(target, updates);
                 return target;
             }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // === new-expression target (issue #481) ===
+
+    #[test]
+    fn allows_new_expression_target() {
+        // Regression for #481 — `Object.assign(new Error(), { code })` is the
+        // only way to build a Postgres-shaped error fixture; the target is
+        // always a fresh object with no pre-existing reference.
+        let src = r#"
+            const original = Object.assign(new Error('not null'), { code: '23502' });
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_new_expression_target_multiple_props() {
+        let src = r#"
+            const postgresError = Object.assign(new Error('duplicate key'), {
+                code: '23505',
+                constraint_name: 'user_email_key',
+            });
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    // === test-file exemption (issue #481) ===
+
+    #[test]
+    fn allows_identifier_target_in_test_file() {
+        // Regression for #481 — patching test-infrastructure objects (e.g. a
+        // reserved DB connection) in test helpers has no non-mutating
+        // alternative; exempt all Object.assign in test files.
+        let src = r#"
+            const reserved = pool.reserve();
+            Object.assign(reserved, { begin });
+        "#;
+        assert!(run_in_test_file(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_identifier_target_in_non_test_file() {
+        let src = r#"
+            const target = { a: 1 };
+            Object.assign(target, { b: 2 });
         "#;
         assert_eq!(run(src).len(), 1);
     }
