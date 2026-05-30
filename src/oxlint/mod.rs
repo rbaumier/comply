@@ -13,6 +13,7 @@
 //!    rule-id + severity through the comply registry so users see
 //!    `[no-explicit-any]` instead of `typescript-eslint(no-explicit-any)`.
 
+mod await_thenable_post_filter;
 mod elysia_post_filter;
 mod equal_probe_post_filter;
 mod no_unsafe_assignment_post_filter;
@@ -108,6 +109,7 @@ pub fn lint_files(
         )?);
     }
 
+    await_thenable_post_filter::apply(&mut all);
     elysia_post_filter::apply(&mut all);
     equal_probe_post_filter::apply(&mut all);
     no_unsafe_assignment_post_filter::apply(&mut all);
