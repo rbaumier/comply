@@ -26,6 +26,18 @@ crate::ast_check! { on ["call_expression"] prefilter = ["callback", "cb", "next"
         return;
     }
 
+    // `const result = await callback(...)` or `return await callback(...)` —
+    // result captured for post-callback cleanup, or explicitly returned.
+    // Neither is the Node error-first callback pattern.
+    if pk == "await_expression" {
+        if let Some(await_parent) = parent.parent() {
+            let apk = await_parent.kind();
+            if apk == "variable_declarator" || apk == "return_statement" {
+                return;
+            }
+        }
+    }
+
     // `cb(err);` as an expression_statement — check if it's followed by control flow or is the last statement in a function body.
     if pk == "expression_statement"
         && let Some(block) = parent.parent()
@@ -121,5 +133,31 @@ mod tests {
     fn flags_cb_followed_by_more_work() {
         let src = "function handle(err) { if (err) { cb(err); doMore(); } finish(); }";
         assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn no_fp_when_callback_result_is_awaited_and_captured() {
+        // Regression #547: `const result = await callback(conn)` followed by cleanup
+        // before `return result` must not be flagged.
+        let src = r#"
+            async function wrap(callback) {
+              try {
+                const result = await callback(conn);
+                await conn.unsafe("RELEASE SAVEPOINT sp");
+                return result;
+              } catch (err) {
+                await conn.unsafe("ROLLBACK TO SAVEPOINT sp");
+                throw err;
+              }
+            }
+        "#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_on_return_await_callback() {
+        // `return await callback(...)` — explicitly returned, not a Node FP.
+        let src = "async function wrap(callback) { return await callback(conn); }";
+        assert!(run_on(src).is_empty());
     }
 }
