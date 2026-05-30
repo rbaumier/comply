@@ -13,6 +13,12 @@
 //! `useEffect`, `useCallback`). Those callbacks run after the surrounding
 //! component finishes rendering, so identifiers declared later in the same
 //! function body are already initialized when the callback fires.
+//!
+//! Also skips forward references inside callbacks passed (directly or as
+//! property values) to `createFileRoute(...)({...})` /
+//! `createLazyFileRoute(...)({...})` options objects. TanStack invokes those
+//! callbacks lazily (on navigation), so any symbol declared after the factory
+//! call is already initialized when the callback runs.
 
 use oxc_ast::AstKind;
 use oxc_ast::ast::Expression;
@@ -59,6 +65,9 @@ impl OxcCheck for Check {
                 let ref_span = nodes.kind(ref_node_id).span();
                 if ref_span.start < decl_span.start {
                     if is_inside_react_hook_callback(nodes, ref_node_id) {
+                        continue;
+                    }
+                    if is_inside_tanstack_route_factory_callback(nodes, ref_node_id) {
                         continue;
                     }
                     let (line, column) =
@@ -180,6 +189,69 @@ fn callback_passed_to_react_hook<'a>(
     false
 }
 
+/// True when the reference sits inside a function/arrow callback that is
+/// passed as an argument (directly or as a property value in an options object)
+/// to `createFileRoute(...)({...})` or `createLazyFileRoute(...)({...})`.
+/// TanStack calls such callbacks lazily (on navigation), so identifiers
+/// declared after the factory call are already initialised when the callback
+/// runs — the forward reference is not a real TDZ hazard.
+fn is_inside_tanstack_route_factory_callback<'a>(
+    nodes: &'a oxc_semantic::AstNodes<'a>,
+    ref_node_id: NodeId,
+) -> bool {
+    for ancestor_id in nodes.ancestor_ids(ref_node_id) {
+        let ancestor = nodes.get_node(ancestor_id);
+        match ancestor.kind() {
+            AstKind::ArrowFunctionExpression(_) | AstKind::Function(_) => {
+                if callback_inside_tanstack_route_factory(ancestor_id, nodes) {
+                    return true;
+                }
+                return false;
+            }
+            AstKind::Program(_) => return false,
+            _ => {}
+        }
+    }
+    false
+}
+
+/// True when `func_id` is a callback (direct argument or object-property value)
+/// of a `createFileRoute(...)` / `createLazyFileRoute(...)` call. Object-level
+/// ancestors (property, object expression) are transparent; only function and
+/// program boundaries stop the walk.
+fn callback_inside_tanstack_route_factory<'a>(
+    func_id: NodeId,
+    nodes: &'a oxc_semantic::AstNodes<'a>,
+) -> bool {
+    for ancestor_id in nodes.ancestor_ids(func_id) {
+        let ancestor = nodes.get_node(ancestor_id);
+        match ancestor.kind() {
+            AstKind::CallExpression(call) => {
+                return call_is_tanstack_route_factory(call);
+            }
+            AstKind::Function(_) | AstKind::ArrowFunctionExpression(_) | AstKind::Program(_) => {
+                return false;
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+/// True when `call` is `createFileRoute(...)` / `createLazyFileRoute(...)`
+/// (direct) or the curried form `createLazyFileRoute("/")(options)`.
+fn call_is_tanstack_route_factory(call: &oxc_ast::ast::CallExpression) -> bool {
+    if callee_name(&call.callee).is_some_and(is_tanstack_route_callee) {
+        return true;
+    }
+    if let Expression::CallExpression(inner) = &call.callee
+        && callee_name(&inner.callee).is_some_and(is_tanstack_route_callee)
+    {
+        return true;
+    }
+    false
+}
+
 /// React hook naming convention: identifier starts with `use` followed by an
 /// uppercase letter (`useMutation`, `useEffect`, `useCallback`, ...).
 fn is_react_hook_name(name: &str) -> bool {
@@ -195,6 +267,10 @@ mod tests {
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+    fn run_on_tsx(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(source, &Check)
     }
 
     #[test]
@@ -331,5 +407,102 @@ mod tests {
                       }";
         let d = run_on(source);
         assert_eq!(d.len(), 1, "inner sync function must still be flagged");
+    }
+
+    #[test]
+    fn no_fp_route_self_reference_in_validate_search_callback() {
+        // Issue #369: Route referenced inside validateSearch callback that is
+        // passed inline to createLazyFileRoute(...)({...}). The callback fires
+        // lazily after Route is assigned, so this is safe.
+        let source = "const Route = createLazyFileRoute(\"/users\")({\n\
+                      validateSearch: (raw) => {\n\
+                      const params = Route.fullPath;\n\
+                      return {};\n\
+                      },\n\
+                      component: () => null,\n\
+                      });";
+        assert!(
+            run_on(source).is_empty(),
+            "Route self-reference in validateSearch should not be flagged"
+        );
+    }
+
+    #[test]
+    fn no_fp_route_self_reference_in_create_file_route_callback() {
+        // Same pattern but with createFileRoute (non-lazy variant).
+        let source = "const Route = createFileRoute(\"/users\")({\n\
+                      validateSearch: (raw) => {\n\
+                      const params = Route.fullPath;\n\
+                      return {};\n\
+                      },\n\
+                      component: () => null,\n\
+                      });";
+        assert!(
+            run_on(source).is_empty(),
+            "Route self-reference in validateSearch of createFileRoute should not be flagged"
+        );
+    }
+
+    #[test]
+    fn no_fp_route_self_reference_in_validate_search_callback_tsx() {
+        // Same as above but parsed as TSX (real .lazy.tsx file grammar).
+        let source = "const Route = createLazyFileRoute(\"/users\")({\n\
+                      validateSearch: (raw) => {\n\
+                      const params = Route.fullPath;\n\
+                      return {};\n\
+                      },\n\
+                      component: () => null,\n\
+                      });";
+        assert!(
+            run_on_tsx(source).is_empty(),
+            "Route self-reference in validateSearch (.lazy.tsx) should not be flagged"
+        );
+    }
+
+    #[test]
+    fn no_fp_route_ref_from_separate_validate_search_fn_before_route() {
+        // Issue #369: validateSearch defined as a separate const BEFORE Route,
+        // but Route is declared via createLazyFileRoute → safe forward ref.
+        let source = "const validateSearch = (raw) => {\n\
+                      const params = Route.fullPath;\n\
+                      return {};\n\
+                      };\n\
+                      export const Route = createLazyFileRoute(\"/users\")({\n\
+                      validateSearch,\n\
+                      component: () => null,\n\
+                      });";
+        assert!(
+            run_on(source).is_empty(),
+            "Route ref in separate validateSearch fn before Route decl should not be flagged"
+        );
+    }
+
+    #[test]
+    fn no_fp_symbol_defined_after_route_used_in_validate_search_callback() {
+        // Issue #369: `schema` is defined after Route but used inside the
+        // validateSearch callback. TanStack calls validateSearch lazily (only
+        // on navigation), so schema is already initialised by then — safe.
+        let source = "export const Route = createLazyFileRoute(\"/users\")({\n\
+                      validateSearch: (raw) => schema.parse(raw),\n\
+                      component: () => null,\n\
+                      });\n\
+                      const schema = { parse: (x) => x };";
+        assert!(
+            run_on(source).is_empty(),
+            "symbol defined after route but used in validateSearch callback should not be flagged"
+        );
+    }
+
+    #[test]
+    fn no_fp_symbol_defined_after_route_used_in_component_callback() {
+        // Same exemption applies to the `component` option, not only validateSearch.
+        let source = "export const Route = createLazyFileRoute(\"/users\")({\n\
+                      component: () => { return helper(); },\n\
+                      });\n\
+                      function helper() { return null; }";
+        assert!(
+            run_on(source).is_empty(),
+            "forward ref in component callback should not be flagged"
+        );
     }
 }
