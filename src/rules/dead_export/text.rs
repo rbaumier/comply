@@ -93,7 +93,9 @@ impl TextCheck for Check {
         if is_in_fixture_dir(ctx.path) {
             return Vec::new();
         }
-        if ctx.project.nearest_package_json(ctx.path).is_some_and(|pkg| pkg.is_library) {
+        if ctx.project.nearest_package_json(ctx.path).is_some_and(|pkg| {
+            pkg.is_library || is_script_entry_point(ctx.path, ctx.project.project_root.as_deref(), &pkg.script_entry_files)
+        }) {
             return Vec::new();
         }
 
@@ -302,6 +304,29 @@ fn collect_type_identifiers(node: tree_sitter::Node, source: &[u8], out: &mut Ha
             stack.push(child);
         }
     }
+}
+
+/// True when `path` is listed as a CLI entry point in a `package.json`
+/// `scripts` value (e.g. `"seed:dev": "bun run src/db/seed/dev.ts"`).
+/// Compares the file's path relative to `project_root` (forward-slash,
+/// no leading `./`) against the extracted `script_entry_files` list.
+fn is_script_entry_point(
+    path: &Path,
+    project_root: Option<&Path>,
+    script_entry_files: &[String],
+) -> bool {
+    if script_entry_files.is_empty() {
+        return false;
+    }
+    let Some(root) = project_root else {
+        return false;
+    };
+    let rel = path
+        .strip_prefix(root)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .replace('\\', "/");
+    script_entry_files.iter().any(|entry| *entry == rel)
 }
 
 /// Entry points we deliberately never flag: `main.*` and `index.*` directly
@@ -755,6 +780,82 @@ mod tests {
         assert!(
             diags.is_empty(),
             "generated TanStack route tree should be a framework entry point: {diags:?}"
+        );
+    }
+
+    // Regression tests for issue #446
+
+    #[test]
+    fn no_fp_for_export_consumed_by_test_file() {
+        // Regression for #446 — `renderWithProviders` is exported from a
+        // test-helpers file that is NOT itself a test file (no `.test.` in name,
+        // not in a `__tests__/` dir). It is imported by test files; dead-export
+        // must not fire because test files ARE part of the import graph.
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "src/app/test-helpers/index.ts",
+                "export function renderWithProviders() {}",
+            ),
+            (
+                "src/features/user/user.test.ts",
+                "import { renderWithProviders } from '../../app/test-helpers';\nrenderWithProviders();",
+            ),
+            ("src/app.ts", "export const z = 1;"),
+        ];
+        let (_dir, diags) = run_on_project(&files, "src/app/test-helpers/index.ts");
+        assert!(
+            diags.iter().all(|d| !d.message.contains("renderWithProviders")),
+            "test-helper export consumed by test file must not be flagged, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn no_fp_for_package_json_script_entry_point() {
+        // Regression for #446 — `seedDevData` is exported from a file that is
+        // invoked as a CLI entry point via a package.json script
+        // (`"seed:dev": "bun run src/db/seed/dev.ts"`). No TS file imports it.
+        // The file path matches the script entry point pattern, so dead-export
+        // must not fire.
+        let pkg = r#"{
+            "scripts": {
+                "seed:dev": "bun run src/db/seed/dev.ts",
+                "delete-user": "bun run src/scripts/deleteUser.ts"
+            }
+        }"#;
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "src/db/seed/dev.ts",
+                "export async function seedDevData(): Promise<void> {}",
+            ),
+            ("src/app.ts", "export const z = 1;"),
+        ];
+        let (_dir, diags) = run_on_project_with_pkg(Some(pkg), &files, "src/db/seed/dev.ts");
+        assert!(
+            diags.iter().all(|d| !d.message.contains("seedDevData")),
+            "CLI entry point export must not be flagged, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn no_fp_for_second_package_json_script_entry_point() {
+        // Regression for #446 — another script entry point
+        let pkg = r#"{
+            "scripts": {
+                "delete-user": "bun run src/scripts/deleteUser.ts"
+            }
+        }"#;
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "src/scripts/deleteUser.ts",
+                "export async function deleteUser(id: string): Promise<void> {}",
+            ),
+            ("src/app.ts", "export const z = 1;"),
+        ];
+        let (_dir, diags) =
+            run_on_project_with_pkg(Some(pkg), &files, "src/scripts/deleteUser.ts");
+        assert!(
+            diags.iter().all(|d| !d.message.contains("deleteUser")),
+            "CLI entry point export must not be flagged, got: {diags:?}"
         );
     }
 }

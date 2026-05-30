@@ -75,6 +75,10 @@ pub struct PackageJson {
     /// True if the package declares `main`, `exports`, or `module` — indicators
     /// that it's an npm library whose exports are consumed externally.
     pub is_library: bool,
+    /// Relative paths of source files that appear as CLI entry points in the
+    /// `scripts` field (e.g. `"seed:dev": "bun run src/db/seed/dev.ts"`).
+    /// Stored with forward slashes and without a leading `./`.
+    pub script_entry_files: Vec<String>,
 }
 
 impl PackageJson {
@@ -111,6 +115,16 @@ impl PackageJson {
                         .collect()
                 })
                 .unwrap_or_default(),
+            script_entry_files: json
+                .get("scripts")
+                .and_then(|node| node.as_object())
+                .map(|obj| {
+                    obj.values()
+                        .filter_map(|v| v.as_str())
+                        .flat_map(extract_script_entry_files)
+                        .collect()
+                })
+                .unwrap_or_default(),
         })
     }
 
@@ -137,6 +151,19 @@ impl PackageJson {
             || self.optional_dependencies.contains_key(name)
             || self.engines.contains_key(name)
     }
+}
+
+/// Extract source-file paths from a package.json script command value.
+///
+/// Splits the command by whitespace and keeps tokens that end with a known
+/// source extension (`.ts`, `.tsx`, `.mts`, `.js`, `.mjs`, `.cjs`). Leading
+/// `./` is stripped so callers can compare against project-root-relative paths.
+fn extract_script_entry_files(cmd: &str) -> Vec<String> {
+    const SOURCE_EXTS: &[&str] = &[".ts", ".tsx", ".mts", ".js", ".mjs", ".cjs"];
+    cmd.split_whitespace()
+        .filter(|token| SOURCE_EXTS.iter().any(|ext| token.ends_with(ext)))
+        .map(|token| token.strip_prefix("./").unwrap_or(token).to_string())
+        .collect()
 }
 
 fn parse_dep_map(json: &Value, section: &str) -> BTreeMap<String, String> {
