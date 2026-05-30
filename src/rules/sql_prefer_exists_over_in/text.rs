@@ -6,6 +6,9 @@ pub struct Check;
 
 impl TextCheck for Check {
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
+        if super::is_test_file(ctx.path) {
+            return Vec::new();
+        }
         let mut diagnostics = Vec::new();
         for (idx, line) in ctx.source.lines().enumerate() {
             let line_upper = line.to_ascii_uppercase();
@@ -47,5 +50,16 @@ mod tests {
     #[test]
     fn allows_in_list() {
         assert!(run("WHERE id IN (1, 2, 3)").is_empty());
+    }
+
+    #[test]
+    fn no_fp_in_test_file() {
+        // Regression for #528.
+        let src = "DELETE FROM users WHERE id IN (SELECT id FROM temp)";
+        let diags = Check.check(&CheckCtx::for_test(
+            Path::new("cleanup.integration.test.ts"),
+            src,
+        ));
+        assert!(diags.is_empty());
     }
 }

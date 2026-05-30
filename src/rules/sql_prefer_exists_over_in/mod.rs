@@ -57,3 +57,12 @@ pub(super) fn contains_in_subquery(text: &str) -> bool {
     let upper = text.to_ascii_uppercase();
     upper.contains("IN (SELECT") || upper.contains("IN(SELECT")
 }
+
+const TEST_MARKERS: &[&str] = &[".test.", ".spec.", "__tests__", "_test.", ".e2e."];
+
+/// True if `path` looks like a test file — performance warnings are irrelevant
+/// in test teardown code.
+pub(super) fn is_test_file(path: &std::path::Path) -> bool {
+    let s = path.to_string_lossy();
+    TEST_MARKERS.iter().any(|m| s.contains(m))
+}
