@@ -121,6 +121,11 @@ impl OxcCheck for Check {
         };
         let arg_name = arg_ident.name.as_str();
 
+        // `default*` props are initial-value props (controlled/uncontrolled pattern) — not derived state.
+        if arg_name.starts_with("default") {
+            return;
+        }
+
         let prop_names = find_component_prop_names(node, semantic);
         if !prop_names.contains(&arg_name) {
             return;
