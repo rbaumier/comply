@@ -23,6 +23,19 @@ fn is_describe_callee(callee: &Expression) -> bool {
     }
 }
 
+/// Return true when the call is `describe.each(table)(name, fn)` — the `fn`
+/// callback receives row data as arguments, so parameters are expected and
+/// must not be flagged.
+fn callee_is_describe_each(callee: &Expression) -> bool {
+    let Expression::CallExpression(inner) = callee else {
+        return false;
+    };
+    let Expression::StaticMemberExpression(member) = &inner.callee else {
+        return false;
+    };
+    member.property.name.as_str() == "each" && is_describe_callee(&member.object)
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[AstType::CallExpression]
@@ -49,10 +62,12 @@ impl OxcCheck for Check {
         }
         let cb = &call.arguments[1];
 
+        let is_each = callee_is_describe_each(&call.callee);
+
         match cb {
             oxc_ast::ast::Argument::ArrowFunctionExpression(arrow) => {
                 let is_async = arrow.r#async;
-                let has_params = !arrow.params.items.is_empty();
+                let has_params = !is_each && !arrow.params.items.is_empty();
                 let returns_value = if arrow.expression {
                     // Arrow with expression body = implicit return
                     true
@@ -83,7 +98,7 @@ impl OxcCheck for Check {
             }
             oxc_ast::ast::Argument::FunctionExpression(func) => {
                 let is_async = func.r#async;
-                let has_params = !func.params.items.is_empty();
+                let has_params = !is_each && !func.params.items.is_empty();
                 let returns_value = func.body.as_ref()
                     .map(|body| body_returns_value_stmts(&body.statements))
                     .unwrap_or(false);
@@ -165,5 +180,60 @@ fn stmt_returns_value(stmt: &oxc_ast::ast::Statement) -> bool {
         }
         Statement::FunctionDeclaration(_) => false,
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rules::test_helpers::{run_oxc_ts, run_oxc_tsx};
+
+    // Regression #516 — describe.each callback receives row params; must not be flagged.
+    #[test]
+    fn allows_describe_each_with_destructured_param() {
+        let d = run_oxc_ts(
+            "const HOOKS = [{ action: 'deactivate' }]; \
+             describe.each(HOOKS)('$action category', ({ action }) => { it('x', () => {}); });",
+            &Check,
+        );
+        assert!(d.is_empty(), "unexpected diagnostics: {d:?}");
+    }
+
+    #[test]
+    fn allows_describe_each_with_multiple_params() {
+        let d = run_oxc_ts(
+            "describe.each([[1, 2]])('sum', (a, b) => { it('x', () => {}); });",
+            &Check,
+        );
+        assert!(d.is_empty(), "unexpected diagnostics: {d:?}");
+    }
+
+    #[test]
+    fn allows_describe_each_tsx_with_typed_params() {
+        let d = run_oxc_tsx(
+            "describe.each([['foo', fn1]])('%s', (_label, decision) => { it('x', () => {}); });",
+            &Check,
+        );
+        assert!(d.is_empty(), "unexpected diagnostics: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_describe_each_with_async_callback() {
+        let d = run_oxc_ts(
+            "describe.each([{}])('suite', async ({ x }) => { it('x', () => {}); });",
+            &Check,
+        );
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("async"));
+    }
+
+    #[test]
+    fn still_flags_plain_describe_with_params() {
+        let d = run_oxc_ts(
+            "describe('suite', (done) => { it('x', () => {}); });",
+            &Check,
+        );
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("parameters"));
     }
 }
