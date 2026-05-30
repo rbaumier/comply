@@ -3,7 +3,10 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
 crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
-    if !ctx.project.has_framework("elysia") || !ctx.source.contains("zod") {
+    if !ctx.project.has_framework("elysia")
+        || !ctx.source.contains("zod")
+        || !ctx.source.contains("elysia")
+    {
         return;
     }
 
@@ -58,5 +61,13 @@ mod tests {
     fn ignores_non_elysia_files() {
         let src = "import { z } from 'zod';\nconst s = z.file();";
         assert!(crate::rules::test_helpers::run_ts(src, &Check).is_empty());
+    }
+
+    #[test]
+    fn no_fp_on_zod_file_schema_constructor_without_elysia_import() {
+        // z.file() is Zod's file schema constructor; it should not fire in
+        // a file that imports only zod, even if the project uses Elysia.
+        let src = "import { z } from 'zod';\nconst FileSchema = z.file();";
+        assert!(run_on(src).is_empty());
     }
 }
