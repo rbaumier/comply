@@ -69,7 +69,8 @@ impl OxcCheck for Check {
 /// True when the `new URL(arg)` argument is author-controlled and not raw
 /// untrusted input: a string literal, a template literal whose every
 /// interpolation roots in an env-validated config object (`config.…` / `env.…`),
-/// or a direct member access rooted in `config` / `env`.
+/// a direct member access rooted in `config` / `env`, or a known-valid HTTP
+/// request URL (`request.url`, `req.url`, `<something>.request.url`).
 /// Those cannot fail at runtime in a way the author hasn't already controlled.
 fn arg_is_trusted(new_expr: &oxc_ast::ast::NewExpression) -> bool {
     use oxc_ast::ast::Expression;
@@ -82,7 +83,29 @@ fn arg_is_trusted(new_expr: &oxc_ast::ast::NewExpression) -> bool {
             tpl.expressions.iter().all(expr_roots_in_trusted_config)
         }
         Expression::StaticMemberExpression(_) | Expression::ComputedMemberExpression(_) => {
-            expr_roots_in_trusted_config(arg)
+            expr_roots_in_trusted_config(arg) || arg_is_request_url(arg)
+        }
+        _ => false,
+    }
+}
+
+/// True when `expr` is a known-valid HTTP request URL property access:
+/// `request.url`, `req.url`, or `<anything>.request.url`.
+/// Frameworks (Elysia, Hono, Express, SvelteKit, …) validate URLs before
+/// dispatching to hooks/middleware, so `new URL(request.url)` cannot throw.
+fn arg_is_request_url(expr: &oxc_ast::ast::Expression) -> bool {
+    use oxc_ast::ast::Expression;
+    let Expression::StaticMemberExpression(m) = expr else {
+        return false;
+    };
+    if m.property.name.as_str() != "url" {
+        return false;
+    }
+    match &m.object {
+        Expression::Identifier(id) => matches!(id.name.as_str(), "request" | "req"),
+        // event.request.url, ctx.request.url, c.req.url, etc.
+        Expression::StaticMemberExpression(inner) => {
+            matches!(inner.property.name.as_str(), "request" | "req")
         }
         _ => false,
     }
@@ -283,5 +306,47 @@ mod tests {
     fn still_flags_non_config_member_expression() {
         assert_eq!(run_on("const u = new URL(process.env.USER_INPUT);").len(), 1);
         assert_eq!(run_on("const u = new URL(req.query.target);").len(), 1);
+    }
+
+    // Regression for #541: `new URL(request.url)` in Elysia/Hono/Express hooks.
+    // Frameworks validate URLs before dispatching — new URL(request.url) cannot throw.
+    #[test]
+    fn allows_request_url() {
+        let src = r#"
+            .onBeforeHandle(({ request }) => {
+                const url = new URL(request.url);
+            })
+        "#;
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn allows_req_url() {
+        let src = r#"function handler(req, res) { const u = new URL(req.url); }"#;
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn allows_event_request_url() {
+        let src = r#"export function handle({ event }) { const u = new URL(event.request.url); }"#;
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn allows_ctx_request_url() {
+        let src = r#"app.use((ctx) => { const u = new URL(ctx.request.url); });"#;
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn still_flags_request_body() {
+        // .body is not a URL — still flag
+        assert_eq!(run_on("const u = new URL(request.body);").len(), 1);
+    }
+
+    #[test]
+    fn still_flags_arbitrary_dot_url() {
+        // user.url is not a known-valid HTTP request URL
+        assert_eq!(run_on("const u = new URL(user.url);").len(), 1);
     }
 }
