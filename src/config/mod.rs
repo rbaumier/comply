@@ -115,10 +115,24 @@ impl Config {
         {
             return false;
         }
-        // File paths arrive with a `./` prefix (the engine walks from
-        // `.`), while override globs are written without one. Strip the
-        // prefix so a key like `src/foo.ts` matches `./src/foo.ts`.
-        let relative = file_path.strip_prefix("./").unwrap_or(file_path);
+        // Override globs are relative (e.g. `src/foo/**`). File paths arrive
+        // in two forms:
+        //   - `./src/foo.ts`  from the engine walker  → strip leading `./`
+        //   - `/abs/path/src/foo.ts` from cross-file rules (unused-file)
+        //     that store canonicalized absolute paths in the import index
+        //     → relativize against CWD (comply is always invoked from the
+        //     project root, which is where comply.toml and the override
+        //     globs are anchored).
+        let abs_relative: Option<PathBuf> = if file_path.is_absolute() {
+            std::env::current_dir()
+                .ok()
+                .and_then(|cwd| file_path.strip_prefix(&cwd).ok().map(|r| r.to_path_buf()))
+        } else {
+            None
+        };
+        let relative: &Path = abs_relative
+            .as_deref()
+            .unwrap_or_else(|| file_path.strip_prefix("./").unwrap_or(file_path));
         for idx in self.glob_matcher.matches(relative) {
             if self.disable_lists[idx].iter().any(|d| d == rule_id) {
                 return false;
@@ -583,6 +597,40 @@ mod tests {
             "intermediate-variables",
             Path::new("src/api/errors/from-database.ts")
         ));
+    }
+
+    // Regression for #496: unused-file stores canonical absolute paths in the
+    // import index. Override globs are relative. is_rule_enabled must relativize
+    // absolute paths against CWD so the glob still fires.
+    #[test]
+    fn absolute_path_override_matches_relative_glob() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(
+            tmp.path().join("comply.toml"),
+            r#"
+            [overrides."src/app/components/data-table/**"]
+            disable = ["unused-file"]
+            "#,
+        )
+        .unwrap();
+        let cfg = Config::load_from(tmp.path()).unwrap();
+
+        // Simulate what unused-file emits: an absolute canonical path.
+        // We compute one by canonicalizing a known path under CWD. We use
+        // the test tmp dir itself to build a plausible absolute path.
+        let cwd = std::env::current_dir().unwrap();
+        let abs_path = cwd.join("src/app/components/data-table/body.tsx");
+        assert!(
+            !cfg.is_rule_enabled("unused-file", &abs_path),
+            "absolute path inside overridden glob must disable the rule"
+        );
+
+        // A file outside the override must still be enabled.
+        let abs_other = cwd.join("src/app/other/file.tsx");
+        assert!(
+            cfg.is_rule_enabled("unused-file", &abs_other),
+            "absolute path outside overridden glob must keep the rule enabled"
+        );
     }
 
     #[test]

@@ -304,4 +304,24 @@ mod tests {
         let (_dir, diags) = run_on_project(&files);
         assert!(diags.is_empty(), "scripts/ files are entry points: {diags:?}");
     }
+
+    // Regression for #496: unused-file diagnostics must carry absolute paths
+    // (from the import index, which canonicalizes all paths). is_rule_enabled
+    // must be able to match those absolute paths against relative override globs.
+    #[test]
+    fn diagnostic_paths_are_absolute() {
+        let files: Vec<(&str, &str)> = vec![
+            ("index.ts", "import { a } from './a';\n"),
+            ("a.ts", "export const a = 1;\n"),
+            ("src/app/components/data-table/body.tsx", "export const body = 1;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files);
+        assert_eq!(diags.len(), 1, "expected one unused-file diagnostic: {diags:?}");
+        assert!(
+            diags[0].path.is_absolute(),
+            "unused-file diagnostic path must be absolute so that is_rule_enabled \
+             can relativize it against CWD for override glob matching: {:?}",
+            diags[0].path
+        );
+    }
 }
