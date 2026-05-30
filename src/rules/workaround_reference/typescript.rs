@@ -36,4 +36,34 @@ mod tests {
     fn allows_jira_ref() {
         assert!(run("// Workaround for PROJ-123\nconst x = 1;").is_empty());
     }
+
+    #[test]
+    fn no_fp_on_compatible_type_description() {
+        // "structurally compatible with RelationalWhere<T>" — pure type-system term, not a workaround
+        let src = r#"
+/**
+ * The returned shape is structurally compatible with `RelationalWhere<TTable>`
+ * for every table that declares a `deactivatedAt` column.
+ */
+const x = 1;
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_on_incompatible() {
+        assert!(run("// These APIs are incompatible with each other\nconst x = 1;").is_empty());
+    }
+
+    #[test]
+    fn flags_compat_layer() {
+        let diags = run("// compat layer for old browsers\nconst x = 1;");
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn flags_compat_fix() {
+        let diags = run("// compat fix for Safari\nconst x = 1;");
+        assert_eq!(diags.len(), 1);
+    }
 }
