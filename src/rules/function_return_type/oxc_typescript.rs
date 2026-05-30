@@ -19,7 +19,7 @@ impl OxcCheck for Check {
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
+        semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         match node.kind() {
@@ -44,6 +44,16 @@ impl OxcCheck for Check {
                 // Same as above: trust an explicit return-type annotation.
                 if arrow.return_type.is_some() {
                     return;
+                }
+                // Pattern: `const fn: Type = async (args) => { … }`
+                // The annotation lives on the VariableDeclarator, not the arrow.
+                // Treat it as explicit — TS already enforces consistency.
+                if let AstKind::VariableDeclarator(decl) =
+                    semantic.nodes().parent_node(node.id()).kind()
+                {
+                    if decl.type_annotation.is_some() {
+                        return;
+                    }
                 }
                 let mut return_types = HashSet::new();
                 collect_return_types_from_stmts(&arrow.body.statements, &mut return_types);
@@ -241,6 +251,22 @@ mod tests {
                 try {
                     const results = await search(query);
                     return results.map((entity) => toOption(entity));
+                } catch {
+                    return [];
+                }
+            };
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_arrow_with_type_annotation_on_declarator() {
+        // Regression for #361 — annotation on the `const fn: Type =` declarator
+        // rather than on the arrow should be trusted as explicit.
+        let src = r#"
+            const fn: (query: string) => Promise<Option[]> = async (query) => {
+                try {
+                    return await doSomething(query);
                 } catch {
                     return [];
                 }
