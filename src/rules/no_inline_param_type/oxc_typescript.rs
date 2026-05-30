@@ -1,7 +1,7 @@
 use crate::diagnostic::Diagnostic;
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{BindingPattern, TSType};
+use oxc_ast::ast::{BindingPattern, PropertyKey, TSSignature, TSType};
 use oxc_semantic::Semantic;
 use std::sync::Arc;
 
@@ -26,9 +26,9 @@ impl OxcCheck for Check {
         let Some(annotation) = &param.type_annotation else {
             return;
         };
-        if !matches!(annotation.type_annotation, TSType::TSTypeLiteral(_)) {
+        let TSType::TSTypeLiteral(type_literal) = &annotation.type_annotation else {
             return;
-        }
+        };
         // Destructured params: the inline type documents the destructured shape.
         if matches!(param.pattern, BindingPattern::ObjectPattern(_)) {
             return;
@@ -41,6 +41,11 @@ impl OxcCheck for Check {
             BindingPattern::BindingIdentifier(id) => id.name.as_str(),
             _ => "<param>",
         };
+        // React props convention: a param named `props` or a single-use shape
+        // carrying `children` (test wrappers, render helpers) stays inline.
+        if name == "props" || type_has_children_member(type_literal) {
+            return;
+        }
         let (line, column) = byte_offset_to_line_col(ctx.source, param.span.start as usize);
         diagnostics.push(Diagnostic {
             path: Arc::clone(&ctx.path_arc),
@@ -56,6 +61,17 @@ impl OxcCheck for Check {
             span: None,
         });
     }
+}
+
+/// True when the inline type literal declares a `children` member — the
+/// React props shape used by component wrappers and render helpers.
+fn type_has_children_member(type_literal: &oxc_ast::ast::TSTypeLiteral) -> bool {
+    type_literal.members.iter().any(|member| {
+        let TSSignature::TSPropertySignature(prop) = member else {
+            return false;
+        };
+        matches!(&prop.key, PropertyKey::StaticIdentifier(id) if id.name == "children")
+    })
 }
 
 /// True when `node` is the first parameter of a function whose name starts
@@ -139,5 +155,18 @@ mod tests {
     #[test]
     fn allows_destructured_param() {
         assert!(run_on("function createPlugin({ db, auth }: { db: Database; auth: Auth }) {}").is_empty());
+    }
+
+    #[test]
+    fn allows_test_wrapper_with_children() {
+        assert!(
+            run_on("renderHook(() => useThing(), { wrapper: (props: { children: ReactNode }) => <Provider>{props.children}</Provider> });")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_props_named_param() {
+        assert!(run_on("const f = (props: { id: string }) => props.id;").is_empty());
     }
 }
