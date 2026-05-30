@@ -40,6 +40,12 @@ crate::ast_check! { on ["unary_expression"] => |node, source, ctx, diagnostics|
             }
         }
     }
+    // Allow `delete process.env[key]` — only way to unset an env var in Node.js.
+    if let Some(obj_node) = arg.child_by_field_name("object") {
+        if source.get(obj_node.byte_range()).map(|b| b == b"process.env").unwrap_or(false) {
+            return;
+        }
+    }
     let pos = index.start_position();
     diagnostics.push(Diagnostic {
         path: std::sync::Arc::clone(&ctx.path_arc),
@@ -85,5 +91,22 @@ mod tests {
     #[test]
     fn allows_dot_property_delete() {
         assert!(run_on("delete obj.foo;").is_empty());
+    }
+
+    // Regression #558 — process.env teardown in tests
+    #[test]
+    fn allows_delete_process_env_dynamic_key() {
+        assert!(run_on("delete process.env[key];").is_empty());
+    }
+
+    #[test]
+    fn allows_delete_process_env_string_literal() {
+        assert!(run_on(r#"delete process.env['MY_VAR'];"#).is_empty());
+    }
+
+    #[test]
+    fn still_flags_non_process_env_dynamic_delete() {
+        let diags = run_on("delete obj[key];");
+        assert_eq!(diags.len(), 1);
     }
 }
