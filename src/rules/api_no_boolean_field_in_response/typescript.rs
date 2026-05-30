@@ -33,6 +33,14 @@ fn looks_like_response_type(name: &str) -> bool {
     RESPONSE_SUFFIXES.iter().any(|s| name.ends_with(s))
 }
 
+fn is_excluded_path(path: &std::path::Path) -> bool {
+    let s = path.to_string_lossy();
+    s.contains(".test.")
+        || s.contains(".spec.")
+        || s.contains("/scripts/")
+        || s.starts_with("scripts/")
+}
+
 /// Return `true` if the `type_annotation` node wraps a bare `boolean`
 /// predefined type. Ignores `boolean | null`, `boolean[]`, etc. — those
 /// already hint at a richer state space.
@@ -89,6 +97,7 @@ fn push_boolean_props(
 }
 
 crate::ast_check! { on ["interface_declaration", "type_alias_declaration"] => |node, source, ctx, diagnostics|
+if is_excluded_path(ctx.path) { return; }
 match node.kind() {
         "interface_declaration" => {
             let Some(name_node) = node.child_by_field_name("name") else { return };
@@ -155,5 +164,48 @@ mod tests {
     #[test]
     fn allows_non_boolean_fields() {
         assert!(run_on("interface UserResponse { id: string; name: string }").is_empty());
+    }
+
+    #[test]
+    fn no_fp_in_test_file() {
+        // Mock response data in test fixtures must not be flagged (#542)
+        let d = crate::rules::test_helpers::run_ts_with_path(
+            "const mockResponse = { items: [], pagination: {}, replace: true };
+             type LaboratoriesResponse = { items: string[]; replace: boolean };",
+            &Check,
+            "src/app/features/laboratories/components/laboratories-page.test.tsx",
+        );
+        assert!(d.is_empty(), "unexpected diagnostics in test file: {d:?}");
+    }
+
+    #[test]
+    fn no_fp_in_spec_file() {
+        let d = crate::rules::test_helpers::run_ts_with_path(
+            "type FooResult = { created: boolean };",
+            &Check,
+            "src/foo.spec.ts",
+        );
+        assert!(d.is_empty(), "unexpected diagnostics in spec file: {d:?}");
+    }
+
+    #[test]
+    fn no_fp_in_scripts_dir() {
+        // Internal CLI result type in scripts/ must not be flagged (#542)
+        let d = crate::rules::test_helpers::run_ts_with_path(
+            "type SeedAdminCdrResult = { user: string; created: boolean };",
+            &Check,
+            "scripts/seed-admin-cdr.ts",
+        );
+        assert!(d.is_empty(), "unexpected diagnostics in scripts dir: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_in_regular_source_file() {
+        let d = crate::rules::test_helpers::run_ts_with_path(
+            "type SeedAdminCdrResult = { user: string; created: boolean };",
+            &Check,
+            "src/api/seed-admin-cdr.ts",
+        );
+        assert_eq!(d.len(), 1);
     }
 }
