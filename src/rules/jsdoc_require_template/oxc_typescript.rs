@@ -8,8 +8,7 @@ use std::sync::Arc;
 
 pub struct Check;
 
-/// Detect a `<T, U>` generics block in a function/class signature.
-fn has_generics(code: &str) -> bool {
+fn extract_generics_between<'a>(code: &'a str) -> Option<&'a str> {
     let first_line = code
         .lines()
         .map(str::trim_start)
@@ -19,20 +18,53 @@ fn has_generics(code: &str) -> bool {
         Some(i) => &first_line[..i],
         None => first_line,
     };
-    let open = match head.rfind('<') {
-        Some(i) => i,
-        None => return false,
-    };
-    let close = match head[open..].find('>') {
-        Some(i) => open + i,
-        None => return false,
-    };
+    let open = head.rfind('<')?;
+    let close = open + head[open..].find('>')?;
     let between = &head[open + 1..close];
-    !between.trim().is_empty()
-        && between.chars().all(|c| {
-            c.is_ascii_alphanumeric()
-                || matches!(c, ',' | ' ' | '_' | '=' | '|' | '{' | '}' | ':' | '<' | '>')
-        })
+    if between.trim().is_empty() {
+        return None;
+    }
+    if between.chars().all(|c| {
+        c.is_ascii_alphanumeric()
+            || matches!(c, ',' | ' ' | '_' | '=' | '|' | '{' | '}' | ':' | '<' | '>')
+    }) {
+        Some(between)
+    } else {
+        None
+    }
+}
+
+/// Detect a `<T, U>` generics block in a function/class signature.
+fn has_generics(code: &str) -> bool {
+    extract_generics_between(code).is_some()
+}
+
+/// Returns true when every top-level type parameter has an `extends` constraint.
+fn all_params_constrained(code: &str) -> bool {
+    let Some(between) = extract_generics_between(code) else {
+        return false;
+    };
+    let mut depth = 0usize;
+    let mut start = 0;
+    for (i, ch) in between.char_indices() {
+        match ch {
+            '<' => depth += 1,
+            '>' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                if !between[start..i]
+                    .split_whitespace()
+                    .any(|w| w == "extends")
+                {
+                    return false;
+                }
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    between[start..]
+        .split_whitespace()
+        .any(|w| w == "extends")
 }
 
 fn starts_with_function_or_class(code: &str) -> bool {
@@ -82,6 +114,9 @@ impl OxcCheck for Check {
                     continue;
                 }
                 if !has_generics(code) {
+                    continue;
+                }
+                if all_params_constrained(code) {
                     continue;
                 }
                 let (line, column) = (block.start_line + 1 + line_offset, 1);
