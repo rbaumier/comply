@@ -12,6 +12,89 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
+const SENTRY_HOOKS: &[&str] = &["beforeSend", "beforeBreadcrumb", "beforeSendTransaction"];
+
+/// True when the mutation is inside a Sentry hook callback — either an inline
+/// lambda assigned to `beforeSend`/`beforeBreadcrumb`, or a named function that
+/// is registered as one of those hooks somewhere in the same file.
+fn is_inside_sentry_hook(node: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut cur = node.parent();
+    while let Some(parent) = cur {
+        match parent.kind() {
+            "pair" => {
+                if let Some(key) = parent.child_by_field_name("key") {
+                    let key_text = key.utf8_text(source).unwrap_or("");
+                    if SENTRY_HOOKS.contains(&key_text) {
+                        return true;
+                    }
+                }
+            }
+            "method_definition" => {
+                if let Some(name) = parent.child_by_field_name("name") {
+                    let name_text = name.utf8_text(source).unwrap_or("");
+                    if SENTRY_HOOKS.contains(&name_text) {
+                        return true;
+                    }
+                }
+            }
+            _ => {}
+        }
+        cur = parent.parent();
+    }
+
+    if let Some(fn_name) = nearest_enclosing_function_name(node, source) {
+        let root = {
+            let mut n = node;
+            while let Some(p) = n.parent() {
+                n = p;
+            }
+            n
+        };
+        return function_is_sentry_hook(root, source, fn_name);
+    }
+    false
+}
+
+fn nearest_enclosing_function_name<'a>(
+    node: tree_sitter::Node,
+    source: &'a [u8],
+) -> Option<&'a str> {
+    let mut cur = node.parent();
+    while let Some(parent) = cur {
+        if parent.kind() == "function_declaration" {
+            return parent
+                .child_by_field_name("name")
+                .and_then(|n| n.utf8_text(source).ok());
+        }
+        cur = parent.parent();
+    }
+    None
+}
+
+fn function_is_sentry_hook(root: tree_sitter::Node, source: &[u8], fn_name: &str) -> bool {
+    if root.kind() == "pair" {
+        if let (Some(key), Some(value)) = (
+            root.child_by_field_name("key"),
+            root.child_by_field_name("value"),
+        ) {
+            let key_text = key.utf8_text(source).unwrap_or("");
+            if SENTRY_HOOKS.contains(&key_text) && value.kind() == "identifier" {
+                let value_text = value.utf8_text(source).unwrap_or("");
+                if value_text == fn_name {
+                    return true;
+                }
+            }
+        }
+    }
+    let mut cursor = root.walk();
+    for child in root.named_children(&mut cursor) {
+        if function_is_sentry_hook(child, source, fn_name) {
+            return true;
+        }
+    }
+    false
+}
+
 const MUTATING_ARRAY_METHODS: &[&str] = &[
     "push",
     "pop",
@@ -282,6 +365,7 @@ match node.kind() {
             }
             let Some(root) = root_identifier_of_member_chain(left, source) else { return };
             if is_created_dom_element_binding(node, source, root) { return; }
+            if is_inside_sentry_hook(node, source) { return; }
             if declared_as_const(node, source, root) {
                 report(diagnostics, ctx.path, &node, root, "Mutating property of");
             }
@@ -291,6 +375,7 @@ match node.kind() {
             let Some(arg) = node.child_by_field_name("argument") else { return };
             let Some(root) = root_identifier_of_member_chain(arg, source) else { return };
             if is_created_dom_element_binding(node, source, root) { return; }
+            if is_inside_sentry_hook(node, source) { return; }
             if declared_as_const(node, source, root) {
                 report(diagnostics, ctx.path, &node, root, "Mutating property of");
             }
@@ -302,12 +387,14 @@ match node.kind() {
             let Some(arg) = node.child_by_field_name("argument") else { return };
             let Some(root) = root_identifier_of_member_chain(arg, source) else { return };
             if is_created_dom_element_binding(node, source, root) { return; }
+            if is_inside_sentry_hook(node, source) { return; }
             if declared_as_const(node, source, root) {
                 report(diagnostics, ctx.path, &node, root, "Deleting property of");
             }
         }
         // arr.push(x), map.set(k, v), Object.assign(obj, ...)
         "call_expression" => {
+            if is_inside_sentry_hook(node, source) { return; }
             let Some(callee) = node.child_by_field_name("function") else { return };
             if callee.kind() != "member_expression" { return }
             let Some(prop) = callee.child_by_field_name("property") else { return };
@@ -588,6 +675,50 @@ Object.assign(handler, { displayName: "myHandler" });"#
         let src = r#"
             const anchor = getAnchorFromDom();
             anchor.href = objectUrl;
+        "#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    // Sentry beforeSend/beforeBreadcrumb — issue #581
+
+    #[test]
+    fn allows_const_alias_mutation_inside_before_send() {
+        // const alias of nested property mutated inside an inline beforeSend hook
+        let src = r#"
+            Sentry.init({
+                beforeSend: (event) => {
+                    const req = event.request;
+                    if (req) req.url = scrubSensitiveQueryFromUrl(req.url);
+                    return event;
+                },
+            });
+        "#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_const_alias_mutation_in_named_function_registered_as_before_send() {
+        // Named function with const alias — registered as beforeSend — issue #581
+        let src = r#"
+            function scrubEvent(event) {
+                const req = event.request;
+                if (req) req.url = scrub(req.url);
+                return event;
+            }
+            Sentry.init({ beforeSend: scrubEvent });
+        "#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_const_mutation_outside_sentry_hook() {
+        // Same shape but NOT a Sentry hook — must still be flagged.
+        let src = r#"
+            function scrubEvent(event) {
+                const req = event.request;
+                if (req) req.url = scrub(req.url);
+                return event;
+            }
         "#;
         assert_eq!(run_on(src).len(), 1);
     }
