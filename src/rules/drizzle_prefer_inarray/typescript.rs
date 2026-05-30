@@ -3,6 +3,21 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
+/// Returns true if the uppercased text contains `IN (` followed (after optional whitespace) by `SELECT`.
+fn in_followed_by_select(upper: &str) -> bool {
+    for prefix in [" IN (", "\nIN (", "\tIN ("] {
+        let mut search = upper;
+        while let Some(pos) = search.find(prefix) {
+            let after = search[pos + prefix.len()..].trim_start_matches([' ', '\t', '\n', '\r']);
+            if after.starts_with("SELECT") {
+                return true;
+            }
+            search = &search[pos + 1..];
+        }
+    }
+    false
+}
+
 crate::ast_check! { on ["template_string"] => |node, source, ctx, diagnostics|
     // tree-sitter-typescript exposes tagged templates either as
     // `template_string` children of `template_literal_type` or as
@@ -37,6 +52,10 @@ crate::ast_check! { on ["template_string"] => |node, source, ctx, diagnostics|
     // PL/pgSQL DO blocks use dollar-quoting (`DO $$` or `DO $tag$`).
     // inArray() cannot be used inside them, so skip.
     if upper.contains("DO $") {
+        return;
+    }
+    // `IN (SELECT ...)` is a subquery — inArray() does not support subqueries, skip.
+    if in_followed_by_select(&upper) {
         return;
     }
     diagnostics.push(Diagnostic::at_node(
@@ -89,6 +108,13 @@ BEGIN
   END LOOP;
 END;
 $$`)"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_in_subquery() {
+        // inArray() does not support subqueries — false positive from #529.
+        let src = r#"db.delete(account).where(sql`account.user_id IN (SELECT id FROM user WHERE email = ${email})`)"#;
         assert!(run(src).is_empty());
     }
 }
