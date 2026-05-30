@@ -1,13 +1,39 @@
 //! testing-no-concurrent-without-context-expect backend — detect
-//! `test.concurrent(...)` / `it.concurrent(...)` calls whose callback does
-//! not destructure `expect` from the test context.
+//! `test.concurrent(...)` / `it.concurrent(...)` calls whose callback
+//! directly uses `expect` without destructuring it from the test context.
 //!
-//! Why: under `test.concurrent`, Vitest gives each test its own isolated
-//! `expect` through the context parameter. Using the module-level `expect`
-//! breaks assertion counting and can leak assertions between parallel
-//! tests. The fix is `({ expect }) => { ... }`.
+//! Why: under `test.concurrent`, snapshot matchers share a file and can
+//! race when multiple tests write concurrently. Using context `{ expect }`
+//! isolates each test's snapshot state. Callbacks that do not reference
+//! `expect` at all (e.g. utility wrappers that delegate to an external fn)
+//! are always safe and must not be flagged.
 
 use crate::diagnostic::{Diagnostic, Severity};
+
+fn is_ident_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_' || b == b'$'
+}
+
+fn contains_identifier(hay: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return false;
+    }
+    let bytes = hay.as_bytes();
+    let n = needle.as_bytes();
+    let mut i = 0;
+    while i + n.len() <= bytes.len() {
+        if &bytes[i..i + n.len()] == n {
+            let before_ok = i == 0 || !is_ident_byte(bytes[i - 1]);
+            let after_idx = i + n.len();
+            let after_ok = after_idx == bytes.len() || !is_ident_byte(bytes[after_idx]);
+            if before_ok && after_ok {
+                return true;
+            }
+        }
+        i += 1;
+    }
+    false
+}
 
 /// Is `func` a `test.concurrent` / `it.concurrent` / `describe.concurrent` callee?
 fn is_concurrent_callee(func: tree_sitter::Node, source: &[u8]) -> bool {
@@ -82,6 +108,12 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     }
     let Some(cb) = callback else { return; };
 
+    // Only flag when `expect` is actually referenced in the callback.
+    // Utility wrappers that delegate to an external fn without calling expect
+    // directly are safe and must not be flagged.
+    let cb_text = cb.utf8_text(source).unwrap_or("");
+    if !contains_identifier(cb_text, "expect") { return; }
+
     if !first_param_destructures_expect(cb, source) {
         diagnostics.push(Diagnostic::at_node(
             ctx.path,
@@ -133,5 +165,20 @@ mod tests {
             run("it.concurrent('works', async () => { expect(2).toBe(2); });").len(),
             1
         );
+    }
+
+    // Regression: #570 — txTest-style utility that wraps it.concurrent but
+    // never calls expect directly in the callback body.
+    #[test]
+    fn no_fp_concurrent_callback_without_expect() {
+        assert!(
+            run("it.concurrent(name, async () => { await handle.txConn.run(reserved, fn); });")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn no_fp_concurrent_empty_callback() {
+        assert!(run("it.concurrent('test', async () => { await doSomething(); });").is_empty());
     }
 }
