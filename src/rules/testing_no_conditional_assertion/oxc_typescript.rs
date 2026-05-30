@@ -47,6 +47,30 @@ fn is_nullish_literal(expr: &Expression) -> bool {
         || matches!(expr.without_parentheses(), Expression::Identifier(id) if id.name.as_str() == "undefined")
 }
 
+/// Extracts `(expect_arg_text, matcher_value_text)` from an equality assertion
+/// like `expect(A).toBe(B)`, `expect(A).toEqual(B)`, `expect(A).toStrictEqual(B)`.
+/// Returns `None` for negated forms or unrecognised matchers.
+fn equality_assertion_parts<'a>(stmt: &Statement<'a>, source: &'a str) -> Option<(&'a str, &'a str)> {
+    use oxc_span::GetSpan;
+    let Statement::ExpressionStatement(es) = stmt else { return None };
+    let Expression::CallExpression(call) = &es.expression else { return None };
+    let Expression::StaticMemberExpression(matcher) = &call.callee else { return None };
+    if !matches!(matcher.property.name.as_str(), "toBe" | "toEqual" | "toStrictEqual") {
+        return None;
+    }
+    // The object must be a bare `expect(...)`, not `expect(...).not`
+    let Expression::CallExpression(expect_call) = &matcher.object else { return None };
+    let Expression::Identifier(id) = &expect_call.callee else { return None };
+    if id.name.as_str() != "expect" {
+        return None;
+    }
+    let expect_arg = expect_call.arguments.first()?.as_expression()?;
+    let matcher_arg = call.arguments.first()?.as_expression()?;
+    let expect_text = source[expect_arg.span().start as usize..expect_arg.span().end as usize].trim();
+    let matcher_text = source[matcher_arg.span().start as usize..matcher_arg.span().end as usize].trim();
+    Some((expect_text, matcher_text))
+}
+
 /// Source text of the `expect(ARG)` argument when `stmt` is an unconditional
 /// truthiness assertion (`expect(ARG).toBe(true)` / `expect(ARG).toBeTruthy()`),
 /// else `None`. Negated forms (`expect(ARG).not.toBe(true)`) return `None`.
@@ -77,8 +101,10 @@ fn truthy_assertion_target<'a>(stmt: &Statement<'a>, source: &'a str) -> Option<
 }
 
 /// True when a statement preceding the `if` in the same block unconditionally
-/// asserts the condition is truthy (`expect(cond).toBe(true)`), so the branch
-/// is guaranteed taken — the `if` only narrows the type for the compiler.
+/// asserts the condition is truthy (`expect(cond).toBe(true)`) or asserts both
+/// sides of an equality condition (`expect(A).toBe(B)` preceding `if (A === B)`),
+/// so the branch is guaranteed taken — the `if` only narrows the type for the
+/// compiler.
 fn block_has_truthy_guard<'a>(
     stmts: &oxc_allocator::Vec<'a, Statement<'a>>,
     if_stmt: &oxc_ast::ast::IfStatement<'a>,
@@ -87,12 +113,37 @@ fn block_has_truthy_guard<'a>(
     use oxc_span::GetSpan;
     let test = if_stmt.test.span();
     let cond_text = source[test.start as usize..test.end as usize].trim();
+
+    // When the condition is `A === B` or `A == B`, a preceding `expect(A).toBe(B)`
+    // (or with sides swapped) guarantees the branch.
+    let equality_sides: Option<(&str, &str)> = match if_stmt.test.without_parentheses() {
+        Expression::BinaryExpression(bin)
+            if matches!(
+                bin.operator,
+                BinaryOperator::StrictEquality | BinaryOperator::Equality
+            ) =>
+        {
+            let left = source[bin.left.span().start as usize..bin.left.span().end as usize].trim();
+            let right =
+                source[bin.right.span().start as usize..bin.right.span().end as usize].trim();
+            Some((left, right))
+        }
+        _ => None,
+    };
+
     for stmt in stmts.iter() {
         if stmt.span().start >= if_stmt.span.start {
             break;
         }
         if truthy_assertion_target(stmt, source) == Some(cond_text) {
             return true;
+        }
+        if let Some((left, right)) = equality_sides {
+            if let Some((exp_arg, mat_arg)) = equality_assertion_parts(stmt, source) {
+                if (exp_arg == left && mat_arg == right) || (exp_arg == right && mat_arg == left) {
+                    return true;
+                }
+            }
         }
     }
     false
@@ -218,6 +269,42 @@ mod tests {
         let src = "test('a', () => {\n\
                      expect(cond).not.toBe(true);\n\
                      if (cond) { expect(value).toBe(1); }\n\
+                   });";
+        assert_eq!(run(src).len(), 1, "{:?}", run(src));
+    }
+
+    // Regression for #514: `expect(A).toBe(B)` preceding `if (A === B)` means
+    // the branch is guaranteed — the `if` is TypeScript type narrowing only.
+    #[test]
+    fn allows_expect_when_guarded_by_equality_assertion() {
+        let src = "test('a', () => {\n\
+                     expect(found?.level).toBe('team');\n\
+                     if (found?.level === 'team') {\n\
+                       expect(found.teams.map(m => m.id)).toEqual([team.id]);\n\
+                     }\n\
+                   });";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // `toEqual` variant of the equality guard.
+    #[test]
+    fn allows_expect_when_guarded_by_to_equal_assertion() {
+        let src = "test('a', () => {\n\
+                     expect(found?.level).toEqual('organization');\n\
+                     if (found?.level === 'organization') {\n\
+                       expect(found.organizations).toHaveLength(1);\n\
+                     }\n\
+                   });";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // A plain if without a guard is still flagged.
+    #[test]
+    fn flags_unguarded_equality_if() {
+        let src = "test('a', () => {\n\
+                     if (found?.level === 'team') {\n\
+                       expect(found.teams).toHaveLength(1);\n\
+                     }\n\
                    });";
         assert_eq!(run(src).len(), 1, "{:?}", run(src));
     }
