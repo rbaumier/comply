@@ -37,6 +37,12 @@ crate::ast_check! { on ["call_expression"] prefilter = ["findFirst"] => |node, s
         if arg.kind() != "object" {
             continue;
         }
+        // In test files, `findFirst({})` with an empty object is intentional —
+        // the test wants any row without caring which one (e.g. post-import
+        // assertions). An empty `{}` has no named children.
+        if ctx.file.path_segments.in_test_dir && arg.named_child_count() == 0 {
+            return;
+        }
         let mut obj_cursor = arg.walk();
         for member in arg.named_children(&mut obj_cursor) {
             match member.kind() {
@@ -80,9 +86,18 @@ crate::ast_check! { on ["call_expression"] prefilter = ["findFirst"] => |node, s
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rules::file_ctx::{FileCtx, PathSegments};
 
     fn run(src: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_ts(src, &Check)
+    }
+
+    fn run_in_test_file(src: &str) -> Vec<Diagnostic> {
+        let file = FileCtx {
+            path_segments: PathSegments { in_test_dir: true, ..PathSegments::default() },
+            ..FileCtx::default()
+        };
+        crate::rules::test_helpers::run_ts_with_file_ctx(src, &Check, &file)
     }
 
     #[test]
@@ -141,5 +156,27 @@ mod tests {
     fn flags_database_handle_without_where() {
         let src = "database.query.organization.findFirst({ columns: { id: true } })";
         assert_eq!(run(src).len(), 1);
+    }
+
+    // Regression for rbaumier/comply#530 — `findFirst({})` with empty object in test files is
+    // intentional (fetch any row for post-import assertions).
+    #[test]
+    fn no_fp_findfirst_empty_object_in_test_file() {
+        let src = "const anyRow = await db.query.team.findFirst({});";
+        assert!(run_in_test_file(src).is_empty());
+    }
+
+    // `findFirst({})` in production code is still flagged.
+    #[test]
+    fn flags_findfirst_empty_object_in_production() {
+        let src = "const anyRow = await db.query.team.findFirst({});";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // `findFirst({ columns: {...} })` without `where` in test files is still flagged.
+    #[test]
+    fn flags_findfirst_with_options_no_where_in_test_file() {
+        let src = "const u = await db.query.users.findFirst({ columns: { id: true } });";
+        assert_eq!(run_in_test_file(src).len(), 1);
     }
 }

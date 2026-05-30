@@ -48,6 +48,12 @@ impl OxcCheck for Check {
         // inside, so play safe and skip).
         let Some(first_arg) = call.arguments.first() else { return };
         let oxc_ast::ast::Argument::ObjectExpression(obj) = first_arg else { return };
+        // In test files, `findFirst({})` with an empty object is intentional —
+        // the test wants any row without caring which one (e.g. post-import
+        // assertions).
+        if ctx.file.path_segments.in_test_dir && obj.properties.is_empty() {
+            return;
+        }
         let mut has_where = false;
         for prop in obj.properties.iter() {
             match prop {
@@ -92,9 +98,18 @@ impl OxcCheck for Check {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rules::file_ctx::{FileCtx, PathSegments};
 
     fn run(src: &str) -> Vec<crate::diagnostic::Diagnostic> {
         crate::rules::test_helpers::run_oxc_ts(src, &Check)
+    }
+
+    fn run_in_test_file(src: &str) -> Vec<crate::diagnostic::Diagnostic> {
+        let file = FileCtx {
+            path_segments: PathSegments { in_test_dir: true, ..PathSegments::default() },
+            ..FileCtx::default()
+        };
+        crate::rules::test_helpers::run_oxc_tsx_with_file_ctx(src, &Check, &file)
     }
 
     #[test]
@@ -159,5 +174,27 @@ mod tests {
             run("database.query.organization.findFirst({ columns: { id: true } });").len(),
             1
         );
+    }
+
+    // Regression for rbaumier/comply#530 — `findFirst({})` with empty object in test files is
+    // intentional (fetch any row for post-import assertions).
+    #[test]
+    fn no_fp_findfirst_empty_object_in_test_file() {
+        let src = "const anyRow = await db.query.team.findFirst({});";
+        assert!(run_in_test_file(src).is_empty());
+    }
+
+    // `findFirst({})` in production code is still flagged.
+    #[test]
+    fn flags_findfirst_empty_object_in_production() {
+        let src = "const anyRow = await db.query.team.findFirst({});";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // `findFirst({ columns: {...} })` without `where` in test files is still flagged.
+    #[test]
+    fn flags_findfirst_with_options_no_where_in_test_file() {
+        let src = "const u = await db.query.users.findFirst({ columns: { id: true } });";
+        assert_eq!(run_in_test_file(src).len(), 1);
     }
 }
