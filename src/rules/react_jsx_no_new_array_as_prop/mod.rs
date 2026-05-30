@@ -4,6 +4,12 @@
 //! allocates a new array on every render. That new reference breaks
 //! `React.memo` / `PureComponent` equality checks and forces the child
 //! component to re-render even when the contents are identical.
+//!
+//! Skipped in test files and Storybook stories, where a component renders once
+//! and reference identity is irrelevant. Also skipped when the project ships
+//! `babel-plugin-react-compiler` (declared in `package.json` or referenced from
+//! a bundler / babel config), since React Compiler auto-memoises inline
+//! references.
 
 mod oxc_typescript;
 #[cfg(test)]
