@@ -91,6 +91,44 @@ fn is_wire_format_fn_name(name: &str) -> bool {
     )
 }
 
+fn is_match_media_call(call: &oxc_ast::ast::CallExpression) -> bool {
+    match &call.callee {
+        Expression::StaticMemberExpression(member) => {
+            member.property.name.as_str() == "matchMedia"
+        }
+        Expression::Identifier(id) => id.name.as_str() == "matchMedia",
+        _ => false,
+    }
+}
+
+/// True when the join result is used as a CSS media query string:
+/// - directly passed to `matchMedia(...)`
+/// - OR assigned to a variable whose name contains "media"
+fn is_css_media_join<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    for ancestor in semantic.nodes().ancestors(node.id()) {
+        match ancestor.kind() {
+            AstKind::CallExpression(call) => {
+                if is_match_media_call(call) {
+                    return true;
+                }
+            }
+            AstKind::VariableDeclarator(decl) => {
+                if let BindingPattern::BindingIdentifier(id) = &decl.id {
+                    let lower = id.name.as_str().to_ascii_lowercase();
+                    return lower.contains("media");
+                }
+                return false;
+            }
+            AstKind::Function(_) | AstKind::ArrowFunctionExpression(_) => return false,
+            _ => {}
+        }
+    }
+    false
+}
+
 /// True for files under a developer-only directory (scripts, bin, migrations).
 /// Joins here are diagnostic output, never user-facing prose.
 fn is_developer_script_path(path: &Path) -> bool {
@@ -238,6 +276,9 @@ impl OxcCheck for Check {
             if is_wire_format_fn_name(&name) {
                 return;
             }
+        }
+        if is_css_media_join(node, semantic) {
+            return;
         }
         if is_url_wire_join(node, semantic) {
             return;
@@ -406,6 +447,34 @@ mod tests {
               const label = items.join(", ");
               return label;
             }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // #579 — FP on CSS media query builder
+    #[test]
+    fn no_fp_join_assigned_to_media_query_variable() {
+        let src = r#"
+            const parts = ["(min-width: 1024px)", "(max-width: 1279px)"];
+            const mediaQuery = parts.join(" and ");
+            window.matchMedia(mediaQuery);
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_join_directly_in_match_media() {
+        let src = r#"
+            const parts = ["(min-width: 1024px)", "(max-width: 1279px)"];
+            window.matchMedia(parts.join(" and "));
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_and_join_outside_media_context() {
+        let src = r#"
+            const label = items.join(" and ");
         "#;
         assert_eq!(run(src).len(), 1);
     }
