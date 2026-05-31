@@ -81,8 +81,28 @@ fn arg_is_trusted(new_expr: &oxc_ast::ast::NewExpression) -> bool {
         Expression::TemplateLiteral(tpl) => {
             tpl.expressions.iter().all(expr_roots_in_trusted_config)
         }
+        // A WHATWG `Request`'s `.url` getter always returns a well-formed
+        // absolute URL, so `new URL(request.url)` cannot throw. Covers
+        // `request.url`, `req.url`, and `event.request.url`.
+        Expression::StaticMemberExpression(m) if is_request_url_access(m) => true,
         Expression::StaticMemberExpression(_) | Expression::ComputedMemberExpression(_) => {
             expr_roots_in_trusted_config(arg)
+        }
+        _ => false,
+    }
+}
+
+/// True for `<request-like>.url` accesses whose receiver is named
+/// `request`/`req` directly or via an outer member (`event.request.url`).
+fn is_request_url_access(member: &oxc_ast::ast::StaticMemberExpression) -> bool {
+    use oxc_ast::ast::Expression;
+    if member.property.name != "url" {
+        return false;
+    }
+    match &member.object {
+        Expression::Identifier(id) => matches!(id.name.as_str(), "request" | "req"),
+        Expression::StaticMemberExpression(m) => {
+            matches!(m.property.name.as_str(), "request" | "req")
         }
         _ => false,
     }
@@ -283,5 +303,19 @@ mod tests {
     fn still_flags_non_config_member_expression() {
         assert_eq!(run_on("const u = new URL(process.env.USER_INPUT);").len(), 1);
         assert_eq!(run_on("const u = new URL(req.query.target);").len(), 1);
+    }
+
+    // Regression for #541: `request.url` is a WHATWG Request URL — always a
+    // valid absolute URL, so the constructor cannot throw.
+    #[test]
+    fn allows_request_url() {
+        assert!(run_on("const u = new URL(request.url);").is_empty());
+        assert!(run_on("const u = new URL(req.url);").is_empty());
+        assert!(run_on("const u = new URL(event.request.url);").is_empty());
+    }
+
+    #[test]
+    fn still_flags_arbitrary_member_url() {
+        assert_eq!(run_on("const u = new URL(config2.url);").len(), 1);
     }
 }
