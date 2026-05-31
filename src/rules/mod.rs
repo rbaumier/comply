@@ -1503,6 +1503,7 @@ pub mod prefer_string_slice;
 pub mod prefer_string_starts_ends_with;
 pub mod prefer_string_trim_start_end;
 pub mod prefer_structured_clone;
+pub mod prefer_concise_arrow_body;
 pub mod prefer_ternary;
 pub mod prefer_to_have_length;
 pub mod prefer_top_level_await;
@@ -2762,7 +2763,8 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         prefer_string_starts_ends_with::register(),
         prefer_string_trim_start_end::register(),
         prefer_structured_clone::register(),
-        prefer_ternary::register(),
+        prefer_concise_arrow_body::register(),
+    prefer_ternary::register(),
         prefer_to_have_length::register(),
         prefer_top_level_await::register(),
         prefer_type_error::register(),
