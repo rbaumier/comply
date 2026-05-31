@@ -64,6 +64,40 @@ fn is_create_element_call(expr: &Expression) -> bool {
     method == "createElement" || method == "createElementNS"
 }
 
+/// True when `node` sits inside a `constructor()` body. Assigning `this.x = value`
+/// while the object is being constructed is initialisation, not mutation of an
+/// already-stable object — TypeScript even allows setting `readonly` fields here.
+fn is_inside_constructor<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    let mut ancestors = semantic.nodes().ancestors(node.id()).peekable();
+    let mut first = true;
+    while let Some(ancestor) = ancestors.next() {
+        if first {
+            first = false;
+            continue;
+        }
+        match ancestor.kind() {
+            AstKind::MethodDefinition(method) => {
+                return method.kind == MethodDefinitionKind::Constructor;
+            }
+            AstKind::Function(_) => {
+                // The constructor body is wrapped in a Function node in OXC's AST.
+                if let Some(next) = ancestors.peek()
+                    && let AstKind::MethodDefinition(method) = next.kind()
+                {
+                    return method.kind == MethodDefinitionKind::Constructor;
+                }
+                return false;
+            }
+            AstKind::ArrowFunctionExpression(_) => return false,
+            _ => {}
+        }
+    }
+    false
+}
+
 fn is_inside_test_hook<'a>(
     node: &oxc_semantic::AstNode<'a>,
     semantic: &'a oxc_semantic::Semantic<'a>,
@@ -125,6 +159,8 @@ impl OxcCheck for Check {
                         if obj_text == "module" || obj_text == "exports" { return; }
                         if prop_text == "current" { return; }
                         if obj_text == "document" && prop_text == "cookie" { return; }
+                        if matches!(&m.object, Expression::ThisExpression(_))
+                            && is_inside_constructor(node, semantic) { return; }
                         if root_object_name(&m.object) == Some("set") { return; }
                         if is_test_setup_for_expr(node, &m.object, ctx, semantic) { return; }
                         if let Some(id) = root_identifier_of_expr(&m.object)
@@ -146,6 +182,8 @@ impl OxcCheck for Check {
                             [m.object.span().start as usize..m.object.span().end as usize];
 
                         if obj_text == "module" || obj_text == "exports" { return; }
+                        if matches!(&m.object, Expression::ThisExpression(_))
+                            && is_inside_constructor(node, semantic) { return; }
                         if root_object_name(&m.object) == Some("set") { return; }
                         if is_test_setup_for_expr(node, &m.object, ctx, semantic) { return; }
                         if let Some(id) = root_identifier_of_expr(&m.object)
@@ -267,6 +305,33 @@ mod tests {
             }
         "#;
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_this_assignment_in_constructor() {
+        // Regression for issue #477: `this.x = value` in a constructor body is
+        // field initialisation (including `readonly` fields), not mutation.
+        let src = r#"
+            class ProblemError extends Error {
+                readonly problem: Problem;
+                constructor(problem: Problem) {
+                    super();
+                    this.name = 'ProblemError';
+                    this.problem = problem;
+                }
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_this_assignment_in_method() {
+        let src = r#"
+            class Foo {
+                update() { this.value = 1; }
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
     }
 
     #[test]
