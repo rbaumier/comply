@@ -111,9 +111,14 @@ pub(super) fn is_clear_text_url(content: &str) -> Option<&'static str> {
             if DUMMY_HOSTS.contains(&hostname) {
                 return None;
             }
-            // RFC 2606 reserves the .test TLD for testing — no real HTTP
-            // connection is ever made to it.
-            if hostname.ends_with(".test") {
+            // RFC 2606 / RFC 6761 reserve `.test`, `.invalid`, and
+            // `.localhost` as TLDs that never resolve. A URL using one is a
+            // synthetic placeholder (e.g. a base for `new URL(relative, base)`
+            // parsing), never a real clear-text network endpoint.
+            if hostname.ends_with(".test")
+                || hostname.ends_with(".invalid")
+                || hostname.ends_with(".localhost")
+            {
                 return None;
             }
             return Some(prefix);
@@ -230,5 +235,17 @@ mod helper_tests {
         // .test is reserved by RFC 2606 — Vitest setup files use it as a fake origin.
         assert!(is_clear_text_url("\"http://example.test:3000\"").is_none());
         assert!(is_clear_text_url("\"http://api.example.test\"").is_none());
+    }
+
+    // #504 — `.invalid` (RFC 2606) is a synthetic base for relative-URL
+    // parsing, never a real network endpoint.
+    #[test]
+    fn does_not_flag_dot_invalid_tld() {
+        assert!(is_clear_text_url("\"http://relative.invalid\"").is_none());
+    }
+
+    #[test]
+    fn still_flags_real_host() {
+        assert_eq!(is_clear_text_url("\"http://api.internal.corp/v1\""), Some("http://"));
     }
 }
