@@ -1195,6 +1195,7 @@ pub mod no_promise_reject;
 pub mod no_redundant_await;
 pub mod no_redundant_clsx;
 pub mod no_redundant_jump;
+pub mod no_redundant_null_undefined_check;
 pub mod no_redundant_optional;
 pub mod no_redundant_state;
 pub mod no_return_type_any;
@@ -1960,6 +1961,7 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         no_floating_promise::register(),
         no_await_in_loop::register(),
         no_redundant_await::register(),
+        no_redundant_null_undefined_check::register(),
         no_redundant_state::register(),
         no_unused_locators::register(),
         unused_component_prop::register(),
