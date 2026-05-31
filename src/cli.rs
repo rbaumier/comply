@@ -74,6 +74,18 @@ pub struct Cli {
     #[arg(long)]
     pub comply_only: bool,
 
+    /// Opt into type-aware analysis. Off by default so the standard run
+    /// stays AstCheck-only and keeps the pre-commit budget under 60s.
+    ///
+    /// When set, comply (a) enables the tsgolint type-aware rule set via
+    /// `oxlint --type-aware` and (b) runs the custom type-aware rules that
+    /// query a TypeScript checker (typescript-go) through a sidecar:
+    /// `no-unused-type`, `no-duplicate-type-definition`,
+    /// `no-redundant-nullish-coalescing-null`. Both require the resolved
+    /// TypeScript program, so they accept a much higher per-run cost.
+    #[arg(long = "type-aware")]
+    pub type_aware: bool,
+
     /// Path to lint (default: current directory).
     pub path: Option<PathBuf>,
 }
@@ -200,6 +212,7 @@ mod tests {
             timings: false,
             tui: false,
             comply_only: false,
+            type_aware: false,
             path: None,
         }
     }

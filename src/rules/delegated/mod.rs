@@ -16,6 +16,7 @@ mod oxc;
 mod promise;
 mod ts;
 pub mod tsgolint;
+pub mod type_aware;
 mod unicorn;
 
 use crate::rules::RuleDef;
@@ -32,7 +33,13 @@ pub fn register_all() -> Vec<RuleDef> {
     rules
 }
 
-/// Collect tsgolint-delegated rules (type-aware, only with --with-types).
+/// Collect tsgolint-delegated rules (type-aware, only with `--type-aware`).
 pub fn register_tsgolint() -> Vec<RuleDef> {
     tsgolint::register_all()
+}
+
+/// Collect comply's custom type-aware rules (sidecar-backed, only with
+/// `--type-aware`).
+pub fn register_type_aware() -> Vec<RuleDef> {
+    type_aware::register_all()
 }
