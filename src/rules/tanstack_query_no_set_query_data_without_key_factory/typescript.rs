@@ -54,6 +54,11 @@ impl TextCheck for Check {
     }
 
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
+        // Test files use raw array keys as deliberately-named sentinels to assert
+        // cache isolation (set, run hook, verify key gone) — not real query keys.
+        if ctx.file.path_segments.in_test_dir {
+            return Vec::new();
+        }
         if !ctx.source.contains("setQueryData(") {
             return Vec::new();
         }
@@ -108,5 +113,18 @@ mod tests {
     fn allows_variable_key() {
         let src = "queryClient.setQueryData(myKey, data);";
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_inline_key_in_test_file() {
+        // Regression for issue #490: raw sentinel key in a test file.
+        use crate::rules::file_ctx::{FileCtx, PathSegments};
+        let file = FileCtx {
+            path_segments: PathSegments { in_test_dir: true, ..Default::default() },
+            ..Default::default()
+        };
+        let src = r#"queryClient.setQueryData(["sentinel"], "preserved");"#;
+        let ctx = CheckCtx::for_test_with_file(Path::new("t.test.tsx"), src, &file);
+        assert!(Check.check(&ctx).is_empty());
     }
 }
