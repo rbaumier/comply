@@ -20,6 +20,7 @@ mod no_misused_spread_post_filter;
 mod no_redundant_type_constituents_post_filter;
 mod no_unsafe_assignment_post_filter;
 mod no_unsafe_type_assertion_css_post_filter;
+mod no_unsafe_type_assertion_generic_bridge_post_filter;
 mod promise_function_async_post_filter;
 mod strict_void_return_post_filter;
 mod options;
@@ -119,6 +120,7 @@ pub fn lint_files(
     no_redundant_type_constituents_post_filter::apply(&mut all);
     no_unsafe_assignment_post_filter::apply(&mut all);
     no_unsafe_type_assertion_css_post_filter::apply(&mut all);
+    no_unsafe_type_assertion_generic_bridge_post_filter::apply(&mut all);
     promise_function_async_post_filter::apply(&mut all);
     strict_void_return_post_filter::apply(&mut all);
 
