@@ -129,6 +129,18 @@ fn is_css_media_join<'a>(
     false
 }
 
+/// True for hook/util files whose purpose is building CSS media-query strings.
+/// A `.join(" and ")` here produces the CSS `and` combinator (a spec keyword
+/// fed to `matchMedia`), never English prose — even on a bare `return`.
+fn is_media_query_path(path: &Path) -> bool {
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    name.contains("media-query") || name.contains("mediaquery")
+}
+
 /// True for files under a developer-only directory (scripts, bin, migrations).
 /// Joins here are diagnostic output, never user-facing prose.
 fn is_developer_script_path(path: &Path) -> bool {
@@ -269,6 +281,9 @@ impl OxcCheck for Check {
         if is_wire_format_path(ctx.path) {
             return;
         }
+        if is_media_query_path(ctx.path) {
+            return;
+        }
         if is_developer_script_path(ctx.path) {
             return;
         }
@@ -349,6 +364,28 @@ mod tests {
             const toQueryString = (values) => values.join(",");
         "#;
         assert!(run(src).is_empty());
+    }
+
+    // #498 — FP on CSS media-query builders: bare `return parts.join(" and ")`
+    // in a *-media-query file produces the CSS `and` combinator, not prose.
+    #[test]
+    fn allows_join_in_media_query_file_issue_498() {
+        let src = r#"
+            function buildQuery(conditions) {
+              return conditions.join(" and ");
+            }
+        "#;
+        assert!(run_with_path(src, "src/app/hooks/use-media-query.ts").is_empty());
+    }
+
+    #[test]
+    fn still_flags_join_in_non_media_file() {
+        let src = r#"
+            function buildSentence(names) {
+              return names.join(" and ");
+            }
+        "#;
+        assert_eq!(run_with_path(src, "src/app/components/list.ts").len(), 1);
     }
 
     #[test]
