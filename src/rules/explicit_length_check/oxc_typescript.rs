@@ -66,6 +66,54 @@ fn is_inside_expect_argument(trimmed: &str, prop_pos: usize) -> bool {
     false
 }
 
+/// True when the `.length`/`.size` whose `.` is at `prop_pos` is consumed as a
+/// numeric value rather than coerced to boolean. Two shapes:
+///   * right-hand operand of a comparison — `found.length !== other.length`
+///     (`prefix.length` reached after a `===`/`!==`/`<`/`>`/`<=`/`>=`);
+///   * a non-leading call/bracket argument — `slice(0, prefix.length)`
+///     (the base is preceded by a `,` at the same nesting level).
+/// A plain `=` assignment RHS (`x = arr.length`) is also a value position.
+fn length_is_numeric_operand(trimmed: &str, prop_pos: usize) -> bool {
+    let bytes = trimmed.as_bytes();
+    // Walk left over the base expression (identifier / member / bracket / call
+    // chain), balancing any `]`/`)` we pass through.
+    let mut i = prop_pos;
+    let mut depth: i32 = 0;
+    while i > 0 {
+        let c = bytes[i - 1];
+        if depth > 0 {
+            match c {
+                b')' | b']' => depth += 1,
+                b'(' | b'[' => depth -= 1,
+                _ => {}
+            }
+            i -= 1;
+            continue;
+        }
+        match c {
+            b')' | b']' => {
+                depth += 1;
+                i -= 1;
+            }
+            _ if c.is_ascii_alphanumeric() || c == b'_' || c == b'$' || c == b'.' => {
+                i -= 1;
+            }
+            _ => break,
+        }
+    }
+    // Skip whitespace immediately to the left of the base expression.
+    let mut j = i;
+    while j > 0 && bytes[j - 1] == b' ' {
+        j -= 1;
+    }
+    if j == 0 {
+        return false;
+    }
+    // Comparison RHS (`===`, `!==`, `==`, `<`, `>`, `<=`, `>=`) or `=` assignment
+    // RHS, or a non-leading argument separated by `,`.
+    matches!(bytes[j - 1], b'=' | b'<' | b'>' | b',')
+}
+
 /// Check if a line has a bare `.length`/`.size` in a boolean context
 /// (no explicit comparison like `> 0`, `=== 0`, `!== 0`, etc.).
 fn has_implicit_length_check(line: &str) -> bool {
@@ -171,6 +219,11 @@ fn has_implicit_length_check(line: &str) -> bool {
                 }
 
                 if is_inside_expect_argument(trimmed, abs_pos) {
+                    search_from = after_prop;
+                    continue;
+                }
+
+                if length_is_numeric_operand(trimmed, abs_pos) {
                     search_from = after_prop;
                     continue;
                 }
@@ -283,5 +336,28 @@ mod tests {
     #[test]
     fn allows_length_as_object_property_value() {
         assert!(run_on("count: list.length,").is_empty());
+    }
+
+    // Regression #589 — `.length` as a numeric `slice` argument, not boolean.
+    #[test]
+    fn allows_length_as_slice_argument_issue_589() {
+        assert!(run_on("const head = full.slice(0, prefix.length);").is_empty());
+    }
+
+    // Regression #589 — comparing two lengths is already an explicit check.
+    #[test]
+    fn allows_two_length_comparison_issue_589() {
+        assert!(run_on("if (found.length !== uniqueTeamIds.length) {}").is_empty());
+    }
+
+    #[test]
+    fn allows_two_length_comparison_in_return_issue_589() {
+        assert!(run_on("return found.length === expected.length;").is_empty());
+    }
+
+    // The boolean-coercion cases the rule exists for must still flag.
+    #[test]
+    fn still_flags_bare_length_in_boolean_call_issue_589() {
+        assert_eq!(run_on("if (Boolean(arr.length)) {}").len(), 1);
     }
 }
