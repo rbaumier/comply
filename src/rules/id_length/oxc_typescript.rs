@@ -90,6 +90,12 @@ impl OxcCheck for Check {
         semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
+        // Test files use single-letter identifiers as generic shorthand for
+        // values in composition/arithmetic assertions (`a + b === 3`) — the
+        // names are as descriptive as the context needs.
+        if ctx.file.path_segments.in_test_dir {
+            return;
+        }
         let min = ctx.config.threshold("id-length", "min", ctx.lang);
         let exceptions = ctx.config.string_list("id-length", "exceptions", ctx.lang);
         let patterns = compile_patterns(
@@ -213,5 +219,18 @@ mod tests {
     fn flags_short_param_in_plain_function() {
         let src = "function helper(a) { return a; }";
         assert_eq!(run(src).len(), 1, "{:?}", run(src));
+    }
+
+    #[test]
+    fn allows_short_identifiers_in_test_files() {
+        // Regression for issue #526: single-letter values in test arithmetic.
+        use crate::rules::file_ctx::{FileCtx, PathSegments};
+        let file = FileCtx {
+            path_segments: PathSegments { in_test_dir: true, ..Default::default() },
+            ..Default::default()
+        };
+        let src = "const a = 1; const b = 2;";
+        let diags = crate::rules::test_helpers::run_oxc_tsx_with_file_ctx(src, &Check, &file);
+        assert!(diags.is_empty(), "{diags:?}");
     }
 }
