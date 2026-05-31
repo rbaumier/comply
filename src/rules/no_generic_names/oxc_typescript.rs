@@ -208,6 +208,33 @@ fn init_has_descriptive_type_assertion(init: Option<&Expression>) -> bool {
     }
 }
 
+/// True when the binding's explicit type annotation is exactly `unknown`. An
+/// `unknown`-typed intermediate is a deliberate, irreducible type statement —
+/// e.g. bridging an `any`-returning call (`Reflect.apply`) to satisfy
+/// `no-unsafe-return` — for which a generic name like `result` is appropriate:
+/// the value is opaque by design and a more specific name would assert a
+/// semantic identity the code cannot make. (Closes #601)
+fn binding_annotation_is_unknown<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    let is_unknown = |ann: &Option<oxc_allocator::Box<'_, TSTypeAnnotation<'_>>>| {
+        ann.as_ref()
+            .is_some_and(|a| matches!(a.type_annotation, TSType::TSUnknownKeyword(_)))
+    };
+    for kind in semantic.nodes().ancestor_kinds(node.id()) {
+        match kind {
+            AstKind::FormalParameter(p) => return is_unknown(&p.type_annotation),
+            AstKind::VariableDeclarator(d) => return is_unknown(&d.type_annotation),
+            AstKind::Function(_)
+            | AstKind::ArrowFunctionExpression(_)
+            | AstKind::Program(_) => return false,
+            _ => continue,
+        }
+    }
+    false
+}
+
 fn ts_type_is_descriptive(ty: &TSType) -> bool {
     match ty {
         // `Result<...>`, `Promise<Result<...>>`, etc.
@@ -430,6 +457,12 @@ impl OxcCheck for Check {
                     // `rows: readonly TRow[]`) carries the domain info the
                     // identifier name would otherwise need to.
                     if type_annotation_is_descriptive(node, semantic) {
+                        return;
+                    }
+                    // An explicit `unknown` annotation is a deliberate opacity
+                    // statement (bridging an `any`-returning call to satisfy
+                    // no-unsafe-return); a generic name fits an opaque value.
+                    if binding_annotation_is_unknown(node, semantic) {
                         return;
                     }
                     let (line, column) =
@@ -705,6 +738,27 @@ mod tests {
             }
         "#;
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_result_typed_unknown_bridge_issue_601() {
+        // `const result: unknown = Reflect.apply(...)` — the `unknown`
+        // annotation is the only way to escape Reflect.apply's `any` return and
+        // satisfy no-unsafe-return; the value is opaque by design.
+        let src = r#"
+            function apply(target: unknown, args: unknown[]): unknown {
+                const result: unknown = Reflect.apply(target, null, args);
+                return result;
+            }
+        "#;
+        assert!(run(src).is_empty(), "result: unknown bridge should not flag");
+    }
+
+    #[test]
+    fn still_flags_untyped_result_const_issue_601() {
+        // Without the `unknown` annotation, a bare `result` is still vague.
+        let src = r#"function f() { const result = compute(); return result; }"#;
+        assert_eq!(run(src).len(), 1);
     }
 
     #[test]
