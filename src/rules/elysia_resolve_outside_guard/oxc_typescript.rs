@@ -94,6 +94,34 @@ fn file_has_guard_call(semantic: &oxc_semantic::Semantic<'_>) -> bool {
     false
 }
 
+/// Return true when any `.as('scoped')` call expression exists in the program.
+///
+/// `.as('scoped')` restricts a plugin's derived values to routes defined after
+/// its `.use()` — semantically equivalent to `.guard({ resolve })` for scope
+/// restriction, so `.resolve()` in such a chain does not leak. `.as('global')`
+/// is deliberately NOT exempt: it propagates everywhere, which is the leak the
+/// rule warns about.
+fn file_has_as_scoped_call(semantic: &oxc_semantic::Semantic<'_>) -> bool {
+    for node in semantic.nodes().iter() {
+        let oxc_ast::AstKind::CallExpression(call) = node.kind() else {
+            continue;
+        };
+        let Expression::StaticMemberExpression(member) = &call.callee else {
+            continue;
+        };
+        if member.property.name.as_str() != "as" {
+            continue;
+        }
+        if let Some(Expression::StringLiteral(s)) =
+            call.arguments.first().and_then(|a| a.as_expression())
+            && s.value.as_str() == "scoped"
+        {
+            return true;
+        }
+    }
+    false
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[]
@@ -112,6 +140,9 @@ impl OxcCheck for Check {
             return Vec::new();
         }
         if file_has_guard_call(semantic) {
+            return Vec::new();
+        }
+        if file_has_as_scoped_call(semantic) {
             return Vec::new();
         }
 
@@ -341,6 +372,39 @@ mod tests {
             gate.resolve(true);
         "#;
         assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    // Regression for #533: `.resolve()` followed by `.as('scoped')` restricts the
+    // derived value's scope — equivalent to `.guard({ resolve })`.
+    #[test]
+    fn allows_resolve_with_as_scoped() {
+        let src = r#"
+            import { Elysia } from 'elysia';
+            return new Elysia({ name: 'require-authorization' })
+                .use(requestIdPlugin)
+                .resolve(async ({ request, requestId }) => ({ user: request }))
+                .as('scoped');
+        "#;
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn allows_resolve_with_as_scoped_double_quotes() {
+        let src = r#"
+            import { Elysia } from 'elysia';
+            new Elysia().resolve(({ headers }) => ({ user: headers.x })).as("scoped");
+        "#;
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn still_flags_resolve_with_as_global() {
+        // `.as('global')` propagates everywhere — the leak the rule warns about.
+        let src = r#"
+            import { Elysia } from 'elysia';
+            new Elysia().resolve(({ headers }) => ({ user: headers.x })).as('global');
+        "#;
+        assert_eq!(run_on(src).len(), 1, "{:?}", run_on(src));
     }
 
     // Regression for #386: destructured `.resolve` from `Promise.withResolvers()`.
