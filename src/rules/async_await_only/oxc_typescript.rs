@@ -57,6 +57,18 @@ impl OxcCheck for Check {
             return;
         }
 
+        // `await promise.catch(() => fallback)` is the canonical error-fallback on
+        // a single awaited operation — already async/await style, not a chain that
+        // should become `try/catch`. Only exempt `.catch` directly under `await`.
+        if method == "catch"
+            && matches!(
+                semantic.nodes().parent_node(node.id()).kind(),
+                AstKind::AwaitExpression(_)
+            )
+        {
+            return;
+        }
+
         // React.lazy() requires a sync callback returning a Promise — the .then()
         // reshapes the module object and cannot be replaced with await.
         if crate::oxc_helpers::is_react_lazy_factory_then(node, semantic) {
@@ -75,5 +87,39 @@ impl OxcCheck for Check {
             severity: Severity::Warning,
             span: None,
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+    #[test]
+    fn flags_then_chain() {
+        assert_eq!(run("foo().then((x) => x + 1);").len(), 1);
+    }
+
+    #[test]
+    fn flags_unawaited_catch() {
+        assert_eq!(run("const p = foo().catch(() => null);").len(), 1);
+    }
+
+    #[test]
+    fn allows_awaited_catch_fallback() {
+        // Regression for issue #561: `await x.catch(() => null)` is the canonical
+        // error-fallback on a single awaited operation, already async/await style.
+        let src = "async function f() { const b = await response.clone().json().catch(() => null); return b; }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_awaited_then_chain() {
+        // `.then` directly awaited is still a transform-chain the rule targets.
+        let src = "async function f() { return await foo().then((x) => x + 1); }";
+        assert_eq!(run(src).len(), 1);
     }
 }
