@@ -4,8 +4,9 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{
-    BinaryOperator, Expression, TSLiteral, TSType, TSTypeName, TSTypeOperatorOperator,
-    UnaryOperator,
+    ArrayExpressionElement, BinaryOperator, ComputedMemberExpression, Expression,
+    IdentifierReference, TSLiteral, TSType, TSTypeName, TSTypeOperatorOperator,
+    UnaryOperator, VariableDeclarationKind,
 };
 use std::sync::Arc;
 
@@ -90,6 +91,13 @@ impl OxcCheck for Check {
                 return;
             }
         }
+        // Skip the generic-accessor shape `bag[key]` where `key: K` and the
+        // indexed object's type is parameterised by the same `K`
+        // (`bag: Record<K, V>`). TS guarantees the key indexes the object — it
+        // is keyof-equivalent, not untrusted input. (Closes #651)
+        if is_typeparam_key_into_matching_object(member, semantic) {
+            return;
+        }
         // Assignment `obj[key] = …` still flags — write is even riskier
         // than read.
         let (line, column) = byte_offset_to_line_col(ctx.source, member.span.start as usize);
@@ -118,27 +126,165 @@ fn decl_type_annotation_satisfies(
     semantic: &oxc_semantic::Semantic<'_>,
     pred: impl Fn(&TSType) -> bool,
 ) -> bool {
+    decl_type_annotation(decl_id, semantic).is_some_and(|ty| pred(ty))
+}
+
+/// Resolve `decl_id` to its declared TS type annotation (formal parameter or
+/// variable declarator, walking up through nested binding patterns). Returns
+/// `None` for untyped bindings or at function/program boundaries.
+fn decl_type_annotation<'a>(
+    decl_id: oxc_semantic::NodeId,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> Option<&'a TSType<'a>> {
     let nodes = semantic.nodes();
-    let check = |ann: &Option<oxc_allocator::Box<'_, oxc_ast::ast::TSTypeAnnotation<'_>>>| {
-        ann.as_ref().is_some_and(|a| pred(&a.type_annotation))
-    };
     match nodes.kind(decl_id) {
-        AstKind::FormalParameter(param) => return check(&param.type_annotation),
-        AstKind::VariableDeclarator(decl) => return check(&decl.type_annotation),
+        AstKind::FormalParameter(param) => {
+            return param.type_annotation.as_ref().map(|a| &a.type_annotation);
+        }
+        AstKind::VariableDeclarator(decl) => {
+            return decl.type_annotation.as_ref().map(|a| &a.type_annotation);
+        }
         _ => {}
     }
     for kind in nodes.ancestor_kinds(decl_id) {
         match kind {
-            AstKind::FormalParameter(param) => return check(&param.type_annotation),
-            AstKind::VariableDeclarator(decl) => return check(&decl.type_annotation),
+            AstKind::FormalParameter(param) => {
+                return param.type_annotation.as_ref().map(|a| &a.type_annotation);
+            }
+            AstKind::VariableDeclarator(decl) => {
+                return decl.type_annotation.as_ref().map(|a| &a.type_annotation);
+            }
             AstKind::Function(_)
             | AstKind::ArrowFunctionExpression(_)
             | AstKind::Program(_)
-            | AstKind::VariableDeclaration(_) => return false,
+            | AstKind::VariableDeclaration(_) => return None,
             _ => continue,
         }
     }
-    false
+    None
+}
+
+/// Resolve an identifier reference to the TS type annotation of its binding.
+fn ident_decl_type<'a>(
+    id: &IdentifierReference,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> Option<&'a TSType<'a>> {
+    let ref_id = id.reference_id.get()?;
+    let sym_id = semantic.scoping().get_reference(ref_id).symbol_id()?;
+    let decl_id = semantic.scoping().symbol_declaration(sym_id);
+    decl_type_annotation(decl_id, semantic)
+}
+
+/// The name of a bare (no type-argument) `TSTypeReference` like `K`, else `None`.
+fn bare_type_ref_name(ty: &TSType) -> Option<String> {
+    if let TSType::TSTypeReference(r) = ty
+        && r.type_arguments.is_none()
+        && let TSTypeName::IdentifierReference(id) = &r.type_name
+    {
+        Some(id.name.to_string())
+    } else {
+        None
+    }
+}
+
+/// True when a generic type parameter named `name` is declared anywhere in the
+/// file (`<K extends …>`). Distinguishes `key: K` (type param) from
+/// `key: SomeStringAlias` (a named alias that could resolve to bare `string`).
+fn type_param_exists(name: &str, semantic: &oxc_semantic::Semantic<'_>) -> bool {
+    semantic.nodes().iter().any(|n| {
+        matches!(n.kind(), AstKind::TSTypeParameter(tp) if tp.name.name.as_str() == name)
+    })
+}
+
+/// True when a TS type mentions the type-parameter `name`, directly or as a
+/// type argument (`Record<K, V>`, `K[]`, `K | null`, …).
+fn ts_type_references_typeparam(ty: &TSType, name: &str) -> bool {
+    match ty {
+        TSType::TSTypeReference(r) => {
+            matches!(&r.type_name, TSTypeName::IdentifierReference(id) if id.name.as_str() == name)
+                || r.type_arguments.as_ref().is_some_and(|args| {
+                    args.params.iter().any(|t| ts_type_references_typeparam(t, name))
+                })
+        }
+        TSType::TSUnionType(u) => u.types.iter().any(|t| ts_type_references_typeparam(t, name)),
+        TSType::TSIntersectionType(i) => {
+            i.types.iter().any(|t| ts_type_references_typeparam(t, name))
+        }
+        TSType::TSArrayType(a) => ts_type_references_typeparam(&a.element_type, name),
+        TSType::TSParenthesizedType(p) => ts_type_references_typeparam(&p.type_annotation, name),
+        _ => false,
+    }
+}
+
+/// True for the type-safe generic-accessor shape: `obj[key]` where `key`'s type
+/// is a bare generic type parameter `K` and `obj`'s type is parameterised by
+/// the same `K` (e.g. `obj: Record<K, V>`). TS enforces that `key` indexes
+/// `obj`, so this is keyof-equivalent rather than untrusted-input injection.
+fn is_typeparam_key_into_matching_object(
+    member: &ComputedMemberExpression,
+    semantic: &oxc_semantic::Semantic<'_>,
+) -> bool {
+    let Expression::Identifier(key_id) = &member.expression else {
+        return false;
+    };
+    let Some(key_type) = ident_decl_type(key_id, semantic) else {
+        return false;
+    };
+    let Some(name) = bare_type_ref_name(key_type) else {
+        return false;
+    };
+    if !type_param_exists(&name, semantic) {
+        return false;
+    }
+    let Expression::Identifier(obj_id) = &member.object else {
+        return false;
+    };
+    ident_decl_type(obj_id, semantic).is_some_and(|ty| ts_type_references_typeparam(ty, &name))
+}
+
+/// True when `expr` is an identifier bound to a `const` array literal whose
+/// elements are all string/number literals — a statically declared allowlist.
+/// Indexing with an element of such an array can only use a known-safe key.
+fn expression_is_const_literal_key_array(
+    expr: &Expression,
+    semantic: &oxc_semantic::Semantic<'_>,
+) -> bool {
+    let Expression::Identifier(id) = expr else {
+        return false;
+    };
+    let Some(ref_id) = id.reference_id.get() else {
+        return false;
+    };
+    let Some(sym_id) = semantic.scoping().get_reference(ref_id).symbol_id() else {
+        return false;
+    };
+    let decl_id = semantic.scoping().symbol_declaration(sym_id);
+    let AstKind::VariableDeclarator(declarator) = semantic.nodes().kind(decl_id) else {
+        return false;
+    };
+    if !matches!(declarator.kind, VariableDeclarationKind::Const) {
+        return false;
+    }
+    let Some(init) = &declarator.init else {
+        return false;
+    };
+    // Accept both a bare array literal and `[...] as const`.
+    let arr = match init {
+        Expression::ArrayExpression(a) => a,
+        Expression::TSAsExpression(as_expr) => match &as_expr.expression {
+            Expression::ArrayExpression(a) => a,
+            _ => return false,
+        },
+        _ => return false,
+    };
+    !arr.elements.is_empty()
+        && arr.elements.iter().all(|el| {
+            matches!(
+                el,
+                ArrayExpressionElement::StringLiteral(_)
+                    | ArrayExpressionElement::NumericLiteral(_)
+            )
+        })
 }
 
 /// True when `decl_id` resolves to a binding whose type annotation contains a
@@ -292,6 +438,11 @@ fn is_iterator_callback_over_keyof_array(
             if expression_type_has_keyof(&member.object) {
                 return true;
             }
+            // Receiver is a const string-literal allowlist array:
+            // `URL_KEYS.forEach((key) => obj[key])`.
+            if expression_is_const_literal_key_array(&member.object, semantic) {
+                return true;
+            }
             let Expression::Identifier(recv) = &member.object else {
                 return false;
             };
@@ -350,7 +501,8 @@ fn is_for_of_over_keyof_iterable(
         match kind {
             AstKind::VariableDeclaration(_) => continue,
             AstKind::ForOfStatement(stmt) => {
-                return expression_type_has_keyof(&stmt.right);
+                return expression_type_has_keyof(&stmt.right)
+                    || expression_is_const_literal_key_array(&stmt.right, semantic);
             }
             _ => return false,
         }
@@ -601,6 +753,62 @@ mod tests {
             &file,
         );
         assert!(diags.is_empty());
+    }
+
+    // Regression #651 — `bag[key]` where `key: K` and `bag: Record<K, …>` is
+    // type-safe by construction (the key indexes the object), not injection.
+    #[test]
+    fn issue_651_generic_param_key_into_record() {
+        let src = r#"
+            function scrubField<K extends string>(bag: Record<K, string>, key: K): void {
+                const fieldValue = bag[key];
+                bag[key] = scrub(fieldValue);
+            }
+        "#;
+        let diags = run(src);
+        assert!(diags.is_empty(), "generic K-keyed Record access should not flag, got {diags:#?}");
+    }
+
+    // Regression #651 — key iterated from a `const` string-literal allowlist
+    // array (for...of).
+    #[test]
+    fn issue_651_for_of_const_allowlist_array() {
+        let src = r#"
+            const URL_BREADCRUMB_DATA_KEYS = ["url", "to", "from"] as const;
+            declare const breadcrumbData: Record<string, string>;
+            for (const key of URL_BREADCRUMB_DATA_KEYS) {
+                const urlValue = breadcrumbData[key];
+                breadcrumbData[key] = scrub(urlValue);
+            }
+        "#;
+        let diags = run(src);
+        assert!(diags.is_empty(), "for...of over const allowlist should not flag, got {diags:#?}");
+    }
+
+    // Regression #651 — key from a `const` allowlist array via `.forEach`.
+    #[test]
+    fn issue_651_foreach_const_allowlist_array() {
+        let src = r#"
+            const KEYS = ["a", "b"];
+            declare const obj: Record<string, number>;
+            KEYS.forEach((key) => {
+                const v = obj[key];
+            });
+        "#;
+        let diags = run(src);
+        assert!(diags.is_empty(), "forEach over const allowlist should not flag, got {diags:#?}");
+    }
+
+    // Negative: a `string`-typed key (not a generic param) into a Record still
+    // flags — that is the genuine injection vector the rule targets.
+    #[test]
+    fn issue_651_still_flags_plain_string_key_into_record() {
+        let src = r#"
+            function f(bag: Record<string, string>, key: string): string {
+                return bag[key];
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
     }
 
     // Negative: a string-keyed addition (concatenation risk) still flags.
