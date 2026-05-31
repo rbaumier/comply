@@ -56,6 +56,17 @@ const x = 1;
     }
 
     #[test]
+    fn no_fp_on_compatibility() {
+        // Regression for issue #543: "compat" inside "compatibility" is not a marker.
+        assert!(run("// improves backward compatibility of the API\nconst x = 1;").is_empty());
+    }
+
+    #[test]
+    fn no_fp_on_hackathon() {
+        assert!(run("// built during the 2024 hackathon\nconst x = 1;").is_empty());
+    }
+
+    #[test]
     fn flags_compat_layer() {
         let diags = run("// compat layer for old browsers\nconst x = 1;");
         assert_eq!(diags.len(), 1);

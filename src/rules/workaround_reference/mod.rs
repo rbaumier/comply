@@ -32,24 +32,36 @@ pub fn register() -> RuleDef {
 
 const KEYWORDS: &[&str] = &["workaround", "hack", "compat"];
 
-pub(crate) fn has_keyword(text: &str) -> bool {
-    let lower = text.to_lowercase();
-    for &kw in KEYWORDS {
-        if kw == "compat" {
-            // "compat" in "compatible"/"incompatible" is a type-system term, not a workaround marker.
-            let mut start = 0;
-            while let Some(pos) = lower[start..].find("compat") {
-                let abs = start + pos;
-                if !lower[abs + "compat".len()..].starts_with("ible") {
-                    return true;
-                }
-                start = abs + 1;
-            }
-        } else if lower.contains(kw) {
+fn is_word_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_'
+}
+
+/// True when `needle` appears in `haystack` as a whole word — surrounded by
+/// non-word characters (or string boundaries). Keeps `compat` from matching
+/// inside `compatible`/`compatibility`/`incompatible` and `hack` from matching
+/// inside `hackathon`.
+fn word_boundary_contains(haystack: &str, needle: &str) -> bool {
+    let bytes = haystack.as_bytes();
+    let nlen = needle.len();
+    let mut start = 0;
+    while let Some(pos) = haystack[start..].find(needle) {
+        let abs = start + pos;
+        let before_ok = abs == 0 || !is_word_byte(bytes[abs - 1]);
+        let after = abs + nlen;
+        let after_ok = after >= bytes.len() || !is_word_byte(bytes[after]);
+        if before_ok && after_ok {
             return true;
         }
+        start = abs + 1;
     }
     false
+}
+
+pub(crate) fn has_keyword(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    KEYWORDS
+        .iter()
+        .any(|&kw| word_boundary_contains(&lower, kw))
 }
 
 pub(crate) fn has_reference(line: &str) -> bool {
