@@ -24,6 +24,18 @@ fn is_config_file(ctx: &CheckCtx) -> bool {
 
 /// Returns true when `node` is nested inside a `.parse()` or `.safeParse()`
 /// call — the Zod centralized-env-reader pattern.
+fn is_test_file(ctx: &CheckCtx) -> bool {
+    if ctx.file.path_segments.in_test_dir {
+        return true;
+    }
+    let name = ctx
+        .path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    name.contains(".test.") || name.contains(".spec.")
+}
+
 fn is_inside_schema_parse_call<'a>(
     semantic: &'a oxc_semantic::Semantic<'a>,
     node: &oxc_semantic::AstNode<'a>,
