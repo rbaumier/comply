@@ -39,6 +39,17 @@ impl OxcCheck for Check {
         if matches!(semantic.nodes().kind(parent_id), AstKind::TSUnionType(_)) {
             return;
         }
+        // Skip unions that are the body of a named type alias (`type Foo = A | B
+        // | …`). The diagnostic advises "extract a type alias", which is moot
+        // once the union is already named — exhaustive domain unions (ApiError,
+        // AuthorizeIntent, closed literal sets) are the canonical representation.
+        // Inline unions in annotations/params stay flagged.
+        if matches!(
+            semantic.nodes().kind(parent_id),
+            AstKind::TSTypeAliasDeclaration(_)
+        ) {
+            return;
+        }
         let max = ctx.config.threshold("max-union-size", "max", ctx.lang);
         let count = count_union_members(&union.types);
         if count > max {
@@ -67,9 +78,18 @@ mod tests {
     }
 
     #[test]
-    fn flags_large_union_in_type_alias() {
-        let src = "type Status = A | B | C | D | E | F;";
-        assert_eq!(run_on(src).len(), 1);
+    fn allows_large_named_union_alias_issue_588() {
+        // Exhaustive domain unions (ApiError, AuthorizeIntent) and closed literal
+        // sets (ToastPosition) are named type aliases — already the canonical
+        // representation; "extract a type alias" is moot.
+        let src = "type ApiError = A | B | C | D | E | F | G;";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_large_literal_union_alias_issue_588() {
+        let src = r#"type ToastPosition = "top-left" | "top-center" | "top-right" | "bottom-left" | "bottom-center" | "bottom-right";"#;
+        assert!(run_on(src).is_empty());
     }
 
     #[test]
