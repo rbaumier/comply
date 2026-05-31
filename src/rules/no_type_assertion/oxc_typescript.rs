@@ -36,6 +36,21 @@ fn has_utility_type_constraint_comment(source: &str, byte_offset: usize) -> bool
     false
 }
 
+/// True when `ty` is a bare reference to a generic type parameter in scope
+/// (e.g. `T` / `TFields`), with no type arguments of its own.
+fn type_arg_is_generic_param(
+    ty: &TSType,
+    node_id: oxc_semantic::NodeId,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let TSType::TSTypeReference(r) = ty else { return false };
+    if r.type_arguments.is_some() {
+        return false;
+    }
+    let TSTypeName::IdentifierReference(id) = &r.type_name else { return false };
+    name_is_generic_type_param_in_scope(id.name.as_str(), node_id, semantic)
+}
+
 fn peel_parens<'a>(expr: &'a Expression<'a>) -> &'a Expression<'a> {
     let mut current = expr;
     while let Expression::ParenthesizedExpression(p) = current {
@@ -92,6 +107,21 @@ impl OxcCheck for Check {
             if name_is_generic_type_param_in_scope(name, node.id(), semantic) {
                 return;
             }
+        }
+
+        // Allow `expr as Foo<TParam>` where a type argument is an in-scope
+        // generic type parameter (e.g. React Hook Form `field as Path<TFields>`).
+        // `Path<TFields>` is a compile-time string-literal union derived from the
+        // generic field shape — there is no runtime value to narrow it to, so the
+        // cast is a structural type bridge, not a narrowing.
+        if let TSType::TSTypeReference(r) = &as_expr.type_annotation
+            && let Some(args) = &r.type_arguments
+            && args
+                .params
+                .iter()
+                .any(|t| type_arg_is_generic_param(t, node.id(), semantic))
+        {
+            return;
         }
 
         // Allow either half of an `x as unknown as T` chain — the chain is
@@ -183,6 +213,24 @@ mod tests {
         let src = "const f = <T>(x: unknown) => x as T;";
         let diags = run_on(src);
         assert!(diags.is_empty(), "unexpected diags: {:?}", diags);
+    }
+
+    #[test]
+    fn allows_cast_to_generic_type_with_param_arg() {
+        // Regression for #571: `field as Path<TFields>` (React Hook Form) bridges
+        // a runtime string to a compile-time type-level union parameterized by an
+        // in-scope generic param — no runtime narrowing exists.
+        let src = "function setFieldError<T extends FieldValues>(setError: UseFormSetError<T>, field: string) {\n\
+                   setError(field as Path<T>, { type: 'manual' });\n}";
+        let diags = run_on(src);
+        assert!(diags.is_empty(), "unexpected diags: {:?}", diags);
+    }
+
+    #[test]
+    fn flags_cast_to_generic_type_without_param_arg() {
+        // `x as Path<string>` has no in-scope generic param — still a cast.
+        let diags = run_on("function f() { return x as Path<string>; }");
+        assert_eq!(diags.len(), 1);
     }
 
     #[test]
