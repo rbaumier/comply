@@ -17,6 +17,27 @@ fn is_create_context_call(call: &oxc_ast::ast::CallExpression) -> bool {
     }
 }
 
+/// True when a callee expression's member/call chain bottoms out in an
+/// `expect(...)` / `assert(...)` call. Handles chains where the assertion is
+/// the *object* rather than the immediate property, e.g.
+/// `expect(spy).toHaveBeenCalledWith(...)` or `expect(x).resolves.toBe(...)`,
+/// which a property-name-only check misses.
+fn callee_chain_has_assertion(expr: &Expression) -> bool {
+    match expr {
+        Expression::Identifier(id) => {
+            id.name.contains("expect") || id.name.contains("assert")
+        }
+        Expression::StaticMemberExpression(m) => {
+            m.property.name.contains("expect")
+                || m.property.name.contains("assert")
+                || callee_chain_has_assertion(&m.object)
+        }
+        Expression::ComputedMemberExpression(m) => callee_chain_has_assertion(&m.object),
+        Expression::CallExpression(call) => callee_chain_has_assertion(&call.callee),
+        _ => false,
+    }
+}
+
 fn is_in_assertion_chain<'a>(
     node: &oxc_semantic::AstNode<'a>,
     semantic: &'a oxc_semantic::Semantic<'a>,
@@ -24,21 +45,17 @@ fn is_in_assertion_chain<'a>(
     let nodes = semantic.nodes();
     let mut current_id = node.id();
     loop {
+        // Check the current node too: the matcher call carrying the `undefined`
+        // argument (`expect(spy).toHaveBeenCalledWith(…, undefined)`) is itself
+        // the assertion — the `expect(…)` is its callee's object, not an ancestor.
+        if let AstKind::CallExpression(call) = nodes.get_node(current_id).kind()
+            && callee_chain_has_assertion(&call.callee)
+        {
+            return true;
+        }
         let parent_id = nodes.parent_id(current_id);
         if parent_id == current_id {
             break;
-        }
-        let parent = nodes.get_node(parent_id);
-        if let AstKind::CallExpression(call) = parent.kind() {
-            let callee_text = match &call.callee {
-                Expression::Identifier(id) => Some(id.name.as_str()),
-                Expression::StaticMemberExpression(m) => Some(m.property.name.as_str()),
-                _ => None,
-            };
-            if let Some(name) = callee_text
-                && (name.contains("expect") || name.contains("assert")) {
-                    return true;
-                }
         }
         current_id = parent_id;
     }
@@ -118,6 +135,20 @@ mod tests {
     #[test]
     fn flags_sole_undefined_arg() {
         assert_eq!(run_oxc_ts("foo(undefined);", &Check).len(), 1);
+    }
+
+    #[test]
+    fn allows_undefined_in_expect_matcher_chain_issue_654() {
+        // `expect(spy).toHaveBeenCalledWith(state, undefined)` — the assertion
+        // is the *object* of the matcher callee, not its property name.
+        assert!(
+            run_oxc_ts("expect(spy).toHaveBeenCalledWith(state, undefined);", &Check).is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_undefined_in_expect_resolves_chain_issue_654() {
+        assert!(run_oxc_ts("expect(p).resolves.toBe(undefined);", &Check).is_empty());
     }
 
     #[test]
