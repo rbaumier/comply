@@ -176,6 +176,13 @@ mod tests {
     }
 
     #[test]
+    fn allows_and_with_strict_equality() {
+        // `&&` pairs with `!==`; `x === null && x === undefined` is always false,
+        // a contradiction that is out of this rule's scope.
+        assert!(run_on("if (x === null && x === undefined) {}").is_empty());
+    }
+
+    #[test]
     fn allows_loose_equality() {
         // Loose `!=` already covers both; this rule scopes to strict equality.
         assert!(run_on("if (x != null && x != undefined) {}").is_empty());
