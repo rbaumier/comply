@@ -23,6 +23,12 @@ impl OxcCheck for Check {
         if !ctx.project.has_framework("elysia") {
             return Vec::new();
         }
+        // Test files stub `getSession` to return null specifically to exercise
+        // the null-session path; the production null check lives in the
+        // middleware under test, not in the fixture.
+        if ctx.file.path_segments.in_test_dir {
+            return Vec::new();
+        }
         if !ctx.source.contains("auth.api.getSession") {
             return Vec::new();
         }
@@ -45,5 +51,37 @@ impl OxcCheck for Check {
             severity: Severity::Error,
             span: None,
         }]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rules::file_ctx::{FileCtx, PathSegments};
+    use crate::rules::test_helpers::{run_oxc_ts_with_framework, run_oxc_ts_with_framework_and_file};
+
+    const SRC: &str = r#"
+        const plugin = new Elysia().macro({
+            auth: { resolve: async () => {
+                const session = await auth.api.getSession({ headers });
+                return { user: session.user };
+            }},
+        });
+    "#;
+
+    #[test]
+    fn flags_missing_null_check_in_production() {
+        assert_eq!(run_oxc_ts_with_framework(SRC, &Check, "elysia").len(), 1);
+    }
+
+    #[test]
+    fn skips_test_file() {
+        // Regression for issue #548: a test stub returning null from getSession
+        // exercises the null-session path on purpose.
+        let file = FileCtx {
+            path_segments: PathSegments { in_test_dir: true, ..Default::default() },
+            ..Default::default()
+        };
+        assert!(run_oxc_ts_with_framework_and_file(SRC, &Check, "elysia", &file).is_empty());
     }
 }
