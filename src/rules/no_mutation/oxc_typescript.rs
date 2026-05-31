@@ -46,6 +46,12 @@ impl OxcCheck for Check {
         semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
+        // Test files mutate const restore buffers and `process.env` to inject
+        // and reset environment-variable state across cases — the canonical
+        // test-time injection surface with no non-mutating alternative.
+        if ctx.file.path_segments.in_test_dir {
+            return;
+        }
         match node.kind() {
             // obj.prop = x, obj.prop += x
             AstKind::AssignmentExpression(assign) => {
