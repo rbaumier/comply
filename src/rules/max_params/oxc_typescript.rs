@@ -122,6 +122,22 @@ mod oxc_tests {
     }
 
     #[test]
+    fn allows_mutation_cache_on_error_callback_issue_587() {
+        // Regression for rbaumier/comply#587 — `new MutationCache({ onError })`
+        // receives React Query's fixed 4-parameter callback signature, dictated
+        // by the library types, not by the caller.
+        let src = r#"
+            import { MutationCache } from "@tanstack/react-query";
+            new MutationCache({
+                onError: (error, _variables, _context, mutation) => {
+                    console.log(error);
+                },
+            });
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
     fn still_flags_unknown_factory_callback_with_four_params() {
         // `myFn` is not in the allowlist — the callback is still flagged.
         let src = r#"
