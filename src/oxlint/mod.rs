@@ -16,6 +16,7 @@
 mod await_thenable_post_filter;
 mod elysia_post_filter;
 mod equal_probe_post_filter;
+mod no_misused_spread_post_filter;
 mod no_redundant_type_constituents_post_filter;
 mod no_unsafe_assignment_post_filter;
 mod no_unsafe_type_assertion_css_post_filter;
@@ -114,6 +115,7 @@ pub fn lint_files(
     await_thenable_post_filter::apply(&mut all);
     elysia_post_filter::apply(&mut all);
     equal_probe_post_filter::apply(&mut all);
+    no_misused_spread_post_filter::apply(&mut all);
     no_redundant_type_constituents_post_filter::apply(&mut all);
     no_unsafe_assignment_post_filter::apply(&mut all);
     no_unsafe_type_assertion_css_post_filter::apply(&mut all);
