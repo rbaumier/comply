@@ -57,22 +57,28 @@ fn has_abort_signal_or_timeout(call: &oxc_ast::ast::CallExpression, source: &str
 }
 
 /// True when the options argument is an opaque reference the caller controls —
-/// a forwarded `init`/options identifier, a member access, or a spread. Such a
-/// value may already carry a `signal`, and hardcoding a timeout inside a
-/// pass-through wrapper would override whatever the caller supplied.
+/// a forwarded `init`/options identifier, a member access, a spread argument, or
+/// an object literal that spreads such a value in (`{ ...base }`). Any of these
+/// may already carry a `signal`, and hardcoding a timeout inside a pass-through
+/// wrapper would override whatever the caller supplied.
 fn forwards_opaque_options(call: &oxc_ast::ast::CallExpression) -> bool {
-    use oxc_ast::ast::{Argument, Expression};
+    use oxc_ast::ast::{Argument, Expression, ObjectPropertyKind};
     // Skip the first positional argument (the URL / endpoint); inspect the rest.
     call.arguments.iter().skip(1).any(|arg| match arg {
         Argument::SpreadElement(_) => true,
-        _ => matches!(
-            arg.as_expression(),
+        _ => match arg.as_expression() {
             Some(
                 Expression::Identifier(_)
-                    | Expression::StaticMemberExpression(_)
-                    | Expression::ComputedMemberExpression(_)
-            )
-        ),
+                | Expression::StaticMemberExpression(_)
+                | Expression::ComputedMemberExpression(_),
+            ) => true,
+            // `{ ...base }` — the spread source may carry a `signal`.
+            Some(Expression::ObjectExpression(obj)) => obj
+                .properties
+                .iter()
+                .any(|p| matches!(p, ObjectPropertyKind::SpreadProperty(_))),
+            _ => false,
+        },
     })
 }
 
