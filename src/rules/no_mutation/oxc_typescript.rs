@@ -4,7 +4,8 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{
-    AssignmentTarget, Expression, IdentifierReference, UnaryOperator, VariableDeclarationKind,
+    AssignmentTarget, Expression, IdentifierReference, PropertyKey, UnaryOperator,
+    VariableDeclarationKind,
 };
 use std::sync::Arc;
 
@@ -50,6 +51,12 @@ impl OxcCheck for Check {
         // and reset environment-variable state across cases — the canonical
         // test-time injection surface with no non-mutating alternative.
         if ctx.file.path_segments.in_test_dir {
+            return;
+        }
+        // Sentry's beforeSend/beforeBreadcrumb hooks receive the event by
+        // reference, expect in-place mutation, and return the same object —
+        // there is no immutable alternative API.
+        if is_inside_sentry_hook(node, semantic) {
             return;
         }
         match node.kind() {
@@ -187,6 +194,62 @@ impl OxcCheck for Check {
             _ => {}
         }
     }
+}
+
+const SENTRY_HOOKS: &[&str] = &["beforeSend", "beforeBreadcrumb", "beforeSendTransaction"];
+
+/// Static name of an object-property key, if it's an identifier or string literal.
+fn static_key_name<'a>(key: &PropertyKey<'a>) -> Option<&'a str> {
+    match key {
+        PropertyKey::StaticIdentifier(id) => Some(id.name.as_str()),
+        PropertyKey::StringLiteral(s) => Some(s.value.as_str()),
+        _ => None,
+    }
+}
+
+/// Name of the nearest enclosing named function (declaration or named expression).
+fn nearest_enclosing_fn_name<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> Option<&'a str> {
+    for ancestor in semantic.nodes().ancestors(node.id()) {
+        if let AstKind::Function(func) = ancestor.kind()
+            && let Some(id) = &func.id
+        {
+            return Some(id.name.as_str());
+        }
+    }
+    None
+}
+
+/// True when the mutation sits inside a Sentry hook callback — either an inline
+/// lambda/method assigned to `beforeSend`/`beforeBreadcrumb`/`beforeSendTransaction`,
+/// or a named function registered as one of those hooks somewhere in the file.
+fn is_inside_sentry_hook<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    for ancestor in semantic.nodes().ancestors(node.id()) {
+        if let AstKind::ObjectProperty(prop) = ancestor.kind()
+            && static_key_name(&prop.key).is_some_and(|name| SENTRY_HOOKS.contains(&name))
+        {
+            return true;
+        }
+    }
+
+    let Some(fn_name) = nearest_enclosing_fn_name(node, semantic) else {
+        return false;
+    };
+    for n in semantic.nodes().iter() {
+        if let AstKind::ObjectProperty(prop) = n.kind()
+            && static_key_name(&prop.key).is_some_and(|name| SENTRY_HOOKS.contains(&name))
+            && let Expression::Identifier(id) = &prop.value
+            && id.name.as_str() == fn_name
+        {
+            return true;
+        }
+    }
+    false
 }
 
 fn is_current_target(target: &AssignmentTarget) -> bool {
@@ -558,6 +621,46 @@ mod tests {
             function set(objectUrl: string) {
                 const anchor = getAnchorFromDom();
                 anchor.href = objectUrl;
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // Sentry beforeSend/beforeBreadcrumb in-place scrub hooks — issue #478
+
+    #[test]
+    fn allows_const_mutation_inside_inline_before_breadcrumb_method() {
+        let src = r#"
+            Sentry.init({
+                beforeBreadcrumb(breadcrumb) {
+                    const data = breadcrumb.data;
+                    data.url = scrubSensitiveQueryFromUrl(data.url);
+                    return breadcrumb;
+                },
+            });
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_const_mutation_in_named_function_registered_as_before_send() {
+        let src = r#"
+            function scrubEvent(event) {
+                const req = event.request;
+                req.url = scrubSensitiveQueryFromUrl(req.url);
+                return event;
+            }
+            Sentry.init({ beforeSend: scrubEvent });
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_const_mutation_outside_sentry_hook() {
+        let src = r#"
+            function scrub() {
+                const data = getData();
+                data.url = scrubSensitiveQueryFromUrl(data.url);
             }
         "#;
         assert_eq!(run(src).len(), 1);

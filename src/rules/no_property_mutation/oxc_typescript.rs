@@ -11,6 +11,64 @@ pub struct Check;
 
 const TEST_GLOBALS: &[&str] = &["console", "window", "global", "globalThis", "process"];
 const TEST_HOOKS: &[&str] = &["beforeEach", "afterEach", "beforeAll", "afterAll"];
+const SENTRY_HOOKS: &[&str] = &["beforeSend", "beforeBreadcrumb", "beforeSendTransaction"];
+
+/// Static name of an object-property key, if it's an identifier or string literal.
+fn static_key_name<'a>(key: &PropertyKey<'a>) -> Option<&'a str> {
+    match key {
+        PropertyKey::StaticIdentifier(id) => Some(id.name.as_str()),
+        PropertyKey::StringLiteral(s) => Some(s.value.as_str()),
+        _ => None,
+    }
+}
+
+/// Name of the nearest enclosing named function (declaration or named expression).
+fn nearest_enclosing_fn_name<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> Option<&'a str> {
+    for ancestor in semantic.nodes().ancestors(node.id()) {
+        if let AstKind::Function(func) = ancestor.kind()
+            && let Some(id) = &func.id
+        {
+            return Some(id.name.as_str());
+        }
+    }
+    None
+}
+
+/// True when the mutation sits inside a Sentry hook callback — either an inline
+/// lambda/method assigned to `beforeSend`/`beforeBreadcrumb`/`beforeSendTransaction`,
+/// or a named function registered as one of those hooks somewhere in the file.
+/// Sentry's hooks are designed around in-place mutation and offer no immutable API.
+fn is_inside_sentry_hook<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    // Inline callback: an ancestor object property keyed by a Sentry hook.
+    for ancestor in semantic.nodes().ancestors(node.id()) {
+        if let AstKind::ObjectProperty(prop) = ancestor.kind()
+            && static_key_name(&prop.key).is_some_and(|name| SENTRY_HOOKS.contains(&name))
+        {
+            return true;
+        }
+    }
+
+    // Named function registered by reference: `beforeSend: scrubEventRequestUrl`.
+    let Some(fn_name) = nearest_enclosing_fn_name(node, semantic) else {
+        return false;
+    };
+    for n in semantic.nodes().iter() {
+        if let AstKind::ObjectProperty(prop) = n.kind()
+            && static_key_name(&prop.key).is_some_and(|name| SENTRY_HOOKS.contains(&name))
+            && let Expression::Identifier(id) = &prop.value
+            && id.name.as_str() == fn_name
+        {
+            return true;
+        }
+    }
+    false
+}
 
 /// Get the root object identifier name from an expression chain.
 fn root_object_name<'a>(expr: &'a Expression<'a>) -> Option<&'a str> {
@@ -161,6 +219,7 @@ impl OxcCheck for Check {
                         if obj_text == "document" && prop_text == "cookie" { return; }
                         if matches!(&m.object, Expression::ThisExpression(_))
                             && is_inside_constructor(node, semantic) { return; }
+                        if is_inside_sentry_hook(node, semantic) { return; }
                         if root_object_name(&m.object) == Some("set") { return; }
                         if is_test_setup_for_expr(node, &m.object, ctx, semantic) { return; }
                         if let Some(id) = root_identifier_of_expr(&m.object)
@@ -184,6 +243,7 @@ impl OxcCheck for Check {
                         if obj_text == "module" || obj_text == "exports" { return; }
                         if matches!(&m.object, Expression::ThisExpression(_))
                             && is_inside_constructor(node, semantic) { return; }
+                        if is_inside_sentry_hook(node, semantic) { return; }
                         if root_object_name(&m.object) == Some("set") { return; }
                         if is_test_setup_for_expr(node, &m.object, ctx, semantic) { return; }
                         if let Some(id) = root_identifier_of_expr(&m.object)
@@ -208,6 +268,7 @@ impl OxcCheck for Check {
                 // Check if it's a member expression.
                 match &update.argument {
                     SimpleAssignmentTarget::StaticMemberExpression(m) => {
+                        if is_inside_sentry_hook(node, semantic) { return; }
                         if is_test_setup_for_expr(node, &m.object, ctx, semantic) { return; }
                         if let Some(id) = root_identifier_of_expr(&m.object)
                             && is_created_dom_element(id, semantic) { return; }
@@ -223,6 +284,7 @@ impl OxcCheck for Check {
                         });
                     }
                     SimpleAssignmentTarget::ComputedMemberExpression(m) => {
+                        if is_inside_sentry_hook(node, semantic) { return; }
                         if is_test_setup_for_expr(node, &m.object, ctx, semantic) { return; }
                         if let Some(id) = root_identifier_of_expr(&m.object)
                             && is_created_dom_element(id, semantic) { return; }
@@ -246,11 +308,13 @@ impl OxcCheck for Check {
                 }
                 match &unary.argument {
                     Expression::StaticMemberExpression(m) => {
+                        if is_inside_sentry_hook(node, semantic) { return; }
                         if is_test_setup_for_expr(node, &m.object, ctx, semantic) { return; }
                         if let Some(id) = root_identifier_of_expr(&m.object)
                             && is_created_dom_element(id, semantic) { return; }
                     }
                     Expression::ComputedMemberExpression(m) => {
+                        if is_inside_sentry_hook(node, semantic) { return; }
                         if is_test_setup_for_expr(node, &m.object, ctx, semantic) { return; }
                         if let Some(id) = root_identifier_of_expr(&m.object)
                             && is_created_dom_element(id, semantic) { return; }
@@ -340,6 +404,67 @@ mod tests {
             function set(objectUrl: string) {
                 const anchor = getAnchorFromDom();
                 anchor.href = objectUrl;
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // Sentry beforeSend/beforeBreadcrumb in-place scrub hooks — issue #478
+
+    #[test]
+    fn allows_mutation_inside_inline_before_send_arrow() {
+        let src = r#"
+            Sentry.init({
+                beforeSend: (event) => {
+                    event.request.url = scrubSensitiveQueryFromUrl(url);
+                    return event;
+                },
+            });
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_mutation_inside_inline_before_breadcrumb_method() {
+        let src = r#"
+            Sentry.init({
+                beforeBreadcrumb(breadcrumb) {
+                    breadcrumb.data = sanitize(breadcrumb.data);
+                    return breadcrumb;
+                },
+            });
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_mutation_in_named_function_registered_as_before_send() {
+        let src = r#"
+            function scrubEventRequestUrl(event) {
+                event.request.url = scrubSensitiveQueryFromUrl(event.request.url);
+                return event;
+            }
+            Sentry.init({ beforeSend: scrubEventRequestUrl });
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_subscript_mutation_in_named_function_registered_as_before_breadcrumb() {
+        let src = r#"
+            function scrubStringField(bag, key) {
+                bag[key] = scrubSensitiveQueryFromUrl(bag[key]);
+            }
+            Sentry.init({ beforeBreadcrumb: scrubStringField });
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_mutation_outside_sentry_hook() {
+        let src = r#"
+            function scrubStringField(bag, key) {
+                bag[key] = scrubSensitiveQueryFromUrl(bag[key]);
             }
         "#;
         assert_eq!(run(src).len(), 1);
