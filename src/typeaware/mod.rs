@@ -329,14 +329,16 @@ mod tests {
         assert_eq!(out[0].path.to_string_lossy(), "/abs/unmapped.ts");
     }
 
-    /// The custom type-aware rule is registered with `Backend::TypeAware` so it
-    /// surfaces in `comply list`/`catalog` and feeds the sidecar phase.
+    /// The custom type-aware rules are registered with `Backend::TypeAware` so
+    /// they surface in `comply list`/`catalog` and feed the sidecar phase.
     #[test]
-    fn redundant_nullish_rule_is_registered_as_type_aware() {
+    fn custom_type_aware_rules_are_registered() {
         let metas = crate::rules::collect_type_aware_bindings();
-        assert!(
-            metas.iter().any(|m| m.id == REDUNDANT_NULLISH),
-            "expected {REDUNDANT_NULLISH} among type-aware bindings"
-        );
+        for id in [REDUNDANT_NULLISH, "no-duplicate-type-definition"] {
+            assert!(
+                metas.iter().any(|m| m.id == id),
+                "expected {id} among type-aware bindings"
+            );
+        }
     }
 }

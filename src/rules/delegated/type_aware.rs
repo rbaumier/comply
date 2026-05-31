@@ -13,14 +13,28 @@ use crate::rules::meta::RuleMeta;
 use crate::rules::{Language, RuleDef};
 
 pub fn register_all() -> Vec<RuleDef> {
-    vec![entry(
-        "no-redundant-nullish-coalescing-null",
-        "`?? null` / `?? undefined` is redundant when the left operand's type already includes that nullish value.",
-        "Drop the `?? null` (or `?? undefined`) — it cannot change the value or the type.",
-    )]
+    vec![
+        entry(
+            "no-duplicate-type-definition",
+            Severity::Warning,
+            "Two or more named types share an identical object shape — a likely copy-paste.",
+            "Consolidate the structurally identical types into a single shared type.",
+        ),
+        entry(
+            "no-redundant-nullish-coalescing-null",
+            Severity::Warning,
+            "`?? null` / `?? undefined` is redundant when the left operand's type already includes that nullish value.",
+            "Drop the `?? null` (or `?? undefined`) — it cannot change the value or the type.",
+        ),
+    ]
 }
 
-fn entry(id: &'static str, description: &'static str, remediation: &'static str) -> RuleDef {
+fn entry(
+    id: &'static str,
+    severity: Severity,
+    description: &'static str,
+    remediation: &'static str,
+) -> RuleDef {
     let backends: Vec<(Language, Backend)> = [Language::TypeScript, Language::Tsx]
         .iter()
         .map(|&lang| (lang, Backend::TypeAware))
@@ -31,7 +45,7 @@ fn entry(id: &'static str, description: &'static str, remediation: &'static str)
             id,
             description,
             remediation,
-            severity: Severity::Warning,
+            severity,
             doc_url: None,
             categories: &["typescript", "type-aware"],
         },
