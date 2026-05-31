@@ -57,16 +57,20 @@ impl OxcCheck for Check {
             return;
         }
 
-        // `await promise.catch(() => fallback)` is the canonical error-fallback on
-        // a single awaited operation — already async/await style, not a chain that
-        // should become `try/catch`. Only exempt `.catch` directly under `await`.
-        if method == "catch"
-            && matches!(
-                semantic.nodes().parent_node(node.id()).kind(),
-                AstKind::AwaitExpression(_)
-            )
-        {
-            return;
+        // A terminal `.catch(handler)` directly under `await` or `void` is the
+        // canonical error-fallback / fire-and-forget idiom, not a promise chain
+        // that should become `try/catch`:
+        //   - `await promise.catch(() => fallback)` — default-on-failure
+        //   - `void promise.catch(() => {})` — fire-and-forget with handled rejection
+        // The alternative (`Promise.allSettled([p])`) is strictly worse.
+        if method == "catch" {
+            let parent = semantic.nodes().parent_node(node.id()).kind();
+            let exempt = matches!(parent, AstKind::AwaitExpression(_))
+                || matches!(parent, AstKind::UnaryExpression(u)
+                    if u.operator == oxc_ast::ast::UnaryOperator::Void);
+            if exempt {
+                return;
+            }
         }
 
         // React.lazy() requires a sync callback returning a Promise — the .then()
@@ -113,6 +117,14 @@ mod tests {
         // Regression for issue #561: `await x.catch(() => null)` is the canonical
         // error-fallback on a single awaited operation, already async/await style.
         let src = "async function f() { const b = await response.clone().json().catch(() => null); return b; }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_voided_catch_fire_and_forget() {
+        // Regression for issue #562: `void p.catch(() => {})` is the canonical
+        // fire-and-forget idiom with a handled rejection.
+        let src = "void navigator.clipboard.writeText(s).catch(() => {});";
         assert!(run(src).is_empty());
     }
 
