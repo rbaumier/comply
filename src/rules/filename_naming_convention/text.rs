@@ -77,6 +77,9 @@ impl TextCheck for Check {
         if super::is_tanstack_pathless_route(ctx.path, file_name) {
             return Vec::new();
         }
+        if super::is_tanstack_dynamic_route(ctx.path, file_name) {
+            return Vec::new();
+        }
         if is_kebab_case(stem) {
             return Vec::new();
         }
@@ -195,5 +198,26 @@ mod tests {
     #[test]
     fn flags_underscore_prefix_outside_routes() {
         assert_eq!(run("src/app/_authed.tsx").len(), 1);
+    }
+
+    // Regression for #521: TanStack Router splat/dynamic route files use `$`.
+    #[test]
+    fn allows_tanstack_splat_route_tsx_issue_521() {
+        assert!(run("src/app/routes/$.tsx").is_empty());
+    }
+
+    #[test]
+    fn allows_tanstack_splat_route_ts_issue_521() {
+        assert!(run("src/app/routes/api/$.ts").is_empty());
+    }
+
+    #[test]
+    fn allows_tanstack_dynamic_param_route() {
+        assert!(run("src/app/routes/posts/$postId.tsx").is_empty());
+    }
+
+    #[test]
+    fn flags_dollar_prefix_outside_routes() {
+        assert_eq!(run("src/app/$.tsx").len(), 1);
     }
 }
