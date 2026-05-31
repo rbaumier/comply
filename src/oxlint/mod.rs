@@ -61,18 +61,27 @@ pub fn is_available() -> bool {
 }
 
 /// Invoke oxlint on the given TS/JS files and return unified diagnostics.
-/// Always enables type-aware rules via `--type-aware` (requires oxlint-tsgolint).
+///
+/// `type_aware` gates the tsgolint rule set (and the `--type-aware` flag that
+/// requires oxlint-tsgolint to build the TypeScript program). Off by default
+/// so the standard run stays syntactic and fast; the type-aware batches only
+/// run when the caller opted in via `--type-aware`.
 #[must_use = "diagnostics from oxlint must be reported"]
 pub fn lint_files(
     files: &[&SourceFile],
     config: &crate::config::Config,
     project: &ProjectCtx,
+    type_aware: bool,
 ) -> Result<Vec<Diagnostic>> {
     if files.is_empty() {
         return Ok(vec![]);
     }
     let oxlint_bindings = crate::rules::collect_oxlint_bindings();
-    let tsgolint_bindings = crate::rules::collect_tsgolint_bindings();
+    let tsgolint_bindings = if type_aware {
+        crate::rules::collect_tsgolint_bindings()
+    } else {
+        Vec::new()
+    };
     if oxlint_bindings.is_empty() && tsgolint_bindings.is_empty() {
         return Ok(vec![]);
     }
@@ -85,15 +94,16 @@ pub fn lint_files(
 
     let mut all = Vec::new();
     if !standard_oxlint.is_empty() {
-        all.extend(lint_files_with_bindings(files, config, &standard_oxlint)?);
+        all.extend(lint_files_with_bindings(files, config, &standard_oxlint, false)?);
     }
 
-    let type_aware = type_aware_files(files);
-    if !type_aware.is_empty() && !standard_tsgolint.is_empty() {
+    let type_aware_ts = type_aware_files(files);
+    if !type_aware_ts.is_empty() && !standard_tsgolint.is_empty() {
         all.extend(lint_files_with_bindings(
-            &type_aware,
+            &type_aware_ts,
             config,
             &standard_tsgolint,
+            true,
         )?);
     }
 
@@ -103,6 +113,7 @@ pub fn lint_files(
             &esm,
             config,
             &module_aware_oxlint,
+            false,
         )?);
     }
 
@@ -112,6 +123,7 @@ pub fn lint_files(
             &type_aware_esm,
             config,
             &module_aware_tsgolint,
+            true,
         )?);
     }
 
@@ -160,6 +172,7 @@ fn lint_files_with_bindings(
     files: &[&SourceFile],
     config: &crate::config::Config,
     bindings: &[(&'static str, &'static RuleMeta, Severity)],
+    type_aware: bool,
 ) -> Result<Vec<Diagnostic>> {
     let rule_entries: Vec<crate::oxlint_config::RuleEntry> = bindings
         .iter()
@@ -170,19 +183,27 @@ fn lint_files_with_bindings(
 
     let mut all = Vec::with_capacity(files.len());
     for batch in files.chunks(FILES_PER_BATCH) {
-        let output = invoke_oxlint(batch, Some(oxlint_config.path()))?;
+        let output = invoke_oxlint(batch, Some(oxlint_config.path()), type_aware)?;
         all.extend(parse_json_bytes(&output.stdout, &output.stderr, &remap)?);
     }
     Ok(all)
 }
 
 /// Spawn oxlint as a subprocess and validate exit status.
+///
+/// `--type-aware` is only passed for tsgolint batches: it forces oxlint to
+/// build the TypeScript program (slow), so the syntactic-rule batches run
+/// without it.
 fn invoke_oxlint(
     files: &[&SourceFile],
     config_path: Option<&Path>,
+    type_aware: bool,
 ) -> Result<std::process::Output> {
     let mut cmd = Command::new("oxlint");
-    cmd.args(["--format", "json", "--type-aware"]);
+    cmd.args(["--format", "json"]);
+    if type_aware {
+        cmd.arg("--type-aware");
+    }
     if let Some(cfg) = config_path {
         cmd.arg("-c").arg(cfg);
     }

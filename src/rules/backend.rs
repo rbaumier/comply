@@ -270,8 +270,13 @@ pub enum Backend {
     /// (v1.2) Shell out to `tsc --noEmit` and filter by diagnostic code.
     Tsc { codes: &'static [u32] },
     /// Delegate to a tsgolint rule (type-aware linting via typescript-go).
-    /// Only runs when --with-types is passed.
+    /// Only runs when `--type-aware` is passed.
     Tsgolint { rule: &'static str },
+    /// A custom type-aware rule executed by comply's own typescript-go
+    /// sidecar (not a typescript-eslint rule). The rule id in `RuleMeta`
+    /// selects the implementation in `crate::typeaware`. Only runs when
+    /// `--type-aware` is passed.
+    TypeAware,
     /// In-process oxc AST walk — native Rust, no FFI.
     Oxc(Box<dyn OxcCheck>),
 }
@@ -285,6 +290,7 @@ impl std::fmt::Debug for Backend {
             Self::Clippy { lint } => write!(f, "Backend::Clippy {{ lint: {lint:?} }}"),
             Self::Tsc { codes } => write!(f, "Backend::Tsc {{ codes: {codes:?} }}"),
             Self::Tsgolint { rule } => write!(f, "Backend::Tsgolint {{ rule: {rule:?} }}"),
+            Self::TypeAware => f.write_str("Backend::TypeAware"),
             Self::Oxc(_) => f.write_str("Backend::Oxc(<dyn OxcCheck>)"),
         }
     }

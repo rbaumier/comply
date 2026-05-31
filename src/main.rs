@@ -41,6 +41,7 @@ mod project;
 mod rules;
 mod runner_helpers;
 mod tui;
+mod typeaware;
 
 use std::io::IsTerminal;
 use std::process::ExitCode;
@@ -192,6 +193,7 @@ struct Timings {
     fix: Duration,
     oxlint: Duration,
     engine_ts: Duration,
+    type_aware: Duration,
     clippy: Duration,
     cargo_shear: Duration,
     cargo_modules: Duration,
@@ -216,6 +218,9 @@ fn print_timings(t: &Timings) {
     eprintln!("  -- typescript --");
     eprintln!("  oxlint        {}", fmt_ms(t.oxlint));
     eprintln!("  engine (ts)   {}", fmt_ms(t.engine_ts));
+    if t.type_aware > Duration::ZERO {
+        eprintln!("  type-aware    {}", fmt_ms(t.type_aware));
+    }
     eprintln!("  -- rust --");
     eprintln!("  clippy        {}", fmt_ms(t.clippy));
     eprintln!("  cargo-shear   {}", fmt_ms(t.cargo_shear));
@@ -326,6 +331,7 @@ fn lint_project(cli: &Cli) -> Result<bool> {
         &config,
         &mut timings,
         cli.comply_only,
+        cli.type_aware,
         cli.is_partial_scan(),
     )?;
 
@@ -392,6 +398,7 @@ fn collect_all_diagnostics(
     config: &Config,
     timings: &mut Timings,
     is_comply_only: bool,
+    type_aware: bool,
     is_partial: bool,
 ) -> Result<Vec<Diagnostic>> {
     let by_lang = partition_by_language(discovered);
@@ -441,6 +448,7 @@ fn collect_all_diagnostics(
             &project,
             timings,
             is_comply_only,
+            type_aware,
         )?);
     }
     if !by_lang.rs.is_empty() {
@@ -647,6 +655,7 @@ fn lint_typescript(
     project: &std::sync::Arc<crate::project::ProjectCtx>,
     timings: &mut Timings,
     is_comply_only: bool,
+    type_aware: bool,
 ) -> Result<Vec<Diagnostic>> {
     let oxlint_available = !is_comply_only && oxlint::is_available();
 
@@ -665,7 +674,10 @@ fn lint_typescript(
             return (Ok(Vec::new()), Duration::ZERO);
         }
         let t = Instant::now();
-        (oxlint::lint_files(ts_files, config, project), t.elapsed())
+        (
+            oxlint::lint_files(ts_files, config, project, type_aware),
+            t.elapsed(),
+        )
     };
     let engine_phase = || -> PhaseOut {
         let t = Instant::now();
@@ -686,6 +698,16 @@ fn lint_typescript(
     let (engine_res, engine_dur) = engine_out;
     timings.engine_ts = engine_dur;
     diagnostics.extend(engine_res?);
+
+    // Type-aware sidecar phase: only when --type-aware is set. Drives a
+    // TypeScript checker (typescript-go) through a Node sidecar to run the
+    // custom rules that need resolved types. Skipped in --comply-only.
+    if type_aware && !is_comply_only {
+        let t = Instant::now();
+        let res = typeaware::lint_files(ts_files, config);
+        timings.type_aware = t.elapsed();
+        diagnostics.extend(res?);
+    }
 
     Ok(diagnostics)
 }

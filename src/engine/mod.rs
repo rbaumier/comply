@@ -376,7 +376,8 @@ fn dispatch_with_lang(
             Backend::Oxlint { .. }
             | Backend::Clippy { .. }
             | Backend::Tsc { .. }
-            | Backend::Tsgolint { .. } => Vec::new(),
+            | Backend::Tsgolint { .. }
+            | Backend::TypeAware => Vec::new(),
             Backend::TreeSitter(_) | Backend::Oxc(_) => continue,
         };
         if let Some(sev) = config.severity_for(meta.id) {
