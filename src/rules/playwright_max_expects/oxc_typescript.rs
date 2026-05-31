@@ -16,15 +16,23 @@ fn is_test_file(path: &std::path::Path) -> bool {
 
 const TEST_FNS: &[&str] = &["test", "it"];
 
+/// Methods on `test`/`it` that are NOT a single test body: `test.describe`
+/// groups tests (its callback aggregates every inner test's expects), and the
+/// hooks run shared setup/teardown. Counting expects across them is wrong — the
+/// limit is per-test. Test modifiers (`test.only`, `test.skip`, `test.fixme`,
+/// ...) still denote a single test and are counted.
+const NON_TEST_METHODS: &[&str] =
+    &["describe", "beforeEach", "afterEach", "beforeAll", "afterAll", "step", "use"];
+
 fn is_test_callee(expr: &Expression) -> bool {
     match expr {
         Expression::Identifier(id) => TEST_FNS.contains(&id.name.as_str()),
         Expression::StaticMemberExpression(member) => {
-            if let Expression::Identifier(obj) = &member.object {
-                TEST_FNS.contains(&obj.name.as_str())
-            } else {
-                false
-            }
+            let Expression::Identifier(obj) = &member.object else {
+                return false;
+            };
+            TEST_FNS.contains(&obj.name.as_str())
+                && !NON_TEST_METHODS.contains(&member.property.name.as_str())
         }
         _ => false,
     }
@@ -113,5 +121,71 @@ impl OxcCheck for Check {
                 span: None,
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rules::test_helpers::run_oxc_ts_with_path;
+
+    const IMPORT: &str = "import { test, expect } from \"@playwright/test\";\n";
+
+    fn run(body: &str) -> Vec<Diagnostic> {
+        let src = format!("{IMPORT}{body}");
+        run_oxc_ts_with_path(&src, &Check, "e2e/auth.spec.ts")
+    }
+
+    #[test]
+    fn flags_single_test_over_limit() {
+        let body = r#"
+            test("too many", async ({ page }) => {
+                await expect(page).toHaveURL("/");
+                await expect(page).toHaveURL("/");
+                await expect(page).toHaveURL("/");
+                await expect(page).toHaveURL("/");
+                await expect(page).toHaveURL("/");
+                await expect(page).toHaveURL("/");
+            });
+        "#;
+        assert_eq!(run(body).len(), 1);
+    }
+
+    #[test]
+    fn does_not_aggregate_across_describe() {
+        // Regression for issues #519 / #568: a describe block with 3 tests, each
+        // within the per-test limit, must not be flagged on the describe line.
+        let body = r#"
+            test.describe("auth", () => {
+                test("a", async ({ page }) => {
+                    await expect(page).toHaveURL("/login");
+                    await expect(page.getByText("x")).toHaveCount(0);
+                    await expect(page.getByRole("button")).toBeVisible();
+                });
+                test("b", async ({ page }) => {
+                    await expect(page).toHaveURL("/");
+                });
+                test("c", async ({ page }) => {
+                    await expect(page.getByRole("alert")).toContainText(/E-mail/);
+                    await expect(page).toHaveURL("/login");
+                });
+            });
+        "#;
+        assert!(run(body).is_empty(), "got {:?}", run(body));
+    }
+
+    #[test]
+    fn still_flags_test_only_modifier_over_limit() {
+        let body = r#"
+            test.only("too many", async ({ page }) => {
+                await expect(page).toHaveURL("/");
+                await expect(page).toHaveURL("/");
+                await expect(page).toHaveURL("/");
+                await expect(page).toHaveURL("/");
+                await expect(page).toHaveURL("/");
+                await expect(page).toHaveURL("/");
+            });
+        "#;
+        assert_eq!(run(body).len(), 1);
     }
 }
