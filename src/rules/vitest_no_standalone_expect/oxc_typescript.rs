@@ -8,16 +8,9 @@ use std::sync::Arc;
 
 pub struct Check;
 
-const TEST_BLOCKS: &[&str] = &[
-    "test",
-    "it",
-    "describe",
-    "suite",
-    "beforeAll",
-    "beforeEach",
-    "afterAll",
-    "afterEach",
-];
+/// Suite-grouping calls whose callback runs at collection time, not test
+/// time — an `expect()` directly in their body is genuinely standalone.
+const COLLECTION_BLOCKS: &[&str] = &["describe", "suite", "fdescribe", "xdescribe"];
 
 fn is_test_file(path: &std::path::Path) -> bool {
     let s = path.to_string_lossy();
@@ -42,22 +35,33 @@ fn callee_base_name<'a>(callee: &'a Expression<'a>) -> Option<&'a str> {
     }
 }
 
-/// Walk up ancestors looking for a CallExpression whose callee is one
-/// of the known test blocks. Returns true if found.
-fn inside_test_block<'a>(
+/// True when an `expect()` is genuinely standalone: either it has no
+/// enclosing function (module scope, runs at import time) or its nearest
+/// enclosing function is a `describe`/`suite` callback (collection time).
+///
+/// Any other enclosing function — a `test`/`it`/hook callback, or a helper
+/// invoked from one (custom assertion helper, precondition guard) — is a
+/// live test context. The call graph is invisible to a single-file check,
+/// so a helper containing `expect()` is assumed to run inside a test.
+fn is_standalone_expect<'a>(
     node: &oxc_semantic::AstNode<'a>,
     semantic: &'a oxc_semantic::Semantic<'a>,
 ) -> bool {
     for ancestor in semantic.nodes().ancestors(node.id()) {
-        if let AstKind::CallExpression(call) = ancestor.kind() {
-            if let Some(name) = callee_base_name(&call.callee) {
-                if TEST_BLOCKS.contains(&name) {
-                    return true;
+        if matches!(
+            ancestor.kind(),
+            AstKind::Function(_) | AstKind::ArrowFunctionExpression(_)
+        ) {
+            let parent = semantic.nodes().parent_node(ancestor.id());
+            if let AstKind::CallExpression(call) = parent.kind() {
+                if let Some(name) = callee_base_name(&call.callee) {
+                    return COLLECTION_BLOCKS.contains(&name);
                 }
             }
+            return false;
         }
     }
-    false
+    true
 }
 
 impl OxcCheck for Check {
@@ -88,7 +92,7 @@ impl OxcCheck for Check {
         if id.name.as_str() != "expect" {
             return;
         }
-        if inside_test_block(node, semantic) {
+        if !is_standalone_expect(node, semantic) {
             return;
         }
         let (line, column) = byte_offset_to_line_col(ctx.source, call.span.start as usize);
@@ -136,6 +140,40 @@ mod tests {
     fn allows_expect_inside_test_each() {
         let src = r#"test.each([1, 2])("n=%i", (n) => { expect(n).toBeGreaterThan(0); });"#;
         assert!(run(src).is_empty());
+    }
+
+    // Regression for #515: expect() inside a helper function invoked from a
+    // test callback runs as a real assertion and must not be flagged.
+    #[test]
+    fn allows_expect_in_assertion_helper_issue_515() {
+        let src = r#"
+            function assertSentenceCase(result) {
+                expect(result).toBe(result.toUpperCase());
+                expect(result).not.toBe(result.toLowerCase());
+            }
+            it.each([])(":name", (_label, run) => {
+                assertSentenceCase(run());
+            });
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_expect_in_async_precondition_helper_issue_515() {
+        let src = r#"
+            async function createTargetUser(cookie, body) {
+                const res = await request(cookie, body);
+                expect(res.status).toBe(200);
+                return res.body;
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_expect_directly_in_describe_body() {
+        let src = r#"describe("group", () => { expect(1).toBe(1); });"#;
+        assert_eq!(run(src).len(), 1);
     }
 
     // Regression for #347: it.each nested inside describe.each was falsely flagged.
