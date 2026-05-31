@@ -138,6 +138,76 @@ function ruleRedundantNullishCoalescing(sourceFile, checker, text, lineStarts, f
   });
 }
 
+// ── Rule: no-duplicate-type-definition ───────────────────────────────────────
+// Two or more named types (across the whole program) whose object shape is
+// structurally identical — a copy-paste smell. Conservative to avoid flagging
+// intentionally-distinct shapes (branded types, DTO vs domain): only object
+// shapes (`interface` or `type = { … }`), only when the shape has at least 3
+// properties, reported as a warning. The fingerprint is built from the
+// resolved property types, not the alias name, so different names with the
+// same shape collide.
+const MIN_DUP_PROPERTIES = 3;
+
+function structuralFingerprint(checker, type) {
+  const props = checker.getPropertiesOfType(type) || [];
+  if (props.length < MIN_DUP_PROPERTIES) return null;
+  const parts = props.map((p) => {
+    const t = checker.getTypeOfSymbol(p);
+    return `${p.name}:${t ? checker.typeToString(t) : "?"}`;
+  });
+  parts.sort();
+  return parts.join(";");
+}
+
+/** Collect duplicate-type candidates from one file into `acc`. */
+function collectDuplicateTypeCandidates(sourceFile, checker, text, lineStarts, file, acc) {
+  const slice = (n) => text.slice(getTokenPosOfNode(n, sourceFile), n.end);
+  walk(sourceFile, (node) => {
+    // Only object shapes: an interface, or a `type X = { … }` type literal.
+    const isObjectShape =
+      node.kind === SyntaxKind.InterfaceDeclaration ||
+      (node.kind === SyntaxKind.TypeAliasDeclaration &&
+        node.type?.kind === SyntaxKind.TypeLiteral);
+    if (!isObjectShape) return;
+    const sym = checker.getSymbolAtLocation(node.name);
+    if (!sym) return;
+    const type = checker.getDeclaredTypeOfSymbol(sym);
+    const fingerprint = type ? structuralFingerprint(checker, type) : null;
+    if (!fingerprint) return;
+    const start = getTokenPosOfNode(node.name, sourceFile);
+    const { line, column } = lineColAt(lineStarts, start);
+    acc.push({ file, name: slice(node.name), line, column, fingerprint });
+  });
+}
+
+/** Group collected candidates by fingerprint and emit a diagnostic per member
+ *  of any group with two or more distinct declarations. */
+function emitDuplicateTypeDiagnostics(candidates) {
+  const groups = new Map();
+  for (const c of candidates) {
+    if (!groups.has(c.fingerprint)) groups.set(c.fingerprint, []);
+    groups.get(c.fingerprint).push(c);
+  }
+  for (const members of groups.values()) {
+    if (members.length < 2) continue;
+    for (const m of members) {
+      const others = members
+        .filter((o) => o !== m)
+        .map((o) => `\`${o.name}\``)
+        .join(", ");
+      diagnostics.push({
+        file: m.file,
+        line: m.line,
+        column: m.column,
+        rule: "no-duplicate-type-definition",
+        message: `Type \`${m.name}\` is structurally identical to ${others} — consolidate into one type.`,
+      });
+    }
+  }
+}
+
+const duplicateCandidates = [];
+
 for (const file of files) {
   const project = snapshot.getDefaultProjectForFile(file);
   if (!project) continue;
@@ -155,6 +225,13 @@ for (const file of files) {
   if (enabled.has("no-redundant-nullish-coalescing-null")) {
     ruleRedundantNullishCoalescing(sourceFile, checker, text, lineStarts, file);
   }
+  if (enabled.has("no-duplicate-type-definition")) {
+    collectDuplicateTypeCandidates(sourceFile, checker, text, lineStarts, file, duplicateCandidates);
+  }
+}
+
+if (enabled.has("no-duplicate-type-definition")) {
+  emitDuplicateTypeDiagnostics(duplicateCandidates);
 }
 
 session.close?.();
