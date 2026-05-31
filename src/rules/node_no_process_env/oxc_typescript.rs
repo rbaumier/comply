@@ -54,6 +54,12 @@ impl OxcCheck for Check {
         if is_config_file(ctx) {
             return Vec::new();
         }
+        // Test files exercising env-parsing modules must read, write, and
+        // restore `process.env` to drive configuration scenarios — the
+        // canonical test-time injection surface, never shipped to production.
+        if ctx.file.path_segments.in_test_dir {
+            return Vec::new();
+        }
         let mut diagnostics = Vec::new();
         for node in semantic.nodes().iter() {
             let AstKind::StaticMemberExpression(member) = node.kind() else { continue };
@@ -179,6 +185,19 @@ function readSentryEnv() {
 }
 "#;
         assert!(run_on(src).is_empty());
+    }
+
+    // #500 — test files inject/restore process.env to drive env-parsing
+    // scenarios; the only test-time mechanism and never ships to production.
+    #[test]
+    fn allows_process_env_in_test_file_issue_500() {
+        let src = r#"
+beforeEach(() => {
+  ENV_BACKUP.FOO = process.env.FOO;
+  process.env.FOO = "https://public@sentry.example/1";
+});
+"#;
+        assert!(run_on_path(src, "src/api/sentry.test.ts").is_empty());
     }
 
     #[test]
