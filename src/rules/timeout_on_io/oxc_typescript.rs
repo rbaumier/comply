@@ -56,6 +56,26 @@ fn has_abort_signal_or_timeout(call: &oxc_ast::ast::CallExpression, source: &str
     args_text.contains("AbortSignal") || args_text.contains("signal:") || args_text.contains("timeout:")
 }
 
+/// True when the options argument is an opaque reference the caller controls —
+/// a forwarded `init`/options identifier, a member access, or a spread. Such a
+/// value may already carry a `signal`, and hardcoding a timeout inside a
+/// pass-through wrapper would override whatever the caller supplied.
+fn forwards_opaque_options(call: &oxc_ast::ast::CallExpression) -> bool {
+    use oxc_ast::ast::{Argument, Expression};
+    // Skip the first positional argument (the URL / endpoint); inspect the rest.
+    call.arguments.iter().skip(1).any(|arg| match arg {
+        Argument::SpreadElement(_) => true,
+        _ => matches!(
+            arg.as_expression(),
+            Some(
+                Expression::Identifier(_)
+                    | Expression::StaticMemberExpression(_)
+                    | Expression::ComputedMemberExpression(_)
+            )
+        ),
+    })
+}
+
 /// Check if the await expression is wrapped in a withTimeout/raceTimeout call.
 fn is_wrapped_in_timeout<'a>(
     node: &oxc_semantic::AstNode<'a>,
@@ -116,6 +136,10 @@ impl OxcCheck for Check {
         }
 
         if has_abort_signal_or_timeout(call, ctx.source) {
+            return;
+        }
+
+        if forwards_opaque_options(call) {
             return;
         }
 
