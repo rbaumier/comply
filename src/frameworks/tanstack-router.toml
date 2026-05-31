@@ -30,6 +30,8 @@ names = [
     "meta",
     "links",
     "scripts",
+    "getRouter",
+    "createRouter",
 ]
 
 [tooling_deps]

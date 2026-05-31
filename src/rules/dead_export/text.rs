@@ -770,6 +770,28 @@ mod tests {
     }
 
     #[test]
+    fn ignores_tanstack_start_router_factory_export_issue_495() {
+        // Regression for #495 — TanStack Start's `getRouter`/`createRouter`
+        // factory in `router.tsx` is consumed only by the gitignored
+        // `routeTree.gen.ts` (via `import type { getRouter }` and the
+        // `Register` interface). That file is absent from the index, so the
+        // export looks dead. It's a framework magic export — never flag it.
+        let pkg = r#"{ "dependencies": { "@tanstack/react-start": "1.0.0" } }"#;
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "src/app/router.tsx",
+                "export const getRouter = (() => (): Router => buildRouter())();",
+            ),
+            ("src/app.ts", "export const z = 1;"),
+        ];
+        let (_dir, diags) = run_on_project_with_pkg(Some(pkg), &files, "src/app/router.tsx");
+        assert!(
+            diags.iter().all(|d| !d.message.contains("getRouter")),
+            "TanStack Start router factory must not be flagged, got: {diags:?}"
+        );
+    }
+
+    #[test]
     fn ignores_framework_entry_file_names() {
         let files: Vec<(&str, &str)> = vec![
             ("src/routeTree.gen.ts", "export const routeTree = {};"),
