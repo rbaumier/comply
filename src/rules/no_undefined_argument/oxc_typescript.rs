@@ -63,6 +63,14 @@ impl OxcCheck for Check {
     ) {
         let AstKind::CallExpression(call) = node.kind() else { return };
 
+        // Test files pass explicit `undefined` to the function-under-test to
+        // exercise that code path — the `undefined` IS the subject and cannot
+        // be omitted (the parameter is typically required). Omitting it would
+        // test a different path or be a type error. Not a smell in tests.
+        if ctx.file.path_segments.in_test_dir {
+            return;
+        }
+
         if is_in_assertion_chain(node, semantic) {
             return;
         }
@@ -96,11 +104,27 @@ impl OxcCheck for Check {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rules::file_ctx::{FileCtx, PathSegments};
     use crate::rules::test_helpers::run_oxc_ts;
+
+    fn run_in_test_file(src: &str) -> Vec<Diagnostic> {
+        let file = FileCtx {
+            path_segments: PathSegments { in_test_dir: true, ..PathSegments::default() },
+            ..FileCtx::default()
+        };
+        crate::rules::test_helpers::run_oxc_tsx_with_file_ctx(src, &Check, &file)
+    }
 
     #[test]
     fn flags_sole_undefined_arg() {
         assert_eq!(run_oxc_ts("foo(undefined);", &Check).len(), 1);
+    }
+
+    #[test]
+    fn allows_undefined_arg_to_function_under_test_issue_680() {
+        // Explicit `undefined` exercising the function-under-test's input path.
+        assert!(run_in_test_file("expect(redactValue(undefined)).toBe(undefined);").is_empty());
+        assert!(run_in_test_file(r#"const r = requireOrError(undefined, "empty");"#).is_empty());
     }
 
     #[test]
