@@ -28,6 +28,21 @@ fn find_matching_brace(bytes: &[u8], start: usize) -> Option<usize> {
     None
 }
 
+/// DOM/host timer APIs whose `set*` shape collides with React state setters but
+/// which never manage optimistic state (`setTimeout(reject, ms)` in a `finally`).
+const NON_STATE_SETTERS: &[&str] = &["setTimeout", "setInterval", "setImmediate"];
+
+/// True when the file shows a React signal. `useOptimistic` only applies to
+/// React state, so without one there is nothing to roll back — a backend
+/// `try/finally` utility (or the word "catch" in a comment there) is irrelevant.
+fn looks_like_react(source: &str) -> bool {
+    source.contains("useState")
+        || source.contains("useReducer")
+        || source.contains("useActionState")
+        || source.contains("from \"react\"")
+        || source.contains("from 'react'")
+}
+
 /// Returns `true` if the setter name suggests it tracks error/status/loading
 /// state rather than real optimistic UI (e.g. `setRootError`, `setSubmitStatus`,
 /// `setIsPending`). These are set *after* a failed request, not before — the
@@ -58,7 +73,7 @@ fn body_calls_rollback_setter(body: &str) -> bool {
             }
             if j < bytes.len() && bytes[j] == b'(' {
                 let name = &body[i..j];
-                if !is_error_or_status_setter(name) {
+                if !is_error_or_status_setter(name) && !NON_STATE_SETTERS.contains(&name) {
                     return true;
                 }
             }
@@ -74,6 +89,12 @@ impl TextCheck for Check {
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
         // Skip files already using useOptimistic.
         if ctx.source.contains("useOptimistic") {
+            return Vec::new();
+        }
+        // The pattern is React-specific; without a React state signal there is
+        // no optimistic state to roll back (backend `try/finally` utilities,
+        // and stray "catch" mentions in their comments, must not fire).
+        if !looks_like_react(ctx.source) {
             return Vec::new();
         }
         let mut diagnostics = Vec::new();
@@ -152,7 +173,7 @@ mod tests {
 
     #[test]
     fn flags_setstate_in_catch() {
-        let src = "async function f(prev) { setItems(next); try { await save(); } catch (e) { setItems(prev); } }";
+        let src = "const [items, setItems] = useState([]);\nasync function f(prev) { setItems(next); try { await save(); } catch (e) { setItems(prev); } }";
         assert_eq!(run(src).len(), 1);
     }
 
@@ -197,7 +218,31 @@ mod tests {
     fn flags_mixed_setter_when_real_rollback_present() {
         // Real rollback setter alongside an error setter still warrants the
         // suggestion — the rollback is what `useOptimistic` would replace.
-        let src = "try { await save(); } catch (e) { setRootError('x'); setItems(prev); }";
+        let src = "const [items, setItems] = useState([]);\ntry { await save(); } catch (e) { setRootError('x'); setItems(prev); }";
         assert_eq!(run(src).len(), 1);
+    }
+
+    // Regression for #600 — a backend `try/finally` timer utility with the word
+    // "catch" in a comment and a `setTimeout` call must not fire.
+    #[test]
+    fn no_fp_backend_try_finally_timer_utility() {
+        let src = "\
+            // no catch branch needed here\n\
+            const timer = { id: undefined };\n\
+            try {\n\
+              return await Promise.race([promise, new Promise((_r, reject) => {\n\
+                timer.id = setTimeout(reject, ms, error);\n\
+              })]);\n\
+            } finally {\n\
+              clearTimeout(timer.id);\n\
+            }";
+        assert!(run(src).is_empty(), "backend timer utility should not flag");
+    }
+
+    // Even in a React file, a `setTimeout` in a catch is not a state rollback.
+    #[test]
+    fn no_fp_settimeout_in_catch_in_react_file() {
+        let src = "const [x, setX] = useState(0);\ntry { await save(); } catch (e) { setTimeout(retry, 1000); }";
+        assert!(run(src).is_empty());
     }
 }
