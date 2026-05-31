@@ -61,7 +61,19 @@ pub(crate) fn mentions_history(raw: &str) -> bool {
     if HISTORY_PHRASES.iter().any(|p| lower.contains(p)) {
         return true;
     }
-    lower
+    let words: Vec<&str> = lower
         .split(|c: char| !c.is_ascii_alphanumeric())
-        .any(|word| HISTORY_WORDS_ALWAYS.contains(&word))
+        .filter(|w| !w.is_empty())
+        .collect();
+    for (i, word) in words.iter().enumerate() {
+        if HISTORY_WORDS_ALWAYS.contains(word) {
+            // "be rewritten" / "be refactored" is a verb describing expected
+            // (often negated or hypothetical) behaviour, not a past code change.
+            if i.checked_sub(1).map(|j| words[j]) == Some("be") {
+                continue;
+            }
+            return true;
+        }
+    }
+    false
 }
