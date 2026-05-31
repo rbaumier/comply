@@ -107,6 +107,13 @@ impl OxcCheck for Check {
         semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
+        // Test files use minimal `z.string().min(n)` schemas as fixtures — the
+        // schema is the subject under test (which message does it emit?), not
+        // production input validation. Trimming would change what's being tested.
+        if ctx.file.path_segments.in_test_dir {
+            return;
+        }
+
         let AstKind::CallExpression(call) = node.kind() else { return };
 
         // Only fire on the `.min(...)` call itself.
@@ -228,5 +235,19 @@ mod tests {
     fn still_flags_standalone_schema_with_regular_name() {
         let src = "const UsernameSchema = z.string().min(3);";
         assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn skips_fixture_schema_in_test_file() {
+        // Regression for issue #508: minimal schema used as a test fixture to
+        // verify the locale's error-message format.
+        use crate::rules::file_ctx::{FileCtx, PathSegments};
+        let file = FileCtx {
+            path_segments: PathSegments { in_test_dir: true, ..Default::default() },
+            ..Default::default()
+        };
+        let src = "const schema = z.string().min(1);";
+        let diags = crate::rules::test_helpers::run_oxc_tsx_with_file_ctx(src, &Check, &file);
+        assert!(diags.is_empty(), "got {diags:?}");
     }
 }
