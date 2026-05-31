@@ -11,7 +11,15 @@ pub struct Check;
 
 const DISALLOWED_PREFIXES: &[&str] = &["new", "class"];
 
+/// Canonical DOM property names that begin with the `class` keyword prefix but
+/// are platform-dictated and cannot be renamed (React uses `className`
+/// precisely because `class` is reserved).
+const EXEMPT: &[&str] = &["className", "classList"];
+
 fn find_keyword_prefix(name: &str) -> Option<&'static str> {
+    if EXEMPT.contains(&name) {
+        return None;
+    }
     for &prefix in DISALLOWED_PREFIXES {
         if let Some(rest) = name.strip_prefix(prefix)
             && rest.starts_with(|c: char| c.is_ascii_uppercase()) {
@@ -88,5 +96,28 @@ impl OxcCheck for Check {
         }
 
         diagnostics
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rules::test_helpers::run_oxc_ts;
+
+    #[test]
+    fn flags_class_prefixed_identifier() {
+        assert_eq!(run_oxc_ts("const classThing = 1;", &Check).len(), 1);
+    }
+
+    // Regression for #523: `className` is the canonical DOM property name and
+    // cannot be renamed.
+    #[test]
+    fn allows_classname_issue_523() {
+        assert!(run_oxc_ts("const className = popup.className;", &Check).is_empty());
+    }
+
+    #[test]
+    fn allows_classlist_issue_523() {
+        assert!(run_oxc_ts("const classList = el.classList;", &Check).is_empty());
     }
 }
