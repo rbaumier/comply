@@ -163,3 +163,52 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(src, &Check)
+    }
+
+    #[test]
+    fn flags_bare_fetch() {
+        assert_eq!(run("async function f() { await fetch(url); }").len(), 1);
+    }
+
+    #[test]
+    fn allows_fetch_with_inline_signal() {
+        let src = "async function f() { await fetch(url, { signal: AbortSignal.timeout(5000) }); }";
+        assert!(run(src).is_empty());
+    }
+
+    // Regression for #545: a wrapper forwarding a caller-supplied `init`
+    // identifier may already carry a `signal`; the rule cannot introspect it
+    // and must not demand a hardcoded timeout that would override the caller.
+    #[test]
+    fn allows_fetch_forwarding_init_identifier_issue_545() {
+        let src = "async function f(input, init) { await fetch(input, init); }";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn allows_fetch_forwarding_options_member_issue_545() {
+        let src = "async function f(opts) { await fetch('/api', opts.requestInit); }";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn allows_fetch_with_spread_options_issue_545() {
+        let src = "async function f(base) { await fetch('/api', { ...base }); }";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // An inline options object without a signal is still flagged — nothing
+    // opaque is forwarded, so the author could add a timeout here.
+    #[test]
+    fn still_flags_inline_options_without_signal() {
+        let src = "async function f() { await fetch('/api', { method: 'POST' }); }";
+        assert_eq!(run(src).len(), 1);
+    }
+}
