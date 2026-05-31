@@ -20,6 +20,13 @@ impl OxcCheck for Check {
     ) {
         let AstKind::AssignmentExpression(assign) = node.kind() else { return };
 
+        // Test files mutate `this` in fake helper-class constructors and stub
+        // instances — idiomatic test-fixture construction with no non-mutating
+        // alternative for readonly fields.
+        if ctx.file.path_segments.in_test_dir {
+            return;
+        }
+
         // Check if the left side is `this.something`
         let oxc_ast::ast::AssignmentTarget::StaticMemberExpression(member) = &assign.left else {
             return;
@@ -84,10 +91,19 @@ impl OxcCheck for Check {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rules::file_ctx::{FileCtx, PathSegments};
     use crate::rules::test_helpers::run_oxc_ts;
 
     fn run(code: &str) -> Vec<Diagnostic> {
         run_oxc_ts(code, &Check)
+    }
+
+    fn run_in_test_file(code: &str) -> Vec<Diagnostic> {
+        let file = FileCtx {
+            path_segments: PathSegments { in_test_dir: true, ..PathSegments::default() },
+            ..FileCtx::default()
+        };
+        crate::rules::test_helpers::run_oxc_tsx_with_file_ctx(code, &Check, &file)
     }
 
     #[test]
@@ -147,5 +163,18 @@ mod tests {
             }
         "#;
         assert_eq!(run(code).len(), 2);
+    }
+
+    #[test]
+    fn allows_this_mutation_in_test_file() {
+        // Regression for rbaumier/comply#582 — fake helper classes mutate `this`
+        // outside the constructor for readonly fields; idiomatic test fixtures.
+        let code = r#"
+            class FakeBetterAuthError extends Error {
+                readonly body: FakeBody;
+                init(body: FakeBody) { this.body = body; }
+            }
+        "#;
+        assert!(run_in_test_file(code).is_empty());
     }
 }

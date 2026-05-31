@@ -30,6 +30,11 @@ impl OxcCheck for Check {
         if unary.operator != oxc_ast::ast::UnaryOperator::Delete {
             return;
         }
+        // Test files delete `process.env` keys and fixture entries in teardown —
+        // bounded to the test scope with no non-mutating equivalent.
+        if ctx.file.path_segments.in_test_dir {
+            return;
+        }
         // The argument must be a computed member expression (bracket access).
         let Expression::ComputedMemberExpression(member) = &unary.argument else {
             return;
@@ -67,9 +72,18 @@ fn is_process_env(expr: &Expression) -> bool {
 #[cfg(test)]
 mod oxc_tests {
     use super::*;
+    use crate::rules::file_ctx::{FileCtx, PathSegments};
 
     fn run(src: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_oxc_ts(src, &Check)
+    }
+
+    fn run_in_test_file(src: &str) -> Vec<Diagnostic> {
+        let file = FileCtx {
+            path_segments: PathSegments { in_test_dir: true, ..PathSegments::default() },
+            ..FileCtx::default()
+        };
+        crate::rules::test_helpers::run_oxc_tsx_with_file_ctx(src, &Check, &file)
     }
 
     #[test]
@@ -81,5 +95,11 @@ mod oxc_tests {
     fn skips_delete_process_env_issue_479() {
         let src = "delete process.env[key];";
         assert!(run(src).is_empty(), "got {:?}", run(src));
+    }
+
+    #[test]
+    fn skips_in_test_file_issue_582() {
+        // Test teardown deletes fixture entries; bounded to test scope.
+        assert!(run_in_test_file("delete fixtures[id];").is_empty());
     }
 }
