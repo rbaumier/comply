@@ -31,7 +31,13 @@ impl OxcCheck for Check {
             return;
         }
         // The argument must be a computed member expression (bracket access).
-        if !matches!(&unary.argument, Expression::ComputedMemberExpression(_)) {
+        let Expression::ComputedMemberExpression(member) = &unary.argument else {
+            return;
+        };
+        // Skip `delete process.env[key]` — process.env is NodeJS.ProcessEnv
+        // (a dictionary), not an array, so this is property deletion, not
+        // sparse-array creation.
+        if is_process_env(&member.object) {
             return;
         }
 
@@ -46,5 +52,34 @@ impl OxcCheck for Check {
             severity: Severity::Error,
             span: None,
         });
+    }
+}
+
+/// True for the `process.env` member expression.
+fn is_process_env(expr: &Expression) -> bool {
+    let Expression::StaticMemberExpression(m) = expr else {
+        return false;
+    };
+    m.property.name == "env"
+        && matches!(&m.object, Expression::Identifier(id) if id.name == "process")
+}
+
+#[cfg(test)]
+mod oxc_tests {
+    use super::*;
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(src, &Check)
+    }
+
+    #[test]
+    fn flags_delete_array_element() {
+        assert_eq!(run("delete arr[0];").len(), 1);
+    }
+
+    #[test]
+    fn skips_delete_process_env_issue_479() {
+        let src = "delete process.env[key];";
+        assert!(run(src).is_empty(), "got {:?}", run(src));
     }
 }
