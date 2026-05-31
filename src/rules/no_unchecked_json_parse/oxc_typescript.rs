@@ -25,7 +25,7 @@ fn binding_is_unknown_typed<'a>(
     let nodes = semantic.nodes();
     for kind in std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id)) {
         if let AstKind::VariableDeclarator(decl) = kind {
-            return is_unknown_annotation(decl.id.type_annotation.as_deref());
+            return is_unknown_annotation(decl.type_annotation.as_deref());
         }
     }
     false
@@ -94,7 +94,7 @@ impl OxcCheck for Check {
                 }
             }
             AstKind::VariableDeclarator(decl) => {
-                if is_unknown_annotation(decl.id.type_annotation.as_deref()) {
+                if is_unknown_annotation(decl.type_annotation.as_deref()) {
                     return;
                 }
             }
