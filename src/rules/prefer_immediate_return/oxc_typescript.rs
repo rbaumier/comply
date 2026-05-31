@@ -44,6 +44,16 @@ impl OxcCheck for Check {
             }
             let declarator = &var_decl.declarations[0];
 
+            // An explicit type annotation makes the variable a typed boundary,
+            // not a redundant alias: `const x: unknown = Reflect.get(...)`
+            // narrows the RHS's `any` to `unknown` without a type assertion.
+            // Inlining would force `as unknown` (no-type-assertion) or leak
+            // `any` (no-unsafe-return) — the variable carries the annotation
+            // those rules require. Don't flag it. (Closes #656)
+            if declarator.type_annotation.is_some() {
+                continue;
+            }
+
             // Must be a simple identifier (not destructuring)
             let oxc_ast::ast::BindingPattern::BindingIdentifier(ref binding) = declarator.id
             else {
@@ -79,5 +89,29 @@ impl OxcCheck for Check {
                 span: None,
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rules::test_helpers::run_oxc_ts;
+
+    #[test]
+    fn flags_untyped_assign_then_return() {
+        let d = run_oxc_ts("function f() { const result = computeValue(); return result; }", &Check);
+        assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn allows_typed_intermediate_variable_issue_656() {
+        // `const x: unknown = Reflect.*(...)` narrows the RHS's `any` to
+        // `unknown` without a type assertion — the annotation is the type
+        // safety mechanism, not a redundant alias.
+        let d = run_oxc_ts(
+            "function trap(source, args) { const proxyResult: unknown = Reflect.apply(source, null, args); return proxyResult; }",
+            &Check,
+        );
+        assert!(d.is_empty(), "got {d:?}");
     }
 }
