@@ -79,7 +79,23 @@ fn is_sync_expect_chain(call: &oxc_ast::ast::CallExpression) -> bool {
     if !SYNC_MATCHERS.contains(&matcher) {
         return false;
     }
+    // `.resolves` / `.rejects` turn the assertion into a Promise, so the
+    // `await` is mandatory even with an otherwise-sync matcher. This is also
+    // the exact form `prefer-expect-resolves` mandates.
+    if chain_has_async_modifier(&member.object) {
+        return false;
+    }
     contains_expect_root(&member.object)
+}
+
+/// True when the chain between `expect(...)` and the matcher contains a
+/// `.resolves` or `.rejects` async modifier.
+fn chain_has_async_modifier(expr: &Expression) -> bool {
+    let Expression::StaticMemberExpression(member) = expr else {
+        return false;
+    };
+    let prop = member.property.name.as_str();
+    prop == "resolves" || prop == "rejects" || chain_has_async_modifier(&member.object)
 }
 
 fn contains_expect_root(expr: &Expression) -> bool {
@@ -142,5 +158,39 @@ impl OxcCheck for Check {
             severity: Severity::Warning,
             span: None,
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rules::test_helpers::run_oxc_ts_with_path;
+
+    const PW_IMPORT: &str = "import { test, expect } from \"@playwright/test\";\n";
+
+    fn run(source: &str) -> Vec<Diagnostic> {
+        run_oxc_ts_with_path(&format!("{PW_IMPORT}{source}"), &Check, "app.spec.ts")
+    }
+
+    #[test]
+    fn flags_await_sync_expect() {
+        assert_eq!(run("await expect(1).toBe(1);").len(), 1);
+    }
+
+    #[test]
+    fn flags_await_sync_expect_with_not() {
+        assert_eq!(run("await expect(1).not.toBe(2);").len(), 1);
+    }
+
+    #[test]
+    fn allows_await_resolves() {
+        // Regression for issue #559: `.resolves` makes the assertion a Promise,
+        // so the await is mandatory (and required by `prefer-expect-resolves`).
+        assert!(run("await expect(res.json()).resolves.toStrictEqual({ status: 'ok' });").is_empty());
+    }
+
+    #[test]
+    fn allows_await_rejects() {
+        assert!(run("await expect(p).rejects.toThrow('boom');").is_empty());
     }
 }
