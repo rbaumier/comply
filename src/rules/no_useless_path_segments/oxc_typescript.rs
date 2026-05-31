@@ -9,8 +9,30 @@ use std::sync::Arc;
 
 pub struct Check;
 
+/// A `..` segment is useless only when it backtracks over a real directory
+/// already traversed (`foo/../bar` collapses to `bar`). A *leading* run of
+/// `..` (`../../scripts`) is the canonical way to climb out of the current
+/// directory and is not redundant. A `.` segment is useless unless it is the
+/// leading `./` of a relative specifier.
 fn has_useless_segment(spec: &str) -> bool {
-    spec.contains("/../") || spec.contains("/./")
+    let mut seen_normal = false;
+    for (i, seg) in spec.split('/').enumerate() {
+        match seg {
+            "." => {
+                if i != 0 {
+                    return true;
+                }
+            }
+            ".." => {
+                if seen_normal {
+                    return true;
+                }
+            }
+            "" => {}
+            _ => seen_normal = true,
+        }
+    }
+    false
 }
 
 fn make_diag(ctx: &CheckCtx, byte_offset: usize, spec: &str) -> Diagnostic {
@@ -93,5 +115,42 @@ impl OxcCheck for Check {
         }
 
         diagnostics
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run_on(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(src, &Check)
+    }
+
+    #[test]
+    fn flags_parent_then_child_segment() {
+        assert_eq!(run_on("import foo from './foo/../bar';").len(), 1);
+    }
+
+    #[test]
+    fn flags_current_dir_segment() {
+        assert_eq!(run_on("import foo from './foo/./bar';").len(), 1);
+    }
+
+    #[test]
+    fn allows_clean_relative_path() {
+        assert!(run_on("import foo from './foo/bar';").is_empty());
+    }
+
+    #[test]
+    fn allows_parent_dir_prefix() {
+        assert!(run_on("import foo from '../foo/bar';").is_empty());
+    }
+
+    // #491 — a long leading run of `..` to climb out of src/ into a sibling
+    // directory (scripts/) is minimal, not redundant.
+    #[test]
+    fn allows_deep_parent_prefix_issue_491() {
+        let src = "import { seedAdminCdr } from '../../../../scripts/seed-admin-cdr';";
+        assert!(run_on(src).is_empty());
     }
 }

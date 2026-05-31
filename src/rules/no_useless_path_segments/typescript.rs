@@ -2,10 +2,32 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-/// Returns true if `spec` (with quotes) contains a useless `/../` or `/./` segment.
+/// Returns true if `spec` (with quotes) contains a useless `..` or `.` segment.
+///
+/// A `..` segment is useless only when it backtracks over a real directory
+/// already traversed (`foo/../bar`). A *leading* run of `..` (`../../scripts`)
+/// is the canonical way to climb out and is not redundant. A `.` segment is
+/// useless unless it is the leading `./` of a relative specifier.
 fn has_useless_segment(spec: &str) -> bool {
     let inner = spec.trim_matches(|c| c == '\'' || c == '"' || c == '`');
-    inner.contains("/../") || inner.contains("/./")
+    let mut seen_normal = false;
+    for (i, seg) in inner.split('/').enumerate() {
+        match seg {
+            "." => {
+                if i != 0 {
+                    return true;
+                }
+            }
+            ".." => {
+                if seen_normal {
+                    return true;
+                }
+            }
+            "" => {}
+            _ => seen_normal = true,
+        }
+    }
+    false
 }
 
 crate::ast_check! { on ["import_statement", "call_expression"] prefilter = ["/../", "/./"] => |node, source, ctx, diagnostics|
@@ -104,6 +126,13 @@ mod tests {
     fn allows_parent_dir_prefix() {
         // `../foo` on its own is not useless — only `/../` within the path is.
         assert!(run_on("import foo from '../foo/bar';").is_empty());
+    }
+
+    // #491 — a long leading run of `..` to climb out of src/ into a sibling
+    // directory (scripts/) is minimal, not redundant.
+    #[test]
+    fn allows_deep_parent_prefix_issue_491() {
+        assert!(run_on("import { seedAdminCdr } from '../../../../scripts/seed-admin-cdr';").is_empty());
     }
 
     #[test]
