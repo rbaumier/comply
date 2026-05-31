@@ -227,6 +227,20 @@ export function txTest(handle) {
     }
 
     #[test]
+    fn no_fp_issue_570_exact_reproducer() {
+        let src = r#"
+export function txTest(handle) {
+  return (name, fn) => {
+    it.concurrent(name, async () => {
+      await handle.txConn.run(reserved, fn);
+    });
+  };
+}
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
     fn no_fp_when_callback_body_is_empty() {
         assert!(run("it.concurrent('noop', async () => {});").is_empty());
     }
