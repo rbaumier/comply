@@ -3,9 +3,24 @@ use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, CheckCtx, OxcCheck};
 use oxc_span::GetSpan;
 use std::collections::HashSet;
+use std::path::Path;
 use std::sync::Arc;
 
 pub struct Check;
+
+/// True for files under a developer-only directory (scripts, bin, migrations).
+/// One-off data-processing and migration scripts trade readability for getting
+/// the job done; deep `switch`/`for`/`if` nesting there is expected, not a
+/// maintainability smell worth refactoring.
+fn is_developer_script_path(path: &Path) -> bool {
+    path.components().any(|c| {
+        if let std::path::Component::Normal(s) = c {
+            matches!(s.to_str(), Some("scripts") | Some("bin") | Some("migrations"))
+        } else {
+            false
+        }
+    })
+}
 
 fn is_control_flow(kind: &AstKind) -> bool {
     matches!(
@@ -35,6 +50,9 @@ impl OxcCheck for Check {
         ctx: &CheckCtx,
     ) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
+        if is_developer_script_path(ctx.path) {
+            return diagnostics;
+        }
         let nodes = semantic.nodes();
         let max_depth = ctx.config.threshold("nested-control-flow", "max", ctx.lang);
         let mut flagged_lines = HashSet::new();
@@ -127,6 +145,52 @@ mod tests {
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+    fn run_with_path(source: &str, path: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_path(source, &Check, path)
+    }
+
+    // Regression #590 — depth-4 `for`+`if` inside a `switch` case in a
+    // data-processing script. Scripts are exempt from the nesting limit.
+    #[test]
+    fn no_fp_deep_nesting_in_script_issue_590() {
+        let src = r#"
+function importLegacy(rows) {
+    switch (mode) {
+        case "batch":
+            for (const row of rows) {
+                if (row.valid) {
+                    if (row.ready) {
+                        process(row);
+                    }
+                }
+            }
+            break;
+    }
+}
+"#;
+        assert!(run_with_path(src, "scripts/import-legacy-data.ts").is_empty());
+    }
+
+    #[test]
+    fn still_flags_deep_nesting_in_src_issue_590() {
+        let src = r#"
+function importLegacy(rows) {
+    switch (mode) {
+        case "batch":
+            for (const row of rows) {
+                if (row.valid) {
+                    if (row.ready) {
+                        process(row);
+                    }
+                }
+            }
+            break;
+    }
+}
+"#;
+        assert_eq!(run_with_path(src, "src/app/lib/import.ts").len(), 1);
     }
 
     #[test]
