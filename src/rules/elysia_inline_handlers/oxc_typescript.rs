@@ -55,6 +55,15 @@ impl OxcCheck for Check {
             return;
         }
 
+        // Skip `Reflect.get(...)` / `Reflect.apply(...)` — the JS reflection
+        // built-in, whose method names collide with Elysia route methods but
+        // have nothing to do with route registration (e.g. inside a Proxy trap).
+        if let Expression::Identifier(obj) = &member.object
+            && obj.name.as_str() == "Reflect"
+        {
+            return;
+        }
+
         // Skip http.<method>(...) when the receiver binding is imported from msw.
         if let Expression::Identifier(obj) = &member.object
             && ident_is_from_msw(obj, semantic)
@@ -161,6 +170,34 @@ http.get("/", handleFn);
             1,
             "http.get with non-msw binding must still be flagged"
         );
+    }
+
+    // Regression for issues #536 / #652: `Reflect.get` / `Reflect.apply` inside a
+    // ProxyHandler trap are the JS reflection built-in, not Elysia route handlers.
+    #[test]
+    fn ignores_reflect_get_in_proxy_trap() {
+        let src = r#"
+            const handler: ProxyHandler<postgres.Sql> = {
+                get(_target, prop) {
+                    const source = als.getStore() ?? rawPg;
+                    const propertyValue = Reflect.get(source, prop);
+                    return propertyValue;
+                },
+            };
+        "#;
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn ignores_reflect_apply_in_proxy_trap() {
+        let src = r#"
+            const handler: ProxyHandler<postgres.Sql> = {
+                apply(_target, _thisArg, args) {
+                    return Reflect.apply(_target, _thisArg, args);
+                },
+            };
+        "#;
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
     }
 
     /// Regression for issue #341: MSW handlers inside Vitest component tests (.test.tsx) must
