@@ -9,32 +9,48 @@ use std::sync::Arc;
 
 pub struct Check;
 
-/// Collect method names from a chained call expression, innermost first.
-/// E.g. `new Elysia().use(p).onError(h)` -> ["use", "onError"]
+/// Collect each chained method as (name, span, owning call), innermost first.
+/// E.g. `new Elysia().use(p).onError(h)` -> [("use", …), ("onError", …)].
+/// The call is carried so callers can inspect the method's arguments.
 fn collect_chain<'a>(
     call: &'a oxc_ast::ast::CallExpression<'a>,
-) -> Vec<(&'a str, u32)> {
+) -> Vec<(&'a str, u32, &'a oxc_ast::ast::CallExpression<'a>)> {
     let mut methods = Vec::new();
-    let mut current_callee = &call.callee;
+    let mut current_call = call;
 
     // The outermost call is the node we start at — walk inward via callee.
     loop {
-        let Expression::StaticMemberExpression(member) = current_callee else {
+        let Expression::StaticMemberExpression(member) = &current_call.callee else {
             break;
         };
         let name = member.property.name.as_str();
         let span_start = member.span.start;
-        methods.push((name, span_start));
+        methods.push((name, span_start, current_call));
 
         // The object of this member is the inner call.
         let Expression::CallExpression(inner_call) = &member.object else {
             break;
         };
-        current_callee = &inner_call.callee;
+        current_call = inner_call;
     }
 
     methods.reverse();
     methods
+}
+
+/// `.onError({ as: 'global' | 'scoped' }, handler)` registers the handler at a
+/// declared scope, so chain order no longer governs which errors it catches.
+/// Detect the leading options-object argument carrying an `as` property.
+fn first_arg_declares_scope(call: &oxc_ast::ast::CallExpression) -> bool {
+    use oxc_ast::ast::{Argument, ObjectPropertyKind, PropertyKey};
+    let Some(Argument::ObjectExpression(obj)) = call.arguments.first() else {
+        return false;
+    };
+    obj.properties.iter().any(|p| {
+        matches!(p, ObjectPropertyKind::ObjectProperty(prop)
+            if matches!(&prop.key,
+                PropertyKey::StaticIdentifier(id) if id.name == "as"))
+    })
 }
 
 impl OxcCheck for Check {
@@ -74,12 +90,17 @@ impl OxcCheck for Check {
         }
 
         let mut seen_use = false;
-        for (name, span_start) in &methods {
+        for (name, span_start, owning_call) in &methods {
             if *name == "use" {
                 seen_use = true;
                 continue;
             }
             if seen_use && *name == "onError" {
+                // A scope-qualified handler (`{ as: 'global' }`) is registered at
+                // that scope regardless of chain position — order is irrelevant.
+                if first_arg_declares_scope(owning_call) {
+                    continue;
+                }
                 let (line, column) = byte_offset_to_line_col(ctx.source, *span_start as usize);
                 diagnostics.push(Diagnostic {
                     path: Arc::clone(&ctx.path_arc),
@@ -119,6 +140,27 @@ mod tests {
     fn allows_onerror_alone() {
         let src = "import { Elysia } from 'elysia';\nnew Elysia().onError(() => {});";
         assert!(run_on(src).is_empty());
+    }
+
+    // Regression for #535: `.onError({ as: 'global' }, handler)` registers at
+    // global scope, so chain order after `.use(plugin)` is irrelevant.
+    #[test]
+    fn allows_global_onerror_after_use_issue_535() {
+        let src = "import { Elysia } from 'elysia';\nnew Elysia().use(requestIdPlugin).onError({ as: 'global' }, handler);";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_scoped_onerror_after_use_issue_535() {
+        let src = "import { Elysia } from 'elysia';\nnew Elysia().use(plugin).onError({ as: 'scoped' }, handler);";
+        assert!(run_on(src).is_empty());
+    }
+
+    // A bare onError (no scope qualifier) after use is still flagged.
+    #[test]
+    fn flags_unscoped_options_onerror_after_use() {
+        let src = "import { Elysia } from 'elysia';\nnew Elysia().use(plugin).onError(() => {});";
+        assert_eq!(run_on(src).len(), 1);
     }
 
     #[test]
