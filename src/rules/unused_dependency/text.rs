@@ -6,6 +6,9 @@
 //! when the current path is the lexicographically smallest indexed path —
 //! a deterministic anchor that doesn't depend on filesystem iteration order.
 //!
+//! Each diagnostic is anchored on `package.json` itself: an unused dependency
+//! has no importer to point at, and the remediation is editing `package.json`.
+//!
 //! Skips:
 //!   - `@types/*` packages — type definitions are consumed by the type
 //!     checker, not by `import` statements.
@@ -60,6 +63,12 @@ impl TextCheck for Check {
         }
 
         let bare = index.bare_specifiers();
+        let manifest_path = ctx
+            .project
+            .project_root
+            .as_ref()
+            .map(|r| r.join("package.json"))
+            .unwrap_or_else(|| ctx.path.to_path_buf());
         let mut diagnostics = Vec::new();
         let extra_tooling: std::collections::HashSet<&str> =
             ctx.project.framework_tooling_deps().collect();
@@ -71,7 +80,7 @@ impl TextCheck for Check {
                 continue;
             }
             diagnostics.push(Diagnostic {
-                path: ctx.path.to_path_buf().into(),
+                path: manifest_path.clone().into(),
                 line: 1,
                 column: 1,
                 rule_id: RULE_ID.into(),
@@ -192,6 +201,40 @@ mod tests {
         assert!(
             diags.is_empty(),
             "@types/* packages must not be flagged, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn repo_scope_dep_used_in_sibling_file_not_flagged() {
+        // The issue's systematic FP: linting a backend file that doesn't
+        // import a dep must not flag that dep when *another* file imports it.
+        // A dependency is unused only when *no* file in the repo imports it.
+        let pkg = r#"{
+            "name": "amadeo",
+            "dependencies": {
+                "lodash": "^4.0.0",
+                "@better-auth/i18n": "^1.0.0"
+            }
+        }"#;
+        let files: Vec<(&str, &str)> = vec![
+            ("api/server.ts", "export const handler = () => 1;"),
+            ("ui/app.ts", "import _ from 'lodash';\nexport const x = _;"),
+        ];
+        let (_dir, diags) = run_on_project(&files, pkg, "api/server.ts");
+        assert_eq!(
+            diags.len(),
+            1,
+            "lodash is imported in ui/app.ts; only @better-auth/i18n is unused repo-wide: {diags:?}"
+        );
+        assert!(
+            diags[0].message.contains("@better-auth/i18n"),
+            "message should name the scoped unused dep, got: {}",
+            diags[0].message
+        );
+        assert!(
+            diags[0].path.ends_with("package.json"),
+            "diagnostic must anchor on package.json, not a source file, got: {:?}",
+            diags[0].path
         );
     }
 
