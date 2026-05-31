@@ -9,8 +9,6 @@ use std::sync::Arc;
 
 pub struct Check;
 
-const TEST_GLOBALS: &[&str] = &["console", "window", "global", "globalThis", "process"];
-const TEST_HOOKS: &[&str] = &["beforeEach", "afterEach", "beforeAll", "afterAll"];
 const SENTRY_HOOKS: &[&str] = &["beforeSend", "beforeBreadcrumb", "beforeSendTransaction"];
 
 /// Static name of an object-property key, if it's an identifier or string literal.
@@ -156,40 +154,6 @@ fn is_inside_constructor<'a>(
     false
 }
 
-fn is_inside_test_hook<'a>(
-    node: &oxc_semantic::AstNode<'a>,
-    semantic: &'a oxc_semantic::Semantic<'a>,
-) -> bool {
-    for ancestor in semantic.nodes().ancestors(node.id()) {
-        if let AstKind::CallExpression(call) = ancestor.kind() {
-            let callee_name = match &call.callee {
-                Expression::Identifier(id) => Some(id.name.as_str()),
-                Expression::StaticMemberExpression(m) => Some(m.property.name.as_str()),
-                _ => None,
-            };
-            if callee_name.is_some_and(|name| TEST_HOOKS.contains(&name)) {
-                return true;
-            }
-        }
-    }
-    false
-}
-
-fn is_test_setup_for_expr<'a>(
-    node: &oxc_semantic::AstNode<'a>,
-    obj_expr: &Expression<'a>,
-    ctx: &CheckCtx,
-    semantic: &'a oxc_semantic::Semantic<'a>,
-) -> bool {
-    if !ctx.file.path_segments.in_test_dir {
-        return false;
-    }
-    if root_object_name(obj_expr).is_some_and(|name| TEST_GLOBALS.contains(&name)) {
-        return true;
-    }
-    is_inside_test_hook(node, semantic)
-}
-
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[
@@ -206,6 +170,12 @@ impl OxcCheck for Check {
         semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
+        // Test files mutate local fixtures, accumulators, and mock-captured
+        // state freely — bounded to the test scope with no non-mutating
+        // alternative. Consistent with no-mutation / no-mutating-assign.
+        if ctx.file.path_segments.in_test_dir {
+            return;
+        }
         match node.kind() {
             AstKind::AssignmentExpression(assign) => {
                 match &assign.left {
@@ -221,7 +191,6 @@ impl OxcCheck for Check {
                             && is_inside_constructor(node, semantic) { return; }
                         if is_inside_sentry_hook(node, semantic) { return; }
                         if root_object_name(&m.object) == Some("set") { return; }
-                        if is_test_setup_for_expr(node, &m.object, ctx, semantic) { return; }
                         if let Some(id) = root_identifier_of_expr(&m.object)
                             && is_created_dom_element(id, semantic) { return; }
 
@@ -245,7 +214,6 @@ impl OxcCheck for Check {
                             && is_inside_constructor(node, semantic) { return; }
                         if is_inside_sentry_hook(node, semantic) { return; }
                         if root_object_name(&m.object) == Some("set") { return; }
-                        if is_test_setup_for_expr(node, &m.object, ctx, semantic) { return; }
                         if let Some(id) = root_identifier_of_expr(&m.object)
                             && is_created_dom_element(id, semantic) { return; }
 
@@ -269,7 +237,6 @@ impl OxcCheck for Check {
                 match &update.argument {
                     SimpleAssignmentTarget::StaticMemberExpression(m) => {
                         if is_inside_sentry_hook(node, semantic) { return; }
-                        if is_test_setup_for_expr(node, &m.object, ctx, semantic) { return; }
                         if let Some(id) = root_identifier_of_expr(&m.object)
                             && is_created_dom_element(id, semantic) { return; }
                         let (line, column) = byte_offset_to_line_col(ctx.source, update.span.start as usize);
@@ -285,7 +252,6 @@ impl OxcCheck for Check {
                     }
                     SimpleAssignmentTarget::ComputedMemberExpression(m) => {
                         if is_inside_sentry_hook(node, semantic) { return; }
-                        if is_test_setup_for_expr(node, &m.object, ctx, semantic) { return; }
                         if let Some(id) = root_identifier_of_expr(&m.object)
                             && is_created_dom_element(id, semantic) { return; }
                         let (line, column) = byte_offset_to_line_col(ctx.source, update.span.start as usize);
@@ -309,13 +275,11 @@ impl OxcCheck for Check {
                 match &unary.argument {
                     Expression::StaticMemberExpression(m) => {
                         if is_inside_sentry_hook(node, semantic) { return; }
-                        if is_test_setup_for_expr(node, &m.object, ctx, semantic) { return; }
                         if let Some(id) = root_identifier_of_expr(&m.object)
                             && is_created_dom_element(id, semantic) { return; }
                     }
                     Expression::ComputedMemberExpression(m) => {
                         if is_inside_sentry_hook(node, semantic) { return; }
-                        if is_test_setup_for_expr(node, &m.object, ctx, semantic) { return; }
                         if let Some(id) = root_identifier_of_expr(&m.object)
                             && is_created_dom_element(id, semantic) { return; }
                     }
@@ -341,9 +305,31 @@ impl OxcCheck for Check {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rules::file_ctx::{FileCtx, PathSegments};
 
     fn run(src: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_oxc_ts(src, &Check)
+    }
+
+    fn run_in_test_file(src: &str) -> Vec<Diagnostic> {
+        let file = FileCtx {
+            path_segments: PathSegments { in_test_dir: true, ..PathSegments::default() },
+            ..FileCtx::default()
+        };
+        crate::rules::test_helpers::run_oxc_tsx_with_file_ctx(src, &Check, &file)
+    }
+
+    #[test]
+    fn skips_in_test_file_issue_582() {
+        // Tests mutate local fixtures and mock-captured state freely; bounded
+        // to the test scope with no non-mutating alternative.
+        let src = r#"
+            beforeEach(() => {
+                config.retries = 3;
+                state["count"] = 0;
+            });
+        "#;
+        assert!(run_in_test_file(src).is_empty());
     }
 
     #[test]
