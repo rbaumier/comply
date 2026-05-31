@@ -23,6 +23,15 @@ fn is_relative_path(spec: &str) -> bool {
     spec.starts_with("./") || spec.starts_with("../")
 }
 
+/// True for specifiers pointing at a build-time generated file whose final
+/// segment ends in `.gen` (e.g. `./routeTree.gen`) or carries a `.gen.`
+/// extension stem (e.g. `./routeTree.gen.ts`). Such files are gitignored and
+/// often absent at lint time, yet always present at build/dev time.
+fn is_generated_specifier(spec: &str) -> bool {
+    let last = spec.rsplit('/').next().unwrap_or(spec);
+    last.ends_with(".gen") || last.contains(".gen.")
+}
+
 fn resolve_and_check(base_dir: &Path, import_spec: &str) -> bool {
     let resolved = base_dir.join(import_spec);
 
@@ -84,6 +93,10 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         return;
     }
 
+    if is_generated_specifier(&import_spec) {
+        return;
+    }
+
     let Some(base_dir) = ctx.path.parent() else { return };
 
     if !resolve_and_check(base_dir, &import_spec) {
@@ -118,5 +131,15 @@ mod tests {
         // This is tested via the is_relative_path check
         assert!(!is_relative_path("react"));
         assert!(!is_relative_path("@tanstack/react-query"));
+    }
+
+    #[test]
+    fn detects_generated_specifiers_issue_487() {
+        // Gitignored build artifacts (e.g. TanStack Router) are exempt.
+        assert!(is_generated_specifier("./routeTree.gen"));
+        assert!(is_generated_specifier("./routeTree.gen.ts"));
+        assert!(is_generated_specifier("../app/routeTree.gen"));
+        assert!(!is_generated_specifier("./routeTree"));
+        assert!(!is_generated_specifier("./generated"));
     }
 }
