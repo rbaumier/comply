@@ -26,12 +26,20 @@ impl OxcCheck for Check {
 
         let line_offsets = super::dense_lines::compute_line_offsets(ctx.source);
 
-        // Collect comment byte ranges from OXC semantic.
-        let comment_ranges: Vec<(usize, usize)> = semantic
+        // Collect byte ranges to strip before counting operators: comments and
+        // regex literals. A regex pattern's `-`, `/`, and quantifier syntax are
+        // not chained operations — stripping them mirrors the string-literal skip
+        // already done in `count_operators`.
+        let mut strip_ranges: Vec<(usize, usize)> = semantic
             .comments()
             .iter()
             .map(|c| (c.span.start as usize, c.span.end as usize))
             .collect();
+        for node in semantic.nodes() {
+            if let AstKind::RegExpLiteral(re) = node.kind() {
+                strip_ranges.push((re.span.start as usize, re.span.end as usize));
+            }
+        }
 
         let mut reported_lines = std::collections::HashSet::new();
         let mut diagnostics = Vec::new();
@@ -62,7 +70,7 @@ impl OxcCheck for Check {
                 continue;
             };
             let stripped =
-                super::dense_lines::strip_comments(line_text, line_start_byte, &comment_ranges);
+                super::dense_lines::strip_comments(line_text, line_start_byte, &strip_ranges);
             if stripped.len() < min_line_length {
                 continue;
             }
@@ -85,5 +93,25 @@ impl OxcCheck for Check {
             });
         }
         diagnostics
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rules::test_helpers::run_oxc_ts;
+
+    #[test]
+    fn ignores_regex_literal_character_classes() {
+        // Regression for issue #524: a regex literal's `-`, `/` and quantifier
+        // syntax are not chained operations.
+        let src = "const UUIDV7_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[0-9a-f]{4}-[0-9a-f]{12}$/;";
+        assert!(run_oxc_ts(src, &Check).is_empty(), "got {:?}", run_oxc_ts(src, &Check));
+    }
+
+    #[test]
+    fn still_flags_dense_operator_chain() {
+        let src = "const total = items.map(x => x.price).filter(p => p > 0).reduce((a, b) => a + b, 0) + extra;";
+        assert_eq!(run_oxc_ts(src, &Check).len(), 1);
     }
 }
