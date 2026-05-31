@@ -135,7 +135,13 @@ fn callee_name<'a>(expr: &'a Expression<'a>) -> Option<&'a str> {
 }
 
 fn is_tanstack_route_callee(name: &str) -> bool {
-    matches!(name, "createFileRoute" | "createLazyFileRoute")
+    matches!(
+        name,
+        "createFileRoute"
+            | "createLazyFileRoute"
+            | "createRootRoute"
+            | "createRootRouteWithContext"
+    )
 }
 
 /// True when the reference sits inside a function/arrow callback that is
@@ -328,6 +334,29 @@ mod tests {
                       }\n\
                       export const Route = createFileRoute(\"/users\")({ component: UsersPage });";
         assert!(run_on(source).is_empty());
+    }
+
+    // Regression for #552: the root route uses the curried
+    // `createRootRouteWithContext()({...})` factory and references the
+    // component declared above it, which in turn calls `Route.useRouteContext()`.
+    #[test]
+    fn allows_forward_ref_to_create_root_route_with_context_issue_552() {
+        let source = "function RootComponent() {\n\
+                      const { queryClient } = Route.useRouteContext();\n\
+                      return queryClient;\n\
+                      }\n\
+                      export const Route = createRootRouteWithContext()({ component: RootComponent });";
+        assert!(run_on(source).is_empty(), "{:?}", run_on(source));
+    }
+
+    #[test]
+    fn allows_forward_ref_to_create_root_route_issue_552() {
+        let source = "function RootComponent() {\n\
+                      const ctx = Route.useRouteContext();\n\
+                      return ctx;\n\
+                      }\n\
+                      export const Route = createRootRoute({ component: RootComponent });";
+        assert!(run_on(source).is_empty(), "{:?}", run_on(source));
     }
 
     #[test]
