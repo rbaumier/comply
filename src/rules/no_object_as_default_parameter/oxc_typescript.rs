@@ -20,6 +20,18 @@ fn check_params(params: &FormalParameters, ctx: &CheckCtx, diagnostics: &mut Vec
             continue;
         }
 
+        // A parameter with an explicit type annotation is a named options
+        // contract, not an ad-hoc option bag. The destructuring remediation
+        // (`function f({ field = default }: T = {})`) requires `T` to be
+        // assignable from `{}` — impossible when the type has a required
+        // (non-`?:`) field, the norm in projects that ban optional markers
+        // under `exactOptionalPropertyTypes`. Only the untyped form, where
+        // switching to individual parameter defaults is always viable, is a
+        // genuine smell. (Closes #682)
+        if param.type_annotation.is_some() {
+            continue;
+        }
+
         let param_name = match &param.pattern {
             BindingPattern::BindingIdentifier(id) => Some(id.name.as_str()),
             _ => None,
@@ -103,6 +115,23 @@ mod tests {
     #[test]
     fn allows_empty_object_default() {
         assert!(run_on("function f(opts = {}) {}").is_empty());
+    }
+
+    #[test]
+    fn allows_typed_options_param_with_object_default_issue_682() {
+        // A typed options contract with a required field cannot be rewritten to
+        // destructuring with `= {}` under no-optional-markers; the null-sentinel
+        // default is immutable and safe.
+        let src = "function createTestApp(\
+            options: CreateTestAppOptions = { serverConfigOverride: null },\
+        ): void {}";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_untyped_object_default_issue_682() {
+        // Without a type annotation it is an ad-hoc option bag — still a smell.
+        assert_eq!(run_on("function f(opts = { timeout: 1000 }) {}").len(), 1);
     }
 
     #[test]
