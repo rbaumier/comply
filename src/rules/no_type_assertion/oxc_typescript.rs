@@ -73,6 +73,12 @@ impl OxcCheck for Check {
     ) {
         let AstKind::TSAsExpression(as_expr) = node.kind() else { return };
 
+        // Test files legitimately use assertions to build minimal stubs/mocks
+        // and to satisfy the checker on intentionally-unreached paths.
+        if ctx.file.path_segments.in_test_dir {
+            return;
+        }
+
         // Allow `as const` — it's a type refinement, not a cast.
         let type_span = as_expr.type_annotation.span();
         let type_text = &ctx.source[type_span.start as usize..type_span.end as usize];
@@ -186,10 +192,26 @@ mod tests {
         crate::rules::test_helpers::run_oxc_ts(source, &Check)
     }
 
+    fn run_in_test_file(source: &str) -> Vec<Diagnostic> {
+        use crate::rules::file_ctx::{FileCtx, PathSegments};
+        let file = FileCtx {
+            path_segments: PathSegments { in_test_dir: true, ..Default::default() },
+            ..Default::default()
+        };
+        crate::rules::test_helpers::run_oxc_tsx_with_file_ctx(source, &Check, &file)
+    }
+
     #[test]
     fn flags_as_string() {
         let diags = run_on("const x = foo as string;");
         assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn allows_assertions_in_test_files() {
+        // Regression for issue #573: test stubs/mocks cast freely.
+        assert!(run_in_test_file("const c = {} as AnyColumn;").is_empty());
+        assert!(run_in_test_file("const e = vi.fn() as UseFormSetError<FieldValues>;").is_empty());
     }
 
     #[test]
