@@ -515,4 +515,16 @@ mod tests {
         "#;
         assert_eq!(run(src).len(), 1);
     }
+
+    // #592 — exact reproducer: a CSS media-query built with `.join(" and ")`
+    // in `use-media-query.ts`. The `" and "` is the CSS combinator keyword,
+    // not English prose; the media-query path exemption (#498) covers it.
+    #[test]
+    fn no_fp_css_media_query_join_issue_592() {
+        let src = r#"
+            const parts = ["(min-width: 640px)", "(max-width: 1023px)"];
+            return parts.join(" and ");
+        "#;
+        assert!(run_with_path(src, "src/app/hooks/use-media-query.ts").is_empty());
+    }
 }
