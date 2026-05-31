@@ -34,6 +34,12 @@ impl OxcCheck for Check {
             if imp.source_path.is_some() {
                 continue;
             }
+            // Skip gitignored build-time generated files (e.g. TanStack
+            // Router's `routeTree.gen.ts`): often absent at lint time, always
+            // present at build/dev time.
+            if is_generated_specifier(&imp.specifier) {
+                continue;
+            }
             if !seen.insert((imp.specifier.clone(), imp.line)) {
                 continue;
             }
@@ -53,5 +59,28 @@ impl OxcCheck for Check {
         }
 
         diagnostics
+    }
+}
+
+/// True for specifiers pointing at a build-time generated file whose final
+/// segment ends in `.gen` (e.g. `./routeTree.gen`) or carries a `.gen.`
+/// extension stem (e.g. `./routeTree.gen.ts`). Such files are gitignored and
+/// often absent at lint time, yet always present at build/dev time.
+fn is_generated_specifier(spec: &str) -> bool {
+    let last = spec.rsplit('/').next().unwrap_or(spec);
+    last.ends_with(".gen") || last.contains(".gen.")
+}
+
+#[cfg(test)]
+mod oxc_tests {
+    use super::is_generated_specifier;
+
+    #[test]
+    fn detects_generated_specifiers_issue_487() {
+        assert!(is_generated_specifier("./routeTree.gen"));
+        assert!(is_generated_specifier("./routeTree.gen.ts"));
+        assert!(is_generated_specifier("../app/routeTree.gen"));
+        assert!(!is_generated_specifier("./routeTree"));
+        assert!(!is_generated_specifier("./generated"));
     }
 }
