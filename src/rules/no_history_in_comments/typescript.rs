@@ -48,4 +48,12 @@ mod tests {
     fn allows_jsdoc_with_was() {
         assert!(run("/** Returns whether the item was found */").is_empty());
     }
+
+    #[test]
+    fn allows_be_rewritten_as_behaviour() {
+        // Regression for issue #494: "be rewritten" describes expected behaviour
+        // (a verb), not a past code change.
+        assert!(run("// non-string — should not be rewritten or crash").is_empty());
+        assert!(run("// the URL will be rewritten to strip query params").is_empty());
+    }
 }
