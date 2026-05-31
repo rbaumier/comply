@@ -3,7 +3,10 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{Expression, TSLiteral, TSType, TSTypeName, TSTypeOperatorOperator};
+use oxc_ast::ast::{
+    BinaryOperator, Expression, TSLiteral, TSType, TSTypeName, TSTypeOperatorOperator,
+    UnaryOperator,
+};
 use std::sync::Arc;
 
 const ITER_METHODS: &[&str] = &[
@@ -34,6 +37,17 @@ impl OxcCheck for Check {
         let AstKind::ComputedMemberExpression(member) = node.kind() else {
             return;
         };
+        // Test files use bracket access on trusted local fixtures/maps freely;
+        // keys never come from untrusted input in a unit test.
+        if ctx.file.path_segments.in_test_dir {
+            return;
+        }
+        // Skip numeric keys — array indexing, not object injection. A numeric
+        // index can't introduce an arbitrary string property / prototype key
+        // (`ips[Math.max(0, ips.length - 1)]`, `arr[i - 1]`).
+        if key_is_numeric(&member.expression) {
+            return;
+        }
         // Skip when the key is a literal (string / number / template
         // with no interpolations) — that's a static lookup, not an
         // injection vector.
@@ -356,6 +370,52 @@ fn expression_type_has_keyof(expr: &Expression) -> bool {
     }
 }
 
+/// True when the key expression evaluates to a number — array indexing, which
+/// is not an object-injection vector. Covers arithmetic (`i - 1`), `Math.*`
+/// calls, `.length`, and the numeric coercions `Number`/`parseInt`/`parseFloat`.
+/// `+` is excluded (it doubles as string concatenation).
+fn key_is_numeric(expr: &Expression) -> bool {
+    match expr {
+        Expression::NumericLiteral(_) => true,
+        Expression::BinaryExpression(b) => matches!(
+            b.operator,
+            BinaryOperator::Subtraction
+                | BinaryOperator::Multiplication
+                | BinaryOperator::Division
+                | BinaryOperator::Remainder
+                | BinaryOperator::Exponential
+                | BinaryOperator::ShiftLeft
+                | BinaryOperator::ShiftRight
+                | BinaryOperator::ShiftRightZeroFill
+                | BinaryOperator::BitwiseOR
+                | BinaryOperator::BitwiseAnd
+                | BinaryOperator::BitwiseXOR
+        ),
+        Expression::UnaryExpression(u) => matches!(
+            u.operator,
+            UnaryOperator::UnaryNegation | UnaryOperator::UnaryPlus | UnaryOperator::BitwiseNot
+        ),
+        Expression::ParenthesizedExpression(p) => key_is_numeric(&p.expression),
+        Expression::StaticMemberExpression(m) => m.property.name.as_str() == "length",
+        Expression::CallExpression(c) => callee_is_numeric_producer(&c.callee),
+        _ => false,
+    }
+}
+
+/// True for callees that always return a number: `Math.<anything>`, and the
+/// global numeric coercions `Number` / `parseInt` / `parseFloat`.
+fn callee_is_numeric_producer(callee: &Expression) -> bool {
+    match callee {
+        Expression::StaticMemberExpression(m) => {
+            matches!(&m.object, Expression::Identifier(id) if id.name.as_str() == "Math")
+        }
+        Expression::Identifier(id) => {
+            matches!(id.name.as_str(), "Number" | "parseInt" | "parseFloat")
+        }
+        _ => false,
+    }
+}
+
 /// Recursively check whether a TS type contains a `keyof X` operator.
 /// Covers `keyof T`, `keyof T & string`, `readonly (keyof T)[]`,
 /// `Extract<keyof T, string>`, and similar shapes.
@@ -506,6 +566,48 @@ mod tests {
             function f(k: "a" | "b"): number { return m[k]; }
         "#;
         assert!(run(src).is_empty());
+    }
+
+    // Regression #574 — numeric array index is not object injection.
+    #[test]
+    fn allows_math_numeric_index() {
+        let src = r#"function f(ips: string[]) { return ips[Math.max(0, ips.length - 1)]; }"#;
+        assert!(run(src).is_empty(), "Math-bounded numeric index should not flag");
+    }
+
+    #[test]
+    fn allows_arithmetic_numeric_index() {
+        let src = r#"function f(arr: number[], i: number) { return arr[i - 1]; }"#;
+        assert!(run(src).is_empty(), "arithmetic numeric index should not flag");
+    }
+
+    #[test]
+    fn allows_parseint_numeric_index() {
+        let src = r#"function f(arr: number[], s: string) { return arr[parseInt(s, 10)]; }"#;
+        assert!(run(src).is_empty());
+    }
+
+    // Regression #574 — test files use bracket access on trusted fixtures.
+    #[test]
+    fn allows_bracket_access_in_test_files() {
+        use crate::rules::file_ctx::{FileCtx, PathSegments};
+        let file = FileCtx {
+            path_segments: PathSegments { in_test_dir: true, ..Default::default() },
+            ..Default::default()
+        };
+        let diags = crate::rules::test_helpers::run_oxc_tsx_with_file_ctx(
+            "function f(obj, key) { return obj[key]; }",
+            &Check,
+            &file,
+        );
+        assert!(diags.is_empty());
+    }
+
+    // Negative: a string-keyed addition (concatenation risk) still flags.
+    #[test]
+    fn still_flags_string_concat_key() {
+        let src = r#"function f(obj: Record<string, number>, k: string) { return obj["p" + k]; }"#;
+        assert_eq!(run(src).len(), 1);
     }
 
     // Negative: a plainly `string`-typed key is still an injection vector.
