@@ -69,7 +69,14 @@ fn catch_routes_through_typed_handler(handler: &CatchClause) -> bool {
 /// call site, so a try/catch around it is legitimate library-boundary control
 /// flow (bail out before running post-success effects), not a Result smell.
 fn try_wraps_throwing_library_call(block_text: &str) -> bool {
-    block_text.contains(".mutateAsync(")
+    const THROWING_BUILTINS: &[&str] = &[
+        ".mutateAsync(",
+        "fetch(",
+        "JSON.parse(",
+        "localStorage.",
+        "sessionStorage.",
+    ];
+    THROWING_BUILTINS.iter().any(|m| block_text.contains(m))
 }
 
 impl OxcCheck for Check {
@@ -91,9 +98,14 @@ impl OxcCheck for Check {
         let AstKind::TryStatement(stmt) = node.kind() else {
             return;
         };
-        if let Some(handler) = &stmt.handler
-            && catch_routes_through_typed_handler(handler)
-        {
+        // `try { … } finally { … }` with no catch performs no error handling —
+        // the error propagates untouched. The `finally` exists only to
+        // guarantee cleanup (clearTimeout, closeDatabase) on every exit path,
+        // for which there is no Result-type equivalent. Not a Result smell.
+        let Some(handler) = &stmt.handler else {
+            return;
+        };
+        if catch_routes_through_typed_handler(handler) {
             return;
         }
         let block_text = &ctx.source
@@ -130,9 +142,18 @@ mod tests {
         assert_eq!(d[0].rule_id, "no-try-statements");
     }
 
+    /// Regression for #576 — `try/finally` with no catch is cleanup-only and
+    /// performs no error handling, so it must not flag.
     #[test]
-    fn flags_try_finally() {
-        let d = run("try { foo(); } finally {}");
+    fn allows_try_finally_without_catch() {
+        let d = run("try { return await Promise.race([p, t]); } finally { clearTimeout(id); }");
+        assert!(d.is_empty());
+    }
+
+    /// A try with a catch (and a trailing finally) is still error handling.
+    #[test]
+    fn flags_try_catch_finally() {
+        let d = run("try { foo(); } catch (e) {} finally { cleanup(); }");
         assert_eq!(d.len(), 1);
     }
 
@@ -225,5 +246,19 @@ mod tests {
     fn still_flags_plain_try_without_mutate_async() {
         let src = "try { await save(); } catch { return; }";
         assert_eq!(run(src).len(), 1);
+    }
+
+    /// Regression for #576 — wrapping a throwing built-in (`fetch`) to convert
+    /// it to a project error type is the correct boundary, not a Result smell.
+    #[test]
+    fn skips_try_wrapping_fetch() {
+        let src = "try { const r = await fetch(url); return r; } catch (e) { throw new ProblemError(e); }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn skips_try_wrapping_json_parse() {
+        let src = "try { return JSON.parse(raw); } catch (e) { throw new ParseError(e); }";
+        assert!(run(src).is_empty());
     }
 }
