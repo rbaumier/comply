@@ -40,6 +40,12 @@ impl OxcCheck for Check {
                 if !DANGEROUS_FUNCTIONS.contains(&prop) {
                     return;
                 }
+                // `RegExp.prototype.exec` is a string match, not a subprocess:
+                // `/re/.exec(x)` has a regex-literal receiver that the textual
+                // SAFE_RECEIVERS allowlist below cannot recognize.
+                if matches!(member.object, Expression::RegExpLiteral(_)) {
+                    return;
+                }
                 // Check safe receivers
                 let obj_text =
                     &ctx.source[member.object.span().start as usize..member.object.span().end as usize];
@@ -86,5 +92,40 @@ impl OxcCheck for Check {
             severity: Severity::Error,
             span: None,
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Check;
+    use crate::rules::test_helpers::run_oxc_ts;
+
+    #[test]
+    fn flags_exec_with_dynamic_command() {
+        let src = "child_process.exec(userInput);";
+        let diags = run_oxc_ts(src, &Check);
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn allows_exec_with_string_literal() {
+        let src = r#"child_process.exec("ls -la");"#;
+        let diags = run_oxc_ts(src, &Check);
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn allows_regex_receiver_by_name() {
+        let src = "const m = regex.exec(input);";
+        let diags = run_oxc_ts(src, &Check);
+        assert!(diags.is_empty());
+    }
+
+    // Regression for #522: a regex *literal* receiver is RegExp.prototype.exec.
+    #[test]
+    fn allows_regex_literal_exec_issue_522() {
+        let src = r#"const m = /https?:\/\/[^"]+/.exec(html);"#;
+        let diags = run_oxc_ts(src, &Check);
+        assert!(diags.is_empty(), "expected no diagnostics, got {diags:?}");
     }
 }
