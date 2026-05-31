@@ -40,6 +40,12 @@ impl OxcCheck for Check {
                 if !DANGEROUS_FUNCTIONS.contains(&prop) {
                     return;
                 }
+                // `/re/.exec(str)` is a regex match, not a subprocess. The
+                // textual SAFE_RECEIVERS allowlist only catches named
+                // receivers, so skip regex *literal* receivers explicitly.
+                if matches!(member.object, Expression::RegExpLiteral(_)) {
+                    return;
+                }
                 // Check safe receivers
                 let obj_text =
                     &ctx.source[member.object.span().start as usize..member.object.span().end as usize];
@@ -86,5 +92,23 @@ impl OxcCheck for Check {
             severity: Severity::Error,
             span: None,
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rules::test_helpers::run_oxc_ts;
+
+    #[test]
+    fn flags_exec_with_dynamic_command() {
+        assert_eq!(run_oxc_ts("exec(`ls ${dir}`)", &Check).len(), 1);
+    }
+
+    // Regression for #522: RegExp.prototype.exec on a regex literal is a
+    // string match, not a subprocess.
+    #[test]
+    fn allows_regexp_literal_exec_issue_522() {
+        assert!(run_oxc_ts("const m = /foo(.*)/.exec(html);", &Check).is_empty());
     }
 }
