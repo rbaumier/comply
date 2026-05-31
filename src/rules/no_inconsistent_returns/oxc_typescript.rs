@@ -4,6 +4,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
+use oxc_ast::ast::Expression;
 use oxc_span::GetSpan;
 use std::sync::Arc;
 
@@ -63,6 +64,13 @@ impl OxcCheck for Check {
             }
         }
 
+        // A React effect callback has type `() => void | (() => void)`: a bare
+        // `return;` ("no cleanup") and `return () => {…}` ("here is the cleanup")
+        // are both valid and intentional. Not an inconsistency.
+        if has_value && has_bare && is_effect_callback(node_id, nodes) {
+            return;
+        }
+
         if has_value && has_bare {
             let (line, column) = byte_offset_to_line_col(ctx.source, span_start as usize);
             diagnostics.push(Diagnostic {
@@ -77,6 +85,28 @@ impl OxcCheck for Check {
         }
         let _ = body;
     }
+}
+
+/// True when the function `node_id` is the callback passed directly to a React
+/// effect hook (`useEffect` / `useLayoutEffect` / `useInsertionEffect`), whose
+/// return type is `void | (() => void)`.
+fn is_effect_callback(node_id: oxc_semantic::NodeId, nodes: &oxc_semantic::AstNodes) -> bool {
+    let parent = nodes.parent_id(node_id);
+    if parent == node_id {
+        return false;
+    }
+    let AstKind::CallExpression(call) = nodes.get_node(parent).kind() else {
+        return false;
+    };
+    let callee_name = match &call.callee {
+        Expression::Identifier(id) => id.name.as_str(),
+        Expression::StaticMemberExpression(m) => m.property.name.as_str(),
+        _ => return false,
+    };
+    matches!(
+        callee_name,
+        "useEffect" | "useLayoutEffect" | "useInsertionEffect"
+    )
 }
 
 /// Walk up from `id` to find the nearest Function or ArrowFunctionExpression
@@ -186,6 +216,47 @@ const f = (x) => {
     }
     return x + 1;
 };
+"#;
+        assert_eq!(run_on(code).len(), 1);
+    }
+
+    #[test]
+    fn allows_use_effect_optional_cleanup() {
+        // Regression for issue #578: `return;` (no cleanup) and `return () => {}`
+        // (cleanup) are both valid in a useEffect callback.
+        let code = r#"
+useEffect(() => {
+    if (liveName === undefined) {
+        return;
+    }
+    setLiveRouteTitle(pathname, liveName);
+    return () => {
+        clearLiveRouteTitle(pathname);
+    };
+}, [liveName, pathname]);
+"#;
+        assert!(run_on(code).is_empty());
+    }
+
+    #[test]
+    fn allows_use_layout_effect_optional_cleanup() {
+        let code = r#"
+useLayoutEffect(() => {
+    if (!ref.current) return;
+    return () => cleanup();
+}, []);
+"#;
+        assert!(run_on(code).is_empty());
+    }
+
+    #[test]
+    fn still_flags_non_effect_callback_with_mixed_returns() {
+        // A plain callback (not an effect hook) with mixed returns still flags.
+        let code = r#"
+useMemo(() => {
+    if (x) return;
+    return compute();
+}, [x]);
 "#;
         assert_eq!(run_on(code).len(), 1);
     }
