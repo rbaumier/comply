@@ -22,8 +22,8 @@ fn is_config_file(ctx: &CheckCtx) -> bool {
     stem.to_ascii_lowercase().ends_with(".config")
 }
 
-/// Returns true when `node` is nested inside a `.parse()` or `.safeParse()`
-/// call — the Zod centralized-env-reader pattern.
+/// True for test files: those in a test directory or named with a
+/// `.test.`/`.spec.` filename suffix.
 fn is_test_file(ctx: &CheckCtx) -> bool {
     if ctx.file.path_segments.in_test_dir {
         return true;
@@ -69,7 +69,8 @@ impl OxcCheck for Check {
         // Test files exercising env-parsing modules must read, write, and
         // restore `process.env` to drive configuration scenarios — the
         // canonical test-time injection surface, never shipped to production.
-        if ctx.file.path_segments.in_test_dir {
+        // Covers both test directories and `.test.`/`.spec.` filename suffixes.
+        if is_test_file(ctx) {
             return Vec::new();
         }
         let mut diagnostics = Vec::new();
