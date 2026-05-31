@@ -3,10 +3,31 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::Expression;
+use oxc_ast::ast::{AssignmentTarget, Expression};
 use std::sync::Arc;
 
 pub struct Check;
+
+/// True when `id` resolves to a binding declared with a type annotation
+/// (e.g. `let body: unknown`). A typed target — `unknown` included — forces
+/// downstream narrowing, the same safety the rule enforces for typed
+/// declarators.
+fn binding_is_typed<'a>(
+    id: &oxc_ast::ast::IdentifierReference<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    let Some(ref_id) = id.reference_id.get() else { return false };
+    let scoping = semantic.scoping();
+    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else { return false };
+    let decl_node_id = scoping.symbol_declaration(sym_id);
+    let nodes = semantic.nodes();
+    for kind in std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id)) {
+        if let AstKind::VariableDeclarator(decl) = kind {
+            return decl.id.type_annotation.is_some();
+        }
+    }
+    false
+}
 
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
