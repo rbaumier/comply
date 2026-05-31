@@ -23,6 +23,13 @@ impl OxcCheck for Check {
     ) {
         let AstKind::TSAsExpression(as_expr) = node.kind() else { return };
 
+        // Test stubs cast partial literals to full library types where
+        // `satisfies` is impossible (the target has required fields the stub
+        // omits) — skip test files.
+        if ctx.file.path_segments.in_test_dir {
+            return;
+        }
+
         // Only flag when the value side is an object or array literal.
         let is_literal = matches!(
             &as_expr.expression,
@@ -85,6 +92,24 @@ mod tests {
     #[test]
     fn flags_object_literal_cast() {
         assert_eq!(run_ts("const x = { a: 1 } as Config;").len(), 1);
+    }
+
+    #[test]
+    fn allows_stub_cast_in_test_files() {
+        // Regression for issue #573: partial stubs can't use `satisfies`.
+        use crate::rules::file_ctx::{FileCtx, PathSegments};
+        let file = FileCtx {
+            path_segments: PathSegments { in_test_dir: true, ..Default::default() },
+            ..Default::default()
+        };
+        assert!(
+            crate::rules::test_helpers::run_oxc_tsx_with_file_ctx(
+                "const a = { api: { getSession: async () => null } } as Auth;",
+                &Check,
+                &file,
+            )
+            .is_empty()
+        );
     }
 
     #[test]

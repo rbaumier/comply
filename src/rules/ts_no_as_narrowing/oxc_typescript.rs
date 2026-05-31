@@ -65,6 +65,13 @@ impl OxcCheck for Check {
             return;
         };
 
+        // Tests cast runtime values after a runtime guard
+        // (`expect(x).toBeInstanceOf(Foo); (x as Foo).field`) — the assertion is
+        // backed by the guard, not standing in for narrowing. Skip test files.
+        if ctx.file.path_segments.in_test_dir {
+            return;
+        }
+
         // Skip `as const`.
         let type_text = &ctx.source
             [as_expr.type_annotation.span().start as usize..as_expr.type_annotation.span().end as usize];
@@ -127,6 +134,24 @@ mod tests {
     #[test]
     fn flags_pascal_user_type() {
         assert_eq!(run_on("const x = value as AdminUser;").len(), 1);
+    }
+
+    #[test]
+    fn allows_guarded_cast_in_test_files() {
+        // Regression for issue #573: assertion after a runtime `instanceof` guard.
+        use crate::rules::file_ctx::{FileCtx, PathSegments};
+        let file = FileCtx {
+            path_segments: PathSegments { in_test_dir: true, ..Default::default() },
+            ..Default::default()
+        };
+        assert!(
+            crate::rules::test_helpers::run_oxc_tsx_with_file_ctx(
+                "const c = (apiError as InternalError).cause;",
+                &Check,
+                &file,
+            )
+            .is_empty()
+        );
     }
 
     #[test]
