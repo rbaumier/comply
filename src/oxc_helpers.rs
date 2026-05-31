@@ -100,6 +100,10 @@ const TANSTACK_QUERY_FACTORIES: &[&str] = &[
     // the same fixed-signature callbacks as the factory options object.
     "mutate",
     "mutateAsync",
+    // Cache constructors — `new MutationCache({ onError })` /
+    // `new QueryCache({ onError })` take the same fixed-signature callbacks.
+    "MutationCache",
+    "QueryCache",
 ];
 
 /// Option-keys inside a TanStack Query factory call whose value is a
@@ -199,8 +203,12 @@ pub fn is_fixed_signature_library_callback<'a>(
         return false;
     }
     let call_parent = nodes.get_node(call_parent_id);
-    let AstKind::CallExpression(call) = call_parent.kind() else {
-        return false;
+    // The options object may be an argument of either a call (`useMutation({…})`)
+    // or a constructor (`new MutationCache({…})`).
+    let (callee, arguments) = match call_parent.kind() {
+        AstKind::CallExpression(call) => (&call.callee, &call.arguments),
+        AstKind::NewExpression(new_expr) => (&new_expr.callee, &new_expr.arguments),
+        _ => return false,
     };
 
     // Any argument may be this ObjectExpression — TanStack Query v4 supports
@@ -208,7 +216,7 @@ pub fn is_fixed_signature_library_callback<'a>(
     // options object is the third argument.
     use oxc_span::GetSpan;
     let obj_expr_span = obj_expr.span();
-    let matches_any_arg = call.arguments.iter().any(|arg| {
+    let matches_any_arg = arguments.iter().any(|arg| {
         arg.as_expression()
             .is_some_and(|expr| expr.span() == obj_expr_span)
     });
@@ -219,7 +227,7 @@ pub fn is_fixed_signature_library_callback<'a>(
     // Callee identifier in allowlist. Handles both bare calls (`useMutation`)
     // and namespace-import calls (`RQ.useMutation`) — the receiver is not
     // verified to be a namespace import; property name is sufficient.
-    let callee_name = match &call.callee {
+    let callee_name = match callee {
         Expression::Identifier(id) => id.name.as_str(),
         Expression::StaticMemberExpression(member) => member.property.name.as_str(),
         _ => return false,
