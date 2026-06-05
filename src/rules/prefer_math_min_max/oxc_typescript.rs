@@ -7,6 +7,18 @@ use oxc_ast::ast::BinaryOperator;
 use oxc_span::GetSpan;
 use std::sync::Arc;
 
+fn is_numeric_literal(expr: &oxc_ast::ast::Expression) -> bool {
+    use oxc_ast::ast::{Expression, UnaryOperator};
+    match expr {
+        Expression::NumericLiteral(_) => true,
+        Expression::UnaryExpression(u) => {
+            u.operator == UnaryOperator::UnaryNegation
+                && matches!(u.argument, Expression::NumericLiteral(_))
+        }
+        _ => false,
+    }
+}
+
 pub struct Check;
 
 impl OxcCheck for Check {
@@ -51,6 +63,12 @@ impl OxcCheck for Check {
             return;
         }
 
+        // Only fire when at least one operand is a numeric literal; skip string/branded-id
+        // comparisons where Math.min/max would produce NaN instead of a lexicographic result.
+        if !is_numeric_literal(&test.left) && !is_numeric_literal(&test.right) {
+            return;
+        }
+
         let method: Option<&str> = if (is_gt && left_text == alt_text && right_text == cons_text)
             || (is_lt && left_text == cons_text && right_text == alt_text)
         {
@@ -78,5 +96,47 @@ impl OxcCheck for Check {
                 span: None,
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(src, &Check)
+    }
+
+    // Regression #756: both operands are identifiers (branded string ids) — must not fire.
+    #[test]
+    fn no_fp_on_identifier_only_ternary() {
+        let src = r#"
+            type GammeId = string & { readonly __brand: "GammeId" };
+            function pick(a: GammeId, b: GammeId): GammeId {
+                return a < b ? a : b;
+            }
+        "#;
+        assert_eq!(run(src).len(), 0);
+    }
+
+    // Primary use case: one operand is a numeric literal — must fire.
+    #[test]
+    fn fires_on_numeric_literal_clamp() {
+        let src = "const v = height < 50 ? height : 50;";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // Both operands are numeric literals — must fire.
+    #[test]
+    fn fires_on_two_numeric_literals() {
+        let src = "const v = 0 < 1 ? 0 : 1;";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // Negative numeric literal — must fire.
+    #[test]
+    fn fires_on_negative_literal() {
+        let src = "const v = x < -1 ? x : -1;";
+        assert_eq!(run(src).len(), 1);
     }
 }
