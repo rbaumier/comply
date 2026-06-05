@@ -111,10 +111,11 @@ fn numeric_type(type_text: &str) -> Option<NumericType> {
 }
 
 fn is_dangerous_cast(source: NumericType, target: NumericType) -> bool {
-    if source.kind == target.kind && source.kind != NumericKind::Float {
-        return target.bits < source.bits;
+    match (source.kind, target.kind) {
+        (_, NumericKind::Float) | (NumericKind::Float, _) => true,
+        (k, k2) if k == k2 => target.bits < source.bits,
+        _ => source.bits >= target.bits,
     }
-    true
 }
 
 fn source_numeric_type(node: tree_sitter::Node, source: &[u8]) -> Option<NumericType> {
@@ -253,5 +254,30 @@ mod tests {
     fn allows_in_test_context() {
         let source = "#[test]\nfn t() { let _ = 1u8 as u64; }";
         assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn test_allows_safe_widening_i8_to_u32() {
+        assert!(run_on("fn f(x: i8) -> u32 { x as u32 }").is_empty());
+    }
+
+    #[test]
+    fn test_allows_safe_widening_i32_to_u64() {
+        assert!(run_on("fn f(x: i32) -> u64 { x as u64 }").is_empty());
+    }
+
+    #[test]
+    fn test_allows_safe_widening_i16_to_u32() {
+        assert!(run_on("fn f(x: i16) -> u32 { x as u32 }").is_empty());
+    }
+
+    #[test]
+    fn test_flags_dangerous_narrowing_i32_to_u16() {
+        assert_eq!(run_on("fn f(x: i32) -> u16 { x as u16 }").len(), 1);
+    }
+
+    #[test]
+    fn test_flags_dangerous_narrowing_i64_to_u32() {
+        assert_eq!(run_on("fn f(x: i64) -> u32 { x as u32 }").len(), 1);
     }
 }
