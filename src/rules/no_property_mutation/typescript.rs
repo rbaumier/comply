@@ -176,20 +176,16 @@ fn is_create_element_call(node: tree_sitter::Node, source: &[u8]) -> bool {
     method == "createElement" || method == "createElementNS"
 }
 
-const TEST_GLOBALS: &[&str] = &["console", "window", "global", "globalThis", "process"];
+const HOST_GLOBALS: &[&str] = &["console", "window", "global", "globalThis", "process"];
 const TEST_HOOKS: &[&str] = &["beforeEach", "afterEach", "beforeAll", "afterAll"];
 
 fn is_test_setup_mutation(
     node: tree_sitter::Node,
-    mutated: tree_sitter::Node,
     source: &[u8],
     ctx: &crate::rules::backend::CheckCtx,
 ) -> bool {
     if !ctx.file.path_segments.in_test_dir {
         return false;
-    }
-    if root_object_name(mutated, source).is_some_and(|name| TEST_GLOBALS.contains(&name)) {
-        return true;
     }
     is_inside_test_hook(node, source)
 }
@@ -218,13 +214,15 @@ match node.kind() {
             let Some(left) = node.child_by_field_name("left") else { return; };
             if !matches!(left.kind(), "member_expression" | "subscript_expression") { return; }
 
+            if root_object_name(left, source).is_some_and(|n| HOST_GLOBALS.contains(&n)) { return; }
+
             // Allow: module.exports = ...
             let obj_text = left.child_by_field_name("object")
                 .and_then(|o| o.utf8_text(source).ok())
                 .unwrap_or("");
             if obj_text == "module" || obj_text == "exports" { return; }
 
-            if is_test_setup_mutation(node, left, source, ctx) { return; }
+            if is_test_setup_mutation(node, source, ctx) { return; }
             if is_inside_sentry_hook(node, source) { return; }
 
             // Allow: ref.current = ... (React useRef pattern)
@@ -259,7 +257,8 @@ match node.kind() {
         "update_expression" => {
             let Some(arg) = node.named_child(0) else { return; };
             if !matches!(arg.kind(), "member_expression" | "subscript_expression") { return; }
-            if is_test_setup_mutation(node, arg, source, ctx) { return; }
+            if root_object_name(arg, source).is_some_and(|n| HOST_GLOBALS.contains(&n)) { return; }
+            if is_test_setup_mutation(node, source, ctx) { return; }
             if is_inside_sentry_hook(node, source) { return; }
             if let Some(root) = root_object_name(arg, source)
                 && is_created_dom_element_binding(node, source, root)
@@ -285,7 +284,8 @@ match node.kind() {
 
             let Some(arg) = node.child_by_field_name("argument") else { return; };
             if !matches!(arg.kind(), "member_expression" | "subscript_expression") { return; }
-            if is_test_setup_mutation(node, arg, source, ctx) { return; }
+            if root_object_name(arg, source).is_some_and(|n| HOST_GLOBALS.contains(&n)) { return; }
+            if is_test_setup_mutation(node, source, ctx) { return; }
             if is_inside_sentry_hook(node, source) { return; }
             if let Some(root) = root_object_name(arg, source)
                 && is_created_dom_element_binding(node, source, root)
@@ -506,5 +506,18 @@ mod tests {
             }
         "#;
         assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_host_global_mutations_outside_test() {
+        assert!(run(r#"process.env.FOO = "x""#).is_empty());
+        assert!(run(r#"process.env["FOO"] = "x""#).is_empty());
+        assert!(run(r#"window.__SHA__ = sha"#).is_empty());
+        assert!(run(r#"globalThis.fetch = impl"#).is_empty());
+    }
+
+    #[test]
+    fn still_flags_non_global_mutations_outside_test() {
+        assert_eq!(run("user.name = \"x\"").len(), 1);
     }
 }
