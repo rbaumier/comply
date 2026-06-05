@@ -44,6 +44,12 @@ const BUNDLER_CONFIG_FILES: &[&str] = &[
     "vite.config.mjs",
     "vite.config.cts",
     "vite.config.cjs",
+    "vitest.config.ts",
+    "vitest.config.js",
+    "vitest.config.mts",
+    "vitest.config.mjs",
+    "vitest.config.cts",
+    "vitest.config.cjs",
     "webpack.config.ts",
     "webpack.config.js",
     "webpack.config.mts",
@@ -97,22 +103,59 @@ fn has_bundler_config(path: &std::path::Path) -> bool {
     false
 }
 
-/// True when `tsconfig.json` declares `moduleResolution: "bundler"` (or any
-/// resolution mode that lets TS resolve extensionless specifiers — `bundler`,
-/// `node16`, `nodenext` all accept them with the right `noEmit`/`allowImportingTsExtensions`
-/// pairing, but `bundler` is the unambiguous "I have a bundler" signal).
-fn tsconfig_uses_bundler_resolution(ctx: &crate::rules::backend::CheckCtx) -> bool {
-    let Some(ts) = ctx.project.nearest_tsconfig(ctx.path) else {
+/// Returns `true` only when the project context positively requires explicit
+/// file extensions — i.e. Node ESM without a bundler.
+///
+/// Inverted default: the rule stays silent unless it can prove the project is
+/// running native Node ESM (`moduleResolution: node16`/`nodenext`, or
+/// `module: node16`/`nodenext`, or `package.json` `"type":"module"` with no
+/// bundler present). Every other mode (`node`, `node10`, `classic`, `bundler`,
+/// `commonjs`, or absent config) accepts extensionless imports and/or rejects
+/// explicit `.ts` extensions.
+fn requires_explicit_extension(ctx: &crate::rules::backend::CheckCtx) -> bool {
+    use crate::project::ModuleType;
+
+    if project_uses_bundler(ctx) {
         return false;
-    };
-    ts.module_resolution
-        .as_deref()
-        .is_some_and(|m| m.eq_ignore_ascii_case("bundler"))
+    }
+
+    if let Some(ts) = ctx.project.nearest_tsconfig(ctx.path) {
+        if let Some(mr) = ts.module_resolution.as_deref() {
+            if ["node", "node10", "classic", "bundler"]
+                .iter()
+                .any(|&m| mr.eq_ignore_ascii_case(m))
+            {
+                return false;
+            }
+            if ["node16", "nodenext"]
+                .iter()
+                .any(|&m| mr.eq_ignore_ascii_case(m))
+            {
+                return true;
+            }
+        }
+        if let Some(m) = ts.module.as_deref() {
+            if m.eq_ignore_ascii_case("commonjs") {
+                return false;
+            }
+            if ["node16", "nodenext"]
+                .iter()
+                .any(|&v| m.eq_ignore_ascii_case(v))
+            {
+                return true;
+            }
+        }
+    }
+
+    // Fallback: package.json "type":"module" without a bundler = native Node ESM.
+    ctx.project
+        .nearest_package_json(ctx.path)
+        .map(|pkg| pkg.module_type == ModuleType::Module)
+        .unwrap_or(false)
 }
 
 crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
-    if project_uses_bundler(ctx) { return; }
-    if tsconfig_uses_bundler_resolution(ctx) { return; }
+    if !requires_explicit_extension(ctx) { return; }
 
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
@@ -212,11 +255,14 @@ mod tests {
         run_ts_with_project_and_path(source, &Check, &project, &canon)
     }
 
-    // -------- baseline (no project context — empty ProjectCtx, no bundler) --------
+    // -------- baseline (no project context — empty ProjectCtx, no package.json) --------
+    // With the inverted default, run_on() (no package.json) → silence.
+    // Tests that need the rule to fire must use run_with_project(Some(r#"{"type":"module"}"#), ...).
 
     #[test]
     fn flags_relative_import_without_extension() {
-        let d = run_on("import { foo } from './utils';");
+        let pkg = r#"{"type":"module"}"#;
+        let d = run_with_project(Some(pkg), None, "import { foo } from './utils';");
         assert_eq!(d.len(), 1);
     }
 
@@ -237,7 +283,8 @@ mod tests {
 
     #[test]
     fn flags_parent_relative_without_extension() {
-        let d = run_on("import { bar } from '../helpers/bar';");
+        let pkg = r#"{"type":"module"}"#;
+        let d = run_with_project(Some(pkg), None, "import { bar } from '../helpers/bar';");
         assert_eq!(d.len(), 1);
     }
 
@@ -248,7 +295,8 @@ mod tests {
 
     #[test]
     fn flags_reexport_without_extension() {
-        let d = run_on("export { foo } from './utils';");
+        let pkg = r#"{"type":"module"}"#;
+        let d = run_with_project(Some(pkg), None, "export { foo } from './utils';");
         assert_eq!(d.len(), 1);
     }
 
@@ -338,6 +386,15 @@ mod tests {
     }
 
     #[test]
+    fn skips_when_vitest_config_present() {
+        let d = run_with_config_file("vitest.config.ts", "import { foo } from './utils';");
+        assert!(
+            d.is_empty(),
+            "vitest config → bundler context → silence: {d:?}"
+        );
+    }
+
+    #[test]
     fn skips_when_tsconfig_module_resolution_bundler() {
         let tsc = r#"{"compilerOptions":{"moduleResolution":"bundler"}}"#;
         let d = run_with_project(None, Some(tsc), "import { foo } from './utils';");
@@ -348,13 +405,12 @@ mod tests {
     }
 
     #[test]
-    fn does_not_skip_when_only_module_is_bundler() {
+    fn skips_when_module_is_bundler_no_esm_context() {
         let tsc = r#"{"compilerOptions":{"module":"bundler"}}"#;
         let d = run_with_project(None, Some(tsc), "import { foo } from './utils';");
-        assert_eq!(
-            d.len(),
-            1,
-            "compilerOptions.module is not the moduleResolution setting"
+        assert!(
+            d.is_empty(),
+            "module:bundler sans package.json type:module → silence (pas d'ESM prouvé): {d:?}"
         );
     }
 
@@ -366,6 +422,154 @@ mod tests {
             d.len(),
             1,
             "Node ESM without a bundler still needs explicit extensions"
+        );
+    }
+
+    // -------- FP regression: extensionless-accepting resolution modes --------
+
+    #[test]
+    fn skips_when_module_resolution_node() {
+        let tsc = r#"{"compilerOptions":{"moduleResolution":"node"}}"#;
+        let d = run_with_project(None, Some(tsc), "import { foo } from './utils';");
+        assert!(
+            d.is_empty(),
+            "moduleResolution:node resolves extensionless → silence: {d:?}"
+        );
+    }
+
+    #[test]
+    fn skips_when_module_resolution_node10() {
+        let tsc = r#"{"compilerOptions":{"moduleResolution":"node10"}}"#;
+        let d = run_with_project(None, Some(tsc), "import { foo } from './utils';");
+        assert!(
+            d.is_empty(),
+            "moduleResolution:node10 resolves extensionless → silence: {d:?}"
+        );
+    }
+
+    #[test]
+    fn skips_when_module_resolution_classic() {
+        let tsc = r#"{"compilerOptions":{"moduleResolution":"classic"}}"#;
+        let d = run_with_project(None, Some(tsc), "import { foo } from './utils';");
+        assert!(
+            d.is_empty(),
+            "moduleResolution:classic resolves extensionless → silence: {d:?}"
+        );
+    }
+
+    #[test]
+    fn skips_when_module_commonjs() {
+        let tsc = r#"{"compilerOptions":{"module":"commonjs"}}"#;
+        let d = run_with_project(None, Some(tsc), "import { foo } from './utils';");
+        assert!(
+            d.is_empty(),
+            "module:commonjs resolves extensionless → silence: {d:?}"
+        );
+    }
+
+    #[test]
+    fn skips_when_node16_but_bundler_present() {
+        let tsc = r#"{"compilerOptions":{"moduleResolution":"node16"}}"#;
+        let pkg = r#"{"devDependencies":{"vite":"^5"}}"#;
+        let d = run_with_project(Some(pkg), Some(tsc), "import { foo } from './utils';");
+        assert!(
+            d.is_empty(),
+            "node16 + bundler present → bundler wins → silence: {d:?}"
+        );
+    }
+
+    // -------- positive: native Node ESM modes that require extensions --------
+
+    #[test]
+    fn flags_when_module_resolution_node16() {
+        let tsc = r#"{"compilerOptions":{"moduleResolution":"node16"}}"#;
+        let d = run_with_project(None, Some(tsc), "import { foo } from './utils';");
+        assert_eq!(
+            d.len(),
+            1,
+            "moduleResolution:node16 requires explicit extensions"
+        );
+    }
+
+    #[test]
+    fn flags_when_module_resolution_nodenext() {
+        let tsc = r#"{"compilerOptions":{"moduleResolution":"nodenext"}}"#;
+        let d = run_with_project(None, Some(tsc), "import { foo } from './utils';");
+        assert_eq!(
+            d.len(),
+            1,
+            "moduleResolution:nodenext requires explicit extensions"
+        );
+    }
+
+    #[test]
+    fn flags_when_module_node16() {
+        let tsc = r#"{"compilerOptions":{"module":"node16"}}"#;
+        let d = run_with_project(None, Some(tsc), "import { foo } from './utils';");
+        assert_eq!(d.len(), 1, "module:node16 requires explicit extensions");
+    }
+
+    #[test]
+    fn flags_when_module_nodenext() {
+        let tsc = r#"{"compilerOptions":{"module":"nodenext"}}"#;
+        let d = run_with_project(None, Some(tsc), "import { foo } from './utils';");
+        assert_eq!(d.len(), 1, "module:nodenext requires explicit extensions");
+    }
+
+    // -------- extends chain: moduleResolution inherited from base tsconfig --------
+
+    fn run_with_extends_tsconfig(
+        base_tsconfig: &str,
+        child_tsconfig_extends: &str,
+        source: &str,
+    ) -> Vec<Diagnostic> {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("tsconfig.base.json"), base_tsconfig).unwrap();
+        let src = dir.path().join("src");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(src.join("tsconfig.json"), child_tsconfig_extends).unwrap();
+        let file_path = src.join("server.ts");
+        fs::write(&file_path, source).unwrap();
+        let lang = Language::from_path(&file_path).unwrap();
+        let source_file = SourceFile {
+            path: file_path.clone(),
+            language: lang,
+        };
+        let refs = vec![&source_file];
+        let config = Config::default();
+        let project = ProjectCtx::load(&refs, &config);
+        let canon = fs::canonicalize(&file_path).unwrap();
+        run_ts_with_project_and_path(source, &Check, &project, &canon)
+    }
+
+    #[test]
+    fn skips_when_module_resolution_bundler_in_extended_tsconfig() {
+        let base = r#"{"compilerOptions":{"moduleResolution":"bundler"}}"#;
+        let child = r#"{"extends":"../tsconfig.base.json"}"#;
+        let d = run_with_extends_tsconfig(
+            base,
+            child,
+            "import { foo } from './utils';",
+        );
+        assert!(
+            d.is_empty(),
+            "moduleResolution:bundler inherited via extends → silence: {d:?}"
+        );
+    }
+
+    #[test]
+    fn flags_when_module_resolution_node16_in_extended_tsconfig() {
+        let base = r#"{"compilerOptions":{"moduleResolution":"node16"}}"#;
+        let child = r#"{"extends":"../tsconfig.base.json"}"#;
+        let d = run_with_extends_tsconfig(
+            base,
+            child,
+            "import { foo } from './utils';",
+        );
+        assert_eq!(
+            d.len(),
+            1,
+            "moduleResolution:node16 inherited via extends → must flag"
         );
     }
 }
