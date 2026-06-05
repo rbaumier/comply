@@ -18,6 +18,7 @@ mod elysia_post_filter;
 mod equal_probe_post_filter;
 mod no_misused_spread_post_filter;
 mod no_redundant_type_constituents_post_filter;
+mod no_unnecessary_condition_exhaustiveness_post_filter;
 mod no_unsafe_assignment_post_filter;
 mod no_unsafe_type_assertion_css_post_filter;
 mod no_unsafe_type_assertion_from_any_post_filter;
@@ -169,6 +170,7 @@ pub fn lint_files(
     equal_probe_post_filter::apply(&mut all);
     no_misused_spread_post_filter::apply(&mut all);
     no_redundant_type_constituents_post_filter::apply(&mut all);
+    no_unnecessary_condition_exhaustiveness_post_filter::apply(&mut all);
     no_unsafe_assignment_post_filter::apply(&mut all);
     no_unsafe_type_assertion_css_post_filter::apply(&mut all);
     no_unsafe_type_assertion_from_any_post_filter::apply(&mut all);
