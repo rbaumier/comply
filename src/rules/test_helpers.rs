@@ -295,6 +295,23 @@ pub fn run_rust(source: &str, check: &dyn AstCheck) -> Vec<Diagnostic> {
     run_with_grammar(source, check, tree_sitter_rust::LANGUAGE.into(), "t.rs")
 }
 
+/// Same as `run_rust` but with a caller-supplied `FileCtx`. Use when
+/// the rule consults `ctx.file.path_segments` (e.g. `in_test_dir`).
+#[must_use]
+pub fn run_rust_with_file_ctx(
+    source: &str,
+    check: &dyn AstCheck,
+    file: &FileCtx,
+) -> Vec<Diagnostic> {
+    run_with_grammar_and_file(
+        source,
+        check,
+        tree_sitter_rust::LANGUAGE.into(),
+        "t.rs",
+        file,
+    )
+}
+
 /// Same as `run_rust` but with a custom fake filename. Use this when
 /// the rule filters on the file path (e.g. `src/main.rs` vs lib files).
 #[must_use]
