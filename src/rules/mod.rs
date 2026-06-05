@@ -756,6 +756,7 @@ pub mod operation_returning_nan;
 pub mod os_command;
 pub mod prefer_called_exactly_once_with;
 pub mod prefer_called_with;
+pub mod prefer_concise_arrow_body;
 pub mod prefer_early_return;
 pub mod prefer_expect_resolves;
 pub mod prefer_exponentiation_operator;
@@ -2245,6 +2246,7 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         block_scope_case::register(),
         prefer_single_boolean_return::register(),
         no_one_iteration_loop::register(),
+        prefer_concise_arrow_body::register(),
         prefer_early_return::register(),
         no_valueof_field::register(),
         no_nested_template_literal::register(),
