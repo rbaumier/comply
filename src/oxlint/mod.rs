@@ -23,6 +23,7 @@ mod no_unsafe_type_assertion_css_post_filter;
 mod no_unsafe_type_assertion_from_any_post_filter;
 mod no_unsafe_type_assertion_generic_bridge_post_filter;
 mod no_unsafe_type_assertion_test_file_post_filter;
+mod only_throw_error_tanstack_post_filter;
 mod promise_function_async_post_filter;
 mod strict_void_return_post_filter;
 mod options;
@@ -137,6 +138,7 @@ pub fn lint_files(
     no_unsafe_type_assertion_from_any_post_filter::apply(&mut all);
     no_unsafe_type_assertion_generic_bridge_post_filter::apply(&mut all);
     no_unsafe_type_assertion_test_file_post_filter::apply(&mut all);
+    only_throw_error_tanstack_post_filter::apply(&mut all);
     promise_function_async_post_filter::apply(&mut all);
     strict_void_return_post_filter::apply(&mut all);
 
