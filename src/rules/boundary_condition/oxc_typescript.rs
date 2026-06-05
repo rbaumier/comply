@@ -58,6 +58,11 @@ impl OxcCheck for Check {
             return;
         }
 
+        // Skip if a preceding sibling guards with early exit or expect().toHaveLength()
+        if has_preceding_guard(node, semantic, obj_text, source) {
+            return;
+        }
+
         let which = if is_first { "first" } else { "last" };
         let at_arg = if is_first { "0" } else { "-1" };
         let (line, column) = byte_offset_to_line_col(source, member.span().start as usize);
@@ -198,5 +203,142 @@ fn has_length_guard_ancestor(
             }
         }
         current_id = parent_id;
+    }
+}
+
+/// Returns true if `stmt` or a top-level statement within it is an early exit
+/// (return, throw, or a bare `.exit()` call such as `process.exit(1)`).
+fn body_has_early_exit(stmt: &Statement) -> bool {
+    match stmt {
+        Statement::ReturnStatement(_) | Statement::ThrowStatement(_) => true,
+        Statement::ExpressionStatement(expr_stmt) => {
+            if let Expression::CallExpression(call) = &expr_stmt.expression {
+                if let Expression::StaticMemberExpression(member) = &call.callee {
+                    return member.property.name.as_str() == "exit";
+                }
+            }
+            false
+        }
+        Statement::BlockStatement(block) => block.body.iter().any(body_has_early_exit),
+        _ => false,
+    }
+}
+
+/// Scans `stmts` for the statement containing `node_span_start`, then checks
+/// all preceding siblings for one of two guard patterns:
+///   1. `if (...length...) { return/throw/process.exit }` (early-exit guard)
+///   2. `expect(<obj_text>).toHaveLength(N)` (Vitest/Jest assertion guard)
+fn scan_preceding_stmts(
+    stmts: &[Statement],
+    node_span_start: u32,
+    obj_text: &str,
+    source: &str,
+) -> bool {
+    let our_idx = stmts
+        .iter()
+        .position(|s| s.span().start <= node_span_start && node_span_start < s.span().end);
+    let Some(our_idx) = our_idx else { return false };
+
+    let needle = format!("expect({obj_text}).toHaveLength(");
+    for stmt in &stmts[..our_idx] {
+        if let Statement::IfStatement(if_stmt) = stmt {
+            let cond_start = if_stmt.test.span().start as usize;
+            let cond_end = if_stmt.test.span().end as usize;
+            let cond_text = &source[cond_start..cond_end];
+            if cond_text.contains(".length")
+                && (body_has_early_exit(&if_stmt.consequent)
+                    || if_stmt.alternate.as_ref().map_or(false, body_has_early_exit))
+            {
+                return true;
+            }
+        }
+        let stmt_span = stmt.span();
+        let stmt_text = &source[stmt_span.start as usize..stmt_span.end as usize];
+        if stmt_text.contains(needle.as_str()) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Returns true when a preceding sibling statement in the same block guards
+/// the array access via an early-exit pattern or a Vitest/Jest length assertion.
+/// Does not cross function boundaries.
+fn has_preceding_guard(
+    node: &oxc_semantic::AstNode,
+    semantic: &oxc_semantic::Semantic,
+    obj_text: &str,
+    source: &str,
+) -> bool {
+    let nodes = semantic.nodes();
+    let mut current_id = node.id();
+    let node_span_start = node.kind().span().start;
+
+    loop {
+        let parent_id = nodes.parent_id(current_id);
+        if parent_id == current_id {
+            return false;
+        }
+        let parent = nodes.get_node(parent_id);
+        match parent.kind() {
+            AstKind::Function(_) | AstKind::ArrowFunctionExpression(_) => return false,
+            AstKind::BlockStatement(block) => {
+                return scan_preceding_stmts(&block.body, node_span_start, obj_text, source);
+            }
+            AstKind::FunctionBody(body) => {
+                return scan_preceding_stmts(
+                    &body.statements,
+                    node_span_start,
+                    obj_text,
+                    source,
+                );
+            }
+            AstKind::Program(prog) => {
+                return scan_preceding_stmts(&prog.body, node_span_start, obj_text, source);
+            }
+            _ => {}
+        }
+        current_id = parent_id;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Check;
+    use crate::rules::test_helpers::run_oxc_ts;
+
+    fn run_on(src: &str) -> Vec<crate::diagnostic::Diagnostic> {
+        run_oxc_ts(src, &Check)
+    }
+
+    #[test]
+    fn no_fp_early_exit_return() {
+        let src = "function f(arr) { if (!arr.length) return; const x = arr[0]; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_early_exit_process_exit() {
+        let src =
+            "if (args.length === 0) { process.exit(1); } const cmd = args[0];";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_early_exit_throw() {
+        let src = "if (!items.length) throw new Error('empty'); const first = items[0];";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_expect_have_length_vitest() {
+        let src = "expect(rows).toHaveLength(1); const first = rows[0];";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_when_no_early_exit() {
+        let src = "if (arr.length > 0) { doSomething(); } const x = arr[0];";
+        assert_eq!(run_on(src).len(), 1);
     }
 }
