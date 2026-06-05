@@ -64,6 +64,9 @@ fn is_version_like(line: &str, ip_end: usize, ip_len: usize) -> bool {
     if ip_start > 0 && (bytes[ip_start - 1] == b'v' || bytes[ip_start - 1] == b'V') {
         return true;
     }
+    if ip_end < bytes.len() && bytes[ip_end] == b'.' && bytes.get(ip_end + 1) == Some(&b'*') {
+        return true;
+    }
     if ip_end < bytes.len()
         && bytes[ip_end] == b'-'
         && bytes.get(ip_end + 1).is_some_and(|b| b.is_ascii_alphabetic())
@@ -200,5 +203,11 @@ mod tests {
     #[test]
     fn allows_version_with_dash_suffix() {
         assert!(run(r#"let s = "Zulu 8.40.0.25-CA-linux64";"#).is_empty());
+    }
+
+    #[test]
+    fn allows_version_with_wildcard_suffix() {
+        assert!(run(r#"let cases = ["3.9.0.0.*", "3.9.1.0.*"];"#).is_empty());
+        assert!(run(r#"const version = "1.2.3.4.*";"#).is_empty());
     }
 }
