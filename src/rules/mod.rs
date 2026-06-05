@@ -1230,7 +1230,6 @@ pub mod prefer_object_literal;
 pub mod prefer_promise_shorthand;
 pub mod prefer_regexp_exec;
 pub mod prefer_type_guard;
-pub mod pub_crate_by_default;
 pub mod public_static_readonly;
 pub mod pure_by_default;
 pub mod redundant_type_aliases;
@@ -2796,7 +2795,6 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         no_get_prefix_rust::register(),
         async_await_only::register(),
         timeout_on_external_command::register(),
-        pub_crate_by_default::register(),
         throw_new_error::register(),
         // eslint-plugin-n (Node.js) rules.
         node_no_path_concat::register(),
