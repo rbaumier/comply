@@ -99,8 +99,21 @@ fn is_async_looking_member_call(call: &CallExpression) -> bool {
     if is_process_std_stream_write(member) {
         return false;
     }
+    if is_stream_controller_close(member) {
+        return false;
+    }
     let method = member.property.name.as_str();
     ASYNC_LOOKING_METHODS.contains(&method)
+}
+
+/// `ReadableStreamDefaultController.close()` / `WritableStreamDefaultController.close()` etc.
+/// return `void` per the WHATWG Streams spec — nothing to await.
+/// Matches when the receiver is a bare identifier whose name contains "controller".
+fn is_stream_controller_close(member: &StaticMemberExpression) -> bool {
+    if member.property.name.as_str() != "close" {
+        return false;
+    }
+    matches!(&member.object, Expression::Identifier(id) if id.name.as_str().to_lowercase().contains("controller"))
 }
 
 /// `process.stdout.write(...)` / `process.stderr.write(...)` return `boolean`
@@ -235,5 +248,27 @@ const parsed = new URL(\"https://example.com/?a=1\");
 parsed.searchParams.delete(\"a\");
 ";
         assert!(run_on(src).is_empty());
+    }
+
+    // Regression tests for issue #758: ReadableStreamDefaultController.close() returns void,
+    // not a Promise — it must not be flagged.
+
+    #[test]
+    fn allows_stream_controller_close() {
+        let src = "\
+async function pull(controller) {
+  const next = await someGenerator.next();
+  if (next.done) {
+    controller.close();
+  }
+}
+";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_non_controller_close() {
+        let d = run_on("db.close();");
+        assert_eq!(d.len(), 1);
     }
 }
