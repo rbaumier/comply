@@ -212,6 +212,8 @@ mod tests {
         // Regression for issue #573: test stubs/mocks cast freely.
         assert!(run_in_test_file("const c = {} as AnyColumn;").is_empty());
         assert!(run_in_test_file("const e = vi.fn() as UseFormSetError<FieldValues>;").is_empty());
+        // Regression for issue #793: tsd literal tuple assertions in test-d/ fixtures.
+        assert!(run_in_test_file("const literal = ['foo'] as ['foo'];").is_empty());
     }
 
     #[test]
