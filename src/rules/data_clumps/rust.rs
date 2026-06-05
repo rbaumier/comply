@@ -7,6 +7,10 @@ use crate::diagnostic::{Diagnostic, Severity};
 use std::collections::{HashMap, HashSet};
 
 crate::ast_check! { on ["source_file"] => |node, source, ctx, diagnostics|
+    if ctx.file.path_segments.in_test_dir {
+        return;
+    }
+
     let mut struct_fields: Vec<(usize, Vec<String>)> = Vec::new();
     collect_structs(node, source, &mut struct_fields);
 
@@ -56,6 +60,9 @@ crate::ast_check! { on ["source_file"] => |node, source, ctx, diagnostics|
 /// Recursively collect struct field sets from the AST.
 fn collect_structs(node: tree_sitter::Node, source: &[u8], out: &mut Vec<(usize, Vec<String>)>) {
     if node.kind() == "struct_item" {
+        if crate::rules::rust_helpers::is_in_test_context(node, source) {
+            return;
+        }
         // Look for field_declaration_list child.
         let mut names: Vec<String> = Vec::new();
         let child_count = node.named_child_count();
@@ -178,5 +185,46 @@ struct Bar {
 }
 "#;
         assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_on_cfg_test_structs() {
+        let src = r#"
+struct Env {
+    id: String,
+    netns: Option<String>,
+    new_pid_ns: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct ArgVals<'a> {
+        id: &'a str,
+        netns: Option<&'a str>,
+        new_pid_ns: bool,
+    }
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_production_clumps() {
+        let src = r#"
+struct Env {
+    id: String,
+    netns: Option<String>,
+    new_pid_ns: bool,
+}
+
+struct ArgVals {
+    id: String,
+    netns: Option<String>,
+    new_pid_ns: bool,
+}
+"#;
+        assert_eq!(run_on(src).len(), 2);
     }
 }
