@@ -31,6 +31,9 @@ const SQL_TYPES: &[&str] = &[
 
 impl TextCheck for Check {
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
+        if !crate::rules::sql_helpers::is_sql_ddl(ctx.source) {
+            return Vec::new();
+        }
         let lines: Vec<&str> = ctx.source.lines().collect();
         let mut diags = Vec::new();
         for (i, line) in lines.iter().enumerate() {
@@ -75,21 +78,53 @@ mod tests {
 
     #[test]
     fn flags_nullable_without_comment() {
-        assert_eq!(run("  deleted_at TIMESTAMP,").len(), 1);
+        assert_eq!(
+            run("CREATE TABLE t (\n  deleted_at TIMESTAMP,\n);").len(),
+            1
+        );
     }
 
     #[test]
     fn allows_nullable_with_inline_comment() {
-        assert!(run("  deleted_at TIMESTAMP, -- null until soft-deleted").is_empty());
+        assert!(run(
+            "CREATE TABLE t (\n  deleted_at TIMESTAMP, -- null until soft-deleted\n);"
+        )
+        .is_empty());
     }
 
     #[test]
     fn allows_nullable_with_preceding_comment() {
-        assert!(run("  -- null until user completes profile\n  avatar_url TEXT,").is_empty());
+        assert!(run(
+            "CREATE TABLE t (\n  -- null until user completes profile\n  avatar_url TEXT,\n);"
+        )
+        .is_empty());
     }
 
     #[test]
     fn allows_not_null() {
-        assert!(run("  email TEXT NOT NULL,").is_empty());
+        assert!(run("CREATE TABLE t (\n  email TEXT NOT NULL,\n);").is_empty());
+    }
+
+    #[test]
+    fn no_fp_on_vue_syntax_highlight_with_ansi_codes() {
+        // Regression for #811: Vue highlighting output with ANSI escapes that
+        // happen to contain SQL type keywords — not DDL, must not flag.
+        let vue_content = "\x1b[33mINTEGER\x1b[0m field_name\n<template><div>TEXT content</div></template>";
+        assert!(run(vue_content).is_empty());
+    }
+
+    #[test]
+    fn no_fp_on_rust_snapshot_with_sql_keywords() {
+        // Regression for #811: Rust test snapshot containing rule names like
+        // "sql-no-varchar" or identifiers with INTEGER/TEXT — not DDL.
+        let rust_snapshot = r#"assert_eq!(output, "INTEGER, TEXT, VARCHAR rules checked");"#;
+        assert!(run(rust_snapshot).is_empty());
+    }
+
+    #[test]
+    fn still_flags_real_ddl_nullable_column() {
+        // DDL with a nullable column and no comment must still be caught.
+        let ddl = "CREATE TABLE users (\n  deleted_at TIMESTAMP,\n);";
+        assert_eq!(run(ddl).len(), 1);
     }
 }
