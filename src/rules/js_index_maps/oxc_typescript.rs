@@ -37,6 +37,15 @@ impl OxcCheck for Check {
             return;
         }
 
+        // Skip when the receiver is itself a property access (e.g. product.correspondences.find(...))
+        // — relation fields are typically small and bounded; Map materialisation would be worse.
+        if matches!(
+            &member.object,
+            Expression::StaticMemberExpression(_) | Expression::ComputedMemberExpression(_)
+        ) {
+            return;
+        }
+
         if !is_inside_loop(node, semantic) {
             return;
         }
@@ -190,5 +199,43 @@ items.forEach(item => {
 "#)
             .is_empty()
         );
+    }
+
+    #[test]
+    fn no_fp_on_relation_property_receiver() {
+        // Regression for #757: product.correspondences is a bounded relation field.
+        assert!(
+            run(r#"
+const fields = centrales.flatMap((centrale) => {
+    const corr = product.correspondences.find((c) => c.centraleId === centrale.id) ?? null;
+    return corr;
+});
+"#)
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn no_fp_on_nested_member_chain() {
+        // a.b.c is still a member expression — should not be flagged.
+        assert!(
+            run(r#"
+items.forEach(item => {
+    const x = a.b.c.find(v => v.id === item.id);
+});
+"#)
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn still_flags_call_expression_receiver() {
+        // getCategories() is a call result — unbounded, should still be flagged.
+        let diags = run(r#"
+items.map(item => {
+    return getCategories().find(c => c.id === item.categoryId);
+});
+"#);
+        assert_eq!(diags.len(), 1);
     }
 }
