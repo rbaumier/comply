@@ -664,9 +664,22 @@ impl ProjectCtx {
     }
 
     /// Walk up from `path` to the nearest `tsconfig.json`, cache by manifest
-    /// directory.
+    /// directory. Follows the `extends` chain so that settings inherited from
+    /// a root `tsconfig.base.json` are visible to callers.
     pub fn nearest_tsconfig(&self, path: &Path) -> Option<Arc<Tsconfig>> {
-        nearest(&self.tsconfig_cache, path, "tsconfig.json", Tsconfig::parse)
+        let start_dir = path.parent()?;
+        let manifest_dir = walk_up_finding(start_dir, "tsconfig.json")?;
+
+        if let Some(hit) = self.tsconfig_cache.lock().ok()?.get(&manifest_dir) {
+            return Some(Arc::clone(hit));
+        }
+
+        let ts = load_tsconfig_file(&manifest_dir.join("tsconfig.json"), 0)?;
+        let arc = Arc::new(ts);
+        if let Ok(mut map) = self.tsconfig_cache.lock() {
+            map.entry(manifest_dir).or_insert_with(|| Arc::clone(&arc));
+        }
+        Some(arc)
     }
 
     /// Lazily-loaded Tailwind theme. Stub returns `None`; future chantier
