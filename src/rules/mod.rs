@@ -1653,7 +1653,6 @@ pub mod unicorn_prefer_array_flat_map;
 pub mod promise_no_return_in_finally;
 pub mod ts_no_mixed_enums;
 pub mod security_detect_unsafe_regex;
-pub mod security_detect_object_injection;
 pub mod eslint_comments_no_unlimited_disable;
 pub mod i18n_enforce_message_id;
 pub mod i18n_enforce_default_message;
@@ -3880,7 +3879,6 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         promise_no_return_in_finally::register(),
         ts_no_mixed_enums::register(),
         security_detect_unsafe_regex::register(),
-        security_detect_object_injection::register(),
         eslint_comments_no_unlimited_disable::register(),
         next_no_duplicate_head::register(),
         next_no_script_component_in_head::register(),
