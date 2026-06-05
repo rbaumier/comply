@@ -13,6 +13,13 @@ impl OxcCheck for Check {
         semantic: &'a oxc_semantic::Semantic<'a>,
         ctx: &CheckCtx,
     ) -> Vec<Diagnostic> {
+        if ctx.file.path_segments.in_test_dir {
+            return vec![];
+        }
+        let line_count = ctx.source.bytes().filter(|&b| b == b'\n').count() + 1;
+        if line_count < 150 {
+            return vec![];
+        }
         let min_run = ctx
             .config
             .threshold("no-section-divider-comments", "min_run", ctx.lang);
@@ -40,6 +47,9 @@ impl OxcCheck for Check {
                 span: None,
             });
         }
+        if diagnostics.len() <= 1 {
+            return vec![];
+        }
         diagnostics
     }
 }
@@ -47,24 +57,32 @@ impl OxcCheck for Check {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rules::file_ctx::{FileCtx, PathSegments};
 
     fn run(source: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_oxc_ts(source, &Check)
     }
 
-    #[test]
-    fn flags_equals_divider() {
-        assert_eq!(run("// ============").len(), 1);
+    fn run_with_file_ctx(source: &str, file: &FileCtx) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx_with_file_ctx(source, &Check, file)
+    }
+
+    fn large_file(extra: &str) -> String {
+        let mut s = "const x = 1;\n".repeat(155);
+        s.push_str(extra);
+        s
     }
 
     #[test]
-    fn flags_dashes_divider() {
-        assert_eq!(run("// ----- SETUP -----").len(), 1);
+    fn flags_multiple_dividers_in_large_file() {
+        let src = large_file("// ============\nconst y = 2;\n// ============\n");
+        assert_eq!(run(&src).len(), 2);
     }
 
     #[test]
-    fn flags_stars_divider() {
-        assert_eq!(run("// ***** PRIVATE *****").len(), 1);
+    fn flags_dashes_divider_in_large_file() {
+        let src = large_file("// ----- SETUP -----\nconst y = 2;\n// ----- END -----\n");
+        assert_eq!(run(&src).len(), 2);
     }
 
     #[test]
@@ -83,7 +101,35 @@ mod tests {
     }
 
     #[test]
-    fn flags_block_comment_divider() {
-        assert_eq!(run("/* ============== */").len(), 1);
+    fn flags_block_comment_divider_in_large_file() {
+        let src = large_file("/* ============== */\nconst y = 2;\n/* ============== */\n");
+        assert_eq!(run(&src).len(), 2);
+    }
+
+    #[test]
+    fn allows_dividers_in_test_file() {
+        let file = FileCtx {
+            path_segments: PathSegments { in_test_dir: true, ..PathSegments::default() },
+            ..FileCtx::default()
+        };
+        let src = large_file("// ============\nconst y = 2;\n// ============\n");
+        assert!(run_with_file_ctx(&src, &file).is_empty());
+    }
+
+    #[test]
+    fn allows_dividers_in_small_file() {
+        assert!(run("// ============\nconst y = 2;\n// ============\n").is_empty());
+    }
+
+    #[test]
+    fn allows_single_divider_in_large_file() {
+        let src = large_file("// ============\nconst y = 2;\n");
+        assert!(run(&src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_multiple_dividers_in_large_file() {
+        let src = large_file("// ============\nconst y = 2;\n// ============\nconst z = 3;\n");
+        assert!(!run(&src).is_empty());
     }
 }
