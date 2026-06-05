@@ -46,6 +46,10 @@ impl OxcCheck for Check {
                 continue;
             }
 
+            let decl_is_type_construct = matches!(
+                nodes.kind(decl_node),
+                AstKind::TSTypeAliasDeclaration(_) | AstKind::TSInterfaceDeclaration(_)
+            );
             let in_type_decl = nodes.ancestor_kinds(decl_node).any(|k| {
                 matches!(
                     k,
@@ -54,9 +58,9 @@ impl OxcCheck for Check {
                         | AstKind::TSModuleDeclaration(_)
                         | AstKind::TSGlobalDeclaration(_)
                         | AstKind::TSFunctionType(_)
-                )
+                ) || matches!(k, AstKind::Function(f) if f.declare)
             });
-            if in_type_decl {
+            if decl_is_type_construct || in_type_decl {
                 continue;
             }
 
@@ -99,4 +103,66 @@ mod tests {
     fn still_flags_unused_local() {
         assert_eq!(run("const unusedThing = 1;\nexport {};").len(), 1);
     }
+
+    #[test]
+    fn no_fp_on_declare_function_params() {
+        // Params of a declare function have no runtime body → zero runtime
+        // references, but are semantically required for the type signature.
+        let src = r#"
+declare function replace<
+    Input extends string,
+    Search extends string,
+>(
+    input: Input,
+    search: Search,
+): string;
+export {};
+"#;
+        let diags = run(src);
+        assert!(
+            !diags.iter().any(|d| d.message.contains("`input`")),
+            "FP on `input` param of declare function"
+        );
+        assert!(
+            !diags.iter().any(|d| d.message.contains("`search`")),
+            "FP on `search` param of declare function"
+        );
+    }
+
+    #[test]
+    fn no_fp_on_type_assertion_alias() {
+        // `type t = Expect<Equal<...>>` is the standard type-assertion idiom
+        // in test-d/ files (type-fest, tsd). `t` is never referenced at runtime
+        // — that is intentional.
+        let src = r#"
+type Expect<T> = T extends true ? true : never;
+type Equal<X, Y> = X extends Y ? (Y extends X ? true : false) : false;
+const result = {};
+type t = Expect<Equal<typeof result, {}>>;
+export {};
+"#;
+        let diags = run(src);
+        assert!(
+            !diags.iter().any(|d| d.message.contains("`t`")),
+            "FP on type assertion alias `t`"
+        );
+    }
+
+    #[test]
+    fn no_fp_on_unused_interface_name() {
+        // The declaration node for `Foo` is the TSInterfaceDeclaration itself;
+        // without decl_is_type_construct, `Foo` would be flagged as unused.
+        let src = r#"
+interface Foo {
+    bar: string;
+}
+export {};
+"#;
+        let diags = run(src);
+        assert!(
+            !diags.iter().any(|d| d.message.contains("`Foo`")),
+            "FP on interface name `Foo`"
+        );
+    }
+
 }
