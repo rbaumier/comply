@@ -14,7 +14,7 @@ impl OxcCheck for Check {
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
+        semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let AstKind::TemplateLiteral(tpl) = node.kind() else {
@@ -37,6 +37,25 @@ impl OxcCheck for Check {
         };
         if indent < min_indent {
             return;
+        }
+        let parent = semantic.nodes().parent_node(node.id());
+        // Tagged templates delegate indentation management to the tag function.
+        if matches!(parent.kind(), AstKind::TaggedTemplateExpression(_)) {
+            return;
+        }
+        // Snapshot assertions intentionally preserve indentation for readability.
+        if let AstKind::CallExpression(call) = parent.kind() {
+            if let oxc_ast::ast::Expression::StaticMemberExpression(member) = &call.callee {
+                let method = member.property.name.as_str();
+                if matches!(
+                    method,
+                    "toMatchSnapshot"
+                        | "toMatchInlineSnapshot"
+                        | "toThrowErrorMatchingInlineSnapshot"
+                ) {
+                    return;
+                }
+            }
         }
         let (line, column) = byte_offset_to_line_col(ctx.source, tpl.span.start as usize);
         diagnostics.push(Diagnostic {
@@ -148,6 +167,24 @@ if (true) {
     #[test]
     fn ignores_backtick_in_string_literal() {
         let src = "const s = '`\n        line\n        line\n`';";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_dedent_tagged_template() {
+        let src = "dedenter`\n    line 1\n    line 2\n`;";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_snapshot_inline_assertion() {
+        let src = r#"
+expect(() => validate(x)).toThrowErrorMatchingInlineSnapshot(`
+    [Error:
+      Must be a string
+    ]
+`);
+"#;
         assert!(run(src).is_empty());
     }
 }
