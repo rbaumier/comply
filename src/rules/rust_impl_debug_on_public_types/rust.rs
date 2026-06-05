@@ -1,9 +1,13 @@
 //! rust-impl-debug-on-public-types backend.
 //!
-//! For every `struct_item` and `enum_item` with a `pub` visibility
+//! For every `struct_item` and `enum_item` with a strictly `pub` visibility
 //! modifier, scan the preceding `attribute_item` siblings looking
 //! for either `#[derive(...Debug...)]` or a manual `impl Debug for
 //! ...` somewhere in the file. Flag if neither is present.
+//!
+//! Suppressed for: `pub(crate)`/`pub(super)`/`pub(in …)` visibility,
+//! files under `tests/` or `benches/`, items in a `#[cfg(test)]` module,
+//! items with `#[doc(hidden)]`, and types with raw-pointer fields.
 //!
 //! We accept manual impls because libraries with closure or PhantomData
 //! fields legitimately can't derive — they hand-roll the impl. The
@@ -11,6 +15,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
+use crate::rules::rust_helpers::{has_test_attribute, is_in_test_context};
 
 #[derive(Debug)]
 pub struct Check;
@@ -31,6 +36,20 @@ impl AstCheck for Check {
         let source_str = ctx.source;
         let kind = node.kind();
         if !is_pub(node, source_bytes) {
+            return;
+        }
+        if ctx.path.components().any(|c| {
+            c.as_os_str() == "tests" || c.as_os_str() == "benches"
+        }) {
+            return;
+        }
+        if is_in_test_context(node, source_bytes) || has_test_attribute(node, source_bytes) {
+            return;
+        }
+        if has_doc_hidden(node, source_bytes) {
+            return;
+        }
+        if has_raw_pointer_field(node) {
             return;
         }
         let Some(name_node) = node.child_by_field_name("name") else {
@@ -77,7 +96,7 @@ fn is_pub(item: tree_sitter::Node, source: &[u8]) -> bool {
     for child in item.children(&mut cursor) {
         if child.kind() == "visibility_modifier"
             && let Ok(text) = child.utf8_text(source)
-            && text.starts_with("pub")
+            && text == "pub"
         {
             return true;
         }
@@ -115,12 +134,55 @@ fn has_debug_derive(item: tree_sitter::Node, source: &[u8]) -> bool {
     false
 }
 
+fn has_doc_hidden(item: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut sibling = item.prev_named_sibling();
+    while let Some(s) = sibling {
+        match s.kind() {
+            "attribute_item" => {
+                if let Ok(text) = s.utf8_text(source)
+                    && text.contains("doc(hidden)")
+                {
+                    return true;
+                }
+            }
+            "line_comment" | "block_comment" => {}
+            _ => break,
+        }
+        sibling = s.prev_named_sibling();
+    }
+    false
+}
+
+fn has_raw_pointer_field(item: tree_sitter::Node) -> bool {
+    let mut cursor = item.walk();
+    loop {
+        if cursor.node().kind() == "pointer_type" {
+            return true;
+        }
+        if cursor.goto_first_child() {
+            continue;
+        }
+        loop {
+            if cursor.goto_next_sibling() {
+                break;
+            }
+            if !cursor.goto_parent() || cursor.node().id() == item.id() {
+                return false;
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_rust(source, &Check)
+    }
+
+    fn run_with_path(source: &str, fake_path: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rust_with_path(source, &Check, fake_path)
     }
 
     #[test]
@@ -171,6 +233,46 @@ mod tests {
             run_on(source).is_empty(),
             "false positive: multi-attribute block with Debug derive should not fire"
         );
+    }
+
+    #[test]
+    fn suppresses_pub_crate_struct() {
+        assert!(run_on("pub(crate) struct Internal { x: u8 }").is_empty());
+    }
+
+    #[test]
+    fn suppresses_pub_struct_in_tests_dir() {
+        assert!(run_with_path("pub struct X;", "tests/foo.rs").is_empty());
+    }
+
+    #[test]
+    fn suppresses_pub_struct_in_benches_dir() {
+        assert!(run_with_path("pub struct X;", "benches/bench.rs").is_empty());
+    }
+
+    #[test]
+    fn suppresses_doc_hidden_enum() {
+        assert!(run_on("#[doc(hidden)]\npub enum Y {}").is_empty());
+    }
+
+    #[test]
+    fn suppresses_cfg_test_struct() {
+        assert!(run_on("#[cfg(test)]\npub struct Z;").is_empty());
+    }
+
+    #[test]
+    fn suppresses_struct_inside_cfg_test_mod() {
+        assert!(run_on("#[cfg(test)]\nmod tests {\n    pub struct TestHelper;\n}").is_empty());
+    }
+
+    #[test]
+    fn suppresses_raw_pointer_field() {
+        assert!(run_on("pub struct W { p: *const u8 }").is_empty());
+    }
+
+    #[test]
+    fn still_flags_plain_pub_struct() {
+        assert_eq!(run_on("pub struct Api { name: String }").len(), 1);
     }
 
     #[test]
