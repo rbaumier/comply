@@ -16,7 +16,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{CheckCtx, OxcCheck};
-use crate::rules::path_utils::is_framework_entry_point;
+use crate::rules::path_utils::{is_config_file, is_framework_entry_point};
 use oxc_ast::ast::{
     Expression, ImportDeclarationSpecifier, Program, Statement,
 };
@@ -30,6 +30,10 @@ fn is_test_file(path: &std::path::Path) -> bool {
     [".test.", ".test-d.", ".spec.", "__tests__", "_test.", ".e2e."]
         .iter()
         .any(|m| s.contains(m))
+        || s.contains("/dtslint/")
+        || s.starts_with("dtslint/")
+        || s.contains("/test-d/")
+        || s.starts_with("test-d/")
 }
 
 /// Test-runner setup files (Vitest `setupFiles`/`globalSetup`, Jest
@@ -227,6 +231,7 @@ impl OxcCheck for Check {
 
         if is_framework_entry_point(ctx.path, ctx.project)
             || is_tanstack_start_entry(ctx.path, ctx.project)
+            || is_config_file(ctx.path)
         {
             return Vec::new();
         }
@@ -495,6 +500,38 @@ mod tests {
             1,
             "no import binding means no exemption"
         );
+    }
+
+    // --- (d) Config files, dtslint/, test-d/ exemptions (Closes #807) --------
+
+    #[test]
+    fn allows_config_file_with_side_effects() {
+        let diags = run_oxc_ts_with_path(
+            "setEnvVariablesThatAreUsedBeforeSetup();",
+            &Check,
+            "vitest.config.mts",
+        );
+        assert!(diags.is_empty(), "config files should be exempt, got {diags:?}");
+    }
+
+    #[test]
+    fn allows_dtslint_type_check_file() {
+        let diags = run_oxc_ts_with_path(
+            "foo(bar, baz)(qux);",
+            &Check,
+            "dtslint/Traversable.ts",
+        );
+        assert!(diags.is_empty(), "dtslint/ files are type-checking utilities, got {diags:?}");
+    }
+
+    #[test]
+    fn allows_test_d_type_test_file() {
+        let diags = run_oxc_ts_with_path(
+            "expectNotAssignable(foo);",
+            &Check,
+            "test-d/schema.ts",
+        );
+        assert!(diags.is_empty(), "test-d/ files are tsd type-testing utilities, got {diags:?}");
     }
 
 }
