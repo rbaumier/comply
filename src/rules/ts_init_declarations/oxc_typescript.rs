@@ -32,6 +32,11 @@ impl OxcCheck for Check {
             {
                 continue;
             }
+            // Skip test files — uninitialized fixtures at `describe` scope
+            // assigned in beforeAll/beforeEach are idiomatic and unavoidable.
+            if ctx.file.path_segments.in_test_dir {
+                return Vec::new();
+            }
             for declarator in &decl.declarations {
                 if declarator.init.is_some() {
                     continue;
@@ -65,9 +70,30 @@ impl OxcCheck for Check {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rules::file_ctx::{FileCtx, PathSegments};
 
     fn run(s: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_oxc_tsx(s, &Check)
+    }
+
+    fn run_in_test_file(src: &str) -> Vec<Diagnostic> {
+        let file = FileCtx {
+            path_segments: PathSegments { in_test_dir: true, ..PathSegments::default() },
+            ..FileCtx::default()
+        };
+        crate::rules::test_helpers::run_oxc_tsx_with_file_ctx(src, &Check, &file)
+    }
+
+    #[test]
+    fn no_fp_on_test_fixture_beforeall() {
+        let src = r#"
+describe('example', () => {
+  let user: User;
+  beforeAll(async () => { user = await createUser(); });
+  test('should work', () => { expect(user.name).toBe('test'); });
+});
+"#;
+        assert!(run_in_test_file(src).is_empty());
     }
 
     #[test]
