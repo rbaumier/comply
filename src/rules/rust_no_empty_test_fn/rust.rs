@@ -64,7 +64,9 @@ fn has_test_attribute(item: tree_sitter::Node, source: &[u8]) -> bool {
             break;
         }
         if let Ok(text) = s.utf8_text(source)
-            && text.contains("#[test]")
+            && (text.contains("#[test]")
+                || text.contains("::test]")   // #[tokio::test], #[actix_rt::test], …
+                || text.contains("::test("))  // #[tokio::test(flavor = "multi_thread")], …
         {
             return true;
         }
@@ -97,5 +99,11 @@ mod tests {
     fn does_not_flag_empty_non_test_fn() {
         // Empty non-test fns are someone else's problem (no_empty_function rule).
         assert!(run_on("fn placeholder() {}").is_empty());
+    }
+
+    #[test]
+    fn flags_empty_tokio_test_fn() {
+        let src = "#[tokio::test]\nasync fn it_works() {}";
+        assert_eq!(run_on(src).len(), 1);
     }
 }

@@ -123,7 +123,9 @@ pub fn has_test_attribute(item: Node, source: &[u8]) -> bool {
         if let Ok(text) = s.utf8_text(source)
             && (text.contains("#[test]")
                 || text.contains("cfg(test)")
-                || text.contains("cfg_attr(test"))
+                || text.contains("cfg_attr(test")
+                || text.contains("::test]")   // #[tokio::test], #[actix_rt::test], …
+                || text.contains("::test("))  // #[tokio::test(flavor = "multi_thread")], …
         {
             return true;
         }
