@@ -408,7 +408,7 @@ fn collect_all_diagnostics(
     // Cross-file rules (unused-dependency, dead-export, unused-file) need
     // a complete import index, so walk the full project tree for the
     // ProjectCtx when running a partial scan.
-    let full_project_files;
+    let full_project_files: Vec<SourceFile>;
     let index_refs: Vec<&SourceFile> = if is_partial {
         let cwd = std::env::current_dir().unwrap_or_default();
         let start = discovered
@@ -429,6 +429,7 @@ fn collect_all_diagnostics(
         full_project_files = files::discover(&cli::ScanMode::All(root))?;
         full_project_files.iter().collect()
     } else {
+        full_project_files = Vec::new();
         discovered.iter().collect()
     };
     let project = std::sync::Arc::new(crate::project::ProjectCtx::load(&index_refs, config));
@@ -441,6 +442,15 @@ fn collect_all_diagnostics(
         project.set_linted_paths(linted);
     }
 
+    let type_program_ts: Vec<&SourceFile> = if is_partial && type_aware {
+        full_project_files
+            .iter()
+            .filter(|f| f.language.is_typescript_family())
+            .collect()
+    } else {
+        Vec::new()
+    };
+
     if !by_lang.ts.is_empty() {
         diagnostics.extend(lint_typescript(
             &by_lang.ts,
@@ -449,6 +459,7 @@ fn collect_all_diagnostics(
             timings,
             is_comply_only,
             type_aware,
+            &type_program_ts,
         )?);
     }
     if !by_lang.rs.is_empty() {
@@ -656,6 +667,7 @@ fn lint_typescript(
     timings: &mut Timings,
     is_comply_only: bool,
     type_aware: bool,
+    type_program_ts: &[&SourceFile],
 ) -> Result<Vec<Diagnostic>> {
     let oxlint_available = !is_comply_only && oxlint::is_available();
 
@@ -668,6 +680,9 @@ fn lint_typescript(
 
     type PhaseOut = (Result<Vec<Diagnostic>>, Duration);
 
+    let type_program_opt: Option<&[&SourceFile]> =
+        if type_program_ts.is_empty() { None } else { Some(type_program_ts) };
+
     let project2 = std::sync::Arc::clone(project);
     let oxlint_phase = || -> PhaseOut {
         if !oxlint_available {
@@ -675,7 +690,7 @@ fn lint_typescript(
         }
         let t = Instant::now();
         (
-            oxlint::lint_files(ts_files, config, project, type_aware),
+            oxlint::lint_files(ts_files, config, project, type_aware, type_program_opt),
             t.elapsed(),
         )
     };
