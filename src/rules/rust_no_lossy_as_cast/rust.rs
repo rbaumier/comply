@@ -6,11 +6,14 @@
 //!
 //! - integer narrowing (`u32 as u8`, `i64 as i32`, etc.)
 //! - float to integer (`f64 as u32`)
-//! - signed/unsigned reinterpretation can wrap, but we leave it for
-//!   `clippy::cast_sign_loss` since the rule is more nuanced
+//! - integer to float when precison can be lost (`u32 as f32`, etc.)
 //!
-//! False positives exist (`SAFETY_CONSTANT as u8` where the value
-//! is known small at compile time) — suppress with `// comply-ignore`.
+//! Widening casts with the same signedness (e.g. `u8 as u32`) are
+//! silenced when the source type is locally visible.  When the source
+//! type is not locally annotated (e.g. a method return or a custom
+//! type alias), the cast is flagged conservatively.  Use
+//! `// comply-ignore: rust-no-lossy-as-cast — <justification>` to
+//! suppress known-safe casts in that situation.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -18,6 +21,19 @@ use crate::rules::backend::{AstCheck, CheckCtx};
 const KINDS: &[&str] = &["type_cast_expression"];
 
 const NARROWING_TARGETS: &[&str] = &["u8", "u16", "u32", "i8", "i16", "i32", "f32"];
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum NumericKind {
+    Unsigned,
+    Signed,
+    Float,
+}
+
+#[derive(Clone, Copy)]
+struct NumericType {
+    kind: NumericKind,
+    bits: u16,
+}
 
 #[derive(Debug)]
 pub struct Check;
@@ -45,11 +61,14 @@ impl AstCheck for Check {
         if !NARROWING_TARGETS.contains(&target) {
             return;
         }
-        let row = node.start_position().row;
-        if let Some(line) = ctx.source.lines().nth(row)
-            && line.contains("//") {
-                return;
-            }
+        let Some(target_type) = numeric_type(target) else {
+            return;
+        };
+        if let Some(source_type) = source_numeric_type(node, source_bytes)
+            && !is_dangerous_cast(source_type, target_type)
+        {
+            return;
+        }
         let pos = node.start_position();
         diagnostics.push(Diagnostic {
             path: std::sync::Arc::clone(&ctx.path_arc),
@@ -66,6 +85,97 @@ impl AstCheck for Check {
             span: None,
         });
     }
+}
+
+fn numeric_type(type_text: &str) -> Option<NumericType> {
+    let (kind, bits) = match type_text.trim() {
+        "u8" => (NumericKind::Unsigned, 8),
+        "u16" => (NumericKind::Unsigned, 16),
+        "u32" => (NumericKind::Unsigned, 32),
+        "u64" => (NumericKind::Unsigned, 64),
+        "u128" => (NumericKind::Unsigned, 128),
+        "usize" => (NumericKind::Unsigned, usize::BITS as u16),
+        "i8" => (NumericKind::Signed, 8),
+        "i16" => (NumericKind::Signed, 16),
+        "i32" => (NumericKind::Signed, 32),
+        "i64" => (NumericKind::Signed, 64),
+        "i128" => (NumericKind::Signed, 128),
+        "isize" => (NumericKind::Signed, usize::BITS as u16),
+        "f32" => (NumericKind::Float, 32),
+        "f64" => (NumericKind::Float, 64),
+        _ => return None,
+    };
+    Some(NumericType { kind, bits })
+}
+
+fn is_dangerous_cast(source: NumericType, target: NumericType) -> bool {
+    if source.kind == target.kind && source.kind != NumericKind::Float {
+        return target.bits < source.bits;
+    }
+    true
+}
+
+fn source_numeric_type(node: tree_sitter::Node, source: &[u8]) -> Option<NumericType> {
+    let value = node.child_by_field_name("value")?;
+    if value.kind() != "identifier" {
+        return None;
+    }
+    let name = value.utf8_text(source).ok()?;
+    let type_text = find_identifier_type(node, name, source)?;
+    numeric_type(&type_text)
+}
+
+fn find_identifier_type(node: tree_sitter::Node, name: &str, source: &[u8]) -> Option<String> {
+    let mut current = Some(node);
+    while let Some(n) = current {
+        if matches!(
+            n.kind(),
+            "function_item" | "closure_expression" | "block" | "source_file"
+        ) && let Some(found) = find_binding_type_before(n, node.start_byte(), name, source)
+        {
+            return Some(found);
+        }
+        current = n.parent();
+    }
+    None
+}
+
+fn find_binding_type_before(
+    node: tree_sitter::Node,
+    limit: usize,
+    name: &str,
+    source: &[u8],
+) -> Option<String> {
+    if node.start_byte() >= limit {
+        return None;
+    }
+    if matches!(node.kind(), "parameter" | "let_declaration")
+        && let Some(pattern) = node.child_by_field_name("pattern")
+        && pattern_contains_identifier(pattern, name, source)
+        && let Some(type_node) = node.child_by_field_name("type")
+        && let Ok(type_text) = type_node.utf8_text(source)
+    {
+        return Some(type_text.trim().to_string());
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if let Some(found) = find_binding_type_before(child, limit, name, source) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+fn pattern_contains_identifier(pattern: tree_sitter::Node, name: &str, source: &[u8]) -> bool {
+    if pattern.kind() == "identifier" {
+        return pattern.utf8_text(source).is_ok_and(|text| text == name);
+    }
+
+    let mut cursor = pattern.walk();
+    pattern
+        .children(&mut cursor)
+        .any(|child| pattern_contains_identifier(child, name, source))
 }
 
 #[cfg(test)]
@@ -97,7 +207,27 @@ mod tests {
     }
 
     #[test]
-    fn allows_cast_with_inline_comment() {
-        assert!(run_on("fn f(x: u64) -> u32 { x as u32 // bounded by MAX_REG }").is_empty());
+    fn allows_widening_u8_to_u32() {
+        assert!(run_on("fn f(x: u8) -> u32 { x as u32 }").is_empty());
+    }
+
+    #[test]
+    fn allows_widening_u16_to_u32() {
+        assert!(run_on("fn f(x: u16) -> u32 { x as u32 }").is_empty());
+    }
+
+    #[test]
+    fn allows_widening_i8_to_i32() {
+        assert!(run_on("fn f(x: i8) -> i32 { x as i32 }").is_empty());
+    }
+
+    #[test]
+    fn allows_widening_i16_to_i32() {
+        assert!(run_on("fn f(x: i16) -> i32 { x as i32 }").is_empty());
+    }
+
+    #[test]
+    fn flags_unknown_source_type_conservatively() {
+        assert_eq!(run_on("fn f(x: MyInt) -> u32 { x as u32 }").len(), 1);
     }
 }
