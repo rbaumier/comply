@@ -6,6 +6,38 @@ use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::*;
 use std::sync::Arc;
 
+/// Returns `true` only when `expr` is an identifier whose declared type
+/// annotation is exactly `: boolean` (TSBooleanKeyword).
+///
+/// Conservative: returns `false` for property access, call expressions,
+/// inferred types, union types, and anything we can't inspect locally.
+fn operand_is_purely_boolean<'a>(
+    expr: &Expression<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    let Expression::Identifier(ident) = expr else { return false };
+    let Some(ref_id) = ident.reference_id.get() else { return false };
+    let scoping = semantic.scoping();
+    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else { return false };
+    let decl_node_id = scoping.symbol_declaration(sym_id);
+    let nodes = semantic.nodes();
+    for kind in
+        std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id))
+    {
+        let ann = match kind {
+            AstKind::FormalParameter(param) => param.type_annotation.as_ref(),
+            AstKind::VariableDeclarator(decl) => decl.type_annotation.as_ref(),
+            AstKind::Function(_) | AstKind::ArrowFunctionExpression(_) | AstKind::Program(_) => {
+                return false
+            }
+            _ => continue,
+        };
+        return ann
+            .is_some_and(|a| matches!(&a.type_annotation, TSType::TSBooleanKeyword(_)));
+    }
+    false
+}
+
 pub struct Check;
 
 fn push_diag(
@@ -90,13 +122,23 @@ impl OxcCheck for Check {
             }
 
             // Pattern 2: strict comparison against a boolean literal.
+            // Only flag when the non-literal operand is typed as exactly
+            // `boolean`; a union like `boolean | SomeObject` needs the
+            // comparison to discriminate — replacing it would change semantics.
             AstKind::BinaryExpression(bin) => {
                 if bin.operator != BinaryOperator::StrictEquality
                     && bin.operator != BinaryOperator::StrictInequality
                 {
                     return;
                 }
-                if is_bool_literal(&bin.left) || is_bool_literal(&bin.right) {
+                let other_side = if is_bool_literal(&bin.left) {
+                    &bin.right
+                } else if is_bool_literal(&bin.right) {
+                    &bin.left
+                } else {
+                    return;
+                };
+                if operand_is_purely_boolean(other_side, semantic) {
                     push_diag(
                         diagnostics,
                         ctx,
@@ -164,5 +206,46 @@ impl OxcCheck for Check {
 
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+    #[test]
+    fn allows_union_typed_comparison_with_false() {
+        // Regression for #752 — x: boolean | OtherType needs === false to
+        // discriminate; replacing with !x would change semantics.
+        let src = "
+            type InitialFocus = boolean | { current: HTMLElement | null } | undefined;
+            function resolve(initialFocus: InitialFocus, fallback: () => HTMLElement | null) {
+                return initialFocus === false ? fallback : initialFocus;
+            }
+        ";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_annotated_boolean_param_comparison() {
+        let src = "function f(x: boolean) { return x === true; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_annotated_boolean_variable_comparison() {
+        let src = "const x: boolean = true; if (x === false) {}";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_unannotated_comparison() {
+        // No annotation — cannot determine type without TS checker; do not flag.
+        let src = "function f(x) { return x === true; }";
+        assert!(run_on(src).is_empty());
     }
 }
