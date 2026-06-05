@@ -33,8 +33,8 @@ mod schema;
 pub use options::for_rule as options_for;
 
 use anyhow::{Context, Result, bail};
-use rustc_hash::FxHashMap;
-use std::path::Path;
+use rustc_hash::{FxHashMap, FxHashSet};
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
 use std::time::Duration;
@@ -73,6 +73,7 @@ pub fn lint_files(
     config: &crate::config::Config,
     project: &ProjectCtx,
     type_aware: bool,
+    type_program_files: Option<&[&SourceFile]>,
 ) -> Result<Vec<Diagnostic>> {
     if files.is_empty() {
         return Ok(vec![]);
@@ -100,12 +101,31 @@ pub fn lint_files(
 
     let type_aware_ts = type_aware_files(files);
     if !type_aware_ts.is_empty() && !standard_tsgolint.is_empty() {
-        all.extend(lint_files_with_bindings(
-            &type_aware_ts,
-            config,
-            &standard_tsgolint,
-            true,
-        )?);
+        if let Some(program) = type_program_files {
+            // Partial-scan: pass all project TS files so tsgolint builds a
+            // complete type program (prevents no-unsafe-* FPs on imports from
+            // unchanged files), then filter results back to the changed files.
+            let program_ts = type_aware_files(program);
+            if !program_ts.is_empty() {
+                let rule_entries: Vec<crate::oxlint_config::RuleEntry<'_>> = standard_tsgolint
+                    .iter()
+                    .map(|(key, _, sev)| (*key, *sev, options::for_rule(key, config)))
+                    .collect();
+                let oxlint_config = crate::oxlint_config::generate(&rule_entries)?;
+                let remap = remap::build_table(&standard_tsgolint);
+                let output = invoke_oxlint(&program_ts, Some(oxlint_config.path()), true)?;
+                let all_diags = parse_json_bytes(&output.stdout, &output.stderr, &remap)?;
+                let changed = changed_path_set(&type_aware_ts);
+                all.extend(all_diags.into_iter().filter(|d| changed.contains(d.path.as_ref())));
+            }
+        } else {
+            all.extend(lint_files_with_bindings(
+                &type_aware_ts,
+                config,
+                &standard_tsgolint,
+                true,
+            )?);
+        }
     }
 
     let esm = es_module_files(files, project);
@@ -120,12 +140,28 @@ pub fn lint_files(
 
     let type_aware_esm = type_aware_files(&esm);
     if !type_aware_esm.is_empty() && !module_aware_tsgolint.is_empty() {
-        all.extend(lint_files_with_bindings(
-            &type_aware_esm,
-            config,
-            &module_aware_tsgolint,
-            true,
-        )?);
+        if let Some(program) = type_program_files {
+            let program_esm = type_aware_files(&es_module_files(program, project));
+            if !program_esm.is_empty() {
+                let rule_entries: Vec<crate::oxlint_config::RuleEntry<'_>> = module_aware_tsgolint
+                    .iter()
+                    .map(|(key, _, sev)| (*key, *sev, options::for_rule(key, config)))
+                    .collect();
+                let oxlint_config = crate::oxlint_config::generate(&rule_entries)?;
+                let remap = remap::build_table(&module_aware_tsgolint);
+                let output = invoke_oxlint(&program_esm, Some(oxlint_config.path()), true)?;
+                let all_diags = parse_json_bytes(&output.stdout, &output.stderr, &remap)?;
+                let changed = changed_path_set(&type_aware_esm);
+                all.extend(all_diags.into_iter().filter(|d| changed.contains(d.path.as_ref())));
+            }
+        } else {
+            all.extend(lint_files_with_bindings(
+                &type_aware_esm,
+                config,
+                &module_aware_tsgolint,
+                true,
+            )?);
+        }
     }
 
     await_thenable_post_filter::apply(&mut all);
@@ -143,6 +179,13 @@ pub fn lint_files(
     strict_void_return_post_filter::apply(&mut all);
 
     Ok(all)
+}
+
+fn changed_path_set(files: &[&SourceFile]) -> FxHashSet<PathBuf> {
+    files
+        .iter()
+        .map(|f| std::fs::canonicalize(&f.path).unwrap_or_else(|_| f.path.clone()))
+        .collect()
 }
 
 fn is_require_import_rule(key: &str) -> bool {
@@ -320,6 +363,63 @@ fn into_diagnostic(d: OxlintDiag, remap: &FxHashMap<String, &'static RuleMeta>) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Manual integration test for issue #755:
+    // 1. Create project with A.ts (unchanged, exports typed hook) and B.tsx (changed, imports A)
+    // 2. Run `comply --working-tree --type-aware` on B.tsx only
+    // 3. Expect: no no-unsafe-* errors in B.tsx
+    // Reproducer from issue: mutations.ts with comply-ignore-file: unused-file
+
+    #[test]
+    fn changed_path_set_retains_changed_files_and_drops_program_files() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let changed_path = dir.path().join("B.tsx");
+        let unchanged_path = dir.path().join("A.ts");
+        std::fs::write(&changed_path, "").unwrap();
+        std::fs::write(&unchanged_path, "").unwrap();
+
+        let changed_sf = SourceFile {
+            path: changed_path.clone(),
+            language: crate::files::Language::Tsx,
+        };
+        let set = changed_path_set(&[&changed_sf]);
+
+        // B.tsx (changed) resolves and is present
+        assert!(
+            set.contains(&std::fs::canonicalize(&changed_path).unwrap()),
+            "changed file must be in set"
+        );
+        // A.ts (unchanged program file) is absent
+        assert!(
+            !set.contains(&std::fs::canonicalize(&unchanged_path).unwrap()),
+            "unchanged file must not be in set"
+        );
+
+        // Diagnostics from B.tsx survive; diagnostics from A.ts are dropped.
+        // oxlint canonicalizes paths, so diagnostics carry canonical paths.
+        let make_diag = |path: &std::path::Path| {
+            let canon = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+            crate::diagnostic::Diagnostic {
+                path: std::sync::Arc::from(canon.as_path()),
+                line: 1,
+                column: 1,
+                rule_id: std::borrow::Cow::Borrowed("no-unsafe-assignment"),
+                message: "unsafe".into(),
+                severity: crate::diagnostic::Severity::Error,
+                span: None,
+            }
+        };
+        let diags = vec![make_diag(&changed_path), make_diag(&unchanged_path)];
+        let filtered: Vec<_> = diags
+            .into_iter()
+            .filter(|d| set.contains(d.path.as_ref()))
+            .collect();
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(
+            filtered[0].path.as_ref(),
+            std::fs::canonicalize(&changed_path).unwrap().as_path()
+        );
+    }
 
     #[test]
     fn fallback_position_is_one_one_not_zero_zero() {
