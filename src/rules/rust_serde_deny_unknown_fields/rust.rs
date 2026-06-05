@@ -47,13 +47,18 @@ impl AstCheck for Check {
         if has_flatten_field(node, source_bytes) {
             return;
         }
-        // Structs marked with a `external wire format mirror` doc
-        // comment are mirrors of an external JSON contract we don't
-        // own. Adding `deny_unknown_fields` would crash on every
-        // upstream tool upgrade that adds a field. The marker is the
-        // explicit opt-out — visible at the source, not hidden in
-        // comply.toml.
-        if has_external_mirror_marker(node, source_bytes) {
+        // ORM structs (Diesel Queryable / Selectable) deserialize from
+        // internal query results, not user input — forward-compat is
+        // more important than strict field validation.
+        if has_orm_derive(&attrs) {
+            return;
+        }
+        // Structs marked with a forward-compat doc comment are mirrors
+        // of external contracts we don't own. Accepted marker phrases:
+        //   "external wire format mirror" (legacy)
+        //   "external api response"
+        //   "versioned protocol"
+        if has_forward_compat_marker(node, source_bytes) {
             return;
         }
         let name = node
@@ -115,20 +120,28 @@ fn has_deny_unknown_fields(attr_text: &str) -> bool {
     attr_text.contains("deny_unknown_fields")
 }
 
-/// True if the struct's preceding doc comments contain the literal
-/// marker phrase `external wire format mirror`. Convention used to
-/// opt out of the rule for structs that mirror an external JSON
-/// schema we don't own (`cargo-shear`, `jscpd`, …) — adding
-/// `deny_unknown_fields` to those would crash comply on every
-/// upstream tool upgrade that adds a field.
-fn has_external_mirror_marker(item: tree_sitter::Node, source: &[u8]) -> bool {
+fn has_orm_derive(attrs: &[String]) -> bool {
+    attrs
+        .iter()
+        .any(|a| a.contains("derive(") && (a.contains("Queryable") || a.contains("Selectable")))
+}
+
+/// True if the struct's preceding doc comments contain any of the
+/// forward-compat marker phrases:
+/// - `"external wire format mirror"` (legacy)
+/// - `"external api response"` — GitHub/Svix-style API mirrors
+/// - `"versioned protocol"` — DAP, dump readers, forward-compat formats
+fn has_forward_compat_marker(item: tree_sitter::Node, source: &[u8]) -> bool {
     let mut sibling = item.prev_named_sibling();
     while let Some(s) = sibling {
         match s.kind() {
             "line_comment" | "block_comment" => {
                 if let Ok(text) = s.utf8_text(source) {
                     let lowered = text.to_ascii_lowercase();
-                    if lowered.contains("external wire format mirror") {
+                    if lowered.contains("external wire format mirror")
+                        || lowered.contains("external api response")
+                        || lowered.contains("versioned protocol")
+                    {
                         return true;
                     }
                 }
@@ -223,5 +236,36 @@ mod tests {
             run_on(source).is_empty(),
             "false positive: struct with flatten field can't have deny_unknown_fields"
         );
+    }
+
+    #[test]
+    fn allows_queryable_orm_struct() {
+        let source = "#[derive(Debug, Deserialize, Queryable)]\nstruct User { id: i32, name: String }";
+        assert!(run_on(source).is_empty(), "FP: ORM struct flagged despite Queryable");
+    }
+
+    #[test]
+    fn allows_selectable_orm_struct() {
+        let source = "#[derive(Deserialize, Selectable)]\nstruct User { id: i32 }";
+        assert!(run_on(source).is_empty(), "FP: ORM struct flagged despite Selectable");
+    }
+
+    #[test]
+    fn allows_external_api_response_with_marker() {
+        let source = "// external api response — version-compatible\n#[derive(Deserialize)]\nstruct GithubUser { login: String }";
+        assert!(run_on(source).is_empty(), "FP: external API response flagged");
+    }
+
+    #[test]
+    fn allows_versioned_protocol_with_marker() {
+        let source = "// versioned protocol — accepts future fields\n#[derive(Deserialize)]\nstruct DapMessage { seq: i32 }";
+        assert!(run_on(source).is_empty(), "FP: versioned protocol flagged");
+    }
+
+    #[test]
+    fn flags_despite_incidental_api_mention() {
+        // "external api" alone does NOT trigger the exemption — must be "external api response"
+        let source = "// fetches data from external api of payment provider\n#[derive(Deserialize)]\nstruct PaymentData { amount: u64 }";
+        assert_eq!(run_on(source).len(), 1, "should still flag: comment mentions external api but not 'external api response'");
     }
 }
