@@ -48,7 +48,7 @@ fn extract_param_names(params: &FormalParameters) -> Vec<String> {
 }
 
 /// Check if a function node is a callback to a framework method like
-/// `fastify.register(...)`.
+/// `fastify.register(...)` or a constructor like `new MutationCache({...})`.
 fn is_framework_callback<'a>(
     node: &oxc_semantic::AstNode<'a>,
     semantic: &'a oxc_semantic::Semantic<'a>,
@@ -59,16 +59,27 @@ fn is_framework_callback<'a>(
     if parent_id == node.id() {
         return false;
     }
-    // The function should be an argument of a call expression.
-    // Walk up: function -> argument (Argument) -> CallExpression
+    // Walk up: function -> ObjectProperty -> ObjectExpression -> CallExpression/NewExpression
     let mut cur = parent_id;
-    for _ in 0..3 {
+    let mut in_object_expr = false;
+    for _ in 0..4 {
         let kind = nodes.kind(cur);
-        if let AstKind::CallExpression(call) = kind {
-            let callee_text =
-                &source[call.callee.span().start as usize..call.callee.span().end as usize];
-            let method = callee_text.rsplit('.').next().unwrap_or(callee_text);
-            return FRAMEWORK_CALLBACK_METHODS.contains(&method);
+        match kind {
+            AstKind::ObjectExpression(_) => {
+                in_object_expr = true;
+            }
+            AstKind::NewExpression(_) => {
+                // Constructor calls always impose their callback API on the caller.
+                let _ = in_object_expr;
+                return true;
+            }
+            AstKind::CallExpression(call) => {
+                let callee_text =
+                    &source[call.callee.span().start as usize..call.callee.span().end as usize];
+                let method = callee_text.rsplit('.').next().unwrap_or(callee_text);
+                return FRAMEWORK_CALLBACK_METHODS.contains(&method);
+            }
+            _ => {}
         }
         let next = nodes.parent_id(cur);
         if next == cur {
@@ -240,5 +251,35 @@ impl OxcCheck for Check {
                 span: None,
             })
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+    #[test]
+    fn no_fp_on_object_literal_callbacks_in_new_expression() {
+        // Regression for issue #751 — MutationCache constructor callbacks share params by library contract.
+        let src = r#"
+new MutationCache({
+  onError(_e, _variables, _context, _mutation) {},
+  onSuccess(_d, _variables, _context, _mutation) {},
+});
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_free_standing_functions_sharing_params() {
+        let src = r#"
+function createUser(name: string, email: string, age: number) {}
+function updateUser(name: string, email: string, age: number) {}
+"#;
+        assert_eq!(run(src).len(), 2);
     }
 }
