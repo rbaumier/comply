@@ -225,6 +225,8 @@ fn scan_path(path: &Path) -> PathSegments {
         in_pages_router: lower.contains("/pages/") || lower.starts_with("pages/"),
         in_test_dir: lower.contains("/tests/")
             || lower.contains("/test/")
+            || lower.contains("/test-d/")
+            || lower.starts_with("test-d/")
             || lower.contains("/tests-")
             || lower.contains("/test-helpers/")
             || lower.contains("/test-helper/")
@@ -349,6 +351,9 @@ mod tests {
         assert!(scan_path(&PathBuf::from("src/api/test-helpers/als-proxy.ts")).in_test_dir);
         assert!(scan_path(&PathBuf::from("src/test-helper/db.ts")).in_test_dir);
         assert!(scan_path(&PathBuf::from("test-helpers/setup.ts")).in_test_dir);
+        // test-d/ convention used by type-fest and tsd for TypeScript type tests (issue #790).
+        assert!(scan_path(&PathBuf::from("packages/type-fest/test-d/schema.ts")).in_test_dir);
+        assert!(scan_path(&PathBuf::from("test-d/foo.ts")).in_test_dir);
     }
 
     #[test]

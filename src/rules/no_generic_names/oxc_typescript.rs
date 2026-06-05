@@ -774,4 +774,23 @@ mod tests {
         let src = r#"function runMigration() {}"#;
         assert_eq!(run(src).len(), 1);
     }
+
+    #[test]
+    fn no_fp_in_test_d_directory() {
+        // Regression for #790 — type-fest and similar packages use test-d/ as a
+        // TypeScript type-test convention; generic names are idiomatic there.
+        let src = r#"const foo = { baz: 'fred' };"#;
+        let path = std::path::Path::new("test-d/schema.ts");
+        let project = crate::project::ProjectCtx::default();
+        let file = crate::rules::file_ctx::FileCtx::build(
+            path,
+            src,
+            crate::files::Language::TypeScript,
+            &project,
+        );
+        assert!(
+            crate::rules::test_helpers::run_oxc_ts_with_framework_and_file(src, &Check, "", &file)
+                .is_empty()
+        );
+    }
 }
