@@ -105,6 +105,12 @@ impl Config {
         self.raw.theme.as_deref()
     }
 
+    /// User-configured additional graph roots (globs relative to project root).
+    #[must_use]
+    pub fn entrypoints(&self) -> &[String] {
+        &self.raw.entrypoints
+    }
+
     /// True if `rule_id` is enabled for `file_path`. Combines:
     ///   - global `[rules.<id>] disabled = true` (kills the rule everywhere)
     ///   - per-glob `[overrides."<g>"] disable = [<id>]` (kills it for matches)
@@ -366,6 +372,9 @@ fn merge(mut base: ComplyToml, user: ComplyToml) -> ComplyToml {
     if user.theme.is_some() {
         base.theme = user.theme;
     }
+    if !user.entrypoints.is_empty() {
+        base.entrypoints = user.entrypoints;
+    }
     for (rule_id, user_rule) in user.rules {
         let entry = base.rules.entry(rule_id).or_default();
         if let Some(d) = user_rule.disabled {
@@ -397,7 +406,8 @@ mod serialize_impl {
 
     impl Serialize for ComplyToml {
         fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-            let mut state = s.serialize_struct("ComplyToml", 2)?;
+            let mut state = s.serialize_struct("ComplyToml", 3)?;
+            state.serialize_field("entrypoints", &self.entrypoints)?;
             state.serialize_field("rules", &self.rules)?;
             state.serialize_field("overrides", &self.overrides)?;
             state.end()
@@ -445,6 +455,17 @@ mod serialize_impl {
                 SeverityToml::Error => s.serialize_str("error"),
             }
         }
+    }
+}
+
+#[cfg(test)]
+impl Config {
+    /// Build a default `Config` with the given entrypoints globs set.
+    /// Used by `dead-export` and `unused-file` regression tests.
+    pub fn with_entrypoints(globs: Vec<String>) -> Self {
+        let mut cfg = Self::default();
+        cfg.raw.entrypoints = globs;
+        cfg
     }
 }
 

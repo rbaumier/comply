@@ -29,6 +29,12 @@ use std::collections::HashMap;
 pub struct ComplyToml {
     #[serde(default)]
     pub theme: Option<String>,
+    /// Additional graph roots for `dead-export` / `unused-file`. Each entry is
+    /// a glob (relative to CWD / project root) matching server entry files,
+    /// CLI mains, workers, etc. Empty by default — frontend-only behavior
+    /// unchanged.
+    #[serde(default)]
+    pub entrypoints: Vec<String>,
     #[serde(default)]
     pub rules: HashMap<String, RuleConfig>,
     #[serde(default)]
