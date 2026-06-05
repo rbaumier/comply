@@ -14,6 +14,7 @@
 //!    `[no-explicit-any]` instead of `typescript-eslint(no-explicit-any)`.
 
 mod await_thenable_post_filter;
+mod ban_types_post_filter;
 mod elysia_post_filter;
 mod equal_probe_post_filter;
 mod no_misused_spread_post_filter;
@@ -165,6 +166,7 @@ pub fn lint_files(
     }
 
     await_thenable_post_filter::apply(&mut all);
+    ban_types_post_filter::apply(&mut all);
     elysia_post_filter::apply(&mut all);
     equal_probe_post_filter::apply(&mut all);
     no_misused_spread_post_filter::apply(&mut all);
