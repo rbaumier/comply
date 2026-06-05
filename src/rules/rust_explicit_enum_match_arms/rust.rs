@@ -101,6 +101,21 @@ fn pattern_is_wildcard(pattern: tree_sitter::Node, source: &[u8]) -> bool {
 /// True if `pattern` looks like it matches an enum variant. See module
 /// docblock for the heuristic.
 fn pattern_is_enum_like(pattern: tree_sitter::Node, source: &[u8]) -> bool {
+    // tree-sitter-rust wraps match arm patterns in a `match_pattern` node
+    // (to accommodate guard clauses like `pat if cond`). Unwrap to the
+    // inner pattern before classifying.
+    if pattern.kind() == "match_pattern" {
+        let mut cursor = pattern.walk();
+        if let Some(inner) = pattern.named_children(&mut cursor).next() {
+            return pattern_is_enum_like(inner, source);
+        }
+        return false;
+    }
+    // Tuple patterns are product types: wildcard is always idiomatic
+    // (covering N×M combinations of sub-arms is impractical).
+    if pattern.kind() == "tuple_pattern" {
+        return false;
+    }
     // Or-pattern: recurse into each disjunct.
     if pattern.kind() == "or_pattern" {
         let mut cursor = pattern.walk();
@@ -188,6 +203,20 @@ mod tests {
     #[test]
     fn allows_in_test_context() {
         let src = "#[test]\nfn t() { let x = Foo::A; let _ = match x { Foo::A => 1, _ => 2 }; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_wildcard_on_tuple_of_options() {
+        let src = "fn f(x: (Option<i32>, Option<i32>)) -> i32 { \
+                   match x { (Some(a), Some(b)) => a + b, _ => 0 } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_wildcard_on_tuple_of_results() {
+        let src = "fn f(x: (Result<i32, E>, Result<i32, E>)) -> i32 { \
+                   match x { (Ok(a), Ok(b)) => a + b, _ => 0 } }";
         assert!(run_on(src).is_empty());
     }
 }
