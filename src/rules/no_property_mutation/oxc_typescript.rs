@@ -111,6 +111,24 @@ fn is_created_dom_element(
     false
 }
 
+const DOM_WRITE_INTERMEDIARIES: &[&str] = &["style", "dataset"];
+
+/// True when the assignment target chain passes through a DOM write property
+/// such as `el.style.width = v` or `el.dataset.key = v`. Mutating `.style`/
+/// `.dataset` sub-properties is the canonical imperative DOM API with no
+/// immutable alternative.
+fn has_dom_write_intermediary(expr: &Expression) -> bool {
+    match expr {
+        Expression::StaticMemberExpression(m) => {
+            if DOM_WRITE_INTERMEDIARIES.contains(&m.property.name.as_str()) {
+                return true;
+            }
+            has_dom_write_intermediary(&m.object)
+        }
+        _ => false,
+    }
+}
+
 fn is_create_element_call(expr: &Expression) -> bool {
     let Expression::CallExpression(call) = expr else { return false };
     let Expression::StaticMemberExpression(member) = &call.callee else { return false };
@@ -193,6 +211,7 @@ impl OxcCheck for Check {
                         if root_object_name(&m.object) == Some("set") { return; }
                         if let Some(id) = root_identifier_of_expr(&m.object)
                             && is_created_dom_element(id, semantic) { return; }
+                        if has_dom_write_intermediary(&m.object) { return; }
 
                         let (line, column) = byte_offset_to_line_col(ctx.source, assign.span.start as usize);
                         diagnostics.push(Diagnostic {
@@ -216,6 +235,7 @@ impl OxcCheck for Check {
                         if root_object_name(&m.object) == Some("set") { return; }
                         if let Some(id) = root_identifier_of_expr(&m.object)
                             && is_created_dom_element(id, semantic) { return; }
+                        if has_dom_write_intermediary(&m.object) { return; }
 
                         let (line, column) = byte_offset_to_line_col(ctx.source, assign.span.start as usize);
                         diagnostics.push(Diagnostic {
@@ -239,6 +259,7 @@ impl OxcCheck for Check {
                         if is_inside_sentry_hook(node, semantic) { return; }
                         if let Some(id) = root_identifier_of_expr(&m.object)
                             && is_created_dom_element(id, semantic) { return; }
+                        if has_dom_write_intermediary(&m.object) { return; }
                         let (line, column) = byte_offset_to_line_col(ctx.source, update.span.start as usize);
                         diagnostics.push(Diagnostic {
                             path: Arc::clone(&ctx.path_arc),
@@ -254,6 +275,7 @@ impl OxcCheck for Check {
                         if is_inside_sentry_hook(node, semantic) { return; }
                         if let Some(id) = root_identifier_of_expr(&m.object)
                             && is_created_dom_element(id, semantic) { return; }
+                        if has_dom_write_intermediary(&m.object) { return; }
                         let (line, column) = byte_offset_to_line_col(ctx.source, update.span.start as usize);
                         diagnostics.push(Diagnostic {
                             path: Arc::clone(&ctx.path_arc),
@@ -277,11 +299,13 @@ impl OxcCheck for Check {
                         if is_inside_sentry_hook(node, semantic) { return; }
                         if let Some(id) = root_identifier_of_expr(&m.object)
                             && is_created_dom_element(id, semantic) { return; }
+                        if has_dom_write_intermediary(&m.object) { return; }
                     }
                     Expression::ComputedMemberExpression(m) => {
                         if is_inside_sentry_hook(node, semantic) { return; }
                         if let Some(id) = root_identifier_of_expr(&m.object)
                             && is_created_dom_element(id, semantic) { return; }
+                        if has_dom_write_intermediary(&m.object) { return; }
                     }
                     _ => return,
                 }
@@ -451,6 +475,34 @@ mod tests {
         let src = r#"
             function scrubStringField(bag, key) {
                 bag[key] = scrubSensitiveQueryFromUrl(bag[key]);
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // DOM .style / .dataset chains — issue #750
+
+    #[test]
+    fn skips_dom_style_chain_issue_750() {
+        // Mutating `.style` sub-properties is the canonical imperative DOM API;
+        // no spread/immutable equivalent exists.
+        let src = r#"
+            function applyStyle(el: HTMLElement, width: number): void {
+                el.style.width = `${width}px`;
+                elements.floating.style.maxHeight = `${availableHeight}px`;
+                el.dataset.key = "value";
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_direct_style_assignment() {
+        // Assigning directly to `.style` (replacing the whole object) is a
+        // genuine mutation — only sub-property writes via `.style.X` are exempt.
+        let src = r#"
+            function reset(el: HTMLElement): void {
+                el.style = someObj;
             }
         "#;
         assert_eq!(run(src).len(), 1);
