@@ -2,6 +2,7 @@
 //! `const foo = () => {...}` arrow functions.
 
 use crate::diagnostic::{Diagnostic, Severity};
+use crate::files::Language;
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use std::sync::Arc;
@@ -57,6 +58,12 @@ impl OxcCheck for Check {
                 oxc_ast::ast::BindingPattern::BindingIdentifier(id) => id.name.as_str(),
                 _ => "<unknown>",
             };
+
+            // PascalCase in a JSX/TSX file = React component convention; the
+            // arrow is intentional (avoids hoisting that breaks hook ordering).
+            if ctx.lang == Language::Tsx && name.starts_with(|c: char| c.is_uppercase()) {
+                continue;
+            }
 
             let (line, column) =
                 byte_offset_to_line_col(ctx.source, declarator.span.start as usize);
@@ -138,7 +145,7 @@ fn nearest_function_span(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rules::test_helpers::run_oxc_ts;
+    use crate::rules::test_helpers::{run_oxc_ts, run_oxc_tsx, run_oxc_tsx_with_path};
 
     #[test]
     fn flags_simple_top_level_arrow() {
@@ -157,5 +164,37 @@ mod tests {
         body.push_str("  return 'default';\n};\n");
         let diags = run_oxc_ts(&body, &Check);
         assert!(diags.is_empty(), "high-complexity arrow should not flag, got {diags:#?}");
+    }
+
+    // React component exemption in .tsx/.jsx files (issue #792)
+
+    #[test]
+    fn no_fp_react_component_no_props_tsx() {
+        let diags = run_oxc_tsx("const App = () => 42;", &Check);
+        assert!(diags.is_empty(), "PascalCase arrow in .tsx should not flag (React component), got {diags:#?}");
+    }
+
+    #[test]
+    fn no_fp_react_component_with_props_tsx() {
+        let diags = run_oxc_tsx("const MyComponent = (props: Props) => props.name;", &Check);
+        assert!(diags.is_empty(), "PascalCase arrow with props in .tsx should not flag, got {diags:#?}");
+    }
+
+    #[test]
+    fn still_flags_camelcase_arrow_in_tsx() {
+        let diags = run_oxc_tsx("const parseData = (input: string) => input;", &Check);
+        assert_eq!(diags.len(), 1, "camelCase utility arrow in .tsx should still flag");
+    }
+
+    #[test]
+    fn still_flags_pascalcase_arrow_in_ts() {
+        let diags = run_oxc_ts("const MyHelper = (x: number) => x + 1;", &Check);
+        assert_eq!(diags.len(), 1, "PascalCase arrow in .ts should still flag (no JSX)");
+    }
+
+    #[test]
+    fn no_fp_react_component_in_jsx() {
+        let diags = run_oxc_tsx_with_path("const Button = () => 42;", &Check, "t.jsx");
+        assert!(diags.is_empty(), "PascalCase arrow in .jsx should not flag, got {diags:#?}");
     }
 }
