@@ -5,6 +5,11 @@
 //! idiomatic way to assert "this call doesn't panic" without caring
 //! about the return value. Skipped via
 //! `rust_helpers::is_in_test_context`.
+//!
+//! NOTE: This rule uses a heuristic (call-like pattern matching) rather than
+//! type awareness. It may flag `let _ = infallible_fn()` where the function
+//! provably does not return Result/Option. Without --type-aware, there is no
+//! fix for this class of FP — document intent in the calling code if needed.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::rust_helpers::is_in_test_context;
@@ -101,6 +106,28 @@ mod tests {
                 fn helper() {
                     let _ = do_something();
                 }
+            }
+        "#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_let_underscore_call_inside_tokio_test() {
+        let src = r#"
+            #[tokio::test]
+            async fn test_send_side_effect() {
+                let _ = tx.send(item).await;
+            }
+        "#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_let_underscore_call_inside_actix_test() {
+        let src = r#"
+            #[actix_rt::test]
+            async fn test_cleanup() {
+                let _ = handle.abort();
             }
         "#;
         assert!(run_on(src).is_empty());
