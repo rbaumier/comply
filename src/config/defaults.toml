@@ -10,6 +10,16 @@
 # defaults, comments included.
 
 # ---------------------------------------------------------------
+# Additional import-graph roots for dead-export / unused-file.
+#
+# By default comply roots reachability at the frontend / route-tree
+# entry only. Add server entries, CLI mains, or worker files here so
+# backend dead exports are also detected.
+#
+# entrypoints = ["src/api/server.ts", "src/workers/*.ts"]
+# ---------------------------------------------------------------
+
+# ---------------------------------------------------------------
 # File / function size limits.
 # ---------------------------------------------------------------
 

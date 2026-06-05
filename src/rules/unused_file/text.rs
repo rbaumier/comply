@@ -74,7 +74,7 @@ impl TextCheck for Check {
 fn detect_entry_points<'a>(index: &'a ImportIndex, project: &ProjectCtx) -> Vec<&'a Path> {
     index
         .indexed_paths()
-        .filter(|p| is_entry_point(p, project) || is_test_file(p))
+        .filter(|p| is_entry_point(p, project) || is_test_file(p) || project.entrypoints_contains(p))
         .collect()
 }
 

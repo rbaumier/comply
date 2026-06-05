@@ -382,6 +382,8 @@ pub struct ProjectCtx {
     pub tsconfig: Option<Arc<Tsconfig>>,
     pub framework: Framework,
     pub detected_frameworks: Vec<&'static FrameworkDef>,
+    /// User-configured entrypoints globs (from `comply.toml`). Empty by default.
+    pub entrypoint_globs: Vec<String>,
 
     // Per-manifest caches, keyed by the *directory* that contains the
     // manifest. Mutex over HashMap is sufficient: contention is low (same
@@ -434,7 +436,7 @@ impl ProjectCtx {
     /// Load once per run from the set of files being linted. Eagerly parses
     /// every TS/JS/TSX input to build `import_index` — cross-file rules are
     /// noisy/wrong without it, so we don't make that lookup lazy.
-    pub fn load(files: &[&SourceFile], _config: &Config) -> Self {
+    pub fn load(files: &[&SourceFile], config: &Config) -> Self {
         let root = detect_project_root(files);
         let pkg = root
             .as_ref()
@@ -458,6 +460,7 @@ impl ProjectCtx {
             tsconfig: tsc.clone(),
             framework,
             detected_frameworks,
+            entrypoint_globs: config.entrypoints().to_vec(),
             ..Self::default()
         };
 
@@ -553,6 +556,38 @@ impl ProjectCtx {
             ];
             MARKERS.iter().any(|name| root.join(name).metadata().is_ok())
         })
+    }
+
+    /// True if `path` matches any user-configured entrypoints glob.
+    /// Relativizes `path` against `project_root` (or CWD as fallback) before
+    /// glob matching — same anchor as the rest of the import-graph logic.
+    pub fn entrypoints_contains(&self, path: &Path) -> bool {
+        use globset::Glob;
+        if self.entrypoint_globs.is_empty() {
+            return false;
+        }
+        let anchor = self
+            .project_root
+            .as_deref()
+            .and_then(|r| std::fs::canonicalize(r).ok())
+            .or_else(|| std::env::current_dir().ok());
+        let rel: std::borrow::Cow<Path> = if path.is_absolute() {
+            anchor
+                .as_deref()
+                .and_then(|a| path.strip_prefix(a).ok().map(|p| p.to_path_buf()))
+                .map(std::borrow::Cow::Owned)
+                .unwrap_or_else(|| std::borrow::Cow::Borrowed(path))
+        } else {
+            std::borrow::Cow::Borrowed(path.strip_prefix("./").unwrap_or(path))
+        };
+        for pattern in &self.entrypoint_globs {
+            if let Ok(glob) = Glob::new(pattern) {
+                if glob.compile_matcher().is_match(rel.as_ref()) {
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     pub fn framework_entry_dirs(&self) -> impl Iterator<Item = &str> {

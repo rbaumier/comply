@@ -36,7 +36,9 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::parsing::ts_language_for;
 use crate::project::import_index::{ExportKind, ImportKind};
 use crate::rules::backend::{CheckCtx, TextCheck};
-use crate::rules::path_utils::{is_config_file, is_framework_entry_point};
+use crate::rules::path_utils::{
+    is_config_file, is_framework_specific_entry_point, is_in_framework_entry_dir,
+};
 use crate::rules::walker::walk_tree;
 use std::collections::HashSet;
 use std::path::Path;
@@ -112,9 +114,18 @@ impl TextCheck for Check {
         }
         let canon = std::fs::canonicalize(ctx.path).unwrap_or_else(|_| ctx.path.to_path_buf());
 
-        // Framework entry points are consumed by framework tooling rather than
-        // imported by application files in the index.
-        if is_framework_entry_point(&canon, ctx.project) {
+        // User-declared entry files (server mains, CLI entries, workers) — never flagged.
+        if ctx.project.entrypoints_contains(&canon) {
+            return Vec::new();
+        }
+        // Framework entry FILE/SUFFIX/ROOT_FILE match — always bail out.
+        if is_framework_specific_entry_point(&canon, ctx.project) {
+            return Vec::new();
+        }
+        // Framework entry DIR match — bail out only when no user entrypoints are
+        // configured (backward-compat). When entrypoints are set the user wants
+        // backend-dir files checked; only the specific file/suffix matches above protect them.
+        if ctx.project.entrypoint_globs.is_empty() && is_in_framework_entry_dir(&canon, ctx.project) {
             return Vec::new();
         }
         let exports = index.get_exports(&canon);
@@ -372,6 +383,30 @@ mod tests {
         files: &[(&str, &str)],
         target_rel: &str,
     ) -> (TempDir, Vec<Diagnostic>) {
+        run_on_project_inner(package_json, Config::default(), files, target_rel)
+    }
+
+    fn run_on_project_with_entrypoints(
+        entrypoints: Vec<String>,
+        files: &[(&str, &str)],
+        target_rel: &str,
+    ) -> (TempDir, Vec<Diagnostic>) {
+        // A minimal package.json anchors project_root at the TempDir root so
+        // entrypoints globs like "src/api/server.ts" resolve correctly.
+        run_on_project_inner(
+            Some(r#"{"name":"test"}"#),
+            Config::with_entrypoints(entrypoints),
+            files,
+            target_rel,
+        )
+    }
+
+    fn run_on_project_inner(
+        package_json: Option<&str>,
+        config: Config,
+        files: &[(&str, &str)],
+        target_rel: &str,
+    ) -> (TempDir, Vec<Diagnostic>) {
         let dir = TempDir::new().unwrap();
         if let Some(package_json) = package_json {
             fs::write(dir.path().join("package.json"), package_json).unwrap();
@@ -390,7 +425,6 @@ mod tests {
             });
         }
         let refs: Vec<&SourceFile> = source_files.iter().collect();
-        let config = Config::default();
         let project = ProjectCtx::load(&refs, &config);
 
         let target_path: PathBuf = dir.path().join(target_rel);
@@ -878,6 +912,134 @@ mod tests {
         assert!(
             diags.iter().all(|d| !d.message.contains("deleteUser")),
             "CLI entry point export must not be flagged, got: {diags:?}"
+        );
+    }
+
+    // Regression tests for issue #754 — backend dead exports not flagged
+
+    #[test]
+    fn flags_dead_export_in_backend_api_schema_when_entrypoints_configured() {
+        // Regression for #754 — dead export in src/api/** was silenced by the
+        // framework entry-dirs bail-out even though it has zero importers.
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "src/api/features/x/schema/x.ts",
+                "export const __DEAD = \"x\";",
+            ),
+            ("src/api/server.ts", "export const app = {};"),
+            ("src/app/app.ts", "export const z = 1;"),
+        ];
+        let (_dir, diags) = run_on_project_with_entrypoints(
+            vec!["src/api/server.ts".to_string()],
+            &files,
+            "src/api/features/x/schema/x.ts",
+        );
+        assert!(
+            diags.iter().any(|d| d.message.contains("__DEAD")),
+            "dead export in backend schema must be flagged when entrypoints configured, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn flags_dead_export_in_backend_handler_when_entrypoints_configured() {
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "src/api/features/x/list-x.ts",
+                "export const __DEAD = \"x\";",
+            ),
+            ("src/api/server.ts", "export const app = {};"),
+            ("src/app/app.ts", "export const z = 1;"),
+        ];
+        let (_dir, diags) = run_on_project_with_entrypoints(
+            vec!["src/api/server.ts".to_string()],
+            &files,
+            "src/api/features/x/list-x.ts",
+        );
+        assert!(
+            diags.iter().any(|d| d.message.contains("__DEAD")),
+            "dead export in backend handler must be flagged when entrypoints configured, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn does_not_flag_entrypoint_file_itself() {
+        // The file listed in entrypoints is the entry — never flagged.
+        let files: Vec<(&str, &str)> = vec![
+            ("src/api/server.ts", "export const __DEAD = \"x\";"),
+            ("src/app/app.ts", "export const z = 1;"),
+        ];
+        let (_dir, diags) = run_on_project_with_entrypoints(
+            vec!["src/api/server.ts".to_string()],
+            &files,
+            "src/api/server.ts",
+        );
+        assert!(
+            diags.is_empty(),
+            "entrypoint file itself must not be flagged, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn does_not_flag_backend_export_imported_by_another_file() {
+        // A backend export that IS imported — not flagged.
+        let files: Vec<(&str, &str)> = vec![
+            ("src/api/features/x/schema.ts", "export const UsedSchema = {};"),
+            (
+                "src/api/features/x/handler.ts",
+                "import { UsedSchema } from './schema';",
+            ),
+            ("src/api/server.ts", "export const app = {};"),
+        ];
+        let (_dir, diags) = run_on_project_with_entrypoints(
+            vec!["src/api/server.ts".to_string()],
+            &files,
+            "src/api/features/x/schema.ts",
+        );
+        assert!(
+            diags.is_empty(),
+            "imported backend export must not be flagged, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn frontend_behavior_unchanged_when_entrypoints_configured() {
+        // Frontend dead exports are still flagged when entrypoints is set.
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "src/app/features/x/head.ts",
+                "export const __DEAD = \"x\";",
+            ),
+            ("src/api/server.ts", "export const app = {};"),
+            ("src/app/other.ts", "export const z = 1;"),
+        ];
+        let (_dir, diags) = run_on_project_with_entrypoints(
+            vec!["src/api/server.ts".to_string()],
+            &files,
+            "src/app/features/x/head.ts",
+        );
+        assert!(
+            diags.iter().any(|d| d.message.contains("__DEAD")),
+            "frontend dead export must still be flagged, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn backend_silenced_without_entrypoints_configured() {
+        // Without entrypoints configured, backend files under /api/ dirs are
+        // still silenced (backward-compat).
+        let pkg = r#"{ "dependencies": { "elysia": "1.0.0" } }"#;
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "src/api/features/x/schema.ts",
+                "export const __DEAD = \"x\";",
+            ),
+            ("src/app.ts", "export const z = 1;"),
+        ];
+        let (_dir, diags) =
+            run_on_project_with_pkg(Some(pkg), &files, "src/api/features/x/schema.ts");
+        assert!(
+            diags.is_empty(),
+            "without entrypoints, backend /api/ files must remain silenced (backward-compat), got: {diags:?}"
         );
     }
 }
