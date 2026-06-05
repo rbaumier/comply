@@ -30,6 +30,7 @@ use crate::config::Config;
 use crate::files::SourceFile;
 use crate::frameworks::FrameworkDef;
 
+pub mod eslint_ignore;
 pub mod import_index;
 pub mod k8s_index;
 pub mod locale_index;

@@ -192,14 +192,31 @@ const EXCLUDED_DIRS: &[&str] = &[
 
 fn walk_directory(path: &Path) -> Result<Vec<SourceFile>> {
     let mut files = Vec::new();
+    // Honor the project's own ESLint exclusions (flat-config `ignores`,
+    // `ignorePatterns`, package.json eslintConfig). The file-based
+    // `.eslintignore` / `.eslint-ignore` are gitignore-syntax, so the walker
+    // handles them natively via add_custom_ignore_filename below.
+    let eslint_ignore = crate::project::eslint_ignore::load(path);
     let walker = WalkBuilder::new(path)
         .standard_filters(true)
         .add_custom_ignore_filename(".complyignore")
-        .filter_entry(|entry| {
-            if entry.file_type().is_some_and(|ft| ft.is_dir())
-                && let Some(name) = entry.file_name().to_str() {
-                    return !EXCLUDED_DIRS.contains(&name);
-                }
+        .add_custom_ignore_filename(".eslintignore")
+        .add_custom_ignore_filename(".eslint-ignore")
+        .filter_entry(move |entry| {
+            let is_dir = entry.file_type().is_some_and(|ft| ft.is_dir());
+            if is_dir
+                && let Some(name) = entry.file_name().to_str()
+                && EXCLUDED_DIRS.contains(&name)
+            {
+                return false;
+            }
+            // Prune directories matching a config-derived ignore so their
+            // subtree is never walked; also drops individual matching files.
+            if let Some(gi) = &eslint_ignore
+                && gi.matched(entry.path(), is_dir).is_ignore()
+            {
+                return false;
+            }
             true
         })
         .build();
@@ -369,6 +386,14 @@ mod tests {
         assert!(parse_git_output(&[0xFF, 0xFE, b'\n']).is_err());
     }
 
+    fn walked_names(root: &Path) -> Vec<String> {
+        walk_directory(root)
+            .expect("walk")
+            .into_iter()
+            .map(|f| f.path.file_name().unwrap().to_string_lossy().into_owned())
+            .collect()
+    }
+
     #[test]
     fn walk_directory_honors_complyignore() {
         let tmp = tempfile::tempdir().expect("tempdir");
@@ -379,14 +404,79 @@ mod tests {
         std::fs::write(root.join("nested/also-skipped.ts"), "x").unwrap();
         std::fs::write(root.join(".complyignore"), "skipped.ts\nnested/\n").unwrap();
 
-        let names: Vec<String> = walk_directory(root)
-            .expect("walk")
-            .into_iter()
-            .map(|f| f.path.file_name().unwrap().to_string_lossy().into_owned())
-            .collect();
+        let names = walked_names(root);
 
         assert!(names.contains(&"kept.ts".to_string()));
         assert!(!names.contains(&"skipped.ts".to_string()));
         assert!(!names.contains(&"also-skipped.ts".to_string()));
+    }
+
+    #[test]
+    fn walk_directory_honors_eslintignore_file() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = tmp.path();
+        std::fs::write(root.join("kept.ts"), "x").unwrap();
+        std::fs::write(root.join("gen.ts"), "x").unwrap();
+        std::fs::write(root.join(".eslintignore"), "gen.ts\n").unwrap();
+
+        let names = walked_names(root);
+
+        assert!(names.contains(&"kept.ts".to_string()));
+        assert!(!names.contains(&"gen.ts".to_string()));
+    }
+
+    #[test]
+    fn walk_directory_honors_flat_config_global_ignores() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = tmp.path();
+        std::fs::write(root.join("kept.ts"), "x").unwrap();
+        std::fs::write(root.join("schema.gen.ts"), "x").unwrap();
+        std::fs::write(
+            root.join("eslint.config.mjs"),
+            "export default [{ ignores: [\"**/*.gen.ts\"] }];\n",
+        )
+        .unwrap();
+
+        let names = walked_names(root);
+
+        assert!(names.contains(&"kept.ts".to_string()));
+        assert!(!names.contains(&"schema.gen.ts".to_string()));
+    }
+
+    #[test]
+    fn walk_directory_honors_eslintrc_ignore_patterns() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = tmp.path();
+        std::fs::write(root.join("kept.ts"), "x").unwrap();
+        std::fs::create_dir(root.join("build")).unwrap();
+        std::fs::write(root.join("build/out.ts"), "x").unwrap();
+        std::fs::write(
+            root.join(".eslintrc.json"),
+            "{ \"ignorePatterns\": [\"build/\"] }",
+        )
+        .unwrap();
+
+        let names = walked_names(root);
+
+        assert!(names.contains(&"kept.ts".to_string()));
+        assert!(!names.contains(&"out.ts".to_string()));
+    }
+
+    #[test]
+    fn walk_directory_honors_package_json_eslint_config() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = tmp.path();
+        std::fs::write(root.join("kept.ts"), "x").unwrap();
+        std::fs::write(root.join("vendor.ts"), "x").unwrap();
+        std::fs::write(
+            root.join("package.json"),
+            "{ \"eslintConfig\": { \"ignorePatterns\": [\"vendor.ts\"] } }",
+        )
+        .unwrap();
+
+        let names = walked_names(root);
+
+        assert!(names.contains(&"kept.ts".to_string()));
+        assert!(!names.contains(&"vendor.ts".to_string()));
     }
 }
