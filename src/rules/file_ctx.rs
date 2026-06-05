@@ -233,6 +233,8 @@ fn scan_path(path: &Path) -> PathSegments {
             || lower.starts_with("tests-")
             || lower.starts_with("test-helpers/")
             || lower.starts_with("test-helper/")
+            || lower.contains("/test-d/")
+            || lower.starts_with("test-d/")
             || lower.contains("/__tests__/")
             || lower.starts_with("__tests__/")
             || lower.contains("/fixtures/")
@@ -349,6 +351,9 @@ mod tests {
         assert!(scan_path(&PathBuf::from("src/api/test-helpers/als-proxy.ts")).in_test_dir);
         assert!(scan_path(&PathBuf::from("src/test-helper/db.ts")).in_test_dir);
         assert!(scan_path(&PathBuf::from("test-helpers/setup.ts")).in_test_dir);
+        // tsd type-testing convention (issue #793).
+        assert!(scan_path(&PathBuf::from("test-d/schema.ts")).in_test_dir);
+        assert!(scan_path(&PathBuf::from("src/test-d/types.ts")).in_test_dir);
     }
 
     #[test]
