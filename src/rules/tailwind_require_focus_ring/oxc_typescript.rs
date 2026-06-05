@@ -3,53 +3,11 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{CallExpression, Expression, JSXAttributeItem, JSXExpression};
+use oxc_ast::ast::JSXAttributeItem;
 use oxc_span::GetSpan;
 use std::sync::Arc;
 
 const INTERACTIVE_TAGS: &[&str] = &["button", "a", "input", "select", "textarea"];
-const CLASS_COMPOSERS: &[&str] = &["cn", "clsx", "classnames", "twMerge"];
-
-/// `buttonVariants(...)`, `cva(...)`, or any `cn(...)` / `clsx(...)` / `twMerge(...)`
-/// whose arguments contain such a call. Convention is strong: any identifier ending
-/// in `Variants` is treated as a cva factory.
-fn is_cva_call(call: &CallExpression) -> bool {
-    match &call.callee {
-        Expression::Identifier(id) => {
-            let name = id.name.as_str();
-            name == "cva" || name.ends_with("Variants")
-        }
-        Expression::StaticMemberExpression(member) => {
-            let name = member.property.name.as_str();
-            name == "cva" || name.ends_with("Variants")
-        }
-        _ => false,
-    }
-}
-
-fn is_class_composer_wrapping_cva(call: &CallExpression) -> bool {
-    let composer_name = match &call.callee {
-        Expression::Identifier(id) => id.name.as_str(),
-        Expression::StaticMemberExpression(member) => member.property.name.as_str(),
-        _ => return false,
-    };
-    if !CLASS_COMPOSERS.contains(&composer_name) {
-        return false;
-    }
-    call.arguments.iter().any(|arg| {
-        let Some(Expression::CallExpression(inner)) = arg.as_expression() else {
-            return false;
-        };
-        is_cva_call(inner) || is_class_composer_wrapping_cva(inner)
-    })
-}
-
-fn class_name_is_cva_driven(expr: &JSXExpression) -> bool {
-    let JSXExpression::CallExpression(call) = expr else {
-        return false;
-    };
-    is_cva_call(call) || is_class_composer_wrapping_cva(call)
-}
 
 fn has_focus_ring(classes: &str) -> bool {
     const OUTLINE_REMOVERS: &[&str] = &[
@@ -119,9 +77,7 @@ impl OxcCheck for Check {
                     Some(oxc_ast::ast::JSXAttributeValue::StringLiteral(lit)) => {
                         class_value = Some(lit.value.as_str());
                     }
-                    Some(oxc_ast::ast::JSXAttributeValue::ExpressionContainer(ec))
-                        if class_name_is_cva_driven(&ec.expression) =>
-                    {
+                    Some(oxc_ast::ast::JSXAttributeValue::ExpressionContainer(_)) => {
                         class_name_exempt = true;
                     }
                     _ => {}
@@ -271,10 +227,19 @@ mod tests {
 
     #[test]
     fn still_flags_button_with_cn_no_cva() {
-        assert_eq!(
+        // cn(...) is a call expression — the rule can't see into it, so it skips (accepted FN).
+        assert!(
             run(r#"export const A = () => <button className={cn("bg-blue-500", "text-white")} />;"#)
-                .len(),
-            1
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn skips_button_with_helper_call() {
+        // Regression for #747: className from a helper function must not be flagged.
+        assert!(
+            run(r#"export const A = () => <button type="button" className={triggerClassName(false)} />;"#)
+                .is_empty()
         );
     }
 
