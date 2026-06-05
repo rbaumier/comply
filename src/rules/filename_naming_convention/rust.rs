@@ -15,7 +15,7 @@ fn is_snake_case(stem: &str) -> bool {
     let mut prev_underscore = false;
     for (i, &b) in bytes.iter().enumerate() {
         if b == b'_' {
-            if prev_underscore || i == 0 || i == bytes.len() - 1 {
+            if prev_underscore || i == 0 {
                 return false;
             }
             prev_underscore = true;
@@ -92,8 +92,23 @@ mod tests {
     }
 
     #[test]
-    fn flags_trailing_underscore() {
-        assert_eq!(run("src/user_.rs").len(), 1);
+    fn allows_trailing_underscore() {
+        assert!(run("src/user_.rs").is_empty());
+    }
+
+    #[test]
+    fn allows_keyword_avoidance_struct() {
+        assert!(run("src/de/struct_.rs").is_empty());
+    }
+
+    #[test]
+    fn allows_keyword_avoidance_type() {
+        assert!(run("src/type_.rs").is_empty());
+    }
+
+    #[test]
+    fn allows_keyword_avoidance_match() {
+        assert!(run("src/match_.rs").is_empty());
     }
 
     #[test]
