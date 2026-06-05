@@ -35,6 +35,10 @@ impl OxcCheck for Check {
         if !is_jsx_expr(&logical.right) {
             return;
         }
+        // Exempt boolean predicate calls (e.g. isError(), hasPermission()).
+        if is_boolean_predicate_call(&logical.left) {
+            return;
+        }
         let (line, column) =
             byte_offset_to_line_col(ctx.source, logical.span.start as usize);
         diagnostics.push(Diagnostic {
@@ -57,6 +61,24 @@ fn is_jsx_expr(expr: &Expression) -> bool {
         expr.without_parentheses(),
         Expression::JSXElement(_) | Expression::JSXFragment(_)
     )
+}
+
+// mirrors jsx_ensure_booleans::BOOLEAN_PREFIXES
+const BOOLEAN_PREFIXES: &[&str] = &[
+    "is", "has", "should", "can", "will", "did", "show", "hide",
+    "enable", "disable", "visible", "active", "open", "loading",
+    "loaded", "allow", "need", "must",
+];
+
+fn is_boolean_predicate_call(expr: &Expression) -> bool {
+    let expr = expr.without_parentheses();
+    if let Expression::CallExpression(call) = expr {
+        if let Expression::Identifier(id) = &call.callee {
+            let lower = id.name.as_str().to_lowercase();
+            return BOOLEAN_PREFIXES.iter().any(|p| lower.starts_with(p));
+        }
+    }
+    false
 }
 
 #[cfg(test)]
@@ -83,5 +105,23 @@ mod tests {
     #[test]
     fn does_not_flag_non_jsx_right_operand() {
         assert!(run_on("const x = <div>{a && b}</div>;").is_empty());
+    }
+
+    #[test]
+    fn allows_type_guard_call() {
+        assert!(run_on("const x = <div>{isErrorWithMessage(error) && <Panel />}</div>;").is_empty());
+    }
+
+    #[test]
+    fn allows_boolean_returning_function() {
+        assert!(run_on("const x = <div>{isTruthy(val) && <Panel />}</div>;").is_empty());
+    }
+
+    #[test]
+    fn flags_numeric_expression() {
+        assert_eq!(
+            run_on("const x = <div>{count && <span>{count}</span>}</div>;").len(),
+            1
+        );
     }
 }
