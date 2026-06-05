@@ -4,10 +4,15 @@
 //! Function and method overload signatures share an identifier with
 //! their implementation by language design — skipped when every
 //! declaration of a symbol is a `Function` AST node.
+//!
+//! Branded type pattern: TypeScript allows a symbol to occupy both the
+//! value namespace (`const`/function) and the type namespace (`type`/`interface`)
+//! simultaneously — skipped when declarations are a mix of value and type-only nodes.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstType, CheckCtx, OxcCheck};
+use oxc_ast::ast::VariableDeclarationKind;
 use oxc_ast::AstKind;
 use oxc_span::GetSpan;
 use std::sync::Arc;
@@ -38,6 +43,33 @@ impl OxcCheck for Check {
                 .iter()
                 .all(|&id| matches!(nodes.kind(id), AstKind::Function(_)));
             if all_functions {
+                continue;
+            }
+
+            // Branded type pattern: `export const Foo = ...; export type Foo = ...;`
+            // TypeScript merges value-namespace (const/function) and type-namespace
+            // (type alias/interface) declarations — exempt only when both sides present
+            // and every decl is one or the other (const only, not let/var).
+            let is_value_decl = |id| -> bool {
+                match nodes.kind(id) {
+                    AstKind::Function(_) => true,
+                    AstKind::VariableDeclarator(_) => {
+                        let parent_id = nodes.parent_id(id);
+                        matches!(nodes.kind(parent_id), AstKind::VariableDeclaration(d) if d.kind == VariableDeclarationKind::Const)
+                    }
+                    _ => false,
+                }
+            };
+            let is_type_decl = |id| -> bool {
+                matches!(
+                    nodes.kind(id),
+                    AstKind::TSTypeAliasDeclaration(_) | AstKind::TSInterfaceDeclaration(_)
+                )
+            };
+            if decl_ids.iter().all(|&id| is_value_decl(id) || is_type_decl(id))
+                && decl_ids.iter().any(|&id| is_value_decl(id))
+                && decl_ids.iter().any(|&id| is_type_decl(id))
+            {
                 continue;
             }
 
@@ -95,6 +127,48 @@ mod tests {
         // Two function declarations = valid TS overload pattern
         let d = run("function foo() {} function foo() {}");
         assert!(d.is_empty());
+    }
+
+    #[test]
+    fn allows_branded_type_unique_symbol() {
+        // Regression for #809: const + type alias with same name is a branded type pattern
+        let d = run(
+            "export const UserId: unique symbol = Symbol(\"UserId\");\nexport type UserId = typeof UserId;",
+        );
+        assert!(d.is_empty(), "expected no diagnostics, got: {d:?}");
+    }
+
+    #[test]
+    fn allows_const_plus_type_alias() {
+        // Regression for #809: plain const + type alias (zod/fp-ts pattern)
+        let d = run(
+            "export const Brand1 = Symbol(\"Brand1\");\nexport type Brand1 = typeof Brand1;",
+        );
+        assert!(d.is_empty(), "expected no diagnostics, got: {d:?}");
+    }
+
+    #[test]
+    fn flags_duplicate_const() {
+        // Two const declarations = real redeclaration
+        let d = run("export const x = 1;\nexport const x = 2;");
+        assert_eq!(d.len(), 1, "expected 1 diagnostic, got: {d:?}");
+        assert!(d[0].message.contains("`x`"));
+    }
+
+    #[test]
+    fn flags_duplicate_let() {
+        // Two let declarations = real redeclaration
+        let d = run("let y = 1;\nlet y = 2;");
+        assert_eq!(d.len(), 1, "expected 1 diagnostic, got: {d:?}");
+        assert!(d[0].message.contains("`y`"));
+    }
+
+    #[test]
+    fn flags_let_plus_type_alias() {
+        // let + type alias is NOT the branded type pattern (const only)
+        let d = run("let Foo = 1;\ntype Foo = string;");
+        assert_eq!(d.len(), 1, "expected 1 diagnostic, got: {d:?}");
+        assert!(d[0].message.contains("`Foo`"));
     }
 
     #[test]
