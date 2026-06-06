@@ -27,7 +27,7 @@ impl OxcCheck for Check {
         if !ctx.project.has_framework("elysia") {
             return;
         }
-        if ctx.source.contains("adapter:") {
+        if ctx.source_contains("adapter:") {
             return;
         }
 

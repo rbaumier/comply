@@ -74,7 +74,7 @@ impl OxcCheck for Check {
             return;
         }
         // Only flag server entry points that bind to a port.
-        if !ctx.source.contains(".listen(") {
+        if !ctx.source_contains(".listen(") {
             return;
         }
 

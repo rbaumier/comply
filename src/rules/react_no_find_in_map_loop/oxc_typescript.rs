@@ -17,12 +17,13 @@ fn in_react_context(ctx: &CheckCtx) -> bool {
 }
 
 fn imports_react(source: &str) -> bool {
-    source.contains("from \"react\"")
-        || source.contains("from 'react'")
-        || source.contains("from \"react/")
-        || source.contains("from 'react/")
-        || source.contains("require(\"react\")")
-        || source.contains("require('react')")
+    use crate::oxc_helpers::source_contains;
+    source_contains(source, "from \"react\"")
+        || source_contains(source, "from 'react'")
+        || source_contains(source, "from \"react/")
+        || source_contains(source, "from 'react/")
+        || source_contains(source, "require(\"react\")")
+        || source_contains(source, "require('react')")
 }
 
 impl OxcCheck for Check {

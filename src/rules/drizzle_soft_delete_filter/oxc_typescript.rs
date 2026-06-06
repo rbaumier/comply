@@ -83,7 +83,7 @@ impl OxcCheck for Check {
             return;
         };
 
-        if !ctx.source.contains("deletedAt") {
+        if !ctx.source_contains("deletedAt") {
             return;
         }
 

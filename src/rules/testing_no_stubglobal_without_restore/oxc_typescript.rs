@@ -80,8 +80,8 @@ impl OxcCheck for Check {
     ) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
 
-        let has_stub_global = ctx.source.contains("stubGlobal");
-        let has_stub_env = ctx.source.contains("stubEnv");
+        let has_stub_global = ctx.source_contains("stubGlobal");
+        let has_stub_env = ctx.source_contains("stubEnv");
         if !(has_stub_global || has_stub_env) {
             return diagnostics;
         }

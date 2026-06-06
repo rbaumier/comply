@@ -23,11 +23,11 @@ impl OxcCheck for Check {
         ctx: &CheckCtx,
     ) -> Vec<Diagnostic> {
         // Only check Hono files.
-        if !ctx.source.contains("from 'hono'") && !ctx.source.contains("from \"hono\"") {
+        if !ctx.source_contains("from 'hono'") && !ctx.source_contains("from \"hono\"") {
             return Vec::new();
         }
         // Skip if secureHeaders is already imported.
-        if ctx.source.contains("hono/secure-headers") {
+        if ctx.source_contains("hono/secure-headers") {
             return Vec::new();
         }
 

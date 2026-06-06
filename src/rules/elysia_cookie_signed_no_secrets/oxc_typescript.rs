@@ -37,7 +37,7 @@ impl OxcCheck for Check {
             return;
         }
 
-        if ctx.source.contains("secrets:") {
+        if ctx.source_contains("secrets:") {
             return;
         }
 

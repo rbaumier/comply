@@ -411,6 +411,7 @@ fn dispatch_with_lang(
             });
 
     if needs_oxc {
+        crate::oxc_helpers::reset_source_contains_cache();
         crate::oxc_helpers::with_oxc_parse(source, path, |semantic| {
             run_oxc_checks(ld, semantic, &ctx, source, path, config, &mut diagnostics);
         });

@@ -26,24 +26,24 @@ impl OxcCheck for Check {
             return Vec::new();
         }
 
-        let has_schema = ctx.source.contains("t.Object") || ctx.source.contains("body:");
+        let has_schema = ctx.source_contains("t.Object") || ctx.source_contains("body:");
         if !has_schema {
             return Vec::new();
         }
 
-        let uses_elysia_client = ctx.source.contains("app.handle(")
-            || ctx.source.contains("treaty(")
-            || ctx.source.contains("new Elysia(");
+        let uses_elysia_client = ctx.source_contains("app.handle(")
+            || ctx.source_contains("treaty(")
+            || ctx.source_contains("new Elysia(");
         if !uses_elysia_client {
             return Vec::new();
         }
 
         // Static-analysis sweep tests inspect app.routes / app.stack — not HTTP responses.
-        if ctx.source.contains("app.routes") || ctx.source.contains("app.stack") {
+        if ctx.source_contains("app.routes") || ctx.source_contains("app.stack") {
             return Vec::new();
         }
 
-        if ctx.source.contains("400") || ctx.source.contains("422") {
+        if ctx.source_contains("400") || ctx.source_contains("422") {
             return Vec::new();
         }
 

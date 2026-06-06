@@ -24,7 +24,7 @@ impl OxcCheck for Check {
         if !ctx.project.has_framework("elysia") {
             return Vec::new();
         }
-        if ctx.source.contains(".compile()") {
+        if ctx.source_contains(".compile()") {
             return Vec::new();
         }
 

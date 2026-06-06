@@ -29,10 +29,10 @@ impl OxcCheck for Check {
         if !is_test_file(ctx.path) {
             return Vec::new();
         }
-        if !ctx.source.contains(".listen(") {
+        if !ctx.source_contains(".listen(") {
             return Vec::new();
         }
-        if !ctx.source.contains("fetch(") {
+        if !ctx.source_contains("fetch(") {
             return Vec::new();
         }
 

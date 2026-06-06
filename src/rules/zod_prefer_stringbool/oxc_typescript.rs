@@ -54,7 +54,7 @@ impl OxcCheck for Check {
         }
 
         // Only flag in form contexts
-        if !FORM_INDICATORS.iter().any(|m| ctx.source.contains(m)) {
+        if !FORM_INDICATORS.iter().any(|m| ctx.source_contains(m)) {
             return;
         }
 

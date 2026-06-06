@@ -414,6 +414,7 @@ pub fn run_oxc_ts_with_framework(
     check: &dyn OxcCheck,
     framework: &str,
 ) -> Vec<Diagnostic> {
+    crate::oxc_helpers::reset_source_contains_cache();
     let allocator = Allocator::default();
     let parse_ret = OxcParser::new(&allocator, source, SourceType::ts()).parse();
     let semantic = SemanticBuilder::new().build(&parse_ret.program).semantic;
@@ -444,6 +445,7 @@ pub fn run_oxc_ts_with_framework_and_file(
     framework: &str,
     file: &FileCtx,
 ) -> Vec<Diagnostic> {
+    crate::oxc_helpers::reset_source_contains_cache();
     let allocator = Allocator::default();
     let parse_ret = OxcParser::new(&allocator, source, SourceType::ts()).parse();
     let semantic = SemanticBuilder::new().build(&parse_ret.program).semantic;
@@ -473,6 +475,7 @@ pub fn run_oxc_tsx_with_framework(
     check: &dyn OxcCheck,
     framework: &str,
 ) -> Vec<Diagnostic> {
+    crate::oxc_helpers::reset_source_contains_cache();
     let allocator = Allocator::default();
     let parse_ret = OxcParser::new(&allocator, source, SourceType::tsx()).parse();
     let semantic = SemanticBuilder::new().build(&parse_ret.program).semantic;
@@ -502,6 +505,7 @@ pub fn run_oxc_tsx_with_project(
     check: &dyn OxcCheck,
     project: &ProjectCtx,
 ) -> Vec<Diagnostic> {
+    crate::oxc_helpers::reset_source_contains_cache();
     let allocator = Allocator::default();
     let parse_ret = OxcParser::new(&allocator, source, SourceType::tsx()).parse();
     let semantic = SemanticBuilder::new().build(&parse_ret.program).semantic;
@@ -531,6 +535,7 @@ pub fn run_oxc_ts_with_path_and_framework(
     fake_path: &str,
     framework: &str,
 ) -> Vec<Diagnostic> {
+    crate::oxc_helpers::reset_source_contains_cache();
     let allocator = Allocator::default();
     let parse_ret = OxcParser::new(&allocator, source, SourceType::ts()).parse();
     let semantic = SemanticBuilder::new().build(&parse_ret.program).semantic;
@@ -561,6 +566,7 @@ pub fn run_oxc_tsx_with_path_and_framework(
     fake_path: &str,
     framework: &str,
 ) -> Vec<Diagnostic> {
+    crate::oxc_helpers::reset_source_contains_cache();
     let allocator = Allocator::default();
     let parse_ret = OxcParser::new(&allocator, source, SourceType::tsx()).parse();
     let semantic = SemanticBuilder::new().build(&parse_ret.program).semantic;
@@ -588,6 +594,7 @@ fn run_oxc_with_source_type(
     source_type: SourceType,
     fake_path: &str,
 ) -> Vec<Diagnostic> {
+    crate::oxc_helpers::reset_source_contains_cache();
     let allocator = Allocator::default();
     let parse_ret = OxcParser::new(&allocator, source, source_type).parse();
     let semantic = SemanticBuilder::new().build(&parse_ret.program).semantic;
@@ -617,6 +624,7 @@ pub fn run_oxc_tsx_with_file_ctx(
     check: &dyn OxcCheck,
     file: &FileCtx,
 ) -> Vec<Diagnostic> {
+    crate::oxc_helpers::reset_source_contains_cache();
     let allocator = Allocator::default();
     let parse_ret = OxcParser::new(&allocator, source, SourceType::tsx()).parse();
     let semantic = SemanticBuilder::new().build(&parse_ret.program).semantic;

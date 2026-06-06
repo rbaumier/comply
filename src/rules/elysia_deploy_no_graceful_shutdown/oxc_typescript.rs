@@ -28,11 +28,11 @@ impl OxcCheck for Check {
         if !ctx.project.has_framework("elysia") {
             return;
         }
-        if !ctx.source.contains(".listen(") {
+        if !ctx.source_contains(".listen(") {
             return;
         }
         // If the file already wires shutdown signals OR calls `.stop()`, accept it.
-        if ctx.source.contains("SIGTERM") || ctx.source.contains("SIGINT") || ctx.source.contains(".stop()") {
+        if ctx.source_contains("SIGTERM") || ctx.source_contains("SIGINT") || ctx.source_contains(".stop()") {
             return;
         }
 

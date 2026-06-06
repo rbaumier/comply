@@ -30,7 +30,7 @@ impl OxcCheck for Check {
         }
 
         // Bail early if source already contains `validateSearch`
-        if ctx.source.contains("validateSearch") {
+        if ctx.source_contains("validateSearch") {
             return Vec::new();
         }
 

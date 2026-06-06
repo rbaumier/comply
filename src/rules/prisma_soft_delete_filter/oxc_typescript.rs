@@ -39,7 +39,7 @@ impl OxcCheck for Check {
         // Only fire when the file mentions `prisma` somewhere — keeps
         // the rule from misfiring on Drizzle / unrelated APIs that may
         // happen to expose the same method name.
-        if !ctx.source.contains("prisma") {
+        if !ctx.source_contains("prisma") {
             return;
         }
         // Heuristic: scan the entire call source range for

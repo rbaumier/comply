@@ -29,16 +29,16 @@ impl OxcCheck for Check {
         if ctx.file.path_segments.in_test_dir {
             return Vec::new();
         }
-        if !ctx.source.contains("auth.api.getSession") {
+        if !ctx.source_contains("auth.api.getSession") {
             return Vec::new();
         }
-        if !ctx.source.contains("resolve") {
+        if !ctx.source_contains("resolve") {
             return Vec::new();
         }
-        if ctx.source.contains("status(401")
-            || ctx.source.contains("!session")
-            || ctx.source.contains("session === null")
-            || ctx.source.contains("session == null")
+        if ctx.source_contains("status(401")
+            || ctx.source_contains("!session")
+            || ctx.source_contains("session === null")
+            || ctx.source_contains("session == null")
         {
             return Vec::new();
         }

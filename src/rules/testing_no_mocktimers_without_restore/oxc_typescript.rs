@@ -64,7 +64,7 @@ impl OxcCheck for Check {
         semantic: &'a oxc_semantic::Semantic<'a>,
         ctx: &CheckCtx,
     ) -> Vec<Diagnostic> {
-        if !ctx.source.contains("useFakeTimers") {
+        if !ctx.source_contains("useFakeTimers") {
             return Vec::new();
         }
         if has_scoped_real_timer_restore(semantic) {

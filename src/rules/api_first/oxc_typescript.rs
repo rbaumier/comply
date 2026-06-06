@@ -47,7 +47,7 @@ impl OxcCheck for Check {
             return Vec::new();
         }
         // Quick check: if any schema indicator appears in source, skip.
-        if SCHEMA_INDICATORS.iter().any(|s| ctx.source.contains(s)) {
+        if SCHEMA_INDICATORS.iter().any(|s| ctx.source_contains(s)) {
             return Vec::new();
         }
 

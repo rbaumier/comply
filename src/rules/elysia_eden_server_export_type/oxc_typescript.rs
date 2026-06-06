@@ -16,13 +16,13 @@ impl OxcCheck for Check {
         if !ctx.project.has_framework("elysia") {
             return Vec::new();
         }
-        if !ctx.source.contains("new Elysia(") {
+        if !ctx.source_contains("new Elysia(") {
             return Vec::new();
         }
-        if !ctx.source.contains(".listen(") {
+        if !ctx.source_contains(".listen(") {
             return Vec::new();
         }
-        if ctx.source.contains("export type") {
+        if ctx.source_contains("export type") {
             return Vec::new();
         }
 

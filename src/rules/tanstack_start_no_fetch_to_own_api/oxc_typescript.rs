@@ -56,8 +56,8 @@ impl OxcCheck for Check {
         }
 
         // File must use TanStack Start.
-        if !ctx.source.contains("@tanstack/start")
-            && !ctx.source.contains("@tanstack/react-start")
+        if !ctx.source_contains("@tanstack/start")
+            && !ctx.source_contains("@tanstack/react-start")
         {
             return;
         }

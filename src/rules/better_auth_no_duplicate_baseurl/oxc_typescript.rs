@@ -38,7 +38,7 @@ impl OxcCheck for Check {
         }
 
         // Only flag when the file references BETTER_AUTH_URL.
-        if !ctx.source.contains("BETTER_AUTH_URL") {
+        if !ctx.source_contains("BETTER_AUTH_URL") {
             return;
         }
 

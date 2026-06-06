@@ -48,7 +48,7 @@ impl OxcCheck for Check {
         }
 
         // Only warn when the file actually has Drizzle relations available
-        if !ctx.source.contains("relations(") {
+        if !ctx.source_contains("relations(") {
             return;
         }
 

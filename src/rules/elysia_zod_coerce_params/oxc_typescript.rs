@@ -29,7 +29,7 @@ impl OxcCheck for Check {
         _semantic: &'a oxc_semantic::Semantic<'a>,
         ctx: &CheckCtx,
     ) -> Vec<Diagnostic> {
-        if !ctx.project.has_framework("elysia") || !ctx.source.contains("zod") {
+        if !ctx.project.has_framework("elysia") || !ctx.source_contains("zod") {
             return Vec::new();
         }
 

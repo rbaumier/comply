@@ -21,7 +21,7 @@ impl OxcCheck for Check {
         _semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
-        if !ctx.source.contains("hono/cors") {
+        if !ctx.source_contains("hono/cors") {
             return;
         }
         let AstKind::CallExpression(call) = node.kind() else { return };

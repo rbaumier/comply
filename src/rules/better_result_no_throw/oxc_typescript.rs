@@ -25,7 +25,7 @@ impl OxcCheck for Check {
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let AstKind::ThrowStatement(throw) = node.kind() else { return };
-        if !ctx.source.contains("better-result") && !ctx.source.contains("@better-result") {
+        if !ctx.source_contains("better-result") && !ctx.source_contains("@better-result") {
             return;
         }
         if inside_result_try_callback(node, semantic) {

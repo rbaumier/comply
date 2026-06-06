@@ -23,10 +23,10 @@ impl OxcCheck for Check {
         semantic: &'a oxc_semantic::Semantic<'a>,
         ctx: &CheckCtx,
     ) -> Vec<Diagnostic> {
-        if !ctx.source.contains("hono/secure-headers") {
+        if !ctx.source_contains("hono/secure-headers") {
             return Vec::new();
         }
-        if !ctx.source.contains("secureHeaders") && !ctx.source.contains("NONCE") {
+        if !ctx.source_contains("secureHeaders") && !ctx.source_contains("NONCE") {
             return Vec::new();
         }
 

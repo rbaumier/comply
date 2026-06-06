@@ -26,7 +26,7 @@ impl OxcCheck for Check {
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         // Skip if file already uses useTransition.
-        if ctx.source.contains("useTransition") {
+        if ctx.source_contains("useTransition") {
             return;
         }
 

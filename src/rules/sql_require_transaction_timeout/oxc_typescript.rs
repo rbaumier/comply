@@ -66,7 +66,7 @@ impl OxcCheck for Check {
             return;
         }
         // File-level guard.
-        if ctx.source.contains("statement_timeout") {
+        if ctx.source_contains("statement_timeout") {
             return;
         }
 
