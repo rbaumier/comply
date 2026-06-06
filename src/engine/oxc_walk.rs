@@ -4,7 +4,7 @@
 //! tree cursor we iterate the flat pre-order `AstNodes` vec. Dispatch
 //! uses `AstKind` discriminant (u8) for O(1) lookup.
 
-use super::LangDispatch;
+use super::{LangDispatch, WorkerState};
 use crate::config::Config;
 use crate::diagnostic::Diagnostic;
 use crate::rules::backend::CheckCtx;
@@ -52,6 +52,7 @@ pub(super) fn run_oxc_checks(
     ctx: &CheckCtx,
     config: &Config,
     pre_enabled: &[bool],
+    worker: &mut WorkerState,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let n = ld.oxc_rules.len();
@@ -67,31 +68,40 @@ pub(super) fn run_oxc_checks(
         file_bitset[ty / 64] |= 1u64 << (ty % 64);
     }
 
+    // Reuse the per-file scratch buffers held on the worker (capacity kept
+    // across files); they are handed back at the end. On a mid-file panic the
+    // taken buffers are simply dropped — the worker keeps empty Vecs, which the
+    // next file refills.
+    let mut enabled = std::mem::take(&mut worker.oxc_enabled);
+    let mut dispatch = std::mem::take(&mut worker.oxc_dispatch);
+    let mut per_rule_diags = std::mem::take(&mut worker.oxc_per_rule_diags);
+
     // Per-rule enabled flags: the pre-parse flags (config + skips + prefilter,
     // computed once and shared with the parse gate) AND the file's AST-type
     // bitset, which can only be checked now that the file is parsed.
-    let enabled: Vec<bool> = ld
-        .oxc_rules
-        .iter()
-        .enumerate()
-        .map(|(i, (_, check))| {
-            if !pre_enabled[i] {
-                return false;
-            }
-            let kinds = check.interested_kinds();
-            kinds.is_empty()
-                || kinds.iter().any(|ty| {
-                    let t = *ty as u8 as usize;
-                    file_bitset[t / 64] & (1u64 << (t % 64)) != 0
-                })
-        })
-        .collect();
+    enabled.clear();
+    enabled.extend(ld.oxc_rules.iter().enumerate().map(|(i, (_, check))| {
+        if !pre_enabled[i] {
+            return false;
+        }
+        let kinds = check.interested_kinds();
+        kinds.is_empty()
+            || kinds.iter().any(|ty| {
+                let t = *ty as u8 as usize;
+                file_bitset[t / 64] & (1u64 << (t % 64)) != 0
+            })
+    }));
 
     // Build dispatch table: AstType -> Vec<usize> (rule indices).
     // AstType is repr(u8) with max value 187, so we use a flat
     // Vec<Vec<usize>> indexed by AstType as u8 for O(1) lookup.
     let table_size = (oxc_ast::ast_kind::AST_TYPE_MAX as usize) + 1;
-    let mut dispatch: Vec<Vec<usize>> = vec![Vec::new(); table_size];
+    if dispatch.len() < table_size {
+        dispatch.resize_with(table_size, Vec::new);
+    }
+    for slot in dispatch.iter_mut() {
+        slot.clear();
+    }
     let mut has_dispatch_rules = false;
     let mut has_semantic_rules = false;
     for (i, (_, check)) in ld.oxc_rules.iter().enumerate() {
@@ -109,7 +119,12 @@ pub(super) fn run_oxc_checks(
         }
     }
 
-    let mut per_rule_diags: Vec<Vec<Diagnostic>> = (0..n).map(|_| Vec::new()).collect();
+    if per_rule_diags.len() < n {
+        per_rule_diags.resize_with(n, Vec::new);
+    }
+    for slot in per_rule_diags.iter_mut().take(n) {
+        slot.clear();
+    }
 
     // Phase 1: per-node dispatch via flat iteration.
     if has_dispatch_rules {
@@ -147,4 +162,9 @@ pub(super) fn run_oxc_checks(
         }
         diagnostics.append(&mut per_rule_diags[i]);
     }
+
+    // Hand the scratch buffers back to the worker for the next file.
+    worker.oxc_enabled = enabled;
+    worker.oxc_dispatch = dispatch;
+    worker.oxc_per_rule_diags = per_rule_diags;
 }

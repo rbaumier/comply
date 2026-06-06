@@ -173,6 +173,10 @@ struct WorkerState {
     states: Vec<Option<Box<dyn std::any::Any>>>,
     per_rule_diags: Vec<Vec<Diagnostic>>,
     source_buf: String,
+    // Scratch buffers for the oxc dispatch path, reused across files.
+    oxc_enabled: Vec<bool>,
+    oxc_dispatch: Vec<Vec<usize>>,
+    oxc_per_rule_diags: Vec<Vec<Diagnostic>>,
 }
 
 impl WorkerState {
@@ -183,6 +187,9 @@ impl WorkerState {
             states: Vec::new(),
             per_rule_diags: Vec::new(),
             source_buf: String::new(),
+            oxc_enabled: Vec::new(),
+            oxc_dispatch: Vec::new(),
+            oxc_per_rule_diags: Vec::new(),
         }
     }
 }
@@ -440,7 +447,7 @@ fn dispatch_with_lang(
         // leaves it untouched — `AssertUnwindSafe` is sound here.
         let oxc_ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             crate::oxc_helpers::with_oxc_parse(source, path, |semantic| {
-                run_oxc_checks(ld, semantic, &ctx, config, &oxc_pre, &mut diagnostics);
+                run_oxc_checks(ld, semantic, &ctx, config, &oxc_pre, worker, &mut diagnostics);
             });
         }));
         if oxc_ran.is_err() {
