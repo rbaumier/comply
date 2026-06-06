@@ -32,7 +32,7 @@ impl OxcCheck for Check {
         _semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
-        if !crate::rules::module_system::is_es_module_context(ctx.path, ctx.project) {
+        if !crate::rules::module_system::is_es_module_context_cached(ctx) {
             return;
         }
 

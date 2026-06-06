@@ -121,6 +121,12 @@ impl Config {
         {
             return false;
         }
+        // No per-path overrides → the global `disabled` check above is the only
+        // gate. Skip the path normalization + glob match (both allocate) that
+        // would otherwise run once per (rule × file) on the engine hot path.
+        if self.glob_matcher.is_empty() {
+            return true;
+        }
         // Override globs are relative (e.g. `src/foo/**`). File paths arrive
         // in two forms:
         //   - `./src/foo.ts`  from the engine walker  → strip leading `./`

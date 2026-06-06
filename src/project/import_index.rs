@@ -194,6 +194,24 @@ pub struct ImportIndex {
     bare_specifiers: HashMap<String, BareSpecifierInfo>,
     /// Strongly connected components with >1 member (import cycles).
     cycles: Vec<Vec<PathBuf>>,
+    /// Raw discovered path → canonical absolute path. Built from the
+    /// canonicalization already performed during extraction, so cross-file
+    /// rules look up `ctx.path`'s canonical form with an O(1) map hit instead
+    /// of a per-file `std::fs::canonicalize` syscall.
+    canonical: HashMap<PathBuf, PathBuf>,
+    /// Distinct importing files per exporting (canonical) path. Precomputed
+    /// reverse edge of `imports` so `get_importers` / `importer_count` are
+    /// O(1) lookups rather than a full scan of every file's imports.
+    importers: HashMap<PathBuf, Vec<PathBuf>>,
+    /// Lexicographically smallest indexed (canonical) path, or `None` when no
+    /// file was indexed. Once-per-project rules anchor on this; precomputing it
+    /// avoids an O(N) `indexed_paths().min()` scan on every file.
+    min_indexed: Option<PathBuf>,
+    /// Canonical paths reached by at least one namespace import
+    /// (`import * as ns from './m'`). `dead-export` treats every export of such
+    /// a module as live; precomputing the set avoids an O(N) `get_imports_to`
+    /// scan per file.
+    namespace_imported: std::collections::HashSet<PathBuf>,
 }
 
 impl ImportIndex {
@@ -204,11 +222,25 @@ impl ImportIndex {
         // Per-file parse + extract runs in parallel; each worker gets its own
         // `Parser` because `tree_sitter::Parser` is !Sync. `map_init` is the
         // same pattern the engine already uses for rule dispatch.
-        let per_file: Vec<(PathBuf, FileExtract)> = files
+        let per_file_raw: Vec<(PathBuf, PathBuf, FileExtract)> = files
             .par_iter()
             .filter(|f| is_indexable(f.language))
-            .map_init(Parser::new, |parser, file| extract_for(parser, file))
+            .map_init(Parser::new, |parser, file| {
+                extract_for(parser, file).map(|(canon, extract)| (file.path.clone(), canon, extract))
+            })
             .flatten()
+            .collect();
+
+        // Raw → canonical map, reusing the canonicalization extract_for already
+        // did. Lets cross-file rules canonicalize `ctx.path` with a map hit.
+        let mut canonical: HashMap<PathBuf, PathBuf> =
+            HashMap::with_capacity(per_file_raw.len());
+        let per_file: Vec<(PathBuf, FileExtract)> = per_file_raw
+            .into_iter()
+            .map(|(raw, canon, extract)| {
+                canonical.insert(raw, canon.clone());
+                (canon, extract)
+            })
             .collect();
 
         let mut exports: HashMap<PathBuf, Vec<ExportedSymbol>> = HashMap::new();
@@ -336,6 +368,29 @@ impl ImportIndex {
         // Sixth pass: Tarjan SCC for cycle detection.
         let cycles = compute_cycles(&imports);
 
+        // Reverse edge: distinct importing files per exporting path. One entry
+        // per (source, importer) pair — multiple imports of the same source
+        // from one file collapse to a single importer (matching the old
+        // `get_importers` scan semantics).
+        let mut importers: HashMap<PathBuf, Vec<PathBuf>> = HashMap::new();
+        let mut namespace_imported: std::collections::HashSet<PathBuf> =
+            std::collections::HashSet::new();
+        for (importer, imps) in &imports {
+            let mut seen: std::collections::HashSet<&Path> = std::collections::HashSet::new();
+            for imp in imps {
+                if let Some(src) = &imp.source_path {
+                    if seen.insert(src.as_path()) {
+                        importers.entry(src.clone()).or_default().push(importer.clone());
+                    }
+                    if imp.kind == ImportKind::Namespace {
+                        namespace_imported.insert(src.clone());
+                    }
+                }
+            }
+        }
+
+        let min_indexed = exports.keys().min().cloned();
+
         Self {
             exports,
             imports,
@@ -343,6 +398,10 @@ impl ImportIndex {
             call_sites,
             bare_specifiers,
             cycles,
+            canonical,
+            importers,
+            min_indexed,
+            namespace_imported,
         }
     }
 
@@ -380,13 +439,49 @@ impl ImportIndex {
     /// Convenience: files that import from `path` at all (any symbol).
     #[must_use]
     pub fn get_importers(&self, path: &Path) -> Vec<&Path> {
-        let mut out = Vec::new();
-        for (importer, imps) in &self.imports {
-            if imps.iter().any(|i| i.source_path.as_deref() == Some(path)) {
-                out.push(importer.as_path());
-            }
+        self.importers
+            .get(path)
+            .map(|v| v.iter().map(PathBuf::as_path).collect())
+            .unwrap_or_default()
+    }
+
+    /// Number of distinct files importing from `path`. O(1) lookup against the
+    /// precomputed reverse-edge map.
+    #[must_use]
+    pub fn importer_count(&self, path: &Path) -> usize {
+        self.importers.get(path).map_or(0, Vec::len)
+    }
+
+    /// Canonical absolute path for a discovered file path. Uses the raw →
+    /// canonical map built during indexing (zero syscalls); falls back to a
+    /// `std::fs::canonicalize` for paths absent from the index — the LSP
+    /// single-file path and unit tests that construct `CheckCtx` by hand.
+    #[must_use]
+    pub fn canonical(&self, path: &Path) -> PathBuf {
+        if let Some(c) = self.canonical.get(path) {
+            return c.clone();
         }
-        out
+        std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+    }
+
+    /// Total number of indexed files — the denominator for ratio-based rules.
+    #[must_use]
+    pub fn total_files(&self) -> usize {
+        self.exports.len()
+    }
+
+    /// Lexicographically smallest indexed (canonical) path. Precomputed once;
+    /// cross-file rules use it as a deterministic per-run anchor.
+    #[must_use]
+    pub fn min_indexed_path(&self) -> Option<&Path> {
+        self.min_indexed.as_deref()
+    }
+
+    /// True when `path` is reached by at least one namespace import
+    /// (`import * as ns from …`). O(1) set lookup.
+    #[must_use]
+    pub fn is_namespace_imported(&self, path: &Path) -> bool {
+        self.namespace_imported.contains(path)
     }
 
     /// Every import site across the project that resolves to `path`.

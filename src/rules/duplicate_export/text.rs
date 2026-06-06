@@ -25,7 +25,7 @@ impl TextCheck for Check {
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
         let index = ctx.project.import_index();
 
-        let canon = std::fs::canonicalize(ctx.path).unwrap_or_else(|_| ctx.path.to_path_buf());
+        let canon = index.canonical(ctx.path);
         let Some(anchor) = ctx.project.anchor_path() else {
             return Vec::new();
         };

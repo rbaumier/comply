@@ -342,7 +342,7 @@ fn dispatch_with_lang(
                 Backend::TreeSitter(_) => {
                     config.is_rule_enabled(meta.id, path)
                         && !should_skip_test_fixture_rule(meta, &file_ctx)
-                        && !should_skip_relaxed_directory_rule(meta, path)
+                        && !should_skip_relaxed_directory_rule(meta, &file_ctx)
                         && pf
                             .as_ref()
                             .is_none_or(|f| source_matches_prefilter(source, f))
@@ -373,7 +373,7 @@ fn dispatch_with_lang(
         if should_skip_test_fixture_rule(meta, &file_ctx) {
             continue;
         }
-        if should_skip_relaxed_directory_rule(meta, path) {
+        if should_skip_relaxed_directory_rule(meta, &file_ctx) {
             continue;
         }
         let mut produced = match backend {
@@ -410,7 +410,7 @@ fn dispatch_with_lang(
             .any(|((meta, _), pf)| {
                 config.is_rule_enabled(meta.id, path)
                     && !should_skip_test_fixture_rule(meta, &file_ctx)
-                    && !should_skip_relaxed_directory_rule(meta, path)
+                    && !should_skip_relaxed_directory_rule(meta, &file_ctx)
                     && pf
                         .as_ref()
                         .is_none_or(|f| source_matches_prefilter(source, f))
@@ -479,8 +479,8 @@ pub(super) fn should_skip_test_fixture_rule(meta: &RuleMeta, file: &FileCtx) -> 
         || matches!(meta.id, "react-button-has-type")
 }
 
-pub(super) fn should_skip_relaxed_directory_rule(meta: &RuleMeta, path: &std::path::Path) -> bool {
-    if !is_relaxed_directory(path) {
+pub(super) fn should_skip_relaxed_directory_rule(meta: &RuleMeta, file: &FileCtx) -> bool {
+    if !file.path_segments.is_relaxed_dir {
         return false;
     }
 
@@ -491,16 +491,6 @@ pub(super) fn should_skip_relaxed_directory_rule(meta: &RuleMeta, path: &std::pa
             meta.id,
             "rust-anyhow-context-on-question-mark" | "rust-serde-deny-unknown-fields"
         )
-}
-
-fn is_relaxed_directory(path: &std::path::Path) -> bool {
-    let normalized = path.to_string_lossy().replace('\\', "/");
-    normalized.starts_with("examples/")
-        || normalized.starts_with("benches/")
-        || normalized.starts_with("fixtures/")
-        || normalized.contains("/examples/")
-        || normalized.contains("/benches/")
-        || normalized.contains("/fixtures/")
 }
 
 /// Dispatch each backend variant to produce diagnostics.

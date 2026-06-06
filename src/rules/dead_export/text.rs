@@ -34,7 +34,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::parsing::ts_language_for;
-use crate::project::import_index::{ExportKind, ImportKind};
+use crate::project::import_index::ExportKind;
 use crate::rules::backend::{CheckCtx, TextCheck};
 use crate::rules::path_utils::{
     is_config_file, is_framework_specific_entry_point, is_in_framework_entry_dir,
@@ -109,10 +109,10 @@ impl TextCheck for Check {
         // index holds only the checked file and every export looks
         // dead. Skip in that mode; users have a workaround already in
         // place but the rule's premise can't be honoured.
-        if index.indexed_paths().count() < 2 {
+        if index.total_files() < 2 {
             return Vec::new();
         }
-        let canon = std::fs::canonicalize(ctx.path).unwrap_or_else(|_| ctx.path.to_path_buf());
+        let canon = index.canonical(ctx.path);
 
         // User-declared entry files (server mains, CLI entries, workers) — never flagged.
         if ctx.project.entrypoints_contains(&canon) {
@@ -135,11 +135,7 @@ impl TextCheck for Check {
 
         // If any importer uses namespace-import form, treat every export as
         // live — the index doesn't track which properties of `ns.*` are read.
-        let reached_via_namespace = index
-            .get_imports_to(&canon)
-            .iter()
-            .any(|imp| imp.kind == ImportKind::Namespace);
-        if reached_via_namespace {
+        if index.is_namespace_imported(&canon) {
             return Vec::new();
         }
 

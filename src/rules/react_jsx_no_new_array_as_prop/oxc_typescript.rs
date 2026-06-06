@@ -42,18 +42,11 @@ const COMPILER_CONFIG_FILES: &[&str] = &[
 /// directory tree stat-ing config files, so memoize it per path — otherwise a
 /// JSX-dense file pays the full filesystem walk on every opening element.
 fn project_uses_react_compiler(ctx: &CheckCtx) -> bool {
-    use std::cell::RefCell;
-    use std::collections::HashMap;
-    use std::path::PathBuf;
-    thread_local! {
-        static CACHE: RefCell<HashMap<PathBuf, bool>> = RefCell::new(HashMap::new());
-    }
-    if let Some(v) = CACHE.with(|c| c.borrow().get(ctx.path).copied()) {
-        return v;
-    }
-    let v = compute_uses_react_compiler(ctx);
-    CACHE.with(|c| c.borrow_mut().insert(ctx.path.to_path_buf(), v));
-    v
+    crate::oxc_helpers::cached_file_bool(
+        ctx.source,
+        crate::oxc_helpers::SLOT_REACT_COMPILER,
+        || compute_uses_react_compiler(ctx),
+    )
 }
 
 /// The config-file walk is bounded by `project_root` (or the nearest

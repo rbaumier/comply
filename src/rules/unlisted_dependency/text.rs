@@ -31,8 +31,8 @@ impl TextCheck for Check {
 
         // Run once per project: only fire on the lexicographically smallest
         // indexed path (deterministic across runs). Every other file short-circuits.
-        let canon = std::fs::canonicalize(ctx.path).unwrap_or_else(|_| ctx.path.to_path_buf());
-        let Some(anchor) = index.indexed_paths().min() else {
+        let canon = index.canonical(ctx.path);
+        let Some(anchor) = index.min_indexed_path() else {
             return Vec::new();
         };
         if canon.as_path() != anchor {

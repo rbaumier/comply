@@ -45,6 +45,9 @@ pub struct PathSegments {
     pub in_node_modules: bool,
     pub in_storybook: bool,
     pub is_vendored: bool,
+    /// `examples/`, `benches/`, or `fixtures/` anywhere in the path —
+    /// directories where api/rust/security rules are intentionally relaxed.
+    pub is_relaxed_dir: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -254,6 +257,12 @@ fn scan_path(path: &Path) -> PathSegments {
         in_node_modules: lower.contains("/node_modules/"),
         in_storybook: lower.contains(".stories."),
         is_vendored: has_vendored_segment(&lower),
+        is_relaxed_dir: lower.starts_with("examples/")
+            || lower.starts_with("benches/")
+            || lower.starts_with("fixtures/")
+            || lower.contains("/examples/")
+            || lower.contains("/benches/")
+            || lower.contains("/fixtures/"),
     }
 }
 

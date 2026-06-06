@@ -31,7 +31,7 @@ impl TextCheck for Check {
         // `ImportIndex::build`. `iter_exports` enumerates exports per file
         // but the map contains an entry for every indexed TS/JS/TSX file
         // (exports vec may be empty), so the count is the denominator we want.
-        let total_files = index.iter_exports().count();
+        let total_files = index.total_files();
         if total_files == 0 {
             // No cross-file index available (LSP / single-file run). The rule
             // has no signal to act on.
@@ -41,9 +41,8 @@ impl TextCheck for Check {
         let threshold_percent = ctx.config.threshold(RULE_ID, "threshold_percent", ctx.lang);
         let min_importers = ctx.config.threshold(RULE_ID, "min_importers", ctx.lang);
 
-        let canon = std::fs::canonicalize(ctx.path).unwrap_or_else(|_| ctx.path.to_path_buf());
-        let importers = index.get_importers(&canon);
-        let importer_count = importers.len();
+        let canon = index.canonical(ctx.path);
+        let importer_count = index.importer_count(&canon);
 
         if importer_count < min_importers {
             return Vec::new();

@@ -60,7 +60,7 @@ pub(super) fn run_oxc_checks(
             }
             config.is_rule_enabled(meta.id, path)
                 && !super::should_skip_test_fixture_rule(meta, ctx.file)
-                && !super::should_skip_relaxed_directory_rule(meta, path)
+                && !super::should_skip_relaxed_directory_rule(meta, ctx.file)
                 && pf
                     .as_ref()
                     .is_none_or(|f| source_matches_prefilter(source, f))

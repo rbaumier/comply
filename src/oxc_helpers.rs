@@ -48,6 +48,54 @@ thread_local! {
     static LINE_INDEX: RefCell<LineIndex> = RefCell::new(LineIndex::default());
 }
 
+/// Per-file memo slots for expensive file-invariant predicates (e.g. "does the
+/// project use React Compiler?", "is this file an ESM context?"). Each slot is
+/// keyed by the source `(ptr, len)` identity and cleared once per file by
+/// [`reset_file_caches`], so a reused worker buffer can never serve a stale
+/// result. Unlike a `HashMap`-keyed memo this is pure integer compares — rules
+/// that call it from per-node `OxcCheck::run` pay no hashing on the hot path.
+#[derive(Default, Clone, Copy)]
+struct FileBoolSlot {
+    ptr: usize,
+    len: usize,
+    val: Option<bool>,
+}
+
+/// Slot index for [`cached_file_bool`] — one per distinct file-invariant
+/// predicate. Keep these unique; collisions would cross-contaminate caches.
+pub const SLOT_REACT_COMPILER: usize = 0;
+pub const SLOT_ES_MODULE: usize = 1;
+const FILE_BOOL_SLOTS: usize = 2;
+
+thread_local! {
+    static FILE_BOOLS: std::cell::Cell<[FileBoolSlot; FILE_BOOL_SLOTS]> = const {
+        std::cell::Cell::new([FileBoolSlot { ptr: 0, len: 0, val: None }; FILE_BOOL_SLOTS])
+    };
+}
+
+/// Memoize a file-invariant boolean predicate for the duration of the current
+/// file. `compute` runs at most once per file per `slot`; subsequent per-node
+/// calls return the cached value via integer-only `(ptr, len)` comparison.
+pub fn cached_file_bool<F: FnOnce() -> bool>(source: &str, slot: usize, compute: F) -> bool {
+    let ptr = source.as_ptr() as usize;
+    let len = source.len();
+    let cur = FILE_BOOLS.with(std::cell::Cell::get)[slot];
+    if cur.ptr == ptr && cur.len == len && let Some(v) = cur.val {
+        return v;
+    }
+    let v = compute();
+    FILE_BOOLS.with(|c| {
+        let mut arr = c.get();
+        arr[slot] = FileBoolSlot {
+            ptr,
+            len,
+            val: Some(v),
+        };
+        c.set(arr);
+    });
+    v
+}
+
 /// Clear every per-file memo (`source_contains` hits and the line-start index).
 /// Called once per file by the engine before any backend runs, so a reused
 /// worker source buffer that happens to share a `(ptr, len)` with the previous
@@ -65,6 +113,7 @@ pub fn reset_file_caches() {
         c.len = 0;
         c.starts.clear();
     });
+    FILE_BOOLS.with(|c| c.set([FileBoolSlot::default(); FILE_BOOL_SLOTS]));
 }
 
 /// Memoized `source.contains(needle)` for the current file. `source.contains`

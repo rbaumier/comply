@@ -39,7 +39,7 @@ pub(super) fn run_multiplexed_walk(
                 .map(|((meta, _), pf)| {
                     config.is_rule_enabled(meta.id, path)
                         && !super::should_skip_test_fixture_rule(meta, ctx.file)
-                        && !super::should_skip_relaxed_directory_rule(meta, path)
+                        && !super::should_skip_relaxed_directory_rule(meta, ctx.file)
                         && pf
                             .as_ref()
                             .is_none_or(|f| super::source_matches_prefilter(source, f))
@@ -138,7 +138,7 @@ pub(super) fn run_legacy_checks(
         if super::should_skip_test_fixture_rule(meta, ctx.file) {
             continue;
         }
-        if super::should_skip_relaxed_directory_rule(meta, path) {
+        if super::should_skip_relaxed_directory_rule(meta, ctx.file) {
             continue;
         }
         if let Some(f) = pf

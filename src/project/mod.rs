@@ -424,6 +424,12 @@ pub struct ProjectCtx {
     // `_routes.json`). Lazily probed on first access — Cloudflare-only
     // rules need it to skip non-CF projects.
     cloudflare_target: OnceLock<bool>,
+
+    // Memoized once-per-project anchor. `anchor_path()` is invariant after
+    // load (the index and `linted_paths` are frozen), but ~5 cross-file rules
+    // call it on every file — caching collapses an O(N) `min()` scan per
+    // (rule × file) into one computation.
+    anchor_path_cache: OnceLock<Option<PathBuf>>,
 }
 
 impl ProjectCtx {
@@ -504,11 +510,15 @@ impl ProjectCtx {
     /// equals `indexed_paths().min()`; in diff mode it restricts to the
     /// changed files so the diagnostic is actually emitted.
     pub fn anchor_path(&self) -> Option<PathBuf> {
-        if let Some(linted) = self.linted_paths.get() {
-            linted.iter().min().cloned()
-        } else {
-            self.import_index().indexed_paths().min().map(Path::to_path_buf)
-        }
+        self.anchor_path_cache
+            .get_or_init(|| {
+                if let Some(linted) = self.linted_paths.get() {
+                    linted.iter().min().cloned()
+                } else {
+                    self.import_index().min_indexed_path().map(Path::to_path_buf)
+                }
+            })
+            .clone()
     }
 
     /// Cross-file import/export index. Always returns a handle: when the
