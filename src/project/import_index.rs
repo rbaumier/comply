@@ -1420,6 +1420,21 @@ fn resolve_relative(
 fn probe_path(raw: &Path, known: &std::collections::HashSet<PathBuf>) -> Option<PathBuf> {
     const EXTS: &[&str] = &["ts", "tsx", "js", "jsx", "mts", "mjs", "cts", "cjs", "vue"];
 
+    // Explicit .d.* imports: existence-only check, no `known` membership required.
+    // .d.ts files are intentionally excluded from the scan set but are valid import targets.
+    if raw
+        .file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| {
+            n.ends_with(".d.ts")
+                || n.ends_with(".d.mts")
+                || n.ends_with(".d.cts")
+                || n.ends_with(".d.tsx")
+        })
+    {
+        return std::fs::canonicalize(raw).ok();
+    }
+
     let has_known_ext = raw
         .extension()
         .and_then(|e| e.to_str())

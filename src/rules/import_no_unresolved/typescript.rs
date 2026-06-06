@@ -140,4 +140,47 @@ mod tests {
         let diags = run_ts_with_project_and_path(source, &Check, &project, &paths[1]);
         assert!(diags.is_empty(), "got unexpected diagnostics: {diags:?}");
     }
+
+    #[test]
+    fn allows_import_of_existing_dts_file() {
+        let dir = TempDir::new().unwrap();
+        let dts_path = dir.path().join("index.d.ts");
+        fs::write(&dts_path, "export type Schema = {};").unwrap();
+        let ts_path = dir.path().join("test-d/schema.ts");
+        fs::create_dir_all(ts_path.parent().unwrap()).unwrap();
+        fs::write(&ts_path, "import type { Schema } from '../index.d.ts';").unwrap();
+        let lang = Language::from_path(&ts_path).unwrap();
+        let source_files = vec![SourceFile {
+            path: ts_path.clone(),
+            language: lang,
+        }];
+        let refs: Vec<&SourceFile> = source_files.iter().collect();
+        let config = Config::default();
+        let project = ProjectCtx::load(&refs, &config);
+        let canon_ts = fs::canonicalize(&ts_path).unwrap();
+        let source = "import type { Schema } from '../index.d.ts';";
+        let diags = run_ts_with_project_and_path(source, &Check, &project, &canon_ts);
+        assert!(diags.is_empty(), "unexpected FP: {diags:?}");
+    }
+
+    #[test]
+    fn flags_import_of_nonexistent_dts_file() {
+        let dir = TempDir::new().unwrap();
+        let ts_path = dir.path().join("test-d/schema.ts");
+        fs::create_dir_all(ts_path.parent().unwrap()).unwrap();
+        fs::write(&ts_path, "import type { Schema } from '../index.d.ts';").unwrap();
+        let lang = Language::from_path(&ts_path).unwrap();
+        let source_files = vec![SourceFile {
+            path: ts_path.clone(),
+            language: lang,
+        }];
+        let refs: Vec<&SourceFile> = source_files.iter().collect();
+        let config = Config::default();
+        let project = ProjectCtx::load(&refs, &config);
+        let canon_ts = fs::canonicalize(&ts_path).unwrap();
+        let source = "import type { Schema } from '../index.d.ts';";
+        let diags = run_ts_with_project_and_path(source, &Check, &project, &canon_ts);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("index.d.ts"));
+    }
 }
