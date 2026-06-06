@@ -8,8 +8,9 @@
 //! when the closure returns.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::path::Path;
+
+use rustc_hash::FxHashMap;
 
 use oxc_allocator::Allocator;
 use oxc_parser::Parser;
@@ -25,7 +26,7 @@ use oxc_span::SourceType;
 struct SourceContainsCache {
     ptr: usize,
     len: usize,
-    hits: HashMap<String, bool>,
+    hits: FxHashMap<String, bool>,
 }
 
 thread_local! {
@@ -136,7 +137,7 @@ pub fn source_contains(source: &str, needle: &str) -> bool {
         if let Some(&hit) = c.hits.get(needle) {
             return hit;
         }
-        let hit = source.contains(needle);
+        let hit = memchr::memmem::find(source.as_bytes(), needle.as_bytes()).is_some();
         c.hits.insert(needle.to_string(), hit);
         hit
     })

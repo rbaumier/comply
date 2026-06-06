@@ -3,9 +3,37 @@
 //! Centralised so `unused-file` and `dead-export` agree on what counts as a
 //! config file and don't drift apart over time.
 
-use std::path::Path;
+use std::cell::RefCell;
+use std::path::{Path, PathBuf};
+
+use rustc_hash::FxHashMap;
 
 use crate::project::ProjectCtx;
+
+thread_local! {
+    /// Per-thread memo of `canonicalize`. The project root and each file's
+    /// parent directory are canonicalized once per classifier call; the same
+    /// directories recur across thousands of files in a run, and the project
+    /// root is constant. canonicalize hits the filesystem (one syscall per
+    /// path segment), so memoizing collapses the bulk of those syscalls.
+    /// Results are deterministic for the duration of a run, so the memo is
+    /// output-identical to calling `canonicalize` directly.
+    static CANON_CACHE: RefCell<FxHashMap<PathBuf, PathBuf>> =
+        RefCell::new(FxHashMap::default());
+}
+
+/// `std::fs::canonicalize(p)` with a per-thread memo, falling back to `p`
+/// itself on error (same as the previous inline `unwrap_or_else`).
+fn canonicalize_cached(p: &Path) -> PathBuf {
+    CANON_CACHE.with(|c| {
+        if let Some(v) = c.borrow().get(p) {
+            return v.clone();
+        }
+        let v = std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+        c.borrow_mut().insert(p.to_path_buf(), v.clone());
+        v
+    })
+}
 
 /// True if `path` is a build/tooling config file. Matches `*.config.*`
 /// (e.g. `vite.config.ts`, `jest.config.js`) and dotfile-rc entries
@@ -44,8 +72,8 @@ pub fn is_framework_specific_entry_point(path: &Path, project: &ProjectCtx) -> b
     let Some(parent) = path.parent() else {
         return false;
     };
-    let canon_parent = std::fs::canonicalize(parent).unwrap_or_else(|_| parent.to_path_buf());
-    let canon_root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    let canon_parent = canonicalize_cached(parent);
+    let canon_root = canonicalize_cached(root);
     if canon_parent != canon_root {
         return false;
     }
@@ -93,8 +121,8 @@ pub fn is_framework_entry_point(path: &Path, project: &ProjectCtx) -> bool {
     let Some(parent) = path.parent() else {
         return false;
     };
-    let canon_parent = std::fs::canonicalize(parent).unwrap_or_else(|_| parent.to_path_buf());
-    let canon_root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    let canon_parent = canonicalize_cached(parent);
+    let canon_root = canonicalize_cached(root);
     if canon_parent != canon_root {
         return false;
     }
