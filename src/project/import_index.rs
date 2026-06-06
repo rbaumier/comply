@@ -227,21 +227,32 @@ impl ImportIndex {
         // sub-project gets its own path aliases.
         let path_resolver = OxcPathResolver::discover(&known_paths);
 
-        // First pass: stash exports, and partially-populate imports with their
-        // raw specifiers resolved against disk (TS) or the module graph (Rust).
-        for (path, mut extract) in per_file {
-            let is_rust = matches!(path.extension().and_then(|e| e.to_str()), Some("rs"));
-            for imp in &mut extract.imports {
-                if is_rust {
-                    if let Some(resolved) = rust_graph.resolve(&path, &imp.specifier) {
+        // First pass: resolve each import's specifier to a concrete file. This
+        // is disk-bound — relative-specifier resolution stat-probes `./foo.ts`,
+        // `./foo/index.ts`, … — and fully independent per file, so run it across
+        // the rayon pool. The resolvers it reads (`rust_graph`, `known_paths`,
+        // `path_resolver`) are immutable and `Sync`. Map insertion below stays
+        // sequential: it's pure in-memory work and would only contend on locks.
+        let resolved: Vec<(PathBuf, FileExtract)> = per_file
+            .into_par_iter()
+            .map(|(path, mut extract)| {
+                let is_rust = matches!(path.extension().and_then(|e| e.to_str()), Some("rs"));
+                for imp in &mut extract.imports {
+                    if is_rust {
+                        if let Some(resolved) = rust_graph.resolve(&path, &imp.specifier) {
+                            imp.source_path = Some(resolved);
+                        }
+                    } else if let Some(resolved) =
+                        resolve_specifier(&path, &imp.specifier, &known_paths, &path_resolver)
+                    {
                         imp.source_path = Some(resolved);
                     }
-                } else if let Some(resolved) =
-                    resolve_specifier(&path, &imp.specifier, &known_paths, &path_resolver)
-                {
-                    imp.source_path = Some(resolved);
                 }
-            }
+                (path, extract)
+            })
+            .collect();
+
+        for (path, extract) in resolved {
             exports.insert(path.clone(), extract.exports);
             imports.insert(path.clone(), extract.imports);
             file_calls.insert(path, extract.calls);
