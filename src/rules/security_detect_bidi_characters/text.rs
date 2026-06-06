@@ -20,6 +20,15 @@ const BIDI_CHARS: &[char] = &[
 ];
 
 impl TextCheck for Check {
+    fn prefilter(&self) -> Option<&'static [&'static str]> {
+        // Skip the per-char UTF-8 decode on files containing none of the
+        // bidi control characters (the overwhelming majority).
+        Some(&[
+            "\u{202A}", "\u{202B}", "\u{202C}", "\u{202D}", "\u{202E}", "\u{2066}", "\u{2067}",
+            "\u{2068}", "\u{2069}",
+        ])
+    }
+
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
         for (line_idx, line) in ctx.source.lines().enumerate() {

@@ -17,6 +17,10 @@ fn is_word_boundary(prev: Option<u8>) -> bool {
 }
 
 impl TextCheck for Check {
+    fn prefilter(&self) -> Option<&'static [&'static str]> {
+        Some(&["new Promise("])
+    }
+
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
         let bytes = ctx.source.as_bytes();
         let needle = b"new Promise(";
