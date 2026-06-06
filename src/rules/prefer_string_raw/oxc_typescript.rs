@@ -44,9 +44,12 @@ impl OxcCheck for Check {
 
             // `String.raw` cannot represent a value ending in a backslash — the
             // trailing `\` escapes the closing backtick (`String.raw`\`` is a
-            // syntax error). The closing quote is a single-byte ASCII char, so
-            // stripping it is boundary-safe.
-            if raw[1..raw.len().saturating_sub(1)].ends_with('\\') {
+            // syntax error). Guard against malformed spans (oxc edge case on
+            // very large repos) where raw.len() < 2 would make the slice panic.
+            if raw.len() < 2 {
+                continue;
+            }
+            if raw[1..raw.len() - 1].ends_with('\\') {
                 continue;
             }
 
@@ -93,5 +96,13 @@ mod tests {
     #[test]
     fn ignores_string_ending_in_backslash() {
         assert!(run_on(r#"const x = "\\d\\";"#).is_empty());
+    }
+
+    // Regression for #777: empty string and single-char strings must not panic
+    // (oxc can emit spans of length 0 or 1 on very large repos like microsoft/TypeScript).
+    #[test]
+    fn no_panic_on_short_string() {
+        assert!(run_on(r#"const a = "";"#).is_empty());
+        assert!(run_on(r#"const b = "x";"#).is_empty());
     }
 }
