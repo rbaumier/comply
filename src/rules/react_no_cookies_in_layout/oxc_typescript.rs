@@ -10,7 +10,7 @@ const DYNAMIC_FNS: &[&str] = &["cookies", "headers"];
 
 /// Returns `true` if `source` contains an import from `next/headers`.
 fn has_next_headers_import(source: &str) -> bool {
-    source.contains("from 'next/headers'") || source.contains("from \"next/headers\"")
+    crate::oxc_helpers::source_contains(source, "from 'next/headers'") || crate::oxc_helpers::source_contains(source, "from \"next/headers\"")
 }
 
 pub struct Check;

@@ -43,7 +43,7 @@ crate::ast_check! { on ["component"] => |node, source, ctx, diagnostics|
                     continue;
                 }
                 let dir = format!("v-{name}");
-                if ctx.source.contains(&dir) {
+                if ctx.source_contains(&dir) {
                     diagnostics.push(Diagnostic {
                         path: std::sync::Arc::clone(&ctx.path_arc),
                         line: idx + 1,

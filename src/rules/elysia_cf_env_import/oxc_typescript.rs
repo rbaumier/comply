@@ -6,13 +6,13 @@ use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use std::sync::Arc;
 
 fn is_cloudflare_context(source: &str, path: &std::path::Path) -> bool {
-    if source.contains("'cloudflare:workers'")
-        || source.contains("\"cloudflare:workers\"")
-        || source.contains("'@cloudflare/")
-        || source.contains("\"@cloudflare/")
-        || source.contains("'elysia/adapter/cloudflare'")
-        || source.contains("\"elysia/adapter/cloudflare\"")
-        || source.contains("CloudflareAdapter")
+    if crate::oxc_helpers::source_contains(source, "'cloudflare:workers'")
+        || crate::oxc_helpers::source_contains(source, "\"cloudflare:workers\"")
+        || crate::oxc_helpers::source_contains(source, "'@cloudflare/")
+        || crate::oxc_helpers::source_contains(source, "\"@cloudflare/")
+        || crate::oxc_helpers::source_contains(source, "'elysia/adapter/cloudflare'")
+        || crate::oxc_helpers::source_contains(source, "\"elysia/adapter/cloudflare\"")
+        || crate::oxc_helpers::source_contains(source, "CloudflareAdapter")
     {
         return true;
     }

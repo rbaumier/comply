@@ -20,7 +20,7 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
         return;
     }
 
-    if ctx.source.contains("secrets:") {
+    if ctx.source_contains("secrets:") {
         return;
     }
 

@@ -9,7 +9,7 @@ use std::sync::Arc;
 pub struct Check;
 
 fn is_nestjs_file(source: &str) -> bool {
-    source.contains("@nestjs/") || source.contains("class-validator")
+    crate::oxc_helpers::source_contains(source, "@nestjs/") || crate::oxc_helpers::source_contains(source, "class-validator")
 }
 
 fn property_has_validator(prop: &oxc_ast::ast::PropertyDefinition, source: &str) -> bool {

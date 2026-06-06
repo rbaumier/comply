@@ -5,12 +5,12 @@ use crate::diagnostic::{Diagnostic, Severity};
 crate::ast_check! { on ["string_fragment"] prefilter = ["hono/secure-headers"] => |node, source, ctx, diagnostics|
     // Only check string_fragment to avoid double-counting (parent `string` also matches).
     // Only check files that import from 'hono/secure-headers'.
-    if !ctx.source.contains("hono/secure-headers") {
+    if !ctx.source_contains("hono/secure-headers") {
         return;
     }
 
     // Must also reference secureHeaders or NONCE.
-    if !ctx.source.contains("secureHeaders") && !ctx.source.contains("NONCE") {
+    if !ctx.source_contains("secureHeaders") && !ctx.source_contains("NONCE") {
         return;
     }
 

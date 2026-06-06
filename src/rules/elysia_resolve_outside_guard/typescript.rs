@@ -6,7 +6,7 @@ crate::ast_check! { on ["call_expression"] prefilter = ["\".resolve\""] => |node
     if !ctx.project.has_framework("elysia") {
         return;
     }
-    if ctx.source.contains(".guard(") {
+    if ctx.source_contains(".guard(") {
         return;
     }
 

@@ -12,12 +12,12 @@ fn is_serverless(path: &std::path::Path, source: &str) -> bool {
         || p.contains("functions/")
         || p.contains("netlify")
         || p.contains("cloudflare");
-    let source_hint = source.contains("runtime = 'edge'")
-        || source.contains("runtime: 'edge'")
-        || source.contains("\"runtime\": \"edge\"")
-        || source.contains("AWSLambda")
-        || source.contains("APIGatewayProxyHandler")
-        || source.contains("export const runtime");
+    let source_hint = crate::oxc_helpers::source_contains(source, "runtime = 'edge'")
+        || crate::oxc_helpers::source_contains(source, "runtime: 'edge'")
+        || crate::oxc_helpers::source_contains(source, "\"runtime\": \"edge\"")
+        || crate::oxc_helpers::source_contains(source, "AWSLambda")
+        || crate::oxc_helpers::source_contains(source, "APIGatewayProxyHandler")
+        || crate::oxc_helpers::source_contains(source, "export const runtime");
     path_hint || source_hint
 }
 

@@ -33,11 +33,11 @@ const OPTIONS_MARKERS: &[&str] = &[
 impl TextCheck for Check {
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
         // If the file uses `<script setup`, it's Composition API — pass.
-        if ctx.source.contains("<script setup") {
+        if ctx.source_contains("<script setup") {
             return Vec::new();
         }
         // Must have `export default {` inside a `<script>` block.
-        if !ctx.source.contains("export default {") && !ctx.source.contains("export default{") {
+        if !ctx.source_contains("export default {") && !ctx.source_contains("export default{") {
             return Vec::new();
         }
         // Look for any Options API marker.

@@ -6,12 +6,12 @@ const MUTATION_METHODS: &[&str] = &["post", "put", "delete", "patch"];
 
 crate::ast_check! { on ["call_expression"] prefilter = ["hono"] => |node, source, ctx, diagnostics|
     // Only check Hono files.
-    if !ctx.source.contains("from 'hono'") && !ctx.source.contains("from \"hono\"") {
+    if !ctx.source_contains("from 'hono'") && !ctx.source_contains("from \"hono\"") {
         return;
     }
 
     // Skip if CSRF protection is already imported.
-    if ctx.source.contains("hono/csrf") {
+    if ctx.source_contains("hono/csrf") {
         return;
     }
 

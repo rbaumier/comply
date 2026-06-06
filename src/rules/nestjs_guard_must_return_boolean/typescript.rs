@@ -4,7 +4,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
 fn is_nestjs_file(source: &str) -> bool {
-    source.contains("@nestjs/") || source.contains("CanActivate")
+    crate::oxc_helpers::source_contains(source, "@nestjs/") || crate::oxc_helpers::source_contains(source, "CanActivate")
 }
 
 fn return_type_text<'a>(method: tree_sitter::Node<'a>, source: &'a [u8]) -> Option<&'a str> {

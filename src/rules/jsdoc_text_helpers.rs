@@ -199,12 +199,21 @@ pub fn is_monadic_gen_generator(code: &str) -> bool {
 /// block. Used by rules that need to inspect the attached symbol (async fn,
 /// generator, throwing fn, …).
 pub fn following_code<'a>(source: &'a str, block_raw: &str) -> &'a str {
-    // Find the block in source and return everything that follows, up to 4
-    // lines. Good enough for lightweight heuristics — we're not trying to be
-    // an AST.
-    let idx = match source.find(block_raw) {
-        Some(i) => i + block_raw.len(),
-        None => return "",
+    // Return everything after the block, up to 4 lines. Good enough for
+    // lightweight heuristics — we're not trying to be an AST.
+    let src_start = source.as_ptr() as usize;
+    let blk_start = block_raw.as_ptr() as usize;
+    // Fast path: every caller passes a sub-slice of `source`, so derive the
+    // block-end offset by pointer arithmetic. Searching the whole source with
+    // `find` is O(n) per block and quadratic across a file full of JSDoc.
+    let idx = if blk_start >= src_start && blk_start + block_raw.len() <= src_start + source.len() {
+        blk_start - src_start + block_raw.len()
+    } else {
+        // Fallback for callers that pass a detached copy of the block.
+        match source.find(block_raw) {
+            Some(i) => i + block_raw.len(),
+            None => return "",
+        }
     };
     let tail = &source[idx..];
     let mut end = 0;

@@ -123,6 +123,10 @@ pub fn scan_blocks(source: &str) -> Vec<JsDocBlock<'_>> {
     let mut out: Vec<JsDocBlock<'_>> = Vec::new();
     let bytes = source.as_bytes();
     let mut i = 0usize;
+    // Line of the byte at `i`, tracked incrementally so the whole scan is O(n)
+    // instead of re-counting newlines from the start of the file for every
+    // block (which would be O(blocks × file-size)).
+    let mut line = 1usize;
     while i + 2 < bytes.len() {
         // Find "/**"
         if bytes[i] == b'/' && bytes[i + 1] == b'*' && bytes.get(i + 2) == Some(&b'*') {
@@ -137,11 +141,15 @@ pub fn scan_blocks(source: &str) -> Vec<JsDocBlock<'_>> {
             };
             let end = i + 3 + end_rel + 2;
             let raw = &source[i..end];
-            let start_line = 1 + source[..i].bytes().filter(|b| *b == b'\n').count();
-            let block = build_block(raw, start_line);
+            let block = build_block(raw, line);
             out.push(block);
+            // Account for newlines inside the block before jumping past it.
+            line += bytes[i..end].iter().filter(|b| **b == b'\n').count();
             i = end;
         } else {
+            if bytes[i] == b'\n' {
+                line += 1;
+            }
             i += 1;
         }
     }

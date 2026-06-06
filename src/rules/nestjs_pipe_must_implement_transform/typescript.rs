@@ -3,7 +3,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
 fn is_nestjs_file(source: &str) -> bool {
-    source.contains("@nestjs/") || source.contains("PipeTransform")
+    crate::oxc_helpers::source_contains(source, "@nestjs/") || crate::oxc_helpers::source_contains(source, "PipeTransform")
 }
 
 fn class_implements_pipe_transform(class: tree_sitter::Node, source: &[u8]) -> bool {

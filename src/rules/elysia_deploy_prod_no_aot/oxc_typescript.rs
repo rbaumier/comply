@@ -10,7 +10,7 @@ use std::sync::Arc;
 pub struct Check;
 
 fn is_root_app_file(source: &str, path: &std::path::Path) -> bool {
-    if source.contains(".listen(") {
+    if crate::oxc_helpers::source_contains(source, ".listen(") {
         return true;
     }
 

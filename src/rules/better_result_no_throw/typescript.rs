@@ -2,7 +2,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use tree_sitter::Node;
 
 fn imports_better_result(source: &str) -> bool {
-    source.contains("better-result") || source.contains("@better-result")
+    crate::oxc_helpers::source_contains(source, "better-result") || crate::oxc_helpers::source_contains(source, "@better-result")
 }
 
 /// True if `node` is inside a context where throwing is the expected pattern:

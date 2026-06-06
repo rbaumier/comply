@@ -10,7 +10,7 @@ use std::sync::Arc;
 pub struct Check;
 
 fn is_prisma_file(source: &str) -> bool {
-    source.contains("@prisma/client") || source.contains("PrismaClient") || source.contains("prisma.")
+    crate::oxc_helpers::source_contains(source, "@prisma/client") || crate::oxc_helpers::source_contains(source, "PrismaClient") || crate::oxc_helpers::source_contains(source, "prisma.")
 }
 
 fn object_has_where_key(obj: &oxc_ast::ast::ObjectExpression) -> bool {

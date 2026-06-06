@@ -155,7 +155,7 @@ impl TextCheck for Check {
     }
 
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
-        if !ctx.source.contains("queryFn") {
+        if !ctx.source_contains("queryFn") {
             return Vec::new();
         }
         find_offenses(ctx.source)

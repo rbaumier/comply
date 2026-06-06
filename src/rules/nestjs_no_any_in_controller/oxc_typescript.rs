@@ -10,7 +10,7 @@ use std::sync::Arc;
 const PARAM_DECORATORS: &[&str] = &["Body", "Query", "Param", "Headers"];
 
 fn is_nestjs_file(source: &str) -> bool {
-    source.contains("@nestjs/") || source.contains("@Controller")
+    crate::oxc_helpers::source_contains(source, "@nestjs/") || crate::oxc_helpers::source_contains(source, "@Controller")
 }
 
 pub struct Check;

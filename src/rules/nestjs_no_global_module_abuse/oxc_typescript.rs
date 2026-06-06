@@ -5,7 +5,7 @@ use oxc_ast::ast::Expression;
 use std::sync::Arc;
 
 fn is_nestjs_file(source: &str) -> bool {
-    source.contains("@nestjs/")
+    crate::oxc_helpers::source_contains(source, "@nestjs/")
 }
 
 pub struct Check;

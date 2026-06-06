@@ -28,7 +28,7 @@ fn byte_to_line_col(source: &str, byte_offset: usize) -> (usize, usize) {
 }
 
 fn imports_tanstack_router(source: &str) -> bool {
-    source.contains("@tanstack/react-router")
+    crate::oxc_helpers::source_contains(source, "@tanstack/react-router")
 }
 
 fn matches_url_name(name: &str) -> bool {

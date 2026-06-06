@@ -10,9 +10,9 @@ use std::sync::Arc;
 pub struct Check;
 
 fn has_pending_hook(source: &str) -> bool {
-    source.contains("useFormStatus")
-        || source.contains("useActionState")
-        || source.contains("useTransition")
+    crate::oxc_helpers::source_contains(source, "useFormStatus")
+        || crate::oxc_helpers::source_contains(source, "useActionState")
+        || crate::oxc_helpers::source_contains(source, "useTransition")
 }
 
 impl TextCheck for Check {

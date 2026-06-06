@@ -75,10 +75,9 @@ impl OxcCheck for Check {
         }
 
         // Check that the file calls `setter(true)`, `setter(false)`, and `await`.
-        let src = ctx.source;
-        if !src.contains(&format!("{setter}(true)"))
-            || !src.contains(&format!("{setter}(false)"))
-            || !src.contains("await ")
+        if !ctx.source_contains(&format!("{setter}(true)"))
+            || !ctx.source_contains(&format!("{setter}(false)"))
+            || !ctx.source_contains("await ")
         {
             return;
         }

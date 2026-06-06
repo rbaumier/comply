@@ -8,19 +8,19 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::project::Framework;
 
 fn source_has_viewport_export(source: &str) -> bool {
-    source.contains("export const viewport")
-        || source.contains("export function generateViewport")
-        || source.contains("export async function generateViewport")
-        || source.contains("export let viewport")
-        || source.contains("export var viewport")
+    crate::oxc_helpers::source_contains(source, "export const viewport")
+        || crate::oxc_helpers::source_contains(source, "export function generateViewport")
+        || crate::oxc_helpers::source_contains(source, "export async function generateViewport")
+        || crate::oxc_helpers::source_contains(source, "export let viewport")
+        || crate::oxc_helpers::source_contains(source, "export var viewport")
 }
 
 fn source_has_metadata_export(source: &str) -> bool {
-    source.contains("export const metadata")
-        || source.contains("export function generateMetadata")
-        || source.contains("export async function generateMetadata")
-        || source.contains("export let metadata")
-        || source.contains("export var metadata")
+    crate::oxc_helpers::source_contains(source, "export const metadata")
+        || crate::oxc_helpers::source_contains(source, "export function generateMetadata")
+        || crate::oxc_helpers::source_contains(source, "export async function generateMetadata")
+        || crate::oxc_helpers::source_contains(source, "export let metadata")
+        || crate::oxc_helpers::source_contains(source, "export var metadata")
 }
 
 crate::ast_check! { on ["program"] => |node, _source, ctx, diagnostics|

@@ -3,7 +3,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
 fn is_nestjs_file(source: &str) -> bool {
-    source.contains("@nestjs/")
+    crate::oxc_helpers::source_contains(source, "@nestjs/")
 }
 
 crate::ast_check! { on ["decorator"] => |node, source, ctx, diagnostics|

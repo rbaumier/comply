@@ -3,7 +3,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
 fn is_angular_file(source: &str) -> bool {
-    source.contains("@angular/") || source.contains("ChangeDetectorRef")
+    crate::oxc_helpers::source_contains(source, "@angular/") || crate::oxc_helpers::source_contains(source, "ChangeDetectorRef")
 }
 
 crate::ast_check! { on ["call_expression"] prefilter = ["ChangeDetectorRef"] => |node, source, ctx, diagnostics|

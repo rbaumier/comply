@@ -15,7 +15,7 @@ impl TextCheck for Check {
     }
 
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
-        if !ctx.source.contains(DECORATOR) {
+        if !ctx.source_contains(DECORATOR) {
             return Vec::new();
         }
         let bytes = ctx.source.as_bytes();

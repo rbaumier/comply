@@ -26,7 +26,7 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
         return;
     }
     // File contains a body schema declaration somewhere (`body: t.` is the standard form).
-    if ctx.source.contains("body: t.") || ctx.source.contains("body:t.") {
+    if ctx.source_contains("body: t.") || ctx.source_contains("body:t.") {
         return;
     }
 

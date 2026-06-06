@@ -11,7 +11,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 
 fn is_root_app_file(source: &str, path: &std::path::Path) -> bool {
     // Strong signal: this file boots the server.
-    if source.contains(".listen(") {
+    if crate::oxc_helpers::source_contains(source, ".listen(") {
         return true;
     }
 
@@ -64,7 +64,7 @@ crate::ast_check! { on ["new_expression"] prefilter = [".listen("] => |node, sou
     }
     // Only flag server entry points that bind to a port. Sub-apps and
     // factory modules (create-app.ts) don't need aot.
-    if !ctx.source.contains(".listen(") {
+    if !ctx.source_contains(".listen(") {
         return;
     }
 

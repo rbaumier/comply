@@ -77,7 +77,7 @@ impl TextCheck for Check {
     }
 
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
-        if !ctx.source.contains("useQuery") {
+        if !ctx.source_contains("useQuery") {
             return Vec::new();
         }
         find_offenses(ctx.source)

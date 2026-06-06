@@ -5,7 +5,7 @@ use crate::rules::backend::{CheckCtx, OxcCheck};
 use std::sync::Arc;
 
 fn has_hono_cookie_import(source: &str) -> bool {
-    source.contains("hono/cookie")
+    crate::oxc_helpers::source_contains(source, "hono/cookie")
 }
 
 fn has_http_only(lines: &[&str], idx: usize) -> bool {

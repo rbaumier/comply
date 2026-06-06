@@ -19,8 +19,8 @@ use oxc_span::SourceType;
 /// Per-file memo backing [`source_contains`]. `ptr`/`len` capture the identity
 /// of the source the `hits` map describes; when either changes the map is
 /// cleared, so a stale entry from a previous file (or test source) can never be
-/// returned. The engine also calls [`reset_source_contains_cache`] once per
-/// file for deterministic hot-path invalidation.
+/// returned. The engine also calls [`reset_file_caches`] once per file for
+/// deterministic hot-path invalidation.
 #[derive(Default)]
 struct SourceContainsCache {
     ptr: usize,
@@ -33,14 +33,37 @@ thread_local! {
         RefCell::new(SourceContainsCache::default());
 }
 
-/// Clear the `source_contains` memo. Called once per file by the engine,
-/// before running oxc checks.
-pub fn reset_source_contains_cache() {
+/// Per-file index of line-start byte offsets backing [`byte_offset_to_line_col`].
+/// `starts[k]` is the byte offset where line `k + 1` begins (`starts[0] == 0`).
+/// Like [`SourceContainsCache`] it is keyed by the source `(ptr, len)` identity
+/// and rebuilt when that changes; the engine also clears it once per file.
+#[derive(Default)]
+struct LineIndex {
+    ptr: usize,
+    len: usize,
+    starts: Vec<usize>,
+}
+
+thread_local! {
+    static LINE_INDEX: RefCell<LineIndex> = RefCell::new(LineIndex::default());
+}
+
+/// Clear every per-file memo (`source_contains` hits and the line-start index).
+/// Called once per file by the engine before any backend runs, so a reused
+/// worker source buffer that happens to share a `(ptr, len)` with the previous
+/// file can never serve a stale entry.
+pub fn reset_file_caches() {
     SOURCE_CONTAINS.with(|c| {
         let mut c = c.borrow_mut();
         c.ptr = 0;
         c.len = 0;
         c.hits.clear();
+    });
+    LINE_INDEX.with(|c| {
+        let mut c = c.borrow_mut();
+        c.ptr = 0;
+        c.len = 0;
+        c.starts.clear();
     });
 }
 
@@ -95,26 +118,46 @@ where
 
 /// Convert an oxc byte offset into 1-based `(line, column)`.
 ///
-/// Shared across all `OxcCheck` rules that emit diagnostics — avoids the
-/// copy-pasted per-rule helper that was duplicated in 15+ tree-sitter rules.
+/// Shared across all `OxcCheck` rules that emit diagnostics. Rules call this
+/// once per emitted diagnostic, so a naive scan from the start of the file
+/// costs O(byte_offset) per call — quadratic on files that emit many
+/// diagnostics. Instead we build a per-file index of line-start offsets once
+/// (cached in a thread-local, keyed by the source `(ptr, len)` identity) and
+/// binary-search it: O(log lines) to find the line, then O(line length) to
+/// count the column (chars, skipping `\r`).
 pub fn byte_offset_to_line_col(source: &str, byte_offset: usize) -> (usize, usize) {
-    let mut line = 1;
-    let mut col = 1;
-    for (i, c) in source.char_indices() {
-        if i >= byte_offset {
-            break;
+    LINE_INDEX.with(|c| {
+        let mut c = c.borrow_mut();
+        let ptr = source.as_ptr() as usize;
+        let len = source.len();
+        if c.ptr != ptr || c.len != len {
+            c.ptr = ptr;
+            c.len = len;
+            c.starts.clear();
+            c.starts.push(0);
+            for (i, b) in source.bytes().enumerate() {
+                if b == b'\n' {
+                    c.starts.push(i + 1);
+                }
+            }
         }
-        if c == '\r' {
-            continue;
+        // Largest line start <= byte_offset (`starts[0] == 0 <= byte_offset`).
+        let line_idx = match c.starts.binary_search(&byte_offset) {
+            Ok(i) => i,
+            Err(i) => i - 1,
+        };
+        let line_start = c.starts[line_idx];
+        let mut col = 1;
+        for (i, ch) in source[line_start..].char_indices() {
+            if line_start + i >= byte_offset {
+                break;
+            }
+            if ch != '\r' {
+                col += 1;
+            }
         }
-        if c == '\n' {
-            line += 1;
-            col = 1;
-        } else {
-            col += 1;
-        }
-    }
-    (line, col)
+        (line_idx + 1, col)
+    })
 }
 
 /// Parse `source` with oxc_parser using the source type inferred from `path`,
@@ -384,12 +427,34 @@ pub fn is_in_ambient_declaration(
 }
 
 #[cfg(test)]
-mod source_contains_tests {
-    use super::{reset_source_contains_cache, source_contains};
+mod oxc_helpers_tests {
+    use super::{byte_offset_to_line_col, reset_file_caches, source_contains};
+
+    /// Reference O(byte_offset) scan — the implementation `byte_offset_to_line_col`
+    /// replaced. The cached version must agree with it for every offset.
+    fn naive_line_col(source: &str, byte_offset: usize) -> (usize, usize) {
+        let mut line = 1;
+        let mut col = 1;
+        for (i, c) in source.char_indices() {
+            if i >= byte_offset {
+                break;
+            }
+            if c == '\r' {
+                continue;
+            }
+            if c == '\n' {
+                line += 1;
+                col = 1;
+            } else {
+                col += 1;
+            }
+        }
+        (line, col)
+    }
 
     #[test]
     fn matches_std_for_hits_and_misses_and_caches() {
-        reset_source_contains_cache();
+        reset_file_caches();
         let src = "import React from 'react';\nconst x = items.find(p);";
         // First call computes, second is served from the memo — both must agree
         // with std::str::contains.
@@ -401,7 +466,7 @@ mod source_contains_tests {
 
     #[test]
     fn invalidates_when_source_identity_changes() {
-        reset_source_contains_cache();
+        reset_file_caches();
         let a = String::from("has a react import");
         assert!(source_contains(&a, "react"));
         // A distinct source (different ptr) must never return `a`'s cached hit.
@@ -412,11 +477,39 @@ mod source_contains_tests {
 
     #[test]
     fn reset_then_recompute_stays_correct() {
-        reset_source_contains_cache();
+        reset_file_caches();
         let s = "needle in a haystack";
         assert!(source_contains(s, "needle"));
-        reset_source_contains_cache();
+        reset_file_caches();
         assert_eq!(source_contains(s, "needle"), s.contains("needle"));
         assert_eq!(source_contains(s, "missing"), s.contains("missing"));
+    }
+
+    #[test]
+    fn byte_offset_matches_naive_scan_with_crlf_and_utf8() {
+        reset_file_caches();
+        // LF, CRLF, a 2-byte char (é), spaces — every char-boundary offset
+        // must match the reference scan.
+        let src = "ab\nc\r\ndé f\nghi";
+        for off in 0..=src.len() {
+            if !src.is_char_boundary(off) {
+                continue;
+            }
+            assert_eq!(
+                byte_offset_to_line_col(src, off),
+                naive_line_col(src, off),
+                "mismatch at byte offset {off}"
+            );
+        }
+    }
+
+    #[test]
+    fn byte_offset_rebuilds_index_on_source_change() {
+        reset_file_caches();
+        let a = String::from("one\ntwo\nthree");
+        assert_eq!(byte_offset_to_line_col(&a, 4), (2, 1)); // start of "two"
+        // Different source, no explicit reset — the index must rebuild itself.
+        let b = String::from("x\ny\nz\nw");
+        assert_eq!(byte_offset_to_line_col(&b, 6), (4, 1)); // start of "w"
     }
 }

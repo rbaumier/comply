@@ -5,7 +5,7 @@ use oxc_ast::ast::Expression;
 use std::sync::Arc;
 
 fn imports_better_result(source: &str) -> bool {
-    source.contains("better-result") || source.contains("@better-result")
+    crate::oxc_helpers::source_contains(source, "better-result") || crate::oxc_helpers::source_contains(source, "@better-result")
 }
 
 pub struct Check;

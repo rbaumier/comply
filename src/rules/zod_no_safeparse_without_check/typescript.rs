@@ -141,7 +141,7 @@ fn find_offenses(source: &str) -> Vec<usize> {
 
 impl TextCheck for Check {
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
-        if !ctx.source.contains(".safeParse(") {
+        if !ctx.source_contains(".safeParse(") {
             return Vec::new();
         }
         find_offenses(ctx.source)

@@ -1,7 +1,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
 fn imports_better_result(source: &str) -> bool {
-    source.contains("better-result") || source.contains("@better-result")
+    crate::oxc_helpers::source_contains(source, "better-result") || crate::oxc_helpers::source_contains(source, "@better-result")
 }
 
 crate::ast_check! { on ["try_statement"] prefilter = ["better-result"] => |node, _source, ctx, diagnostics|

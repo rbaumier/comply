@@ -3,7 +3,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
 fn is_nestjs_file(source: &str) -> bool {
-    source.contains("@nestjs/") || source.contains("@Controller")
+    crate::oxc_helpers::source_contains(source, "@nestjs/") || crate::oxc_helpers::source_contains(source, "@Controller")
 }
 
 const ROUTE_DECORATORS: &[&str] = &["@Get", "@Post", "@Put", "@Patch", "@Delete", "@All", "@Options", "@Head"];

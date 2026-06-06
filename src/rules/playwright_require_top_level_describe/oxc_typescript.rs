@@ -9,7 +9,7 @@ use std::sync::Arc;
 pub struct Check;
 
 fn is_playwright_file(source: &str) -> bool {
-    source.contains("@playwright/test") || source.contains("playwright/test")
+    crate::oxc_helpers::source_contains(source, "@playwright/test") || crate::oxc_helpers::source_contains(source, "playwright/test")
 }
 
 fn is_bare_test_call(call: &oxc_ast::ast::CallExpression) -> bool {

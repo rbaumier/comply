@@ -50,10 +50,10 @@ fn is_group_referenced(name: &str, source: &str) -> bool {
     let bracket_access_dq = format!("groups[\"{name}\"]");
     let bracket_access_sq = format!("groups['{name}']");
     let replacement_ref = format!("$<{name}>");
-    source.contains(&dot_access)
-        || source.contains(&bracket_access_dq)
-        || source.contains(&bracket_access_sq)
-        || source.contains(&replacement_ref)
+    crate::oxc_helpers::source_contains(source, &dot_access)
+        || crate::oxc_helpers::source_contains(source, &bracket_access_dq)
+        || crate::oxc_helpers::source_contains(source, &bracket_access_sq)
+        || crate::oxc_helpers::source_contains(source, &replacement_ref)
 }
 
 impl OxcCheck for Check {

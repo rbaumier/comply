@@ -8,7 +8,7 @@ use oxc_span::GetSpan;
 use std::sync::Arc;
 
 fn imports_better_result(source: &str) -> bool {
-    source.contains("better-result") || source.contains("@better-result")
+    crate::oxc_helpers::source_contains(source, "better-result") || crate::oxc_helpers::source_contains(source, "@better-result")
 }
 
 fn is_helper_path(path: &std::path::Path) -> bool {

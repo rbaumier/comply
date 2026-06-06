@@ -5,15 +5,15 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
 fn is_angular_file(source: &str) -> bool {
-    source.contains("@angular/") || source.contains("@Component") || source.contains("@Injectable") || source.contains("@Directive")
+    crate::oxc_helpers::source_contains(source, "@angular/") || crate::oxc_helpers::source_contains(source, "@Component") || crate::oxc_helpers::source_contains(source, "@Injectable") || crate::oxc_helpers::source_contains(source, "@Directive")
 }
 
 fn file_has_unsubscribe_pattern(source: &str) -> bool {
-    source.contains("takeUntilDestroyed")
-        || source.contains("takeUntil(")
-        || source.contains("DestroyRef")
-        || source.contains(".unsubscribe(")
-        || source.contains("Subscription")
+    crate::oxc_helpers::source_contains(source, "takeUntilDestroyed")
+        || crate::oxc_helpers::source_contains(source, "takeUntil(")
+        || crate::oxc_helpers::source_contains(source, "DestroyRef")
+        || crate::oxc_helpers::source_contains(source, ".unsubscribe(")
+        || crate::oxc_helpers::source_contains(source, "Subscription")
 }
 
 crate::ast_check! { on ["call_expression"] prefilter = [".unsubscribe("] => |node, source, ctx, diagnostics|

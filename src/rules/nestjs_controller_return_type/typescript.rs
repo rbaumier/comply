@@ -9,7 +9,7 @@ use std::sync::Arc;
 pub struct Check;
 
 fn is_nestjs_controller_file(source: &str) -> bool {
-    source.contains("@Controller")
+    crate::oxc_helpers::source_contains(source, "@Controller")
 }
 
 /// Walk the source character-by-character, find every `async ` keyword that

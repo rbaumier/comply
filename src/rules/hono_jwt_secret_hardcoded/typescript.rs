@@ -7,7 +7,7 @@ use crate::rules::backend::{CheckCtx, TextCheck};
 pub struct Check;
 
 fn is_hono_jwt(source: &str) -> bool {
-    source.contains("hono/jwt") || (source.contains("hono") && source.contains("jwt("))
+    crate::oxc_helpers::source_contains(source, "hono/jwt") || (crate::oxc_helpers::source_contains(source, "hono") && crate::oxc_helpers::source_contains(source, "jwt("))
 }
 
 /// Locate every `jwt(...)` call and return the byte offsets of any

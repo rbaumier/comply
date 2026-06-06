@@ -94,7 +94,7 @@ fn find_offenses(source: &str) -> Vec<usize> {
 impl TextCheck for Check {
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
         // Only consider files that look like they use TanStack Query.
-        if !ctx.source.contains("useQuery") && !ctx.source.contains("queryOptions") {
+        if !ctx.source_contains("useQuery") && !ctx.source_contains("queryOptions") {
             return Vec::new();
         }
         find_offenses(ctx.source)

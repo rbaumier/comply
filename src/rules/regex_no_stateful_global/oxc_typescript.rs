@@ -80,7 +80,7 @@ fn find_enclosing_binding<'a>(
 fn has_stateful_usage(source: &str, var_name: &str) -> bool {
     let test_pattern = format!("{var_name}.test(");
     let exec_pattern = format!("{var_name}.exec(");
-    source.contains(&test_pattern) || source.contains(&exec_pattern)
+    crate::oxc_helpers::source_contains(source, &test_pattern) || crate::oxc_helpers::source_contains(source, &exec_pattern)
 }
 
 #[cfg(test)]

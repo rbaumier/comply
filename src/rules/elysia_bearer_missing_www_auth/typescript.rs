@@ -15,7 +15,7 @@ impl AstCheck for Check {
         if !ctx.project.has_framework("elysia") {
             return Vec::new();
         }
-        if ctx.source.contains("WWW-Authenticate") {
+        if ctx.source_contains("WWW-Authenticate") {
             return Vec::new();
         }
 

@@ -16,7 +16,7 @@ const HOOK_METHODS: &[&str] = &[
 ];
 
 fn is_root_app_file(source: &str, path: &std::path::Path) -> bool {
-    if source.contains(".listen(") {
+    if crate::oxc_helpers::source_contains(source, ".listen(") {
         return true;
     }
     let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
@@ -30,7 +30,7 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     if !ctx.project.has_framework("elysia") {
         return;
     }
-    if !ctx.source.contains("export") {
+    if !ctx.source_contains("export") {
         return;
     }
     if is_root_app_file(ctx.source, ctx.path) {
@@ -48,19 +48,18 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     }
 
     // If the file uses any scope marker, skip — fuzzy but cheap.
-    let s = ctx.source;
-    let has_scope = s.contains("as:'global'")
-        || s.contains("as: 'global'")
-        || s.contains("as:\"global\"")
-        || s.contains("as: \"global\"")
-        || s.contains("as:'scoped'")
-        || s.contains("as: 'scoped'")
-        || s.contains("as:\"scoped\"")
-        || s.contains("as: \"scoped\"")
-        || s.contains(".as('scoped')")
-        || s.contains(".as(\"scoped\")")
-        || s.contains(".as('global')")
-        || s.contains(".as(\"global\")");
+    let has_scope = ctx.source_contains("as:'global'")
+        || ctx.source_contains("as: 'global'")
+        || ctx.source_contains("as:\"global\"")
+        || ctx.source_contains("as: \"global\"")
+        || ctx.source_contains("as:'scoped'")
+        || ctx.source_contains("as: 'scoped'")
+        || ctx.source_contains("as:\"scoped\"")
+        || ctx.source_contains("as: \"scoped\"")
+        || ctx.source_contains(".as('scoped')")
+        || ctx.source_contains(".as(\"scoped\")")
+        || ctx.source_contains(".as('global')")
+        || ctx.source_contains(".as(\"global\")");
     if has_scope {
         return;
     }

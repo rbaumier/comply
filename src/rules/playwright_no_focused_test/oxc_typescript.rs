@@ -9,7 +9,7 @@ use std::sync::Arc;
 pub struct Check;
 
 fn is_playwright_test_path(source: &str) -> bool {
-    source.contains("@playwright/test") || source.contains("playwright/test")
+    crate::oxc_helpers::source_contains(source, "@playwright/test") || crate::oxc_helpers::source_contains(source, "playwright/test")
 }
 
 impl OxcCheck for Check {

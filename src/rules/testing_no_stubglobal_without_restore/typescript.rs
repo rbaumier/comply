@@ -76,8 +76,8 @@ impl crate::rules::backend::AstCheck for Check {
         tree: &tree_sitter::Tree,
     ) -> Vec<Diagnostic> {
         let source = ctx.source.as_bytes();
-        let has_stub_global = ctx.source.contains("stubGlobal");
-        let has_stub_env = ctx.source.contains("stubEnv");
+        let has_stub_global = ctx.source_contains("stubGlobal");
+        let has_stub_env = ctx.source_contains("stubEnv");
         if !(has_stub_global || has_stub_env) {
             return Vec::new();
         }

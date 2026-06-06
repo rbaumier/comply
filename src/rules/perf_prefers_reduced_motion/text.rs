@@ -5,7 +5,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 
 crate::ast_check! { prefilter = ["animation", "@keyframes"] => |node, source, ctx, diagnostics|
     if !diagnostics.is_empty() { return; }
-    if ctx.source.contains("prefers-reduced-motion") { return; }
+    if ctx.source_contains("prefers-reduced-motion") { return; }
 
     let offender = match node.kind() {
         "keyframes_statement" => Some(node),

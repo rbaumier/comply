@@ -7,17 +7,17 @@ crate::ast_check! { on ["program"] prefilter = ["auth.api.getSession"] => |node,
     if !ctx.project.has_framework("elysia") {
         return;
     }
-    if !ctx.source.contains("auth.api.getSession") {
+    if !ctx.source_contains("auth.api.getSession") {
         return;
     }
-    if !ctx.source.contains("resolve") {
+    if !ctx.source_contains("resolve") {
         return;
     }
 
-    if ctx.source.contains("status(401")
-        || ctx.source.contains("!session")
-        || ctx.source.contains("session === null")
-        || ctx.source.contains("session == null")
+    if ctx.source_contains("status(401")
+        || ctx.source_contains("!session")
+        || ctx.source_contains("session === null")
+        || ctx.source_contains("session == null")
     {
         return;
     }

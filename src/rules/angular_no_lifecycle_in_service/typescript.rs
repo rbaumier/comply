@@ -14,7 +14,7 @@ const COMPONENT_LIFECYCLE_HOOKS: &[&str] = &[
 ];
 
 fn is_angular_file(source: &str) -> bool {
-    source.contains("@angular/") || source.contains("@Injectable")
+    crate::oxc_helpers::source_contains(source, "@angular/") || crate::oxc_helpers::source_contains(source, "@Injectable")
 }
 
 fn class_decorators_text(class: tree_sitter::Node, source: &[u8]) -> String {

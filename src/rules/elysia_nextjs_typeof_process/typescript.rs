@@ -6,7 +6,7 @@ crate::ast_check! { on ["unary_expression"] prefilter = ["@elysiajs/eden"] => |n
     if !ctx.project.has_framework("elysia") {
         return;
     }
-    if !ctx.source.contains("@elysiajs/eden") {
+    if !ctx.source_contains("@elysiajs/eden") {
         return;
     }
 

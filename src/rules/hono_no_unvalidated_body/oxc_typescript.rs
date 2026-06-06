@@ -7,18 +7,18 @@ use oxc_span::GetSpan;
 use std::sync::Arc;
 
 fn is_hono_file(source: &str) -> bool {
-    source.contains("hono") || source.contains("Hono")
+    crate::oxc_helpers::source_contains(source, "hono") || crate::oxc_helpers::source_contains(source, "Hono")
 }
 
 fn has_validator(source: &str) -> bool {
-    source.contains("hono/validator")
-        || source.contains("@hono/zod-validator")
-        || source.contains("@hono/typebox-validator")
-        || source.contains("@hono/valibot-validator")
-        || source.contains("zValidator")
-        || source.contains("tbValidator")
-        || source.contains("vValidator")
-        || source.contains("validator(")
+    crate::oxc_helpers::source_contains(source, "hono/validator")
+        || crate::oxc_helpers::source_contains(source, "@hono/zod-validator")
+        || crate::oxc_helpers::source_contains(source, "@hono/typebox-validator")
+        || crate::oxc_helpers::source_contains(source, "@hono/valibot-validator")
+        || crate::oxc_helpers::source_contains(source, "zValidator")
+        || crate::oxc_helpers::source_contains(source, "tbValidator")
+        || crate::oxc_helpers::source_contains(source, "vValidator")
+        || crate::oxc_helpers::source_contains(source, "validator(")
 }
 
 pub struct Check;

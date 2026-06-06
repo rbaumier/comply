@@ -17,7 +17,7 @@ const STOP_KEYS: &[&str] = &[
 
 crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
     let _ = source;
-    if !ctx.project.has_framework("elysia") || !ctx.source.contains("zod") {
+    if !ctx.project.has_framework("elysia") || !ctx.source_contains("zod") {
         return;
     }
 

@@ -41,7 +41,7 @@ impl AstCheck for Check {
             macro_name.starts_with("tokio::")
         } else {
             // Bare `select!` — only flag if file imports from tokio
-            ctx.source.contains("use tokio::")
+            ctx.source_contains("use tokio::")
         };
         if !is_tokio {
             return;

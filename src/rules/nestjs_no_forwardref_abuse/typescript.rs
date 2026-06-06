@@ -9,7 +9,7 @@ use std::sync::Arc;
 pub struct Check;
 
 fn is_nestjs_file(source: &str) -> bool {
-    source.contains("@nestjs/") || source.contains("@Module") || source.contains("@Injectable")
+    crate::oxc_helpers::source_contains(source, "@nestjs/") || crate::oxc_helpers::source_contains(source, "@Module") || crate::oxc_helpers::source_contains(source, "@Injectable")
 }
 
 impl TextCheck for Check {

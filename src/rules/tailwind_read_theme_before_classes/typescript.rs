@@ -98,7 +98,7 @@ fn class_contains_arbitrary(text: &str) -> Option<usize> {
 }
 
 fn file_reads_theme(source: &str) -> bool {
-    THEME_MARKERS.iter().any(|m| source.contains(m))
+    THEME_MARKERS.iter().any(|m| crate::oxc_helpers::source_contains(source, m))
 }
 
 crate::ast_check! { on ["string"] prefilter = ["resolveConfig"] => |node, source, ctx, diagnostics|

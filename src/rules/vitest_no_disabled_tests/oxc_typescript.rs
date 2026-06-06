@@ -19,7 +19,7 @@ fn is_test_file(path: &std::path::Path) -> bool {
 }
 
 fn has_vitest_import(source: &str) -> bool {
-    VITEST_IMPORTS.iter().any(|p| source.contains(p))
+    VITEST_IMPORTS.iter().any(|p| crate::oxc_helpers::source_contains(source, p))
 }
 
 impl OxcCheck for Check {

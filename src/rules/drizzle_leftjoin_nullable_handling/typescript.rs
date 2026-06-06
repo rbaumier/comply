@@ -48,7 +48,7 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     // When the statement uses an explicit select object AND the file declares
     // nullable fields (e.g. Zod `.nullable()`), the developer intentionally
     // projected a nullable field from the joined table — not a bug.
-    if stmt_text.contains("select({") && ctx.source.contains(".nullable()") {
+    if stmt_text.contains("select({") && ctx.source_contains(".nullable()") {
         return;
     }
     let pos = node.start_position();

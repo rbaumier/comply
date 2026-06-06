@@ -90,6 +90,9 @@ impl OxcCheck for Check {
         ctx: &CheckCtx,
     ) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
+        // Hoisted out of the comment loop: splitting the whole source is O(file)
+        // and independent of the comment, so doing it per comment is quadratic.
+        let lines: Vec<&str> = ctx.source.lines().collect();
 
         for comment in semantic.comments() {
             let raw = &ctx.source[comment.span.start as usize..comment.span.end as usize];
@@ -105,7 +108,6 @@ impl OxcCheck for Check {
             let body = extract_jsdoc_body(trimmed);
             let (start_line, _) = byte_offset_to_line_col(ctx.source, comment.span.start as usize);
 
-            let lines: Vec<&str> = ctx.source.lines().collect();
             let Some(name) = get_next_symbol_name(&lines, start_line) else { continue };
 
             if !is_trivial_description(&body, &name) {

@@ -6,7 +6,7 @@ use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use std::sync::Arc;
 
 fn is_nestjs_file(source: &str) -> bool {
-    source.contains("@nestjs/")
+    crate::oxc_helpers::source_contains(source, "@nestjs/")
 }
 
 fn class_name_looks_like_provider(name: &str) -> bool {

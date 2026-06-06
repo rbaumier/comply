@@ -7,7 +7,7 @@ use std::sync::Arc;
 pub struct Check;
 
 fn is_angular_file(source: &str) -> bool {
-    source.contains("@angular/") || source.contains("@Component")
+    crate::oxc_helpers::source_contains(source, "@angular/") || crate::oxc_helpers::source_contains(source, "@Component")
 }
 
 impl OxcCheck for Check {

@@ -6,7 +6,7 @@ crate::ast_check! { on ["call_expression"] prefilter = [".publish"] => |node, so
     if !ctx.project.has_framework("elysia") {
         return;
     }
-    if !ctx.source.contains(".ws(") {
+    if !ctx.source_contains(".ws(") {
         return;
     }
 
@@ -16,7 +16,7 @@ crate::ast_check! { on ["call_expression"] prefilter = [".publish"] => |node, so
         return;
     }
 
-    if ctx.source.contains(".subscribe(") {
+    if ctx.source_contains(".subscribe(") {
         return;
     }
 

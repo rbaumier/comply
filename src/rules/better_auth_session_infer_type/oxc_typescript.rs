@@ -6,7 +6,7 @@ use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use std::sync::Arc;
 
 fn file_imports_better_auth(source: &str) -> bool {
-    source.contains("from \"better-auth") || source.contains("from 'better-auth")
+    crate::oxc_helpers::source_contains(source, "from \"better-auth") || crate::oxc_helpers::source_contains(source, "from 'better-auth")
 }
 
 pub struct Check;

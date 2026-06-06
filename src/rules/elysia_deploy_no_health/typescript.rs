@@ -6,7 +6,7 @@ crate::ast_check! { on ["call_expression"] prefilter = [".listen"] => |node, sou
     if !ctx.project.has_framework("elysia") {
         return;
     }
-    if !ctx.source.contains(".listen(") {
+    if !ctx.source_contains(".listen(") {
         return;
     }
     // Accept any conventional liveness/readiness probe path. `/health` is the
@@ -21,7 +21,7 @@ crate::ast_check! { on ["call_expression"] prefilter = [".listen"] => |node, sou
         "/health/live",
         "/health/ready",
     ];
-    if HEALTH_PATHS.iter().any(|p| ctx.source.contains(p)) {
+    if HEALTH_PATHS.iter().any(|p| ctx.source_contains(p)) {
         return;
     }
 

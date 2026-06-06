@@ -106,7 +106,7 @@ impl TextCheck for Check {
     }
 
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
-        if !ctx.source.contains("dehydrate(") || !ctx.source.contains("prefetchQuery(") {
+        if !ctx.source_contains("dehydrate(") || !ctx.source_contains("prefetchQuery(") {
             return Vec::new();
         }
         find_offenses(ctx.source)

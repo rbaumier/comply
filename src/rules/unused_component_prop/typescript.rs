@@ -18,8 +18,8 @@ fn is_type_test_file(path: &std::path::Path, source: &str) -> bool {
         || name.contains(".type-test")
         || name.ends_with(".d.ts")
         || name.ends_with(".d.tsx")
-        || source.contains("@vitest-environment")
-        || source.contains("@ts-check")
+        || crate::oxc_helpers::source_contains(source, "@vitest-environment")
+        || crate::oxc_helpers::source_contains(source, "@ts-check")
 }
 
 impl crate::rules::backend::AstCheck for Check {

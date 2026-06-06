@@ -24,7 +24,7 @@ fn touches_node_streams(source: &str) -> bool {
         "createReadStream",
         "createWriteStream",
     ];
-    NEEDLES.iter().any(|n| source.contains(n))
+    NEEDLES.iter().any(|n| crate::oxc_helpers::source_contains(source, n))
 }
 
 /// True when the first argument of a `.pipe(` call is a functional combinator

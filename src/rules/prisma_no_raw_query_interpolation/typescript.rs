@@ -4,7 +4,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
 fn is_prisma_file(source: &str) -> bool {
-    source.contains("@prisma/client") || source.contains("PrismaClient") || source.contains("$queryRaw") || source.contains("$executeRaw")
+    crate::oxc_helpers::source_contains(source, "@prisma/client") || crate::oxc_helpers::source_contains(source, "PrismaClient") || crate::oxc_helpers::source_contains(source, "$queryRaw") || crate::oxc_helpers::source_contains(source, "$executeRaw")
 }
 
 crate::ast_check! { on ["call_expression"] prefilter = ["$queryRaw", "$executeRaw"] => |node, source, ctx, diagnostics|

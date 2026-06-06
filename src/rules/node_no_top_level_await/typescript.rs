@@ -27,7 +27,7 @@ fn is_script_file(path: &std::path::Path, source: &str) -> bool {
 }
 
 fn is_entrypoint(source: &str) -> bool {
-    source.contains(".listen(") || source.contains("process.exit")
+    crate::oxc_helpers::source_contains(source, ".listen(") || crate::oxc_helpers::source_contains(source, "process.exit")
 }
 
 crate::ast_check! { on ["await_expression"] => |node, source, ctx, diagnostics|

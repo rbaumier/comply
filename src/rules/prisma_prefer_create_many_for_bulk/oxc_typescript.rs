@@ -7,9 +7,9 @@ use oxc_ast::ast::Expression;
 use std::sync::Arc;
 
 fn is_prisma_file(source: &str) -> bool {
-    source.contains("@prisma/client")
-        || source.contains("PrismaClient")
-        || source.contains("prisma.")
+    crate::oxc_helpers::source_contains(source, "@prisma/client")
+        || crate::oxc_helpers::source_contains(source, "PrismaClient")
+        || crate::oxc_helpers::source_contains(source, "prisma.")
 }
 
 /// Walk ancestors to check if this node is inside a loop construct.

@@ -7,7 +7,7 @@ use std::sync::Arc;
 pub struct Check;
 
 fn is_nestjs_file(source: &str) -> bool {
-    source.contains("@nestjs/") || source.contains("CanActivate")
+    crate::oxc_helpers::source_contains(source, "@nestjs/") || crate::oxc_helpers::source_contains(source, "CanActivate")
 }
 
 impl OxcCheck for Check {

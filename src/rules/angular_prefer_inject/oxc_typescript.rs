@@ -11,10 +11,10 @@ pub struct Check;
 const ANGULAR_DECORATORS: &[&str] = &["Component", "Injectable", "Directive", "Pipe"];
 
 fn is_angular_file(source: &str) -> bool {
-    source.contains("@angular/")
-        || source.contains("@Component")
-        || source.contains("@Injectable")
-        || source.contains("@Directive")
+    crate::oxc_helpers::source_contains(source, "@angular/")
+        || crate::oxc_helpers::source_contains(source, "@Component")
+        || crate::oxc_helpers::source_contains(source, "@Injectable")
+        || crate::oxc_helpers::source_contains(source, "@Directive")
 }
 
 /// Check if a class has an Angular decorator.

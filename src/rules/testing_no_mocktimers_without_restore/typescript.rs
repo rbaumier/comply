@@ -84,7 +84,7 @@ impl crate::rules::backend::AstCheck for Check {
         tree: &tree_sitter::Tree,
     ) -> Vec<Diagnostic> {
         let source = ctx.source.as_bytes();
-        if !ctx.source.contains("useFakeTimers") {
+        if !ctx.source_contains("useFakeTimers") {
             return Vec::new();
         }
         if has_scoped_real_timer_restore(tree, source) {

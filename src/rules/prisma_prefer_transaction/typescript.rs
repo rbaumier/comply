@@ -5,7 +5,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
 fn is_prisma_file(source: &str) -> bool {
-    source.contains("@prisma/client") || source.contains("PrismaClient") || source.contains("prisma.")
+    crate::oxc_helpers::source_contains(source, "@prisma/client") || crate::oxc_helpers::source_contains(source, "PrismaClient") || crate::oxc_helpers::source_contains(source, "prisma.")
 }
 
 const WRITE_METHODS: &[&str] = &[

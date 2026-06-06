@@ -7,7 +7,7 @@ use oxc_span::GetSpan;
 use std::sync::Arc;
 
 fn has_hono_cookie_import(source: &str) -> bool {
-    source.contains("hono/cookie")
+    crate::oxc_helpers::source_contains(source, "hono/cookie")
 }
 
 fn has_secure(lines: &[&str], idx: usize) -> bool {

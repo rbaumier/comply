@@ -17,10 +17,10 @@ crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
     if !is_test_file(ctx.path) {
         return;
     }
-    if !ctx.source.contains(".listen(") {
+    if !ctx.source_contains(".listen(") {
         return;
     }
-    if !ctx.source.contains("fetch(") {
+    if !ctx.source_contains("fetch(") {
         return;
     }
 

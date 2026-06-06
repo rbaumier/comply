@@ -4,8 +4,8 @@ use crate::diagnostic::{Diagnostic, Severity};
 
 crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     if !ctx.project.has_framework("elysia")
-        || !ctx.source.contains("zod")
-        || !ctx.source.contains("elysia")
+        || !ctx.source_contains("zod")
+        || !ctx.source_contains("elysia")
     {
         return;
     }
@@ -15,7 +15,7 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
         return;
     }
 
-    if ctx.source.contains("fileType(") {
+    if ctx.source_contains("fileType(") {
         return;
     }
 

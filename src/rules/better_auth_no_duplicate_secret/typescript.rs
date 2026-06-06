@@ -31,7 +31,7 @@ crate::ast_check! { on ["call_expression"] prefilter = ["BETTER_AUTH_SECRET"] =>
 
     // Only flag when the file actually references BETTER_AUTH_SECRET — otherwise
     // there's no "duplication" to warn about.
-    if !ctx.source.contains("BETTER_AUTH_SECRET") {
+    if !ctx.source_contains("BETTER_AUTH_SECRET") {
         return;
     }
 

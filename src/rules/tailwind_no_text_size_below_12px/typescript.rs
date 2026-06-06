@@ -54,7 +54,7 @@ fn find_offenses(source: &str) -> Vec<(usize, String)> {
 
 impl TextCheck for Check {
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
-        if !ctx.source.contains("text-[") {
+        if !ctx.source_contains("text-[") {
             return Vec::new();
         }
         find_offenses(ctx.source)

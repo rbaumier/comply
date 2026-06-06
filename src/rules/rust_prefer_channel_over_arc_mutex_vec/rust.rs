@@ -8,7 +8,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
 crate::ast_check! { on ["call_expression", "generic_type"] => |node, source, ctx, diagnostics|
-    if !ctx.source.contains(".lock()") || !ctx.source.contains(".push(") { return; }
+    if !ctx.source_contains(".lock()") || !ctx.source_contains(".push(") { return; }
 
     let matched = match node.kind() {
         "call_expression" => is_arc_mutex_vec_call(node, source),

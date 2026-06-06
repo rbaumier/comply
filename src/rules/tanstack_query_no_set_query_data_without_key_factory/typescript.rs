@@ -59,7 +59,7 @@ impl TextCheck for Check {
         if ctx.file.path_segments.in_test_dir {
             return Vec::new();
         }
-        if !ctx.source.contains("setQueryData(") {
+        if !ctx.source_contains("setQueryData(") {
             return Vec::new();
         }
         find_offenses(ctx.source)

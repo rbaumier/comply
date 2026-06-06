@@ -15,7 +15,7 @@ fn source_wraps_in_memo(source: &str, ident: &str) -> bool {
         format!("let {ident} = memo("),
         format!("var {ident} = memo("),
     ];
-    patterns.iter().any(|p| source.contains(p.as_str()))
+    patterns.iter().any(|p| crate::oxc_helpers::source_contains(source, p.as_str()))
 }
 
 pub struct Check;

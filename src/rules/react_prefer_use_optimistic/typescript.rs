@@ -36,11 +36,11 @@ const NON_STATE_SETTERS: &[&str] = &["setTimeout", "setInterval", "setImmediate"
 /// React state, so without one there is nothing to roll back — a backend
 /// `try/finally` utility (or the word "catch" in a comment there) is irrelevant.
 fn looks_like_react(source: &str) -> bool {
-    source.contains("useState")
-        || source.contains("useReducer")
-        || source.contains("useActionState")
-        || source.contains("from \"react\"")
-        || source.contains("from 'react'")
+    crate::oxc_helpers::source_contains(source, "useState")
+        || crate::oxc_helpers::source_contains(source, "useReducer")
+        || crate::oxc_helpers::source_contains(source, "useActionState")
+        || crate::oxc_helpers::source_contains(source, "from \"react\"")
+        || crate::oxc_helpers::source_contains(source, "from 'react'")
 }
 
 /// Returns `true` if the setter name suggests it tracks error/status/loading
@@ -88,7 +88,7 @@ fn body_calls_rollback_setter(body: &str) -> bool {
 impl TextCheck for Check {
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
         // Skip files already using useOptimistic.
-        if ctx.source.contains("useOptimistic") {
+        if ctx.source_contains("useOptimistic") {
             return Vec::new();
         }
         // The pattern is React-specific; without a React state signal there is

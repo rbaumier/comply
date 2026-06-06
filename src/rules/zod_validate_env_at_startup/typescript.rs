@@ -14,16 +14,16 @@ use crate::diagnostic::{Diagnostic, Severity};
 
 /// Return `true` if the file imports Zod.
 fn file_uses_zod(source: &str) -> bool {
-    source.contains("from \"zod\"")
-        || source.contains("from 'zod'")
-        || source.contains("require(\"zod\")")
-        || source.contains("require('zod')")
+    crate::oxc_helpers::source_contains(source, "from \"zod\"")
+        || crate::oxc_helpers::source_contains(source, "from 'zod'")
+        || crate::oxc_helpers::source_contains(source, "require(\"zod\")")
+        || crate::oxc_helpers::source_contains(source, "require('zod')")
 }
 
 /// Return `true` if the file already validates `process.env` via a Zod
 /// schema call (`.parse(process.env)` or `.safeParse(process.env)`).
 fn file_validates_env(source: &str) -> bool {
-    source.contains(".parse(process.env)") || source.contains(".safeParse(process.env)")
+    crate::oxc_helpers::source_contains(source, ".parse(process.env)") || crate::oxc_helpers::source_contains(source, ".safeParse(process.env)")
 }
 
 crate::ast_check! { on ["member_expression"] prefilter = ["process.env"] => |node, source, ctx, diagnostics|

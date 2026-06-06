@@ -6,7 +6,7 @@ crate::ast_check! { on ["import_statement"] prefilter = ["@elysiajs/node"] => |n
     if !ctx.project.has_framework("elysia") {
         return;
     }
-    if ctx.source.contains("adapter:") {
+    if ctx.source_contains("adapter:") {
         return;
     }
 

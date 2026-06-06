@@ -11,7 +11,7 @@ use std::sync::Arc;
 /// A file with useCallback/useMemo calls cannot be a Server Component —
 /// these hooks are inert at SSR time and only make sense in client bundles.
 fn source_uses_client_hooks(source: &str) -> bool {
-    source.contains("useCallback(") || source.contains("useMemo(")
+    crate::oxc_helpers::source_contains(source, "useCallback(") || crate::oxc_helpers::source_contains(source, "useMemo(")
 }
 
 pub struct Check;

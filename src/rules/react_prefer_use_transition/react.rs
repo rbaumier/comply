@@ -55,7 +55,7 @@ fn extract_setter_name<'a>(pattern: tree_sitter::Node<'_>, source: &'a [u8]) -> 
 
 crate::ast_check! { on ["variable_declarator"] => |node, source, ctx, diagnostics|
     // Skip if file already uses useTransition.
-    if ctx.source.contains("useTransition") {
+    if ctx.source_contains("useTransition") {
         return;
     }
     let Some(name_node) = node.child_by_field_name("name") else { return };

@@ -8,7 +8,7 @@ pub struct Check;
 
 /// True if the file looks like a Hono file using the cors middleware.
 fn is_hono_cors(source: &str) -> bool {
-    source.contains("hono/cors") || (source.contains("hono") && source.contains("cors("))
+    crate::oxc_helpers::source_contains(source, "hono/cors") || (crate::oxc_helpers::source_contains(source, "hono") && crate::oxc_helpers::source_contains(source, "cors("))
 }
 
 /// Scan `source` for `cors({ ... origin: "..." ... })` style configurations.

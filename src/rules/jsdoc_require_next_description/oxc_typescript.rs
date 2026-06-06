@@ -1,4 +1,5 @@
 use crate::diagnostic::{Diagnostic, Severity};
+use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstType, CheckCtx, OxcCheck};
 use crate::rules::jsdoc_text_helpers::{
     find_jsdoc_blocks, parse_tags, strip_type_annotation, value_has_description,
@@ -43,7 +44,7 @@ impl OxcCheck for Check {
                     j += 1;
                 }
                 let comment_text = &source[start..j];
-                let line_offset = source[..start].matches('\n').count();
+                let line_offset = byte_offset_to_line_col(source, start).0 - 1;
 
                 for block in find_jsdoc_blocks(comment_text) {
                     for tag in parse_tags(&block.content) {

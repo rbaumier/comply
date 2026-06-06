@@ -42,8 +42,7 @@ fn declaration_named_get<'a>(
 }
 
 crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
-    let src = ctx.source;
-    if PAGINATION_TERMS.iter().any(|p| src.contains(p)) {
+    if PAGINATION_TERMS.iter().any(|p| ctx.source_contains(p)) {
         return;
     }
 

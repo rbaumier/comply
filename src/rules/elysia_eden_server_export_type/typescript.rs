@@ -7,13 +7,13 @@ crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
     if !ctx.project.has_framework("elysia") {
         return;
     }
-    if !ctx.source.contains("new Elysia(") {
+    if !ctx.source_contains("new Elysia(") {
         return;
     }
-    if !ctx.source.contains(".listen(") {
+    if !ctx.source_contains(".listen(") {
         return;
     }
-    if ctx.source.contains("export type") {
+    if ctx.source_contains("export type") {
         return;
     }
 

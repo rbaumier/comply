@@ -26,17 +26,16 @@ impl OxcCheck for Check {
         let AstKind::CallExpression(call) = node.kind() else { return };
 
         // Cheap textual gate: must contain a global scope marker AND a typed-state method.
-        let s = ctx.source;
-        let has_global = s.contains("as:'global'")
-            || s.contains("as: 'global'")
-            || s.contains("as:\"global\"")
-            || s.contains("as: \"global\"")
-            || s.contains(".as('global')")
-            || s.contains(".as(\"global\")");
+        let has_global = ctx.source_contains("as:'global'")
+            || ctx.source_contains("as: 'global'")
+            || ctx.source_contains("as:\"global\"")
+            || ctx.source_contains("as: \"global\"")
+            || ctx.source_contains(".as('global')")
+            || ctx.source_contains(".as(\"global\")");
         if !has_global {
             return;
         }
-        let has_typed = s.contains(".state(") || s.contains(".decorate(") || s.contains(".model(");
+        let has_typed = ctx.source_contains(".state(") || ctx.source_contains(".decorate(") || ctx.source_contains(".model(");
         if !has_typed {
             return;
         }

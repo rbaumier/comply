@@ -20,12 +20,12 @@ fn is_dynamic_path(text: &str, kind: &str) -> bool {
 }
 
 fn imports_elysia(source: &str) -> bool {
-    source.contains("from 'elysia'")
-        || source.contains("from \"elysia\"")
-        || source.contains("from 'elysia/")
-        || source.contains("from \"elysia/")
-        || source.contains("from '@elysiajs/")
-        || source.contains("from \"@elysiajs/")
+    crate::oxc_helpers::source_contains(source, "from 'elysia'")
+        || crate::oxc_helpers::source_contains(source, "from \"elysia\"")
+        || crate::oxc_helpers::source_contains(source, "from 'elysia/")
+        || crate::oxc_helpers::source_contains(source, "from \"elysia/")
+        || crate::oxc_helpers::source_contains(source, "from '@elysiajs/")
+        || crate::oxc_helpers::source_contains(source, "from \"@elysiajs/")
 }
 
 fn is_test_file(path: &std::path::Path) -> bool {

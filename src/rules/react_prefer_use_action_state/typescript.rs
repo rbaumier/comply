@@ -33,14 +33,14 @@ fn file_has_form_action_expr(source: &str) -> bool {
 impl TextCheck for Check {
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
         let src = ctx.source;
-        if !src.contains("useState")
-            || !src.contains("useTransition")
+        if !ctx.source_contains("useState")
+            || !ctx.source_contains("useTransition")
             || !file_has_form_action_expr(src)
         {
             return Vec::new();
         }
         // Already migrated? skip.
-        if src.contains("useActionState") {
+        if ctx.source_contains("useActionState") {
             return Vec::new();
         }
         let Some(idx) = src.find("useTransition") else {

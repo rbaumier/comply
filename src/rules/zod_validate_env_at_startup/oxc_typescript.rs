@@ -7,14 +7,14 @@ use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use std::sync::Arc;
 
 fn file_uses_zod(source: &str) -> bool {
-    source.contains("from \"zod\"")
-        || source.contains("from 'zod'")
-        || source.contains("require(\"zod\")")
-        || source.contains("require('zod')")
+    crate::oxc_helpers::source_contains(source, "from \"zod\"")
+        || crate::oxc_helpers::source_contains(source, "from 'zod'")
+        || crate::oxc_helpers::source_contains(source, "require(\"zod\")")
+        || crate::oxc_helpers::source_contains(source, "require('zod')")
 }
 
 fn file_validates_env(source: &str) -> bool {
-    source.contains(".parse(process.env)") || source.contains(".safeParse(process.env)")
+    crate::oxc_helpers::source_contains(source, ".parse(process.env)") || crate::oxc_helpers::source_contains(source, ".safeParse(process.env)")
 }
 
 pub struct Check;

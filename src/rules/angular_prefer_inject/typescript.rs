@@ -5,7 +5,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
 fn is_angular_file(source: &str) -> bool {
-    source.contains("@angular/") || source.contains("@Component") || source.contains("@Injectable") || source.contains("@Directive")
+    crate::oxc_helpers::source_contains(source, "@angular/") || crate::oxc_helpers::source_contains(source, "@Component") || crate::oxc_helpers::source_contains(source, "@Injectable") || crate::oxc_helpers::source_contains(source, "@Directive")
 }
 
 /// Walk up to find the enclosing class_declaration.

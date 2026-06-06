@@ -23,16 +23,16 @@ impl AstCheck for Check {
         _state: Option<&mut dyn std::any::Any>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
-        if !ctx.source.contains("express") {
+        if !ctx.source_contains("express") {
             return;
         }
         // helmet() installs HSTS by default, so that's accepted.
-        if ctx.source.contains("helmet(") {
+        if ctx.source_contains("helmet(") {
             return;
         }
         // Explicit HSTS header is also accepted.
-        if ctx.source.contains("Strict-Transport-Security")
-            || ctx.source.contains("strict-transport-security")
+        if ctx.source_contains("Strict-Transport-Security")
+            || ctx.source_contains("strict-transport-security")
         {
             return;
         }

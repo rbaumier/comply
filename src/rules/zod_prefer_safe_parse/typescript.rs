@@ -19,11 +19,10 @@ fn is_route_file(ctx: &crate::rules::backend::CheckCtx) -> bool {
     if ROUTE_FILE_PATTERNS.iter().any(|p| file_name.ends_with(p)) {
         return true;
     }
-    let src = ctx.source;
-    src.contains("export async function GET")
-        || src.contains("export async function POST")
-        || src.contains("export async function PUT")
-        || src.contains("export async function DELETE")
+    ctx.source_contains("export async function GET")
+        || ctx.source_contains("export async function POST")
+        || ctx.source_contains("export async function PUT")
+        || ctx.source_contains("export async function DELETE")
 }
 
 crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|

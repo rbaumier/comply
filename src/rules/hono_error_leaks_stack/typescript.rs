@@ -20,7 +20,7 @@ fn inside_on_error(node: tree_sitter::Node<'_>, source: &[u8]) -> Option<String>
 }
 
 crate::ast_check! { on ["member_expression"] prefilter = ["hono", "Hono"] => |node, source, ctx, diagnostics|
-    if !ctx.source.contains("hono") && !ctx.source.contains("Hono") { return; }
+    if !ctx.source_contains("hono") && !ctx.source_contains("Hono") { return; }
     let text = node.utf8_text(source).unwrap_or("");
     // Match `<ident>.stack` or `<ident>.message`.
     let property = node.child_by_field_name("property");

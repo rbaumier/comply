@@ -5,14 +5,14 @@ use crate::rules::backend::{CheckCtx, OxcCheck};
 use std::sync::Arc;
 
 fn is_nuxt_or_vue_source(src: &str) -> bool {
-    src.contains("#imports")
-        || src.contains("nuxt/app")
-        || src.contains("#app")
-        || src.contains("defineNuxtPlugin")
-        || src.contains("defineNuxtRouteMiddleware")
-        || src.contains("useNuxtApp")
-        || src.contains("<template")
-        || src.contains("defineComponent")
+    ctx.source_contains("#imports")
+        || ctx.source_contains("nuxt/app")
+        || ctx.source_contains("#app")
+        || ctx.source_contains("defineNuxtPlugin")
+        || ctx.source_contains("defineNuxtRouteMiddleware")
+        || ctx.source_contains("useNuxtApp")
+        || ctx.source_contains("<template")
+        || ctx.source_contains("defineComponent")
 }
 
 pub struct Check;
@@ -31,10 +31,10 @@ impl OxcCheck for Check {
         if !is_nuxt_or_vue_source(src) {
             return Vec::new();
         }
-        let sanitized = src.contains("DOMPurify")
-            || src.contains("sanitize(")
-            || src.contains("sanitizeHtml(")
-            || src.contains("purify(");
+        let sanitized = ctx.source_contains("DOMPurify")
+            || ctx.source_contains("sanitize(")
+            || ctx.source_contains("sanitizeHtml(")
+            || ctx.source_contains("purify(");
 
         let mut diagnostics = Vec::new();
         let mut start = 0;

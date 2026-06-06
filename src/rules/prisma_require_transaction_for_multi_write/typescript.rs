@@ -22,9 +22,9 @@ const WRITE_METHODS: &[&str] = &[
 ];
 
 fn is_prisma_file(source: &str) -> bool {
-    source.contains("@prisma/client")
-        || source.contains("PrismaClient")
-        || source.contains("prisma.")
+    crate::oxc_helpers::source_contains(source, "@prisma/client")
+        || crate::oxc_helpers::source_contains(source, "PrismaClient")
+        || crate::oxc_helpers::source_contains(source, "prisma.")
 }
 
 impl TextCheck for Check {
@@ -32,7 +32,7 @@ impl TextCheck for Check {
         if !is_prisma_file(ctx.source) {
             return Vec::new();
         }
-        if ctx.source.contains("$transaction(") {
+        if ctx.source_contains("$transaction(") {
             return Vec::new();
         }
 

@@ -3,7 +3,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
 fn is_angular_file(source: &str) -> bool {
-    source.contains("@angular/") || source.contains("@Component") || source.contains("@Directive")
+    crate::oxc_helpers::source_contains(source, "@angular/") || crate::oxc_helpers::source_contains(source, "@Component") || crate::oxc_helpers::source_contains(source, "@Directive")
 }
 
 crate::ast_check! { on ["call_expression"] prefilter = ["@Component", "@Directive"] => |node, source, ctx, diagnostics|

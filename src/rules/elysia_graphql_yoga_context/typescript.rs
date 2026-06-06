@@ -19,7 +19,7 @@ crate::ast_check! { on ["call_expression"] prefilter = ["useContext"] => |node, 
     if !norm.contains("context:") {
         return;
     }
-    if ctx.source.contains("useContext") {
+    if ctx.source_contains("useContext") {
         return;
     }
 

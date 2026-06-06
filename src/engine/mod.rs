@@ -327,6 +327,12 @@ fn dispatch_with_lang(
         return Vec::new();
     }
 
+    // Fresh per-file memos (source_contains hits, line-start index) before any
+    // backend (text, tree-sitter, or oxc) reads them. Worker source buffers are
+    // reused, so two consecutive files can share a `(ptr, len)`; this reset
+    // guarantees no stale entry regardless of which backends run.
+    crate::oxc_helpers::reset_file_caches();
+
     let needs_ast = ld.has_ts_rules
         && ld
             .applicable
@@ -411,7 +417,6 @@ fn dispatch_with_lang(
             });
 
     if needs_oxc {
-        crate::oxc_helpers::reset_source_contains_cache();
         crate::oxc_helpers::with_oxc_parse(source, path, |semantic| {
             run_oxc_checks(ld, semantic, &ctx, source, path, config, &mut diagnostics);
         });

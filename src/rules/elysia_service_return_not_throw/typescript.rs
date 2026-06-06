@@ -10,29 +10,29 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
 fn imports_elysia(source: &str) -> bool {
-    source.contains("from 'elysia'")
-        || source.contains("from \"elysia\"")
-        || source.contains("from 'elysia/")
-        || source.contains("from \"elysia/")
-        || source.contains("from '@elysiajs/")
-        || source.contains("from \"@elysiajs/")
+    crate::oxc_helpers::source_contains(source, "from 'elysia'")
+        || crate::oxc_helpers::source_contains(source, "from \"elysia\"")
+        || crate::oxc_helpers::source_contains(source, "from 'elysia/")
+        || crate::oxc_helpers::source_contains(source, "from \"elysia/")
+        || crate::oxc_helpers::source_contains(source, "from '@elysiajs/")
+        || crate::oxc_helpers::source_contains(source, "from \"@elysiajs/")
 }
 
 fn imports_frontend(source: &str) -> bool {
-    source.contains("from 'react'")
-        || source.contains("from \"react\"")
-        || source.contains("from 'react/")
-        || source.contains("from \"react/")
-        || source.contains("from 'react-dom")
-        || source.contains("from \"react-dom")
-        || source.contains("from '@tanstack/")
-        || source.contains("from \"@tanstack/")
-        || source.contains("from 'vue'")
-        || source.contains("from \"vue\"")
-        || source.contains("from 'svelte")
-        || source.contains("from \"svelte")
-        || source.contains("from 'solid-js")
-        || source.contains("from \"solid-js")
+    crate::oxc_helpers::source_contains(source, "from 'react'")
+        || crate::oxc_helpers::source_contains(source, "from \"react\"")
+        || crate::oxc_helpers::source_contains(source, "from 'react/")
+        || crate::oxc_helpers::source_contains(source, "from \"react/")
+        || crate::oxc_helpers::source_contains(source, "from 'react-dom")
+        || crate::oxc_helpers::source_contains(source, "from \"react-dom")
+        || crate::oxc_helpers::source_contains(source, "from '@tanstack/")
+        || crate::oxc_helpers::source_contains(source, "from \"@tanstack/")
+        || crate::oxc_helpers::source_contains(source, "from 'vue'")
+        || crate::oxc_helpers::source_contains(source, "from \"vue\"")
+        || crate::oxc_helpers::source_contains(source, "from 'svelte")
+        || crate::oxc_helpers::source_contains(source, "from \"svelte")
+        || crate::oxc_helpers::source_contains(source, "from 'solid-js")
+        || crate::oxc_helpers::source_contains(source, "from \"solid-js")
 }
 
 const LIFECYCLE_METHODS: &[&str] = &[

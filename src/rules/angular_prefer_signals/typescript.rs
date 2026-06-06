@@ -7,7 +7,7 @@ use crate::rules::backend::{CheckCtx, TextCheck};
 pub struct Check;
 
 fn is_angular_component(source: &str) -> bool {
-    source.contains("@Component")
+    crate::oxc_helpers::source_contains(source, "@Component")
 }
 
 impl TextCheck for Check {

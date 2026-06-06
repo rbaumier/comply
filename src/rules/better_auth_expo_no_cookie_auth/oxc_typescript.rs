@@ -16,24 +16,23 @@ impl OxcCheck for Check {
         _semantic: &'a oxc_semantic::Semantic<'a>,
         ctx: &CheckCtx,
     ) -> Vec<Diagnostic> {
-        let text = ctx.source;
 
-        let is_native = text.contains("from \"react-native\"")
-            || text.contains("from 'react-native'")
-            || text.contains("from \"expo\"")
-            || text.contains("from 'expo'")
-            || text.contains("from \"expo-router\"")
-            || text.contains("from 'expo-router'");
+        let is_native = ctx.source_contains("from \"react-native\"")
+            || ctx.source_contains("from 'react-native'")
+            || ctx.source_contains("from \"expo\"")
+            || ctx.source_contains("from 'expo'")
+            || ctx.source_contains("from \"expo-router\"")
+            || ctx.source_contains("from 'expo-router'");
 
         if !is_native {
             return Vec::new();
         }
 
-        if !text.contains("createAuthClient") {
+        if !ctx.source_contains("createAuthClient") {
             return Vec::new();
         }
 
-        if text.contains("expoClient(") {
+        if ctx.source_contains("expoClient(") {
             return Vec::new();
         }
 

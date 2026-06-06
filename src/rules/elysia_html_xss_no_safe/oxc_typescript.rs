@@ -14,10 +14,10 @@ use std::sync::Arc;
 pub struct Check;
 
 fn file_imports_elysia_html(source: &str) -> bool {
-    source.contains("from '@elysiajs/html'")
-        || source.contains("from \"@elysiajs/html\"")
-        || source.contains("from 'elysia/html'")
-        || source.contains("from \"elysia/html\"")
+    crate::oxc_helpers::source_contains(source, "from '@elysiajs/html'")
+        || crate::oxc_helpers::source_contains(source, "from \"@elysiajs/html\"")
+        || crate::oxc_helpers::source_contains(source, "from 'elysia/html'")
+        || crate::oxc_helpers::source_contains(source, "from \"elysia/html\"")
 }
 
 /// Returns true when `text` contains `body`, `query`, or `params` as a

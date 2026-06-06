@@ -7,7 +7,7 @@ use crate::rules::backend::{AstCheck, CheckCtx};
 pub struct Check;
 
 fn has_hono_cookie_import(source: &str) -> bool {
-    source.contains("hono/cookie")
+    crate::oxc_helpers::source_contains(source, "hono/cookie")
 }
 
 fn has_safe_samesite(lines: &[&str], idx: usize) -> bool {

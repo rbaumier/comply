@@ -47,7 +47,7 @@ impl TextCheck for Check {
         if !looks_like_api_path(ctx.path) {
             return Vec::new();
         }
-        if !ctx.source.contains(".passthrough(") {
+        if !ctx.source_contains(".passthrough(") {
             return Vec::new();
         }
         find_offenses(ctx.source)

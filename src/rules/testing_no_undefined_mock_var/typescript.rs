@@ -42,16 +42,15 @@ crate::ast_check! { on ["variable_declarator"] => |node, source, ctx, diagnostic
     let Ok(var_name) = name_node.utf8_text(source) else { return; };
     if !var_name.chars().all(|c| c.is_alphanumeric() || c == '_') { return; }
 
-    let source_str = ctx.source;
 
     // Scan the full source for `<var_name>.mockReturnValue|mockResolvedValue|mockImplementation`.
     let configured = ["mockReturnValue", "mockResolvedValue", "mockImplementation"]
         .iter()
-        .any(|m| source_str.contains(&format!("{var_name}.{m}")));
+        .any(|m| ctx.source_contains(&format!("{var_name}.{m}")));
     if configured { return; }
 
     // If the mock is used as a spy (appears in expect()), the undefined return is fine.
-    if source_str.contains(&format!("expect({var_name})")) { return; }
+    if ctx.source_contains(&format!("expect({var_name})")) { return; }
 
     let pos = value.start_position();
     diagnostics.push(Diagnostic {

@@ -39,13 +39,12 @@ impl OxcCheck for Check {
         }
 
         // Confirm the file actually sets a Location header somewhere.
-        let s = ctx.source;
-        let has_location = s.contains("set.headers.location")
-            || s.contains("set.headers['location']")
-            || s.contains("set.headers[\"location\"]")
-            || s.contains("set.headers.Location")
-            || s.contains("set.headers['Location']")
-            || s.contains("set.headers[\"Location\"]");
+        let has_location = ctx.source_contains("set.headers.location")
+            || ctx.source_contains("set.headers['location']")
+            || ctx.source_contains("set.headers[\"location\"]")
+            || ctx.source_contains("set.headers.Location")
+            || ctx.source_contains("set.headers['Location']")
+            || ctx.source_contains("set.headers[\"Location\"]");
         if !has_location {
             return;
         }

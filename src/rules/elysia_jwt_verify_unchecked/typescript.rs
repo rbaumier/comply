@@ -12,7 +12,7 @@ impl AstCheck for Check {
     }
 
     fn check(&self, ctx: &CheckCtx, _tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
-        if !ctx.project.has_framework("elysia") || !ctx.source.contains("jwt") {
+        if !ctx.project.has_framework("elysia") || !ctx.source_contains("jwt") {
             return Vec::new();
         }
 

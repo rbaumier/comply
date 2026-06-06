@@ -14,7 +14,7 @@ const BODY_CALLS: &[&str] = &[
 ];
 
 fn is_hono(source: &str) -> bool {
-    source.contains("hono") || source.contains("Hono")
+    crate::oxc_helpers::source_contains(source, "hono") || crate::oxc_helpers::source_contains(source, "Hono")
 }
 
 /// Find each `.get(...)` / `.head(...)` route handler and report any body

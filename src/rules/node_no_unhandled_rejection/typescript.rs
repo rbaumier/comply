@@ -72,7 +72,7 @@ impl TextCheck for Check {
     }
 
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
-        if !ctx.source.contains("unhandledRejection") {
+        if !ctx.source_contains("unhandledRejection") {
             return Vec::new();
         }
         let mut diagnostics = Vec::new();

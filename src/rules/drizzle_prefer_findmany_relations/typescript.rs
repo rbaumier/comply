@@ -20,7 +20,7 @@ crate::ast_check! { on ["call_expression"] prefilter = ["leftJoin", "innerJoin",
     // `relations(` call form catches both `import { relations } from
     // 'drizzle-orm'` (followed by a call) and `export const xRelations =
     // relations(table, …)`.
-    if !ctx.source.contains("relations(") {
+    if !ctx.source_contains("relations(") {
         return;
     }
     diagnostics.push(Diagnostic::at_node(

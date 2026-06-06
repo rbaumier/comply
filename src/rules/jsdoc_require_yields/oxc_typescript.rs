@@ -4,6 +4,7 @@
 //! (not AST node types). Reuses the same text helpers as the TreeSitter version.
 
 use crate::diagnostic::{Diagnostic, Severity};
+use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstType, CheckCtx, OxcCheck};
 use crate::rules::jsdoc_text_helpers::{
     find_jsdoc_blocks, following_code, has_tag, is_monadic_gen_generator, parse_tags,
@@ -44,7 +45,9 @@ impl OxcCheck for Check {
             };
             let block_end = abs + end_rel + 2;
             let text = &ctx.source[abs..block_end];
-            let line_offset = ctx.source[..abs].matches('\n').count();
+            // 0-based newline count before the block, via the cached line index
+            // (O(log n)) instead of re-scanning the file prefix per block.
+            let line_offset = byte_offset_to_line_col(ctx.source, abs).0 - 1;
 
             for block in find_jsdoc_blocks(text) {
                 let tags = parse_tags(&block.content);

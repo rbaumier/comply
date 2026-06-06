@@ -23,10 +23,9 @@ impl OxcCheck for Check {
         semantic: &'a oxc_semantic::Semantic<'a>,
         ctx: &CheckCtx,
     ) -> Vec<Diagnostic> {
-        let src = ctx.source;
 
         // Quick exit: file already calls a validator.
-        if VALIDATOR_CALLS.iter().any(|c| src.contains(c)) {
+        if VALIDATOR_CALLS.iter().any(|c| ctx.source_contains(c)) {
             return Vec::new();
         }
 

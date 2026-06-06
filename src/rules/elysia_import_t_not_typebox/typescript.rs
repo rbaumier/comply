@@ -3,7 +3,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
 crate::ast_check! { on ["import_statement"] prefilter = ["@sinclair/typebox"] => |node, source, ctx, diagnostics|
-    if !ctx.project.has_framework("elysia") || !ctx.source.contains("@sinclair/typebox") {
+    if !ctx.project.has_framework("elysia") || !ctx.source_contains("@sinclair/typebox") {
         return;
     }
 

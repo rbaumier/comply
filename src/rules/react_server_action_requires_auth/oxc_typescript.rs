@@ -31,14 +31,13 @@ impl OxcCheck for Check {
         semantic: &'a oxc_semantic::Semantic<'a>,
         ctx: &CheckCtx,
     ) -> Vec<Diagnostic> {
-        let src = ctx.source;
 
         // Quick exit: no mutations in file.
-        if !MUTATION_CALLS.iter().any(|c| src.contains(c)) {
+        if !MUTATION_CALLS.iter().any(|c| ctx.source_contains(c)) {
             return Vec::new();
         }
         // Quick exit: file already calls auth.
-        if AUTH_CALLS.iter().any(|c| src.contains(c)) {
+        if AUTH_CALLS.iter().any(|c| ctx.source_contains(c)) {
             return Vec::new();
         }
 

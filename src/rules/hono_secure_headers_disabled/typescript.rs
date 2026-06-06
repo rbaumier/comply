@@ -12,7 +12,7 @@ const SECURITY_HEADERS: &[&str] = &[
 
 crate::ast_check! { on ["pair"] prefilter = ["hono/secure-headers"] => |node, source, ctx, diagnostics|
     // Only check files that import from 'hono/secure-headers'.
-    if !ctx.source.contains("hono/secure-headers") {
+    if !ctx.source_contains("hono/secure-headers") {
         return;
     }
 

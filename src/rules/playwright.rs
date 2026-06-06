@@ -4,12 +4,13 @@ use crate::rules::backend::CheckCtx;
 
 #[must_use]
 pub fn imports_playwright_test(source: &str) -> bool {
-    source.contains("from \"@playwright/test\"")
-        || source.contains("from '@playwright/test'")
-        || source.contains("require(\"@playwright/test\")")
-        || source.contains("require('@playwright/test')")
-        || source.contains("import(\"@playwright/test\")")
-        || source.contains("import('@playwright/test')")
+    use crate::oxc_helpers::source_contains;
+    source_contains(source, "from \"@playwright/test\"")
+        || source_contains(source, "from '@playwright/test'")
+        || source_contains(source, "require(\"@playwright/test\")")
+        || source_contains(source, "require('@playwright/test')")
+        || source_contains(source, "import(\"@playwright/test\")")
+        || source_contains(source, "import('@playwright/test')")
 }
 
 #[must_use]
