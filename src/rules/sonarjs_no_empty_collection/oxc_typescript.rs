@@ -7,11 +7,10 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
-use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
+use crate::rules::backend::{AstKind, CheckCtx, OxcCheck};
 use oxc_ast::ast::{
     BindingPattern, Expression, TSType, TSTypeName, VariableDeclarator,
 };
-use oxc_semantic::AstNode;
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -78,72 +77,75 @@ fn collect_empty_bindings<'a>(
 }
 
 impl OxcCheck for Check {
-    fn interested_kinds(&self) -> &'static [AstType] {
-        &[AstType::CallExpression, AstType::ForOfStatement]
-    }
-
-    fn run<'a>(
+    // Stateful: every call site is judged against the file's full set of
+    // provably-empty bindings, so the rule runs once per file via
+    // `run_on_semantic` (collecting that set once) instead of per-node —
+    // a per-node `run` would rebuild the set on every CallExpression /
+    // ForOfStatement, i.e. O(nodes²) per file.
+    fn run_on_semantic<'a>(
         &self,
-        node: &AstNode<'a>,
-        ctx: &CheckCtx,
         semantic: &'a oxc_semantic::Semantic<'a>,
-        diagnostics: &mut Vec<Diagnostic>,
-    ) {
+        ctx: &CheckCtx,
+    ) -> Vec<Diagnostic> {
         let empties = collect_empty_bindings(semantic);
         if empties.is_empty() {
-            return;
+            return Vec::new();
         }
-        match node.kind() {
-            AstKind::CallExpression(call) => {
-                let Expression::StaticMemberExpression(m) = &call.callee else { return };
-                let Expression::Identifier(obj) = &m.object else { return };
-                if !empties.contains(obj.name.as_str()) {
-                    return;
+        let mut diagnostics = Vec::new();
+        for node in semantic.nodes().iter() {
+            match node.kind() {
+                AstKind::CallExpression(call) => {
+                    let Expression::StaticMemberExpression(m) = &call.callee else { continue };
+                    let Expression::Identifier(obj) = &m.object else { continue };
+                    if !empties.contains(obj.name.as_str()) {
+                        continue;
+                    }
+                    let method = m.property.name.as_str();
+                    if !matches!(
+                        method,
+                        "forEach" | "map" | "filter" | "reduce" | "find" | "some" | "every" | "flatMap"
+                    ) {
+                        continue;
+                    }
+                    let (line, column) = byte_offset_to_line_col(ctx.source, call.span.start as usize);
+                    diagnostics.push(Diagnostic {
+                        path: Arc::clone(&ctx.path_arc),
+                        line,
+                        column,
+                        rule_id: super::META.id.into(),
+                        message: format!(
+                            "`{}` is provably empty (declared as `[] as const` / `readonly []`) — \
+                             this `.{}()` call is dead code.",
+                            obj.name.as_str(),
+                            method
+                        ),
+                        severity: Severity::Warning,
+                        span: None,
+                    });
                 }
-                let method = m.property.name.as_str();
-                if !matches!(
-                    method,
-                    "forEach" | "map" | "filter" | "reduce" | "find" | "some" | "every" | "flatMap"
-                ) {
-                    return;
+                AstKind::ForOfStatement(stmt) => {
+                    let Expression::Identifier(obj) = &stmt.right else { continue };
+                    if !empties.contains(obj.name.as_str()) {
+                        continue;
+                    }
+                    let (line, column) = byte_offset_to_line_col(ctx.source, stmt.span.start as usize);
+                    diagnostics.push(Diagnostic {
+                        path: Arc::clone(&ctx.path_arc),
+                        line,
+                        column,
+                        rule_id: super::META.id.into(),
+                        message: format!(
+                            "`{}` is provably empty — this `for...of` loop never executes.",
+                            obj.name.as_str()
+                        ),
+                        severity: Severity::Warning,
+                        span: None,
+                    });
                 }
-                let (line, column) = byte_offset_to_line_col(ctx.source, call.span.start as usize);
-                diagnostics.push(Diagnostic {
-                    path: Arc::clone(&ctx.path_arc),
-                    line,
-                    column,
-                    rule_id: super::META.id.into(),
-                    message: format!(
-                        "`{}` is provably empty (declared as `[] as const` / `readonly []`) — \
-                         this `.{}()` call is dead code.",
-                        obj.name.as_str(),
-                        method
-                    ),
-                    severity: Severity::Warning,
-                    span: None,
-                });
+                _ => {}
             }
-            AstKind::ForOfStatement(stmt) => {
-                let Expression::Identifier(obj) = &stmt.right else { return };
-                if !empties.contains(obj.name.as_str()) {
-                    return;
-                }
-                let (line, column) = byte_offset_to_line_col(ctx.source, stmt.span.start as usize);
-                diagnostics.push(Diagnostic {
-                    path: Arc::clone(&ctx.path_arc),
-                    line,
-                    column,
-                    rule_id: super::META.id.into(),
-                    message: format!(
-                        "`{}` is provably empty — this `for...of` loop never executes.",
-                        obj.name.as_str()
-                    ),
-                    severity: Severity::Warning,
-                    span: None,
-                });
-            }
-            _ => {}
         }
+        diagnostics
     }
 }
 
