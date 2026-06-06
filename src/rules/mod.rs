@@ -659,8 +659,6 @@ pub mod zod_prefer_stringbool;
 pub mod zod_record_two_args;
 pub mod zod_require_input_for_transforms;
 pub mod zod_require_multipleof_currency;
-// rust_must_use_on_result intentionally not declared — see mod.rs
-// below for the rationale.
 pub mod cognitive_complexity;
 pub mod display_name;
 pub mod generator_without_yield;
@@ -825,7 +823,6 @@ pub mod rust_helpers;
 pub mod rust_impl_debug_on_public_types;
 pub mod rust_large_enum_variant;
 pub mod rust_mod_tests_without_cfg_test;
-pub mod rust_must_use_on_result_fn;
 pub mod rust_no_as_numeric_cast;
 pub mod rust_no_bool_return_from_fallible;
 pub mod rust_no_box_default;
@@ -2094,12 +2091,6 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         rust_no_todo_macro::register(),
         rust_no_sleep_in_test::register(),
         rust_prefer_tracing_over_log::register(),
-        // rust_must_use_on_result removed: std::result::Result is already
-        // `#[must_use]` and type aliases (`io::Result`, `anyhow::Result`)
-        // inherit it. Explicitly annotating Result-returning pub fns is
-        // redundant and trips clippy::double_must_use. The rule's use case
-        // collapsed down to hypothetical new types named Result that
-        // don't alias std — we've never seen one in the wild.
         rust_undocumented_unsafe::register(),
         rust_await_holding_lock::register(),
         rust_large_enum_variant::register(),
@@ -3042,7 +3033,6 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         rust_vec_with_capacity::register(),
         rust_prefer_channel_over_arc_mutex_vec::register(),
         rust_anyhow_context_on_question_mark::register(),
-        rust_must_use_on_result_fn::register(),
         rust_unsafe_ffi_isolation::register(),
         rust_thiserror_for_lib::register(),
         // v3.0 — Skill-driven rules: Batch 6 (TanStack Start)
