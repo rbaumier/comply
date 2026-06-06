@@ -43,6 +43,7 @@ rustc-hash = "2"
 syntect = { version = "5", default-features = false, features = ["default-fancy"] }
 memchr = "2"
 wait-timeout = "0.2"
+mimalloc = "0.1"
 
 [dev-dependencies]
 assert_cmd = "2"
