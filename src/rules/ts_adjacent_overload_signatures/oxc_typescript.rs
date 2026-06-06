@@ -10,72 +10,72 @@ pub struct Check;
 
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
-        &[]
+        &[
+            AstType::Program,
+            AstType::ClassBody,
+            AstType::TSInterfaceDeclaration,
+        ]
     }
 
-    fn run_on_semantic<'a>(
+    fn run<'a>(
         &self,
-        semantic: &'a oxc_semantic::Semantic<'a>,
+        node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-    ) -> Vec<Diagnostic> {
+        _semantic: &'a oxc_semantic::Semantic<'a>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
         use oxc_ast::ast::*;
         use oxc_ast::AstKind;
 
-        let mut diagnostics = Vec::new();
-
-        for node in semantic.nodes().iter() {
-            match node.kind() {
-                AstKind::Program(program) => {
-                    check_body_items(
-                        program.body.iter().filter_map(|stmt| extract_overload_name_from_stmt(stmt, ctx.source)),
-                        ctx,
-                        &mut diagnostics,
-                    );
-                }
-                AstKind::ClassBody(body) => {
-                    let items = body.body.iter().filter_map(|elem| {
-                        match elem {
-                            ClassElement::MethodDefinition(m) => {
-                                let name = property_key_name(&m.key, ctx.source)?;
-                                let is_static = m.r#static;
-                                let span = m.span;
-                                if is_static {
-                                    Some((format!("static {name}"), span))
-                                } else {
-                                    Some((name, span))
-                                }
-                            }
-                            ClassElement::TSIndexSignature(_) => None,
-                            ClassElement::PropertyDefinition(_) => None,
-                            ClassElement::AccessorProperty(_) => None,
-                            ClassElement::StaticBlock(_) => None,
-                        }
-                    });
-                    check_body_items(items, ctx, &mut diagnostics);
-                }
-                AstKind::TSInterfaceDeclaration(iface) => {
-                    let items = iface.body.body.iter().filter_map(|sig| {
-                        match sig {
-                            TSSignature::TSMethodSignature(m) => {
-                                let name = property_key_name(&m.key, ctx.source)?;
-                                Some((name, m.span))
-                            }
-                            TSSignature::TSCallSignatureDeclaration(c) => {
-                                Some(("call".to_string(), c.span))
-                            }
-                            TSSignature::TSConstructSignatureDeclaration(c) => {
-                                Some(("new".to_string(), c.span))
-                            }
-                            _ => None,
-                        }
-                    });
-                    check_body_items(items, ctx, &mut diagnostics);
-                }
-                _ => {}
+        match node.kind() {
+            AstKind::Program(program) => {
+                check_body_items(
+                    program.body.iter().filter_map(|stmt| extract_overload_name_from_stmt(stmt, ctx.source)),
+                    ctx,
+                    diagnostics,
+                );
             }
+            AstKind::ClassBody(body) => {
+                let items = body.body.iter().filter_map(|elem| {
+                    match elem {
+                        ClassElement::MethodDefinition(m) => {
+                            let name = property_key_name(&m.key, ctx.source)?;
+                            let is_static = m.r#static;
+                            let span = m.span;
+                            if is_static {
+                                Some((format!("static {name}"), span))
+                            } else {
+                                Some((name, span))
+                            }
+                        }
+                        ClassElement::TSIndexSignature(_) => None,
+                        ClassElement::PropertyDefinition(_) => None,
+                        ClassElement::AccessorProperty(_) => None,
+                        ClassElement::StaticBlock(_) => None,
+                    }
+                });
+                check_body_items(items, ctx, diagnostics);
+            }
+            AstKind::TSInterfaceDeclaration(iface) => {
+                let items = iface.body.body.iter().filter_map(|sig| {
+                    match sig {
+                        TSSignature::TSMethodSignature(m) => {
+                            let name = property_key_name(&m.key, ctx.source)?;
+                            Some((name, m.span))
+                        }
+                        TSSignature::TSCallSignatureDeclaration(c) => {
+                            Some(("call".to_string(), c.span))
+                        }
+                        TSSignature::TSConstructSignatureDeclaration(c) => {
+                            Some(("new".to_string(), c.span))
+                        }
+                        _ => None,
+                    }
+                });
+                check_body_items(items, ctx, diagnostics);
+            }
+            _ => {}
         }
-
-        diagnostics
     }
 }
 

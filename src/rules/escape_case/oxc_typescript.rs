@@ -13,29 +13,30 @@ pub struct Check;
 
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [oxc_ast::AstType] {
-        &[]
+        &[
+            oxc_ast::AstType::StringLiteral,
+            oxc_ast::AstType::TemplateLiteral,
+        ]
     }
 
-    fn run_on_semantic<'a>(
+    fn run<'a>(
         &self,
-        semantic: &'a oxc_semantic::Semantic<'a>,
+        node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-    ) -> Vec<Diagnostic> {
-        let mut diagnostics = Vec::new();
-        for node in semantic.nodes().iter() {
-            match node.kind() {
-                AstKind::StringLiteral(lit) => {
-                    let text = &ctx.source[lit.span.start as usize..lit.span.end as usize];
-                    check_escapes(text, lit.span.start as usize, ctx, &mut diagnostics);
-                }
-                AstKind::TemplateLiteral(tpl) => {
-                    let text = &ctx.source[tpl.span.start as usize..tpl.span.end as usize];
-                    check_escapes(text, tpl.span.start as usize, ctx, &mut diagnostics);
-                }
-                _ => {}
+        _semantic: &'a oxc_semantic::Semantic<'a>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
+        match node.kind() {
+            AstKind::StringLiteral(lit) => {
+                let text = &ctx.source[lit.span.start as usize..lit.span.end as usize];
+                check_escapes(text, lit.span.start as usize, ctx, diagnostics);
             }
+            AstKind::TemplateLiteral(tpl) => {
+                let text = &ctx.source[tpl.span.start as usize..tpl.span.end as usize];
+                check_escapes(text, tpl.span.start as usize, ctx, diagnostics);
+            }
+            _ => {}
         }
-        diagnostics
     }
 }
 

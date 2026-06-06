@@ -74,43 +74,39 @@ fn is_generic_type_arg(
 
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
-        &[]
+        &[AstType::TSVoidKeyword]
     }
 
-    fn run_on_semantic<'a>(
+    fn run<'a>(
         &self,
-        semantic: &'a oxc_semantic::Semantic<'a>,
+        node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-    ) -> Vec<Diagnostic> {
-        let mut diagnostics = Vec::new();
+        semantic: &'a oxc_semantic::Semantic<'a>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
+        let AstKind::TSVoidKeyword(kw) = node.kind() else {
+            return;
+        };
 
-        for node in semantic.nodes().iter() {
-            let AstKind::TSVoidKeyword(kw) = node.kind() else {
-                continue;
-            };
-
-            if is_return_type_context(node, semantic, kw.span.start) {
-                continue;
-            }
-            if is_generic_type_arg(node, semantic) {
-                continue;
-            }
-
-            let (line, column) =
-                byte_offset_to_line_col(ctx.source, kw.span.start as usize);
-            diagnostics.push(Diagnostic {
-                path: Arc::clone(&ctx.path_arc),
-                line,
-                column,
-                rule_id: super::META.id.into(),
-                message: "`void` is only valid as a return type or generic type argument."
-                    .into(),
-                severity: Severity::Warning,
-                span: None,
-            });
+        if is_return_type_context(node, semantic, kw.span.start) {
+            return;
+        }
+        if is_generic_type_arg(node, semantic) {
+            return;
         }
 
-        diagnostics
+        let (line, column) =
+            byte_offset_to_line_col(ctx.source, kw.span.start as usize);
+        diagnostics.push(Diagnostic {
+            path: Arc::clone(&ctx.path_arc),
+            line,
+            column,
+            rule_id: super::META.id.into(),
+            message: "`void` is only valid as a return type or generic type argument."
+                .into(),
+            severity: Severity::Warning,
+            span: None,
+        });
     }
 }
 
