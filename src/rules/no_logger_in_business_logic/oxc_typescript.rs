@@ -7,15 +7,21 @@ use oxc_ast::ast::Expression;
 use oxc_span::GetSpan;
 use std::sync::Arc;
 
-const BUSINESS_DIRS: &[&str] = &["service", "domain", "core", "model", "entity"];
+/// Path fragments that mark a business-logic directory, pre-expanded with
+/// both path separators so the per-node check needs no `format!` allocation.
+const BUSINESS_DIR_PATTERNS: &[&str] = &[
+    "/service/", "\\service\\",
+    "/domain/", "\\domain\\",
+    "/core/", "\\core\\",
+    "/model/", "\\model\\",
+    "/entity/", "\\entity\\",
+];
 
 const CONSOLE_METHODS: &[&str] = &["log", "info", "warn", "error", "debug", "trace"];
 
 fn is_business_logic_path(path: &std::path::Path) -> bool {
     let path_str = path.to_string_lossy();
-    BUSINESS_DIRS.iter().any(|dir| {
-        path_str.contains(&format!("/{dir}/")) || path_str.contains(&format!("\\{dir}\\"))
-    })
+    BUSINESS_DIR_PATTERNS.iter().any(|p| path_str.contains(p))
 }
 
 /// Return the leftmost identifier name in a (possibly chained) member expression.
