@@ -110,6 +110,16 @@ pub fn is_in_test_context(node: Node, source: &[u8]) -> bool {
     false
 }
 
+/// True if `path` is under a `tests/` directory component — i.e. any
+/// path segment equals `"tests"`. Covers `<crate>/tests/`, `tests/` at
+/// the workspace root, and deeply nested `foo/tests/` subdirectories.
+///
+/// Shared by rules that want to skip diagnostics for integration-test
+/// files without relying on the tree-sitter attribute walk.
+pub fn is_under_tests_dir(path: &std::path::Path) -> bool {
+    path.components().any(|c| c.as_os_str() == "tests")
+}
+
 /// True if the item has `#[test]`, `#[cfg(test)]`, or `#[cfg_attr(test, …)]`
 /// as a preceding `attribute_item` sibling. In tree-sitter-rust, outer
 /// attributes on an item appear as `attribute_item` nodes immediately
