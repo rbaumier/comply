@@ -39,6 +39,12 @@ fn extract_rules(payload: &str) -> Vec<&str> {
 }
 
 impl TextCheck for Check {
+    // The ESLint markers share the `eslint-disable` substring; the comply
+    // markers share `comply-ignore`. A file with neither can never fire.
+    fn prefilter(&self) -> Option<&'static [&'static str]> {
+        Some(&["eslint-disable", "comply-ignore"])
+    }
+
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
         for (idx, line) in ctx.source.lines().enumerate() {

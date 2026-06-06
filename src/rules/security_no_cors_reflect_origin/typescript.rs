@@ -48,6 +48,12 @@ fn flag_line(line: &str) -> Option<usize> {
 }
 
 impl TextCheck for Check {
+    // Every flagged shape reflects the request `origin`/`Origin` header, so a
+    // file containing neither substring can never fire this rule.
+    fn prefilter(&self) -> Option<&'static [&'static str]> {
+        Some(&["origin", "Origin"])
+    }
+
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
         for (idx, line) in ctx.source.lines().enumerate() {

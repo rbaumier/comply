@@ -13,6 +13,12 @@ const MARKERS: &[&str] = &[
 ];
 
 impl TextCheck for Check {
+    // Every marker is an `eslint-disable*` variant, so files without that
+    // substring can never fire this rule.
+    fn prefilter(&self) -> Option<&'static [&'static str]> {
+        Some(&["eslint-disable"])
+    }
+
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
         for (idx, line) in ctx.source.lines().enumerate() {
