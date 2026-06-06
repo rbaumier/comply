@@ -54,6 +54,13 @@ use config::Config;
 use diagnostic::Diagnostic;
 use files::{Language, SourceFile};
 
+/// The whole pipeline is allocation-heavy and massively parallel (one
+/// arena + AST + diagnostic buffers per file across every rayon worker).
+/// mimalloc's per-thread heaps cut cross-thread allocator contention that
+/// the system allocator serializes on, with no behavioural change.
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 const RAYON_WORKER_STACK_SIZE_BYTES: usize = 32 * 1024 * 1024;
 
 fn main() -> ExitCode {
