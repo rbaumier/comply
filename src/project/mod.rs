@@ -430,6 +430,13 @@ pub struct ProjectCtx {
     // call it on every file — caching collapses an O(N) `min()` scan per
     // (rule × file) into one computation.
     anchor_path_cache: OnceLock<Option<PathBuf>>,
+
+    // "Does this project use React Compiler?" keyed by the *directory* of the
+    // file asking. The answer depends only on the directory chain (manifest +
+    // bundler/babel configs from that dir up to the root), not file content,
+    // and the underlying probe stat-walks config files — so without this memo a
+    // JSX-dense tree pays the full walk once per file.
+    react_compiler_dir_cache: Mutex<HashMap<PathBuf, bool>>,
 }
 
 impl ProjectCtx {
@@ -672,6 +679,88 @@ impl ProjectCtx {
             "package.json",
             PackageJson::parse,
         )
+    }
+
+    /// True when the project ships React Compiler — declared as a dependency
+    /// or referenced from a bundler / babel config between `path`'s directory
+    /// and the project root. Memoized by directory: the answer is identical for
+    /// every file in the same directory, so a JSX-dense tree pays the
+    /// config-file stat-walk once per directory instead of once per file.
+    pub fn uses_react_compiler(&self, path: &Path) -> bool {
+        let key = path.parent().map(Path::to_path_buf).unwrap_or_default();
+        if let Some(&v) = self.react_compiler_dir_cache.lock().unwrap().get(&key) {
+            return v;
+        }
+        let v = self.compute_uses_react_compiler(path);
+        self.react_compiler_dir_cache
+            .lock()
+            .unwrap()
+            .insert(key, v);
+        v
+    }
+
+    fn compute_uses_react_compiler(&self, path: &Path) -> bool {
+        const REACT_COMPILER_DEP: &str = "babel-plugin-react-compiler";
+        const COMPILER_CONFIG_FILES: &[&str] = &[
+            "vite.config.ts",
+            "vite.config.js",
+            "vite.config.mts",
+            "vite.config.mjs",
+            "vite.config.cts",
+            "vite.config.cjs",
+            "next.config.ts",
+            "next.config.js",
+            "next.config.mjs",
+            "next.config.cjs",
+            "babel.config.ts",
+            "babel.config.js",
+            "babel.config.mjs",
+            "babel.config.cjs",
+            "babel.config.json",
+            ".babelrc",
+            ".babelrc.json",
+            ".babelrc.js",
+            ".babelrc.cjs",
+        ];
+
+        if let Some(pkg) = self.nearest_package_json(path)
+            && pkg.has_dep_or_engine(REACT_COMPILER_DEP)
+        {
+            return true;
+        }
+
+        // Upper bound for the config-file walk: the explicit project root, else
+        // the first ancestor that owns a `package.json`. Never escapes upward.
+        let stop_at: Option<PathBuf> = self.project_root.clone().or_else(|| {
+            let mut d = path.parent();
+            loop {
+                let Some(dir) = d else { break None };
+                if dir.join("package.json").is_file() {
+                    break Some(dir.to_path_buf());
+                }
+                d = dir.parent();
+            }
+        });
+
+        let mut dir = path.parent();
+        while let Some(d) = dir {
+            for name in COMPILER_CONFIG_FILES {
+                let cfg = d.join(name);
+                if !cfg.is_file() {
+                    continue;
+                }
+                if let Ok(raw) = std::fs::read_to_string(&cfg)
+                    && raw.contains(REACT_COMPILER_DEP)
+                {
+                    return true;
+                }
+            }
+            if stop_at.as_deref() == Some(d) {
+                break;
+            }
+            dir = d.parent();
+        }
+        false
     }
 
     /// Walk up from `path` to the nearest `tsconfig.json`, cache by manifest

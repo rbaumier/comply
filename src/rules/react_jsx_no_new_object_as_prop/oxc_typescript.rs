@@ -16,93 +16,6 @@ use oxc_ast::ast::{
 use oxc_span::GetSpan;
 use std::sync::Arc;
 
-const REACT_COMPILER_DEP: &str = "babel-plugin-react-compiler";
-
-/// Config files that may opt the project into React Compiler.
-const COMPILER_CONFIG_FILES: &[&str] = &[
-    "vite.config.ts",
-    "vite.config.js",
-    "vite.config.mts",
-    "vite.config.mjs",
-    "vite.config.cts",
-    "vite.config.cjs",
-    "next.config.ts",
-    "next.config.js",
-    "next.config.mjs",
-    "next.config.cjs",
-    "babel.config.ts",
-    "babel.config.js",
-    "babel.config.mjs",
-    "babel.config.cjs",
-    "babel.config.json",
-    ".babelrc",
-    ".babelrc.json",
-    ".babelrc.js",
-    ".babelrc.cjs",
-];
-
-/// True when the project ships React Compiler — either declared as a
-/// dependency or referenced inside a bundler / babel config.
-///
-/// The result depends only on the file path and project, not the node, but
-/// `run` is invoked per `JSXOpeningElement`. The underlying check walks the
-/// directory tree stat-ing config files, so memoize it per path — otherwise a
-/// JSX-dense file pays the full filesystem walk on every opening element.
-fn project_uses_react_compiler(ctx: &CheckCtx) -> bool {
-    crate::oxc_helpers::cached_file_bool(
-        ctx.source,
-        crate::oxc_helpers::SLOT_REACT_COMPILER,
-        || compute_uses_react_compiler(ctx),
-    )
-}
-
-/// The config-file walk is bounded by `project_root` (or the nearest
-/// directory that contains a `package.json`) so it never escapes the project
-/// boundary into a monorepo root, home directory, or `/`.
-fn compute_uses_react_compiler(ctx: &CheckCtx) -> bool {
-    if let Some(pkg) = ctx.project.nearest_package_json(ctx.path)
-        && pkg.has_dep_or_engine(REACT_COMPILER_DEP)
-    {
-        return true;
-    }
-
-    // Determine the upper bound for the config-file walk: prefer the explicit
-    // project root; fall back to the first ancestor directory that owns a
-    // `package.json` (found by walking up from the file being checked).
-    let stop_at: Option<std::path::PathBuf> =
-        ctx.project.project_root.clone().or_else(|| {
-            let mut d = ctx.path.parent();
-            loop {
-                let Some(dir) = d else { break None };
-                if dir.join("package.json").is_file() {
-                    break Some(dir.to_path_buf());
-                }
-                d = dir.parent();
-            }
-        });
-
-    let mut dir = ctx.path.parent();
-    while let Some(d) = dir {
-        for name in COMPILER_CONFIG_FILES {
-            let cfg = d.join(name);
-            if !cfg.is_file() {
-                continue;
-            }
-            if let Ok(raw) = std::fs::read_to_string(&cfg)
-                && raw.contains(REACT_COMPILER_DEP)
-            {
-                return true;
-            }
-        }
-        // Stop at the project root — never walk above it.
-        if stop_at.as_deref() == Some(d) {
-            break;
-        }
-        dir = d.parent();
-    }
-    false
-}
-
 pub struct Check;
 
 impl OxcCheck for Check {
@@ -117,7 +30,7 @@ impl OxcCheck for Check {
         _semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
-        if project_uses_react_compiler(ctx) {
+        if ctx.project.uses_react_compiler(ctx.path) {
             return;
         }
         let AstKind::JSXOpeningElement(opening) = node.kind() else {
