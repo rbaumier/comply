@@ -17,7 +17,7 @@ mod span_resolver;
 pub use pretty::render_pretty;
 
 use anyhow::{Context, Result};
-use serde_json::json;
+use serde::Serialize;
 
 use crate::diagnostic::{Diagnostic, Severity};
 use std::fmt::Write as _;
@@ -61,20 +61,42 @@ pub fn format_eslint(diagnostics: &[Diagnostic]) -> String {
 /// Format diagnostics as a JSON array — one object per violation.
 /// Stable shape so editors and CI tools can depend on it.
 pub fn format_json(diagnostics: &[Diagnostic]) -> Result<String> {
-    let payload: Vec<_> = diagnostics
+    // Serialize borrowing structs directly instead of building an intermediate
+    // `serde_json::Value` tree (one heap-allocated map per diagnostic). Field
+    // order matches the historical insertion order so the wire bytes are
+    // unchanged. `collect_str` streams the path's lossy display form straight
+    // into the serializer — no per-diagnostic `String` allocation.
+    fn serialize_display_path<S: serde::Serializer>(
+        path: &std::path::Path,
+        s: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        s.collect_str(&path.display())
+    }
+
+    #[derive(Serialize)]
+    struct JsonDiag<'a> {
+        #[serde(serialize_with = "serialize_display_path")]
+        path: &'a std::path::Path,
+        line: usize,
+        column: usize,
+        #[serde(rename = "ruleId")]
+        rule_id: &'a str,
+        message: &'a str,
+        severity: &'static str,
+    }
+
+    let payload: Vec<JsonDiag> = diagnostics
         .iter()
-        .map(|d| {
-            json!({
-                "path": d.path.display().to_string(),
-                "line": d.line,
-                "column": d.column,
-                "ruleId": d.rule_id,
-                "message": d.message,
-                "severity": match d.severity {
-                    Severity::Error => "error",
-                    Severity::Warning => "warning",
-                },
-            })
+        .map(|d| JsonDiag {
+            path: d.path.as_ref(),
+            line: d.line,
+            column: d.column,
+            rule_id: d.rule_id.as_ref(),
+            message: d.message.as_ref(),
+            severity: match d.severity {
+                Severity::Error => "error",
+                Severity::Warning => "warning",
+            },
         })
         .collect();
     serde_json::to_string_pretty(&payload).context("failed to serialize diagnostics as JSON")
