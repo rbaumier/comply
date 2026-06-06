@@ -153,6 +153,18 @@ impl Config {
         true
     }
 
+    /// True if `rule_id` is disabled everywhere via `[rules.<id>] disabled =
+    /// true`. Lets project-wide phases (e.g. clone detection) skip work whose
+    /// every diagnostic would otherwise be computed and then filtered away.
+    /// Ignores per-glob overrides, which only narrow a rule rather than kill it.
+    #[must_use]
+    pub fn is_rule_globally_disabled(&self, rule_id: &str) -> bool {
+        self.raw
+            .rules
+            .get(rule_id)
+            .is_some_and(|r| r.disabled == Some(true))
+    }
+
     /// Override severity for a rule, or `None` if the user didn't set one.
     #[must_use]
     pub fn severity_for(&self, rule_id: &str) -> Option<Severity> {

@@ -486,7 +486,7 @@ fn collect_all_diagnostics(
         )?);
     }
 
-    if discovered.len() >= 2 {
+    if discovered.len() >= 2 && !config.is_rule_globally_disabled(clone_detection::RULE_ID) {
         let t = Instant::now();
         let all_refs: Vec<&SourceFile> = discovered.iter().collect();
         diagnostics.extend(clone_detection::lint_files(&all_refs));
