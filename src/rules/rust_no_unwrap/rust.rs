@@ -9,6 +9,12 @@
 //! a panic cleanly fails the test. We skip any call whose enclosing
 //! function has `#[test]` or whose enclosing module has `#[cfg(test)]`.
 //!
+//! build.rs is exempted — panics in Cargo build scripts are an acceptable
+//! error mode during compilation (e.g. env::var("FOO").unwrap()).
+//!
+//! Lock operations are exempted — `.read().unwrap()`, `.write().unwrap()`,
+//! `.lock().unwrap()` are idiomatic for std::sync::{Mutex,RwLock} poisoning.
+//!
 //! This rule is equivalent to `clippy::unwrap_used` + `clippy::expect_used`
 //! (both restriction-group lints, off by default in clippy). Running it
 //! via comply means you get the check without having to enable the lints
@@ -35,6 +41,9 @@ impl AstCheck for Check {
         _state: Option<&mut dyn std::any::Any>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
+        if ctx.path.file_name() == Some(std::ffi::OsStr::new("build.rs")) {
+            return;
+        }
         let source_bytes = ctx.source.as_bytes();
         // Looking for `receiver.unwrap()` / `receiver.expect("…")`.
         let Some(function) = node.child_by_field_name("function") else {
@@ -55,6 +64,25 @@ impl AstCheck for Check {
         // Skip test code — `.unwrap()` is fine there.
         if is_in_test_context(node, source_bytes) || is_under_tests_dir(ctx.path) {
             return;
+        }
+        // Skip lock operations — .read()/.write()/.lock()/.try_lock() unwrap is idiomatic.
+        if field_text == "unwrap" {
+            let receiver = function.child_by_field_name("value");
+            if let Some(recv) = receiver {
+                if recv.kind() == "call_expression" {
+                    if let Some(inner_func) = recv.child_by_field_name("function") {
+                        if inner_func.kind() == "field_expression" {
+                            if let Some(inner_field) = inner_func.child_by_field_name("field") {
+                                if let Ok(method) = inner_field.utf8_text(source_bytes) {
+                                    if matches!(method, "read" | "write" | "lock" | "try_lock" | "try_read" | "try_write") {
+                                        return;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
         let pos = node.start_position();
         diagnostics.push(Diagnostic {
@@ -115,5 +143,28 @@ mod tests {
     #[test]
     fn does_not_flag_question_mark() {
         assert!(run_on("fn f() -> Result<(), ()> { let x = y?; Ok(()) }").is_empty());
+    }
+
+    #[test]
+    fn allows_unwrap_in_build_rs() {
+        let source = r#"fn main() { let v = std::env::var("TARGET").unwrap(); }"#;
+        assert!(crate::rules::test_helpers::run_rust_with_path(source, &Check, "build.rs").is_empty());
+    }
+
+    #[test]
+    fn allows_unwrap_on_rwlock_read() {
+        let source = "fn f(data: &RwLock<Vec<u8>>) -> Vec<u8> { data.read().unwrap().clone() }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_unwrap_on_mutex_lock() {
+        let source = "fn f(m: &Mutex<u32>) -> u32 { *m.lock().unwrap() }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn still_flags_non_lock_unwrap() {
+        assert_eq!(run_on("fn f() { let x = y.unwrap(); }").len(), 1);
     }
 }
