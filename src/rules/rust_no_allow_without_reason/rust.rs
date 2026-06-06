@@ -1,5 +1,5 @@
 //! Walks `attribute_item` nodes matching `#[allow(...)]`.
-//! Flags when no comment exists on the same line or the line above.
+//! Flags when no comment exists on the same line, the line above, or the line below.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::rust_helpers::is_in_test_context;
@@ -23,6 +23,12 @@ crate::ast_check! { on ["attribute_item"] => |node, source, ctx, diagnostics|
         return;
     }
 
+    if allow_list_contains(text, "dead_code")
+        && ctx.path.components().any(|c| c.as_os_str() == "tests")
+    {
+        return;
+    }
+
     let has_inline_comment = lines.get(row).is_some_and(|l| {
         if let Some(pos) = l.find("//") {
             pos > l.find("#[allow").unwrap_or(0)
@@ -32,8 +38,9 @@ crate::ast_check! { on ["attribute_item"] => |node, source, ctx, diagnostics|
     });
 
     let has_preceding_comment = row > 0 && lines.get(row - 1).is_some_and(|l| l.trim().starts_with("//"));
+    let has_following_comment = lines.get(row + 1).is_some_and(|l| l.trim().starts_with("//"));
 
-    if has_inline_comment || has_preceding_comment {
+    if has_inline_comment || has_preceding_comment || has_following_comment {
         return;
     }
 
@@ -118,5 +125,20 @@ mod tests {
     #[test]
     fn ignores_non_allow_attributes() {
         assert!(run("#[derive(Debug)]\nstruct S;").is_empty());
+    }
+
+    #[test]
+    fn allows_with_following_comment() {
+        assert!(run("#[allow(dead_code)]\n// justified below\ntype Foo = i32;").is_empty());
+    }
+
+    #[test]
+    fn allows_dead_code_in_tests_dir() {
+        assert!(crate::rules::test_helpers::run_rust_with_path(
+            "#[allow(dead_code)]\ntype BoxStream<T> = Box<dyn Send>;",
+            &Check,
+            "tests/async_send_sync.rs"
+        )
+        .is_empty());
     }
 }
