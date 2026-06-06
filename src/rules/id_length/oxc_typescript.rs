@@ -68,6 +68,16 @@ fn is_sort_comparator_param(
     matches!(member.property.name.as_str(), "sort" | "toSorted")
 }
 
+/// Single-letter names idiomatic in TS/JS: loop indices, math coordinates,
+/// key/value pairs, error/file/string handles — mirrors CONVENTIONAL_RUST_NAMES.
+fn is_conventional_short_binding(name: &str) -> bool {
+    matches!(
+        name,
+        "i" | "j" | "k" | "n" | "x" | "y" | "z" | "s" | "f" | "v" | "e" | "w" | "r"
+            | "a" | "b" | "c" | "d" | "m" | "p" | "h" | "l" | "o"
+    )
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[
@@ -178,6 +188,9 @@ impl OxcCheck for Check {
             if patterns.iter().any(|p| p.is_match(name)) {
                 continue;
             }
+            if is_conventional_short_binding(name) {
+                continue;
+            }
             let (line, column) = byte_offset_to_line_col(ctx.source, span.start as usize);
             diagnostics.push(Diagnostic {
                 path: Arc::clone(&ctx.path_arc),
@@ -214,10 +227,10 @@ mod tests {
         assert!(run(src).is_empty(), "{:?}", run(src));
     }
 
-    // A short parameter outside a sort comparator is still flagged.
+    // A non-conventional short parameter outside a sort comparator is still flagged.
     #[test]
     fn flags_short_param_in_plain_function() {
-        let src = "function helper(a) { return a; }";
+        let src = "function helper(q) { return q; }";
         assert_eq!(run(src).len(), 1, "{:?}", run(src));
     }
 
@@ -232,5 +245,19 @@ mod tests {
         let src = "const a = 1; const b = 2;";
         let diags = crate::rules::test_helpers::run_oxc_tsx_with_file_ctx(src, &Check, &file);
         assert!(diags.is_empty(), "{diags:?}");
+    }
+
+    // Regression for #771: uppercase single-letter type params exempt via exception_patterns.
+    #[test]
+    fn allows_uppercase_type_param_in_hkt_style() {
+        let src = "function apply(F) { return F; }";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // Regression for #771: conventional lowercase params exempt via is_conventional_short_binding.
+    #[test]
+    fn allows_conventional_params_in_plain_function() {
+        let src = "function move(x, y) { return x + y; }";
+        assert!(run(src).is_empty(), "{:?}", run(src));
     }
 }
