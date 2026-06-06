@@ -9,6 +9,8 @@ use std::sync::Arc;
 // better-result API: Result.err(value), result.isErr()
 const ALLOWED_METHOD_NAMES: &[&str] = &["err", "isErr"];
 
+// `addr` is intentionally NOT on the list — `std::net::SocketAddr`,
+// `peer_addr()`, `local_addr()`, and `bind_addr` are standard Rust API.
 const DEFAULT_BANNED: &[(&str, &str)] = &[
     ("acct", "account"),
     ("usr", "user"),
@@ -16,7 +18,6 @@ const DEFAULT_BANNED: &[(&str, &str)] = &[
     ("pwd", "password"),
     ("cnt", "count"),
     ("desc", "description"),
-    ("addr", "address"),
     ("org", "organization"),
 ];
 
@@ -162,6 +163,9 @@ mod tests {
         assert!(run_on("const cfg = {};").is_empty());
         assert!(run_on("function f(err: Error) {}").is_empty());
         assert!(run_on("function f(req: Request, res: Response) {}").is_empty());
+        // `addr` is standard in networking/socket code.
+        assert!(run_on("function f(addr: SocketAddr) {}").is_empty());
+        assert!(run_on("const toAddr = destination.parse();").is_empty());
     }
 
     #[test]
