@@ -95,8 +95,13 @@ fn is_entry_point(path: &Path, project: &ProjectCtx) -> bool {
     let canon_root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
 
     // CLIs and smoke/build tools are run directly, never imported. They live in
-    // a top-level `scripts/` or `bin/` directory.
-    if in_top_level_dir(path, &canon_root, &["scripts", "bin"]) {
+    // a top-level `scripts/`, `bin/`, `examples/`, `example-apps/`, `tools/`,
+    // or `benchmarks/` directory.
+    if in_top_level_dir(
+        path,
+        &canon_root,
+        &["scripts", "bin", "examples", "example-apps", "tools", "benchmarks"],
+    ) {
         return true;
     }
 
@@ -116,6 +121,20 @@ fn is_entry_point(path: &Path, project: &ProjectCtx) -> bool {
     // Framework root file stems (e.g. "next.config" matches next.config.ts).
     if at_root && project.framework_root_files().any(|s| s == stem) {
         return true;
+    }
+
+    // Workspace package entry points: treat index.ts/main.ts at the root of any
+    // workspace package (or its src/ subdir) as a BFS seed, so files reachable
+    // only within that package are not flagged.
+    for workspace_root in &project.workspace_roots {
+        let canon_wr =
+            std::fs::canonicalize(workspace_root).unwrap_or_else(|_| workspace_root.clone());
+        let at_wr = canon_parent == canon_wr;
+        let under_wr_src = canon_parent.parent() == Some(canon_wr.as_path())
+            && canon_parent.file_name().and_then(|n| n.to_str()) == Some("src");
+        if (stem == "main" || stem == "index") && (at_wr || under_wr_src) {
+            return true;
+        }
     }
 
     false
@@ -322,6 +341,79 @@ mod tests {
             "unused-file diagnostic path must be absolute so that is_rule_enabled \
              can relativize it against CWD for override glob matching: {:?}",
             diags[0].path
+        );
+    }
+
+    // Regression for #776: workspace package entry points and their internal
+    // imports must not be flagged on monorepos.
+    #[test]
+    fn workspace_package_internal_files_are_not_flagged() {
+        // packages/b is a workspace package not imported by the root index.ts.
+        // packages/b/index.ts imports ./lib internally — both must be silent.
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "package.json",
+                r#"{"name":"root","workspaces":["packages/*"]}"#,
+            ),
+            ("index.ts", "export const root = 1;\n"),
+            // packages/b needs its own package.json for resolve_workspace_roots
+            // to recognise it as a workspace package root.
+            ("packages/b/package.json", r#"{"name":"b","version":"0.0.1"}"#),
+            (
+                "packages/b/index.ts",
+                "import { lib } from './lib';\nexport { lib };\n",
+            ),
+            ("packages/b/lib.ts", "export const lib = 42;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files);
+        assert!(
+            diags.is_empty(),
+            "workspace package files must not be flagged: {diags:?}"
+        );
+    }
+
+    // Regression for #776: files under top-level `examples/` are entry points.
+    #[test]
+    fn examples_dir_files_are_not_flagged() {
+        let files: Vec<(&str, &str)> = vec![
+            ("index.ts", "export const root = 1;\n"),
+            ("examples/bun/src/client.ts", "console.log('example');\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files);
+        assert!(
+            diags.is_empty(),
+            "examples/ files are entry points and must not be flagged: {diags:?}"
+        );
+    }
+
+    // Regression for #776: files under top-level `tools/` are entry points.
+    #[test]
+    fn tools_dir_files_are_not_flagged() {
+        let files: Vec<(&str, &str)> = vec![
+            ("index.ts", "export const root = 1;\n"),
+            ("tools/gulp/gulpfile.ts", "console.log('task runner');\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files);
+        assert!(
+            diags.is_empty(),
+            "tools/ files are entry points and must not be flagged: {diags:?}"
+        );
+    }
+
+    // Regression for #776: files under top-level `example-apps/` are entry points.
+    #[test]
+    fn example_apps_dir_files_are_not_flagged() {
+        let files: Vec<(&str, &str)> = vec![
+            ("index.ts", "export const root = 1;\n"),
+            (
+                "example-apps/credential-sync/constants.ts",
+                "export const API_URL = 'https://example.com';\n",
+            ),
+        ];
+        let (_dir, diags) = run_on_project(&files);
+        assert!(
+            diags.is_empty(),
+            "example-apps/ files are entry points and must not be flagged: {diags:?}"
         );
     }
 }
