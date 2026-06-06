@@ -15,6 +15,8 @@ use crate::parsing;
 
 pub const RULE_ID: &str = "no-clones";
 const MIN_TOKENS: usize = 100;
+/// Polynomial multiplier for the sliding-window Rabin-Karp hash.
+const WINDOW_HASH_MULT: u64 = 6_364_136_223_846_793_005;
 const BUCKET_SATURATED: usize = 64;
 /// Minimum number of distinct token-text trigrams required in a match window.
 ///
@@ -71,6 +73,10 @@ pub fn lint_files(files: &[&SourceFile]) -> Vec<Diagnostic> {
 }
 
 fn find_raw_clones(file_data: &[Option<FileTokens>]) -> Vec<RawClone> {
+    // Weight of the token leaving the window when rolling one step right, i.e.
+    // `WINDOW_HASH_MULT^(MIN_TOKENS - 1)`.
+    let k_pow: u64 = WINDOW_HASH_MULT.wrapping_pow((MIN_TOKENS - 1) as u32);
+
     let mut index: FxHashMap<u64, Vec<Occurrence>> = FxHashMap::default();
     let mut raw: Vec<RawClone> = Vec::new();
 
@@ -79,8 +85,21 @@ fn find_raw_clones(file_data: &[Option<FileTokens>]) -> Vec<RawClone> {
         if ft.tokens.len() < MIN_TOKENS {
             continue;
         }
-        for start in 0..=(ft.tokens.len() - MIN_TOKENS) {
-            let wh = window_hash(&ft.tokens[start..start + MIN_TOKENS]);
+        // Rabin-Karp rolling hash: hash the first window in full, then derive
+        // each subsequent window in O(1) by dropping the outgoing token and
+        // folding in the incoming one. Yields the same value as `window_hash`
+        // applied to each window, at ~MIN_TOKENS× less work.
+        let n_windows = ft.tokens.len() - MIN_TOKENS + 1;
+        let mut wh = window_hash(&ft.tokens[0..MIN_TOKENS]);
+        for start in 0..n_windows {
+            if start > 0 {
+                let outgoing = ft.tokens[start - 1].hash;
+                let incoming = ft.tokens[start + MIN_TOKENS - 1].hash;
+                wh = wh
+                    .wrapping_sub(outgoing.wrapping_mul(k_pow))
+                    .wrapping_mul(WINDOW_HASH_MULT)
+                    .wrapping_add(incoming);
+            }
 
             let bucket = index.entry(wh).or_default();
 
@@ -455,9 +474,7 @@ fn token_hash(grammar_tag: u8, kind_id: u16, text: &[u8]) -> u64 {
 fn window_hash(tokens: &[Token]) -> u64 {
     let mut h: u64 = 0;
     for t in tokens {
-        h = h
-            .wrapping_mul(6_364_136_223_846_793_005)
-            .wrapping_add(t.hash);
+        h = h.wrapping_mul(WINDOW_HASH_MULT).wrapping_add(t.hash);
     }
     h
 }
