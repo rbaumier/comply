@@ -417,9 +417,24 @@ fn dispatch_with_lang(
             });
 
     if needs_oxc {
-        crate::oxc_helpers::with_oxc_parse(source, path, |semantic| {
-            run_oxc_checks(ld, semantic, &ctx, source, path, config, &mut diagnostics);
-        });
+        // The oxc parser can panic on pathological input (e.g. oxc_ast 0.127
+        // crashes on some payload sources). A linter must never let one file
+        // take down the whole run, so isolate the parse + dispatch: on panic we
+        // skip this file's oxc rules with a warning and keep its text and
+        // tree-sitter diagnostics (already collected above). `diagnostics` is
+        // only appended to at the very end of `run_oxc_checks`, so a panic
+        // leaves it untouched — `AssertUnwindSafe` is sound here.
+        let oxc_ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            crate::oxc_helpers::with_oxc_parse(source, path, |semantic| {
+                run_oxc_checks(ld, semantic, &ctx, source, path, config, &mut diagnostics);
+            });
+        }));
+        if oxc_ran.is_err() {
+            eprintln!(
+                "comply: skipping oxc rules for {} (parser panicked); other rules still applied",
+                path.display()
+            );
+        }
     }
 
     if let Some(ref t) = tree {

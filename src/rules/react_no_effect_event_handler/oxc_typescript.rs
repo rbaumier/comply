@@ -52,8 +52,11 @@ impl OxcCheck for Check {
             return;
         }
 
-        // First argument must be arrow/function.
-        let callback_expr = call.arguments[0].to_expression();
+        // First argument must be arrow/function. `as_expression` yields None for
+        // a spread argument (`useEffect(...x)`), which we then skip.
+        let Some(callback_expr) = call.arguments[0].as_expression() else {
+            return;
+        };
         let callback_body = match callback_expr {
             Expression::ArrowFunctionExpression(arrow) => &arrow.body.statements,
             Expression::FunctionExpression(func) => {
@@ -64,24 +67,21 @@ impl OxcCheck for Check {
         };
 
         // Second argument must be an array.
-        let deps_expr = call.arguments[1].to_expression();
+        let Some(deps_expr) = call.arguments[1].as_expression() else {
+            return;
+        };
         let Expression::ArrayExpression(deps_arr) = deps_expr else {
             return;
         };
 
-        // Collect dep names (identifiers only).
+        // Collect dep names (identifiers only). Spread and elision elements are
+        // not expressions, so `as_expression` yields None and they're skipped.
         let dep_names: Vec<&str> = deps_arr
             .elements
             .iter()
-            .filter_map(|el| {
-                if let oxc_ast::ast::ArrayExpressionElement::Identifier(id) = el {
-                    Some(id.name.as_str())
-                } else {
-                    match el.to_expression() {
-                        Expression::Identifier(id) => Some(id.name.as_str()),
-                        _ => None,
-                    }
-                }
+            .filter_map(|el| match el.as_expression() {
+                Some(Expression::Identifier(id)) => Some(id.name.as_str()),
+                _ => None,
             })
             .collect();
 
@@ -126,5 +126,29 @@ impl OxcCheck for Check {
             severity: Severity::Warning,
             span: None,
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(source, &Check)
+    }
+
+    // Regression for #895: a spread element in the dependency array made
+    // `ArrayExpressionElement::to_expression()` panic (oxc unreachable!),
+    // crashing the whole run on payload's `useThrottledEffect`/`useDebouncedEffect`.
+    #[test]
+    fn does_not_panic_on_spread_deps() {
+        assert!(run("useEffect(() => {}, [...deps, delay])").is_empty());
+    }
+
+    // A spread element is skipped, but real identifier deps are still detected.
+    #[test]
+    fn flags_real_dep_alongside_spread() {
+        let src = "function App() { useEffect(() => { if (x) { f(); } }, [...deps, x]); }";
+        assert_eq!(run(src).len(), 1);
     }
 }
