@@ -14,7 +14,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::rust_helpers::is_in_test_context;
+use crate::rules::rust_helpers::{is_in_test_context, is_under_tests_dir};
 
 const KINDS: &[&str] = &["macro_invocation"];
 
@@ -45,7 +45,7 @@ impl AstCheck for Check {
         if !BANNED_MACROS.contains(&macro_name) {
             return;
         }
-        if is_in_test_context(node, source_bytes) {
+        if is_in_test_context(node, source_bytes) || is_under_tests_dir(ctx.path) {
             return;
         }
         let pos = node.start_position();
@@ -110,5 +110,23 @@ mod tests {
     #[test]
     fn does_not_flag_println() {
         assert!(run_on(r#"fn f() { println!("hi"); }"#).is_empty());
+    }
+
+    #[test]
+    fn allows_panic_in_tokio_test() {
+        let source = "#[tokio::test]\nasync fn it_works() { panic!(); }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_panic_in_actix_rt_test() {
+        let source = "#[actix_rt::test]\nasync fn it_works() { panic!(); }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_panic_in_tests_directory() {
+        let source = "fn helper() { panic!(); }";
+        assert!(crate::rules::test_helpers::run_rust_with_path(source, &Check, "tests/helpers.rs").is_empty());
     }
 }
