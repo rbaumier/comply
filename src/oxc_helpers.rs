@@ -430,8 +430,8 @@ pub fn is_in_ambient_declaration(
 mod oxc_helpers_tests {
     use super::{byte_offset_to_line_col, reset_file_caches, source_contains};
 
-    /// Reference O(byte_offset) scan — the implementation `byte_offset_to_line_col`
-    /// replaced. The cached version must agree with it for every offset.
+    /// Reference O(byte_offset) scan that `byte_offset_to_line_col` must agree
+    /// with for every offset.
     fn naive_line_col(source: &str, byte_offset: usize) -> (usize, usize) {
         let mut line = 1;
         let mut col = 1;
