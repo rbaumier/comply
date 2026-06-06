@@ -17,26 +17,24 @@ struct AssignInfo<'a> {
 
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
-        &[]
+        &[AstType::Program, AstType::BlockStatement, AstType::FunctionBody]
     }
 
-    fn run_on_semantic<'a>(
+    fn run<'a>(
         &self,
-        semantic: &'a oxc_semantic::Semantic<'a>,
+        node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-    ) -> Vec<Diagnostic> {
-        let mut diagnostics = Vec::new();
-        for node in semantic.nodes().iter() {
-            let stmts: Option<&oxc_allocator::Vec<'a, Statement<'a>>> = match node.kind() {
-                AstKind::Program(prog) => Some(&prog.body),
-                AstKind::BlockStatement(block) => Some(&block.body),
-                AstKind::FunctionBody(body) => Some(&body.statements),
-                _ => None,
-            };
-            let Some(stmts) = stmts else { continue };
-            check_consecutive_assignments(stmts, ctx, &mut diagnostics);
-        }
-        diagnostics
+        _semantic: &'a oxc_semantic::Semantic<'a>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
+        let stmts: Option<&oxc_allocator::Vec<'a, Statement<'a>>> = match node.kind() {
+            AstKind::Program(prog) => Some(&prog.body),
+            AstKind::BlockStatement(block) => Some(&block.body),
+            AstKind::FunctionBody(body) => Some(&body.statements),
+            _ => None,
+        };
+        let Some(stmts) = stmts else { return };
+        check_consecutive_assignments(stmts, ctx, diagnostics);
     }
 }
 

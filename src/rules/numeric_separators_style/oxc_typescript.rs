@@ -84,40 +84,38 @@ fn expected_format(raw: &str) -> Option<String> {
 
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [oxc_ast::AstType] {
-        &[]
+        &[oxc_ast::AstType::NumericLiteral]
     }
 
-    fn run_on_semantic<'a>(
+    fn run<'a>(
         &self,
-        semantic: &'a oxc_semantic::Semantic<'a>,
+        node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-    ) -> Vec<Diagnostic> {
+        _semantic: &'a oxc_semantic::Semantic<'a>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
         if ctx.file.path_segments.in_test_dir {
-            return Vec::new();
+            return;
         }
-
-        let mut diagnostics = Vec::new();
-        for node in semantic.nodes().iter() {
-            if let AstKind::NumericLiteral(lit) = node.kind() {
-                let raw = &ctx.source[lit.span.start as usize..lit.span.end as usize];
-                if let Some(formatted) = expected_format(raw) {
-                    let (line, column) =
-                        byte_offset_to_line_col(ctx.source, lit.span.start as usize);
-                    diagnostics.push(Diagnostic {
-                        path: Arc::clone(&ctx.path_arc),
-                        line,
-                        column,
-                        rule_id: super::META.id.into(),
-                        message: format!(
-                            "Invalid group length in numeric value: `{}` should be `{}`.",
-                            raw, formatted
-                        ),
-                        severity: Severity::Warning,
-                        span: None,
-                    });
-                }
-            }
+        let AstKind::NumericLiteral(lit) = node.kind() else {
+            return;
+        };
+        let raw = &ctx.source[lit.span.start as usize..lit.span.end as usize];
+        if let Some(formatted) = expected_format(raw) {
+            let (line, column) =
+                byte_offset_to_line_col(ctx.source, lit.span.start as usize);
+            diagnostics.push(Diagnostic {
+                path: Arc::clone(&ctx.path_arc),
+                line,
+                column,
+                rule_id: super::META.id.into(),
+                message: format!(
+                    "Invalid group length in numeric value: `{}` should be `{}`.",
+                    raw, formatted
+                ),
+                severity: Severity::Warning,
+                span: None,
+            });
         }
-        diagnostics
     }
 }
