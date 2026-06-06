@@ -170,7 +170,7 @@ fn is_fmt_param(node: tree_sitter::Node, source: &[u8]) -> bool {
 /// coordinates, key/value pairs, error/string/file handles.
 const CONVENTIONAL_RUST_NAMES: &[&str] = &[
     "i", "j", "k", "n", "x", "y", "z", "s", "f", "v", "e", "w", "r",
-    "a", "b", "c", "d", "m", "p", "h",
+    "a", "b", "c", "d", "m", "p", "h", "l", "o",
 ];
 
 /// Allow conventional single-letter names in let bindings, for-loop
@@ -184,7 +184,7 @@ fn is_conventional_short_binding(node: tree_sitter::Node, name: &str) -> bool {
     };
     matches!(
         parent.kind(),
-        "let_declaration" | "parameter" | "for_expression"
+        "let_declaration" | "parameter" | "for_expression" | "field_declaration"
     )
 }
 
@@ -229,8 +229,9 @@ mod tests {
 
     #[test]
     fn flags_short_struct_field() {
-        let diags = run_on("struct S { q: u32 }");
-        assert_eq!(diags.len(), 2);
+        // Struct name `Foo` is long enough; only field `q` (non-conventional) is flagged.
+        let diags = run_on("struct Foo { q: u32 }");
+        assert_eq!(diags.len(), 1);
     }
 
     #[test]
@@ -285,9 +286,10 @@ mod tests {
 
     #[test]
     fn flags_short_const_name() {
-        let diags = run_on("const N: u32 = 1;");
+        // Uppercase single-letter consts now exempt via exception_patterns; use non-conventional lowercase.
+        let diags = run_on("const q: u32 = 1;");
         assert_eq!(diags.len(), 1);
-        assert!(diags[0].message.contains("`N`"));
+        assert!(diags[0].message.contains("`q`"));
     }
 
     #[test]
@@ -310,5 +312,28 @@ mod tests {
         let diags = run_on("fn main() { let foo = 1; let q = 2; }");
         assert_eq!(diags.len(), 1);
         assert_eq!(diags[0].message, "Identifier `q` is too short (< 2).");
+    }
+
+    // Regression for #771: uppercase single-letter names exempt via exception_patterns.
+    #[test]
+    fn allows_uppercase_single_letter_struct_name() {
+        assert!(run_on("struct C {}").is_empty());
+    }
+
+    #[test]
+    fn allows_uppercase_single_letter_type_alias() {
+        assert!(run_on("type K = u32;").is_empty());
+    }
+
+    // Regression for #771: conventional field name `f` in field_declaration.
+    #[test]
+    fn allows_conventional_field_name() {
+        assert!(run_on("struct FromFnLayer<F> { f: F }").is_empty());
+    }
+
+    // Regression for #771: `l` added to CONVENTIONAL_RUST_NAMES.
+    #[test]
+    fn allows_loop_var_l() {
+        assert!(run_on("fn main() { for l in vec![1] {} }").is_empty());
     }
 }

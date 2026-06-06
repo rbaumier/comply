@@ -78,7 +78,7 @@ min = 2
 #   `t` for react-i18next's useTranslation()
 #   `T` for typescript generics
 exceptions = ["_", "t", "T"]
-# exception_patterns = ["^[A-Z]$"]
+exception_patterns = ["^[A-Z]$"]
 
 # ---------------------------------------------------------------
 # Complexity / quality thresholds.
