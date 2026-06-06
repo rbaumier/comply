@@ -16,6 +16,18 @@ use oxc_ast::ast::{
 use oxc_span::GetSpan;
 use std::sync::Arc;
 
+/// React-Compiler detection for the per-node fast path. The project-level
+/// answer (`ProjectCtx::uses_react_compiler`) is memoized per directory behind
+/// a `Mutex`; wrap it in the lock-free thread-local file slot so a JSX-dense
+/// file takes the lock at most once instead of on every opening element.
+fn project_uses_react_compiler(ctx: &CheckCtx) -> bool {
+    crate::oxc_helpers::cached_file_bool(
+        ctx.source,
+        crate::oxc_helpers::SLOT_REACT_COMPILER,
+        || ctx.project.uses_react_compiler(ctx.path),
+    )
+}
+
 pub struct Check;
 
 impl OxcCheck for Check {
@@ -30,7 +42,7 @@ impl OxcCheck for Check {
         _semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
-        if ctx.project.uses_react_compiler(ctx.path) {
+        if project_uses_react_compiler(ctx) {
             return;
         }
         let AstKind::JSXOpeningElement(opening) = node.kind() else {
