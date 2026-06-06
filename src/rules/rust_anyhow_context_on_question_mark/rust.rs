@@ -23,6 +23,32 @@ crate::ast_check! { on ["try_expression"] => |node, source, ctx, diagnostics|
         return;
     }
 
+    let mut cur = node;
+    let mut in_main_anyhow = false;
+    while let Some(parent) = cur.parent() {
+        match parent.kind() {
+            "function_item" => {
+                let body_start = parent
+                    .child_by_field_name("body")
+                    .map(|b| b.start_byte())
+                    .unwrap_or(parent.end_byte());
+                let sig = &source[parent.start_byte()..body_start];
+                if let Ok(text) = std::str::from_utf8(sig) {
+                    in_main_anyhow =
+                        text.contains("fn main(") && text.contains("anyhow::Result");
+                }
+                break;
+            }
+            "closure_expression" | "async_block" => break,
+            _ => {
+                cur = parent;
+            }
+        }
+    }
+    if in_main_anyhow {
+        return;
+    }
+
     diagnostics.push(Diagnostic::at_node(
         ctx.path,
         &node,
@@ -48,6 +74,27 @@ mod tests {
     #[test]
     fn flags_bare_question_mark_in_main() {
         let src = r#"fn load() -> anyhow::Result<String> { let s = std::fs::read_to_string("x")?; Ok(s) }"#;
+        assert!(!run(src).is_empty());
+    }
+
+    #[test]
+    fn no_diagnostic_in_main_returning_anyhow_result() {
+        // bare ? in fn main() -> anyhow::Result is idiomatic — anyhow prints the full error chain
+        let src = r#"fn main() -> anyhow::Result<()> { let s = std::fs::read_to_string("x")?; Ok(()) }"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_bare_question_mark_in_helper_returning_anyhow_result() {
+        // non-main functions still need context
+        let src = r#"fn helper() -> anyhow::Result<()> { let s = std::fs::read_to_string("x")?; Ok(()) }"#;
+        assert!(!run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_question_mark_in_closure_inside_main_anyhow() {
+        // closure boundary breaks the exemption — ? inside a closure is not in main's scope
+        let src = r#"fn main() -> anyhow::Result<()> { let f = || -> anyhow::Result<()> { let s = std::fs::read_to_string("x")?; Ok(()) }; Ok(()) }"#;
         assert!(!run(src).is_empty());
     }
 
