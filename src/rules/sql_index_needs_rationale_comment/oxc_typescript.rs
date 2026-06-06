@@ -55,6 +55,11 @@ impl OxcCheck for Check {
             _ => return,
         };
 
+        // Cheap content pre-filter before the O(offset) line/column lookup:
+        // skip the vast majority of string literals that can't be a CREATE INDEX.
+        if !super::rust::content_has_create_index(content) {
+            return;
+        }
         let (line, col) = byte_offset_to_line_col(ctx.source, offset);
         // line is 1-based from byte_offset_to_line_col, but check_string_content
         // expects a 0-based row index (it adds +1 internally).
@@ -87,5 +92,27 @@ mod tests {
     fn allows_create_index_with_preceding_comment() {
         let src = "const sql = `-- Accelerates dashboard query for user_id\nCREATE INDEX idx_foo ON bar(baz);`;";
         assert!(run_on(src).is_empty());
+    }
+
+    // Regression for #892: `byte_offset_to_line_col` is O(offset), so calling
+    // it for every string literal made this rule O(n²) — a 50k-literal file
+    // took ~25s. The `content_has_create_index` pre-filter keeps it linear.
+    // Generous wall-clock budget: post-fix this is tens of ms even in debug.
+    #[test]
+    fn many_non_sql_literals_stay_linear() {
+        let mut src = String::from("const names = [\n");
+        for i in 0..20_000 {
+            src.push_str("  \"surname");
+            src.push_str(&i.to_string());
+            src.push_str("\",\n");
+        }
+        src.push_str("];\n");
+        let start = std::time::Instant::now();
+        assert!(run_on(&src).is_empty());
+        assert!(
+            start.elapsed().as_secs() < 5,
+            "sql-index-needs-rationale-comment went quadratic: {:?}",
+            start.elapsed()
+        );
     }
 }

@@ -23,8 +23,17 @@ const KINDS: &[&str] = &["string_literal", "raw_string_literal"];
 fn create_index_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
-        Regex::new(r"\bCREATE\s+(?:UNIQUE\s+)?INDEX\b").expect("static regex compiles")
+        Regex::new(r"(?i)\bCREATE\s+(?:UNIQUE\s+)?INDEX\b").expect("static regex compiles")
     })
+}
+
+/// Cheap pre-filter for the oxc string-literal walk: true if `content`
+/// could contain a `CREATE INDEX`. Lets the per-node backend skip the
+/// O(offset) line/column computation for the overwhelming majority of
+/// string literals that aren't SQL — without it a file of N literals
+/// costs O(N²).
+pub(super) fn content_has_create_index(content: &str) -> bool {
+    create_index_re().is_match(content)
 }
 
 #[derive(Debug)]
@@ -118,8 +127,7 @@ pub(super) fn check_string_content(
     let re = create_index_re();
 
     for (idx, line) in lines.iter().enumerate() {
-        let upper = line.to_ascii_uppercase();
-        let Some(m) = re.find(&upper) else {
+        let Some(m) = re.find(line) else {
             continue;
         };
         if has_rationale_before(&lines, idx, lookback_lines, min_rationale_words)
