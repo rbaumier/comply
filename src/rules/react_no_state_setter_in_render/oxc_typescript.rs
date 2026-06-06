@@ -28,31 +28,31 @@ impl OxcCheck for Check {
 
         for node in semantic.nodes().iter() {
             // Look for function declarations and arrow functions assigned to variables.
-            let (func_name, _body_node_id) = match node.kind() {
+            let func_name = match node.kind() {
                 AstKind::Function(func) => {
                     let Some(id) = &func.id else { continue };
-                    let name = id.name.as_str().to_string();
-                    let Some(body) = &func.body else { continue };
-                    // We need to find the node ID for the body — use span matching.
-                    (name, find_block_node_id(semantic, body.span))
+                    if func.body.is_none() {
+                        continue;
+                    }
+                    id.name.as_str().to_string()
                 }
                 AstKind::VariableDeclarator(decl) => {
                     let BindingPattern::BindingIdentifier(id) = &decl.id else {
                         continue;
                     };
-                    let name = id.name.as_str().to_string();
                     let Some(init) = &decl.init else { continue };
                     match init {
                         Expression::ArrowFunctionExpression(arrow) => {
-                            let Some(_body) = &arrow.body.statements.first() else {
+                            if arrow.body.statements.first().is_none() {
                                 continue;
-                            };
-                            // For arrow functions, we process the body directly.
-                            (name, Some(node.id()))
+                            }
+                            id.name.as_str().to_string()
                         }
                         Expression::FunctionExpression(func) => {
-                            let Some(body) = &func.body else { continue };
-                            (name, find_block_node_id(semantic, body.span))
+                            if func.body.is_none() {
+                                continue;
+                            }
+                            id.name.as_str().to_string()
                         }
                         _ => continue,
                     }
@@ -215,20 +215,3 @@ fn is_inside_nested_function(
     }
 }
 
-fn find_block_node_id(
-    semantic: &oxc_semantic::Semantic,
-    span: oxc_span::Span,
-) -> Option<oxc_semantic::NodeId> {
-    for node in semantic.nodes().iter() {
-        if matches!(node.kind(), AstKind::FunctionBody(_)) {
-            let node_span = match node.kind() {
-                AstKind::FunctionBody(b) => b.span,
-                _ => continue,
-            };
-            if node_span == span {
-                return Some(node.id());
-            }
-        }
-    }
-    None
-}
