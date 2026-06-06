@@ -1,6 +1,6 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
-use crate::rules::backend::{AstKind, CheckCtx, OxcCheck};
+use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use std::sync::Arc;
 
 pub struct Check;
@@ -22,51 +22,59 @@ fn count_escaped_backslashes(s: &str) -> usize {
 }
 
 impl OxcCheck for Check {
-    fn run_on_semantic<'a>(
+    fn interested_kinds(&self) -> &'static [AstType] {
+        &[AstType::StringLiteral]
+    }
+
+    fn prefilter(&self) -> Option<&'static [&'static str]> {
+        // The rule only fires on a literal carrying two escaped backslashes,
+        // so the source must contain at least one `\\` byte pair.
+        Some(&["\\\\"])
+    }
+
+    fn run<'a>(
         &self,
-        semantic: &'a oxc_semantic::Semantic<'a>,
+        node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-    ) -> Vec<Diagnostic> {
-        let mut diagnostics = Vec::new();
-        for node in semantic.nodes().iter() {
-            let AstKind::StringLiteral(lit) = node.kind() else { continue };
-            let raw = &ctx.source[lit.span.start as usize..lit.span.end as usize];
+        _semantic: &'a oxc_semantic::Semantic<'a>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
+        let AstKind::StringLiteral(lit) = node.kind() else { return };
+        let raw = &ctx.source[lit.span.start as usize..lit.span.end as usize];
 
-            // Skip strings containing backticks (can't use String.raw with backticks)
-            if raw.contains('`') {
-                continue;
-            }
-
-            // Skip strings with interpolation patterns
-            if raw.contains("${") {
-                continue;
-            }
-
-            // `String.raw` cannot represent a value ending in a backslash — the
-            // trailing `\` escapes the closing backtick (`String.raw`\`` is a
-            // syntax error). Guard against malformed spans (oxc edge case on
-            // very large repos) where raw.len() < 2 would make the slice panic.
-            if raw.len() < 2 {
-                continue;
-            }
-            if raw[1..raw.len() - 1].ends_with('\\') {
-                continue;
-            }
-
-            if count_escaped_backslashes(raw) >= 2 {
-                let (line, column) = byte_offset_to_line_col(ctx.source, lit.span.start as usize);
-                diagnostics.push(Diagnostic {
-                    path: Arc::clone(&ctx.path_arc),
-                    line,
-                    column,
-                    rule_id: super::META.id.into(),
-                    message: "`String.raw` should be used to avoid escaping `\\`.".into(),
-                    severity: Severity::Warning,
-                    span: None,
-                });
-            }
+        // Skip strings containing backticks (can't use String.raw with backticks)
+        if raw.contains('`') {
+            return;
         }
-        diagnostics
+
+        // Skip strings with interpolation patterns
+        if raw.contains("${") {
+            return;
+        }
+
+        // `String.raw` cannot represent a value ending in a backslash — the
+        // trailing `\` escapes the closing backtick (`String.raw`\`` is a
+        // syntax error). Guard against malformed spans (oxc edge case on
+        // very large repos) where raw.len() < 2 would make the slice panic.
+        if raw.len() < 2 {
+            return;
+        }
+        if raw[1..raw.len() - 1].ends_with('\\') {
+            return;
+        }
+
+        if count_escaped_backslashes(raw) >= 2 {
+            let (line, column) = byte_offset_to_line_col(ctx.source, lit.span.start as usize);
+            diagnostics.push(Diagnostic {
+                path: Arc::clone(&ctx.path_arc),
+                line,
+                column,
+                rule_id: super::META.id.into(),
+                message: "`String.raw` should be used to avoid escaping `\\`.".into(),
+                severity: Severity::Warning,
+                span: None,
+            });
+        }
     }
 }
 

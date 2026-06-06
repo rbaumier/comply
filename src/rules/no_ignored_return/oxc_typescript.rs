@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
-use crate::rules::backend::{AstKind, CheckCtx, OxcCheck};
+use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::Expression;
 
 pub struct Check;
@@ -24,56 +24,57 @@ const PURE_METHODS: &[&str] = &[
 ];
 
 impl OxcCheck for Check {
-    fn run_on_semantic<'a>(
+    fn interested_kinds(&self) -> &'static [AstType] {
+        &[AstType::ExpressionStatement]
+    }
+
+    fn run<'a>(
         &self,
-        semantic: &'a oxc_semantic::Semantic<'a>,
+        node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-    ) -> Vec<Diagnostic> {
-        let mut diagnostics = Vec::new();
-        for node in semantic.nodes().iter() {
-            let AstKind::ExpressionStatement(expr_stmt) = node.kind() else {
-                continue;
-            };
-            let Expression::CallExpression(call) = &expr_stmt.expression else {
-                continue;
-            };
-            let Expression::StaticMemberExpression(member) = &call.callee else {
-                continue;
-            };
-            let method_name = member.property.name.as_str();
-            if !PURE_METHODS.contains(&method_name) {
-                continue;
-            }
-            // Arrow concise body (`xs.map(fn)` is the implicit-return
-            // expression of `() => xs.map(fn)`) wraps the call in an
-            // ExpressionStatement under a FunctionBody, but the value
-            // IS returned. Common JSX list pattern:
-            // `{items.map(item => <Item />)}`
-            let parent = semantic.nodes().parent_node(node.id());
-            if let AstKind::FunctionBody(_) = parent.kind() {
-                let grand = semantic.nodes().parent_node(parent.id());
-                if let AstKind::ArrowFunctionExpression(arrow) = grand.kind()
-                    && arrow.expression
-                {
-                    continue;
-                }
-            }
-            let (line, column) =
-                byte_offset_to_line_col(ctx.source, expr_stmt.span.start as usize);
-            diagnostics.push(Diagnostic {
-                path: Arc::clone(&ctx.path_arc),
-                line,
-                column,
-                rule_id: super::META.id.into(),
-                message: format!(
-                    "Return value of `.{}` is ignored — the call has no side effect.",
-                    method_name
-                ),
-                severity: Severity::Warning,
-                span: None,
-            });
+        semantic: &'a oxc_semantic::Semantic<'a>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
+        let AstKind::ExpressionStatement(expr_stmt) = node.kind() else {
+            return;
+        };
+        let Expression::CallExpression(call) = &expr_stmt.expression else {
+            return;
+        };
+        let Expression::StaticMemberExpression(member) = &call.callee else {
+            return;
+        };
+        let method_name = member.property.name.as_str();
+        if !PURE_METHODS.contains(&method_name) {
+            return;
         }
-        diagnostics
+        // Arrow concise body (`xs.map(fn)` is the implicit-return
+        // expression of `() => xs.map(fn)`) wraps the call in an
+        // ExpressionStatement under a FunctionBody, but the value
+        // IS returned. Common JSX list pattern:
+        // `{items.map(item => <Item />)}`
+        let parent = semantic.nodes().parent_node(node.id());
+        if let AstKind::FunctionBody(_) = parent.kind() {
+            let grand = semantic.nodes().parent_node(parent.id());
+            if let AstKind::ArrowFunctionExpression(arrow) = grand.kind()
+                && arrow.expression
+            {
+                return;
+            }
+        }
+        let (line, column) = byte_offset_to_line_col(ctx.source, expr_stmt.span.start as usize);
+        diagnostics.push(Diagnostic {
+            path: Arc::clone(&ctx.path_arc),
+            line,
+            column,
+            rule_id: super::META.id.into(),
+            message: format!(
+                "Return value of `.{}` is ignored — the call has no side effect.",
+                method_name
+            ),
+            severity: Severity::Warning,
+            span: None,
+        });
     }
 }
 
