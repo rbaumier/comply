@@ -15,14 +15,20 @@ pub fn imports_playwright_test(source: &str) -> bool {
 
 #[must_use]
 pub fn is_playwright_context(ctx: &CheckCtx) -> bool {
-    if imports_playwright_test(ctx.source) {
-        return true;
-    }
-    if !ctx.project.has_framework("playwright") {
-        return false;
-    }
-    let path = ctx.path.to_string_lossy();
-    path.contains("/e2e/") || path.contains("/playwright/") || path.contains(".e2e.")
+    // File-invariant (source + path + project), but called from per-node
+    // `run()` across ~25 Playwright rules — without memoization each
+    // CallExpression repays `to_string_lossy` + the import/path scans. Cache
+    // the answer once per file.
+    crate::oxc_helpers::cached_file_bool(ctx.source, crate::oxc_helpers::SLOT_PLAYWRIGHT, || {
+        if imports_playwright_test(ctx.source) {
+            return true;
+        }
+        if !ctx.project.has_framework("playwright") {
+            return false;
+        }
+        let path = ctx.path.to_string_lossy();
+        path.contains("/e2e/") || path.contains("/playwright/") || path.contains(".e2e.")
+    })
 }
 
 #[cfg(test)]
