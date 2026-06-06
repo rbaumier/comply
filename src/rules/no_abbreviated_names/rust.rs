@@ -13,6 +13,9 @@ use crate::rules::backend::{AstCheck, CheckCtx};
 // are all part of the Rust vocabulary (cfg attributes, std::fmt, io
 // context, iteration index, …) and flagging them only adds noise. The
 // list targets abbreviations a reader genuinely has to guess about.
+//
+// `addr` is intentionally NOT on the list — `std::net::SocketAddr`,
+// `peer_addr()`, `local_addr()`, and `bind_addr` are standard Rust API.
 const DEFAULT_BANNED: &[(&str, &str)] = &[
     ("acct", "account"),
     ("usr", "user"),
@@ -20,7 +23,6 @@ const DEFAULT_BANNED: &[(&str, &str)] = &[
     ("pwd", "password"),
     ("cnt", "count"),
     ("desc", "description"),
-    ("addr", "address"),
     ("org", "organization"),
 ];
 
@@ -141,6 +143,9 @@ mod tests {
         assert!(run_on("fn f() { let cfg = 1; }").is_empty());
         assert!(run_on("fn f(err: Error) {}").is_empty());
         assert!(run_on("fn f() { let fmt = 1; }").is_empty());
+        // `addr` is standard for SocketAddr in Rust networking code.
+        assert!(run_on("fn f(addr: &SocketAddr) {}").is_empty());
+        assert!(run_on("fn f() { let addr = socket.local_addr()?; }").is_empty());
     }
 
     #[test]
