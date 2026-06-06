@@ -8,6 +8,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
+use crate::rules::rust_helpers::is_in_test_context;
 
 const KINDS: &[&str] = &["expression_statement"];
 
@@ -42,6 +43,9 @@ impl AstCheck for Check {
             return;
         };
         if !is_tokio_spawn(text) {
+            return;
+        }
+        if is_in_test_context(node, source_bytes) {
             return;
         }
         let pos = call.start_position();
@@ -102,5 +106,50 @@ mod tests {
     fn does_not_flag_other_calls() {
         let source = "fn f() { other_function(); }";
         assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_spawn_in_tokio_test() {
+        let source = r#"
+#[tokio::test]
+async fn my_test() {
+    tokio::spawn(async move { work().await });
+}
+"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_spawn_in_plain_test() {
+        let source = r#"
+#[test]
+fn my_test() {
+    tokio::spawn(async { work().await });
+}
+"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_spawn_in_cfg_test_module() {
+        let source = r#"
+#[cfg(test)]
+mod tests {
+    fn helper() {
+        tokio::spawn(async { work().await });
+    }
+}
+"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_spawn_in_production_code() {
+        let source = r#"
+fn start_worker() {
+    tokio::spawn(async { process().await });
+}
+"#;
+        assert_eq!(run_on(source).len(), 1);
     }
 }
