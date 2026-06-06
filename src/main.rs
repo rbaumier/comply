@@ -441,16 +441,6 @@ fn collect_all_diagnostics(
         full_project_files = Vec::new();
         discovered.iter().collect()
     };
-    let project = std::sync::Arc::new(crate::project::ProjectCtx::load(&index_refs, config));
-
-    if is_partial {
-        let linted: Vec<std::path::PathBuf> = discovered
-            .iter()
-            .filter_map(|f| std::fs::canonicalize(&f.path).ok())
-            .collect();
-        project.set_linted_paths(linted);
-    }
-
     let type_program_ts: Vec<&SourceFile> = if is_partial && type_aware {
         full_project_files
             .iter()
@@ -463,12 +453,25 @@ fn collect_all_diagnostics(
     let clones_enabled =
         discovered.len() >= 2 && !config.is_rule_globally_disabled(clone_detection::RULE_ID);
 
-    // Clone detection only needs the file list, not the engine's diagnostics,
-    // so it can run concurrently with the language engines. `rayon::join` lets
-    // the sequential core of clone detection (`find_raw_clones`) overlap the
-    // engine's per-file parallel work instead of running strictly after it —
-    // the clones phase is largely hidden behind the dominant engine phase.
-    let engine_work = || -> Result<Vec<Diagnostic>> {
+    // Clone detection only needs the file list, not the import index, so its
+    // `rayon::join` arm runs concurrently with the other arm's full chain:
+    // `ProjectCtx::load` (index build) followed by the language engines.
+    // Building the index is no longer a serial prelude — it overlaps the
+    // clones' tree-sitter tokenize pass, and the engine overlaps the clones'
+    // sequential tail as before. The engine arm owns the project and returns
+    // it so it escapes for the post-filtering passes below.
+    let engine_work = || -> Result<(std::sync::Arc<crate::project::ProjectCtx>, Vec<Diagnostic>)> {
+        let project =
+            std::sync::Arc::new(crate::project::ProjectCtx::load(&index_refs, config));
+
+        if is_partial {
+            let linted: Vec<std::path::PathBuf> = discovered
+                .iter()
+                .filter_map(|f| std::fs::canonicalize(&f.path).ok())
+                .collect();
+            project.set_linted_paths(linted);
+        }
+
         let mut diags = Vec::with_capacity(discovered.len());
         if !by_lang.ts.is_empty() {
             diags.extend(lint_typescript(
@@ -504,7 +507,7 @@ fn collect_all_diagnostics(
                 None,
             )?);
         }
-        Ok(diags)
+        Ok((project, diags))
     };
     let clones_work = || -> (Vec<Diagnostic>, std::time::Duration) {
         if !clones_enabled {
@@ -516,8 +519,9 @@ fn collect_all_diagnostics(
         (d, t.elapsed())
     };
 
-    let (engine_diags, (clone_diags, clones_elapsed)) = rayon::join(engine_work, clones_work);
-    diagnostics.extend(engine_diags?);
+    let (engine_res, (clone_diags, clones_elapsed)) = rayon::join(engine_work, clones_work);
+    let (project, engine_diags) = engine_res?;
+    diagnostics.extend(engine_diags);
     diagnostics.extend(clone_diags);
     timings.clones = clones_elapsed;
 
