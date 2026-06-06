@@ -41,6 +41,7 @@ use crate::rules::{self, RuleDef, backend::Backend, backend::CheckCtx, meta::Rul
 
 const LARGE_PROJECT_FILE_COUNT: usize = 1_000;
 const ENGINE_LARGE_PROJECT_BUDGET: Duration = Duration::from_secs(55);
+const ENGINE_MAX_FILE_LINES: usize = 10_000;
 
 
 /// Pre-computed per-language dispatch table. Built once in `lint_files`,
@@ -315,6 +316,11 @@ fn dispatch_with_lang(
     project: &ProjectCtx,
 ) -> Vec<Diagnostic> {
     let path = &file.path;
+
+    let line_count = source.bytes().filter(|&b| b == b'\n').count() + 1;
+    if line_count > ENGINE_MAX_FILE_LINES {
+        return Vec::new();
+    }
 
     let file_ctx = FileCtx::build(path, source, file.language, project);
     if file_ctx.is_generated || file_ctx.is_minified || file_ctx.path_segments.is_vendored {
@@ -875,5 +881,29 @@ key = "válue é 💡"
                 Some(&project),
             );
         }
+    }
+
+    #[test]
+    fn oversized_file_is_skipped() {
+        // A valid TS file of 10 001 lines must be skipped entirely — no diagnostics.
+        let mut source = String::from("export const names = [\n");
+        for _ in 0..9_999 {
+            source.push_str("  \"value\",\n");
+        }
+        source.push_str("];\n");
+        // source now has 10 001 lines (1 header + 9 999 values + 1 closing)
+
+        let project = ProjectCtx::empty();
+        let diagnostics = lint_in_memory(
+            Path::new("src/generated.ts"),
+            Language::TypeScript,
+            &source,
+            default_static_config(),
+            Some(&project),
+        );
+        assert!(
+            diagnostics.is_empty(),
+            "expected no diagnostics for oversized file, got {diagnostics:?}"
+        );
     }
 }
