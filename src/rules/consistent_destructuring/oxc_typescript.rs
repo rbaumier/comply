@@ -23,8 +23,8 @@ impl OxcCheck for Check {
         let mut diagnostics = Vec::new();
 
         // Phase 1: collect all destructuring declarations
-        // (object_text, end_byte, has_rest)
-        let mut destructured: Vec<(String, u32, bool)> = Vec::new();
+        // (object_text, end_byte, enclosing_fn_range)
+        let mut destructured: Vec<(String, u32, Option<(u32, u32)>)> = Vec::new();
 
         // Phase 2: collect all member expression candidates
         struct Candidate {
@@ -59,7 +59,24 @@ impl OxcCheck for Check {
                         continue;
                     }
 
-                    destructured.push((obj_text.to_string(), decl.span.end, has_rest));
+                    let fn_range = {
+                        let mut result = None;
+                        for ancestor in nodes.ancestors(node.id()) {
+                            match ancestor.kind() {
+                                AstKind::Function(f) => {
+                                    result = Some((f.span.start, f.span.end));
+                                    break;
+                                }
+                                AstKind::ArrowFunctionExpression(a) => {
+                                    result = Some((a.span.start, a.span.end));
+                                    break;
+                                }
+                                _ => {}
+                            }
+                        }
+                        result
+                    };
+                    destructured.push((obj_text.to_string(), decl.span.end, fn_range));
                 }
                 AstKind::StaticMemberExpression(member) => {
                     // Skip if parent is a member expression (nested: user.address.city)
@@ -119,27 +136,88 @@ impl OxcCheck for Check {
 
         // Phase 3: match candidates against destructured objects
         for c in &candidates {
-            for (decl_obj, decl_end, _) in &destructured {
+            for (decl_obj, decl_end, fn_range) in &destructured {
                 if c.obj_text == *decl_obj && c.start_byte > *decl_end {
-                    let (line, column) = byte_offset_to_line_col(source, c.start_byte as usize);
-                    diagnostics.push(Diagnostic {
-                        path: Arc::clone(&ctx.path_arc),
-                        line,
-                        column,
-                        rule_id: "consistent-destructuring".into(),
-                        message: format!(
-                            "Use destructured variable for `{}` instead of `{}.{}`.",
-                            c.prop_text, c.obj_text, c.prop_text,
-                        ),
-                        severity: Severity::Warning,
-                        span: None,
-                    });
-                    break;
+                    let scope_ok = match fn_range {
+                        None => true,
+                        Some((fn_start, fn_end)) => {
+                            c.start_byte >= *fn_start && c.start_byte <= *fn_end
+                        }
+                    };
+                    if scope_ok {
+                        let (line, column) = byte_offset_to_line_col(source, c.start_byte as usize);
+                        diagnostics.push(Diagnostic {
+                            path: Arc::clone(&ctx.path_arc),
+                            line,
+                            column,
+                            rule_id: "consistent-destructuring".into(),
+                            message: format!(
+                                "Use destructured variable for `{}` instead of `{}.{}`.",
+                                c.prop_text, c.obj_text, c.prop_text,
+                            ),
+                            severity: Severity::Warning,
+                            span: None,
+                        });
+                        break;
+                    }
                 }
             }
         }
 
         diagnostics
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+    #[test]
+    fn skips_cross_function_scope() {
+        let code = r#"
+            const obj = { x: 1, y: 2 };
+            function first() {
+                const { x } = obj;
+                console.log(x);
+            }
+            function second() {
+                console.log(obj.y);
+            }
+        "#;
+        assert!(run(code).is_empty(), "Should not flag across function scopes");
+    }
+
+    #[test]
+    fn flags_same_function_scope() {
+        let code = r#"
+            function test() {
+                const { x } = obj;
+                console.log(x);
+                console.log(obj.y);
+            }
+        "#;
+        let diags = run(code);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains('y'));
+    }
+
+    #[test]
+    fn flags_nested_inner_scope() {
+        let code = r#"
+            function outer() {
+                const { x } = obj;
+                function inner() {
+                    console.log(obj.y);
+                }
+            }
+        "#;
+        let diags = run(code);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains('y'));
     }
 }
 

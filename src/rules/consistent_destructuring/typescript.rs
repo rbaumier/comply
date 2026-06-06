@@ -26,8 +26,8 @@ fn node_text<'a>(source: &'a str, node: &tree_sitter::Node) -> &'a str {
 /// `finish` so we don't depend on traversal order between sibling subtrees.
 #[derive(Default)]
 struct State {
-    /// (object_text, end_byte_of_declaration)
-    destructured: Vec<(String, usize)>,
+    /// (object_text, end_byte_of_declaration, enclosing_fn_range)
+    destructured: Vec<(String, usize, Option<(usize, usize)>)>,
     candidates: Vec<MemberCandidate>,
 }
 
@@ -115,7 +115,8 @@ impl AstCheck for Check {
                 return;
             }
 
-            state.destructured.push((object_text, end_byte));
+            let fn_range = enclosing_fn_range_ts(node);
+            state.destructured.push((object_text, end_byte, fn_range));
             return;
         }
 
@@ -188,26 +189,47 @@ impl AstCheck for Check {
             return;
         }
         for c in &state.candidates {
-            for (decl_obj, decl_end) in &state.destructured {
+            for (decl_obj, decl_end, fn_range) in &state.destructured {
                 if &c.obj_text == decl_obj && c.start_byte > *decl_end {
-                    let prop_text = &c.prop_text;
-                    let obj_text = &c.obj_text;
-                    diagnostics.push(Diagnostic {
-                        path: std::sync::Arc::clone(&ctx.path_arc),
-                        line: c.line,
-                        column: c.column,
-                        rule_id: "consistent-destructuring".into(),
-                        message: format!(
-                            "Use destructured variable for `{prop_text}` instead of `{obj_text}.{prop_text}`."
-                        ),
-                        severity: Severity::Warning,
-                        span: None,
-                    });
-                    break;
+                    let scope_ok = match fn_range {
+                        None => true,
+                        Some((fn_start, fn_end)) => {
+                            c.start_byte >= *fn_start && c.start_byte <= *fn_end
+                        }
+                    };
+                    if scope_ok {
+                        let prop_text = &c.prop_text;
+                        let obj_text = &c.obj_text;
+                        diagnostics.push(Diagnostic {
+                            path: std::sync::Arc::clone(&ctx.path_arc),
+                            line: c.line,
+                            column: c.column,
+                            rule_id: "consistent-destructuring".into(),
+                            message: format!(
+                                "Use destructured variable for `{prop_text}` instead of `{obj_text}.{prop_text}`."
+                            ),
+                            severity: Severity::Warning,
+                            span: None,
+                        });
+                        break;
+                    }
                 }
             }
         }
     }
+}
+
+fn enclosing_fn_range_ts(node: tree_sitter::Node) -> Option<(usize, usize)> {
+    let mut cur = node;
+    while let Some(parent) = cur.parent() {
+        match parent.kind() {
+            "function_declaration" | "function" | "arrow_function" | "method_definition" => {
+                return Some((parent.start_byte(), parent.end_byte()));
+            }
+            _ => { cur = parent; }
+        }
+    }
+    None
 }
 
 /// Check if a node is a "simple" expression (identifier or non-computed
@@ -276,5 +298,49 @@ mod tests {
     fn skips_nested_member() {
         // user.address.city — nested access, don't flag
         assert!(run_on("const { name } = user;\nconsole.log(user.address.city);").is_empty());
+    }
+
+    #[test]
+    fn skips_cross_function_scope() {
+        let code = r#"
+            const obj = { x: 1, y: 2 };
+            function first() {
+                const { x } = obj;
+                console.log(x);
+            }
+            function second() {
+                console.log(obj.y);
+            }
+        "#;
+        assert!(run_on(code).is_empty(), "Should not flag across function scopes");
+    }
+
+    #[test]
+    fn flags_same_function_scope() {
+        let code = r#"
+            function test() {
+                const { x } = obj;
+                console.log(x);
+                console.log(obj.y);
+            }
+        "#;
+        let diags = run_on(code);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains('y'));
+    }
+
+    #[test]
+    fn flags_nested_inner_scope() {
+        let code = r#"
+            function outer() {
+                const { x } = obj;
+                function inner() {
+                    console.log(obj.y);
+                }
+            }
+        "#;
+        let diags = run_on(code);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains('y'));
     }
 }
