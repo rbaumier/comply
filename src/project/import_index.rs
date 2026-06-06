@@ -76,7 +76,7 @@ pub enum ExportKind {
 }
 
 /// One exported symbol at a source location.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExportedSymbol {
     /// Local name visible to importers. For `export default` this is
     /// `"default"` regardless of the original identifier.
@@ -105,7 +105,7 @@ pub enum ImportKind {
 }
 
 /// One imported symbol at a source location.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImportedSymbol {
     /// Local binding name in the importing file. For `import { a as b }`
     /// this is `"b"`. For side-effect imports this is empty.
@@ -860,6 +860,7 @@ fn compute_cycles(imports: &HashMap<PathBuf, Vec<ImportedSymbol>>) -> Vec<Vec<Pa
 }
 
 /// Raw per-file extract before cross-file resolution.
+#[derive(Debug, PartialEq, Eq)]
 struct FileExtract {
     exports: Vec<ExportedSymbol>,
     imports: Vec<ImportedSymbol>,
@@ -872,7 +873,7 @@ struct FileExtract {
 /// A `new X(...)` / `X(...)` site captured during per-file extract. The
 /// `local_name` is the identifier as written in this file; it is linked to an
 /// exporting file + exported name later via the import list.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct LocalCall {
     local_name: String,
     line: usize,
@@ -904,49 +905,29 @@ fn extract_for(parser: &mut Parser, file: &SourceFile) -> Option<(PathBuf, FileE
     if matches!(file.language, Language::Vue) {
         return extract_vue(parser, &source, &file.path);
     }
-    let grammar: tree_sitter::Language = match file.language {
-        Language::Tsx => tree_sitter_typescript::LANGUAGE_TSX.into(),
-        Language::TypeScript | Language::JavaScript => {
-            tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()
-        }
-        _ => return None,
-    };
-    parser.set_language(&grammar).ok()?;
-    let tree = parser.parse(source.as_bytes(), None)?;
+    if !matches!(
+        file.language,
+        Language::Tsx | Language::TypeScript | Language::JavaScript
+    ) {
+        return None;
+    }
 
-    let mut exports = Vec::new();
-    let mut imports = Vec::new();
-    let mut calls = Vec::new();
-    walk_tree(&tree, |node| match node.kind() {
-        "import_statement" => extract_import(node, source.as_bytes(), &mut imports),
-        "export_statement" => extract_export(node, source.as_bytes(), &mut exports),
-        "new_expression" => extract_call(node, source.as_bytes(), CallKind::New, &mut calls),
-        "call_expression" => {
-            if node
-                .child_by_field_name("function")
-                .is_some_and(|c| c.kind() == "import")
-            {
-                extract_dynamic_import(node, source.as_bytes(), &mut imports);
-            } else {
-                extract_require(node, source.as_bytes(), &mut imports);
-                extract_call(node, source.as_bytes(), CallKind::Call, &mut calls);
-            }
-        }
-        _ => {}
-    });
+    // Extract imports/exports/calls from oxc's AST — the same fast parser the
+    // engine already uses — instead of a second, slower tree-sitter parse.
+    // Wrapped in `catch_unwind` because the oxc parser can panic on
+    // pathological input; a failed parse drops the file from the index, the
+    // same outcome a tree-sitter parse failure produced.
+    let extract = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        extract_ts_oxc(&source, &file.path)
+    }))
+    .ok()
+    .flatten()?;
 
     // Absolute-path canonicalization: rules compare paths by value, so two
     // different spellings of the same file (relative vs absolute) would miss
     // each other. Fall back to the given path if canonicalize fails.
     let canon = std::fs::canonicalize(&file.path).unwrap_or_else(|_| file.path.clone());
-    Some((
-        canon,
-        FileExtract {
-            exports,
-            imports,
-            calls,
-        },
-    ))
+    Some((canon, extract))
 }
 
 fn extract_vue(parser: &mut Parser, source: &str, path: &Path) -> Option<(PathBuf, FileExtract)> {
@@ -1510,6 +1491,503 @@ fn extract_params(node: Node, source: &[u8]) -> Vec<String> {
         }
     }
     result
+}
+
+// ===========================================================================
+// oxc-based extraction (TS/JS/TSX) — byte-exact equivalent of the tree-sitter
+// path above. Replicates `extract_for`'s TS dispatch and every helper it calls
+// (`extract_import` / `extract_export` / `extract_call` / `extract_dynamic_import`
+// / `extract_require`) using the typed oxc AST. The Rust and Vue paths stay on
+// tree-sitter. Not yet wired into `build()`; validated by the differential test
+// `oxc_matches_treesitter` below.
+// ===========================================================================
+
+/// 1-based line of `offset` = 1 + count of `\n` bytes in `source[..offset]`.
+/// Matches tree-sitter's `start_position().row + 1`.
+/// Byte offsets of every line start (index 0 + the byte after each `\n`).
+/// Built once per file so line/column lookups are O(log lines) binary searches
+/// instead of an O(offset) rescan per import/export/call node.
+fn oxc_line_starts(source: &str) -> Vec<usize> {
+    let mut starts = Vec::with_capacity(source.len() / 32 + 1);
+    starts.push(0);
+    starts.extend(
+        source
+            .bytes()
+            .enumerate()
+            .filter(|(_, b)| *b == b'\n')
+            .map(|(i, _)| i + 1),
+    );
+    starts
+}
+
+/// 1-based line number of `offset`, matching tree-sitter's
+/// `start_position().row + 1`.
+fn oxc_line_at(lines: &[usize], offset: usize) -> usize {
+    lines.partition_point(|&start| start <= offset)
+}
+
+/// 1-based column of `offset` as a BYTE offset from the last `\n` before it,
+/// matching tree-sitter's `start_position().column + 1` (tree-sitter columns
+/// are byte offsets, not char counts).
+fn oxc_column_at(lines: &[usize], offset: usize) -> usize {
+    let line = lines.partition_point(|&start| start <= offset);
+    (offset - lines[line - 1]) + 1
+}
+
+/// oxc equivalent of `extract_for`'s TS/JS/TSX branch. Returns the same
+/// `FileExtract` (same elements, same order) as the tree-sitter path.
+/// `source` is the file text; `path` selects the oxc `SourceType`.
+fn extract_ts_oxc(source: &str, path: &Path) -> Option<FileExtract> {
+    use oxc_allocator::Allocator;
+    use oxc_ast::AstKind;
+    use oxc_parser::Parser as OxcParser;
+
+    let source_type = crate::oxc_helpers::source_type_for_path(path);
+    let allocator = Allocator::default();
+    let parse_ret = OxcParser::new(&allocator, source, source_type).parse();
+    let semantic = oxc_semantic::SemanticBuilder::new()
+        .build(&parse_ret.program)
+        .semantic;
+
+    let mut exports = Vec::new();
+    let mut imports = Vec::new();
+    let mut calls = Vec::new();
+    let lines = oxc_line_starts(source);
+
+    // Pre-order over `nodes().iter()` (NodeId order == SemanticBuilder visit
+    // order == pre-order DFS), the same traversal `walk_tree` performs.
+    for node in semantic.nodes().iter() {
+        match node.kind() {
+            AstKind::ImportDeclaration(import) => {
+                oxc_extract_import(&lines, import, &mut imports);
+            }
+            AstKind::ExportNamedDeclaration(export) => {
+                oxc_extract_export_named(&lines, export, &mut exports);
+            }
+            AstKind::ExportAllDeclaration(export) => {
+                oxc_extract_export_all(&lines, export, &mut exports);
+            }
+            AstKind::ExportDefaultDeclaration(export) => {
+                exports.push(ExportedSymbol {
+                    name: "default".into(),
+                    kind: ExportKind::Default,
+                    line: oxc_line_at(&lines, export.span.start as usize),
+                    reexport_source: None,
+                    params: Vec::new(),
+                });
+            }
+            AstKind::NewExpression(new_expr) => {
+                oxc_extract_call_new(&lines, new_expr, &mut calls);
+            }
+            AstKind::CallExpression(call) => {
+                oxc_extract_require(&lines, call, &mut imports);
+                oxc_extract_call_call(&lines, call, &mut calls);
+            }
+            AstKind::ImportExpression(import_expr) => {
+                oxc_extract_dynamic_import(&lines, import_expr, &mut imports);
+            }
+            _ => {}
+        }
+    }
+
+    Some(FileExtract {
+        exports,
+        imports,
+        calls,
+    })
+}
+
+fn oxc_extract_import(
+    lines: &[usize],
+    import: &oxc_ast::ast::ImportDeclaration,
+    out: &mut Vec<ImportedSymbol>,
+) {
+    use oxc_ast::ast::ImportDeclarationSpecifier;
+
+    let specifier = import.source.value.as_str().to_string();
+    let line = oxc_line_at(lines, import.span.start as usize);
+    let stmt_type_only = import.import_kind.is_type();
+
+    // `import '...'` (side effect): `specifiers` is `None`. `import {} from '...'`
+    // is `Some([])` and produces no symbols, like tree-sitter's empty clause.
+    let Some(specifiers) = &import.specifiers else {
+        out.push(ImportedSymbol {
+            local_name: String::new(),
+            imported_name: String::new(),
+            kind: ImportKind::SideEffect,
+            specifier,
+            source_path: None,
+            line,
+            is_type_only: false,
+        });
+        return;
+    };
+
+    for spec in specifiers {
+        match spec {
+            ImportDeclarationSpecifier::ImportDefaultSpecifier(def) => {
+                out.push(ImportedSymbol {
+                    local_name: def.local.name.as_str().to_string(),
+                    imported_name: "default".into(),
+                    kind: ImportKind::Default,
+                    specifier: specifier.clone(),
+                    source_path: None,
+                    line,
+                    is_type_only: stmt_type_only,
+                });
+            }
+            ImportDeclarationSpecifier::ImportNamespaceSpecifier(ns) => {
+                out.push(ImportedSymbol {
+                    local_name: ns.local.name.as_str().to_string(),
+                    imported_name: "*".into(),
+                    kind: ImportKind::Namespace,
+                    specifier: specifier.clone(),
+                    source_path: None,
+                    line,
+                    is_type_only: stmt_type_only,
+                });
+            }
+            ImportDeclarationSpecifier::ImportSpecifier(named) => {
+                let local = named.local.name.as_str().to_string();
+                // tree-sitter only sees `identifier` nodes; `import { "x" as y }`
+                // exposes a single identifier (`y`), so imported == local there.
+                let imported = named
+                    .imported
+                    .identifier_name()
+                    .map_or_else(|| local.clone(), |id| id.as_str().to_string());
+                let spec_type_only = stmt_type_only || named.import_kind.is_type();
+                out.push(ImportedSymbol {
+                    local_name: local,
+                    imported_name: imported,
+                    kind: ImportKind::Named,
+                    specifier: specifier.clone(),
+                    source_path: None,
+                    line,
+                    is_type_only: spec_type_only,
+                });
+            }
+        }
+    }
+}
+
+fn oxc_extract_export_named(
+    lines: &[usize],
+    export: &oxc_ast::ast::ExportNamedDeclaration,
+    out: &mut Vec<ExportedSymbol>,
+) {
+    use oxc_ast::ast::Declaration;
+
+    let line = oxc_line_at(lines, export.span.start as usize);
+    let reexport_source = export.source.as_ref().map(|s| s.value.as_str().to_string());
+
+    // `export { a, b as c } [from '...']`
+    if export.declaration.is_none() {
+        let kind = if reexport_source.is_some() {
+            ExportKind::ReExport
+        } else {
+            ExportKind::Named
+        };
+        for spec in &export.specifiers {
+            // tree-sitter positional logic: `{ a }` => one identifier (a);
+            // `{ b as c }` => two identifiers, exported name = c. A string-literal
+            // alias is not an identifier in tree-sitter, so it falls back to local.
+            let name = match spec.exported.identifier_name() {
+                Some(id) => id.as_str().to_string(),
+                None => match spec.local.identifier_name() {
+                    Some(id) => id.as_str().to_string(),
+                    None => continue,
+                },
+            };
+            out.push(ExportedSymbol {
+                name,
+                kind,
+                line,
+                reexport_source: reexport_source.clone(),
+                params: Vec::new(),
+            });
+        }
+        return;
+    }
+
+    // `export function foo` / `export class Foo` / `export const …` /
+    // `export type/interface/enum …`
+    let declaration = export.declaration.as_ref().unwrap();
+
+    // Ambient `export declare const/function/class …` carry no concrete
+    // binding. tree-sitter wraps them in an `ambient_declaration` node it
+    // never descends into, so they were absent from the index; match that so
+    // a named import of an ambient export is not seen as a missing export.
+    if declaration.declare() {
+        return;
+    }
+
+    match declaration {
+        Declaration::FunctionDeclaration(func) => {
+            // A body-less function is an overload signature or ambient
+            // declaration; tree-sitter parses those as `function_signature`
+            // (not `function_declaration`) and never emits them. Match that so
+            // an overloaded `export function` yields one export, not two.
+            if func.body.is_some()
+                && let Some(id) = &func.id
+            {
+                out.push(ExportedSymbol {
+                    name: id.name.as_str().to_string(),
+                    kind: ExportKind::Named,
+                    line,
+                    reexport_source: None,
+                    params: oxc_extract_params(func),
+                });
+            }
+        }
+        Declaration::ClassDeclaration(class) => {
+            if let Some(id) = &class.id {
+                out.push(ExportedSymbol {
+                    name: id.name.as_str().to_string(),
+                    kind: ExportKind::Named,
+                    line,
+                    reexport_source: None,
+                    params: Vec::new(),
+                });
+            }
+        }
+        Declaration::VariableDeclaration(var) => {
+            for decl in &var.declarations {
+                let mut names = Vec::new();
+                oxc_collect_pattern_names(&decl.id, &mut names);
+                for name in names {
+                    out.push(ExportedSymbol {
+                        name,
+                        kind: ExportKind::Named,
+                        line,
+                        reexport_source: None,
+                        params: Vec::new(),
+                    });
+                }
+            }
+        }
+        Declaration::TSTypeAliasDeclaration(decl) => {
+            out.push(ExportedSymbol {
+                name: decl.id.name.as_str().to_string(),
+                kind: ExportKind::Named,
+                line,
+                reexport_source: None,
+                params: Vec::new(),
+            });
+        }
+        Declaration::TSInterfaceDeclaration(decl) => {
+            out.push(ExportedSymbol {
+                name: decl.id.name.as_str().to_string(),
+                kind: ExportKind::Named,
+                line,
+                reexport_source: None,
+                params: Vec::new(),
+            });
+        }
+        Declaration::TSEnumDeclaration(decl) => {
+            out.push(ExportedSymbol {
+                name: decl.id.name.as_str().to_string(),
+                kind: ExportKind::Named,
+                line,
+                reexport_source: None,
+                params: Vec::new(),
+            });
+        }
+        _ => {}
+    }
+}
+
+fn oxc_extract_export_all(
+    lines: &[usize],
+    export: &oxc_ast::ast::ExportAllDeclaration,
+    out: &mut Vec<ExportedSymbol>,
+) {
+    // `export * as ns from '...'` is emitted as a `namespace_export` node in
+    // tree-sitter, where the `*` is NOT a direct child of `export_statement`,
+    // so tree-sitter's `extract_export` (`has_star` + `export_clause` checks)
+    // matches NOTHING and drops it. Replicate that: only bare `export * from`
+    // (no `as ns`) becomes a `StarReExport`.
+    if export.exported.is_some() {
+        return;
+    }
+    out.push(ExportedSymbol {
+        name: "*".into(),
+        kind: ExportKind::StarReExport,
+        line: oxc_line_at(lines, export.span.start as usize),
+        reexport_source: Some(export.source.value.as_str().to_string()),
+        params: Vec::new(),
+    });
+}
+
+/// Function-declaration params whose pattern is a plain identifier — matches
+/// tree-sitter `extract_params` (destructured / rest params are skipped).
+fn oxc_extract_params(func: &oxc_ast::ast::Function) -> Vec<String> {
+    use oxc_ast::ast::BindingPattern;
+    let mut result = Vec::new();
+    for item in &func.params.items {
+        if let BindingPattern::BindingIdentifier(id) = &item.pattern {
+            result.push(id.name.as_str().to_string());
+        }
+    }
+    result
+}
+
+/// oxc equivalent of tree-sitter `collect_pattern_names` over a binding pattern.
+fn oxc_collect_pattern_names(pattern: &oxc_ast::ast::BindingPattern, out: &mut Vec<String>) {
+    use oxc_ast::ast::BindingPattern;
+    match pattern {
+        BindingPattern::BindingIdentifier(id) => out.push(id.name.as_str().to_string()),
+        BindingPattern::ObjectPattern(obj) => {
+            // `value` is the actual binding for both `{ a }` (shorthand) and
+            // `{ a: local }` (pair). Rest comes last in source order.
+            for prop in &obj.properties {
+                oxc_collect_pattern_names(&prop.value, out);
+            }
+            if let Some(rest) = &obj.rest {
+                oxc_collect_pattern_names(&rest.argument, out);
+            }
+        }
+        BindingPattern::ArrayPattern(arr) => {
+            for elem in arr.elements.iter().flatten() {
+                oxc_collect_pattern_names(elem, out);
+            }
+            if let Some(rest) = &arr.rest {
+                oxc_collect_pattern_names(&rest.argument, out);
+            }
+        }
+        BindingPattern::AssignmentPattern(assign) => {
+            // `{ a = 1 }` / `[a = 1]` — the left side is the binding.
+            oxc_collect_pattern_names(&assign.left, out);
+        }
+    }
+}
+
+fn oxc_extract_call_new(
+    lines: &[usize],
+    new_expr: &oxc_ast::ast::NewExpression,
+    out: &mut Vec<LocalCall>,
+) {
+    oxc_push_call(
+        lines,
+        &new_expr.callee,
+        &new_expr.arguments,
+        new_expr.span.start as usize,
+        new_expr.span.end as usize,
+        CallKind::New,
+        out,
+    );
+}
+
+fn oxc_extract_call_call(
+    lines: &[usize],
+    call: &oxc_ast::ast::CallExpression,
+    out: &mut Vec<LocalCall>,
+) {
+    oxc_push_call(
+        lines,
+        &call.callee,
+        &call.arguments,
+        call.span.start as usize,
+        call.span.end as usize,
+        CallKind::Call,
+        out,
+    );
+}
+
+/// Shared body for `new X(...)` / `X(...)`. Only fires when the callee is a
+/// bare identifier; argument names are `Some` for plain identifiers, `None`
+/// otherwise (spreads, member access, literals, …).
+fn oxc_push_call(
+    lines: &[usize],
+    callee: &oxc_ast::ast::Expression,
+    arguments: &[oxc_ast::ast::Argument],
+    start: usize,
+    end: usize,
+    kind: CallKind,
+    out: &mut Vec<LocalCall>,
+) {
+    use oxc_ast::ast::{Argument, Expression};
+
+    let Expression::Identifier(id) = callee else {
+        return;
+    };
+    let args = arguments
+        .iter()
+        .map(|arg| match arg {
+            // tree-sitter parses `undefined` as its own node kind (not an
+            // identifier), so it yields `None`; match that here.
+            Argument::Identifier(id) if id.name.as_str() != "undefined" => {
+                Some(id.name.as_str().to_string())
+            }
+            _ => None,
+        })
+        .collect();
+
+    out.push(LocalCall {
+        local_name: id.name.as_str().to_string(),
+        line: oxc_line_at(lines, start),
+        column: oxc_column_at(lines, start),
+        byte_offset: start,
+        byte_len: end - start,
+        kind,
+        args,
+    });
+}
+
+fn oxc_extract_dynamic_import(
+    lines: &[usize],
+    import_expr: &oxc_ast::ast::ImportExpression,
+    out: &mut Vec<ImportedSymbol>,
+) {
+    use oxc_ast::ast::Expression;
+    let Expression::StringLiteral(lit) = &import_expr.source else {
+        return;
+    };
+    let specifier = lit.value.as_str();
+    if specifier.is_empty() {
+        return;
+    }
+    out.push(ImportedSymbol {
+        local_name: String::new(),
+        imported_name: "*".into(),
+        kind: ImportKind::Namespace,
+        specifier: specifier.to_string(),
+        source_path: None,
+        line: oxc_line_at(lines, import_expr.span.start as usize),
+        is_type_only: false,
+    });
+}
+
+fn oxc_extract_require(
+    lines: &[usize],
+    call: &oxc_ast::ast::CallExpression,
+    out: &mut Vec<ImportedSymbol>,
+) {
+    use oxc_ast::ast::{Argument, Expression};
+    let Expression::Identifier(callee) = &call.callee else {
+        return;
+    };
+    if callee.name.as_str() != "require" {
+        return;
+    }
+    let Some(first_arg) = call.arguments.first() else {
+        return;
+    };
+    let Argument::StringLiteral(lit) = first_arg else {
+        return;
+    };
+    let specifier = lit.value.as_str();
+    if specifier.is_empty() {
+        return;
+    }
+    out.push(ImportedSymbol {
+        local_name: String::new(),
+        imported_name: "*".into(),
+        kind: ImportKind::Namespace,
+        specifier: specifier.to_string(),
+        source_path: None,
+        line: oxc_line_at(lines, call.span.start as usize),
+        is_type_only: false,
+    });
 }
 
 /// Try to resolve a relative specifier (`./foo`, `../bar/baz`) into an
@@ -2873,5 +3351,168 @@ mod tests {
         let imports = index.get_imports(&app_canon);
         assert_eq!(imports.len(), 1, "imports: {imports:?}");
         assert_eq!(imports[0].source_path.as_ref(), Some(&utils_canon));
+    }
+
+    // =======================================================================
+    // Differential test: the oxc extractor must produce a byte-exact
+    // `FileExtract` (same elements, same order, same line/column/offset) as the
+    // tree-sitter path for TS/JS/TSX sources.
+    // =======================================================================
+
+    /// In-memory tree-sitter extraction mirroring `extract_for`'s TS/JS/TSX
+    /// dispatch (no disk read, no canonicalization).
+    fn extract_ts_treesitter(source: &str, lang: Language) -> FileExtract {
+        let grammar: tree_sitter::Language = match lang {
+            Language::Tsx => tree_sitter_typescript::LANGUAGE_TSX.into(),
+            Language::TypeScript | Language::JavaScript => {
+                tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()
+            }
+            other => panic!("unexpected language {other:?}"),
+        };
+        let mut parser = Parser::new();
+        parser.set_language(&grammar).unwrap();
+        let tree = parser.parse(source.as_bytes(), None).unwrap();
+        let bytes = source.as_bytes();
+
+        let mut exports = Vec::new();
+        let mut imports = Vec::new();
+        let mut calls = Vec::new();
+        walk_tree(&tree, |node| match node.kind() {
+            "import_statement" => extract_import(node, bytes, &mut imports),
+            "export_statement" => extract_export(node, bytes, &mut exports),
+            "new_expression" => extract_call(node, bytes, CallKind::New, &mut calls),
+            "call_expression" => {
+                if node
+                    .child_by_field_name("function")
+                    .is_some_and(|c| c.kind() == "import")
+                {
+                    extract_dynamic_import(node, bytes, &mut imports);
+                } else {
+                    extract_require(node, bytes, &mut imports);
+                    extract_call(node, bytes, CallKind::Call, &mut calls);
+                }
+            }
+            _ => {}
+        });
+        FileExtract {
+            exports,
+            imports,
+            calls,
+        }
+    }
+
+    /// Every distinct case the oxc extractor must match, one source string each.
+    const DIFF_CASES: &[&str] = &[
+        // --- imports ---
+        "import foo from './m';",
+        "import * as ns from './m';",
+        "import { a, b } from './m';",
+        "import { a as b } from './m';",
+        "import { a, b as c, d } from './m';",
+        "import './side-effect';",
+        "import {} from './empty';",
+        "import def, { a, b as c } from './m';",
+        "import def, * as ns from './m';",
+        "import React from 'react';",
+        // type-only imports (statement-level + per-specifier)
+        "import type { T } from './t';",
+        "import type Foo from './t';",
+        "import { type T, value } from './t';",
+        "import { type A as B } from './t';",
+        "import type * as NS from './t';",
+        // dynamic import / require
+        "const x = import('./dyn');",
+        "async function f() { const m = await import('./dyn'); return m; }",
+        "const y = require('./req');",
+        "const z = require('not-relative');",
+        "notRequire('./nope');",
+        // template-literal specifiers must be ignored by both (not StringLiteral)
+        "const t = import(`./tpl`);",
+        "const r = require(`./tpl`);",
+        // --- exports ---
+        "export * from './m';",
+        "export * as ns from './m';",
+        "export { a, b } from './m';",
+        "export { a as b } from './m';",
+        "export { a, b as c };",
+        "export {};",
+        "export type { T } from './t';",
+        "export type { T };",
+        "export default 42;",
+        "export default function hello() {}",
+        "export default class Widget {}",
+        "export default function (x, y) { return x + y; }",
+        "export function fn(a, b, c) { return a; }",
+        "export function* gen(x) { yield x; }",
+        "export async function afn(p, q) { return p; }",
+        "export function destructured({ a, b }, [c], ...rest) { return a; }",
+        "export class Klass {}",
+        "export abstract class AbstractK {}",
+        "export const single = 1;",
+        "export const a1 = 1, b1 = 2, c1 = 3;",
+        "export let mutable = 0;",
+        "export var legacy = 0;",
+        "declare const obj: any; export const { signIn, signOut } = obj;",
+        "declare const obj: any; export const { foo: bar } = obj;",
+        "declare const obj: any; export const { a = 1, b } = obj;",
+        "declare const arr: any; export const [first, second, ...others] = arr;",
+        "declare const obj: any; export const { a: { b }, ...rest } = obj;",
+        "declare const obj: any; export const [, skipped, { nested }] = obj;",
+        "export type Alias = number;",
+        "export interface Iface { x: number; }",
+        "export enum Color { Red, Green }",
+        // --- calls / new ---
+        "f(a, b);",
+        "f(a, obj.x, 42, ...spread);",
+        "new Widget(config, handler);",
+        "new Foo();",
+        "ns.method(a);",
+        "obj.prop.deep(x);",
+        "f(g(h(a)), b);",
+        "new Outer(new Inner(a));",
+        "const c = compute(input);",
+        // --- multi-byte / accents: offsets & columns must stay byte-based ---
+        "const café = 1;\nimport { naïve } from './accentué';\nrender(café, naïve);",
+        "// commentaire éàü\nnew Composé(arg);\nexport const ñ = 1;",
+        "import { x } from './m';\n\n\nf(x);\nnew Y(z);",
+        // 4-byte chars (emoji) inside strings before a call — byte offsets and
+        // columns must stay byte-based, not char-based.
+        "const s = '🚀🚀🚀'; launch(s, payload);\nnew Rocket(s);",
+        "render('😀'); new Widget('x', '😀');",
+        // --- a realistic mixed module ---
+        "import React, { useState as useS, type FC } from 'react';\n\
+         import * as utils from './utils';\n\
+         import './styles.css';\n\
+         export { helper } from './helpers';\n\
+         export * from './all';\n\
+         export * as everything from './everything';\n\
+         export const value = 1, { destructured } = obj;\n\
+         export default function App(props, ref) {\n\
+           const [s, setS] = useState(0);\n\
+           render(props);\n\
+           return new Component(s);\n\
+         }\n",
+    ];
+
+    #[test]
+    fn oxc_matches_treesitter() {
+        // Run every case under both grammars: `.tsx` (TSX) and `.ts`
+        // (TypeScript). None of the cases use JSX, so both must agree, and the
+        // oxc `SourceType` is selected from the path extension exactly as in
+        // production (`source_type_for_path`).
+        let variants: &[(Language, &str)] =
+            &[(Language::Tsx, "diff.tsx"), (Language::TypeScript, "diff.ts")];
+        for (lang, file) in variants {
+            let path = Path::new(file);
+            for (i, src) in DIFF_CASES.iter().enumerate() {
+                let ts = extract_ts_treesitter(src, *lang);
+                let oxc = extract_ts_oxc(src, path).expect("oxc extract");
+                assert_eq!(
+                    oxc, ts,
+                    "case #{i} ({file}) diverged:\n--- source ---\n{src}\n\
+                     --- oxc ---\n{oxc:#?}\n--- tree-sitter ---\n{ts:#?}"
+                );
+            }
+        }
     }
 }
