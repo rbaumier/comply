@@ -393,6 +393,13 @@ pub struct ProjectCtx {
     package_json_cache: Mutex<HashMap<PathBuf, Arc<PackageJson>>>,
     tsconfig_cache: Mutex<HashMap<PathBuf, Arc<Tsconfig>>>,
 
+    // Memoizes the upward `walk_up_finding` stat-walk that locates a marker
+    // file (`package.json`, `tsconfig.json`). The resolved manifest directory
+    // is identical for every file in the same directory, so the walk runs once
+    // per (start dir, marker) instead of once per file. Nested by marker so
+    // hits avoid allocating a composite key.
+    manifest_dir_cache: Mutex<HashMap<&'static str, HashMap<PathBuf, Option<PathBuf>>>>,
+
     // Lazy project-wide fields. `OnceLock<Option<T>>` keeps the "init once,
     // cache None on failure, never retry" contract in a single primitive.
     tailwind_theme: OnceLock<Option<TailwindTheme>>,
@@ -697,6 +704,7 @@ impl ProjectCtx {
     pub fn nearest_package_json(&self, path: &Path) -> Option<Arc<PackageJson>> {
         nearest(
             &self.package_json_cache,
+            &self.manifest_dir_cache,
             path,
             "package.json",
             PackageJson::parse,
@@ -790,7 +798,7 @@ impl ProjectCtx {
     /// a root `tsconfig.base.json` are visible to callers.
     pub fn nearest_tsconfig(&self, path: &Path) -> Option<Arc<Tsconfig>> {
         let start_dir = path.parent()?;
-        let manifest_dir = walk_up_finding(start_dir, "tsconfig.json")?;
+        let manifest_dir = walk_up_finding_cached(&self.manifest_dir_cache, start_dir, "tsconfig.json")?;
 
         if let Some(hit) = self.tsconfig_cache.lock().ok()?.get(&manifest_dir) {
             return Some(Arc::clone(hit));
@@ -867,8 +875,9 @@ fn resolve_workspace_roots(project_root: Option<&Path>, pkg: &PackageJson) -> Ve
 /// clone the `Arc` under the lock.
 fn nearest<T>(
     cache: &Mutex<HashMap<PathBuf, Arc<T>>>,
+    dir_cache: &Mutex<HashMap<&'static str, HashMap<PathBuf, Option<PathBuf>>>>,
     path: &Path,
-    filename: &str,
+    filename: &'static str,
     parse: impl Fn(&str) -> Option<T>,
 ) -> Option<Arc<T>> {
     let start_dir = path.parent()?;
@@ -878,7 +887,7 @@ fn nearest<T>(
     // ancestor shadow a closer, not-yet-parsed manifest — the monorepo case of
     // a root tsconfig alongside per-package tsconfigs, where resolution order
     // is arbitrary.
-    let manifest_dir = walk_up_finding(start_dir, filename)?;
+    let manifest_dir = walk_up_finding_cached(dir_cache, start_dir, filename)?;
 
     if let Some(hit) = cache.lock().ok()?.get(&manifest_dir) {
         return Some(Arc::clone(hit));
@@ -933,6 +942,30 @@ pub(crate) fn walk_up_finding(start: &Path, target: &str) -> Option<PathBuf> {
         cur = dir.parent();
     }
     None
+}
+
+/// [`walk_up_finding`] memoized by the per-run `manifest_dir_cache`. The walk
+/// is deterministic for the duration of a run, so the memo is output-identical
+/// while collapsing thousands of duplicate stat-walks (one per file sharing a
+/// directory) down to one per (directory, marker).
+fn walk_up_finding_cached(
+    cache: &Mutex<HashMap<&'static str, HashMap<PathBuf, Option<PathBuf>>>>,
+    start: &Path,
+    target: &'static str,
+) -> Option<PathBuf> {
+    if let Ok(c) = cache.lock()
+        && let Some(inner) = c.get(target)
+        && let Some(hit) = inner.get(start)
+    {
+        return hit.clone();
+    }
+    let resolved = walk_up_finding(start, target);
+    if let Ok(mut c) = cache.lock() {
+        c.entry(target)
+            .or_default()
+            .insert(start.to_path_buf(), resolved.clone());
+    }
+    resolved
 }
 
 fn load_manifest_at<T>(
