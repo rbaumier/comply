@@ -672,6 +672,11 @@ fn collect_bare_specifiers(
     imports: &HashMap<PathBuf, Vec<ImportedSymbol>>,
 ) -> HashMap<String, BareSpecifierInfo> {
     let mut result: HashMap<String, BareSpecifierInfo> = HashMap::new();
+    // Per-package importer dedup. The previous `entry.importers.contains(file)`
+    // scan was O(importers²) per package — quadratic for a dependency imported
+    // by thousands of files. A `HashSet` makes the membership test O(1) while
+    // preserving the first-seen insertion order into the `Vec`.
+    let mut seen: HashMap<String, std::collections::HashSet<PathBuf>> = HashMap::new();
     for (file, imps) in imports {
         for imp in imps {
             if imp.source_path.is_some() || imp.specifier.starts_with('.') {
@@ -681,6 +686,7 @@ fn collect_bare_specifiers(
             if pkg.is_empty() || is_builtin_module(&pkg) {
                 continue;
             }
+            let is_new_importer = seen.entry(pkg.clone()).or_default().insert(file.clone());
             let entry = result.entry(pkg).or_insert(BareSpecifierInfo {
                 type_only: true,
                 importers: Vec::new(),
@@ -688,7 +694,7 @@ fn collect_bare_specifiers(
             if !imp.is_type_only {
                 entry.type_only = false;
             }
-            if !entry.importers.contains(file) {
+            if is_new_importer {
                 entry.importers.push(file.clone());
             }
         }
