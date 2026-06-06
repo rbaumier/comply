@@ -193,10 +193,12 @@ fn scan_minified(path: &Path, source: &str) -> bool {
     if name.contains(".min.") {
         return true;
     }
-    // Heuristic: >4KB on a single line (or ≤3 lines) is minified.
+    // Heuristic: minified content is either a handful of lines, or a normal
+    // line count with one machine-generated line that dwarfs the rest. Bundles
+    // often keep a few short header lines above a single multi-KB payload line.
     if source.len() > 4096 {
         let line_count = source.bytes().filter(|&b| b == b'\n').count() + 1;
-        if line_count <= 3 {
+        if line_count <= 3 || source.split('\n').any(|line| line.len() > 4096) {
             return true;
         }
     }
@@ -333,6 +335,29 @@ mod tests {
     fn does_not_match_string_inside_expression() {
         let directives = scan_directives("const x = \"use client\";");
         assert!(!directives.use_client);
+    }
+
+    #[test]
+    fn minified_long_single_line_among_normal_lines() {
+        // A few short lines above one multi-KB payload line — the shape of a
+        // bundle that keeps header lines above the minified body.
+        let long = "a".repeat(5000);
+        let src = format!("// header\nconst x = 1;\nconst data = \"{long}\";\n");
+        assert!(scan_minified(&PathBuf::from("dist/assets/index-abc123.js"), &src));
+    }
+
+    #[test]
+    fn not_minified_normal_multiline_js() {
+        let src = "const a = 1;\nconst b = 2;\nfunction f() {\n  return a + b;\n}\n".repeat(200);
+        assert!(!scan_minified(&PathBuf::from("src/app.js"), &src));
+    }
+
+    #[test]
+    fn long_line_in_ts_is_not_minified() {
+        // The minified heuristic only applies to js/css bundle extensions.
+        let long = "a".repeat(5000);
+        let src = format!("const data = \"{long}\";\n");
+        assert!(!scan_minified(&PathBuf::from("src/data.ts"), &src));
     }
 
     #[test]
