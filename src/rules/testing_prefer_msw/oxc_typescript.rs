@@ -100,13 +100,18 @@ impl OxcCheck for Check {
         semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
-        if !is_test_file(ctx.path) {
-            return;
-        }
-
-        // A fetch-wrapper unit test must mock `fetch` directly to exercise
-        // transport-layer rejections MSW cannot reproduce; exempt the file.
-        if is_fetch_wrapper_unit_test(semantic) {
+        // Both guards are file-invariant but `run` is per-node;
+        // `is_fetch_wrapper_unit_test` scans the whole semantic, so without a
+        // per-file memo a test file pays O(nodes²). The file is in scope iff it
+        // is a test file that is NOT a fetch-wrapper unit test (which must mock
+        // `fetch` directly to exercise transport-layer rejections MSW can't
+        // reproduce).
+        let in_scope = crate::oxc_helpers::cached_file_bool(
+            ctx.source,
+            crate::oxc_helpers::SLOT_TESTING_MSW,
+            || is_test_file(ctx.path) && !is_fetch_wrapper_unit_test(semantic),
+        );
+        if !in_scope {
             return;
         }
 

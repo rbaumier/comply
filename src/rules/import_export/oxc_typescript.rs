@@ -20,7 +20,7 @@ impl OxcCheck for Check {
             return Vec::new();
         }
 
-        let canon = std::fs::canonicalize(ctx.path).unwrap_or_else(|_| ctx.path.to_path_buf());
+        let canon = index.canonical(ctx.path);
 
         let exports = index.get_exports(&canon);
         let mut by_name: HashMap<&str, Vec<&crate::project::import_index::ExportedSymbol>> =

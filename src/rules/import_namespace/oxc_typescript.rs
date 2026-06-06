@@ -28,7 +28,7 @@ impl OxcCheck for Check {
             return diagnostics;
         }
 
-        let canon = std::fs::canonicalize(ctx.path).unwrap_or_else(|_| ctx.path.to_path_buf());
+        let canon = index.canonical(ctx.path);
 
         // 1. Collect namespace imports: local_name -> resolved source path.
         let mut ns_map: HashMap<String, PathBuf> = HashMap::new();

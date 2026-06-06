@@ -27,7 +27,7 @@ impl OxcCheck for Check {
             return diagnostics;
         }
 
-        let canon = std::fs::canonicalize(ctx.path).unwrap_or_else(|_| ctx.path.to_path_buf());
+        let canon = index.canonical(ctx.path);
 
         let mut named_by_source: HashMap<PathBuf, Option<HashSet<String>>> = HashMap::new();
 

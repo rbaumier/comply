@@ -41,7 +41,7 @@ impl OxcCheck for Check {
             return Vec::new();
         }
 
-        let canon = std::fs::canonicalize(ctx.path).unwrap_or_else(|_| ctx.path.to_path_buf());
+        let canon = index.canonical(ctx.path);
 
         if let Some(cycle) = index.cycle_for(&canon) {
             let formatted = format_cycle(cycle, ctx.project.project_root.as_deref());

@@ -65,7 +65,8 @@ struct FileBoolSlot {
 /// predicate. Keep these unique; collisions would cross-contaminate caches.
 pub const SLOT_REACT_COMPILER: usize = 0;
 pub const SLOT_ES_MODULE: usize = 1;
-const FILE_BOOL_SLOTS: usize = 2;
+pub const SLOT_TESTING_MSW: usize = 2;
+const FILE_BOOL_SLOTS: usize = 3;
 
 thread_local! {
     static FILE_BOOLS: std::cell::Cell<[FileBoolSlot; FILE_BOOL_SLOTS]> = const {
