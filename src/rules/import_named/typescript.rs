@@ -119,6 +119,18 @@ mod tests {
     }
 
     #[test]
+    fn allows_import_of_ambient_declare_const() {
+        // `export declare const X` is a real named export, importable by name.
+        let (_dir, project, paths) = setup_project(&[
+            ("constants.ts", "export declare const GLOBAL_SEROVAL: '$R';"),
+            ("app.ts", "import { GLOBAL_SEROVAL } from './constants';"),
+        ]);
+        let source = "import { GLOBAL_SEROVAL } from './constants';";
+        let diags = run_ts_with_project_and_path(source, &Check, &project, &paths[1]);
+        assert!(diags.is_empty());
+    }
+
+    #[test]
     fn skips_star_reexport_source() {
         let (_dir, project, paths) = setup_project(&[
             ("base.ts", "export const x = 1;"),

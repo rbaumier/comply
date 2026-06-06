@@ -1710,18 +1710,9 @@ fn oxc_extract_export_named(
     }
 
     // `export function foo` / `export class Foo` / `export const …` /
-    // `export type/interface/enum …`
-    let declaration = export.declaration.as_ref().unwrap();
-
-    // Ambient `export declare const/function/class …` carry no concrete
-    // binding. tree-sitter wraps them in an `ambient_declaration` node it
-    // never descends into, so they were absent from the index; match that so
-    // a named import of an ambient export is not seen as a missing export.
-    if declaration.declare() {
-        return;
-    }
-
-    match declaration {
+    // `export type/interface/enum …`. Ambient `export declare const/class …`
+    // are real named exports (importable by name), so they are indexed too.
+    match export.declaration.as_ref().unwrap() {
         Declaration::FunctionDeclaration(func) => {
             // A body-less function is an overload signature or ambient
             // declaration; tree-sitter parses those as `function_signature`
