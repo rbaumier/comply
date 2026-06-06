@@ -17,6 +17,14 @@ impl OxcCheck for Check {
         ]
     }
 
+    // The rule only fires on `require(…)`, `__dirname`, `__filename`,
+    // `module.exports`, or `exports.x`. `"exports"` is a substring of both
+    // `module.exports` and `exports.x`, so these four literals cover every
+    // path. Pure-ESM files (the common case) carry none and skip dispatch.
+    fn prefilter(&self) -> Option<&'static [&'static str]> {
+        Some(&["require", "__dirname", "__filename", "exports"])
+    }
+
     fn run<'a>(
         &self,
         node: &oxc_semantic::AstNode<'a>,

@@ -63,6 +63,12 @@ impl OxcCheck for Check {
         &[AstType::StaticMemberExpression]
     }
 
+    // The rule only flags `window.`/`self.`/`global.` member access, so a file
+    // carrying none of these identifiers can never trigger it.
+    fn prefilter(&self) -> Option<&'static [&'static str]> {
+        Some(&["window", "self", "global"])
+    }
+
     fn run<'a>(
         &self,
         node: &oxc_semantic::AstNode<'a>,

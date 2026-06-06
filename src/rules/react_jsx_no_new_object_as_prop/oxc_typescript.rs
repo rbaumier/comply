@@ -44,10 +44,29 @@ const COMPILER_CONFIG_FILES: &[&str] = &[
 /// True when the project ships React Compiler — either declared as a
 /// dependency or referenced inside a bundler / babel config.
 ///
+/// The result depends only on the file path and project, not the node, but
+/// `run` is invoked per `JSXOpeningElement`. The underlying check walks the
+/// directory tree stat-ing config files, so memoize it per path — otherwise a
+/// JSX-dense file pays the full filesystem walk on every opening element.
+fn project_uses_react_compiler(ctx: &CheckCtx) -> bool {
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+    thread_local! {
+        static CACHE: RefCell<HashMap<PathBuf, bool>> = RefCell::new(HashMap::new());
+    }
+    if let Some(v) = CACHE.with(|c| c.borrow().get(ctx.path).copied()) {
+        return v;
+    }
+    let v = compute_uses_react_compiler(ctx);
+    CACHE.with(|c| c.borrow_mut().insert(ctx.path.to_path_buf(), v));
+    v
+}
+
 /// The config-file walk is bounded by `project_root` (or the nearest
 /// directory that contains a `package.json`) so it never escapes the project
 /// boundary into a monorepo root, home directory, or `/`.
-fn project_uses_react_compiler(ctx: &CheckCtx) -> bool {
+fn compute_uses_react_compiler(ctx: &CheckCtx) -> bool {
     if let Some(pkg) = ctx.project.nearest_package_json(ctx.path)
         && pkg.has_dep_or_engine(REACT_COMPILER_DEP)
     {

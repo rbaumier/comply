@@ -107,10 +107,6 @@ impl OxcCheck for Check {
             return;
         }
         let min = ctx.config.threshold("id-length", "min", ctx.lang);
-        let exceptions = ctx.config.string_list("id-length", "exceptions", ctx.lang);
-        let patterns = compile_patterns(
-            &ctx.config.string_list("id-length", "exception_patterns", ctx.lang),
-        );
 
         let names: Vec<(&str, oxc_span::Span)> = match node.kind() {
             AstKind::VariableDeclarator(decl) => {
@@ -177,6 +173,17 @@ impl OxcCheck for Check {
             }
             _ => return,
         };
+
+        // Cheap length gate first: most identifiers clear `min`, so defer the
+        // exception lists — which compile regexes — until a genuinely short
+        // name actually appears. This runs on every declaration node.
+        if names.iter().all(|(name, _)| name.chars().count() >= min) {
+            return;
+        }
+        let exceptions = ctx.config.string_list("id-length", "exceptions", ctx.lang);
+        let patterns = compile_patterns(
+            &ctx.config.string_list("id-length", "exception_patterns", ctx.lang),
+        );
 
         for (name, span) in names {
             if name.chars().count() >= min {
