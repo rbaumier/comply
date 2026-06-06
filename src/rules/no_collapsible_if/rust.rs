@@ -5,6 +5,12 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
 crate::ast_check! { on ["if_expression"] => |node, _source, ctx, diagnostics|
+    // Skip else-if arms: merging them would harm readability of control-flow chains.
+    if let Some(parent) = node.parent()
+        && parent.kind() == "else_clause" {
+            return;
+    }
+
     // The outer if must NOT have an else clause.
     if node.child_by_field_name("alternative").is_some() {
         return;
@@ -101,6 +107,21 @@ fn f() {
             do_something();
         } else {
             do_other();
+        }
+    }
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_else_if_with_nested_if() {
+        let src = r#"
+fn f() {
+    if a { do_a(); }
+    else if b {
+        if c {
+            do_c();
         }
     }
 }
