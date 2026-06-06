@@ -19,6 +19,12 @@ impl OxcCheck for Check {
         _semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
+        if ctx.path.to_string_lossy().contains(".test.")
+            || ctx.path.to_string_lossy().contains(".spec.")
+        {
+            return;
+        }
+
         let AstKind::ImportDeclaration(import) = node.kind() else {
             return;
         };
@@ -115,6 +121,27 @@ mod tests {
             "import { seedAdminCdr } from '../../../../scripts/seed-admin-cdr'",
             &Check,
             "src/api/features/auth/seed-admin-cdr.integration.test.ts"
+        )
+        .is_empty());
+    }
+
+    // Regression: test files must be allowed to import internal modules — issue #798
+    #[test]
+    fn allows_test_file_importing_internal_module() {
+        assert!(run_oxc_ts_with_path(
+            "import { renderToString } from '../../src/adapter/deno/ssg.ts'",
+            &Check,
+            "runtime-tests/deno/ssg.test.tsx"
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn allows_spec_file_importing_internal_module() {
+        assert!(run_oxc_ts_with_path(
+            "import { queryUsers } from '../../api/features/users/db/queries'",
+            &Check,
+            "src/features/auth/handlers.spec.ts"
         )
         .is_empty());
     }
