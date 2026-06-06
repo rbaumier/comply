@@ -1,6 +1,6 @@
 use crate::diagnostic::Diagnostic;
 use crate::oxc_helpers::byte_offset_to_line_col;
-use crate::rules::backend::{AstKind, CheckCtx, OxcCheck};
+use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::Statement;
 use oxc_span::GetSpan;
 use std::sync::Arc;
@@ -38,22 +38,28 @@ fn stmt_text<'a>(stmt: &Statement, source: &'a str) -> &'a str {
 }
 
 impl OxcCheck for Check {
-    fn run_on_semantic<'a>(
-        &self,
-        semantic: &'a oxc_semantic::Semantic<'a>,
-        ctx: &CheckCtx,
-    ) -> Vec<Diagnostic> {
-        let mut diagnostics = Vec::new();
-        let nodes = semantic.nodes();
+    fn interested_kinds(&self) -> &'static [AstType] {
+        &[
+            AstType::Program,
+            AstType::BlockStatement,
+            AstType::FunctionBody,
+        ]
+    }
 
-        for node in nodes.iter() {
+    fn run<'a>(
+        &self,
+        node: &oxc_semantic::AstNode<'a>,
+        ctx: &CheckCtx,
+        _semantic: &'a oxc_semantic::Semantic<'a>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
             let stmts: Option<&oxc_allocator::Vec<'a, Statement<'a>>> = match node.kind() {
                 AstKind::Program(prog) => Some(&prog.body),
                 AstKind::BlockStatement(block) => Some(&block.body),
                 AstKind::FunctionBody(body) => Some(&body.statements),
                 _ => None,
             };
-            let Some(stmts) = stmts else { continue };
+            let Some(stmts) = stmts else { return };
 
             for pair in stmts.windows(2) {
                 let (s1, s2) = (&pair[0], &pair[1]);
@@ -101,9 +107,6 @@ impl OxcCheck for Check {
                         });
                     }
             }
-        }
-
-        diagnostics
     }
 }
 

@@ -1,42 +1,55 @@
 use crate::diagnostic::Diagnostic;
 use crate::oxc_helpers::byte_offset_to_line_col;
-use crate::rules::backend::{AstKind, CheckCtx, OxcCheck};
+use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::Statement;
 use std::sync::Arc;
 
 pub struct Check;
 
 impl OxcCheck for Check {
-    fn run_on_semantic<'a>(
+    fn interested_kinds(&self) -> &'static [AstType] {
+        &[
+            AstType::TryStatement,
+            AstType::IfStatement,
+            AstType::SwitchCase,
+            AstType::WhileStatement,
+            AstType::DoWhileStatement,
+            AstType::ForStatement,
+            AstType::ForInStatement,
+            AstType::ForOfStatement,
+        ]
+    }
+
+    fn run<'a>(
         &self,
-        semantic: &'a oxc_semantic::Semantic<'a>,
+        node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-    ) -> Vec<Diagnostic> {
-        let mut diagnostics = Vec::new();
-        for node in semantic.nodes().iter() {
+        _semantic: &'a oxc_semantic::Semantic<'a>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
             match node.kind() {
                 AstKind::TryStatement(try_stmt) => {
                     // Check catch clause
                     if let Some(handler) = &try_stmt.handler
                         && block_is_empty_no_comment(&handler.body.body, ctx.source, handler.body.span) {
-                            flag(ctx, handler.span.start, "catch", &mut diagnostics);
+                            flag(ctx, handler.span.start, "catch", diagnostics);
                         }
                     // Check finally clause (finalizer is a BlockStatement)
                     if let Some(finalizer) = &try_stmt.finalizer
                         && block_is_empty_no_comment(&finalizer.body, ctx.source, finalizer.span) {
-                            flag(ctx, finalizer.span.start, "finally", &mut diagnostics);
+                            flag(ctx, finalizer.span.start, "finally", diagnostics);
                         }
                 }
                 AstKind::IfStatement(stmt) => {
                     // Check if consequence is empty block
                     if let Statement::BlockStatement(block) = &stmt.consequent
                         && block_is_empty_no_comment(&block.body, ctx.source, block.span) {
-                            flag(ctx, stmt.span.start, "if", &mut diagnostics);
+                            flag(ctx, stmt.span.start, "if", diagnostics);
                         }
                     // Check else branch (alternate)
                     if let Some(Statement::BlockStatement(block)) = &stmt.alternate
                         && block_is_empty_no_comment(&block.body, ctx.source, block.span) {
-                            flag(ctx, block.span.start, "else", &mut diagnostics);
+                            flag(ctx, block.span.start, "else", diagnostics);
                         }
                 }
                 AstKind::SwitchCase(case) => {
@@ -45,44 +58,42 @@ impl OxcCheck for Check {
                         // Check if there's a comment within the case span
                         let span_text = &ctx.source[case.span.start as usize..case.span.end as usize];
                         if !span_text.contains("//") && !span_text.contains("/*") {
-                            flag(ctx, case.span.start, "default", &mut diagnostics);
+                            flag(ctx, case.span.start, "default", diagnostics);
                         }
                     }
                 }
                 AstKind::WhileStatement(stmt) => {
                     if let Statement::BlockStatement(block) = &stmt.body
                         && block_is_empty_no_comment(&block.body, ctx.source, block.span) {
-                            flag(ctx, stmt.span.start, "while", &mut diagnostics);
+                            flag(ctx, stmt.span.start, "while", diagnostics);
                         }
                 }
                 AstKind::DoWhileStatement(stmt) => {
                     if let Statement::BlockStatement(block) = &stmt.body
                         && block_is_empty_no_comment(&block.body, ctx.source, block.span) {
-                            flag(ctx, stmt.span.start, "do-while", &mut diagnostics);
+                            flag(ctx, stmt.span.start, "do-while", diagnostics);
                         }
                 }
                 AstKind::ForStatement(stmt) => {
                     if let Statement::BlockStatement(block) = &stmt.body
                         && block_is_empty_no_comment(&block.body, ctx.source, block.span) {
-                            flag(ctx, stmt.span.start, "for", &mut diagnostics);
+                            flag(ctx, stmt.span.start, "for", diagnostics);
                         }
                 }
                 AstKind::ForInStatement(stmt) => {
                     if let Statement::BlockStatement(block) = &stmt.body
                         && block_is_empty_no_comment(&block.body, ctx.source, block.span) {
-                            flag(ctx, stmt.span.start, "for-in", &mut diagnostics);
+                            flag(ctx, stmt.span.start, "for-in", diagnostics);
                         }
                 }
                 AstKind::ForOfStatement(stmt) => {
                     if let Statement::BlockStatement(block) = &stmt.body
                         && block_is_empty_no_comment(&block.body, ctx.source, block.span) {
-                            flag(ctx, stmt.span.start, "for-of", &mut diagnostics);
+                            flag(ctx, stmt.span.start, "for-of", diagnostics);
                         }
                 }
                 _ => {}
             }
-        }
-        diagnostics
     }
 }
 
