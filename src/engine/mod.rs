@@ -64,11 +64,22 @@ struct LangDispatch<'a> {
     interesting: Vec<bool>,
     oxc_rules: Vec<(&'a RuleMeta, &'a dyn OxcCheck)>,
     oxc_prefilters: Vec<Option<PrefilterFinders>>,
+    /// Path-independent `config.is_rule_enabled` for each oxc rule, valid only
+    /// when `globs_empty`. Lets `run_oxc_checks` skip the per-file config
+    /// lookup (one `HashMap` hit per rule × file) on the common case of a
+    /// project with no per-glob `[overrides]`.
+    oxc_config_enabled: Vec<bool>,
+    globs_empty: bool,
     has_ts_rules: bool,
 }
 
 impl<'a> LangDispatch<'a> {
-    fn build(rule_defs: &'a [RuleDef], language: Language, project: &ProjectCtx) -> Self {
+    fn build(
+        rule_defs: &'a [RuleDef],
+        language: Language,
+        project: &ProjectCtx,
+        config: &Config,
+    ) -> Self {
         let mut applicable = collect_applicable(rule_defs, language);
         applicable.retain(|(meta, _)| !should_skip_framework_scoped_rule(meta, project));
         let applicable_prefilters: Vec<Option<PrefilterFinders>> = applicable
@@ -127,6 +138,13 @@ impl<'a> LangDispatch<'a> {
         }
         let interesting: Vec<bool> = dispatch.iter().map(|v| !v.is_empty()).collect();
         let has_ts_rules = !multiplexed.is_empty() || !legacy.is_empty();
+        let globs_empty = config.path_overrides_empty();
+        // When there are no per-glob overrides, `is_rule_enabled` ignores the
+        // path, so its result is the same for every file — compute it once.
+        let oxc_config_enabled: Vec<bool> = oxc_rules
+            .iter()
+            .map(|(meta, _)| config.is_rule_enabled(meta.id, Path::new("")))
+            .collect();
         Self {
             applicable,
             applicable_prefilters,
@@ -138,6 +156,8 @@ impl<'a> LangDispatch<'a> {
             interesting,
             oxc_rules,
             oxc_prefilters,
+            oxc_config_enabled,
+            globs_empty,
             has_ts_rules,
         }
     }
@@ -204,7 +224,7 @@ pub fn lint_files_with_project(
         .collect();
     let lang_dispatches: FxHashMap<Language, LangDispatch> = languages
         .into_iter()
-        .map(|lang| (lang, LangDispatch::build(&rule_defs, lang, project)))
+        .map(|lang| (lang, LangDispatch::build(&rule_defs, lang, project, config)))
         .collect();
 
     let deadline = (files.len() > LARGE_PROJECT_FILE_COUNT)
@@ -505,7 +525,7 @@ fn dispatch_backends(
     project: &ProjectCtx,
 ) -> Vec<Diagnostic> {
     let rule_defs = rules::all_rule_defs();
-    let ld = LangDispatch::build(&rule_defs, file.language, project);
+    let ld = LangDispatch::build(&rule_defs, file.language, project, config);
     dispatch_with_lang(file, source, &ld, worker, config, project)
 }
 

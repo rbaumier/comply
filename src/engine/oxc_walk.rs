@@ -48,7 +48,8 @@ pub(super) fn run_oxc_checks(
         .oxc_rules
         .iter()
         .zip(&ld.oxc_prefilters)
-        .map(|((meta, check), pf)| {
+        .enumerate()
+        .map(|(i, ((meta, check), pf))| {
             let kinds = check.interested_kinds();
             if !kinds.is_empty()
                 && !kinds.iter().any(|ty| {
@@ -58,7 +59,15 @@ pub(super) fn run_oxc_checks(
             {
                 return false;
             }
-            config.is_rule_enabled(meta.id, path)
+            // `is_rule_enabled` is path-independent when there are no per-glob
+            // overrides, so use the value precomputed once per run; otherwise
+            // fall back to the per-file lookup.
+            let config_enabled = if ld.globs_empty {
+                ld.oxc_config_enabled[i]
+            } else {
+                config.is_rule_enabled(meta.id, path)
+            };
+            config_enabled
                 && !super::should_skip_test_fixture_rule(meta, ctx.file)
                 && !super::should_skip_relaxed_directory_rule(meta, ctx.file)
                 && pf

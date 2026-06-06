@@ -153,6 +153,15 @@ impl Config {
         true
     }
 
+    /// True when the project has no per-glob `[overrides."..."]` blocks, so
+    /// `is_rule_enabled` is path-independent: its result for a given rule is
+    /// the same for every file. Lets the engine compute the per-rule enabled
+    /// flags once per run instead of once per (rule × file).
+    #[must_use]
+    pub fn path_overrides_empty(&self) -> bool {
+        self.glob_matcher.is_empty()
+    }
+
     /// True if `rule_id` is disabled everywhere via `[rules.<id>] disabled =
     /// true`. Lets project-wide phases (e.g. clone detection) skip work whose
     /// every diagnostic would otherwise be computed and then filtered away.
