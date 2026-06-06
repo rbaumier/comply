@@ -1523,6 +1523,24 @@ fn resolve_relative(
 
 /// Probe an absolute path (without or with extension) against the known set,
 /// trying bare, each TS/JS extension, and `index.*` variants.
+/// Resolve `.`/`..` components purely lexically — no filesystem access, no
+/// symlink resolution. Used as a fast pre-check against the canonical `known`
+/// set before falling back to `std::fs::canonicalize`.
+fn lexical_normalize(p: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut pb = PathBuf::new();
+    for comp in p.components() {
+        match comp {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                pb.pop();
+            }
+            other => pb.push(other.as_os_str()),
+        }
+    }
+    pb
+}
+
 fn probe_path(raw: &Path, known: &std::collections::HashSet<PathBuf>) -> Option<PathBuf> {
     const EXTS: &[&str] = &["ts", "tsx", "js", "jsx", "mts", "mjs", "cts", "cjs", "vue"];
 
@@ -1545,6 +1563,43 @@ fn probe_path(raw: &Path, known: &std::collections::HashSet<PathBuf>) -> Option<
         .extension()
         .and_then(|e| e.to_str())
         .is_some_and(|ext| EXTS.contains(&ext));
+
+    // Fast pass: try every candidate the syscall pass below would, but resolve
+    // it lexically and look it up in the in-memory `known` set. `raw` is built
+    // from a canonical importer dir, so a normalized candidate present in
+    // `known` is exactly what `canonicalize` would return — and candidates are
+    // tried in the same priority order, so the result is identical. Anything
+    // reachable only through a symlink misses here and falls to the syscall
+    // pass, preserving behavior.
+    if has_known_ext {
+        let n = lexical_normalize(raw);
+        if known.contains(&n) {
+            return Some(n);
+        }
+    } else {
+        if raw.extension().is_some() {
+            if let Some(raw_str) = raw.to_str() {
+                for ext in EXTS {
+                    let n = lexical_normalize(&PathBuf::from(format!("{raw_str}.{ext}")));
+                    if known.contains(&n) {
+                        return Some(n);
+                    }
+                }
+            }
+        }
+        for ext in EXTS {
+            let n = lexical_normalize(&raw.with_extension(ext));
+            if known.contains(&n) {
+                return Some(n);
+            }
+        }
+        for ext in EXTS {
+            let n = lexical_normalize(&raw.join(format!("index.{ext}")));
+            if known.contains(&n) {
+                return Some(n);
+            }
+        }
+    }
 
     if has_known_ext {
         if let Ok(c) = std::fs::canonicalize(raw)
