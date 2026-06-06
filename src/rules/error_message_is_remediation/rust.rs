@@ -24,6 +24,8 @@ crate::ast_check! { on ["macro_invocation"] => |node, source, ctx, diagnostics|
     let Some(mac) = node.child_by_field_name("macro") else { return };
     let Ok(mac_name) = mac.utf8_text(source) else { return };
 
+    if ctx.file.path_segments.in_test_dir { return; }
+
     if mac_name != "panic" && mac_name != "bail" && mac_name != "anyhow" {
         return;
     }
@@ -62,9 +64,14 @@ crate::ast_check! { on ["macro_invocation"] => |node, source, ctx, diagnostics|
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rules::file_ctx::{FileCtx, PathSegments};
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_rust(source, &Check)
+    }
+
+    fn run_on_with_file_ctx(source: &str, file: &FileCtx) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rust_with_file_ctx(source, &Check, file)
     }
 
     #[test]
@@ -75,5 +82,23 @@ mod tests {
     #[test]
     fn allows_descriptive_panic() {
         assert!(run_on(r#"fn f() { panic!("Connection pool is exhausted — try again or check configuration"); }"#).is_empty());
+    }
+
+    #[test]
+    fn ignores_panic_in_test_file() {
+        let file = FileCtx {
+            path_segments: PathSegments { in_test_dir: true, ..Default::default() },
+            ..Default::default()
+        };
+        assert!(run_on_with_file_ctx(r#"fn f() { panic!("oops"); }"#, &file).is_empty());
+    }
+
+    #[test]
+    fn still_flags_panic_in_production() {
+        let file = FileCtx {
+            path_segments: PathSegments { in_test_dir: false, ..Default::default() },
+            ..Default::default()
+        };
+        assert_eq!(run_on_with_file_ctx(r#"fn f() { panic!("oops"); }"#, &file).len(), 1);
     }
 }
