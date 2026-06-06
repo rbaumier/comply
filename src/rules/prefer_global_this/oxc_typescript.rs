@@ -76,10 +76,6 @@ impl OxcCheck for Check {
         semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
-        if project_allows_window(ctx.project, ctx.path) {
-            return;
-        }
-
         let AstKind::StaticMemberExpression(member) = node.kind() else {
             return;
         };
@@ -91,6 +87,13 @@ impl OxcCheck for Check {
 
         let name = obj.name.as_str();
         if !matches!(name, "window" | "self" | "global") {
+            return;
+        }
+
+        // The project allowlist requires a `package.json` lookup (locked,
+        // per-directory memoised) — gate it behind the rare identifier match
+        // above so the vast majority of `a.b` accesses skip it entirely.
+        if project_allows_window(ctx.project, ctx.path) {
             return;
         }
 

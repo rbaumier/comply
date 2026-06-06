@@ -116,18 +116,20 @@ fn is_under_typeof(node: tree_sitter::Node, source: &[u8]) -> bool {
 }
 
 crate::ast_check! { on ["member_expression"] => |node, source, ctx, diagnostics|
-    // Project allowlist — browser-like targets keep `window` as the real
-    // DOM Window object.
-    if project_allows_window(ctx.project, ctx.path) {
-        return;
-    }
-
     let Some(obj) = node.child_by_field_name("object") else { return };
     if obj.kind() != "identifier" {
         return;
     }
     let name = obj.utf8_text(source).unwrap_or("");
     if !matches!(name, "window" | "self" | "global") {
+        return;
+    }
+
+    // Project allowlist — browser-like targets keep `window` as the real
+    // DOM Window object. The check requires a `package.json` lookup, so gate
+    // it behind the rare identifier match above rather than paying it on
+    // every `a.b` access.
+    if project_allows_window(ctx.project, ctx.path) {
         return;
     }
 
