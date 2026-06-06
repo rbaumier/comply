@@ -7,12 +7,66 @@
 //! the allocator lives on the stack of `with_semantic` and gets dropped
 //! when the closure returns.
 
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::path::Path;
 
 use oxc_allocator::Allocator;
 use oxc_parser::Parser;
 use oxc_semantic::{Semantic, SemanticBuilder};
 use oxc_span::SourceType;
+
+/// Per-file memo backing [`source_contains`]. `ptr`/`len` capture the identity
+/// of the source the `hits` map describes; when either changes the map is
+/// cleared, so a stale entry from a previous file (or test source) can never be
+/// returned. The engine also calls [`reset_source_contains_cache`] once per
+/// file for deterministic hot-path invalidation.
+#[derive(Default)]
+struct SourceContainsCache {
+    ptr: usize,
+    len: usize,
+    hits: HashMap<String, bool>,
+}
+
+thread_local! {
+    static SOURCE_CONTAINS: RefCell<SourceContainsCache> =
+        RefCell::new(SourceContainsCache::default());
+}
+
+/// Clear the `source_contains` memo. Called once per file by the engine,
+/// before running oxc checks.
+pub fn reset_source_contains_cache() {
+    SOURCE_CONTAINS.with(|c| {
+        let mut c = c.borrow_mut();
+        c.ptr = 0;
+        c.len = 0;
+        c.hits.clear();
+    });
+}
+
+/// Memoized `source.contains(needle)` for the current file. `source.contains`
+/// is O(file-size); rules call this from per-node `OxcCheck::run`, so without
+/// the memo a file of N nodes costs O(N × file-size). The result is constant
+/// for a given source, so we scan once per distinct needle. The cache
+/// auto-invalidates when `source`'s `(ptr, len)` identity changes.
+pub fn source_contains(source: &str, needle: &str) -> bool {
+    let ptr = source.as_ptr() as usize;
+    let len = source.len();
+    SOURCE_CONTAINS.with(|c| {
+        let mut c = c.borrow_mut();
+        if c.ptr != ptr || c.len != len {
+            c.ptr = ptr;
+            c.len = len;
+            c.hits.clear();
+        }
+        if let Some(&hit) = c.hits.get(needle) {
+            return hit;
+        }
+        let hit = source.contains(needle);
+        c.hits.insert(needle.to_string(), hit);
+        hit
+    })
+}
 
 /// Pick the right `SourceType` based on file extension. Defaults to `tsx()`
 /// for unknown extensions — it's the most permissive (accepts JSX +
@@ -327,4 +381,42 @@ pub fn is_in_ambient_declaration(
         matches!(ancestor.kind(), AstKind::TSGlobalDeclaration(_))
             || matches!(ancestor.kind(), AstKind::TSModuleDeclaration(m) if m.declare)
     })
+}
+
+#[cfg(test)]
+mod source_contains_tests {
+    use super::{reset_source_contains_cache, source_contains};
+
+    #[test]
+    fn matches_std_for_hits_and_misses_and_caches() {
+        reset_source_contains_cache();
+        let src = "import React from 'react';\nconst x = items.find(p);";
+        // First call computes, second is served from the memo — both must agree
+        // with std::str::contains.
+        assert_eq!(source_contains(src, "react"), src.contains("react"));
+        assert!(source_contains(src, "react"));
+        assert_eq!(source_contains(src, "angular"), src.contains("angular"));
+        assert!(!source_contains(src, "angular"));
+    }
+
+    #[test]
+    fn invalidates_when_source_identity_changes() {
+        reset_source_contains_cache();
+        let a = String::from("has a react import");
+        assert!(source_contains(&a, "react"));
+        // A distinct source (different ptr) must never return `a`'s cached hit.
+        let b = String::from("no framework here at all");
+        assert_eq!(source_contains(&b, "react"), b.contains("react"));
+        assert!(!source_contains(&b, "react"));
+    }
+
+    #[test]
+    fn reset_then_recompute_stays_correct() {
+        reset_source_contains_cache();
+        let s = "needle in a haystack";
+        assert!(source_contains(s, "needle"));
+        reset_source_contains_cache();
+        assert_eq!(source_contains(s, "needle"), s.contains("needle"));
+        assert_eq!(source_contains(s, "missing"), s.contains("missing"));
+    }
 }

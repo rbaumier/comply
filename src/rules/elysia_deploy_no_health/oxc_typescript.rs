@@ -35,10 +35,10 @@ impl OxcCheck for Check {
         if !ctx.project.has_framework("elysia") {
             return;
         }
-        if !ctx.source.contains(".listen(") {
+        if !ctx.source_contains(".listen(") {
             return;
         }
-        if HEALTH_PATHS.iter().any(|p| ctx.source.contains(p)) {
+        if HEALTH_PATHS.iter().any(|p| ctx.source_contains(p)) {
             return;
         }
 

@@ -15,7 +15,7 @@ impl OxcCheck for Check {
         semantic: &'a oxc_semantic::Semantic<'a>,
         ctx: &CheckCtx,
     ) -> Vec<Diagnostic> {
-        if !ctx.source.contains("z.infer") {
+        if !ctx.source_contains("z.infer") {
             return Vec::new();
         }
 

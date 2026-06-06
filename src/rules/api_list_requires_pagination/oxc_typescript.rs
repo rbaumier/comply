@@ -21,7 +21,7 @@ impl OxcCheck for Check {
         semantic: &'a oxc_semantic::Semantic<'a>,
         ctx: &CheckCtx,
     ) -> Vec<Diagnostic> {
-        if PAGINATION_TERMS.iter().any(|p| ctx.source.contains(p)) {
+        if PAGINATION_TERMS.iter().any(|p| ctx.source_contains(p)) {
             return Vec::new();
         }
 

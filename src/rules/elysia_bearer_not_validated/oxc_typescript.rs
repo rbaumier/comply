@@ -25,7 +25,7 @@ impl OxcCheck for Check {
         }
 
         // If the file contains any verify call, assume it's validated.
-        if ctx.source.contains(".verify(") || ctx.source.contains("verifyBearer") {
+        if ctx.source_contains(".verify(") || ctx.source_contains("verifyBearer") {
             return Vec::new();
         }
 

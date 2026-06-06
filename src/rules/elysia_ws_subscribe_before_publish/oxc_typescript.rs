@@ -28,7 +28,7 @@ impl OxcCheck for Check {
         if !ctx.project.has_framework("elysia") {
             return;
         }
-        if !ctx.source.contains(".ws(") {
+        if !ctx.source_contains(".ws(") {
             return;
         }
 
@@ -38,7 +38,7 @@ impl OxcCheck for Check {
             return;
         }
 
-        if ctx.source.contains(".subscribe(") {
+        if ctx.source_contains(".subscribe(") {
             return;
         }
 

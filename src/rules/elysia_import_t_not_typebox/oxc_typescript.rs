@@ -29,7 +29,7 @@ impl OxcCheck for Check {
         if !ctx.project.has_framework("elysia") {
             return;
         }
-        if !ctx.source.contains("@sinclair/typebox") {
+        if !ctx.source_contains("@sinclair/typebox") {
             return;
         }
         if import.source.value.as_str() != "@sinclair/typebox" {

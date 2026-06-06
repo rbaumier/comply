@@ -42,7 +42,7 @@ impl OxcCheck for Check {
         if !ctx.project.has_framework("elysia") {
             return;
         }
-        if !ctx.source.contains("export") {
+        if !ctx.source_contains("export") {
             return;
         }
         if is_root_app_file(ctx.source, ctx.path) {

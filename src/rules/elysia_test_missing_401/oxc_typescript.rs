@@ -86,7 +86,7 @@ impl OxcCheck for Check {
         // Bare "auth" in header literals is not middleware composition.
         let exercises_auth_route = AUTH_INVOCATION_MARKERS
             .iter()
-            .any(|m| ctx.source.contains(m))
+            .any(|m| ctx.source_contains(m))
             || AUTH_INVOCATION_MARKERS_CI
                 .iter()
                 .any(|m| lower.contains(m));
@@ -94,11 +94,11 @@ impl OxcCheck for Check {
             return Vec::new();
         }
 
-        let tests_http_routes = ctx.source.contains(".handle(")
+        let tests_http_routes = ctx.source_contains(".handle(")
             || lower.contains("treaty(")
             || lower.contains("supertest")
-            || ctx.source.contains("\"/api/")
-            || ctx.source.contains("'/api/");
+            || ctx.source_contains("\"/api/")
+            || ctx.source_contains("'/api/");
         if !tests_http_routes {
             return Vec::new();
         }
@@ -107,7 +107,7 @@ impl OxcCheck for Check {
             return Vec::new();
         }
 
-        if ctx.source.contains("401") || lower.contains("unauthorized") {
+        if ctx.source_contains("401") || lower.contains("unauthorized") {
             return Vec::new();
         }
 

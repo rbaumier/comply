@@ -33,7 +33,7 @@ impl OxcCheck for Check {
         _semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
-        if !ctx.source.contains("hono/secure-headers") {
+        if !ctx.source_contains("hono/secure-headers") {
             return;
         }
 

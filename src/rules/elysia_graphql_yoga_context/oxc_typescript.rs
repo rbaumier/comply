@@ -41,7 +41,7 @@ impl OxcCheck for Check {
         if !norm.contains("context:") {
             return;
         }
-        if ctx.source.contains("useContext") {
+        if ctx.source_contains("useContext") {
             return;
         }
 

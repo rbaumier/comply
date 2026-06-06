@@ -34,11 +34,11 @@ impl OxcCheck for Check {
             return;
         }
 
-        let uses_t = ctx.source.contains("t.Object(")
-            || ctx.source.contains("t.String(")
-            || ctx.source.contains("t.Number(")
-            || ctx.source.contains("t.Array(")
-            || ctx.source.contains("t.Boolean(");
+        let uses_t = ctx.source_contains("t.Object(")
+            || ctx.source_contains("t.String(")
+            || ctx.source_contains("t.Number(")
+            || ctx.source_contains("t.Array(")
+            || ctx.source_contains("t.Boolean(");
         if !uses_t {
             return;
         }

@@ -48,7 +48,7 @@ impl OxcCheck for Check {
         }
 
         // Check if class has @Injectable() decorator.
-        if ctx.source.contains("@Injectable") {
+        if ctx.source_contains("@Injectable") {
             // Walk decorators on the class.
             for decorator in &class.decorators {
                 let dec_start = decorator.span.start as usize;

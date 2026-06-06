@@ -33,7 +33,7 @@ impl OxcCheck for Check {
         }
 
         // Only flag when the file actually references BETTER_AUTH_SECRET.
-        if !ctx.source.contains("BETTER_AUTH_SECRET") {
+        if !ctx.source_contains("BETTER_AUTH_SECRET") {
             return;
         }
 

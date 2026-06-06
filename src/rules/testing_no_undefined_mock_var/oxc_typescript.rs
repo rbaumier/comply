@@ -90,13 +90,13 @@ impl OxcCheck for Check {
             // Scan full source for configuration methods.
             let configured = ["mockReturnValue", "mockResolvedValue", "mockImplementation"]
                 .iter()
-                .any(|m| ctx.source.contains(&format!("{var_name}.{m}")));
+                .any(|m| ctx.source_contains(&format!("{var_name}.{m}")));
             if configured {
                 continue;
             }
 
             // If the mock is used as a spy (appears in expect()), the undefined return is fine.
-            if ctx.source.contains(&format!("expect({var_name})")) {
+            if ctx.source_contains(&format!("expect({var_name})")) {
                 continue;
             }
 

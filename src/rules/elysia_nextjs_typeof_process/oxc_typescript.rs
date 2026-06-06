@@ -27,7 +27,7 @@ impl OxcCheck for Check {
         if !ctx.project.has_framework("elysia") {
             return;
         }
-        if !ctx.source.contains("@elysiajs/eden") {
+        if !ctx.source_contains("@elysiajs/eden") {
             return;
         }
 

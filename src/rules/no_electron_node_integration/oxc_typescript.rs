@@ -65,7 +65,7 @@ impl OxcCheck for Check {
         let AstKind::NewExpression(new_expr) = node.kind() else { return };
 
         // Pre-filter: source must contain "nodeIntegration".
-        if !ctx.source.contains("nodeIntegration") {
+        if !ctx.source_contains("nodeIntegration") {
             return;
         }
 

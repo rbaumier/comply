@@ -24,11 +24,11 @@ impl OxcCheck for Check {
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         // Only check files that import or create Express apps.
-        if !ctx.source.contains("express") {
+        if !ctx.source_contains("express") {
             return;
         }
         // If helmet() is registered anywhere in this file, we're fine.
-        if ctx.source.contains("helmet(") {
+        if ctx.source_contains("helmet(") {
             return;
         }
         if !diagnostics.is_empty() {

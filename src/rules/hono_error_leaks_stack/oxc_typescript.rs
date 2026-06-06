@@ -39,7 +39,7 @@ impl OxcCheck for Check {
         semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
-        if !ctx.source.contains("hono") && !ctx.source.contains("Hono") {
+        if !ctx.source_contains("hono") && !ctx.source_contains("Hono") {
             return;
         }
 

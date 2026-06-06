@@ -47,7 +47,7 @@ impl OxcCheck for Check {
         }
 
         // File contains a body schema declaration somewhere.
-        if ctx.source.contains("body: t.") || ctx.source.contains("body:t.") {
+        if ctx.source_contains("body: t.") || ctx.source_contains("body:t.") {
             return;
         }
 

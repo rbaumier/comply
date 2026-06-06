@@ -20,7 +20,7 @@ impl OxcCheck for Check {
         _semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
-        if !ctx.project.has_framework("elysia") || !ctx.source.contains("zod") {
+        if !ctx.project.has_framework("elysia") || !ctx.source_contains("zod") {
             return;
         }
         let AstKind::CallExpression(call) = node.kind() else { return };
@@ -28,7 +28,7 @@ impl OxcCheck for Check {
         if callee_text != "z.file" {
             return;
         }
-        if ctx.source.contains("fileType(") {
+        if ctx.source_contains("fileType(") {
             return;
         }
         let (line, column) = byte_offset_to_line_col(ctx.source, call.span.start as usize);

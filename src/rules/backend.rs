@@ -52,6 +52,16 @@ pub struct CheckCtx<'a> {
 }
 
 impl<'a> CheckCtx<'a> {
+    /// Memoized `self.source.contains(needle)` — see
+    /// [`crate::oxc_helpers::source_contains`]. Use this instead of
+    /// `self.source.contains(...)` inside per-node `OxcCheck::run` to avoid
+    /// O(n²) on large files (the guard is file-constant but `run` is per-node).
+    pub fn source_contains(&self, needle: &str) -> bool {
+        crate::oxc_helpers::source_contains(self.source, needle)
+    }
+}
+
+impl<'a> CheckCtx<'a> {
     /// Convenience constructor for unit tests. Uses the process-wide default
     /// config and empty `ProjectCtx` / `FileCtx` so rules that don't rely on
     /// project context pay nothing. Rules that *do* walk the filesystem via

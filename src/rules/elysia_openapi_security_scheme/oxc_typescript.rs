@@ -23,7 +23,7 @@ impl OxcCheck for Check {
         if !ctx.project.has_framework("elysia") {
             return;
         }
-        if ctx.source.contains("securitySchemes") {
+        if ctx.source_contains("securitySchemes") {
             return;
         }
 
