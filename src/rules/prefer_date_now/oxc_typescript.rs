@@ -11,6 +11,10 @@ impl OxcCheck for Check {
         &[AstType::CallExpression, AstType::UnaryExpression]
     }
 
+    fn prefilter(&self) -> Option<&'static [&'static str]> {
+        Some(&["Date"])
+    }
+
     fn run<'a>(
         &self,
         node: &oxc_semantic::AstNode<'a>,

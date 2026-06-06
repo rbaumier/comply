@@ -57,6 +57,10 @@ impl OxcCheck for Check {
         &[AstType::CallExpression]
     }
 
+    fn prefilter(&self) -> Option<&'static [&'static str]> {
+        Some(&["unserialize", "deserialize", "yaml", "YAML", "pickle"])
+    }
+
     fn run<'a>(
         &self,
         node: &oxc_semantic::AstNode<'a>,

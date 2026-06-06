@@ -12,6 +12,10 @@ impl OxcCheck for Check {
         &[AstType::ImportDeclaration, AstType::CallExpression, AstType::NewExpression]
     }
 
+    fn prefilter(&self) -> Option<&'static [&'static str]> {
+        Some(&["Animated"])
+    }
+
     fn run<'a>(
         &self,
         node: &oxc_semantic::AstNode<'a>,

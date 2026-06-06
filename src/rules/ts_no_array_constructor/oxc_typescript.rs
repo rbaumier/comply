@@ -19,6 +19,10 @@ impl OxcCheck for Check {
         &[AstType::CallExpression, AstType::NewExpression]
     }
 
+    fn prefilter(&self) -> Option<&'static [&'static str]> {
+        Some(&["Array"])
+    }
+
     fn run<'a>(
         &self,
         node: &oxc_semantic::AstNode<'a>,

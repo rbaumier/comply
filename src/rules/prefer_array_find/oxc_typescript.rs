@@ -15,6 +15,10 @@ impl OxcCheck for Check {
         &[AstType::CallExpression, AstType::ComputedMemberExpression]
     }
 
+    fn prefilter(&self) -> Option<&'static [&'static str]> {
+        Some(&["filter"])
+    }
+
     fn run<'a>(
         &self,
         node: &oxc_semantic::AstNode<'a>,
