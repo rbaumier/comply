@@ -267,7 +267,8 @@ fn lint_with_rules(
     let diagnostics = engine::lint_files_with_project(&all_refs, &config, &project, Some(filter))?;
 
     let after_overrides = apply_config_filters(diagnostics, &config);
-    let after_suppressions = ignore_comments::apply_to_all(after_overrides, &discovered);
+    let after_suppressions =
+        ignore_comments::apply_to_all(after_overrides, &discovered, &project.clean_files_snapshot());
     let has_violations = !after_suppressions.is_empty();
 
     if should_emit_json {
@@ -326,7 +327,7 @@ fn lint_project(cli: &Cli) -> Result<bool> {
         eprintln!("comply: ran {runs} fixer(s); re-linting");
     }
 
-    let diagnostics = collect_all_diagnostics(
+    let (diagnostics, clean_files) = collect_all_diagnostics(
         &discovered,
         &config,
         &mut timings,
@@ -337,7 +338,8 @@ fn lint_project(cli: &Cli) -> Result<bool> {
 
     let t_post = Instant::now();
     let after_overrides = apply_config_filters(diagnostics, &config);
-    let mut after_suppressions = ignore_comments::apply_to_all(after_overrides, &discovered);
+    let mut after_suppressions =
+        ignore_comments::apply_to_all(after_overrides, &discovered, &clean_files);
     if cli.diff_only {
         let changed = changed_lines::changed_lines(&mode)?;
         let repo_root = changed_lines::git_repo_root().unwrap_or_default();
@@ -400,7 +402,7 @@ fn collect_all_diagnostics(
     is_comply_only: bool,
     type_aware: bool,
     is_partial: bool,
-) -> Result<Vec<Diagnostic>> {
+) -> Result<(Vec<Diagnostic>, std::collections::HashSet<std::path::PathBuf>)> {
     let by_lang = partition_by_language(discovered);
     let mut diagnostics = Vec::with_capacity(discovered.len());
 
@@ -519,7 +521,8 @@ fn collect_all_diagnostics(
         });
     }
 
-    Ok(diagnostics)
+    let clean_files = project.clean_files_snapshot();
+    Ok((diagnostics, clean_files))
 }
 
 /// Apply config-driven filters to subprocess diagnostics (oxlint, clippy)

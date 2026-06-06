@@ -20,7 +20,7 @@
 //! - Lazy fields use `OnceLock<Option<T>>`; parse failures cache as `None`
 //!   (no retry within the run) and emit one stderr warning per field.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -437,6 +437,14 @@ pub struct ProjectCtx {
     // and the underlying probe stat-walks config files — so without this memo a
     // JSX-dense tree pays the full walk once per file.
     react_compiler_dir_cache: Mutex<HashMap<PathBuf, bool>>,
+
+    // Files the engine read and found to contain no `comply-ignore` substring.
+    // The post-filter (`ignore_comments::apply_to_all`) otherwise re-reads every
+    // discovered file from disk just to run that one substring check; for files
+    // recorded here it can skip the read entirely (a known-clean file can carry
+    // neither a suppression nor a malformed marker). Keyed by the discovery path
+    // (same value `apply_to_all` iterates), so no canonicalization is needed.
+    clean_files: Mutex<HashSet<PathBuf>>,
 }
 
 impl ProjectCtx {
@@ -445,6 +453,20 @@ impl ProjectCtx {
     /// still walk disk; only the eager root-level fields are absent.
     pub fn empty() -> Self {
         Self::default()
+    }
+
+    /// Record that the engine read `path` and found no `comply-ignore`
+    /// substring. Called once per file from the parallel engine loop, so the
+    /// lock is held only for the insert.
+    pub fn note_clean_file(&self, path: &Path) {
+        self.clean_files.lock().unwrap().insert(path.to_path_buf());
+    }
+
+    /// Snapshot of the known-clean file set, taken once after the engine
+    /// completes so the post-filter can do lock-free membership checks.
+    #[must_use]
+    pub fn clean_files_snapshot(&self) -> HashSet<PathBuf> {
+        self.clean_files.lock().unwrap().clone()
     }
 
     /// Load once per run from the set of files being linted. Eagerly parses

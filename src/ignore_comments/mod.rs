@@ -158,27 +158,16 @@ pub fn apply_suppressions(
 pub fn apply_to_all(
     diagnostics: Vec<Diagnostic>,
     discovered: &[crate::files::SourceFile],
+    clean_files: &HashSet<PathBuf>,
 ) -> Vec<Diagnostic> {
-    // `canonical_key` is a filesystem syscall (realpath). With tens of
-    // thousands of diagnostics spread over a few thousand files, canonicalizing
-    // once per diagnostic dominated this phase. Memoize: each distinct path is
-    // canonicalized once, then served from the cache. `get(&Path)` borrows, so
-    // a cache hit allocates nothing.
-    let mut canon_cache: HashMap<PathBuf, PathBuf> = HashMap::new();
-    let mut canon = |p: &Path| -> PathBuf {
-        if let Some(c) = canon_cache.get(p) {
-            return c.clone();
-        }
-        let c = canonical_key(p);
-        canon_cache.insert(p.to_path_buf(), c.clone());
-        c
-    };
-
-    let mut by_file: HashMap<PathBuf, Vec<Diagnostic>> =
+    // Group diagnostics by their as-reported path. The in-process engine and
+    // clone detector report the discovery path verbatim (a cloned `Arc<Path>`),
+    // so this raw match needs no syscall. Keyed by `Arc<Path>` so grouping is a
+    // refcount bump, not a path allocation.
+    let mut by_raw: HashMap<std::sync::Arc<Path>, Vec<Diagnostic>> =
         HashMap::with_capacity(diagnostics.len());
     for d in diagnostics {
-        let key = canon(d.path.as_ref());
-        by_file.entry(key).or_default().push(d);
+        by_raw.entry(std::sync::Arc::clone(&d.path)).or_default().push(d);
     }
 
     // Pair each discovered file with its diagnostics moved out of the map, so
@@ -188,14 +177,41 @@ pub fn apply_to_all(
     let mut work: Vec<(&crate::files::SourceFile, Vec<Diagnostic>)> =
         Vec::with_capacity(discovered.len());
     for file in discovered {
-        let key = canon(&file.path);
-        let file_diags = by_file.remove(&key).unwrap_or_default();
+        let file_diags = by_raw.remove(file.path.as_path()).unwrap_or_default();
         work.push((file, file_diags));
+    }
+
+    // Anything still in `by_raw` had a path that didn't match a discovered file
+    // verbatim — the only producer of such paths is an external linter that
+    // canonicalized them (oxlint). `canonical_key` is a `realpath` syscall, so
+    // this reconciliation is skipped entirely when every path matched above
+    // (e.g. `--comply-only`, where no external linter runs), sparing one
+    // syscall per discovered file.
+    let mut orphans: Vec<Diagnostic> = Vec::new();
+    if !by_raw.is_empty() {
+        let mut by_canon: HashMap<PathBuf, Vec<Diagnostic>> = HashMap::new();
+        for (raw, diags) in by_raw.drain() {
+            by_canon.entry(canonical_key(&raw)).or_default().extend(diags);
+        }
+        for (file, file_diags) in &mut work {
+            if let Some(extra) = by_canon.remove(&canonical_key(&file.path)) {
+                file_diags.extend(extra);
+            }
+        }
+        for diags in by_canon.into_values() {
+            orphans.extend(diags);
+        }
     }
 
     let mut result: Vec<Diagnostic> = work
         .into_par_iter()
         .flat_map_iter(|(file, file_diags)| {
+            // The engine already read this file and saw no `comply-ignore`
+            // substring — it can carry neither a suppression nor a malformed
+            // marker, so skip the re-read. Equivalent to the fast path below.
+            if clean_files.contains(&file.path) {
+                return file_diags.into_iter();
+            }
             let out: Vec<Diagnostic> = match std::fs::read_to_string(&file.path) {
                 // Fast path: a file with no `comply-ignore` marker anywhere can
                 // neither suppress a diagnostic nor carry a malformed marker, so
@@ -213,10 +229,9 @@ pub fn apply_to_all(
         })
         .collect();
 
-    // Files not in `discovered` (truly orphaned) pass through unchanged.
-    for (_, file_diags) in by_file {
-        result.extend(file_diags);
-    }
+    // Diagnostics that matched no discovered file (truly orphaned) pass through
+    // unchanged.
+    result.extend(orphans);
     result
 }
 

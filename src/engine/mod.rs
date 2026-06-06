@@ -523,6 +523,11 @@ fn lint_one_file_with_dispatch(
     std::fs::File::open(&file.path)
         .and_then(|mut f| f.read_to_string(&mut worker.source_buf))
         .with_context(|| format!("failed to read {}", file.path.display()))?;
+    // The post-filter re-reads every discovered file solely to run this same
+    // substring check; record clean files now so it can skip the read for them.
+    if !worker.source_buf.contains("comply-ignore") {
+        project.note_clean_file(&file.path);
+    }
     if ld.applicable.is_empty() {
         return Ok(vec![]);
     }
