@@ -16,7 +16,7 @@ mod oxc_walk;
 mod prefilter;
 mod walk;
 
-use oxc_walk::run_oxc_checks;
+use oxc_walk::{oxc_pre_enabled, run_oxc_checks};
 use prefilter::{PrefilterFinders, build_finders, source_matches_prefilter};
 use walk::{run_legacy_checks, run_multiplexed_walk};
 
@@ -421,20 +421,14 @@ fn dispatch_with_lang(
     }
 
     // oxc-based rules -- parse once with oxc_parser if any Oxc backend is
-    // enabled for this file.
-    let needs_oxc = !ld.oxc_rules.is_empty()
-        && ld
-            .oxc_rules
-            .iter()
-            .zip(&ld.oxc_prefilters)
-            .any(|((meta, _), pf)| {
-                config.is_rule_enabled(meta.id, path)
-                    && !should_skip_test_fixture_rule(meta, &file_ctx)
-                    && !should_skip_relaxed_directory_rule(meta, &file_ctx)
-                    && pf
-                        .as_ref()
-                        .is_none_or(|f| source_matches_prefilter(source, f))
-            });
+    // enabled for this file. The pre-parse enabled flags (config + skips +
+    // prefilter) are computed once here and reused inside run_oxc_checks.
+    let oxc_pre = if ld.oxc_rules.is_empty() {
+        Vec::new()
+    } else {
+        oxc_pre_enabled(ld, &ctx)
+    };
+    let needs_oxc = oxc_pre.iter().any(|&e| e);
 
     if needs_oxc {
         // The oxc parser can panic on pathological input (e.g. oxc_ast 0.127
@@ -446,7 +440,7 @@ fn dispatch_with_lang(
         // leaves it untouched — `AssertUnwindSafe` is sound here.
         let oxc_ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             crate::oxc_helpers::with_oxc_parse(source, path, |semantic| {
-                run_oxc_checks(ld, semantic, &ctx, source, path, config, &mut diagnostics);
+                run_oxc_checks(ld, semantic, &ctx, config, &oxc_pre, &mut diagnostics);
             });
         }));
         if oxc_ran.is_err() {

@@ -9,9 +9,34 @@ use crate::config::Config;
 use crate::diagnostic::Diagnostic;
 use crate::rules::backend::CheckCtx;
 use oxc_semantic::Semantic;
-use std::path::Path;
-
 use super::prefilter::source_matches_prefilter;
+
+/// Per-rule "pre-parse" enabled flags: config + test/relaxed-dir skips +
+/// prefilter — everything that does not need the parsed AST. Computed once per
+/// file and shared between the `needs_oxc` parse gate and `run_oxc_checks`,
+/// which layers the file's AST-type bitset on top.
+pub(super) fn oxc_pre_enabled(ld: &LangDispatch, ctx: &CheckCtx) -> Vec<bool> {
+    ld.oxc_rules
+        .iter()
+        .zip(&ld.oxc_prefilters)
+        .enumerate()
+        .map(|(i, ((meta, _check), pf))| {
+            // `is_rule_enabled` is path-independent without per-glob overrides,
+            // so reuse the value precomputed once per run.
+            let config_enabled = if ld.globs_empty {
+                ld.oxc_config_enabled[i]
+            } else {
+                ctx.config.is_rule_enabled(meta.id, ctx.path)
+            };
+            config_enabled
+                && !super::should_skip_test_fixture_rule(meta, ctx.file)
+                && !super::should_skip_relaxed_directory_rule(meta, ctx.file)
+                && pf
+                    .as_ref()
+                    .is_none_or(|f| source_matches_prefilter(ctx.source, f))
+        })
+        .collect()
+}
 
 /// Run all `OxcCheck` rules against a parsed file's `Semantic`.
 ///
@@ -25,9 +50,8 @@ pub(super) fn run_oxc_checks(
     ld: &LangDispatch,
     semantic: &Semantic,
     ctx: &CheckCtx,
-    source: &str,
-    path: &Path,
     config: &Config,
+    pre_enabled: &[bool],
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let n = ld.oxc_rules.len();
@@ -43,36 +67,23 @@ pub(super) fn run_oxc_checks(
         file_bitset[ty / 64] |= 1u64 << (ty % 64);
     }
 
-    // Per-rule enabled flags (bitset + config + prefilter).
+    // Per-rule enabled flags: the pre-parse flags (config + skips + prefilter,
+    // computed once and shared with the parse gate) AND the file's AST-type
+    // bitset, which can only be checked now that the file is parsed.
     let enabled: Vec<bool> = ld
         .oxc_rules
         .iter()
-        .zip(&ld.oxc_prefilters)
         .enumerate()
-        .map(|(i, ((meta, check), pf))| {
+        .map(|(i, (_, check))| {
+            if !pre_enabled[i] {
+                return false;
+            }
             let kinds = check.interested_kinds();
-            if !kinds.is_empty()
-                && !kinds.iter().any(|ty| {
+            kinds.is_empty()
+                || kinds.iter().any(|ty| {
                     let t = *ty as u8 as usize;
                     file_bitset[t / 64] & (1u64 << (t % 64)) != 0
                 })
-            {
-                return false;
-            }
-            // `is_rule_enabled` is path-independent when there are no per-glob
-            // overrides, so use the value precomputed once per run; otherwise
-            // fall back to the per-file lookup.
-            let config_enabled = if ld.globs_empty {
-                ld.oxc_config_enabled[i]
-            } else {
-                config.is_rule_enabled(meta.id, path)
-            };
-            config_enabled
-                && !super::should_skip_test_fixture_rule(meta, ctx.file)
-                && !super::should_skip_relaxed_directory_rule(meta, ctx.file)
-                && pf
-                    .as_ref()
-                    .is_none_or(|f| source_matches_prefilter(source, f))
         })
         .collect();
 
