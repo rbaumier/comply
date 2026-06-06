@@ -68,6 +68,16 @@ impl OxcCheck for Check {
         semantic: &'a oxc_semantic::Semantic<'a>,
         ctx: &CheckCtx,
     ) -> Vec<Diagnostic> {
+        let path_str = ctx.path.to_string_lossy();
+        if path_str.contains(".test.")
+            || path_str.contains(".spec.")
+            || path_str.contains("__tests__")
+            || path_str.contains("_test.")
+            || path_str.contains("test-d/")
+        {
+            return vec![];
+        }
+
         let mut annotation_lines: HashMap<String, Vec<usize>> = HashMap::new();
 
         for node in semantic.nodes().iter() {
@@ -159,6 +169,10 @@ mod tests {
         crate::rules::test_helpers::run_oxc_ts(src, &Check)
     }
 
+    fn run_with_path(src: &str, path: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_path(src, &Check, path)
+    }
+
     #[test]
     fn flags_repeated_complex_union() {
         let src = r#"
@@ -219,5 +233,46 @@ mod tests {
             type CacheEntry = string | number | boolean;
         "#;
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_in_test_file() {
+        // Regression #799 — repeated union in .test.ts must not fire.
+        let src = r#"
+            const a: 'a' | 'b' | 'c' = 'a';
+            const b: 'a' | 'b' | 'c' = 'b';
+            const c: 'a' | 'b' | 'c' = 'c';
+        "#;
+        assert!(run_with_path(src, "foo.test.ts").is_empty());
+    }
+
+    #[test]
+    fn no_fp_in_spec_file() {
+        // Regression #799 — repeated union in .spec.ts must not fire.
+        let src = r#"
+            function a(x: { data: string } | { error: string }) {}
+            function b(x: { data: string } | { error: string }) {}
+        "#;
+        assert!(run_with_path(src, "foo.spec.ts").is_empty());
+    }
+
+    #[test]
+    fn no_fp_in_test_d_dir() {
+        // Regression #799 — repeated intersection in test-d/ must not fire.
+        let src = r#"
+            type A = { x: number } & { y: string };
+            type B = { x: number } & { y: string };
+        "#;
+        assert!(run_with_path(src, "test-d/foo.ts").is_empty());
+    }
+
+    #[test]
+    fn normal_ts_file_still_flagged() {
+        // Regression #799 — the guard must not suppress non-test files.
+        let src = r#"
+            const a: 'a' | 'b' | 'c' = 'a';
+            const b: 'a' | 'b' | 'c' = 'b';
+        "#;
+        assert!(!run_with_path(src, "foo.ts").is_empty());
     }
 }
