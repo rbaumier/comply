@@ -451,47 +451,66 @@ fn collect_all_diagnostics(
         Vec::new()
     };
 
-    if !by_lang.ts.is_empty() {
-        diagnostics.extend(lint_typescript(
-            &by_lang.ts,
-            config,
-            &project,
-            timings,
-            is_comply_only,
-            type_aware,
-            &type_program_ts,
-        )?);
-    }
-    if !by_lang.rs.is_empty() {
-        diagnostics.extend(lint_rust(
-            &by_lang.rs,
-            config,
-            &project,
-            timings,
-            is_comply_only,
-        )?);
-    }
-    if !by_lang.vue.is_empty() {
-        let t = Instant::now();
-        let vue_diags = engine::lint_files_with_project(&by_lang.vue, config, &project, None)?;
-        timings.engine_vue = t.elapsed();
-        diagnostics.extend(vue_diags);
-    }
-    if !by_lang.json.is_empty() {
-        diagnostics.extend(engine::lint_files_with_project(
-            &by_lang.json,
-            config,
-            &project,
-            None,
-        )?);
-    }
+    let clones_enabled =
+        discovered.len() >= 2 && !config.is_rule_globally_disabled(clone_detection::RULE_ID);
 
-    if discovered.len() >= 2 && !config.is_rule_globally_disabled(clone_detection::RULE_ID) {
+    // Clone detection only needs the file list, not the engine's diagnostics,
+    // so it can run concurrently with the language engines. `rayon::join` lets
+    // the sequential core of clone detection (`find_raw_clones`) overlap the
+    // engine's per-file parallel work instead of running strictly after it —
+    // the clones phase is largely hidden behind the dominant engine phase.
+    let engine_work = || -> Result<Vec<Diagnostic>> {
+        let mut diags = Vec::with_capacity(discovered.len());
+        if !by_lang.ts.is_empty() {
+            diags.extend(lint_typescript(
+                &by_lang.ts,
+                config,
+                &project,
+                timings,
+                is_comply_only,
+                type_aware,
+                &type_program_ts,
+            )?);
+        }
+        if !by_lang.rs.is_empty() {
+            diags.extend(lint_rust(
+                &by_lang.rs,
+                config,
+                &project,
+                timings,
+                is_comply_only,
+            )?);
+        }
+        if !by_lang.vue.is_empty() {
+            let t = Instant::now();
+            let vue_diags = engine::lint_files_with_project(&by_lang.vue, config, &project, None)?;
+            timings.engine_vue = t.elapsed();
+            diags.extend(vue_diags);
+        }
+        if !by_lang.json.is_empty() {
+            diags.extend(engine::lint_files_with_project(
+                &by_lang.json,
+                config,
+                &project,
+                None,
+            )?);
+        }
+        Ok(diags)
+    };
+    let clones_work = || -> (Vec<Diagnostic>, std::time::Duration) {
+        if !clones_enabled {
+            return (Vec::new(), std::time::Duration::ZERO);
+        }
         let t = Instant::now();
         let all_refs: Vec<&SourceFile> = discovered.iter().collect();
-        diagnostics.extend(clone_detection::lint_files(&all_refs));
-        timings.clones = t.elapsed();
-    }
+        let d = clone_detection::lint_files(&all_refs);
+        (d, t.elapsed())
+    };
+
+    let (engine_diags, (clone_diags, clones_elapsed)) = rayon::join(engine_work, clones_work);
+    diagnostics.extend(engine_diags?);
+    diagnostics.extend(clone_diags);
+    timings.clones = clones_elapsed;
 
     if project.has_framework("drizzle") {
         diagnostics.retain(|d| {
