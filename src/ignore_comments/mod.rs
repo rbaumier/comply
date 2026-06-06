@@ -10,8 +10,9 @@ mod line;
 mod payload;
 
 use crate::diagnostic::Diagnostic;
+use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Result of parsing comply-ignore comments in a source file.
 #[derive(Debug)]
@@ -158,28 +159,60 @@ pub fn apply_to_all(
     diagnostics: Vec<Diagnostic>,
     discovered: &[crate::files::SourceFile],
 ) -> Vec<Diagnostic> {
-    let mut by_file: HashMap<std::path::PathBuf, Vec<Diagnostic>> =
+    // `canonical_key` is a filesystem syscall (realpath). With tens of
+    // thousands of diagnostics spread over a few thousand files, canonicalizing
+    // once per diagnostic dominated this phase. Memoize: each distinct path is
+    // canonicalized once, then served from the cache. `get(&Path)` borrows, so
+    // a cache hit allocates nothing.
+    let mut canon_cache: HashMap<PathBuf, PathBuf> = HashMap::new();
+    let mut canon = |p: &Path| -> PathBuf {
+        if let Some(c) = canon_cache.get(p) {
+            return c.clone();
+        }
+        let c = canonical_key(p);
+        canon_cache.insert(p.to_path_buf(), c.clone());
+        c
+    };
+
+    let mut by_file: HashMap<PathBuf, Vec<Diagnostic>> =
         HashMap::with_capacity(diagnostics.len());
     for d in diagnostics {
-        let key = canonical_key(d.path.as_ref());
+        let key = canon(d.path.as_ref());
         by_file.entry(key).or_default().push(d);
     }
 
-    let mut result = Vec::with_capacity(by_file.values().map(Vec::len).sum::<usize>());
+    // Pair each discovered file with its diagnostics moved out of the map, so
+    // the per-file disk read + scan below can run in parallel — each file is
+    // fully independent. `into_par_iter().flat_map(..).collect()` preserves the
+    // discovered order, so output is identical to the sequential version.
+    let mut work: Vec<(&crate::files::SourceFile, Vec<Diagnostic>)> =
+        Vec::with_capacity(discovered.len());
     for file in discovered {
-        let key = canonical_key(&file.path);
+        let key = canon(&file.path);
         let file_diags = by_file.remove(&key).unwrap_or_default();
-        match std::fs::read_to_string(&file.path) {
-            Ok(src) => result.extend(apply_suppressions(file_diags, &file.path, &src)),
-            Err(e) => {
-                eprintln!(
-                    "comply: skipping ignore-scan for {}: {e}",
-                    file.path.display()
-                );
-                result.extend(file_diags);
-            }
-        }
+        work.push((file, file_diags));
     }
+
+    let mut result: Vec<Diagnostic> = work
+        .into_par_iter()
+        .flat_map_iter(|(file, file_diags)| {
+            let out: Vec<Diagnostic> = match std::fs::read_to_string(&file.path) {
+                // Fast path: a file with no `comply-ignore` marker anywhere can
+                // neither suppress a diagnostic nor carry a malformed marker, so
+                // the multi-pass line scan in `parse_ignores` is pure waste. One
+                // SIMD substring check over the whole file replaces two per-line
+                // `find` scans on every line of the repo.
+                Ok(src) if !src.contains("comply-ignore") => file_diags,
+                Ok(src) => apply_suppressions(file_diags, &file.path, &src),
+                Err(e) => {
+                    eprintln!("comply: skipping ignore-scan for {}: {e}", file.path.display());
+                    file_diags
+                }
+            };
+            out.into_iter()
+        })
+        .collect();
+
     // Files not in `discovered` (truly orphaned) pass through unchanged.
     for (_, file_diags) in by_file {
         result.extend(file_diags);
