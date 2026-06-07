@@ -47,7 +47,7 @@ impl TextCheck for Check {
             .unwrap_or_default();
 
         let workspace_names: rustc_hash::FxHashSet<String> =
-            ctx.project.workspace_package_names().into_iter().collect();
+            ctx.project.workspace_package_names().iter().cloned().collect();
 
         let mut diagnostics = Vec::new();
         for (spec, info) in index.bare_specifiers() {
