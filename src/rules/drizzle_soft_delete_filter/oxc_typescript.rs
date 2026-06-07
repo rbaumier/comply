@@ -87,7 +87,14 @@ impl OxcCheck for Check {
             return;
         }
 
-        if !file_has_deleted_at_column(ctx.source) {
+        // `file_has_deleted_at_column` scans the whole source; it's a file-level
+        // property, so memoize it once per file instead of rescanning on every
+        // CallExpression node (the per-node call made this O(nodes × source)).
+        if !crate::oxc_helpers::cached_file_bool(
+            ctx.source,
+            crate::oxc_helpers::SLOT_DELETED_AT_COLUMN,
+            || file_has_deleted_at_column(ctx.source),
+        ) {
             return;
         }
 
