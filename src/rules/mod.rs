@@ -895,6 +895,7 @@ pub mod react_button_has_type;
 pub mod react_checked_requires_onchange;
 pub mod react_form_requires_novalidate;
 pub mod react_forward_ref_uses_ref;
+pub mod react_hook_form_use_no_memo;
 pub mod react_iframe_missing_sandbox;
 pub mod react_jsx_key;
 pub mod react_jsx_no_bind;
@@ -2841,6 +2842,7 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         react_no_access_state_in_setstate::register(),
         react_button_has_type::register(),
         react_form_requires_novalidate::register(),
+        react_hook_form_use_no_memo::register(),
         react_jsx_key::register(),
         react_jsx_no_useless_fragment::register(),
         react_jsx_pascal_case::register(),
