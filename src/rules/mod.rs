@@ -1029,6 +1029,7 @@ pub mod zod_prefer_discriminated_union;
 pub mod zod_prefer_enum_over_literal_union;
 pub mod zod_prefer_safe_parse;
 pub mod zod_prefer_top_level_format;
+pub mod zod_prefer_error_over_message;
 pub mod zod_refine_requires_path;
 pub mod zod_require_error_messages;
 pub mod zod_string_min_1_required;
@@ -2077,6 +2078,7 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
         zod_prefer_enum_over_literal_union::register(),
         zod_refine_requires_path::register(),
         zod_require_error_messages::register(),
+        zod_prefer_error_over_message::register(),
         zod_no_optional_nullable_chain::register(),
         zod_no_transform_in_record_key::register(),
         zod_no_throw_in_refine::register(),
