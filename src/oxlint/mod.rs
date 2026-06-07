@@ -36,8 +36,9 @@ pub use options::for_rule as options_for;
 
 use anyhow::{Context, Result, bail};
 use rustc_hash::{FxHashMap, FxHashSet};
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::OnceLock;
 use std::time::Duration;
 use wait_timeout::ChildExt;
@@ -263,17 +264,12 @@ fn invoke_oxlint(
         cmd.arg(&f.path);
     }
 
-    let mut child = cmd
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
+    let child = cmd
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
         .spawn()
         .context("failed to invoke oxlint — install it with: npm install -g oxlint")?;
-    let Some(status) = child
-        .wait_timeout(OXLINT_BATCH_TIMEOUT)
-        .context("failed to wait for oxlint")?
-    else {
-        let _ = child.kill();
-        let _ = child.wait();
+    let Some(output) = drain_and_wait(child, OXLINT_BATCH_TIMEOUT)? else {
         eprintln!(
             "comply: oxlint timed out after {}s on {} file(s); continuing with partial results",
             OXLINT_BATCH_TIMEOUT.as_secs(),
@@ -285,10 +281,6 @@ fn invoke_oxlint(
             stderr: Vec::new(),
         });
     };
-    let output = child
-        .wait_with_output()
-        .context("failed to collect oxlint output")?;
-    debug_assert_eq!(output.status, status);
 
     // oxlint exits 1 when violations are found — that is normal, not an error.
     if !output.status.success() && output.status.code() != Some(1) {
@@ -299,6 +291,50 @@ fn invoke_oxlint(
         );
     }
     Ok(output)
+}
+
+/// Wait for `child` up to `timeout`, draining its stdout/stderr on dedicated
+/// threads. Returns `Ok(None)` if the child was killed for exceeding `timeout`.
+///
+/// The threads are load-bearing: `wait_timeout` only polls the process and
+/// never reads the pipes, so a child that writes past the OS pipe buffer
+/// (~64 KiB) blocks on `write()` and can never exit — a deadlock that surfaces
+/// as a spurious timeout on any project with enough diagnostics to overflow it.
+fn drain_and_wait(
+    mut child: std::process::Child,
+    timeout: Duration,
+) -> Result<Option<std::process::Output>> {
+    let mut stdout_pipe = child.stdout.take().expect("child stdout must be piped");
+    let mut stderr_pipe = child.stderr.take().expect("child stderr must be piped");
+    let stdout_reader = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = stdout_pipe.read_to_end(&mut buf);
+        buf
+    });
+    let stderr_reader = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = stderr_pipe.read_to_end(&mut buf);
+        buf
+    });
+
+    let Some(status) = child
+        .wait_timeout(timeout)
+        .context("failed to wait for oxlint")?
+    else {
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = stdout_reader.join();
+        let _ = stderr_reader.join();
+        return Ok(None);
+    };
+
+    let stdout = stdout_reader.join().unwrap_or_default();
+    let stderr = stderr_reader.join().unwrap_or_default();
+    Ok(Some(std::process::Output {
+        status,
+        stdout,
+        stderr,
+    }))
 }
 
 #[cfg(unix)]
@@ -440,6 +476,35 @@ mod tests {
         let json = br#"{ "diagnostics": [] }"#;
         let result = parse_json_bytes(json, b"", &remap).expect("must parse");
         assert!(result.is_empty());
+    }
+
+    #[test]
+    fn drain_and_wait_does_not_deadlock_on_output_exceeding_pipe_buffer() {
+        // A child that writes ~200 KiB — far past the ~64 KiB OS pipe buffer —
+        // then exits 0. Without draining the pipes on threads, oxlint blocks on
+        // write() and `wait_timeout` never sees it exit (issue: svix-webhooks
+        // timed out at 45s despite finishing in <1s). It must complete, not
+        // time out, and its full output must be captured.
+        let child = Command::new("sh")
+            .args([
+                "-c",
+                "i=0; while [ $i -lt 4000 ]; do printf '%050d\\n' $i; i=$((i + 1)); done",
+            ])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn sh");
+
+        let output = drain_and_wait(child, Duration::from_secs(30))
+            .expect("wait must not error")
+            .expect("child must complete, not time out");
+
+        assert!(output.status.success());
+        assert!(
+            output.stdout.len() > 200_000,
+            "expected full output, got {} bytes",
+            output.stdout.len()
+        );
     }
 
     #[test]
