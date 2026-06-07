@@ -445,6 +445,19 @@ pub struct ProjectCtx {
     // JSX-dense tree pays the full walk once per file.
     react_compiler_dir_cache: Mutex<HashMap<PathBuf, bool>>,
 
+    // "Does this project use a bundler?" keyed by the *directory* of the file
+    // asking. Like `react_compiler_dir_cache`, the answer depends only on the
+    // directory chain (nearest package.json + bundler config files up to the
+    // root), not file content, and the probe stat-walks config files — so
+    // without this memo a deep monorepo pays the full walk once per file.
+    bundler_dir_cache: Mutex<HashMap<PathBuf, bool>>,
+
+    // Workspace member package names, read+parsed from each workspace root's
+    // package.json. Project-wide and constant, but queried once per import by
+    // `no-implicit-deps` / `unlisted-dependency` — memoized so the disk read +
+    // JSON parse of every member manifest happens once, not once per import.
+    workspace_package_names_cache: OnceLock<Vec<String>>,
+
     // Files the engine read and found to contain no `comply-ignore` substring.
     // The post-filter (`ignore_comments::apply_to_all`) otherwise re-reads every
     // discovered file from disk just to run that one substring check; for files
@@ -729,6 +742,21 @@ impl ProjectCtx {
         v
     }
 
+    /// Memoize a directory-invariant "does this project use a bundler?" probe.
+    /// The answer is identical for every file in the same directory (it depends
+    /// only on the manifest + bundler-config chain from that directory up to the
+    /// root), so a deep monorepo pays the stat-walk once per directory instead of
+    /// once per file. `compute` runs at most once per directory.
+    pub fn cached_bundler<F: FnOnce() -> bool>(&self, path: &Path, compute: F) -> bool {
+        let key = path.parent().map(Path::to_path_buf).unwrap_or_default();
+        if let Some(&v) = self.bundler_dir_cache.lock().unwrap().get(&key) {
+            return v;
+        }
+        let v = compute();
+        self.bundler_dir_cache.lock().unwrap().insert(key, v);
+        v
+    }
+
     fn compute_uses_react_compiler(&self, path: &Path) -> bool {
         const REACT_COMPILER_DEP: &str = "babel-plugin-react-compiler";
         const COMPILER_CONFIG_FILES: &[&str] = &[
@@ -825,15 +853,17 @@ impl ProjectCtx {
 
     /// Package names from all workspace members. Used by `unlisted-dependency`
     /// to recognize cross-workspace imports as valid.
-    pub fn workspace_package_names(&self) -> Vec<String> {
-        self.workspace_roots
-            .iter()
-            .filter_map(|root| {
-                let raw = std::fs::read_to_string(root.join("package.json")).ok()?;
-                let pkg = PackageJson::parse(&raw)?;
-                pkg.name
-            })
-            .collect()
+    pub fn workspace_package_names(&self) -> &[String] {
+        self.workspace_package_names_cache.get_or_init(|| {
+            self.workspace_roots
+                .iter()
+                .filter_map(|root| {
+                    let raw = std::fs::read_to_string(root.join("package.json")).ok()?;
+                    let pkg = PackageJson::parse(&raw)?;
+                    pkg.name
+                })
+                .collect()
+        })
     }
 }
 
@@ -1167,7 +1197,7 @@ mod tests {
             workspace_roots: roots,
             ..ProjectCtx::default()
         };
-        let mut names = ctx.workspace_package_names();
+        let mut names = ctx.workspace_package_names().to_vec();
         names.sort();
         assert_eq!(
             names,

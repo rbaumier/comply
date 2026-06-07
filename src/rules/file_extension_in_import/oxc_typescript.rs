@@ -105,10 +105,14 @@ impl OxcCheck for Check {
         semantic: &'a oxc_semantic::Semantic<'a>,
         ctx: &CheckCtx,
     ) -> Vec<Diagnostic> {
-        if project_uses_bundler(ctx) {
-            return Vec::new();
-        }
-        if tsconfig_uses_bundler_resolution(ctx) {
+        // Both probes are directory-invariant (manifest + bundler config +
+        // tsconfig chain), so memoize the combined skip decision per directory:
+        // `has_bundler_config` stat-walks the ancestor tree, which is otherwise
+        // re-run for every file in a deep monorepo.
+        let skip_for_bundler = ctx.project.cached_bundler(ctx.path, || {
+            project_uses_bundler(ctx) || tsconfig_uses_bundler_resolution(ctx)
+        });
+        if skip_for_bundler {
             return Vec::new();
         }
 
