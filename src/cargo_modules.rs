@@ -42,6 +42,10 @@ pub fn lint_files(files: &[&SourceFile]) -> Result<Vec<Diagnostic>> {
         return Ok(vec![]);
     }
     let mut diagnostics = Vec::new();
+    // Per-package on purpose: `cargo modules orphans` walks a single crate's
+    // module tree and has no `--workspace` mode, so we group by the nearest
+    // manifest (the member) rather than the workspace root the way the clippy
+    // and shear runners do.
     for workspace in runner_helpers::collect_unique_roots(files, "Cargo.toml") {
         diagnostics.extend(scan_workspace(&workspace)?);
     }

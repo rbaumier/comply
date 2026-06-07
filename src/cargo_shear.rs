@@ -54,7 +54,7 @@ pub fn lint_files(files: &[&SourceFile]) -> Result<Vec<Diagnostic>> {
     let mut diagnostics = Vec::new();
     let mut roots = std::collections::HashSet::new();
     for f in files {
-        if let Some(root) = find_cargo_workspace_root(&f.path) {
+        if let Some(root) = runner_helpers::find_cargo_workspace_root(&f.path) {
             roots.insert(root);
         }
     }
@@ -62,26 +62,6 @@ pub fn lint_files(files: &[&SourceFile]) -> Result<Vec<Diagnostic>> {
         diagnostics.extend(lint_workspace(&workspace)?);
     }
     Ok(diagnostics)
-}
-
-fn find_cargo_workspace_root(path: &Path) -> Option<std::path::PathBuf> {
-    let canonical = path.canonicalize().ok()?;
-    let mut current = canonical.parent();
-    let mut nearest = None;
-    while let Some(dir) = current {
-        let cargo_toml = dir.join("Cargo.toml");
-        if cargo_toml.is_file() {
-            if nearest.is_none() {
-                nearest = Some(dir.to_path_buf());
-            }
-            if let Ok(content) = fs::read_to_string(&cargo_toml)
-                && content.contains("[workspace]") {
-                    return Some(dir.to_path_buf());
-                }
-        }
-        current = dir.parent();
-    }
-    nearest
 }
 
 /// Run `cargo shear --format=json` from inside `workspace` and parse the

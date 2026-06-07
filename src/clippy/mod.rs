@@ -198,30 +198,20 @@ fn group_by_workspace<'a>(
 ) -> HashMap<Option<PathBuf>, Vec<&'a SourceFile>> {
     let mut out: HashMap<Option<PathBuf>, Vec<&'a SourceFile>> = HashMap::new();
     for f in files {
-        let root = find_workspace_root(&f.path);
+        let root = crate::runner_helpers::find_cargo_workspace_root(&f.path);
         out.entry(root).or_default().push(*f);
     }
     out
 }
 
-/// Walk up parent directories looking for the nearest `Cargo.toml`.
-/// Returns the directory containing it, or `None` if we hit the
-/// filesystem root without finding one.
-fn find_workspace_root(file: &Path) -> Option<PathBuf> {
-    let mut cur = file.parent()?.to_path_buf();
-    loop {
-        if cur.join("Cargo.toml").is_file() {
-            return Some(cur);
-        }
-        if !cur.pop() {
-            return None;
-        }
-    }
-}
-
 /// Spawn `cargo clippy` for one workspace and return the captured Output.
 /// We pass `--quiet` to suppress cargo's progress noise on stderr, and
 /// `--message-format=json` to get structured diagnostics on stdout.
+///
+/// `--workspace` lints every member in one shared build. `workspace` is
+/// the workspace root (resolved via `find_cargo_workspace_root`), so a
+/// virtual manifest covers all members, and a root that is itself a
+/// package still reaches the other members instead of only the root crate.
 ///
 /// `clippy_conf_dir` is the directory containing comply's generated
 /// `clippy.toml` (when the user set per-lint thresholds in
@@ -237,6 +227,7 @@ fn invoke_clippy(
     let mut cmd = Command::new("cargo");
     cmd.args([
         "clippy",
+        "--workspace",
         "--message-format=json",
         "--quiet",
         "--manifest-path",
@@ -381,36 +372,6 @@ fn canonicalize_or_self(path: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
-    use tempfile::TempDir;
-
-    #[test]
-    fn find_workspace_root_finds_immediate_cargo_toml() {
-        let tmp = TempDir::new().unwrap();
-        let cargo = tmp.path().join("Cargo.toml");
-        fs::write(&cargo, "[package]\nname=\"x\"\nversion=\"0.0.0\"").unwrap();
-        let src = tmp.path().join("src");
-        fs::create_dir(&src).unwrap();
-        let file = src.join("main.rs");
-        fs::write(&file, "fn main() {}").unwrap();
-
-        let root = find_workspace_root(&file);
-        assert_eq!(root, Some(tmp.path().to_path_buf()));
-    }
-
-    #[test]
-    fn find_workspace_root_returns_none_for_loose_file() {
-        let tmp = TempDir::new().unwrap();
-        let file = tmp.path().join("loose.rs");
-        fs::write(&file, "fn main() {}").unwrap();
-        // No Cargo.toml anywhere in this branch.
-        let root = find_workspace_root(&file);
-        // The function walks up to filesystem root, which won't have a
-        // Cargo.toml unless the test runner happens to be inside one.
-        // We accept either None or a real workspace — what we can verify
-        // is that the function doesn't panic and the result is consistent.
-        let _ = root;
-    }
 
     #[test]
     fn parse_clippy_jsonl_extracts_diagnostics_for_filtered_files() {

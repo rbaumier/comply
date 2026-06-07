@@ -155,6 +155,11 @@ fn run_clippy_fix(files: &[&SourceFile], config: &Config) -> Result<usize> {
 
 /// Walk up parents from each file looking for the nearest Cargo.toml.
 /// Files outside any workspace land under the `None` key.
+///
+/// Deliberately groups by the nearest member manifest, not the workspace
+/// root (unlike the clippy *lint* path). `cargo clippy --fix` rewrites
+/// source, so we keep the edit scope to the member crates the user
+/// actually touched rather than fixing every sibling in the workspace.
 fn group_by_workspace<'a>(
     files: &[&'a SourceFile],
 ) -> rustc_hash::FxHashMap<Option<PathBuf>, Vec<&'a SourceFile>> {
