@@ -17,9 +17,8 @@ use crate::rules::jsdoc_text_helpers::{find_jsdoc_blocks, has_tag, parse_tags};
 /// Slice of source that follows the JSDoc block, capped at the close of the
 /// documented entity. Empty if the JSDoc is not followed by something that
 /// looks like a function declaration or expression.
-fn documented_function_body(source: &str, block_raw: &str) -> Option<String> {
-    let idx = source.find(block_raw)? + block_raw.len();
-    let tail = &source[idx..];
+fn documented_function_body(source: &str, comment_end: usize) -> Option<String> {
+    let tail = source.get(comment_end..)?;
     let open = tail.find('{')?;
     let bytes = tail.as_bytes();
     let mut depth = 0i32;
@@ -81,11 +80,10 @@ enum DocumentedEntity {
     Other,
 }
 
-fn classify_entity(source: &str, block_raw: &str) -> DocumentedEntity {
-    let Some(idx) = source.find(block_raw) else {
+fn classify_entity(source: &str, comment_end: usize) -> DocumentedEntity {
+    let Some(after) = source.get(comment_end..) else {
         return DocumentedEntity::Other;
     };
-    let after = &source[idx + block_raw.len()..];
     let head = match after.find('{') {
         Some(i) => &after[..i],
         None => after,
@@ -234,12 +232,16 @@ crate::ast_check! { on ["comment"] prefilter = ["/**"] => |node, source, ctx, di
     let Ok(text) = node.utf8_text(source) else { return; };
     if !text.starts_with("/**") { return; }
     let line_offset = node.start_position().row;
+    // The comment's exact end offset in the source — use it directly instead of
+    // re-locating the block with `source.find(text)`, which is O(source length)
+    // per JSDoc comment (quadratic on heavily-documented files).
+    let comment_end = node.end_byte();
 
     for block in find_jsdoc_blocks(text) {
         let tags = parse_tags(&block.content);
         let has_yields_tag = has_tag(&tags, "yields");
-        let entity = classify_entity(ctx.source, text);
-        let body = documented_function_body(ctx.source, text).unwrap_or_default();
+        let entity = classify_entity(ctx.source, comment_end);
+        let body = documented_function_body(ctx.source, comment_end).unwrap_or_default();
         let is_gen = matches!(entity, DocumentedEntity::Generator);
         let yields_in_body = matches!(entity, DocumentedEntity::Generator | DocumentedEntity::Function)
             && body_has_own_yield(&body);
