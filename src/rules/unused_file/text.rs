@@ -33,7 +33,28 @@ impl TextCheck for Check {
             return Vec::new();
         }
 
-        let entry_points = detect_entry_points(index, ctx.project);
+        // `project_root` and `workspace_roots` are constant for the whole run,
+        // but `is_entry_point` is called once per indexed path (twice, counting
+        // the reachability seed pass). Canonicalizing them here collapses an
+        // O(files × workspace_roots) burst of `canonicalize` syscalls — the
+        // dominant cost on large monorepos — into O(workspace_roots).
+        let canon_root: Option<std::path::PathBuf> = ctx
+            .project
+            .project_root
+            .as_deref()
+            .map(|r| std::fs::canonicalize(r).unwrap_or_else(|_| r.to_path_buf()));
+        // A `HashSet` so the workspace-root membership test in `is_entry_point`
+        // is O(1) instead of a linear scan per indexed path — a monorepo can
+        // declare hundreds of workspace roots, making that scan O(files × roots).
+        let canon_workspace_roots: std::collections::HashSet<std::path::PathBuf> = ctx
+            .project
+            .workspace_roots
+            .iter()
+            .map(|wr| std::fs::canonicalize(wr).unwrap_or_else(|_| wr.clone()))
+            .collect();
+
+        let entry_points =
+            detect_entry_points(index, ctx.project, canon_root.as_deref(), &canon_workspace_roots);
         if entry_points.is_empty() {
             return Vec::new();
         }
@@ -45,7 +66,7 @@ impl TextCheck for Check {
             if reachable.contains(path) {
                 continue;
             }
-            if is_entry_point(path, ctx.project) {
+            if is_entry_point(path, ctx.project, canon_root.as_deref(), &canon_workspace_roots) {
                 continue;
             }
             if is_declaration_file(path)
@@ -71,14 +92,28 @@ impl TextCheck for Check {
     }
 }
 
-fn detect_entry_points<'a>(index: &'a ImportIndex, project: &ProjectCtx) -> Vec<&'a Path> {
+fn detect_entry_points<'a>(
+    index: &'a ImportIndex,
+    project: &ProjectCtx,
+    canon_root: Option<&Path>,
+    canon_workspace_roots: &std::collections::HashSet<std::path::PathBuf>,
+) -> Vec<&'a Path> {
     index
         .indexed_paths()
-        .filter(|p| is_entry_point(p, project) || is_test_file(p) || project.entrypoints_contains(p))
+        .filter(|p| {
+            is_entry_point(p, project, canon_root, canon_workspace_roots)
+                || is_test_file(p)
+                || project.entrypoints_contains(p)
+        })
         .collect()
 }
 
-fn is_entry_point(path: &Path, project: &ProjectCtx) -> bool {
+fn is_entry_point(
+    path: &Path,
+    project: &ProjectCtx,
+    canon_root: Option<&Path>,
+    canon_workspace_roots: &std::collections::HashSet<std::path::PathBuf>,
+) -> bool {
     let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
 
     if is_config_file(path) {
@@ -89,17 +124,16 @@ fn is_entry_point(path: &Path, project: &ProjectCtx) -> bool {
         return true;
     }
 
-    let Some(root) = project.project_root.as_deref() else {
+    let Some(canon_root) = canon_root else {
         return false;
     };
-    let canon_root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
 
     // CLIs and smoke/build tools are run directly, never imported. They live in
     // a top-level `scripts/`, `bin/`, `examples/`, `example-apps/`, `tools/`,
     // or `benchmarks/` directory.
     if in_top_level_dir(
         path,
-        &canon_root,
+        canon_root,
         &["scripts", "bin", "examples", "example-apps", "tools", "benchmarks"],
     ) {
         return true;
@@ -112,7 +146,7 @@ fn is_entry_point(path: &Path, project: &ProjectCtx) -> bool {
     let at_root = canon_parent == canon_root;
     // A bundler/CLI entry conventionally sits at the project root *or* directly
     // under the source root — `main.ts`, `index.ts`, `src/main.ts`.
-    let under_src = canon_parent.parent() == Some(canon_root.as_path())
+    let under_src = canon_parent.parent() == Some(canon_root)
         && canon_parent.file_name().and_then(|n| n.to_str()) == Some("src");
 
     if (stem == "main" || stem == "index") && (at_root || under_src) {
@@ -126,13 +160,13 @@ fn is_entry_point(path: &Path, project: &ProjectCtx) -> bool {
     // Workspace package entry points: treat index.ts/main.ts at the root of any
     // workspace package (or its src/ subdir) as a BFS seed, so files reachable
     // only within that package are not flagged.
-    for workspace_root in &project.workspace_roots {
-        let canon_wr =
-            std::fs::canonicalize(workspace_root).unwrap_or_else(|_| workspace_root.clone());
-        let at_wr = canon_parent == canon_wr;
-        let under_wr_src = canon_parent.parent() == Some(canon_wr.as_path())
-            && canon_parent.file_name().and_then(|n| n.to_str()) == Some("src");
-        if (stem == "main" || stem == "index") && (at_wr || under_wr_src) {
+    if stem == "main" || stem == "index" {
+        let at_wr = canon_workspace_roots.contains(&canon_parent);
+        let under_wr_src = canon_parent.file_name().and_then(|n| n.to_str()) == Some("src")
+            && canon_parent
+                .parent()
+                .is_some_and(|p| canon_workspace_roots.contains(p));
+        if at_wr || under_wr_src {
             return true;
         }
     }
