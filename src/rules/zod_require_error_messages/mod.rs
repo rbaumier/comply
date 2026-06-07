@@ -13,7 +13,8 @@ use crate::rules::meta::RuleMeta;
 pub const META: RuleMeta = RuleMeta {
     id: "zod-require-error-messages",
     description: "`.refine()` without an error message produces unhelpful validation errors.",
-    remediation: "Add `{ message: 'descriptive error' }` as the second argument to `.refine()`.",
+    remediation: "Add `{ error: 'descriptive error' }` as the second argument to `.refine()` \
+                  (Zod v4 renamed the `message` param to `error`).",
     severity: Severity::Warning,
     doc_url: None,
     categories: &["zod"],

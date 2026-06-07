@@ -26,7 +26,7 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
         ctx.path,
         &node,
         super::META.id,
-        "Add `{ message: '...' }` to `.refine()` — bare refine produces no helpful error message.".into(),
+        "Add `{ error: '...' }` to `.refine()` — bare refine produces no helpful error message.".into(),
         Severity::Warning,
     ));
 }
