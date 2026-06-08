@@ -69,6 +69,10 @@ const INSTANCE_METHODS: &[(&str, u32)] = &[
     ("groupBy", 21),
 ];
 
+/// Directory path segments that unambiguously indicate a non-Node.js runtime.
+/// Files under these paths are exempt from Node.js API version checks.
+pub(super) const NON_NODE_RUNTIME_DIRS: &[&str] = &["deno/", "cloudflare-workers/"];
+
 /// Static methods on well-known constructors.
 const STATIC_METHODS: &[(&str, &str, u32)] = &[
     ("Object", "hasOwn", 16),
