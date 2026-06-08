@@ -89,6 +89,12 @@ pub struct ExportedSymbol {
     pub reexport_source: Option<String>,
     /// Parameter names for function exports (empty for non-functions).
     pub params: Vec<String>,
+    /// `true` for `export type Foo` / `export interface Foo` — pure type
+    /// exports that live only in the TypeScript namespace and emit no runtime
+    /// JS. TypeScript allows `export const X` and `export type X` to coexist
+    /// under the same name (value namespace vs. type namespace), so callers
+    /// must group by `(name, is_type_only)` rather than `name` alone.
+    pub is_type_only: bool,
 }
 
 /// Kind of an imported symbol.
@@ -993,6 +999,7 @@ fn extract_vue(parser: &mut Parser, source: &str, path: &Path) -> Option<(PathBu
             line: 1,
             reexport_source: None,
             params: Vec::new(),
+            is_type_only: false,
         });
     }
 
@@ -1247,6 +1254,7 @@ fn extract_export(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
                 line,
                 reexport_source: Some(src.clone()),
                 params: Vec::new(),
+                is_type_only: false,
             });
             return;
         }
@@ -1256,6 +1264,7 @@ fn extract_export(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
             line,
             reexport_source: Some(src.clone()),
             params: Vec::new(),
+            is_type_only: false,
         });
         return;
     }
@@ -1293,6 +1302,7 @@ fn extract_export(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
                 line,
                 reexport_source: source_str.clone(),
                 params: Vec::new(),
+                is_type_only: false,
             });
         }
         return;
@@ -1309,6 +1319,7 @@ fn extract_export(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
             line,
             reexport_source: None,
             params: Vec::new(),
+            is_type_only: false,
         });
         return;
     }
@@ -1329,6 +1340,7 @@ fn extract_export(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
                         line,
                         reexport_source: None,
                         params,
+                        is_type_only: false,
                     });
                 }
             }
@@ -1343,6 +1355,7 @@ fn extract_export(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
                         line,
                         reexport_source: None,
                         params: Vec::new(),
+                        is_type_only: false,
                     });
                 }
             }
@@ -1372,11 +1385,12 @@ fn extract_export(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
                             line,
                             reexport_source: None,
                             params: Vec::new(),
+                            is_type_only: false,
                         });
                     }
                 }
             }
-            "type_alias_declaration" | "interface_declaration" | "enum_declaration" => {
+            "type_alias_declaration" | "interface_declaration" => {
                 if let Some(id) = child
                     .named_children(&mut child.walk())
                     .find(|c| c.kind() == "type_identifier" || c.kind() == "identifier")
@@ -1387,6 +1401,22 @@ fn extract_export(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
                         line,
                         reexport_source: None,
                         params: Vec::new(),
+                        is_type_only: true,
+                    });
+                }
+            }
+            "enum_declaration" => {
+                if let Some(id) = child
+                    .named_children(&mut child.walk())
+                    .find(|c| c.kind() == "type_identifier" || c.kind() == "identifier")
+                {
+                    out.push(ExportedSymbol {
+                        name: text_of(id, source),
+                        kind: ExportKind::Named,
+                        line,
+                        reexport_source: None,
+                        params: Vec::new(),
+                        is_type_only: false,
                     });
                 }
             }
@@ -1574,6 +1604,7 @@ fn extract_ts_oxc(source: &str, path: &Path) -> Option<FileExtract> {
                     line: oxc_line_at(&lines, export.span.start as usize),
                     reexport_source: None,
                     params: Vec::new(),
+                    is_type_only: false,
                 });
             }
             AstKind::NewExpression(new_expr) => {
@@ -1704,6 +1735,7 @@ fn oxc_extract_export_named(
                 line,
                 reexport_source: reexport_source.clone(),
                 params: Vec::new(),
+                is_type_only: false,
             });
         }
         return;
@@ -1727,6 +1759,7 @@ fn oxc_extract_export_named(
                     line,
                     reexport_source: None,
                     params: oxc_extract_params(func),
+                    is_type_only: false,
                 });
             }
         }
@@ -1738,6 +1771,7 @@ fn oxc_extract_export_named(
                     line,
                     reexport_source: None,
                     params: Vec::new(),
+                    is_type_only: false,
                 });
             }
         }
@@ -1752,6 +1786,7 @@ fn oxc_extract_export_named(
                         line,
                         reexport_source: None,
                         params: Vec::new(),
+                        is_type_only: false,
                     });
                 }
             }
@@ -1763,6 +1798,7 @@ fn oxc_extract_export_named(
                 line,
                 reexport_source: None,
                 params: Vec::new(),
+                is_type_only: true,
             });
         }
         Declaration::TSInterfaceDeclaration(decl) => {
@@ -1772,6 +1808,7 @@ fn oxc_extract_export_named(
                 line,
                 reexport_source: None,
                 params: Vec::new(),
+                is_type_only: true,
             });
         }
         Declaration::TSEnumDeclaration(decl) => {
@@ -1781,6 +1818,7 @@ fn oxc_extract_export_named(
                 line,
                 reexport_source: None,
                 params: Vec::new(),
+                is_type_only: false,
             });
         }
         _ => {}
@@ -1806,6 +1844,7 @@ fn oxc_extract_export_all(
         line: oxc_line_at(lines, export.span.start as usize),
         reexport_source: Some(export.source.value.as_str().to_string()),
         params: Vec::new(),
+        is_type_only: false,
     });
 }
 
@@ -2360,6 +2399,7 @@ fn extract_rust_item(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
         line: node.start_position().row + 1,
         reexport_source: None,
         params: Vec::new(),
+        is_type_only: false,
     });
 }
 
@@ -2430,6 +2470,7 @@ fn extract_rust_use(
                 line,
                 reexport_source: Some(specifier),
                 params: Vec::new(),
+                is_type_only: false,
             });
         }
     }

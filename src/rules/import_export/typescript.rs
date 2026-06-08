@@ -13,20 +13,23 @@ crate::ast_check! { on ["program"] => |node, _source, ctx, diagnostics|
 
     let canon = std::fs::canonicalize(ctx.path).unwrap_or_else(|_| ctx.path.to_path_buf());
 
-    // Group exports by name. `StarReExport` has no specific name, skip it.
+    // Group exports by (name, is_type_only). `StarReExport` has no specific
+    // name, skip it. TypeScript allows `export const X` and `export type X`
+    // to coexist under the same name (value vs. type namespace), so they must
+    // not be treated as duplicates of each other.
     let exports = index.get_exports(&canon);
-    let mut by_name: HashMap<&str, Vec<&crate::project::import_index::ExportedSymbol>> =
+    let mut by_name: HashMap<(&str, bool), Vec<&crate::project::import_index::ExportedSymbol>> =
         HashMap::new();
     for exp in exports {
         if exp.kind == ExportKind::StarReExport {
             continue;
         }
-        by_name.entry(exp.name.as_str()).or_default().push(exp);
+        by_name.entry((exp.name.as_str(), exp.is_type_only)).or_default().push(exp);
     }
 
-    // For any name exported more than once, flag every occurrence after the first.
+    // For any (name, is_type_only) pair exported more than once, flag every occurrence after the first.
     let mut duplicates: Vec<(&str, usize)> = Vec::new();
-    for (name, occurrences) in &by_name {
+    for ((name, _), occurrences) in &by_name {
         if occurrences.len() < 2 {
             continue;
         }
@@ -133,6 +136,16 @@ mod tests {
         let (_dir, project, paths) =
             setup_project(&[("a.ts", "export const bar = 1;\n"), ("m.ts", source)]);
         let diags = run_ts_with_project_and_path(source, &Check, &project, &paths[1]);
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn allows_value_and_type_same_name() {
+        // Zod pattern: `export const $output` (value) + `export type $output` (type alias).
+        // These live in separate TypeScript namespaces and must not be flagged as duplicates.
+        let source = "export const $output: unique symbol = Symbol(\"ZodOutput\");\nexport type $output = typeof $output;\n";
+        let (_dir, project, paths) = setup_project(&[("m.ts", source)]);
+        let diags = run_ts_with_project_and_path(source, &Check, &project, &paths[0]);
         assert!(diags.is_empty());
     }
 }
