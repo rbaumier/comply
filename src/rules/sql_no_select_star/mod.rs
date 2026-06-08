@@ -23,7 +23,7 @@ pub const META: RuleMeta = RuleMeta {
     doc_url: None,
     categories: &["database", "sql"],
 
-    skip_in_test_dir: false,
+    skip_in_test_dir: true,
     skip_in_relaxed_dir: false,
 };
 
@@ -59,4 +59,18 @@ pub fn register() -> RuleDef {
 pub(super) fn contains_select_star(text: &str) -> bool {
     let upper = text.to_ascii_uppercase();
     upper.contains("SELECT *") || upper.contains("SELECT  *")
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::rules::file_ctx::{FileCtx, PathSegments};
+
+    #[test]
+    fn meta_skips_test_dir() {
+        let file_ctx = FileCtx {
+            path_segments: PathSegments { in_test_dir: true, ..Default::default() },
+            ..Default::default()
+        };
+        assert!(!super::META.applies_to_file(&file_ctx));
+    }
 }
