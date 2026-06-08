@@ -273,11 +273,12 @@ pub fn register_all() -> Vec<RuleDef> {
             "`<T extends unknown>` is redundant — `unknown` is the default.",
             "Remove the constraint: `<T>`.",
         ),
-        entry(
+        entry_with_filter(
             "no-unnecessary-type-parameters",
             "no-unnecessary-type-parameters",
             "Type parameter is never used or could be `unknown`.",
             "Remove the unused type parameter.",
+            Some(Arc::new(EqualProbeFilter)),
         ),
         entry(
             "no-unnecessary-template-expression",
@@ -971,6 +972,308 @@ fn pfa_is_single_return_block_no_await(block: &str) -> bool {
     semicolons <= 1
 }
 
+// ── no-unnecessary-type-parameters post-filter (equal-probe) ──────────────
+//
+// Two FP shapes are dropped:
+// 1. The type-challenges `Equal<X, Y>` probe idiom: `<T>() => T extends X ? 1 : 2`.
+//    The `<T>` is load-bearing for the structural comparison.
+// 2. Multi-line function signatures where tsgolint only sees the first
+//    occurrence of a type parameter.
+
+struct EqualProbeFilter;
+
+impl PostFilter for EqualProbeFilter {
+    fn keep(&self, diag: &crate::diagnostic::Diagnostic, source: Option<&str>) -> bool {
+        let Some(src) = source else {
+            return true;
+        };
+        !ep_is_equal_probe_fp(src, diag.line) && !ep_is_multiline_param_fp(src, diag.line)
+    }
+}
+
+fn ep_is_equal_probe_fp(src: &str, line_1based: usize) -> bool {
+    if line_1based == 0 {
+        return false;
+    }
+    let lines: Vec<&str> = src.lines().collect();
+    let Some(&line) = lines.get(line_1based - 1) else {
+        return false;
+    };
+    if ep_has_unit_conditional(line) {
+        return true;
+    }
+    if ep_has_generic_arrow_fn(line) {
+        for next_line in lines.iter().skip(line_1based).take(3) {
+            if ep_has_unit_conditional_expr(next_line) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn ep_is_multiline_param_fp(src: &str, line_1based: usize) -> bool {
+    if line_1based == 0 {
+        return false;
+    }
+    let lines: Vec<&str> = src.lines().collect();
+    let Some(&decl_line) = lines.get(line_1based - 1) else {
+        return false;
+    };
+    let Some(param_name) = ep_extract_type_param_name(decl_line) else {
+        return false;
+    };
+    let mut paren_depth: i32 = 0;
+    for b in decl_line.bytes() {
+        match b {
+            b'(' => paren_depth += 1,
+            b')' => {
+                paren_depth -= 1;
+                if paren_depth < 0 {
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut lines_with_param: usize = 0;
+    for next_line in lines.iter().skip(line_1based).take(15) {
+        if ep_contains_word(next_line, &param_name) {
+            lines_with_param += 1;
+            if lines_with_param >= 2 {
+                return true;
+            }
+        }
+        let mut hit_body = false;
+        for b in next_line.bytes() {
+            match b {
+                b'(' => paren_depth += 1,
+                b')' => {
+                    paren_depth -= 1;
+                    if paren_depth < 0 {
+                        break;
+                    }
+                }
+                b'{' if paren_depth <= 0 => {
+                    hit_body = true;
+                    break;
+                }
+                _ => {}
+            }
+        }
+        if hit_body || paren_depth < 0 {
+            break;
+        }
+    }
+    false
+}
+
+fn ep_has_unit_conditional(line: &str) -> bool {
+    if !ep_has_generic_arrow_fn(line) {
+        return false;
+    }
+    ep_has_unit_conditional_expr(line)
+}
+
+fn ep_has_unit_conditional_expr(line: &str) -> bool {
+    let bytes = line.as_bytes();
+    let mut i = 0;
+    while i + 7 <= bytes.len() {
+        if &bytes[i..i + 7] == b"extends"
+            && (i == 0 || !ep_is_ident_byte(bytes[i - 1]))
+            && (i + 7 == bytes.len() || !ep_is_ident_byte(bytes[i + 7]))
+        {
+            if let Some((q_pos, c_pos)) = ep_find_ternary_after(line, i + 7) {
+                let arm1 = line[q_pos + 1..c_pos].trim();
+                let rest = &line[c_pos + 1..];
+                let end = rest
+                    .find(|c: char| c == ')' || c == ',' || c == ';')
+                    .unwrap_or(rest.len());
+                let arm2 = rest[..end].trim();
+                if ep_is_unit_literal(arm1) && ep_is_unit_literal(arm2) {
+                    return true;
+                }
+            }
+        }
+        i += 1;
+    }
+    false
+}
+
+fn ep_has_generic_arrow_fn(line: &str) -> bool {
+    let bytes = line.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] != b'<' {
+            i += 1;
+            continue;
+        }
+        let start = i + 1;
+        if start >= bytes.len() || !ep_is_ident_start(bytes[start]) {
+            i += 1;
+            continue;
+        }
+        let Some(close) = ep_find_matching_angle(bytes, i + 1) else {
+            i += 1;
+            continue;
+        };
+        let after_gt = close + 1;
+        if after_gt >= bytes.len() || bytes[after_gt] != b'(' {
+            i += 1;
+            continue;
+        }
+        let after_open = after_gt + 1;
+        if after_open >= bytes.len() || bytes[after_open] != b')' {
+            i += 1;
+            continue;
+        }
+        return true;
+    }
+    false
+}
+
+fn ep_find_matching_angle(bytes: &[u8], start: usize) -> Option<usize> {
+    let mut depth: i32 = 1;
+    let mut i = start;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'<' => depth += 1,
+            b'>' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(i);
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    None
+}
+
+fn ep_extract_type_param_name(line: &str) -> Option<String> {
+    let bytes = line.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'<' {
+            let start = i + 1;
+            if start < bytes.len() && ep_is_ident_start(bytes[start]) {
+                let mut j = start;
+                while j < bytes.len() && ep_is_ident_byte(bytes[j]) {
+                    j += 1;
+                }
+                if j > start {
+                    return Some(String::from_utf8_lossy(&bytes[start..j]).into_owned());
+                }
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+fn ep_contains_word(line: &str, word: &str) -> bool {
+    let word_bytes = word.as_bytes();
+    let line_bytes = line.as_bytes();
+    if word_bytes.is_empty() || line_bytes.len() < word_bytes.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i + word_bytes.len() <= line_bytes.len() {
+        if &line_bytes[i..i + word_bytes.len()] == word_bytes {
+            let before_ok = i == 0 || !ep_is_ident_byte(line_bytes[i - 1]);
+            let after_pos = i + word_bytes.len();
+            let after_ok = after_pos >= line_bytes.len() || !ep_is_ident_byte(line_bytes[after_pos]);
+            if before_ok && after_ok {
+                return true;
+            }
+        }
+        i += 1;
+    }
+    false
+}
+
+fn ep_find_ternary_after(line: &str, from: usize) -> Option<(usize, usize)> {
+    let bytes = line.as_bytes();
+    let mut depth_paren: i32 = 0;
+    let mut depth_angle: i32 = 0;
+    let mut i = from;
+    let mut q_pos: Option<usize> = None;
+    while i < bytes.len() {
+        let b = bytes[i];
+        match b {
+            b'(' => depth_paren += 1,
+            b')' => depth_paren -= 1,
+            b'<' => depth_angle += 1,
+            b'>' => depth_angle -= 1,
+            b'?' if depth_paren == 0 && depth_angle == 0 => {
+                if i + 1 < bytes.len() && bytes[i + 1] == b'?' {
+                    i += 2;
+                    continue;
+                }
+                q_pos = Some(i);
+                break;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    let q = q_pos?;
+    let mut depth_paren: i32 = 0;
+    let mut depth_angle: i32 = 0;
+    let mut j = q + 1;
+    while j < bytes.len() {
+        let b = bytes[j];
+        match b {
+            b'(' => depth_paren += 1,
+            b')' => depth_paren -= 1,
+            b'<' => depth_angle += 1,
+            b'>' => depth_angle -= 1,
+            b':' if depth_paren == 0 && depth_angle == 0 => return Some((q, j)),
+            _ => {}
+        }
+        j += 1;
+    }
+    None
+}
+
+fn ep_is_unit_literal(s: &str) -> bool {
+    let s = s.trim();
+    if s.is_empty() {
+        return false;
+    }
+    matches!(s, "true" | "false" | "null" | "undefined")
+        || ep_is_numeric_literal(s)
+        || ep_is_string_literal(s)
+}
+
+fn ep_is_numeric_literal(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    if bytes.is_empty() {
+        return false;
+    }
+    let start = if bytes[0] == b'-' || bytes[0] == b'+' { 1 } else { 0 };
+    let rest = &s[start..];
+    !rest.is_empty()
+        && rest.chars().all(|c| c.is_ascii_digit() || c == '.' || c == 'e' || c == 'E' || c == '_')
+}
+
+fn ep_is_string_literal(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    bytes.len() >= 2
+        && ((bytes[0] == b'"' && bytes[bytes.len() - 1] == b'"')
+            || (bytes[0] == b'\'' && bytes[bytes.len() - 1] == b'\'')
+            || (bytes[0] == b'`' && bytes[bytes.len() - 1] == b'`'))
+}
+
+fn ep_is_ident_start(b: u8) -> bool {
+    b.is_ascii_alphabetic() || b == b'_' || b == b'$'
+}
+
+fn ep_is_ident_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_' || b == b'$'
+}
+
 // ── strict-void-return post-filter ────────────────────────────────────────
 //
 // Two FP shapes are dropped:
@@ -1336,6 +1639,81 @@ export function loader() {
         let src_content = source_for(&path);
         let f = PromiseFunctionAsyncFilter;
         assert!(!f.keep(&pfa_diag(&path, line, col), Some(&src_content)));
+    }
+
+    // ── no-unnecessary-type-parameters (equal probe) ────────────────────
+
+    fn ep_diag(path: &std::path::Path, line: usize) -> Diagnostic {
+        Diagnostic {
+            path: Arc::from(path),
+            line,
+            column: 1,
+            rule_id: Cow::Borrowed("no-unnecessary-type-parameters"),
+            message: String::new(),
+            severity: crate::diagnostic::Severity::Error,
+            span: None,
+        }
+    }
+
+    #[test]
+    fn ep_drops_equal_probe_identity() {
+        let src = "type IdentityProbe<X> = <T>() => T extends X ? 1 : 2;\n";
+        let path = write_temp("ep_identity_probe.ts", src);
+        let src_content = source_for(&path);
+        let f = EqualProbeFilter;
+        assert!(!f.keep(&ep_diag(&path, 1), Some(&src_content)));
+    }
+
+    #[test]
+    fn ep_drops_equal_probe_with_boolean_units() {
+        let src = "type P<X> = <T>() => T extends X ? true : false;\n";
+        let path = write_temp("ep_bool_units.ts", src);
+        let src_content = source_for(&path);
+        let f = EqualProbeFilter;
+        assert!(!f.keep(&ep_diag(&path, 1), Some(&src_content)));
+    }
+
+    #[test]
+    fn ep_drops_probe_with_constrained_type_param() {
+        let src = "type P<X> = <T extends unknown>() => T extends X ? 1 : 2;\n";
+        let path = write_temp("ep_constrained_probe.ts", src);
+        let src_content = source_for(&path);
+        let f = EqualProbeFilter;
+        assert!(!f.keep(&ep_diag(&path, 1), Some(&src_content)));
+    }
+
+    #[test]
+    fn ep_drops_multiline_signature_fp() {
+        let src = concat!(
+            "export function useListSearchSync<TSearch extends ListRouteSearch>(\n",
+            "  routeApi: ListRouteApi<TSearch>,\n",
+            "  { filterKeys }: UseListSearchSyncOptions<TSearch>,\n",
+            "): void {}\n",
+        );
+        let path = write_temp("ep_multiline_sig.ts", src);
+        let line = line_of(src, "useListSearchSync");
+        let src_content = source_for(&path);
+        let f = EqualProbeFilter;
+        assert!(!f.keep(&ep_diag(&path, line), Some(&src_content)));
+    }
+
+    #[test]
+    fn ep_keeps_real_unused_type_parameter() {
+        let src = "function f<T>(x: number): string { return ''; }\n";
+        let path = write_temp("ep_real_unused.ts", src);
+        let src_content = source_for(&path);
+        let f = EqualProbeFilter;
+        assert!(f.keep(&ep_diag(&path, 1), Some(&src_content)));
+    }
+
+    #[test]
+    fn ep_does_not_drop_nested_conditional_without_function_generic() {
+        let src = "type A<T> = T extends (U extends V ? 1 : 2) ? 3 : 4;\n";
+        let path = write_temp("ep_nested_conditional.ts", src);
+        let line = line_of(src, "T extends");
+        let src_content = source_for(&path);
+        let f = EqualProbeFilter;
+        assert!(f.keep(&ep_diag(&path, line), Some(&src_content)));
     }
 
     // ── strict-void-return ───────────────────────────────────────────────
