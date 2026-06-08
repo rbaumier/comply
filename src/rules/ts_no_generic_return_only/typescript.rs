@@ -41,6 +41,13 @@ crate::ast_check! { |node, source, ctx, diagnostics|
     let Some(type_params) = node.child_by_field_name("type_parameters") else { return };
     let Some(params) = node.child_by_field_name("parameters") else { return };
 
+    if node.child_by_field_name("return_type")
+           .map(|n| n.kind() == "type_predicate_annotation")
+           .unwrap_or(false)
+    {
+        return;
+    }
+
     let mut cursor = type_params.walk();
     for tp in type_params.named_children(&mut cursor) {
         if tp.kind() != "type_parameter" {
@@ -91,6 +98,12 @@ mod tests {
     #[test]
     fn allows_non_generic_function() {
         let src = "function plain(): string { return 'x'; }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_generic_in_type_guard() {
+        let src = "const isSuccess = <T>(x: any): x is { t: 'success'; value: T } => Boolean(x && x.t === 'success');";
         assert!(run(src).is_empty());
     }
 }
