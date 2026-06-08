@@ -2,7 +2,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{ClassElement, PropertyKey};
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 use std::sync::Arc;
 
 pub struct Check;
@@ -22,7 +22,7 @@ impl OxcCheck for Check {
         let AstKind::Class(class) = node.kind() else { return };
 
         // Map: member name -> list of (span_start, has_body).
-        let mut seen: HashMap<&str, Vec<(u32, bool)>> = HashMap::new();
+        let mut seen: FxHashMap<&str, Vec<(u32, bool)>> = FxHashMap::default();
 
         for element in &class.body.body {
             let (name, span_start, has_body) = match element {

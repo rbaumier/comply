@@ -4,14 +4,14 @@
 //! /`query:`, recommend using a registered model string reference instead.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 
 const SCHEMA_KEYS: &[&str] = &["body", "response", "query", "params", "headers"];
 
 /// Walk top-level imports and collect identifiers ending in `Schema` /
 /// `Model` brought in from a relative path.
-fn collect_imported_schemas(root: tree_sitter::Node<'_>, source: &[u8]) -> HashSet<String> {
-    let mut names = HashSet::new();
+fn collect_imported_schemas(root: tree_sitter::Node<'_>, source: &[u8]) -> FxHashSet<String> {
+    let mut names = FxHashSet::default();
     let mut cursor = root.walk();
     for child in root.named_children(&mut cursor) {
         if child.kind() != "import_statement" {

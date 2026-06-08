@@ -1,7 +1,7 @@
 //! package-json-unique-deps backend — flag packages that appear in both
 //! `dependencies` and `devDependencies`.
 
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
@@ -50,7 +50,7 @@ impl TextCheck for Check {
         }
 
         let lines: Vec<&str> = ctx.source.lines().collect();
-        let mut section_keys: HashMap<&str, HashSet<String>> = HashMap::new();
+        let mut section_keys: FxHashMap<&str, FxHashSet<String>> = FxHashMap::default();
 
         let mut i = 0;
         while i < lines.len() {

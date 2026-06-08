@@ -51,8 +51,8 @@ impl TextCheck for Check {
 
 /// Scan lowered source for `<ident> boolean` (or `bool`) declarations.
 /// Returns a set of column names known to be boolean.
-fn collect_boolean_columns(lower: &str) -> std::collections::HashSet<String> {
-    let mut out = std::collections::HashSet::new();
+fn collect_boolean_columns(lower: &str) -> rustc_hash::FxHashSet<String> {
+    let mut out = rustc_hash::FxHashSet::default();
     for line in lower.lines() {
         // Skip CREATE INDEX lines — only column declarations.
         if line.contains("create index") {

@@ -86,8 +86,8 @@ impl OxcCheck for Check {
         }
 
         // Collect node IDs of functions/arrows that contain an await or for-await.
-        let mut has_await: std::collections::HashSet<oxc_semantic::NodeId> =
-            std::collections::HashSet::new();
+        let mut has_await: rustc_hash::FxHashSet<oxc_semantic::NodeId> =
+            rustc_hash::FxHashSet::default();
 
         for node in semantic.nodes().iter() {
             match node.kind() {

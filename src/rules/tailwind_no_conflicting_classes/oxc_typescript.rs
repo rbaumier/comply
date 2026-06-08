@@ -1,6 +1,6 @@
 //! tailwind-no-conflicting-classes oxc backend for TS / JS / TSX.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -40,7 +40,7 @@ impl OxcCheck for Check {
         };
         let class_str = lit.value.as_str();
         let classes: Vec<&str> = class_str.split_whitespace().collect();
-        let mut groups: HashMap<&str, Vec<&str>> = HashMap::new();
+        let mut groups: FxHashMap<&str, Vec<&str>> = FxHashMap::default();
         for class in &classes {
             if let Some(key) = super::conflict_key(class) {
                 groups.entry(key).or_default().push(class);

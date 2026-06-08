@@ -4,7 +4,7 @@ use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{
     BindingPattern, Expression, FormalParameter, LogicalExpression, LogicalOperator,
 };
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 use std::sync::Arc;
 
 pub struct Check;
@@ -20,7 +20,7 @@ impl OxcCheck for Check {
         ctx: &CheckCtx,
     ) -> Vec<Diagnostic> {
         // Collect all parameter names in the file.
-        let mut params = HashSet::new();
+        let mut params = FxHashSet::default();
         for node in semantic.nodes().iter() {
             if let AstKind::FormalParameter(param) = node.kind() {
                 collect_param_name(param, &mut params);
@@ -40,7 +40,7 @@ impl OxcCheck for Check {
     }
 }
 
-fn collect_param_name(param: &FormalParameter, params: &mut HashSet<String>) {
+fn collect_param_name(param: &FormalParameter, params: &mut FxHashSet<String>) {
     if let BindingPattern::BindingIdentifier(id) = &param.pattern {
         params.insert(id.name.to_string());
     }
@@ -48,7 +48,7 @@ fn collect_param_name(param: &FormalParameter, params: &mut HashSet<String>) {
 
 fn check_logical(
     expr: &LogicalExpression,
-    params: &HashSet<String>,
+    params: &FxHashSet<String>,
     ctx: &CheckCtx,
     diagnostics: &mut Vec<Diagnostic>,
 ) {

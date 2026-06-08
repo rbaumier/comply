@@ -6,7 +6,7 @@
 //! from declarations, then scan the class body for references.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 /// Collect all text content of a node's subtree for reference scanning.
 fn collect_text_references(node: tree_sitter::Node, source: &[u8], refs: &mut Vec<String>) {
@@ -70,7 +70,7 @@ crate::ast_check! { on ["class_declaration", "class"] => |node, source, ctx, dia
     };
 
     // Phase 1: collect private member declarations
-    let mut private_members: HashMap<String, tree_sitter::Point> = HashMap::new();
+    let mut private_members: FxHashMap<String, tree_sitter::Point> = FxHashMap::default();
     // Phase 2: collect all references in method bodies and property initializers
     let mut all_references: Vec<String> = Vec::new();
 

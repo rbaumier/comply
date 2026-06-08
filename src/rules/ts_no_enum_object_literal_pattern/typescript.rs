@@ -13,12 +13,12 @@
 //!    (not a string/number, not a `keyof` cast), flag it.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 
 /// Walk the program and collect the names of `const X = { ... } as const`
 /// bindings. We only return identifier names — that's enough for our match.
-fn collect_as_const_objects(root: tree_sitter::Node, source: &[u8]) -> HashSet<String> {
-    let mut names = HashSet::new();
+fn collect_as_const_objects(root: tree_sitter::Node, source: &[u8]) -> FxHashSet<String> {
+    let mut names = FxHashSet::default();
     let mut stack: Vec<tree_sitter::Node> = vec![root];
     while let Some(node) = stack.pop() {
         if node.kind() == "lexical_declaration" || node.kind() == "variable_declaration" {

@@ -2,7 +2,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::jsx;
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 
 const EXEMPT_INPUT_TYPES: &[&str] = &["hidden", "submit", "button", "reset", "image"];
 
@@ -100,13 +100,13 @@ fn is_inside_label(node: tree_sitter::Node, source: &[u8]) -> bool {
 }
 
 struct LabelCollector {
-    label_fors: HashSet<String>,
+    label_fors: FxHashSet<String>,
 }
 
 impl LabelCollector {
     fn new() -> Self {
         Self {
-            label_fors: HashSet::new(),
+            label_fors: FxHashSet::default(),
         }
     }
 

@@ -164,12 +164,12 @@ fn verify_tokens(a: &FileTokens, a_start: usize, b: &FileTokens, b_start: usize)
 /// The clone is rejected when the merged span has fewer than
 /// `MIN_DISTINCT_TRIGRAMS` distinct trigrams.
 fn has_enough_distinct_texts(ft: &FileTokens, first_tok: usize, last_window_tok: usize) -> bool {
-    use std::collections::HashSet;
+    use rustc_hash::FxHashSet;
     let last_tok = (last_window_tok + MIN_TOKENS - 1).min(ft.tokens.len() - 1);
     if last_tok < first_tok + 2 {
         return false;
     }
-    let mut seen: HashSet<(&[u8], &[u8], &[u8])> = HashSet::new();
+    let mut seen: FxHashSet<(&[u8], &[u8], &[u8])> = FxHashSet::default();
     for i in first_tok..=last_tok - 2 {
         let a = &ft.tokens[i];
         let b = &ft.tokens[i + 1];
@@ -255,7 +255,7 @@ fn merge_and_emit(
     //    enable/disable, …).  These implement symmetric operations that
     //    intentionally share query structure — the shared block is not
     //    accidental copy-paste.
-    let mut suppressed = std::collections::HashSet::<usize>::new();
+    let mut suppressed = rustc_hash::FxHashSet::<usize>::default();
     {
         let mut by_pair: FxHashMap<(usize, usize), Vec<usize>> = FxHashMap::default();
         for (idx, s) in spans.iter().enumerate() {

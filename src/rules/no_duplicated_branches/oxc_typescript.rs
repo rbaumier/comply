@@ -49,7 +49,7 @@ impl OxcCheck for Check {
             return;
         }
 
-        let mut reported = std::collections::HashSet::new();
+        let mut reported = rustc_hash::FxHashSet::default();
         for j in 1..bodies.len() {
             if bodies[j].1.is_empty() {
                 continue;

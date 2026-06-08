@@ -6,7 +6,7 @@
 //! `import { a as x, a as x }` is flagged.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 
 crate::ast_check! { on ["import_statement"] => |node, source, ctx, diagnostics|
     // Find the named_imports block inside the import_clause.
@@ -20,7 +20,7 @@ crate::ast_check! { on ["import_statement"] => |node, source, ctx, diagnostics|
             if clause_child.kind() != "named_imports" {
                 continue;
             }
-            let mut seen: HashSet<String> = HashSet::new();
+            let mut seen: FxHashSet<String> = FxHashSet::default();
             let mut spec_cursor = clause_child.walk();
             for spec in clause_child.named_children(&mut spec_cursor) {
                 if spec.kind() != "import_specifier" {

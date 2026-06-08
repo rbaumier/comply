@@ -62,7 +62,7 @@ fn check_if_branches(
         }
     };
 
-    let mut reported: std::collections::HashSet<usize> = std::collections::HashSet::new();
+    let mut reported: rustc_hash::FxHashSet<usize> = rustc_hash::FxHashSet::default();
     for j in 1..branches.len() {
         if branches[j].body.is_empty() {
             continue;

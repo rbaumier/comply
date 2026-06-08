@@ -82,8 +82,8 @@ impl OxcCheck for Check {
         }
 
         // Pass 1: collect node IDs of functions/arrows that contain assertions.
-        let mut has_assertion: std::collections::HashSet<oxc_semantic::NodeId> =
-            std::collections::HashSet::new();
+        let mut has_assertion: rustc_hash::FxHashSet<oxc_semantic::NodeId> =
+            rustc_hash::FxHashSet::default();
 
         for node in semantic.nodes().iter() {
             let is_assert = match node.kind() {

@@ -1,4 +1,5 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::BTreeMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
 use std::sync::Arc;
@@ -44,8 +45,8 @@ pub struct GroupPreviewInfo {
 
 pub struct App {
     pub diagnostics: Vec<Diagnostic>,
-    pub sources: HashMap<Arc<Path>, String>,
-    line_offsets: HashMap<Arc<Path>, Vec<(usize, usize)>>,
+    pub sources: FxHashMap<Arc<Path>, String>,
+    line_offsets: FxHashMap<Arc<Path>, Vec<(usize, usize)>>,
     haystacks: Vec<String>,
     cwd: PathBuf,
     cwd_canonical: PathBuf,
@@ -55,11 +56,11 @@ pub struct App {
     by_rule: BTreeMap<String, Vec<usize>>,
 
     pub cursor: usize,
-    expanded_groups: HashSet<String>,
+    expanded_groups: FxHashSet<String>,
 
     pub input_mode: InputMode,
     pub search_query: String,
-    filtered_indices: Option<HashSet<usize>>,
+    filtered_indices: Option<FxHashSet<usize>>,
 
     pending_g: bool,
     pub status_message: Option<String>,
@@ -67,11 +68,11 @@ pub struct App {
     pub needs_redraw: bool,
 
     pub visible_rows: Vec<Row>,
-    pub group_summaries: HashMap<String, GroupSummary>,
+    pub group_summaries: FxHashMap<String, GroupSummary>,
     pub total_diagnostic_count: usize,
     pub filtered_diagnostic_count: usize,
 
-    pub highlight_cache: HashMap<Arc<Path>, Vec<Vec<(ratatui::style::Color, String)>>>,
+    pub highlight_cache: FxHashMap<Arc<Path>, Vec<Vec<(ratatui::style::Color, String)>>>,
 }
 
 fn build_line_offsets(source: &str) -> Vec<(usize, usize)> {
@@ -142,10 +143,10 @@ fn build_editor_args(
 impl App {
     pub fn new(
         diagnostics: Vec<Diagnostic>,
-        sources: HashMap<Arc<Path>, String>,
+        sources: FxHashMap<Arc<Path>, String>,
         display_root: PathBuf,
     ) -> Self {
-        let line_offsets: HashMap<Arc<Path>, Vec<(usize, usize)>> = sources
+        let line_offsets: FxHashMap<Arc<Path>, Vec<(usize, usize)>> = sources
             .iter()
             .map(|(p, s)| (p.clone(), build_line_offsets(s)))
             .collect();
@@ -204,7 +205,7 @@ impl App {
             by_file,
             by_rule,
             cursor: 0,
-            expanded_groups: HashSet::new(),
+            expanded_groups: FxHashSet::default(),
             input_mode: InputMode::Normal,
             search_query: String::new(),
             filtered_indices: None,
@@ -213,10 +214,10 @@ impl App {
             should_quit: false,
             needs_redraw: false,
             visible_rows: Vec::new(),
-            group_summaries: HashMap::new(),
+            group_summaries: FxHashMap::default(),
             total_diagnostic_count: total,
             filtered_diagnostic_count: total,
-            highlight_cache: HashMap::new(),
+            highlight_cache: FxHashMap::default(),
         };
         app.rebuild();
         app
@@ -350,7 +351,7 @@ impl App {
 
     fn rebuild(&mut self) {
         let mut rows: Vec<Row> = Vec::new();
-        let mut summaries: HashMap<String, GroupSummary> = HashMap::new();
+        let mut summaries: FxHashMap<String, GroupSummary> = FxHashMap::default();
         let mut filtered_count = 0usize;
 
         if self.view_mode == ViewMode::All {
@@ -411,7 +412,7 @@ impl App {
 
             let mut errors = 0usize;
             let mut warnings = 0usize;
-            let mut files: HashSet<&Arc<Path>> = HashSet::new();
+            let mut files: FxHashSet<&Arc<Path>> = FxHashSet::default();
             for &i in &kept {
                 let d = &self.diagnostics[i];
                 match d.severity {
@@ -592,7 +593,7 @@ impl App {
             self.filtered_indices = None;
         } else {
             let needle = self.search_query.to_lowercase();
-            let set: HashSet<usize> = self
+            let set: FxHashSet<usize> = self
                 .haystacks
                 .iter()
                 .enumerate()

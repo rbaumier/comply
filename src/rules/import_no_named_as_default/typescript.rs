@@ -3,7 +3,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::project::import_index::{ExportKind, ImportKind};
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::path::PathBuf;
 
 crate::ast_check! { on ["program"] => |node, _source, ctx, diagnostics|
@@ -16,7 +16,7 @@ crate::ast_check! { on ["program"] => |node, _source, ctx, diagnostics|
 
     // Cache named exports per source path. `None` means "skip this source"
     // (it has `export * from '…'` so we can't enumerate names reliably).
-    let mut named_by_source: HashMap<PathBuf, Option<HashSet<String>>> = HashMap::new();
+    let mut named_by_source: FxHashMap<PathBuf, Option<FxHashSet<String>>> = FxHashMap::default();
 
     for imp in index.get_imports(&canon) {
         if imp.kind != ImportKind::Default {

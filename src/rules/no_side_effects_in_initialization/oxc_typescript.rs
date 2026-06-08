@@ -20,7 +20,7 @@ use crate::rules::path_utils::{is_config_file, is_framework_entry_point};
 use oxc_ast::ast::{
     Expression, ImportDeclarationSpecifier, Program, Statement,
 };
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 use std::sync::Arc;
 
 pub struct Check;
@@ -131,8 +131,8 @@ fn shape_is_vitest_setup(program: &Program) -> bool {
 /// Collect local identifier names that are bound to `startTransition`
 /// imported from `"react"`. Handles `import { startTransition } from "react"`
 /// and `import { startTransition as ST } from "react"`.
-fn react_start_transition_bindings(program: &Program) -> HashSet<String> {
-    let mut out = HashSet::new();
+fn react_start_transition_bindings(program: &Program) -> FxHashSet<String> {
+    let mut out = FxHashSet::default();
     for stmt in &program.body {
         let Statement::ImportDeclaration(import) = stmt else { continue };
         if import.source.value.as_str() != "react" {
@@ -153,7 +153,7 @@ fn react_start_transition_bindings(program: &Program) -> HashSet<String> {
 
 fn is_start_transition_call(
     call: &oxc_ast::ast::CallExpression,
-    bindings: &HashSet<String>,
+    bindings: &FxHashSet<String>,
 ) -> bool {
     let Expression::Identifier(id) = &call.callee else { return false };
     bindings.contains(id.name.as_str())

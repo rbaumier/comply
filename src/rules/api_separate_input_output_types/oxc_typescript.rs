@@ -7,7 +7,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{TSSignature, TSType, TSTypeName};
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 use std::sync::Arc;
 
 const SERVER_MANAGED_FIELDS: &[&str] = &[
@@ -54,7 +54,7 @@ fn collect_server_fields<'a>(members: &'a [TSSignature<'a>]) -> Vec<&'a str> {
 }
 
 /// Collect type identifier names from a type annotation subtree.
-fn collect_type_names_from_ts_type(ts_type: &TSType, out: &mut HashSet<String>) {
+fn collect_type_names_from_ts_type(ts_type: &TSType, out: &mut FxHashSet<String>) {
     match ts_type {
         TSType::TSTypeReference(tref) => {
             if let TSTypeName::IdentifierReference(ident) = &tref.type_name {
@@ -98,8 +98,8 @@ impl OxcCheck for Check {
         let nodes = semantic.nodes();
 
         // Pass 1: collect input/output type positions
-        let mut inputs: HashSet<String> = HashSet::new();
-        let mut outputs: HashSet<String> = HashSet::new();
+        let mut inputs: FxHashSet<String> = FxHashSet::default();
+        let mut outputs: FxHashSet<String> = FxHashSet::default();
 
         for node in nodes.iter() {
             match node.kind() {
@@ -186,7 +186,7 @@ impl OxcCheck for Check {
     }
 }
 
-fn should_flag(name: &str, inputs: &HashSet<String>, outputs: &HashSet<String>) -> bool {
+fn should_flag(name: &str, inputs: &FxHashSet<String>, outputs: &FxHashSet<String>) -> bool {
     let used_in = inputs.contains(name);
     let used_out = outputs.contains(name);
     if has_input_suffix(name) {

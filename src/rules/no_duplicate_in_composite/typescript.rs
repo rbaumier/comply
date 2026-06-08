@@ -5,7 +5,7 @@
 //! tree-sitter TypeScript grammar and checks for repeated members.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 
 crate::ast_check! { on ["union_type", "intersection_type"] => |node, source, ctx, diagnostics|
 match node.kind() {
@@ -19,7 +19,7 @@ match node.kind() {
         return;
     }
 
-    let mut seen = HashSet::new();
+    let mut seen = FxHashSet::default();
     for i in 0..count {
         let Some(child) = node.named_child(i) else { continue };
         let Ok(text) = child.utf8_text(source) else { continue };

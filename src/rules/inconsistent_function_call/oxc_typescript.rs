@@ -4,7 +4,7 @@
 //! sites for each name. If a function is called both as `new Foo(...)` and
 //! `Foo(...)`, emit one diagnostic per inconsistent call site.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -44,7 +44,7 @@ impl OxcCheck for Check {
         let program = semantic.nodes().program();
 
         // 1. Collect every function_declaration name + whether it is exported.
-        let mut declared: HashMap<String, DeclInfo> = HashMap::new();
+        let mut declared: FxHashMap<String, DeclInfo> = FxHashMap::default();
         collect_function_declarations(program, ctx.source, &mut declared);
         if declared.is_empty() {
             return Vec::new();
@@ -52,8 +52,8 @@ impl OxcCheck for Check {
 
         // 2. Scan every call site in THIS file.
         let declared_names: Vec<String> = declared.keys().cloned().collect();
-        let mut new_sites: HashMap<String, Vec<Site>> = HashMap::new();
-        let mut plain_sites: HashMap<String, Vec<Site>> = HashMap::new();
+        let mut new_sites: FxHashMap<String, Vec<Site>> = FxHashMap::default();
+        let mut plain_sites: FxHashMap<String, Vec<Site>> = FxHashMap::default();
 
         for node in semantic.nodes().iter() {
             match node.kind() {
@@ -162,7 +162,7 @@ impl OxcCheck for Check {
 fn collect_function_declarations(
     program: &Program<'_>,
     source: &str,
-    out: &mut HashMap<String, DeclInfo>,
+    out: &mut FxHashMap<String, DeclInfo>,
 ) {
     for stmt in &program.body {
         collect_from_statement(stmt, source, false, out);
@@ -173,7 +173,7 @@ fn collect_from_statement(
     stmt: &Statement<'_>,
     source: &str,
     exported: bool,
-    out: &mut HashMap<String, DeclInfo>,
+    out: &mut FxHashMap<String, DeclInfo>,
 ) {
     match stmt {
         Statement::FunctionDeclaration(f) => {
@@ -213,7 +213,7 @@ fn collect_from_declaration(
     decl: &Declaration<'_>,
     source: &str,
     exported: bool,
-    out: &mut HashMap<String, DeclInfo>,
+    out: &mut FxHashMap<String, DeclInfo>,
 ) {
     if let Declaration::FunctionDeclaration(f) = decl
         && let Some(ref id) = f.id {

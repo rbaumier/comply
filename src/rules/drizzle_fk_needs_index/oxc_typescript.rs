@@ -7,7 +7,7 @@ use oxc_ast::ast::{
     Argument, ArrayExpressionElement, Expression, FunctionBody, ObjectPropertyKind,
     PropertyKey, Statement,
 };
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 use std::sync::Arc;
 
 const TABLE_CTORS: &[&str] = &["pgTable", "mysqlTable", "sqliteTable"];
@@ -70,7 +70,7 @@ impl OxcCheck for Check {
         //   index(...).on(t.col)           → col
         //   uniqueIndex(...).on(t.col)     → col
         //   primaryKey({ columns: [t.a] }) → a (leading column only)
-        let mut indexed: HashSet<String> = HashSet::new();
+        let mut indexed: FxHashSet<String> = FxHashSet::default();
         if let Some(extras) = call.arguments.get(2) {
             collect_indexed_columns_from_arg(extras, &mut indexed);
         }
@@ -126,7 +126,7 @@ fn expr_calls_references(expr: &Expression) -> bool {
     }
 }
 
-fn collect_indexed_columns_from_arg<'a>(arg: &Argument<'a>, out: &mut HashSet<String>) {
+fn collect_indexed_columns_from_arg<'a>(arg: &Argument<'a>, out: &mut FxHashSet<String>) {
     let body: &FunctionBody<'a> = match arg {
         Argument::ArrowFunctionExpression(a) => &a.body,
         Argument::FunctionExpression(f) => match f.body.as_deref() {
@@ -154,7 +154,7 @@ fn collect_indexed_columns_from_arg<'a>(arg: &Argument<'a>, out: &mut HashSet<St
     }
 }
 
-fn collect_from_returned_expression<'a>(expr: &Expression<'a>, out: &mut HashSet<String>) {
+fn collect_from_returned_expression<'a>(expr: &Expression<'a>, out: &mut FxHashSet<String>) {
     match expr {
         Expression::ArrayExpression(arr) => {
             for el in &arr.elements {
@@ -188,7 +188,7 @@ fn array_element_as_expression<'b, 'a>(
     }
 }
 
-fn collect_from_extras_entry<'a>(expr: &'a Expression<'a>, out: &mut HashSet<String>) {
+fn collect_from_extras_entry<'a>(expr: &'a Expression<'a>, out: &mut FxHashSet<String>) {
     // Walk the call chain top-down (e.g. index("x").on(t.col).where(sql`...`))
     // looking for a `.on(...)` call whose receiver satisfies `is_index_chain`.
     // If found, collect args and return. Otherwise check for bare `primaryKey(...)`.

@@ -5,7 +5,7 @@
 //! that wastes a line and confuses readers into thinking the timeout is
 //! being extended further.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 use crate::diagnostic::{Diagnostic, Severity};
 
@@ -14,7 +14,7 @@ crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
         return;
     }
     // scope node id → list of `test.slow()` call_expression nodes inside it
-    let mut by_scope: HashMap<usize, Vec<tree_sitter::Node>> = HashMap::new();
+    let mut by_scope: FxHashMap<usize, Vec<tree_sitter::Node>> = FxHashMap::default();
 
     // Manual pre-order walk of all descendants.
     let mut cursor = node.walk();

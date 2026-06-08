@@ -110,12 +110,12 @@ fn collect_type_positions(
     program: tree_sitter::Node<'_>,
     source: &[u8],
 ) -> (
-    std::collections::HashSet<String>,
-    std::collections::HashSet<String>,
+    rustc_hash::FxHashSet<String>,
+    rustc_hash::FxHashSet<String>,
 ) {
-    use std::collections::HashSet;
-    let mut inputs: HashSet<String> = HashSet::new();
-    let mut outputs: HashSet<String> = HashSet::new();
+    use rustc_hash::FxHashSet;
+    let mut inputs: FxHashSet<String> = FxHashSet::default();
+    let mut outputs: FxHashSet<String> = FxHashSet::default();
 
     let mut cursor = program.walk();
     let root_id = program.id();
@@ -164,7 +164,7 @@ fn collect_type_positions(
 fn collect_type_names(
     root: tree_sitter::Node<'_>,
     source: &[u8],
-    out: &mut std::collections::HashSet<String>,
+    out: &mut rustc_hash::FxHashSet<String>,
 ) {
     let mut cursor = root.walk();
     let root_id = root.id();

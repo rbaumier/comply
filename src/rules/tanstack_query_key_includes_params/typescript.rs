@@ -161,7 +161,7 @@ crate::ast_check! { on ["pair"] => |node, source, ctx, diagnostics|
     let mut free_refs: Vec<String> = Vec::new();
     collect_free_references(body_node, source, &mut free_refs);
 
-    let bound: std::collections::HashSet<&str> = param_names
+    let bound: rustc_hash::FxHashSet<&str> = param_names
         .iter()
         .chain(local_decls.iter())
         .map(String::as_str)
@@ -187,7 +187,7 @@ crate::ast_check! { on ["pair"] => |node, source, ctx, diagnostics|
     // Find the sibling queryKey pair and the identifiers named inside
     // its array.
     let Some(parent_obj) = node.parent() else { return; };
-    let mut key_idents: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut key_idents: rustc_hash::FxHashSet<String> = rustc_hash::FxHashSet::default();
     let mut saw_query_key = false;
     let mut cursor = parent_obj.walk();
     for child in parent_obj.children(&mut cursor) {
@@ -380,7 +380,7 @@ fn collect_free_references(node: tree_sitter::Node, source: &[u8], out: &mut Vec
 fn collect_all_identifiers(
     node: tree_sitter::Node,
     source: &[u8],
-    out: &mut std::collections::HashSet<String>,
+    out: &mut rustc_hash::FxHashSet<String>,
 ) {
     walk_subtree(node, &mut |n| {
         if n.kind() == "identifier"
@@ -404,7 +404,7 @@ fn collect_all_identifiers(
 fn collect_module_scope_bindings(
     node: tree_sitter::Node,
     source: &[u8],
-) -> std::collections::HashSet<String> {
+) -> rustc_hash::FxHashSet<String> {
     // Walk up to find the program root.
     let mut current = node;
     while let Some(parent) = current.parent() {
@@ -412,7 +412,7 @@ fn collect_module_scope_bindings(
     }
     let program = current;
 
-    let mut out: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut out: rustc_hash::FxHashSet<String> = rustc_hash::FxHashSet::default();
     let mut cursor = program.walk();
     for child in program.named_children(&mut cursor) {
         match child.kind() {

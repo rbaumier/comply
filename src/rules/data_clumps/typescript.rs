@@ -7,7 +7,7 @@
 //! ImportIndex, detecting clumps across file boundaries.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::path::PathBuf;
 
 /// Node kinds that can have `parameters` / `formal_parameters`.
@@ -59,14 +59,14 @@ crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
     }
 
     // For each 3-param subset, count which functions contain it.
-    let mut subset_occurrences: HashMap<Vec<String>, Vec<FnLocation>> = HashMap::new();
+    let mut subset_occurrences: FxHashMap<Vec<String>, Vec<FnLocation>> = FxHashMap::default();
     for (loc, params) in &fn_params {
         for combo in combinations(params, 3) {
             subset_occurrences.entry(combo).or_default().push(loc.clone());
         }
     }
 
-    let mut flagged: HashSet<FnLocation> = HashSet::new();
+    let mut flagged: FxHashSet<FnLocation> = FxHashSet::default();
     let mut results: Vec<(usize, String)> = Vec::new();
 
     for (subset, locations) in &subset_occurrences {

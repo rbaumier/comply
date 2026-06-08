@@ -5,7 +5,7 @@
 //! and skip computed property names.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 fn has_body(node: tree_sitter::Node) -> bool {
     node.child_by_field_name("body").is_some()
@@ -13,7 +13,7 @@ fn has_body(node: tree_sitter::Node) -> bool {
 
 crate::ast_check! { on ["class_body"] => |node, source, ctx, diagnostics|
     // Map: member name -> list of (row, has_body).
-    let mut seen: HashMap<String, Vec<(usize, bool)>> = HashMap::new();
+    let mut seen: FxHashMap<String, Vec<(usize, bool)>> = FxHashMap::default();
     let child_count = node.named_child_count();
 
     for i in 0..child_count {

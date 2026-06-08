@@ -9,7 +9,7 @@ use oxc_ast::ast::{
     AssignmentTarget, Expression, VariableDeclarationKind,
 };
 use oxc_span::GetSpan;
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 use std::sync::Arc;
 
 /// Mutating array/collection methods.
@@ -47,7 +47,7 @@ impl OxcCheck for Check {
         // Program-scope variable declarations are direct children of Program.
         let _root_scope = semantic.scoping().root_scope_id();
         let mut bindings: Vec<(String, u32)> = Vec::new(); // (name, span_start)
-        let mut names: HashSet<String> = HashSet::new();
+        let mut names: FxHashSet<String> = FxHashSet::default();
 
         for node in nodes.iter() {
             let AstKind::VariableDeclaration(decl) = node.kind() else {
@@ -76,8 +76,8 @@ impl OxcCheck for Check {
         }
 
         // Step 2: find test/it and beforeEach calls, check for mutations.
-        let mut mutated_in_tests: HashSet<String> = HashSet::new();
-        let mut reset_in_before_each: HashSet<String> = HashSet::new();
+        let mut mutated_in_tests: FxHashSet<String> = FxHashSet::default();
+        let mut reset_in_before_each: FxHashSet<String> = FxHashSet::default();
 
         for node in nodes.iter() {
             let AstKind::CallExpression(call) = node.kind() else {
@@ -148,8 +148,8 @@ fn is_at_program_level(nodes: &oxc_semantic::AstNodes, node_id: oxc_semantic::No
 fn collect_mutations_in_span(
     nodes: &oxc_semantic::AstNodes,
     span: oxc_span::Span,
-    names: &HashSet<String>,
-    found: &mut HashSet<String>,
+    names: &FxHashSet<String>,
+    found: &mut FxHashSet<String>,
 ) {
     for node in nodes.iter() {
         let node_span = node.kind().span();

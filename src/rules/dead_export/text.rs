@@ -40,7 +40,7 @@ use crate::rules::path_utils::{
     is_config_file, is_framework_specific_entry_point, is_in_framework_entry_dir,
 };
 use crate::rules::walker::walk_tree;
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 use std::path::Path;
 
 const RULE_ID: &str = "dead-export";
@@ -139,7 +139,7 @@ impl TextCheck for Check {
             return Vec::new();
         }
 
-        let magic: std::collections::HashSet<&str> =
+        let magic: rustc_hash::FxHashSet<&str> =
             ctx.project.framework_magic_exports().collect();
 
         // Types/interfaces consumed structurally by other exported functions
@@ -201,8 +201,8 @@ impl TextCheck for Check {
 /// that appear inside another exported `type_alias_declaration` or
 /// `interface_declaration` are deliberately ignored — chaining one
 /// "potentially dead" type through another doesn't make either of them live.
-fn collect_structurally_consumed_types(source: &str, lang: crate::files::Language) -> HashSet<String> {
-    let mut out = HashSet::new();
+fn collect_structurally_consumed_types(source: &str, lang: crate::files::Language) -> FxHashSet<String> {
+    let mut out = FxHashSet::default();
     let Some(grammar) = ts_language_for(lang) else {
         return out;
     };
@@ -245,17 +245,17 @@ fn collect_structurally_consumed_types(source: &str, lang: crate::files::Languag
 /// sharing a name with an export at top level would silence the diagnostic —
 /// a false negative we accept in exchange for never re-flagging an export
 /// that's genuinely re-used in the same file.
-fn collect_in_file_referenced_names(source: &str, lang: crate::files::Language) -> HashSet<String> {
-    let mut counts: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+fn collect_in_file_referenced_names(source: &str, lang: crate::files::Language) -> FxHashSet<String> {
+    let mut counts: rustc_hash::FxHashMap<String, u32> = rustc_hash::FxHashMap::default();
     let Some(grammar) = ts_language_for(lang) else {
-        return HashSet::new();
+        return FxHashSet::default();
     };
     let mut parser = tree_sitter::Parser::new();
     if parser.set_language(&grammar).is_err() {
-        return HashSet::new();
+        return FxHashSet::default();
     }
     let Some(tree) = parser.parse(source, None) else {
-        return HashSet::new();
+        return FxHashSet::default();
     };
     let bytes = source.as_bytes();
     let root = tree.root_node();
@@ -296,7 +296,7 @@ fn collect_in_file_referenced_names(source: &str, lang: crate::files::Language) 
 /// `statement_block` so that type casts or local variable annotations inside
 /// the function body do not silence dead-export for types that appear nowhere
 /// in the public signature.
-fn collect_type_identifiers(node: tree_sitter::Node, source: &[u8], out: &mut HashSet<String>) {
+fn collect_type_identifiers(node: tree_sitter::Node, source: &[u8], out: &mut FxHashSet<String>) {
     let mut stack = vec![node];
     while let Some(n) = stack.pop() {
         if n.kind() == "type_identifier" {

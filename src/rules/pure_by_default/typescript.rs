@@ -14,7 +14,7 @@
 //! - references buried inside nested arrows / blocks are still picked
 //!   up because semantic resolution chases the lexical scope chain.
 
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 
 use oxc_ast::AstKind;
 use oxc_ast::ast::VariableDeclarationKind;
@@ -36,7 +36,7 @@ impl crate::rules::backend::AstCheck for Check {
             let nodes = semantic.nodes();
             let root_scope = scoping.root_scope_id();
             let mut diagnostics = Vec::new();
-            let mut flagged: HashSet<NodeId> = HashSet::new();
+            let mut flagged: FxHashSet<NodeId> = FxHashSet::default();
 
             for symbol_id in scoping.symbol_ids() {
                 if scoping.symbol_scope_id(symbol_id) != root_scope {

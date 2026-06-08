@@ -52,7 +52,7 @@ pub fn lint_files(files: &[&SourceFile]) -> Result<Vec<Diagnostic>> {
         return Ok(vec![]);
     }
     let mut diagnostics = Vec::new();
-    let mut roots = std::collections::HashSet::new();
+    let mut roots = rustc_hash::FxHashSet::default();
     for f in files {
         if let Some(root) = runner_helpers::find_cargo_workspace_root(&f.path) {
             roots.insert(root);

@@ -6,7 +6,7 @@
 //!
 //! **Exception:** a struct with any `#[serde(flatten)]` field is
 //! deliberately NOT flagged. `deny_unknown_fields` and `flatten` are
-//! mutually exclusive in serde — the flatten's target HashMap/struct
+//! mutually exclusive in serde — the flatten's target FxHashMap/struct
 //! is exactly the mechanism for accepting unknown keys, so rejecting
 //! them before the flatten can catch them defeats the field's purpose.
 
@@ -230,7 +230,7 @@ mod tests {
                       struct Config {\n\
                           name: String,\n\
                           #[serde(flatten)]\n\
-                          extra: std::collections::HashMap<String, toml::Value>,\n\
+                          extra: rustc_hash::FxHashMap<String, toml::Value>,\n\
                       }";
         assert!(
             run_on(source).is_empty(),

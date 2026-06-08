@@ -19,7 +19,7 @@
 //! now `runner_helpers::probe_binary("cargo", &["shear", "--version"])`,
 //! which is one line.
 
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -103,8 +103,8 @@ pub fn find_cargo_workspace_root(path: &Path) -> Option<PathBuf> {
 /// (no ancestor with `marker_filename`) are silently dropped — the
 /// caller is expected to either skip them or warn separately.
 #[must_use]
-pub fn collect_unique_roots(files: &[&SourceFile], marker_filename: &str) -> HashSet<PathBuf> {
-    let mut roots = HashSet::new();
+pub fn collect_unique_roots(files: &[&SourceFile], marker_filename: &str) -> FxHashSet<PathBuf> {
+    let mut roots = FxHashSet::default();
     for f in files {
         if let Some(root) = find_ancestor_with(&f.path, marker_filename) {
             roots.insert(root);

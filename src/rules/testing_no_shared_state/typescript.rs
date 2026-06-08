@@ -7,7 +7,7 @@
 //! Either scope the state per test or reset it in `beforeEach`.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 
 /// Collect names bound by `let`/`var` at program scope.
 fn collect_program_let_var(
@@ -66,9 +66,9 @@ const MUTATING_METHODS: &[&str] = &[
 fn body_assigns_any(
     fn_node: tree_sitter::Node,
     source: &[u8],
-    names: &HashSet<String>,
-) -> HashSet<String> {
-    let mut found = HashSet::new();
+    names: &FxHashSet<String>,
+) -> FxHashSet<String> {
+    let mut found = FxHashSet::default();
     let Some(body) = fn_node.child_by_field_name("body") else {
         return found;
     };
@@ -175,7 +175,7 @@ impl crate::rules::backend::AstCheck for Check {
             return Vec::new();
         }
 
-        let names: HashSet<String> = bindings.iter().map(|(n, _)| n.clone()).collect();
+        let names: FxHashSet<String> = bindings.iter().map(|(n, _)| n.clone()).collect();
 
         // Collect test/it callbacks and beforeEach callbacks.
         let test_cbs: Vec<_> = collect_hook_calls(root, source, &["test", "it"])
@@ -188,7 +188,7 @@ impl crate::rules::backend::AstCheck for Check {
             .collect();
 
         // Names reassigned inside test/it callbacks.
-        let mut mutated_in_tests: HashSet<String> = HashSet::new();
+        let mut mutated_in_tests: FxHashSet<String> = FxHashSet::default();
         for cb in &test_cbs {
             for n in body_assigns_any(*cb, source, &names) {
                 mutated_in_tests.insert(n);
@@ -199,7 +199,7 @@ impl crate::rules::backend::AstCheck for Check {
         }
 
         // Names reset in a beforeEach.
-        let mut reset_in_before_each: HashSet<String> = HashSet::new();
+        let mut reset_in_before_each: FxHashSet<String> = FxHashSet::default();
         for cb in &before_each_cbs {
             for n in body_assigns_any(*cb, source, &names) {
                 reset_in_before_each.insert(n);

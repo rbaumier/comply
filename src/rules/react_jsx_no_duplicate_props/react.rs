@@ -4,10 +4,10 @@
 //! `jsx_attribute` children, and flags duplicates.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 
 crate::ast_check! { on ["jsx_opening_element", "jsx_self_closing_element"] => |node, source, ctx, diagnostics|
-    let mut seen = HashSet::new();
+    let mut seen = FxHashSet::default();
     let mut cursor = node.walk();
 
     for child in node.children(&mut cursor) {

@@ -4,13 +4,13 @@
 //! clippy reports lints with their canonical name — `clippy::unwrap_used`,
 //! `clippy::too_many_arguments`, etc. — which is exactly the string we
 //! store in `Backend::Clippy { lint }`. So the remap is a direct
-//! HashMap with no string surgery.
+//! FxHashMap with no string surgery.
 //!
 //! The `missing_docs` rustc lint is the only exception: it's not in the
 //! `clippy::` namespace, but it serves the same role as the doc-coverage
 //! rule, so we accept it as a binding key without prefix.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 use crate::diagnostic::Severity;
 use crate::rules::meta::RuleMeta;
@@ -20,8 +20,8 @@ use crate::rules::meta::RuleMeta;
 /// emits exactly the name you pass to `-W`.
 pub fn build_table(
     bindings: &[(&'static str, &'static RuleMeta, Severity)],
-) -> HashMap<String, &'static RuleMeta> {
-    let mut table = HashMap::with_capacity(bindings.len());
+) -> FxHashMap<String, &'static RuleMeta> {
+    let mut table = FxHashMap::with_capacity_and_hasher(bindings.len(), Default::default());
     for (lint, meta, _) in bindings {
         table.insert((*lint).to_string(), *meta);
     }

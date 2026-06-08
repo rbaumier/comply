@@ -7,7 +7,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::jsdoc_helpers::scan_blocks;
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 
 crate::ast_check! { on ["comment"] prefilter = ["/**"] => |node, source, ctx, diagnostics|
     let Ok(text) = node.utf8_text(source) else { return; };
@@ -22,7 +22,7 @@ crate::ast_check! { on ["comment"] prefilter = ["/**"] => |node, source, ctx, di
         if !is_typedef {
             continue;
         }
-        let mut seen: HashSet<String> = HashSet::new();
+        let mut seen: FxHashSet<String> = FxHashSet::default();
         for tag in tags
             .iter()
             .filter(|t| matches!(t.name.as_str(), "property" | "prop"))

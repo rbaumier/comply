@@ -5,7 +5,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{CheckCtx, OxcCheck};
 use oxc_ast::ast::{Argument, Expression, Statement};
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 use std::sync::Arc;
 
 pub struct Check;
@@ -47,7 +47,7 @@ fn check_statements(
     ctx: &CheckCtx,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let mut hook_counts: HashMap<&str, usize> = HashMap::new();
+    let mut hook_counts: FxHashMap<&str, usize> = FxHashMap::default();
 
     for stmt in stmts {
         let Statement::ExpressionStatement(expr_stmt) = stmt else {

@@ -6,7 +6,7 @@
 //! `ast_check!` macro only supports per-node logic, so we implement
 //! `AstCheck` manually.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -34,7 +34,7 @@ fn is_in_type_alias_declaration(node: tree_sitter::Node) -> bool {
 
 #[derive(Default)]
 struct State {
-    annotation_lines: HashMap<String, Vec<usize>>,
+    annotation_lines: FxHashMap<String, Vec<usize>>,
 }
 
 impl AstCheck for Check {

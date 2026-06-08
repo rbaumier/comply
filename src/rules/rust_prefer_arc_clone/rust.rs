@@ -1,7 +1,7 @@
 //! Detects `.clone()` on variables declared as `Arc<T>` or initialized
 //! with `Arc::new(...)` / `Arc::clone(...)`.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 use crate::diagnostic::{Diagnostic, Severity};
 
@@ -11,7 +11,7 @@ fn is_arc_binding_at_call(
     call_start: usize,
     target_name: &str,
 ) -> bool {
-    let mut bindings = HashMap::new();
+    let mut bindings = FxHashMap::default();
     let mut cursor = root.walk();
     collect_bindings_before_call(root, source, call_start, &mut cursor, &mut bindings);
     bindings.get(target_name).copied().unwrap_or(false)
@@ -22,7 +22,7 @@ fn collect_bindings_before_call<'a>(
     source: &'a [u8],
     call_start: usize,
     cursor: &mut tree_sitter::TreeCursor<'a>,
-    bindings: &mut HashMap<&'a str, bool>,
+    bindings: &mut FxHashMap<&'a str, bool>,
 ) {
     if node.start_byte() >= call_start {
         return;

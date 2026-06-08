@@ -1,7 +1,7 @@
 //! playwright-no-duplicate-hooks — disallow duplicate setup/teardown hooks.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 const TEST_MARKERS: &[&str] = &[".test.", ".spec.", "__tests__", "_test.", ".e2e."];
 
@@ -19,7 +19,7 @@ fn check_block(
     ctx: &crate::rules::backend::CheckCtx,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let mut hook_counts: HashMap<String, usize> = HashMap::new();
+    let mut hook_counts: FxHashMap<String, usize> = FxHashMap::default();
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         // If this child is a describe call, recurse into its callback body.

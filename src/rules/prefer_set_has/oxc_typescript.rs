@@ -4,7 +4,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{CheckCtx, OxcCheck};
 use oxc_ast::ast::{Expression, VariableDeclarationKind};
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 use std::sync::Arc;
 
 pub struct Check;
@@ -27,7 +27,7 @@ impl OxcCheck for Check {
         let mut diagnostics = Vec::new();
 
         // Phase 1: collect names of `const NAME = [...]` declarations.
-        let mut array_names = HashSet::new();
+        let mut array_names = FxHashSet::default();
         for node in semantic.nodes().iter() {
             if let AstKind::VariableDeclaration(decl) = node.kind() {
                 if decl.kind != VariableDeclarationKind::Const {

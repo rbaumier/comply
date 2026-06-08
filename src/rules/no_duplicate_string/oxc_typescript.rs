@@ -1,6 +1,6 @@
 //! no-duplicate-string oxc backend for TS / JS / TSX.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -29,7 +29,7 @@ impl OxcCheck for Check {
             .config
             .threshold("no-duplicate-string", "min_occurrences", ctx.lang);
 
-        let mut occurrences: HashMap<String, Vec<(usize, usize)>> = HashMap::new();
+        let mut occurrences: FxHashMap<String, Vec<(usize, usize)>> = FxHashMap::default();
 
         for node in semantic.nodes() {
             let (content, offset) = match node.kind() {

@@ -6,11 +6,11 @@
 //! interface/type body, flag the duplicates.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 crate::ast_check! { on ["interface_body", "object_type"] => |node, source, ctx, diagnostics|
     // Collect method signatures grouped by name.
-    let mut seen: HashMap<String, Vec<usize>> = HashMap::new();
+    let mut seen: FxHashMap<String, Vec<usize>> = FxHashMap::default();
     let child_count = node.named_child_count();
 
     for i in 0..child_count {

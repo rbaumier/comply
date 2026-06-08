@@ -41,7 +41,7 @@ impl OxcCheck for Check {
             }
         }
 
-        let mut reported_lines = std::collections::HashSet::new();
+        let mut reported_lines = rustc_hash::FxHashSet::default();
         let mut diagnostics = Vec::new();
 
         for node in semantic.nodes() {
