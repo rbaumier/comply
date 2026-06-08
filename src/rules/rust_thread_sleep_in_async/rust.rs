@@ -6,7 +6,7 @@
 //! `async fn` via the shared `is_inside_async_fn` helper.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::rules::rust_helpers::is_inside_async_fn;
+use crate::rules::rust_helpers::{is_inside_async_fn, is_inside_spawned_closure};
 
 crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     let Some(text) = crate::rules::call_expression::call_function_name(node, source) else {
@@ -16,6 +16,9 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
         return;
     }
     if !is_inside_async_fn(node, source) {
+        return;
+    }
+    if is_inside_spawned_closure(node, source) {
         return;
     }
     let pos = node.start_position();
@@ -120,5 +123,53 @@ mod tests {
         // Unknown origin — don't flag to avoid false positives.
         let source = "async fn f() { sleep(d); }";
         assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_thread_sleep_in_thread_spawn_closure() {
+        let source = r#"
+            #[tokio::test]
+            async fn test() {
+                thread::spawn(|| {
+                    thread::sleep(std::time::Duration::from_millis(100));
+                });
+            }
+        "#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_thread_sleep_in_spawn_blocking_closure() {
+        let source = r#"
+            async fn test() {
+                tokio::task::spawn_blocking(|| {
+                    thread::sleep(std::time::Duration::from_millis(100));
+                });
+            }
+        "#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_thread_sleep_in_builder_spawn_closure() {
+        let source = r#"
+            async fn test() {
+                std::thread::Builder::new()
+                    .spawn(|| {
+                        thread::sleep(std::time::Duration::from_millis(100));
+                    });
+            }
+        "#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn still_flags_direct_sleep_in_async() {
+        let source = r#"
+            async fn test() {
+                thread::sleep(std::time::Duration::from_millis(100));
+            }
+        "#;
+        assert_eq!(run_on(source).len(), 1);
     }
 }

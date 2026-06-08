@@ -41,6 +41,40 @@ pub fn is_inside_async_fn(node: Node, source: &[u8]) -> bool {
     false
 }
 
+/// True if `node` is inside a closure that is passed directly as an argument
+/// to a thread-spawning function (`thread::spawn`, `spawn_blocking`, etc.).
+/// Those closures execute on a separate OS thread, not on the async runtime
+/// worker, so blocking calls inside them are safe.
+pub fn is_inside_spawned_closure(node: Node, source: &[u8]) -> bool {
+    use crate::rules::call_expression::call_function_name;
+    let mut cur = node;
+    while let Some(parent) = cur.parent() {
+        if parent.kind() == "function_item" {
+            return false;
+        }
+        if parent.kind() == "closure_expression" {
+            if let Some(args) = parent.parent()
+                && args.kind() == "arguments"
+                && let Some(call) = args.parent()
+                && call.kind() == "call_expression"
+                && let Some(fn_text) = call_function_name(call, source)
+                && is_thread_spawn_fn(fn_text)
+            {
+                return true;
+            }
+        }
+        cur = parent;
+    }
+    false
+}
+
+fn is_thread_spawn_fn(text: &str) -> bool {
+    text.ends_with("thread::spawn")
+        || text.contains("thread::Builder")
+        || text.ends_with("spawn_blocking")
+        || text.ends_with("rayon::spawn")
+}
+
 /// If `node` is a `Result<T, E>` `generic_type`, return its second
 /// positional type argument (the error type `E`). Returns `None` for
 /// any other node, or for `Result<T>` aliases like `io::Result<T>`
