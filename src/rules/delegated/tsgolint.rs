@@ -26,11 +26,12 @@ pub fn register_all() -> Vec<RuleDef> {
             "Promise used in a void context or as a boolean condition.",
             "Await the promise or check its resolved value explicitly.",
         ),
-        entry(
+        entry_with_filter(
             "await-thenable",
             "await-thenable",
             "`await` on a non-thenable value has no effect.",
             "Remove the `await` or ensure the value is a Promise.",
+            Some(Arc::new(AwaitThenableFilter)),
         ),
         // `require-await` is intentionally NOT delegated: comply ships the
         // native `no-async-without-await` rule, which carries the contract-case
@@ -601,5 +602,80 @@ fn entry_with_filter(
             skip_in_relaxed_dir: false,
         },
         backends,
+    }
+}
+
+// ── await-thenable post-filter ─────────────────────────────────────────────
+//
+// RTL's `render()` is synchronous and returns `RenderResult`, not a Promise.
+// `await`ing a non-thenable is valid JS (no-op at runtime) and idiomatic in
+// `async` test bodies alongside real awaits like `await userEvent.click()`.
+// tsgolint correctly identifies the non-thenable `await`, but in a test file
+// the pattern is intentional — suppress it. (Closes #449)
+
+struct AwaitThenableFilter;
+
+impl PostFilter for AwaitThenableFilter {
+    fn keep(&self, diag: &crate::diagnostic::Diagnostic, _source: Option<&str>) -> bool {
+        !is_test_path(&diag.path)
+    }
+}
+
+fn is_test_path(path: &std::path::Path) -> bool {
+    let lower = path.to_string_lossy().replace('\\', "/");
+    lower.contains(".test.")
+        || lower.contains(".spec.")
+        || lower.contains("/__tests__/")
+        || lower.starts_with("__tests__/")
+        || lower.contains("/tests/")
+        || lower.contains("/test/")
+        || lower.starts_with("tests/")
+        || lower.starts_with("test/")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diagnostic::{Diagnostic, Severity};
+    use std::borrow::Cow;
+    use std::path::Path;
+    use std::sync::Arc;
+
+    fn diag(path: &str) -> Diagnostic {
+        Diagnostic {
+            path: Arc::from(Path::new(path)),
+            line: 1,
+            column: 1,
+            rule_id: Cow::Borrowed("await-thenable"),
+            message: String::new(),
+            severity: Severity::Error,
+            span: None,
+        }
+    }
+
+    // Regression for #449: await renderWithProviders() in RTL test file must not fire.
+    #[test]
+    fn drops_await_thenable_in_test_file() {
+        let f = AwaitThenableFilter;
+        let d = diag("src/features/product/product-row-actions.test.tsx");
+        assert!(!f.keep(&d, None), "await-thenable in .test.tsx must be suppressed");
+    }
+
+    #[test]
+    fn drops_await_thenable_in_spec_file() {
+        let f = AwaitThenableFilter;
+        assert!(!f.keep(&diag("src/utils/format.spec.ts"), None));
+    }
+
+    #[test]
+    fn drops_await_thenable_in_tests_dir() {
+        let f = AwaitThenableFilter;
+        assert!(!f.keep(&diag("src/__tests__/helpers.ts"), None));
+    }
+
+    #[test]
+    fn keeps_await_thenable_in_production_file() {
+        let f = AwaitThenableFilter;
+        assert!(f.keep(&diag("src/features/product/product-row-actions.tsx"), None));
     }
 }
