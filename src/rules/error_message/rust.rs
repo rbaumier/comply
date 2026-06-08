@@ -7,7 +7,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-const ERROR_MACROS: &[&str] = &["anyhow", "bail", "eyre", "panic", "todo", "unimplemented"];
+const ERROR_MACROS: &[&str] = &["anyhow", "bail", "eyre", "panic"];
 
 crate::ast_check! { on ["macro_invocation"] => |node, source, ctx, diagnostics|
     let Some(macro_node) = node.child_by_field_name("macro") else { return };
@@ -85,5 +85,24 @@ mod tests {
     #[test]
     fn allows_anyhow_with_message() {
         assert!(run_on(r#"fn f() { anyhow!("failed to process"); }"#).is_empty());
+    }
+
+    #[test]
+    fn allows_todo_without_message() {
+        assert!(run_on("fn f() { todo!(); }").is_empty());
+        assert!(run_on("fn f() { unimplemented!(); }").is_empty());
+    }
+
+    #[test]
+    fn allows_todo_in_unreachable_branch() {
+        let code = r#"
+            fn process(t: i32) {
+                match t {
+                    0 => {},
+                    _ => todo!(),
+                }
+            }
+        "#;
+        assert!(run_on(code).is_empty());
     }
 }
