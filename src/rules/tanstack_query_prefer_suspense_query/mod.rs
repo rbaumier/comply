@@ -7,12 +7,15 @@
 //! The hook throws a promise that the nearest Suspense boundary catches,
 //! and `data` is guaranteed defined on the happy path.
 
+#[cfg(test)]
 mod typescript;
+mod oxc_typescript;
 
 use crate::diagnostic::Severity;
+use crate::files::Language;
+use crate::rules::RuleDef;
 use crate::rules::backend::Backend;
 use crate::rules::meta::RuleMeta;
-use crate::rules::{RuleDef, TS_FAMILY};
 
 pub const META: RuleMeta = RuleMeta {
     id: "tanstack-query-prefer-suspense-query",
@@ -32,9 +35,10 @@ pub const META: RuleMeta = RuleMeta {
 pub fn register() -> RuleDef {
     RuleDef {
         meta: META,
-        backends: TS_FAMILY
-            .iter()
-            .map(|&lang| (lang, Backend::TreeSitter(Box::new(typescript::Check))))
-            .collect(),
+        backends: vec![
+            (Language::TypeScript, Backend::Oxc(Box::new(oxc_typescript::Check))),
+            (Language::JavaScript, Backend::Oxc(Box::new(oxc_typescript::Check))),
+            (Language::Tsx, Backend::Oxc(Box::new(oxc_typescript::Check))),
+        ],
     }
 }
