@@ -131,11 +131,12 @@ pub fn register_all() -> Vec<RuleDef> {
         //     "Condition is not explicitly boolean — implicit coercion is error-prone.",
         //     "Use an explicit comparison: `!== undefined`, `> 0`, `Boolean(x)`.",
         // ),
-        entry(
+        entry_with_filter(
             "no-unnecessary-condition",
             "no-unnecessary-condition",
             "Condition is always truthy or always falsy based on types.",
             "Remove the condition or fix the type.",
+            Some(Arc::new(NoUnnecessaryConditionFilter)),
         ),
         entry(
             "no-unnecessary-boolean-literal-compare",
@@ -974,6 +975,120 @@ fn pfa_is_single_return_block_no_await(block: &str) -> bool {
     semicolons <= 1
 }
 
+// ── no-unnecessary-condition post-filter (composite) ─────────────────────
+//
+// Two FP shapes are dropped:
+// 1. Elysia lifecycle-hook callbacks with `??` — `.derive` fields are
+//    runtime-undefined on short-circuit paths even though TS types them as set.
+// 2. Discriminated-union exhaustiveness gates — `=== "literal"` followed by a
+//    `: never = <discriminant>` binding within 50 lines.
+
+const NUC_ELYSIA_HOOK_OPENERS: &[&str] = &[
+    ".mapResponse(",
+    ".onError(",
+    ".onResponse(",
+    ".onAfterResponse(",
+    ".onRequest(",
+    ".onTransform(",
+    ".onParse(",
+    ".onBeforeHandle(",
+    ".onAfterHandle(",
+    ".beforeHandle(",
+    ".afterHandle(",
+];
+
+struct NoUnnecessaryConditionFilter;
+
+impl PostFilter for NoUnnecessaryConditionFilter {
+    fn keep(&self, diag: &crate::diagnostic::Diagnostic, source: Option<&str>) -> bool {
+        let Some(src) = source else {
+            return true;
+        };
+        !nuc_is_elysia_lifecycle_nullish_fp(src, diag.line)
+            && !nuc_is_exhaustiveness_gate_fp(src, diag.line)
+    }
+}
+
+fn nuc_is_elysia_lifecycle_nullish_fp(src: &str, line_1based: usize) -> bool {
+    if !nuc_imports_elysia(src) {
+        return false;
+    }
+    let lines: Vec<&str> = src.lines().collect();
+    if line_1based == 0 || line_1based > lines.len() {
+        return false;
+    }
+    let line_text = lines[line_1based - 1];
+    if !line_text.contains("??") {
+        return false;
+    }
+    let start = line_1based.saturating_sub(100).max(1);
+    for i in (start..line_1based).rev() {
+        let l = lines[i - 1];
+        if NUC_ELYSIA_HOOK_OPENERS.iter().any(|h| l.contains(h)) {
+            return true;
+        }
+    }
+    false
+}
+
+fn nuc_imports_elysia(src: &str) -> bool {
+    src.contains("from \"elysia\"") || src.contains("from 'elysia'")
+}
+
+fn nuc_is_exhaustiveness_gate_fp(src: &str, line_1based: usize) -> bool {
+    let lines: Vec<&str> = src.lines().collect();
+    if line_1based == 0 || line_1based > lines.len() {
+        return false;
+    }
+    let flagged = lines[line_1based - 1];
+    let Some(lhs) = nuc_extract_comparison_lhs(flagged) else {
+        return false;
+    };
+    if lhs.is_empty() {
+        return false;
+    }
+    let needle = format!(": never = {lhs}");
+    let window_start = line_1based;
+    let window_end = (window_start + 50).min(lines.len());
+    lines[window_start..window_end]
+        .iter()
+        .any(|l| l.contains(&needle))
+}
+
+fn nuc_extract_comparison_lhs(line: &str) -> Option<String> {
+    let op_idx = nuc_find_first_op(line)?;
+    let raw = line[..op_idx].trim();
+    if raw.is_empty() {
+        return Some(String::new());
+    }
+    let start = raw
+        .char_indices()
+        .rev()
+        .skip_while(|(_, c)| c.is_alphanumeric() || *c == '_' || *c == '$' || *c == '.')
+        .next()
+        .map(|(i, c)| i + c.len_utf8())
+        .unwrap_or(0);
+    Some(raw[start..].to_owned())
+}
+
+fn nuc_find_first_op(line: &str) -> Option<usize> {
+    let eq3 = nuc_find_substr(line, "===");
+    let neq = nuc_find_substr(line, "!==");
+    match (eq3, neq) {
+        (None, None) => None,
+        (Some(i), None) => Some(i),
+        (None, Some(j)) => Some(j),
+        (Some(i), Some(j)) => Some(i.min(j)),
+    }
+}
+
+fn nuc_find_substr(haystack: &str, needle: &str) -> Option<usize> {
+    haystack
+        .as_bytes()
+        .windows(needle.len())
+        .position(|w| w == needle.as_bytes())
+}
+
 // ── no-misused-spread post-filter ─────────────────────────────────────────
 //
 // Drops FPs when spreading a class instance into a `new <X>Error(...)` call.
@@ -1728,6 +1843,60 @@ export function loader() {
         let src_content = source_for(&path);
         let f = PromiseFunctionAsyncFilter;
         assert!(!f.keep(&pfa_diag(&path, line, col), Some(&src_content)));
+    }
+
+    // ── no-unnecessary-condition ─────────────────────────────────────────
+
+    fn nuc_diag(path: &std::path::Path, line: usize) -> Diagnostic {
+        Diagnostic {
+            path: Arc::from(path),
+            line,
+            column: 1,
+            rule_id: Cow::Borrowed("no-unnecessary-condition"),
+            message: String::new(),
+            severity: crate::diagnostic::Severity::Error,
+            span: None,
+        }
+    }
+
+    #[test]
+    fn nuc_drops_elysia_map_response_nullish() {
+        let src = "import { Elysia } from \"elysia\";\nnew Elysia()\n  .mapResponse(({ requestId, set }) => {\n    set.headers[\"x-request-id\"] = requestId ?? \"unknown\";\n  });\n";
+        let path = write_temp("nuc_elysia_map.ts", src);
+        let src_content = source_for(&path);
+        let line = line_of(src, "requestId ?? \"unknown\"");
+        let f = NoUnnecessaryConditionFilter;
+        assert!(!f.keep(&nuc_diag(&path, line), Some(&src_content)));
+    }
+
+    #[test]
+    fn nuc_drops_exhaustiveness_gate() {
+        let src = "function foo(props: { action: \"create\" }) {\n  if (props.action === \"create\") {\n    return 1;\n  }\n  const _exhaustive: never = props.action;\n}\n";
+        let path = write_temp("nuc_exhaustiveness.ts", src);
+        let src_content = source_for(&path);
+        let line = line_of(src, "props.action === \"create\"");
+        let f = NoUnnecessaryConditionFilter;
+        assert!(!f.keep(&nuc_diag(&path, line), Some(&src_content)));
+    }
+
+    #[test]
+    fn nuc_keeps_nullish_outside_elysia_hook() {
+        let src = "import { Elysia } from \"elysia\";\nconst x: string = \"set\";\nconst y = x ?? \"fallback\";\n";
+        let path = write_temp("nuc_outside_hook.ts", src);
+        let src_content = source_for(&path);
+        let line = line_of(src, "?? \"fallback\"");
+        let f = NoUnnecessaryConditionFilter;
+        assert!(f.keep(&nuc_diag(&path, line), Some(&src_content)));
+    }
+
+    #[test]
+    fn nuc_keeps_always_true_without_gate() {
+        let src = "function foo(props: { action: \"create\" }) {\n  if (props.action === \"create\") {\n    return 1;\n  }\n  return 0;\n}\n";
+        let path = write_temp("nuc_no_gate.ts", src);
+        let src_content = source_for(&path);
+        let line = line_of(src, "props.action === \"create\"");
+        let f = NoUnnecessaryConditionFilter;
+        assert!(f.keep(&nuc_diag(&path, line), Some(&src_content)));
     }
 
     // ── no-misused-spread ────────────────────────────────────────────────
