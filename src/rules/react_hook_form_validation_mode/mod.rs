@@ -18,6 +18,8 @@ pub const META: RuleMeta = RuleMeta {
     severity: Severity::Warning,
     doc_url: Some("https://react-hook-form.com/docs/useform"),
     categories: &["react"],
+    skip_in_test_dir: false,
+    skip_in_relaxed_dir: false,
 };
 
 pub fn register() -> RuleDef {

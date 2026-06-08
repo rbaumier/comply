@@ -53,7 +53,7 @@ const ENGINE_MAX_FILE_LINES: usize = 10_000;
 /// `interesting` is a Vec<bool> indexed by kind_id, used as a fast
 /// pre-filter in the walk to skip the closure entirely for uninteresting
 /// nodes (most nodes in any tree).
-struct LangDispatch<'a> {
+pub(crate) struct LangDispatch<'a> {
     applicable: Vec<(&'a RuleMeta, &'a Backend)>,
     applicable_prefilters: Vec<Option<PrefilterFinders>>,
     multiplexed: Vec<(&'a RuleMeta, &'a dyn AstCheck)>,
@@ -74,7 +74,7 @@ struct LangDispatch<'a> {
 }
 
 impl<'a> LangDispatch<'a> {
-    fn build(
+    pub(crate) fn build(
         rule_defs: &'a [RuleDef],
         language: Language,
         project: &ProjectCtx,
@@ -281,10 +281,9 @@ pub fn lint_files_with_project(
 /// disk (the disk version is stale relative to the editor's buffer).
 /// Same dispatch logic as `lint_one_file`, minus the disk read.
 ///
-/// `dispatch_backends` already skips Oxlint/Clippy/Tsc — those backends
-/// don't produce diagnostics in-process — so the LSP path inherits
-/// "tree-sitter and text rules only" for free, which is exactly what
-/// we want for per-keystroke editor feedback.
+/// Oxlint/Clippy/Tsc backends don't produce diagnostics in-process, so the
+/// LSP path inherits "tree-sitter and text rules only" for free, which is
+/// exactly what we want for per-keystroke editor feedback.
 #[must_use = "diagnostics from in-memory lint must be reported"]
 pub fn lint_in_memory(
     path: &std::path::Path,
@@ -293,16 +292,6 @@ pub fn lint_in_memory(
     config: &Config,
     project: Option<&ProjectCtx>,
 ) -> Vec<Diagnostic> {
-    let rule_defs = rules::all_rule_defs();
-    let applicable = collect_applicable(&rule_defs, language);
-    if applicable.is_empty() {
-        return Vec::new();
-    }
-    let file = SourceFile {
-        path: path.to_path_buf(),
-        language,
-    };
-    let mut worker = WorkerState::new();
     // LSP callers that haven't built a ProjectCtx yet get the empty default:
     // `nearest_*` still walks disk, only eager root fields are absent.
     let empty;
@@ -313,7 +302,55 @@ pub fn lint_in_memory(
             &empty
         }
     };
-    dispatch_backends(&file, source, &applicable, &mut worker, config, project)
+    let rule_defs = rules::all_rule_defs();
+    let ld = LangDispatch::build(&rule_defs, language, project, config);
+    if ld.applicable.is_empty() {
+        return Vec::new();
+    }
+    let file = SourceFile {
+        path: path.to_path_buf(),
+        language,
+    };
+    let mut worker = WorkerState::new();
+    dispatch_with_lang(&file, source, &ld, &mut worker, config, project)
+}
+
+/// Lint in-memory text using a pre-built `LangDispatch`.
+///
+/// Called by the LSP server, which caches the dispatch table across keystrokes
+/// so the full `LangDispatch::build` cost is paid at most once per language
+/// per session, not on every keystroke.
+#[must_use = "diagnostics from in-memory lint must be reported"]
+pub(crate) fn lint_in_memory_with_dispatch(
+    path: &std::path::Path,
+    language: Language,
+    source: &str,
+    config: &Config,
+    dispatch: &LangDispatch<'_>,
+    project: Option<&ProjectCtx>,
+) -> Vec<Diagnostic> {
+    let file = SourceFile {
+        path: path.to_path_buf(),
+        language,
+    };
+    let mut worker = WorkerState::new();
+    let empty;
+    let project = match project {
+        Some(p) => p,
+        None => {
+            empty = ProjectCtx::empty();
+            &empty
+        }
+    };
+    dispatch_with_lang(&file, source, dispatch, &mut worker, config, project)
+}
+
+/// Build a `LangDispatch<'static>` for the LSP dispatch cache.
+///
+/// Uses the globally stored rule definitions so the returned dispatch borrows
+/// `'static` data and can be held inside an `Arc` across async tasks.
+pub(crate) fn build_dispatch_for_lsp(language: Language, config: &Config) -> LangDispatch<'static> {
+    LangDispatch::build(rules::all_rule_defs_static(), language, &ProjectCtx::empty(), config)
 }
 
 /// Flatten `RuleDef[]` into `(meta, backend)` pairs that apply to `language`.
@@ -482,21 +519,6 @@ fn should_skip_framework_scoped_rule(meta: &RuleMeta, project: &ProjectCtx) -> b
 }
 
 
-/// Dispatch each backend variant to produce diagnostics.
-/// Used by the LSP path (`lint_in_memory`) which doesn't pre-build
-/// a `LangDispatch`.
-fn dispatch_backends(
-    file: &SourceFile,
-    source: &str,
-    _applicable: &[(&RuleMeta, &Backend)],
-    worker: &mut WorkerState,
-    config: &Config,
-    project: &ProjectCtx,
-) -> Vec<Diagnostic> {
-    let rule_defs = rules::all_rule_defs();
-    let ld = LangDispatch::build(&rule_defs, file.language, project, config);
-    dispatch_with_lang(file, source, &ld, worker, config, project)
-}
 
 fn lint_one_file_with_dispatch(
     file: &SourceFile,
