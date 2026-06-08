@@ -14,6 +14,7 @@ crate::ast_check! { on ["function_item"] => |node, source, ctx, diagnostics|
     let Some(body) = node.child_by_field_name("body") else { return; };
     let Ok(body_text) = body.utf8_text(source) else { return; };
     if !body_uses_fs(body_text) { return; }
+    if !is_pub(node, source) { return; }
 
     let Some(params) = node.child_by_field_name("parameters") else { return; };
     let mut cursor = params.walk();
@@ -82,6 +83,18 @@ fn classify_path_like_type<'a>(type_node: Node<'a>, source: &'a [u8]) -> Option<
     }
 }
 
+fn is_pub(item: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut cursor = item.walk();
+    for child in item.children(&mut cursor) {
+        if child.kind() == "visibility_modifier"
+            && let Ok(text) = child.utf8_text(source)
+        {
+            return text == "pub";
+        }
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -92,19 +105,19 @@ mod tests {
 
     #[test]
     fn flags_ref_path_param_in_fs_fn() {
-        let src = "fn load(p: &Path) -> String { fs::read_to_string(p).unwrap() }";
+        let src = "pub fn load(p: &Path) -> String { fs::read_to_string(p).unwrap() }";
         assert_eq!(run(src).len(), 1);
     }
 
     #[test]
     fn flags_ref_str_param_in_fs_fn() {
-        let src = "fn load(p: &str) -> Vec<u8> { fs::read(p).unwrap() }";
+        let src = "pub fn load(p: &str) -> Vec<u8> { fs::read(p).unwrap() }";
         assert_eq!(run(src).len(), 1);
     }
 
     #[test]
     fn flags_pathbuf_param_in_fs_fn() {
-        let src = "fn load(p: PathBuf) -> String { fs::read_to_string(&p).unwrap() }";
+        let src = "pub fn load(p: PathBuf) -> String { fs::read_to_string(&p).unwrap() }";
         assert_eq!(run(src).len(), 1);
     }
 
@@ -121,6 +134,20 @@ mod tests {
     fn allows_non_fs_function_with_ref_path() {
         // Same signature, but no fs call in the body → not our concern.
         let src = "fn describe(p: &Path) -> String { format!(\"{:?}\", p) }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_private_fs_function_with_ref_path() {
+        let src = "fn is_merge_state(hg_root: &Path) -> bool { \
+                   let path = hg_root.join(\"dirstate\"); \
+                   File::open(path).is_ok() }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_pub_crate_fs_function_with_ref_path() {
+        let src = "pub(crate) fn load(p: &Path) -> String { fs::read_to_string(p).unwrap() }";
         assert!(run(src).is_empty());
     }
 }
