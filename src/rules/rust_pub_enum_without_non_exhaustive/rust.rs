@@ -74,6 +74,16 @@ fn is_internal_crate(path: &Path) -> bool {
         return true;
     }
 
+    // Binary-only crate: no [lib] section in Cargo.toml AND no src/lib.rs
+    // (Cargo auto-detects src/lib.rs as the default library target when [lib] is absent).
+    let has_lib_section = value.get("lib").is_some_and(toml::Value::is_table);
+    let has_lib_rs = manifest
+        .parent()
+        .map_or(false, |root| root.join("src/lib.rs").is_file());
+    if !has_lib_section && !has_lib_rs {
+        return true;
+    }
+
     let Some(workspace_manifest) = nearest_workspace_manifest(path, &manifest) else {
         return false;
     };
@@ -174,7 +184,9 @@ mod tests {
     use tempfile::TempDir;
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_rust(source, &Check)
+        // Use an absolute path with no Cargo.toml ancestor so is_internal_crate
+        // does not accidentally pick up the comply project's own Cargo.toml.
+        crate::rules::test_helpers::run_rust_with_path(source, &Check, "/nonexistent_cargo_project/src/t.rs")
     }
 
     #[test]
@@ -216,6 +228,32 @@ mod tests {
     }
 
     #[test]
+    fn treats_binary_only_crate_as_internal() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"mybin\"\nversion = \"0.1.0\"\n[[bin]]\nname = \"mybin\"\npath = \"src/main.rs\"\n",
+        )
+        .unwrap();
+
+        assert!(is_internal_crate(&dir.path().join("src/main.rs")));
+    }
+
+    #[test]
+    fn treats_lib_crate_without_explicit_lib_section_as_external() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"mylib\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        fs::create_dir_all(dir.path().join("src")).unwrap();
+        fs::write(dir.path().join("src/lib.rs"), "").unwrap();
+
+        assert!(!is_internal_crate(&dir.path().join("src/lib.rs")));
+    }
+
+    #[test]
     fn treats_workspace_member_without_publish_true_as_internal() {
         let dir = TempDir::new().unwrap();
         let member = dir.path().join("crates/internal");
@@ -238,7 +276,7 @@ mod tests {
     fn treats_workspace_member_with_publish_true_as_public() {
         let dir = TempDir::new().unwrap();
         let member = dir.path().join("crates/public-api");
-        fs::create_dir_all(&member).unwrap();
+        fs::create_dir_all(member.join("src")).unwrap();
         fs::write(
             dir.path().join("Cargo.toml"),
             "[workspace]\nmembers = [\"crates/public-api\"]\n",
@@ -249,6 +287,7 @@ mod tests {
             "[package]\nname = \"public-api\"\nversion = \"0.1.0\"\npublish = true\n",
         )
         .unwrap();
+        fs::write(member.join("src/lib.rs"), "").unwrap();
 
         assert!(!is_internal_crate(&member.join("src/lib.rs")));
     }
@@ -257,7 +296,7 @@ mod tests {
     fn treats_workspace_member_with_publish_registry_as_public() {
         let dir = TempDir::new().unwrap();
         let member = dir.path().join("crates/public-api");
-        fs::create_dir_all(&member).unwrap();
+        fs::create_dir_all(member.join("src")).unwrap();
         fs::write(
             dir.path().join("Cargo.toml"),
             "[workspace]\nmembers = [\"crates/public-api\"]\n",
@@ -268,6 +307,7 @@ mod tests {
             "[package]\nname = \"public-api\"\nversion = \"0.1.0\"\npublish = [\"crates-io\"]\n",
         )
         .unwrap();
+        fs::write(member.join("src/lib.rs"), "").unwrap();
 
         assert!(!is_internal_crate(&member.join("src/lib.rs")));
     }
