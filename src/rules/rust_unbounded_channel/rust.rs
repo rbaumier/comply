@@ -13,6 +13,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
+use crate::rules::rust_helpers::{is_in_test_context, is_under_tests_dir};
 
 const KINDS: &[&str] = &["call_expression"];
 
@@ -44,6 +45,9 @@ impl AstCheck for Check {
             || text.ends_with("mpsc::channel")
             || text == "channel" && is_inside_mpsc_use(node, source_bytes);
         if !is_unbounded {
+            return;
+        }
+        if is_in_test_context(node, source_bytes) || is_under_tests_dir(ctx.path) {
             return;
         }
         // mpsc::channel — only flag if it's `std::sync::mpsc` (which is
@@ -129,5 +133,23 @@ mod tests {
     fn allows_std_sync_channel_with_capacity() {
         let source = "use std::sync::mpsc;\nfn f() { let (tx, rx) = mpsc::sync_channel(1024); }";
         assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_unbounded_channel_in_test_fn() {
+        let source = "#[test]\nfn it_works() { let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<u8>(); }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_unbounded_channel_in_tokio_test() {
+        let source = "#[tokio::test]\nasync fn it_works() { let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<u8>(); }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_unbounded_channel_in_tests_dir() {
+        let source = "fn f() { let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<u8>(); }";
+        assert!(crate::rules::test_helpers::run_rust_with_path(source, &Check, "tests/my_test.rs").is_empty());
     }
 }
