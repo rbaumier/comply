@@ -269,16 +269,11 @@ fn leading_pk_column<'b, 'a>(
         let Expression::ArrayExpression(arr) = &p.value else {
             return None;
         };
-        for el in &arr.elements {
-            if let Some(inner) = array_element_as_expression(el) {
-                if let Expression::StaticMemberExpression(member) = inner {
-                    return Some(member.property.name.as_str());
-                }
-            }
-            // Only the FIRST non-empty element matters — Postgres only
-            // indexes the leading prefix of a composite primary key.
-            return None;
+        let first = arr.elements.iter().find_map(array_element_as_expression)?;
+        if let Expression::StaticMemberExpression(member) = first {
+            return Some(member.property.name.as_str());
         }
+        return None;
     }
     None
 }
