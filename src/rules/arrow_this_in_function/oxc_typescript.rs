@@ -61,7 +61,7 @@ fn is_in_unbound_arrow<'a>(
             AstKind::ArrowFunctionExpression(_) => {
                 saw_arrow = true;
             }
-            AstKind::Function(_) | AstKind::MethodDefinition(_) => {
+            AstKind::Function(_) | AstKind::MethodDefinition(_) | AstKind::PropertyDefinition(_) => {
                 return false;
             }
             _ => {}
@@ -108,5 +108,15 @@ mod tests {
     #[test]
     fn ignores_plain_this_without_arrow() {
         assert!(run_on("function foo() { return this; }").is_empty());
+    }
+
+    #[test]
+    fn allows_arrow_in_class_property() {
+        assert!(run_on("class Foo { onUnload = () => this.x; }").is_empty());
+    }
+
+    #[test]
+    fn allows_arrow_in_class_property_with_type() {
+        assert!(run_on("class Bar { prop: () => boolean = () => this.active; }").is_empty());
     }
 }
