@@ -30,6 +30,7 @@ fn is_allowed_test_callee(name: &str) -> bool {
             | "afterAll"
             | "before"
             | "after"
+            | "contextualize"
     )
 }
 
