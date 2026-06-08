@@ -717,6 +717,14 @@ impl ProjectCtx {
         ctx
     }
 
+    /// Walk up from `path` to the nearest `package.json` and return the
+    /// *directory* containing it. The walk result is cached by start directory —
+    /// the same invariant as `nearest_package_json`.
+    pub fn nearest_package_json_dir(&self, path: &Path) -> Option<PathBuf> {
+        let start_dir = path.parent()?;
+        walk_up_finding_cached(&self.manifest_dir_cache, start_dir, "package.json")
+    }
+
     /// Walk up from `path` to the nearest `package.json`, cache the parsed
     /// result by manifest directory. Returns the same `Arc` on repeated
     /// lookups against any file under the same manifest.
