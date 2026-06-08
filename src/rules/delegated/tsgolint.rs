@@ -523,11 +523,12 @@ pub fn register_all() -> Vec<RuleDef> {
             "`@ts-ignore` and `@ts-nocheck` suppress type errors dangerously.",
             "Fix the type error instead of suppressing it.",
         ),
-        entry(
+        entry_with_filter(
             "ban-types",
             "ban-types",
             "`Object`, `{}`, `Function` are too loose — use specific types.",
             "Use `object`, `Record<>`, or explicit function signatures.",
+            Some(Arc::new(BanTypesFilter)),
         ),
         entry(
             "no-namespace",
@@ -633,6 +634,65 @@ fn is_test_path(path: &std::path::Path) -> bool {
         || lower.starts_with("test/")
 }
 
+// ── ban-types post-filter ──────────────────────────────────────────────────
+//
+// `string & {}` is a well-known TypeScript pattern to widen a literal union
+// while preserving autocomplete. `{}` is an intersection operand, not a
+// standalone empty-object type annotation, so ban-types firing on it is a
+// false positive. (Closes #748)
+
+struct BanTypesFilter;
+
+impl PostFilter for BanTypesFilter {
+    fn keep(&self, diag: &crate::diagnostic::Diagnostic, source: Option<&str>) -> bool {
+        if diag.line == 0 {
+            return true;
+        }
+        let Some(src) = source else { return true };
+        let line = src.lines().nth(diag.line - 1).unwrap_or("");
+        !is_intersection_member(line)
+    }
+}
+
+fn is_intersection_member(line: &str) -> bool {
+    let bytes = line.as_bytes();
+    has_ampersand_then_empty_braces(bytes) || has_empty_braces_then_ampersand(bytes)
+}
+
+fn has_ampersand_then_empty_braces(bytes: &[u8]) -> bool {
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'&' {
+            let mut j = i + 1;
+            while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+                j += 1;
+            }
+            if j + 1 < bytes.len() && bytes[j] == b'{' && bytes[j + 1] == b'}' {
+                return true;
+            }
+        }
+        i += 1;
+    }
+    false
+}
+
+fn has_empty_braces_then_ampersand(bytes: &[u8]) -> bool {
+    let mut i = 0;
+    while i + 1 < bytes.len() {
+        if bytes[i] == b'{' && bytes[i + 1] == b'}' {
+            let mut j = i + 2;
+            while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+                j += 1;
+            }
+            if j < bytes.len() && bytes[j] == b'&' {
+                return true;
+            }
+        }
+        i += 1;
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -677,5 +737,59 @@ mod tests {
     fn keeps_await_thenable_in_production_file() {
         let f = AwaitThenableFilter;
         assert!(f.keep(&diag("src/features/product/product-row-actions.tsx"), None));
+    }
+
+    // ── ban-types ───────────────────────────────────────────────────────────
+
+    fn ban_types_diag(path: &std::path::Path, line: usize) -> Diagnostic {
+        Diagnostic {
+            path: std::sync::Arc::from(path),
+            line,
+            column: 1,
+            rule_id: Cow::Borrowed("ban-types"),
+            message: String::new(),
+            severity: Severity::Error,
+            span: None,
+        }
+    }
+
+    fn write_temp(name: &str, src: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join("comply-tsgolint-post-filter-tests");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(name);
+        std::fs::write(&path, src).unwrap();
+        path
+    }
+
+    fn line_of(src: &str, needle: &str) -> usize {
+        src.lines()
+            .enumerate()
+            .find(|(_, l)| l.contains(needle))
+            .map(|(i, _)| i + 1)
+            .expect("needle not in source")
+    }
+
+    fn source_for(path: &std::path::Path) -> String {
+        std::fs::read_to_string(path).unwrap()
+    }
+
+    // Regression for #748: `string & {}` intersection must be suppressed.
+    #[test]
+    fn drops_ban_types_on_intersection() {
+        let src = "type Spec = Breakpoint | (string & {});\n";
+        let path = write_temp("ban_types_intersection.ts", src);
+        let line = line_of(src, "string & {}");
+        let src_content = source_for(&path);
+        let f = BanTypesFilter;
+        assert!(!f.keep(&ban_types_diag(&path, line), Some(&src_content)));
+    }
+
+    #[test]
+    fn keeps_ban_types_standalone_empty_object() {
+        let src = "const x: {} = foo;\n";
+        let path = write_temp("ban_types_standalone.ts", src);
+        let src_content = source_for(&path);
+        let f = BanTypesFilter;
+        assert!(f.keep(&ban_types_diag(&path, 1), Some(&src_content)));
     }
 }

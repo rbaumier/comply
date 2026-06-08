@@ -13,7 +13,6 @@
 //!    rule-id + severity through the comply registry so users see
 //!    `[no-explicit-any]` instead of `typescript-eslint(no-explicit-any)`.
 
-mod ban_types_post_filter;
 mod elysia_post_filter;
 mod equal_probe_post_filter;
 mod no_misused_spread_post_filter;
