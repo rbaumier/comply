@@ -76,7 +76,7 @@ fn expr_has_fetch(expr: &Expression) -> bool {
                 }
             // Check arguments but don't cross function boundaries.
             call.arguments.iter().any(|arg| {
-                let e = arg.to_expression();
+                let Some(e) = arg.as_expression() else { return false };
                 match e {
                     Expression::ArrowFunctionExpression(_)
                     | Expression::FunctionExpression(_) => false,
@@ -145,7 +145,7 @@ impl OxcCheck for Check {
             return;
         }
 
-        let callback_expr = call.arguments[0].to_expression();
+        let Some(callback_expr) = call.arguments[0].as_expression() else { return };
         let body_stmts = match callback_expr {
             Expression::ArrowFunctionExpression(arrow) => &arrow.body.statements,
             Expression::FunctionExpression(func) => {
@@ -169,5 +169,26 @@ impl OxcCheck for Check {
             severity: Severity::Warning,
             span: None,
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(source, &Check)
+    }
+
+    // Regression for #911: a spread argument to useEffect made `Argument::to_expression()` panic.
+    #[test]
+    fn does_not_panic_on_spread_arg_to_use_effect() {
+        assert!(run("useEffect(...args)").is_empty());
+    }
+
+    // Regression for #911: a spread argument inside a non-fetch call made `arg.to_expression()` panic.
+    #[test]
+    fn does_not_panic_on_spread_arg_inside_call() {
+        assert!(run("useEffect(() => { f(...args); }, [])").is_empty());
     }
 }

@@ -237,7 +237,7 @@ fn check_expr_for_setter(
             if let Expression::Identifier(callee) = &call.callee
                 && callee.name == setter_name && !call.arguments.is_empty() {
                     let first_arg = &call.arguments[0];
-                    let arg_expr = first_arg.to_expression();
+                    let Some(arg_expr) = first_arg.as_expression() else { return };
                     // If the argument is an arrow/function, that's the correct updater form.
                     if matches!(
                         arg_expr,
@@ -271,5 +271,20 @@ fn check_expr_for_setter(
             }
         }
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(source, &Check)
+    }
+
+    // Regression for #911: a spread argument to the setter made `Argument::to_expression()` panic.
+    #[test]
+    fn does_not_panic_on_spread_arg_to_setter() {
+        assert!(run("const [x, setX] = useState(0); setX(...args)").is_empty());
     }
 }
