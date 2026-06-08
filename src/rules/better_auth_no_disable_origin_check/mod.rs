@@ -15,6 +15,9 @@ pub const META: RuleMeta = RuleMeta {
     severity: Severity::Error,
     doc_url: Some("https://www.better-auth.com/docs/security"),
     categories: &["security", "better-auth"],
+
+    skip_in_test_dir: false,
+    skip_in_relaxed_dir: true,
 };
 
 pub fn register() -> RuleDef {

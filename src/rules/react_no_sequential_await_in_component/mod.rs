@@ -23,6 +23,9 @@ pub const META: RuleMeta = RuleMeta {
         "https://react.dev/reference/rsc/server-components#async-components-with-server-components",
     ),
     categories: &["react"],
+
+    skip_in_test_dir: false,
+    skip_in_relaxed_dir: false,
 };
 
 pub fn register() -> RuleDef {

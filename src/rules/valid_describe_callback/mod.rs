@@ -19,6 +19,9 @@ pub const META: RuleMeta = RuleMeta {
         "https://github.com/jest-community/eslint-plugin-jest/blob/main/docs/rules/valid-describe-callback.md",
     ),
     categories: &["testing"],
+
+    skip_in_test_dir: false,
+    skip_in_relaxed_dir: false,
 };
 
 pub fn register() -> RuleDef {

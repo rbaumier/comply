@@ -43,6 +43,8 @@ fn entry_with_clippy(
             severity: Severity::Error,
             doc_url: None,
             categories: &["typescript"],
+            skip_in_test_dir: false,
+            skip_in_relaxed_dir: false,
         },
         oxlint_key,
         clippy_lint,

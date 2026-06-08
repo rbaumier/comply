@@ -17,6 +17,9 @@ pub const META: RuleMeta = RuleMeta {
     severity: Severity::Error,
     doc_url: Some("https://nodejs.org/api/process.html#event-unhandledrejection"),
     categories: &["node"],
+
+    skip_in_test_dir: false,
+    skip_in_relaxed_dir: false,
 };
 
 pub fn register() -> RuleDef {

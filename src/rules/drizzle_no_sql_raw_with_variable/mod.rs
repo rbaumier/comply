@@ -15,6 +15,9 @@ pub const META: RuleMeta = RuleMeta {
     severity: Severity::Error,
     doc_url: Some("https://orm.drizzle.team/docs/sql#sqlraw"),
     categories: &["drizzle", "security"],
+
+    skip_in_test_dir: false,
+    skip_in_relaxed_dir: true,
 };
 
 pub fn register() -> RuleDef {

@@ -19,6 +19,9 @@ pub const META: RuleMeta = RuleMeta {
         "https://ota-meshi.github.io/eslint-plugin-regexp/rules/no-super-linear-move.html",
     ),
     categories: &["security", "regex"],
+
+    skip_in_test_dir: false,
+    skip_in_relaxed_dir: true,
 };
 
 pub fn register() -> RuleDef {

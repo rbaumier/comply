@@ -25,6 +25,9 @@ pub const META: RuleMeta = RuleMeta {
     severity: Severity::Warning,
     doc_url: Some("https://datatracker.ietf.org/doc/html/rfc9745"),
     categories: &["api"],
+
+    skip_in_test_dir: false,
+    skip_in_relaxed_dir: true,
 };
 
 pub fn register() -> RuleDef {

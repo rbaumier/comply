@@ -19,6 +19,9 @@ pub const META: RuleMeta = RuleMeta {
         "https://github.com/vitest-dev/eslint-plugin-vitest/blob/main/docs/rules/no-disabled-tests.md",
     ),
     categories: &["vitest"],
+
+    skip_in_test_dir: false,
+    skip_in_relaxed_dir: false,
 };
 
 pub fn register() -> RuleDef {

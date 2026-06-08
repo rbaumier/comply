@@ -20,6 +20,9 @@ pub const META: RuleMeta = RuleMeta {
         "https://github.com/sindresorhus/eslint-plugin-unicorn/blob/main/docs/rules/prefer-mock-promise-shorthand.md",
     ),
     categories: &["testing"],
+
+    skip_in_test_dir: false,
+    skip_in_relaxed_dir: false,
 };
 
 pub fn register() -> RuleDef {

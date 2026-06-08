@@ -15,6 +15,9 @@ pub const META: RuleMeta = RuleMeta {
     severity: Severity::Warning,
     doc_url: Some("https://formatjs.io/docs/tooling/linter#enforce-id"),
     categories: &["i18n"],
+
+    skip_in_test_dir: false,
+    skip_in_relaxed_dir: false,
 };
 
 pub fn register() -> RuleDef {

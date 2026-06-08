@@ -586,6 +586,8 @@ fn entry(
             severity: Severity::Error,
             doc_url: Some("https://typescript-eslint.io/rules/"),
             categories: &["typescript", "type-aware"],
+            skip_in_test_dir: false,
+            skip_in_relaxed_dir: false,
         },
         backends,
     }

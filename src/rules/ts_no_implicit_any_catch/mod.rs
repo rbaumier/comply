@@ -22,6 +22,9 @@ pub const META: RuleMeta = RuleMeta {
         "https://www.typescriptlang.org/docs/handbook/release-notes/typescript-4-4.html#use-unknown-catch-variables",
     ),
     categories: &["typescript"],
+
+    skip_in_test_dir: false,
+    skip_in_relaxed_dir: false,
 };
 
 pub fn register() -> RuleDef {

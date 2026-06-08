@@ -18,6 +18,9 @@ pub const META: RuleMeta = RuleMeta {
     severity: Severity::Warning,
     doc_url: Some("https://react.dev/reference/react-dom/hooks/useFormStatus"),
     categories: &["react"],
+
+    skip_in_test_dir: false,
+    skip_in_relaxed_dir: false,
 };
 
 pub fn register() -> RuleDef {

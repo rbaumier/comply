@@ -15,6 +15,9 @@ pub const META: RuleMeta = RuleMeta {
     severity: Severity::Error,
     doc_url: Some("https://nuxt.com/docs/api/utils/define-page-meta"),
     categories: &["nuxt"],
+
+    skip_in_test_dir: false,
+    skip_in_relaxed_dir: false,
 };
 
 pub fn register() -> RuleDef {

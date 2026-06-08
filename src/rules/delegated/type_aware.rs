@@ -48,6 +48,8 @@ fn entry(
             severity,
             doc_url: None,
             categories: &["typescript", "type-aware"],
+            skip_in_test_dir: false,
+            skip_in_relaxed_dir: false,
         },
         backends,
     }

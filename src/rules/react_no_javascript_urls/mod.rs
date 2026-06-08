@@ -19,6 +19,9 @@ pub const META: RuleMeta = RuleMeta {
         "https://react.dev/reference/react-dom/components/common#javascript-urls-are-blocked",
     ),
     categories: &["react", "security"],
+
+    skip_in_test_dir: false,
+    skip_in_relaxed_dir: true,
 };
 
 pub fn register() -> RuleDef {

@@ -15,6 +15,9 @@ pub const META: RuleMeta = RuleMeta {
     severity: Severity::Warning,
     doc_url: Some("https://github.com/tailwindlabs/prettier-plugin-tailwindcss"),
     categories: &["tailwind"],
+
+    skip_in_test_dir: true,
+    skip_in_relaxed_dir: false,
 };
 
 /// Coarse ordering groups. Lower index = should appear earlier.

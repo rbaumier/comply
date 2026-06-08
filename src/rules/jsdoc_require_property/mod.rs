@@ -19,6 +19,9 @@ pub const META: RuleMeta = RuleMeta {
         "https://github.com/gajus/eslint-plugin-jsdoc/blob/main/docs/rules/require-property.md",
     ),
     categories: &["jsdoc"],
+
+    skip_in_test_dir: false,
+    skip_in_relaxed_dir: false,
 };
 
 /// Does the `@typedef` body type it as an object?

@@ -21,6 +21,9 @@ pub const META: RuleMeta = RuleMeta {
         "https://developer.mozilla.org/docs/Web/JavaScript/Reference/Global_Objects/Promise/withResolvers",
     ),
     categories: &["typescript", "async"],
+
+    skip_in_test_dir: false,
+    skip_in_relaxed_dir: false,
 };
 
 pub fn register() -> RuleDef {

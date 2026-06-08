@@ -17,6 +17,9 @@ pub const META: RuleMeta = RuleMeta {
     severity: Severity::Error,
     doc_url: Some("https://react.dev/reference/rsc/use-client"),
     categories: &["nextjs", "rsc"],
+
+    skip_in_test_dir: false,
+    skip_in_relaxed_dir: false,
 };
 
 pub fn register() -> RuleDef {

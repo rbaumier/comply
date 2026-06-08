@@ -18,6 +18,9 @@ pub const META: RuleMeta = RuleMeta {
     severity: Severity::Error,
     doc_url: Some("https://github.com/veritem/eslint-plugin-vitest/blob/main/docs/rules/no-identical-title.md"),
     categories: &["testing", "vitest"],
+
+    skip_in_test_dir: false,
+    skip_in_relaxed_dir: false,
 };
 
 pub fn register() -> RuleDef {

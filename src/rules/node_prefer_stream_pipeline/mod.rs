@@ -17,6 +17,9 @@ pub const META: RuleMeta = RuleMeta {
         "https://nodejs.org/api/stream.html#streampipelinesource-transforms-destination-callback",
     ),
     categories: &["node"],
+
+    skip_in_test_dir: false,
+    skip_in_relaxed_dir: false,
 };
 
 pub fn register() -> RuleDef {

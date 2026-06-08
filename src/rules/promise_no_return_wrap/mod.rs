@@ -15,6 +15,9 @@ pub const META: RuleMeta = RuleMeta {
     severity: Severity::Warning,
     doc_url: Some("https://github.com/eslint-community/eslint-plugin-promise/blob/main/docs/rules/no-return-wrap.md"),
     categories: &["promise"],
+
+    skip_in_test_dir: false,
+    skip_in_relaxed_dir: false,
 };
 
 pub fn register() -> RuleDef {

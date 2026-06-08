@@ -22,6 +22,9 @@ pub const META: RuleMeta = RuleMeta {
         "https://cheatsheetseries.owasp.org/cheatsheets/DOM_based_XSS_Prevention_Cheat_Sheet.html",
     ),
     categories: &["security"],
+
+    skip_in_test_dir: false,
+    skip_in_relaxed_dir: true,
 };
 
 pub fn register() -> RuleDef {

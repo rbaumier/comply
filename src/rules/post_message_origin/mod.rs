@@ -17,6 +17,9 @@ pub const META: RuleMeta = RuleMeta {
     severity: Severity::Error,
     doc_url: Some("https://rules.sonarsource.com/javascript/RSPEC-2819"),
     categories: &["security", "sonarjs"],
+
+    skip_in_test_dir: false,
+    skip_in_relaxed_dir: true,
 };
 
 pub fn register() -> RuleDef {

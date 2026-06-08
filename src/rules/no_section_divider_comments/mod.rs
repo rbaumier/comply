@@ -27,6 +27,9 @@ pub const META: RuleMeta = RuleMeta {
     severity: Severity::Error,
     doc_url: None,
     categories: &["comments"],
+
+    skip_in_test_dir: false,
+    skip_in_relaxed_dir: false,
 };
 
 const DIVIDER_CHARS: &[u8] = b"=-*#~";

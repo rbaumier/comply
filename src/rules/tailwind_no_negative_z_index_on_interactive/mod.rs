@@ -20,6 +20,9 @@ pub const META: RuleMeta = RuleMeta {
     severity: Severity::Error,
     doc_url: None,
     categories: &["tailwind", "accessibility"],
+
+    skip_in_test_dir: true,
+    skip_in_relaxed_dir: false,
 };
 
 pub fn register() -> RuleDef {

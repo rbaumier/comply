@@ -27,6 +27,9 @@ pub const META: RuleMeta = RuleMeta {
     severity: Severity::Error,
     doc_url: None,
     categories: &["rust"],
+
+    skip_in_test_dir: false,
+    skip_in_relaxed_dir: true,
 };
 pub fn register() -> RuleDef {
     crate::register_rust_only!(META, rust)
