@@ -193,11 +193,12 @@ pub fn register_all() -> Vec<RuleDef> {
         // ══════════════════════════════════════════════════════════════════
         // ERRORS
         // ══════════════════════════════════════════════════════════════════
-        entry(
+        entry_with_filter(
             "only-throw-error",
             "only-throw-error",
             "Throwing a non-Error value loses stack trace information.",
             "Throw an Error instance: `throw new Error(message)`.",
+            Some(Arc::new(OnlyThrowErrorFilter)),
         ),
         // ══════════════════════════════════════════════════════════════════
         // METHODS / THIS
@@ -728,6 +729,41 @@ fn imports_plugin_option_from_vite(src: &str) -> bool {
     })
 }
 
+// ── only-throw-error post-filter ───────────────────────────────────────────
+//
+// TanStack Router's `notFound()` and `redirect()` return marker objects, not
+// Error subclasses. The router intercepts them when thrown — this is the
+// framework's documented control-flow idiom.
+
+struct OnlyThrowErrorFilter;
+
+impl PostFilter for OnlyThrowErrorFilter {
+    fn keep(&self, diag: &crate::diagnostic::Diagnostic, source: Option<&str>) -> bool {
+        let Some(src) = source else { return true };
+        !is_tanstack_control_flow_fp(src, diag.line)
+    }
+}
+
+fn is_tanstack_control_flow_fp(src: &str, line_1based: usize) -> bool {
+    if !imports_tanstack_router(src) {
+        return false;
+    }
+    let lines: Vec<&str> = src.lines().collect();
+    if line_1based == 0 || line_1based > lines.len() {
+        return false;
+    }
+    let line_text = lines[line_1based - 1];
+    line_text.contains("throw")
+        && (line_text.contains("notFound(") || line_text.contains("redirect("))
+}
+
+fn imports_tanstack_router(src: &str) -> bool {
+    src.contains("from \"@tanstack/react-router\"")
+        || src.contains("from '@tanstack/react-router'")
+        || src.contains("from \"@tanstack/router-core\"")
+        || src.contains("from '@tanstack/router-core'")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -868,5 +904,48 @@ const x: string = unknownAny as string;
         let src_content = source_for(&path);
         let f = NoUnsafeAssignmentFilter;
         assert!(f.keep(&unsafe_assign_diag(&path, line), Some(&src_content)));
+    }
+
+    // ── only-throw-error ────────────────────────────────────────────────────
+
+    fn throw_diag(path: &std::path::Path, line: usize) -> Diagnostic {
+        Diagnostic {
+            path: std::sync::Arc::from(path),
+            line,
+            column: 1,
+            rule_id: Cow::Borrowed("only-throw-error"),
+            message: String::new(),
+            severity: Severity::Error,
+            span: None,
+        }
+    }
+
+    // Regression: `throw notFound(...)` in TanStack Router file must be suppressed.
+    #[test]
+    fn drops_tanstack_not_found_throw() {
+        let src = r#"import { notFound } from "@tanstack/react-router";
+export function loader() {
+  throw notFound({ routeId: "/x" });
+}
+"#;
+        let path = write_temp("tanstack_throw.ts", src);
+        let line = line_of(src, "throw notFound(");
+        let src_content = source_for(&path);
+        let f = OnlyThrowErrorFilter;
+        assert!(!f.keep(&throw_diag(&path, line), Some(&src_content)));
+    }
+
+    #[test]
+    fn keeps_throw_without_tanstack_import() {
+        let src = r#"function notFound(opts) { return { type: "not-found", ...opts }; }
+export function loader() {
+  throw notFound({ routeId: "/x" });
+}
+"#;
+        let path = write_temp("throw_no_tanstack.ts", src);
+        let line = line_of(src, "throw notFound(");
+        let src_content = source_for(&path);
+        let f = OnlyThrowErrorFilter;
+        assert!(f.keep(&throw_diag(&path, line), Some(&src_content)));
     }
 }
