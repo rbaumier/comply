@@ -1,6 +1,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
 crate::ast_check! { on ["call_expression"] prefilter = ["Command::new"] => |node, source, ctx, diagnostics|
+    if ctx.path.file_name() == Some(std::ffi::OsStr::new("build.rs")) { return; }
     let Some(func_node) = node.child_by_field_name("function") else { return };
     let Ok(func_text) = func_node.utf8_text(source) else { return };
     if func_text != "Command::new" { return; }
@@ -68,5 +69,11 @@ mod tests {
     fn allows_command_without_output_or_spawn() {
         let src = "fn f() { let mut cmd = Command::new(\"git\"); cmd.arg(\"status\"); }";
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_command_in_build_rs() {
+        let src = r#"fn commit_hash() { Command::new("git").args(["rev-parse", "--short", "HEAD"]).output().ok(); }"#;
+        assert!(crate::rules::test_helpers::run_rust_with_path(src, &Check, "build.rs").is_empty());
     }
 }
