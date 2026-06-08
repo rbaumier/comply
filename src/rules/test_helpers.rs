@@ -497,6 +497,35 @@ pub fn run_oxc_tsx_with_framework(
     diagnostics
 }
 
+/// Run an `OxcCheck` against `source` parsed as TypeScript with a
+/// caller-supplied `ProjectCtx`.
+#[must_use]
+pub fn run_oxc_ts_with_project(
+    source: &str,
+    check: &dyn OxcCheck,
+    project: &ProjectCtx,
+) -> Vec<Diagnostic> {
+    crate::oxc_helpers::reset_file_caches();
+    let allocator = Allocator::default();
+    let parse_ret = OxcParser::new(&allocator, source, SourceType::ts()).parse();
+    let semantic = SemanticBuilder::new().build(&parse_ret.program).semantic;
+    let ctx = CheckCtx::for_test_with_project(Path::new("t.ts"), source, project);
+
+    let kinds = check.interested_kinds();
+    if kinds.is_empty() {
+        return check.run_on_semantic(&semantic, &ctx);
+    }
+
+    let mut diagnostics = Vec::new();
+    for node in semantic.nodes().iter() {
+        let ty = node.kind().ty();
+        if kinds.contains(&ty) {
+            check.run(node, &ctx, &semantic, &mut diagnostics);
+        }
+    }
+    diagnostics
+}
+
 /// Run an `OxcCheck` against `source` parsed as TSX with a
 /// caller-supplied `ProjectCtx`.
 #[must_use]
