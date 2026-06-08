@@ -1,4 +1,5 @@
 use crate::diagnostic::{Diagnostic, Severity};
+use crate::files::Language;
 use crate::rules::backend::{CheckCtx, TextCheck};
 
 #[derive(Debug)]
@@ -39,6 +40,14 @@ fn is_empty(source: &str) -> bool {
 
 impl TextCheck for Check {
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
+        // Rust crate roots (lib.rs / main.rs) are legitimately empty
+        // in CI-only packages and workspace stubs — Cargo requires the file.
+        if ctx.lang == Language::Rust {
+            let name = ctx.path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if name == "lib.rs" || name == "main.rs" {
+                return Vec::new();
+            }
+        }
         if !is_empty(ctx.source) {
             return Vec::new();
         }
@@ -96,5 +105,23 @@ mod tests {
     #[test]
     fn flags_triple_slash_only() {
         assert_eq!(run("/// <reference types=\"vite/client\" />").len(), 1);
+    }
+
+    #[test]
+    fn lib_rs_empty_not_flagged() {
+        let diags = Check.check(&CheckCtx::for_test(Path::new("lib.rs"), "// CI-only crate\n"));
+        assert_eq!(diags.len(), 0);
+    }
+
+    #[test]
+    fn main_rs_empty_not_flagged() {
+        let diags = Check.check(&CheckCtx::for_test(Path::new("main.rs"), ""));
+        assert_eq!(diags.len(), 0);
+    }
+
+    #[test]
+    fn other_rs_empty_still_flagged() {
+        let diags = Check.check(&CheckCtx::for_test(Path::new("utils.rs"), "// nothing\n"));
+        assert_eq!(diags.len(), 1);
     }
 }
