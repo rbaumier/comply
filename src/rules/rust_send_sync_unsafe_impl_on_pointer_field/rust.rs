@@ -2,10 +2,11 @@
 //!
 //! For every `unsafe impl Send for X` / `unsafe impl Sync for X` we walk
 //! the file looking for a `struct_item` whose name is `X`. If that struct
-//! has a field whose type is a raw pointer (`*const T` / `*mut T`),
-//! `Cell<…>`, or `RefCell<…>` we flag the impl. We do not chase down
-//! cross-file definitions — comply only inspects one file at a time and
-//! the false-positive rate of guessing about other files is too high.
+//! has a field whose type is `Cell<…>`, `RefCell<…>`, or `UnsafeCell<…>`
+//! we flag the impl. Raw pointers (`*const T` / `*mut T`) are `Send + Sync`
+//! by default in Rust and are not flagged. We do not chase down cross-file
+//! definitions — comply only inspects one file at a time and the
+//! false-positive rate of guessing about other files is too high.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -73,7 +74,7 @@ impl AstCheck for Check {
             "rust-send-sync-unsafe-impl-on-pointer-field",
             format!(
                 "`unsafe impl {last_segment} for {target_base}` — but \
-                 `{target_base}` holds a raw pointer / `Cell` / `RefCell` \
+                 `{target_base}` holds a `Cell` / `RefCell` / `UnsafeCell` \
                  field. Wrap with `Mutex`, `Atomic*`, or `parking_lot` \
                  instead of asserting thread safety by hand."
             ),
@@ -151,9 +152,6 @@ fn ordered_has_unsync_field(list: tree_sitter::Node, source: &[u8]) -> bool {
 }
 
 fn is_unsync_type(node: tree_sitter::Node, source: &[u8]) -> bool {
-    if node.kind() == "pointer_type" {
-        return true;
-    }
     if node.kind() == "generic_type"
         && let Some(t) = node.child_by_field_name("type")
         && let Ok(text) = t.utf8_text(source)
@@ -175,9 +173,15 @@ mod tests {
     }
 
     #[test]
-    fn flags_send_for_struct_with_raw_ptr() {
+    fn allows_unsafe_impl_send_with_raw_ptr() {
         let src = "struct S { p: *mut u8 }\nunsafe impl Send for S {}";
-        assert_eq!(run_on(src).len(), 1);
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_unsafe_impl_sync_with_raw_pointer() {
+        let src = "struct Buffer { ptr: *mut u8 }\nunsafe impl Sync for Buffer {}";
+        assert!(run_on(src).is_empty());
     }
 
     #[test]
@@ -189,6 +193,12 @@ mod tests {
     #[test]
     fn flags_send_for_struct_with_refcell() {
         let src = "struct S { c: RefCell<u32> }\nunsafe impl Send for S {}";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_unsafecell() {
+        let src = "struct S { c: UnsafeCell<u32> }\nunsafe impl Sync for S {}";
         assert_eq!(run_on(src).len(), 1);
     }
 
