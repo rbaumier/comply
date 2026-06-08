@@ -1870,7 +1870,7 @@ pub fn oxlint_delegate(meta: RuleMeta, rule: &'static str, languages: &[Language
         meta,
         backends: languages
             .iter()
-            .map(|&lang| (lang, Backend::Oxlint { rule }))
+            .map(|&lang| (lang, Backend::Oxlint { rule, post_filter: None }))
             .collect(),
     }
 }
@@ -1885,7 +1885,7 @@ pub fn oxlint_and_clippy(
 ) -> RuleDef {
     let mut backends: Vec<(Language, Backend)> = TS_FAMILY
         .iter()
-        .map(|&lang| (lang, Backend::Oxlint { rule: oxlint_rule }))
+        .map(|&lang| (lang, Backend::Oxlint { rule: oxlint_rule, post_filter: None }))
         .collect();
     backends.push((Language::Rust, Backend::Clippy { lint: clippy_lint }));
     RuleDef { meta, backends }
@@ -1902,7 +1902,7 @@ pub fn collect_oxlint_bindings() -> Vec<(&'static str, &'static RuleMeta, Severi
         // once per process invocation, so the leak is negligible.
         let meta_static: &'static RuleMeta = Box::leak(Box::new(rule.meta));
         for (_lang, backend) in &rule.backends {
-            if let Backend::Oxlint { rule: oxlint_key } = backend {
+            if let Backend::Oxlint { rule: oxlint_key, .. } = backend {
                 bindings.push((*oxlint_key, meta_static, meta_static.severity));
             }
         }
@@ -1942,7 +1942,7 @@ pub fn collect_tsgolint_bindings() -> Vec<(&'static str, &'static RuleMeta, Seve
     for rule in delegated::register_tsgolint() {
         let meta_static: &'static RuleMeta = Box::leak(Box::new(rule.meta));
         for (_lang, backend) in &rule.backends {
-            if let Backend::Tsgolint { rule: tsgolint_key } = backend {
+            if let Backend::Tsgolint { rule: tsgolint_key, .. } = backend {
                 bindings.push((*tsgolint_key, meta_static, meta_static.severity));
             }
         }
@@ -1950,6 +1950,42 @@ pub fn collect_tsgolint_bindings() -> Vec<(&'static str, &'static RuleMeta, Seve
     bindings.sort_by_key(|(key, _, _)| *key);
     bindings.dedup_by_key(|(key, _, _)| *key);
     bindings
+}
+
+/// Build a map from comply rule-id to the post-filters for that rule.
+///
+/// Called once by the oxlint dispatcher (`crate::oxlint::lint_files`).
+/// The dispatcher retains each diagnostic only when every filter in the Vec
+/// returns `true` (`all()` = suppress if any filter returns `false`).
+pub fn collect_delegated_post_filters(
+) -> rustc_hash::FxHashMap<&'static str, Vec<std::sync::Arc<dyn backend::PostFilter>>> {
+    use backend::PostFilter;
+    let mut map: rustc_hash::FxHashMap<
+        &'static str,
+        Vec<std::sync::Arc<dyn PostFilter>>,
+    > = rustc_hash::FxHashMap::default();
+    let mut seen: rustc_hash::FxHashSet<&'static str> = rustc_hash::FxHashSet::default();
+    for rule in all_rule_defs() {
+        let rule_id = rule.meta.id;
+        // Avoid processing the same comply rule more than once (TS_FAMILY
+        // produces 3 backends for the same rule — break after the first match).
+        if seen.contains(rule_id) {
+            continue;
+        }
+        for (_lang, b) in &rule.backends {
+            let filter_opt = match b {
+                Backend::Oxlint { post_filter, .. } => post_filter.as_ref(),
+                Backend::Tsgolint { post_filter, .. } => post_filter.as_ref(),
+                _ => None,
+            };
+            if let Some(f) = filter_opt {
+                map.entry(rule_id).or_default().push(std::sync::Arc::clone(f));
+                seen.insert(rule_id);
+                break;
+            }
+        }
+    }
+    map
 }
 
 /// Accessor for comply's custom type-aware rules (`Backend::TypeAware`).

@@ -4,9 +4,10 @@
 //! They run automatically when oxlint-tsgolint is installed.
 
 use crate::diagnostic::Severity;
-use crate::rules::backend::Backend;
+use crate::rules::backend::{Backend, PostFilter};
 use crate::rules::meta::RuleMeta;
 use crate::rules::{Language, RuleDef};
+use std::sync::Arc;
 
 pub fn register_all() -> Vec<RuleDef> {
     vec![
@@ -569,13 +570,23 @@ fn entry(
     description: &'static str,
     remediation: &'static str,
 ) -> RuleDef {
+    entry_with_filter(id, rule_name, description, remediation, None)
+}
+
+fn entry_with_filter(
+    id: &'static str,
+    rule_name: &'static str,
+    description: &'static str,
+    remediation: &'static str,
+    post_filter: Option<Arc<dyn PostFilter>>,
+) -> RuleDef {
     // Leak the prefixed string to get a 'static lifetime.
     // This is intentional — rule definitions live for the entire process.
     let oxlint_key: &'static str = Box::leak(format!("typescript/{rule_name}").into_boxed_str());
 
     let backends: Vec<(Language, Backend)> = [Language::TypeScript, Language::Tsx]
         .iter()
-        .map(|&lang| (lang, Backend::Tsgolint { rule: oxlint_key }))
+        .map(|&lang| (lang, Backend::Tsgolint { rule: oxlint_key, post_filter: post_filter.as_ref().map(Arc::clone) }))
         .collect();
 
     RuleDef {

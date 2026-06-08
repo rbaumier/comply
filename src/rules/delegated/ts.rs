@@ -1,8 +1,10 @@
 //! typescript-eslint plugin rules delegated to oxlint.
 
 use crate::diagnostic::Severity;
+use crate::rules::backend::{Backend, PostFilter};
 use crate::rules::meta::RuleMeta;
 use crate::rules::{RuleDef, TS_FAMILY, oxlint_delegate};
+use std::sync::Arc;
 
 pub fn register_all() -> Vec<RuleDef> {
     vec![
@@ -96,4 +98,30 @@ fn entry(
         oxlint_key,
         TS_FAMILY,
     )
+}
+
+fn entry_with_filter(
+    id: &'static str,
+    oxlint_key: &'static str,
+    severity: Severity,
+    description: &'static str,
+    remediation: &'static str,
+    post_filter: Option<Arc<dyn PostFilter>>,
+) -> RuleDef {
+    RuleDef {
+        meta: RuleMeta {
+            id,
+            description,
+            remediation,
+            severity,
+            doc_url: None,
+            categories: &["typescript"],
+            skip_in_test_dir: false,
+            skip_in_relaxed_dir: false,
+        },
+        backends: TS_FAMILY
+            .iter()
+            .map(|&lang| (lang, Backend::Oxlint { rule: oxlint_key, post_filter: post_filter.as_ref().map(Arc::clone) }))
+            .collect(),
+    }
 }
