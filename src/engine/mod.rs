@@ -496,7 +496,7 @@ pub(super) fn should_skip_test_fixture_rule(meta: &RuleMeta, file: &FileCtx) -> 
 
     meta.categories
         .iter()
-        .any(|category| matches!(*category, "a11y" | "accessibility" | "tailwind" | "ui" | "html"))
+        .any(|category| matches!(*category, "a11y" | "accessibility" | "tailwind" | "ui" | "html" | "vue"))
         || matches!(meta.id, "react-button-has-type")
 }
 
@@ -942,5 +942,18 @@ key = "válue é 💡"
             diagnostics.is_empty(),
             "expected no diagnostics for oversized file, got {diagnostics:?}"
         );
+    }
+
+    #[test]
+    fn vue_self_closing_skipped_in_test_dir() {
+        use crate::engine::should_skip_test_fixture_rule;
+        use crate::rules::file_ctx::{FileCtx, PathSegments};
+        use crate::rules::vue_self_closing_comp;
+
+        let file = FileCtx {
+            path_segments: PathSegments { in_test_dir: true, ..Default::default() },
+            ..FileCtx::default()
+        };
+        assert!(should_skip_test_fixture_rule(&vue_self_closing_comp::META, &file));
     }
 }
