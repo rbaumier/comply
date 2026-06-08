@@ -64,6 +64,13 @@ impl OxcCheck for Check {
             if let Statement::ReturnStatement(ret) = stmt
                 && ret.argument.is_some()
             {
+                // Allow call/new expressions — they may return a Promise,
+                // which is the documented Vitest/Jest/Mocha async pattern.
+                if let Some(arg) = &ret.argument {
+                    if matches!(arg, Expression::CallExpression(_) | Expression::NewExpression(_)) {
+                        return;
+                    }
+                }
                 let (line, column) = byte_offset_to_line_col(ctx.source, ret.span.start as usize);
                 diagnostics.push(Diagnostic {
                     path: Arc::clone(&ctx.path_arc),
@@ -79,5 +86,39 @@ impl OxcCheck for Check {
                 return;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_path(source, &Check, "t.spec.ts")
+    }
+
+    #[test]
+    fn allows_call_expression_return_regression_851() {
+        // Regression for #851: supertest Promise chain must not be flagged.
+        let d = run("it('x', () => { return request(server).get('/broadcast').expect(200, '2'); });");
+        assert!(d.is_empty());
+    }
+
+    #[test]
+    fn allows_new_promise_return() {
+        let d = run("it('x', () => { return new Promise(resolve => resolve()); });");
+        assert!(d.is_empty());
+    }
+
+    #[test]
+    fn flags_literal_return() {
+        let d = run("it('x', () => { return 42; });");
+        assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn flags_identifier_return() {
+        let d = run("it('x', () => { return someVariable; });");
+        assert_eq!(d.len(), 1);
     }
 }
