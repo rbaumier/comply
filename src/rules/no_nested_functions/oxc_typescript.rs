@@ -29,6 +29,15 @@ impl OxcCheck for Check {
         semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
+        // Callbacks passed directly to a call/new expression are never flagged.
+        let parent = semantic.nodes().parent_node(node.id());
+        if matches!(
+            parent.kind(),
+            AstKind::CallExpression(_) | AstKind::NewExpression(_)
+        ) {
+            return;
+        }
+
         // Count nesting boundaries among ancestors (skip self).
         // Arrow functions passed as call arguments are not counted.
         let mut depth = 0usize;
@@ -101,6 +110,24 @@ describe("suite", () => {
     });
 });
 "#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_arrow_callback_inside_nested_named_fns() {
+        let src = "function outer() { function inner() { [].map(x => x); } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_named_fn_callback_inside_nested_named_fns() {
+        let src = "function outer() { function inner() { [].map(function(x) { return x; }); } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_filter_reduce_callbacks_at_depth_2() {
+        let src = "function outer() { function inner() { [1].filter(x => x > 0); [1].reduce((a, b) => a + b, 0); } }";
         assert!(run_on(src).is_empty());
     }
 }
