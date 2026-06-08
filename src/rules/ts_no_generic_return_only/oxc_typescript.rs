@@ -48,11 +48,21 @@ impl OxcCheck for Check {
             let (type_params, params_span) = match node.kind() {
                 AstKind::Function(func) => {
                     let Some(tp) = &func.type_parameters else { continue };
+                    if func.return_type.as_ref().is_some_and(|ann| {
+                        matches!(ann.type_annotation, oxc_ast::ast::TSType::TSTypePredicate(_))
+                    }) {
+                        continue;
+                    }
                     let params_span = func.params.span;
                     (tp, params_span)
                 }
                 AstKind::ArrowFunctionExpression(arrow) => {
                     let Some(tp) = &arrow.type_parameters else { continue };
+                    if arrow.return_type.as_ref().is_some_and(|ann| {
+                        matches!(ann.type_annotation, oxc_ast::ast::TSType::TSTypePredicate(_))
+                    }) {
+                        continue;
+                    }
                     let params_span = arrow.params.span;
                     (tp, params_span)
                 }
@@ -84,5 +94,16 @@ impl OxcCheck for Check {
         }
 
         diagnostics
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn allows_generic_in_type_guard() {
+        let src = "const isSuccess = <T>(x: any): x is { t: 'success'; value: T } => Boolean(x && x.t === 'success');";
+        assert!(crate::rules::test_helpers::run_oxc_ts(src, &Check).is_empty());
     }
 }
