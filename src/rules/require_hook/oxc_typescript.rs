@@ -40,6 +40,7 @@ fn is_allowed_test_callee(name: &str) -> bool {
             | "afterAll"
             | "before"
             | "after"
+            | "contextualize"
     )
 }
 
@@ -154,8 +155,18 @@ fn declaration_is_pure(decl: &VariableDeclaration) -> bool {
     })
 }
 
+fn imports_node_test(program: &Program<'_>) -> bool {
+    program.body.iter().any(|stmt| {
+        if let Statement::ImportDeclaration(import) = stmt {
+            import.source.value.as_str() == "node:test"
+        } else {
+            false
+        }
+    })
+}
+
 /// Classify a top-level statement.
-fn top_level_is_allowed(stmt: &Statement) -> bool {
+fn top_level_is_allowed(stmt: &Statement, node_test_mode: bool) -> bool {
     match stmt {
         Statement::ImportDeclaration(_)
         | Statement::ExportAllDeclaration(_)
@@ -177,6 +188,10 @@ fn top_level_is_allowed(stmt: &Statement) -> bool {
             if matches!(expr, Expression::StringLiteral(_)) {
                 return true;
             }
+            // node:test: top-level await is idiomatic setup — the framework has no beforeAll equivalent
+            if node_test_mode && matches!(expr, Expression::AwaitExpression(_)) {
+                return true;
+            }
             // Must be a call expression.
             if !matches!(expr, Expression::CallExpression(_)) {
                 return false;
@@ -191,6 +206,45 @@ fn top_level_is_allowed(stmt: &Statement) -> bool {
         }
 
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rules::test_helpers::run_oxc_ts_with_path;
+
+    #[test]
+    fn allows_contextualize_at_top_level() {
+        let src = r#"
+import { contextualize } from "@ark/attest";
+contextualize(() => {
+  describe("t", () => { it("works", () => {}); });
+});
+"#;
+        let d = run_oxc_ts_with_path(src, &Check, "foo.test.ts");
+        assert!(d.is_empty(), "contextualize() must be allowed at top level: {d:?}");
+    }
+
+    #[test]
+    fn allows_top_level_await_with_node_test_import() {
+        let src = r#"
+import { test } from "node:test";
+await setup();
+test("x", () => {});
+"#;
+        let d = run_oxc_ts_with_path(src, &Check, "foo.test.ts");
+        assert!(d.is_empty(), "top-level await must be allowed when node:test is imported: {d:?}");
+    }
+
+    #[test]
+    fn flags_top_level_await_without_node_test_import() {
+        let src = r#"
+await setup();
+describe("x", () => {});
+"#;
+        let d = run_oxc_ts_with_path(src, &Check, "foo.test.ts");
+        assert_eq!(d.len(), 1, "top-level await without node:test must be flagged: {d:?}");
     }
 }
 
@@ -209,10 +263,11 @@ impl OxcCheck for Check {
         }
 
         let program = semantic.nodes().program();
+        let node_test_mode = imports_node_test(program);
         let mut diagnostics = Vec::new();
 
         for stmt in &program.body {
-            if top_level_is_allowed(stmt) {
+            if top_level_is_allowed(stmt, node_test_mode) {
                 continue;
             }
             let span = stmt.span();
