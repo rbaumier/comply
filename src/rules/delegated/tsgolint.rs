@@ -563,11 +563,12 @@ pub fn register_all() -> Vec<RuleDef> {
             "`setTimeout(\"code\")` executes string as code like eval.",
             "Pass a function instead of a string.",
         ),
-        entry(
+        entry_with_filter(
             "no-misused-spread",
             "no-misused-spread",
             "Spread `...x` on incompatible type loses data.",
             "Ensure spread is used on the correct type.",
+            Some(Arc::new(NoMisusedSpreadFilter)),
         ),
     ]
 }
@@ -971,6 +972,37 @@ fn pfa_is_single_return_block_no_await(block: &str) -> bool {
         }
     }
     semicolons <= 1
+}
+
+// ── no-misused-spread post-filter ─────────────────────────────────────────
+//
+// Drops FPs when spreading a class instance into a `new <X>Error(...)` call.
+// Library error constructors (Better Auth's APIError, etc.) take a plain
+// Record body — spreading is intentional interop. (Closes #554)
+
+struct NoMisusedSpreadFilter;
+
+impl PostFilter for NoMisusedSpreadFilter {
+    fn keep(&self, diag: &crate::diagnostic::Diagnostic, source: Option<&str>) -> bool {
+        let Some(src) = source else {
+            return true;
+        };
+        !nms_is_error_constructor_interop_spread(src, diag.line)
+    }
+}
+
+fn nms_is_error_constructor_interop_spread(src: &str, line_1based: usize) -> bool {
+    let lines: Vec<&str> = src.lines().collect();
+    if line_1based == 0 || line_1based > lines.len() {
+        return false;
+    }
+    if !lines[line_1based - 1].contains("...") {
+        return false;
+    }
+    let start = line_1based.saturating_sub(8);
+    let end = (line_1based + 1).min(lines.len());
+    let window = lines[start..end].join("\n");
+    window.contains("new ") && window.contains("Error(")
 }
 
 // ── no-redundant-type-constituents post-filter ────────────────────────────
@@ -1696,6 +1728,40 @@ export function loader() {
         let src_content = source_for(&path);
         let f = PromiseFunctionAsyncFilter;
         assert!(!f.keep(&pfa_diag(&path, line, col), Some(&src_content)));
+    }
+
+    // ── no-misused-spread ────────────────────────────────────────────────
+
+    fn nms_diag(path: &std::path::Path, line: usize) -> Diagnostic {
+        Diagnostic {
+            path: Arc::from(path),
+            line,
+            column: 5,
+            rule_id: Cow::Borrowed("no-misused-spread"),
+            message: "Using the spread operator on a class instance loses methods.".into(),
+            severity: crate::diagnostic::Severity::Error,
+            span: None,
+        }
+    }
+
+    #[test]
+    fn nms_drops_spread_into_error_constructor() {
+        let src = "throw new APIError(\n  'FORBIDDEN',\n  { ...apiError },\n);\n";
+        let path = write_temp("nms_error_interop.ts", src);
+        let src_content = source_for(&path);
+        let line = line_of(src, "{ ...apiError }");
+        let f = NoMisusedSpreadFilter;
+        assert!(!f.keep(&nms_diag(&path, line), Some(&src_content)));
+    }
+
+    #[test]
+    fn nms_keeps_spread_not_into_error_constructor() {
+        let src = "const merged = { ...someClassInstance };\n";
+        let path = write_temp("nms_plain_spread.ts", src);
+        let src_content = source_for(&path);
+        let line = line_of(src, "...someClassInstance");
+        let f = NoMisusedSpreadFilter;
+        assert!(f.keep(&nms_diag(&path, line), Some(&src_content)));
     }
 
     // ── no-redundant-type-constituents ──────────────────────────────────

@@ -14,7 +14,6 @@
 //!    `[no-explicit-any]` instead of `typescript-eslint(no-explicit-any)`.
 
 mod elysia_post_filter;
-mod no_misused_spread_post_filter;
 mod no_unnecessary_condition_exhaustiveness_post_filter;
 mod options;
 mod remap;
