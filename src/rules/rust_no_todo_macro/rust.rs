@@ -12,7 +12,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::rust_helpers::is_in_test_context;
+use crate::rules::rust_helpers::{is_in_test_context, is_under_tests_dir};
 
 const KINDS: &[&str] = &["macro_invocation"];
 
@@ -41,7 +41,7 @@ impl AstCheck for Check {
         if macro_name != "todo" {
             return;
         }
-        if is_in_test_context(node, source_bytes) {
+        if is_in_test_context(node, source_bytes) || is_under_tests_dir(ctx.path) {
             return;
         }
         let pos = node.start_position();
@@ -90,6 +90,10 @@ mod tests {
         assert!(run_on(source).is_empty());
     }
 
+    fn run_with_path(source: &str, path: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rust_with_path(source, &Check, path)
+    }
+
     #[test]
     fn does_not_flag_panic() {
         assert!(run_on(r#"fn f() { panic!("boom"); }"#).is_empty());
@@ -98,5 +102,17 @@ mod tests {
     #[test]
     fn does_not_flag_unimplemented() {
         assert!(run_on("fn f() { unimplemented!(); }").is_empty());
+    }
+
+    #[test]
+    fn allows_todo_in_integration_test_file() {
+        let source = "impl IntoResponse for Stub { fn into_response(self) { todo!(); } }";
+        assert!(run_with_path(source, "axum-macros/tests/debug_handler/fail/wrong_return_tuple.rs").is_empty());
+    }
+
+    #[test]
+    fn allows_todo_in_tests_subdirectory() {
+        let source = "fn stub() { todo!(); }";
+        assert!(run_with_path(source, "crate/tests/fixtures/stub.rs").is_empty());
     }
 }
