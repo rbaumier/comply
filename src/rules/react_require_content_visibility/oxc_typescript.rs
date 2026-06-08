@@ -80,39 +80,6 @@ fn large_array_source(recv: &Expression, min_nodes: usize) -> bool {
     }
 }
 
-fn is_known_small_array_source(recv: &Expression, min_nodes: usize) -> bool {
-    match recv {
-        Expression::ArrayExpression(arr) => {
-            let count = arr.elements.iter().count();
-            count < min_nodes
-        }
-        Expression::CallExpression(call) => {
-            let Expression::StaticMemberExpression(member) = &call.callee else {
-                return false;
-            };
-            let Expression::Identifier(obj) = &member.object else {
-                return false;
-            };
-            if obj.name.as_str() != "Array" || member.property.name.as_str() != "from" {
-                return false;
-            }
-            let Some(Argument::ObjectExpression(obj_expr)) = call.arguments.first() else {
-                return false;
-            };
-            for prop in &obj_expr.properties {
-                if let oxc_ast::ast::ObjectPropertyKind::ObjectProperty(p) = prop
-                    && let oxc_ast::ast::PropertyKey::StaticIdentifier(key) = &p.key
-                        && key.name.as_str() == "length"
-                            && let Expression::NumericLiteral(n) = &p.value {
-                                return (n.value as usize) < min_nodes;
-                            }
-            }
-            false
-        }
-        _ => false,
-    }
-}
-
 fn callback_body_has_content_visibility(source: &str, span: oxc_span::Span) -> bool {
     let text = &source[span.start as usize..span.end as usize];
     text.contains("contentVisibility") || text.contains("content-visibility")

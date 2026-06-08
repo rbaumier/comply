@@ -8,17 +8,6 @@ use std::sync::Arc;
 
 pub struct Check;
 
-/// True when `expr` is `<x>.<method>(…)` — checks the property name.
-fn is_method_call_named(expr: &Expression, method: &str) -> bool {
-    let Expression::CallExpression(call) = expr else {
-        return false;
-    };
-    let Expression::StaticMemberExpression(m) = &call.callee else {
-        return false;
-    };
-    m.property.name.as_str() == method
-}
-
 /// Walk up the parent chain of `node` (a CallExpression). Returns true
 /// if any ancestor call's *method* is `target_method` and the chain is
 /// continuous (each parent is a member-access on the previous).
