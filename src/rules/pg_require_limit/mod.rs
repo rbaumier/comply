@@ -18,9 +18,23 @@ pub const META: RuleMeta = RuleMeta {
     doc_url: Some("https://wiki.postgresql.org/wiki/Don%27t_Do_This#Don.27t_forget_LIMIT"),
     categories: &["database", "postgresql"],
 
-    skip_in_test_dir: false,
+    skip_in_test_dir: true,
     skip_in_relaxed_dir: false,
 };
+
+#[cfg(test)]
+mod tests {
+    use crate::rules::file_ctx::{FileCtx, PathSegments};
+
+    #[test]
+    fn meta_skips_test_dir() {
+        let file_ctx = FileCtx {
+            path_segments: PathSegments { in_test_dir: true, ..Default::default() },
+            ..Default::default()
+        };
+        assert!(!super::META.applies_to_file(&file_ctx));
+    }
+}
 
 pub fn register() -> RuleDef {
     RuleDef {
