@@ -369,11 +369,12 @@ pub fn register_all() -> Vec<RuleDef> {
             "`void x` has no effect — the value is already discarded.",
             "Remove the `void` operator.",
         ),
-        entry(
+        entry_with_filter(
             "strict-void-return",
             "strict-void-return",
             "Function declared void but caller expects a value.",
             "Fix the return type or don't use the return value.",
+            Some(Arc::new(StrictVoidReturnFilter)),
         ),
         entry(
             "consistent-return",
@@ -970,6 +971,123 @@ fn pfa_is_single_return_block_no_await(block: &str) -> bool {
     semicolons <= 1
 }
 
+// ── strict-void-return post-filter ────────────────────────────────────────
+//
+// Two FP shapes are dropped:
+// 1. `vi.fn()` mocks — inline or aliased via const/let/var. (Closes #…)
+// 2. `renderHook(() => …)` callbacks — the callback must return the hook
+//    value. A 2-line window is used to avoid bleeding into adjacent calls.
+
+struct StrictVoidReturnFilter;
+
+impl PostFilter for StrictVoidReturnFilter {
+    fn keep(&self, diag: &crate::diagnostic::Diagnostic, source: Option<&str>) -> bool {
+        let Some(src) = source else {
+            return true;
+        };
+        !svr_is_vi_fn_fp(src, diag.line, diag.column) && !svr_is_render_hook_fp(src, diag.line)
+    }
+}
+
+fn svr_is_vi_fn_fp(src: &str, line_1based: usize, column_1based: usize) -> bool {
+    let Some(line) = src.lines().nth(line_1based.saturating_sub(1)) else {
+        return false;
+    };
+    if svr_has_vi_fn_call_at_or_after(line, column_1based) {
+        return true;
+    }
+    let Some(ident) = svr_identifier_at(line, column_1based) else {
+        return false;
+    };
+    svr_is_vi_fn_alias(src, &ident)
+}
+
+fn svr_has_vi_fn_call_at_or_after(line: &str, column_1based: usize) -> bool {
+    let col0 = column_1based.saturating_sub(1).min(line.len());
+    line[col0..].contains("vi.fn(")
+}
+
+fn svr_identifier_at(line: &str, column_1based: usize) -> Option<String> {
+    let bytes = line.as_bytes();
+    if column_1based == 0 || column_1based > bytes.len() {
+        return None;
+    }
+    let start = column_1based - 1;
+    if !line.is_char_boundary(start) {
+        return None;
+    }
+    if !svr_is_ident_start(bytes[start]) {
+        return None;
+    }
+    let mut end = start;
+    while end < bytes.len() && svr_is_ident_byte(bytes[end]) {
+        end += 1;
+    }
+    if !line.is_char_boundary(end) {
+        return None;
+    }
+    Some(line[start..end].to_string())
+}
+
+fn svr_is_vi_fn_alias(src: &str, ident: &str) -> bool {
+    for line in src.lines() {
+        let trimmed = line.trim_start();
+        for kw in ["const ", "let ", "var "] {
+            if let Some(rest) = trimmed.strip_prefix(kw) {
+                let rest = rest.trim_start();
+                if let Some(after_ident) = rest.strip_prefix(ident) {
+                    let next = after_ident.as_bytes().first().copied();
+                    if next.is_none_or(|b| !svr_is_ident_byte(b)) && after_ident.contains("vi.fn(") {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
+fn svr_is_render_hook_fp(src: &str, line_1based: usize) -> bool {
+    if line_1based == 0 {
+        return false;
+    }
+    let lines: Vec<&str> = src.lines().collect();
+    if line_1based > lines.len() {
+        return false;
+    }
+    let start = line_1based.saturating_sub(1).max(1);
+    for i in (start..=line_1based).rev() {
+        let line = lines[i - 1];
+        if svr_contains_render_hook_call(line) {
+            return true;
+        }
+    }
+    false
+}
+
+fn svr_contains_render_hook_call(line: &str) -> bool {
+    let needle = "renderHook(";
+    let bytes = line.as_bytes();
+    let mut from = 0;
+    while let Some(pos) = line[from..].find(needle) {
+        let abs = from + pos;
+        let ok = abs == 0 || !svr_is_ident_byte(bytes[abs - 1]);
+        if ok {
+            return true;
+        }
+        from = abs + needle.len();
+    }
+    false
+}
+
+fn svr_is_ident_start(b: u8) -> bool {
+    b.is_ascii_alphabetic() || b == b'_' || b == b'$'
+}
+
+fn svr_is_ident_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_' || b == b'$'
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1218,5 +1336,101 @@ export function loader() {
         let src_content = source_for(&path);
         let f = PromiseFunctionAsyncFilter;
         assert!(!f.keep(&pfa_diag(&path, line, col), Some(&src_content)));
+    }
+
+    // ── strict-void-return ───────────────────────────────────────────────
+
+    fn svr_diag(path: &std::path::Path, line: usize, column: usize) -> Diagnostic {
+        Diagnostic {
+            path: Arc::from(path),
+            line,
+            column,
+            rule_id: Cow::Borrowed("strict-void-return"),
+            message: String::new(),
+            severity: crate::diagnostic::Severity::Error,
+            span: None,
+        }
+    }
+
+    #[test]
+    fn svr_drops_inline_vi_fn_jsx_prop() {
+        let src = "import { vi } from 'vitest';\nfunction Test() { return <Dialog onClose={vi.fn()} />; }\n";
+        let path = write_temp("svr_inline_vi_fn.tsx", src);
+        let (line, _) = line_col_of(src, "vi.fn()");
+        let src_content = source_for(&path);
+        let f = StrictVoidReturnFilter;
+        assert!(!f.keep(&svr_diag(&path, line, 1), Some(&src_content)));
+    }
+
+    #[test]
+    fn svr_drops_aliased_vi_fn_via_const_declaration() {
+        let src = "import { vi } from 'vitest';\nconst onClose = vi.fn();\nfunction Test() { return <Dialog onClose={onClose} />; }\n";
+        let path = write_temp("svr_aliased_vi_fn.tsx", src);
+        let (line, col) = line_col_of(src, "onClose={onClose}");
+        let value_col = col + "onClose={".len();
+        let src_content = source_for(&path);
+        let f = StrictVoidReturnFilter;
+        assert!(!f.keep(&svr_diag(&path, line, value_col), Some(&src_content)));
+    }
+
+    #[test]
+    fn svr_drops_render_hook_callback() {
+        let src = "import { renderHook } from '@testing-library/react';\ntest('x', () => {\n  renderHook(() => useUser());\n});\n";
+        let path = write_temp("svr_render_hook.tsx", src);
+        let (line, _) = line_col_of(src, "renderHook(() =>");
+        let src_content = source_for(&path);
+        let f = StrictVoidReturnFilter;
+        assert!(!f.keep(&svr_diag(&path, line, 15), Some(&src_content)));
+    }
+
+    #[test]
+    fn svr_keeps_genuine_void_misuse() {
+        let src = "function setup(cb: () => void) { cb(); }\nsetup(() => 42);\n";
+        let path = write_temp("svr_genuine_misuse.ts", src);
+        let (line, _) = line_col_of(src, "() => 42");
+        let src_content = source_for(&path);
+        let f = StrictVoidReturnFilter;
+        assert!(f.keep(&svr_diag(&path, line, 7), Some(&src_content)));
+    }
+
+    #[test]
+    fn svr_keeps_lookalike_my_render_hook() {
+        let src = "function myRenderHook(cb: () => void) { cb(); }\nmyRenderHook(() => 42);\n";
+        let path = write_temp("svr_my_render_hook.ts", src);
+        let (line, _) = line_col_of(src, "myRenderHook(() => 42)");
+        let src_content = source_for(&path);
+        let f = StrictVoidReturnFilter;
+        assert!(f.keep(&svr_diag(&path, line, 14), Some(&src_content)));
+    }
+
+    #[test]
+    fn svr_render_hook_no_bleed_into_adjacent_call() {
+        let src = "\
+import { renderHook } from '@testing-library/react';
+test('a', () => {
+  renderHook(() => useUser());
+
+  // unrelated
+  otherCall(() => getValue());
+});
+";
+        let path = write_temp("svr_render_hook_no_bleed.tsx", src);
+        let (rh_line, _) = line_col_of(src, "renderHook(() =>");
+        let (oc_line, _) = line_col_of(src, "otherCall(() =>");
+        let src_content = source_for(&path);
+        let f = StrictVoidReturnFilter;
+        assert!(!f.keep(&svr_diag(&path, rh_line, 15), Some(&src_content)));
+        assert!(f.keep(&svr_diag(&path, oc_line, 13), Some(&src_content)));
+    }
+
+    #[test]
+    fn svr_ident_prefix_does_not_match_alias() {
+        let src = "import { vi } from 'vitest';\nconst mockable = vi.fn();\nfunction T() { return <D onClose={mock} />; }\n";
+        let path = write_temp("svr_prefix_no_match.tsx", src);
+        let (line, col) = line_col_of(src, "{mock}");
+        let value_col = col + 1;
+        let src_content = source_for(&path);
+        let f = StrictVoidReturnFilter;
+        assert!(f.keep(&svr_diag(&path, line, value_col), Some(&src_content)));
     }
 }

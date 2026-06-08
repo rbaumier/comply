@@ -18,7 +18,6 @@ mod equal_probe_post_filter;
 mod no_misused_spread_post_filter;
 mod no_redundant_type_constituents_post_filter;
 mod no_unnecessary_condition_exhaustiveness_post_filter;
-mod strict_void_return_post_filter;
 mod options;
 mod remap;
 mod schema;
