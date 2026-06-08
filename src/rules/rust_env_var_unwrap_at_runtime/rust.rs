@@ -8,7 +8,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::rust_helpers::is_in_test_context;
+use crate::rules::rust_helpers::{is_in_test_context, is_under_tests_dir};
 
 const KINDS: &[&str] = &["call_expression"];
 
@@ -49,7 +49,7 @@ impl AstCheck for Check {
         if !is_env_var_call(receiver, source) {
             return;
         }
-        if is_in_test_context(node, source) || is_in_fn_main(node, source) {
+        if is_in_test_context(node, source) || is_in_fn_main(node, source) || is_under_tests_dir(ctx.path) {
             return;
         }
         diagnostics.push(Diagnostic::at_node(
@@ -127,6 +127,12 @@ mod tests {
         let src = r#"#[test]
 fn t() { let url = std::env::var("URL").unwrap(); }"#;
         assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_env_var_in_tests_dir_helper() {
+        let src = r#"pub fn setup() { env::var("PATH").expect("PATH not set"); }"#;
+        assert!(crate::rules::test_helpers::run_rust_with_path(src, &Check, "tests/utils/mocked_pagers.rs").is_empty());
     }
 
     #[test]
