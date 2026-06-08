@@ -8,11 +8,11 @@
 use crate::diagnostic::Diagnostic;
 
 fn run_rs(src: &str) -> Vec<Diagnostic> {
-    crate::rules::test_helpers::run_rust(src, &super::rust::Check)
+    crate::rules::test_helpers::run_rule(&super::rust::Check, src, "t.rs")
 }
 
 fn run_ts(src: &str) -> Vec<Diagnostic> {
-    crate::rules::test_helpers::run_ts(src, &super::typescript::Check)
+    crate::rules::test_helpers::run_rule(&super::typescript::Check, src, "t.ts")
 }
 
 #[test]

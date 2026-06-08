@@ -215,11 +215,26 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     }
 }
 
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_ast_check(self, src, path, project, file)
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rules::test_helpers::run_ts;
-
+    
     const PW: &str = "import { test, expect } from \"@playwright/test\";\n";
 
     fn pw(s: &str) -> String {
@@ -228,14 +243,14 @@ mod tests {
 
     #[test]
     fn flags_missing_await_on_page_click() {
-        let d = run_ts(&pw("page.click('#button');"), &Check);
+        let d = crate::rules::test_helpers::run_rule(&Check, &pw("page.click('#button');"), "t.ts");
         assert_eq!(d.len(), 1);
         assert!(d[0].message.contains("page.click"));
     }
 
     #[test]
     fn flags_missing_await_on_expect() {
-        let d = run_ts(&pw("expect(locator).toBeVisible();"), &Check);
+        let d = crate::rules::test_helpers::run_rule(&Check, &pw("expect(locator).toBeVisible();"), "t.ts");
         assert_eq!(d.len(), 1);
         assert!(d[0].message.contains("toBeVisible"));
     }
@@ -243,12 +258,12 @@ mod tests {
     #[test]
     fn allows_awaited_calls() {
         let source = pw("await page.click('#button');\nawait expect(locator).toBeVisible();");
-        assert!(run_ts(&source, &Check).is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, &source, "t.ts").is_empty());
     }
 
     #[test]
     fn flags_locator_fill() {
-        let d = run_ts(&pw("locator.fill('hello');"), &Check);
+        let d = crate::rules::test_helpers::run_rule(&Check, &pw("locator.fill('hello');"), "t.ts");
         assert_eq!(d.len(), 1);
         assert!(d[0].message.contains("fill"));
     }

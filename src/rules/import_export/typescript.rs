@@ -55,14 +55,29 @@ crate::ast_check! { on ["program"] => |node, _source, ctx, diagnostics|
     }
 }
 
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_ast_check(self, src, path, project, file)
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::Config;
     use crate::files::{Language, SourceFile};
     use crate::project::ProjectCtx;
-    use crate::rules::test_helpers::run_ts_with_project_and_path;
-    use std::fs;
+        use std::fs;
     use std::path::PathBuf;
     use tempfile::TempDir;
 
@@ -96,7 +111,7 @@ mod tests {
     fn flags_duplicate_export_name() {
         let source = "export const foo = 1;\nexport const foo = 2;\n";
         let (_dir, project, paths) = setup_project(&[("m.ts", source)]);
-        let diags = run_ts_with_project_and_path(source, &Check, &project, &paths[0]);
+        let diags = crate::rules::test_helpers::run_rule_with_ctx(&Check, source, &paths[0], &project, crate::rules::file_ctx::default_static_file_ctx());
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("foo"));
     }
@@ -105,7 +120,7 @@ mod tests {
     fn allows_unique_exports() {
         let source = "export const foo = 1;\nexport const bar = 2;\n";
         let (_dir, project, paths) = setup_project(&[("m.ts", source)]);
-        let diags = run_ts_with_project_and_path(source, &Check, &project, &paths[0]);
+        let diags = crate::rules::test_helpers::run_rule_with_ctx(&Check, source, &paths[0], &project, crate::rules::file_ctx::default_static_file_ctx());
         assert!(diags.is_empty());
     }
 
@@ -117,7 +132,7 @@ mod tests {
             ("b.ts", "export const foo = 2;\n"),
             ("m.ts", source),
         ]);
-        let diags = run_ts_with_project_and_path(source, &Check, &project, &paths[2]);
+        let diags = crate::rules::test_helpers::run_rule_with_ctx(&Check, source, &paths[2], &project, crate::rules::file_ctx::default_static_file_ctx());
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("foo"));
     }
@@ -126,7 +141,7 @@ mod tests {
     fn allows_default_and_named() {
         let source = "export default 1;\nexport const foo = 2;\n";
         let (_dir, project, paths) = setup_project(&[("m.ts", source)]);
-        let diags = run_ts_with_project_and_path(source, &Check, &project, &paths[0]);
+        let diags = crate::rules::test_helpers::run_rule_with_ctx(&Check, source, &paths[0], &project, crate::rules::file_ctx::default_static_file_ctx());
         assert!(diags.is_empty());
     }
 
@@ -135,7 +150,7 @@ mod tests {
         let source = "export * from './a';\nexport const foo = 1;\n";
         let (_dir, project, paths) =
             setup_project(&[("a.ts", "export const bar = 1;\n"), ("m.ts", source)]);
-        let diags = run_ts_with_project_and_path(source, &Check, &project, &paths[1]);
+        let diags = crate::rules::test_helpers::run_rule_with_ctx(&Check, source, &paths[1], &project, crate::rules::file_ctx::default_static_file_ctx());
         assert!(diags.is_empty());
     }
 
@@ -145,7 +160,7 @@ mod tests {
         // These live in separate TypeScript namespaces and must not be flagged as duplicates.
         let source = "export const $output: unique symbol = Symbol(\"ZodOutput\");\nexport type $output = typeof $output;\n";
         let (_dir, project, paths) = setup_project(&[("m.ts", source)]);
-        let diags = run_ts_with_project_and_path(source, &Check, &project, &paths[0]);
+        let diags = crate::rules::test_helpers::run_rule_with_ctx(&Check, source, &paths[0], &project, crate::rules::file_ctx::default_static_file_ctx());
         assert!(diags.is_empty());
     }
 }

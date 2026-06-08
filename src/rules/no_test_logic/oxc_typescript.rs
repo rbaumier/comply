@@ -228,11 +228,26 @@ fn is_setup_hook_call(expr: &Expression) -> bool {
 }
 
 #[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+#[cfg(test)]
 mod tests {
     use super::*;
 
     fn run_test_file(path: &str, source: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_oxc_ts_with_path(source, &Check, path)
+        crate::rules::test_helpers::run_rule(&Check, source, path)
     }
 
     #[test]

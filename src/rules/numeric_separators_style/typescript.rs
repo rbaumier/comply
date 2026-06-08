@@ -103,49 +103,64 @@ crate::ast_check! { on ["number"] => |node, source, ctx, diagnostics|
     }
 }
 
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_ast_check(self, src, path, project, file)
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rules::test_helpers::run_ts;
-
+    
     #[test]
     fn flags_large_decimal_without_separators() {
-        let d = run_ts("const x = 1000000;", &Check);
+        let d = crate::rules::test_helpers::run_rule(&Check, "const x = 1000000;", "t.ts");
         assert_eq!(d.len(), 1);
         assert!(d[0].message.contains("1_000_000"));
     }
 
     #[test]
     fn flags_five_digit_number() {
-        let d = run_ts("const x = 10000;", &Check);
+        let d = crate::rules::test_helpers::run_rule(&Check, "const x = 10000;", "t.ts");
         assert_eq!(d.len(), 1);
         assert!(d[0].message.contains("10_000"));
     }
 
     #[test]
     fn allows_four_digit_number() {
-        assert!(run_ts("const x = 1000;", &Check).is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, "const x = 1000;", "t.ts").is_empty());
     }
 
     #[test]
     fn allows_already_separated() {
-        assert!(run_ts("const x = 1_000_000;", &Check).is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, "const x = 1_000_000;", "t.ts").is_empty());
     }
 
     #[test]
     fn flags_hex_without_separators() {
-        let d = run_ts("const x = 0xFF00FF;", &Check);
+        let d = crate::rules::test_helpers::run_rule(&Check, "const x = 0xFF00FF;", "t.ts");
         assert_eq!(d.len(), 1);
         assert!(d[0].message.contains("0xFF_00_FF"));
     }
 
     #[test]
     fn allows_short_hex() {
-        assert!(run_ts("const x = 0xFF;", &Check).is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, "const x = 0xFF;", "t.ts").is_empty());
     }
 
     #[test]
     fn allows_separated_four_digit_number() {
-        assert!(run_ts("const x = 1_000;", &Check).is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, "const x = 1_000;", "t.ts").is_empty());
     }
 }

@@ -35,18 +35,29 @@ crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
     });
 }
 
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_ast_check(self, src, path, project, file)
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn run_on_test(source: &str) -> Vec<Diagnostic> {
         let project = crate::project::ProjectCtx::for_test_with_framework("elysia");
-        crate::rules::test_helpers::run_ts_with_project_and_path(
-            source,
-            &Check,
-            &project,
-            std::path::Path::new("app.test.ts"),
-        )
+        crate::rules::test_helpers::run_rule_with_ctx(&Check, source, std::path::Path::new("app.test.ts"), &project, crate::rules::file_ctx::default_static_file_ctx())
     }
 
     #[test]
@@ -64,7 +75,7 @@ mod tests {
     #[test]
     fn ignores_non_test_files() {
         let src = "import { Elysia } from 'elysia';\nconst app = new Elysia().listen(3000);\nfetch('http://localhost:3000');";
-        let diags = crate::rules::test_helpers::run_ts_with_path(src, &Check, "app.ts");
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "app.ts");
         assert!(diags.is_empty());
     }
 }

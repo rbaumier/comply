@@ -85,15 +85,29 @@ crate::ast_check! { prefilter = ["apiVersion"] => |node, source, ctx, diagnostic
     }
 }
 
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_ast_check(self, src, path, project, file)
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rules::test_helpers::{
-        k8s_project_from_sources, run_yaml, run_yaml_with_project_and_path,
-    };
+    use crate::rules::test_helpers::{k8s_project_from_sources};
 
     fn run(s: &str) -> Vec<Diagnostic> {
-        run_yaml(s, &Check)
+        crate::rules::test_helpers::run_rule(&Check, s, "manifest.yaml")
     }
 
     #[test]
@@ -120,7 +134,7 @@ mod tests {
     fn flags_peer_selector_without_matching_pods_in_project() {
         let policy = "apiVersion: networking.k8s.io/v1\nkind: NetworkPolicy\nmetadata:\n  name: allow\nspec:\n  podSelector: {}\n  ingress:\n  - from:\n    - podSelector:\n        matchLabels:\n          app: web";
         let (_dir, project, paths) = k8s_project_from_sources(&[("policy.yaml", policy)]);
-        let diags = run_yaml_with_project_and_path(policy, &Check, &project, &paths[0]);
+        let diags = crate::rules::test_helpers::run_rule_with_ctx(&Check, policy, &paths[0], &project, crate::rules::file_ctx::default_static_file_ctx());
         assert_eq!(diags.len(), 1);
     }
 
@@ -130,7 +144,7 @@ mod tests {
         let deployment = "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: web\nspec:\n  template:\n    metadata:\n      labels:\n        app: web\n    spec:\n      containers:\n      - name: app\n        image: nginx";
         let (_dir, project, paths) =
             k8s_project_from_sources(&[("policy.yaml", policy), ("deploy.yaml", deployment)]);
-        let diags = run_yaml_with_project_and_path(policy, &Check, &project, &paths[0]);
+        let diags = crate::rules::test_helpers::run_rule_with_ctx(&Check, policy, &paths[0], &project, crate::rules::file_ctx::default_static_file_ctx());
         assert!(diags.is_empty());
     }
 }

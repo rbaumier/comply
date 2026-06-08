@@ -269,15 +269,30 @@ fn byte_offset_to_line_col(source: &str, byte_offset: usize) -> (usize, usize) {
 }
 
 #[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_ast_check(self, src, path, project, file)
+    }
+}
+#[cfg(test)]
 mod tests {
     use super::*;
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_ts(source, &Check)
+        crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
     }
 
     fn run_on_path(source: &str, path: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_ts_with_path(source, &Check, path)
+        crate::rules::test_helpers::run_rule(&Check, source, path)
     }
 
     #[test]
@@ -369,7 +384,7 @@ mod tests {
             path_segments: PathSegments { in_test_dir: true, ..Default::default() },
             ..Default::default()
         };
-        let diags = crate::rules::test_helpers::run_ts_with_file_ctx(src, &Check, &file);
+        let diags = crate::rules::test_helpers::run_rule_with_ctx(&Check, src, "t.ts", crate::project::default_static_project_ctx(), &file);
         assert!(diags.is_empty());
     }
 }

@@ -144,16 +144,31 @@ impl OxcCheck for Check {
 }
 
 #[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+#[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rules::test_helpers::{run_oxc_tsx, run_oxc_tsx_with_path};
+    
 
     #[test]
     fn allows_empty_arrow_in_jsx_prop_in_test_file() {
         let src = r#"
             const x = <Foo onClose={() => {}} />;
         "#;
-        assert!(run_oxc_tsx_with_path(src, &Check, "Foo.test.tsx").is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, src, "Foo.test.tsx").is_empty());
     }
 
     #[test]
@@ -161,7 +176,7 @@ mod tests {
         let src = r#"
             const x = <Foo onClose={function () {}} />;
         "#;
-        assert!(run_oxc_tsx_with_path(src, &Check, "Foo.test.tsx").is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, src, "Foo.test.tsx").is_empty());
     }
 
     #[test]
@@ -169,7 +184,7 @@ mod tests {
         let src = r#"
             useEffect(() => {}, []);
         "#;
-        assert!(run_oxc_tsx_with_path(src, &Check, "Foo.test.tsx").is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, src, "Foo.test.tsx").is_empty());
     }
 
     #[test]
@@ -179,7 +194,7 @@ mod tests {
         let src = r#"
             useEffect((() => {}), []);
         "#;
-        assert!(run_oxc_tsx_with_path(src, &Check, "Foo.test.tsx").is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, src, "Foo.test.tsx").is_empty());
     }
 
     #[test]
@@ -188,7 +203,7 @@ mod tests {
         let src = r#"
             const handler = () => {};
         "#;
-        let diags = run_oxc_tsx_with_path(src, &Check, "Foo.test.tsx");
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "Foo.test.tsx");
         assert_eq!(diags.len(), 1);
     }
 
@@ -197,7 +212,7 @@ mod tests {
         let src = r#"
             function doNothing() {}
         "#;
-        let diags = run_oxc_tsx_with_path(src, &Check, "Foo.test.tsx");
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "Foo.test.tsx");
         assert_eq!(diags.len(), 1);
     }
 
@@ -206,7 +221,7 @@ mod tests {
         let src = r#"
             const x = <Foo onClose={() => {}} />;
         "#;
-        let diags = run_oxc_tsx(src, &Check);
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "t.tsx");
         assert_eq!(diags.len(), 1);
     }
 }

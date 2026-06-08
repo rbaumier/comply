@@ -51,71 +51,78 @@ crate::ast_check! { on ["arguments"] prefilter = ["undefined"] => |node, source,
     }
 }
 
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_ast_check(self, src, path, project, file)
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn flags_sole_undefined_arg() {
-        let d = crate::rules::test_helpers::run_ts("foo(undefined);", &Check);
+        let d = crate::rules::test_helpers::run_rule(&Check, "foo(undefined);", "t.ts");
         assert_eq!(d.len(), 1);
         assert_eq!(d[0].rule_id, "no-undefined-argument");
     }
 
     #[test]
     fn flags_undefined_among_args() {
-        let d = crate::rules::test_helpers::run_ts("foo(x, undefined, y);", &Check);
+        let d = crate::rules::test_helpers::run_rule(&Check, "foo(x, undefined, y);", "t.ts");
         assert_eq!(d.len(), 1);
     }
 
     #[test]
     fn allows_no_undefined() {
-        let d = crate::rules::test_helpers::run_ts("foo(x, y);", &Check);
+        let d = crate::rules::test_helpers::run_rule(&Check, "foo(x, y);", "t.ts");
         assert!(d.is_empty());
     }
 
     #[test]
     fn allows_undefined_in_variable_name() {
-        let d = crate::rules::test_helpers::run_ts("foo(undefinedValue);", &Check);
+        let d = crate::rules::test_helpers::run_rule(&Check, "foo(undefinedValue);", "t.ts");
         assert!(d.is_empty());
     }
 
     #[test]
     fn allows_undefined_in_expect_matcher() {
-        let d = crate::rules::test_helpers::run_ts(
-            "expect(spy).toHaveBeenCalledWith(state, undefined);",
-            &Check,
-        );
+        let d = crate::rules::test_helpers::run_rule(&Check, "expect(spy).toHaveBeenCalledWith(state, undefined);", "t.ts");
         assert!(d.is_empty());
     }
 
     #[test]
     fn allows_undefined_in_to_equal() {
-        let d = crate::rules::test_helpers::run_ts("expect(result).toEqual(undefined);", &Check);
+        let d = crate::rules::test_helpers::run_rule(&Check, "expect(result).toEqual(undefined);", "t.ts");
         assert!(d.is_empty());
     }
 
     #[test]
     fn still_flags_outside_expect() {
-        let d = crate::rules::test_helpers::run_ts("doStuff(undefined);", &Check);
+        let d = crate::rules::test_helpers::run_rule(&Check, "doStuff(undefined);", "t.ts");
         assert_eq!(d.len(), 1);
     }
 
     #[test]
     fn allows_react_create_context_undefined() {
-        let d = crate::rules::test_helpers::run_ts(
-            "const Ctx = React.createContext<Foo | undefined>(undefined);",
-            &Check,
-        );
+        let d = crate::rules::test_helpers::run_rule(&Check, "const Ctx = React.createContext<Foo | undefined>(undefined);", "t.ts");
         assert!(d.is_empty());
     }
 
     #[test]
     fn allows_bare_create_context_undefined() {
-        let d = crate::rules::test_helpers::run_ts(
-            "const Ctx = createContext<Foo | undefined>(undefined);",
-            &Check,
-        );
+        let d = crate::rules::test_helpers::run_rule(&Check, "const Ctx = createContext<Foo | undefined>(undefined);", "t.ts");
         assert!(d.is_empty());
     }
 }

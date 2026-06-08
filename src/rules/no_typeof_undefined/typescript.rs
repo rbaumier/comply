@@ -117,6 +117,22 @@ crate::ast_check! { on ["binary_expression"] prefilter = ["typeof"] => |node, so
     });
 }
 
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_ast_check(self, src, path, project, file)
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -124,7 +140,7 @@ mod tests {
     #[test]
     fn flags_typeof_member_expression() {
         let d =
-            crate::rules::test_helpers::run_ts("if (typeof obj.foo === 'undefined') {}", &Check);
+            crate::rules::test_helpers::run_rule(&Check, "if (typeof obj.foo === 'undefined') {}", "t.ts");
         assert_eq!(d.len(), 1);
         assert_eq!(d[0].rule_id, "no-typeof-undefined");
     }
@@ -132,13 +148,13 @@ mod tests {
     #[test]
     fn flags_typeof_member_expression_double_quotes() {
         let d =
-            crate::rules::test_helpers::run_ts(r#"if (typeof obj.foo === "undefined") {}"#, &Check);
+            crate::rules::test_helpers::run_rule(&Check, r#"if (typeof obj.foo === "undefined") {}"#, "t.ts");
         assert_eq!(d.len(), 1);
     }
 
     #[test]
     fn flags_typeof_subscript_expression() {
-        let d = crate::rules::test_helpers::run_ts("if (typeof arr[0] === 'undefined') {}", &Check);
+        let d = crate::rules::test_helpers::run_rule(&Check, "if (typeof arr[0] === 'undefined') {}", "t.ts");
         assert_eq!(d.len(), 1);
     }
 
@@ -146,79 +162,64 @@ mod tests {
     fn allows_typeof_bare_identifier() {
         // `x` may not be declared — `x === undefined` would throw.
         // `typeof x === 'undefined'` is the only safe check.
-        let d = crate::rules::test_helpers::run_ts("if (typeof x === 'undefined') {}", &Check);
+        let d = crate::rules::test_helpers::run_rule(&Check, "if (typeof x === 'undefined') {}", "t.ts");
         assert!(d.is_empty());
     }
 
     #[test]
     fn allows_direct_undefined_comparison() {
-        let d = crate::rules::test_helpers::run_ts("if (x === undefined) {}", &Check);
+        let d = crate::rules::test_helpers::run_rule(&Check, "if (x === undefined) {}", "t.ts");
         assert!(d.is_empty());
     }
 
     #[test]
     fn allows_typeof_for_other_types() {
-        let d = crate::rules::test_helpers::run_ts("if (typeof x === 'string') {}", &Check);
+        let d = crate::rules::test_helpers::run_rule(&Check, "if (typeof x === 'string') {}", "t.ts");
         assert!(d.is_empty());
     }
 
     // Regression for #209 — SSR guards on DOM globals must not fire.
     #[test]
     fn allows_typeof_globalthis_window() {
-        let d = crate::rules::test_helpers::run_ts(
-            "if (typeof globalThis.window === 'undefined') {}",
-            &Check,
-        );
+        let d = crate::rules::test_helpers::run_rule(&Check, "if (typeof globalThis.window === 'undefined') {}", "t.ts");
         assert!(d.is_empty(), "{d:?}");
     }
 
     #[test]
     fn allows_typeof_bare_window() {
         let d =
-            crate::rules::test_helpers::run_ts("if (typeof window === 'undefined') {}", &Check);
+            crate::rules::test_helpers::run_rule(&Check, "if (typeof window === 'undefined') {}", "t.ts");
         assert!(d.is_empty(), "{d:?}");
     }
 
     #[test]
     fn allows_typeof_bare_document() {
         let d =
-            crate::rules::test_helpers::run_ts("if (typeof document === 'undefined') {}", &Check);
+            crate::rules::test_helpers::run_rule(&Check, "if (typeof document === 'undefined') {}", "t.ts");
         assert!(d.is_empty(), "{d:?}");
     }
 
     #[test]
     fn allows_typeof_navigator_negated() {
-        let d = crate::rules::test_helpers::run_ts(
-            "if (typeof navigator !== 'undefined') {}",
-            &Check,
-        );
+        let d = crate::rules::test_helpers::run_rule(&Check, "if (typeof navigator !== 'undefined') {}", "t.ts");
         assert!(d.is_empty(), "{d:?}");
     }
 
     #[test]
     fn allows_typeof_globalthis_document() {
-        let d = crate::rules::test_helpers::run_ts(
-            "if (typeof globalThis.document === 'undefined') {}",
-            &Check,
-        );
+        let d = crate::rules::test_helpers::run_rule(&Check, "if (typeof globalThis.document === 'undefined') {}", "t.ts");
         assert!(d.is_empty(), "{d:?}");
     }
 
     #[test]
     fn flags_typeof_non_dom_property_access() {
-        let d = crate::rules::test_helpers::run_ts(
-            "if (typeof someObj.someProp === 'undefined') {}",
-            &Check,
-        );
+        let d = crate::rules::test_helpers::run_rule(&Check, "if (typeof someObj.someProp === 'undefined') {}", "t.ts");
         assert_eq!(d.len(), 1, "{d:?}");
     }
 
     #[test]
     fn flags_typeof_globalthis_non_dom() {
-        let d = crate::rules::test_helpers::run_ts(
-            "if (typeof globalThis.myCustomGlobal === 'undefined') {}",
-            &Check,
-        );
+        let d = crate::rules::test_helpers::run_rule(&Check, "if (typeof globalThis.myCustomGlobal === 'undefined') {}", "t.ts");
         assert_eq!(d.len(), 1, "{d:?}");
     }
 }

@@ -205,45 +205,61 @@ match node.kind() {
     }
 }
 
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_ast_check(self, src, path, project, file)
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn run_ts(source: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_ts(source, &Check)
+        crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
     }
 
     #[test]
     fn flags_log_div_ln2() {
-        let d = run_ts("const x = Math.log(n) / Math.LN2;");
+        let d = crate::rules::test_helpers::run_rule(&Check, "const x = Math.log(n) / Math.LN2;", "t.ts");
         assert_eq!(d.len(), 1);
         assert_eq!(d[0].rule_id, "prefer-modern-math-apis");
     }
 
     #[test]
     fn flags_log_div_ln10() {
-        let d = run_ts("const x = Math.log(n) / Math.LN10;");
+        let d = crate::rules::test_helpers::run_rule(&Check, "const x = Math.log(n) / Math.LN10;", "t.ts");
         assert_eq!(d.len(), 1);
     }
 
     #[test]
     fn flags_sqrt_sum_of_squares() {
-        let d = run_ts("const h = Math.sqrt(a ** 2 + b ** 2);");
+        let d = crate::rules::test_helpers::run_rule(&Check, "const h = Math.sqrt(a ** 2 + b ** 2);", "t.ts");
         assert_eq!(d.len(), 1);
     }
 
     #[test]
     fn allows_math_log2() {
-        assert!(run_ts("const x = Math.log2(n);").is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, "const x = Math.log2(n);", "t.ts").is_empty());
     }
 
     #[test]
     fn allows_math_hypot() {
-        assert!(run_ts("const h = Math.hypot(a, b);").is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, "const h = Math.hypot(a, b);", "t.ts").is_empty());
     }
 
     #[test]
     fn allows_plain_math_sqrt() {
-        assert!(run_ts("const r = Math.sqrt(x);").is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, "const r = Math.sqrt(x);", "t.ts").is_empty());
     }
 }

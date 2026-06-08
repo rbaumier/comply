@@ -56,44 +56,59 @@ crate::ast_check! { on ["binary_expression"] => |node, source, ctx, diagnostics|
     }
 }
 
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_ast_check(self, src, path, project, file)
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rules::test_helpers::run_ts;
-
+    
     #[test]
     fn flags_undefined_plus() {
-        let d = run_ts("const x = undefined + 1;", &Check);
+        let d = crate::rules::test_helpers::run_rule(&Check, "const x = undefined + 1;", "t.ts");
         assert_eq!(d.len(), 1);
         assert!(d[0].message.contains("undefined"));
     }
 
     #[test]
     fn flags_undefined_minus() {
-        let d = run_ts("const x = undefined - 5;", &Check);
+        let d = crate::rules::test_helpers::run_rule(&Check, "const x = undefined - 5;", "t.ts");
         assert_eq!(d.len(), 1);
     }
 
     #[test]
     fn flags_string_multiply() {
-        let d = run_ts("const x = \"hello\" * 2;", &Check);
+        let d = crate::rules::test_helpers::run_rule(&Check, "const x = \"hello\" * 2;", "t.ts");
         assert_eq!(d.len(), 1);
         assert!(d[0].message.contains("string"));
     }
 
     #[test]
     fn flags_string_minus() {
-        let d = run_ts("const x = \"text\" - 1;", &Check);
+        let d = crate::rules::test_helpers::run_rule(&Check, "const x = \"text\" - 1;", "t.ts");
         assert_eq!(d.len(), 1);
     }
 
     #[test]
     fn allows_number_arithmetic() {
-        assert!(run_ts("const x = 10 + 5;", &Check).is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, "const x = 10 + 5;", "t.ts").is_empty());
     }
 
     #[test]
     fn allows_string_concat() {
-        assert!(run_ts("const x = \"hello\" + \" world\";", &Check).is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, "const x = \"hello\" + \" world\";", "t.ts").is_empty());
     }
 }

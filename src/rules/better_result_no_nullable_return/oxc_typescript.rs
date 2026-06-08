@@ -175,9 +175,24 @@ impl OxcCheck for Check {
 }
 
 #[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+#[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rules::test_helpers::{run_oxc_ts, run_oxc_ts_with_path};
+    
 
     #[test]
     fn flags_nullable_return() {
@@ -189,13 +204,13 @@ function f(id: string): User | null {
   return null;
 }
 "#;
-        assert_eq!(run_oxc_ts(src, &Check).len(), 1);
+        assert_eq!(crate::rules::test_helpers::run_rule(&Check, src, "t.ts").len(), 1);
     }
 
     #[test]
     fn allows_result_return() {
         let src = "import { Result } from 'better-result';\nfunction f(): Result<User, NotFoundError> { return Result.err(new NotFoundError()); }";
-        assert!(run_oxc_ts(src, &Check).is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, src, "t.ts").is_empty());
     }
 
     #[test]
@@ -213,7 +228,7 @@ function multiLevelFilterUsers(levels: string[]): DefinedUsersWhere | undefined 
   return { AND: [first, ...rest] };
 }
 "#;
-        assert!(run_oxc_ts(src, &Check).is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, src, "t.ts").is_empty());
     }
 
     #[test]
@@ -225,7 +240,7 @@ function loadUser(id: string): User | undefined {
   return undefined;
 }
 "#;
-        assert_eq!(run_oxc_ts(src, &Check).len(), 1);
+        assert_eq!(crate::rules::test_helpers::run_rule(&Check, src, "t.ts").len(), 1);
     }
 
     #[test]
@@ -236,7 +251,7 @@ async function loadUser(id: string): Promise<User | undefined> {
   return undefined;
 }
 "#;
-        assert_eq!(run_oxc_ts(src, &Check).len(), 1);
+        assert_eq!(crate::rules::test_helpers::run_rule(&Check, src, "t.ts").len(), 1);
     }
 
     #[test]
@@ -249,7 +264,7 @@ async function loadUser(id: string): Promise<User | undefined> {
   return undefined;
 }
 "#;
-        assert_eq!(run_oxc_ts(src, &Check).len(), 1);
+        assert_eq!(crate::rules::test_helpers::run_rule(&Check, src, "t.ts").len(), 1);
     }
 
     #[test]
@@ -263,7 +278,7 @@ function loadUser(id: string): User | undefined {
   return undefined;
 }
 "#;
-        assert_eq!(run_oxc_ts(src, &Check).len(), 1);
+        assert_eq!(crate::rules::test_helpers::run_rule(&Check, src, "t.ts").len(), 1);
     }
 
     // Issue #372 regression: helper function names (to*, from*, map*, transform*)
@@ -278,7 +293,7 @@ export async function toNullable<T>(result: Result<T, unknown>): Promise<T | nul
   return r.ok ? r.value : null;
 }
 "#;
-        assert!(run_oxc_ts(src, &Check).is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, src, "t.ts").is_empty());
     }
 
     #[test]
@@ -290,7 +305,7 @@ export function fromNullable<T>(value: T | null): T | null {
   return value;
 }
 "#;
-        assert!(run_oxc_ts(src, &Check).is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, src, "t.ts").is_empty());
     }
 
     #[test]
@@ -302,7 +317,7 @@ export const mapToOption = async <T>(value: T | null): Promise<T | undefined> =>
   return value ?? undefined;
 };
 "#;
-        assert!(run_oxc_ts(src, &Check).is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, src, "t.ts").is_empty());
     }
 
     #[test]
@@ -314,7 +329,7 @@ export async function transformToNullable<T>(id: string): Promise<T | null> {
   return data ? data.value : null;
 }
 "#;
-        assert!(run_oxc_ts(src, &Check).is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, src, "t.ts").is_empty());
     }
 
     #[test]
@@ -326,7 +341,7 @@ export async function loadData(id: string): Promise<User | null> {
   return x ?? null;
 }
 "#;
-        assert!(run_oxc_ts_with_path(src, &Check, "src/api/lib/result-helpers.ts").is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, src, "src/api/lib/result-helpers.ts").is_empty());
     }
 
     #[test]
@@ -337,7 +352,7 @@ export async function getData(id: string): Promise<User | undefined> {
   return await db.find(id);
 }
 "#;
-        assert!(run_oxc_ts_with_path(src, &Check, "src/utils/query.ts").is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, src, "src/utils/query.ts").is_empty());
     }
 
     #[test]
@@ -349,7 +364,7 @@ export function getUser(id: string): User | null {
   return null;
 }
 "#;
-        assert!(run_oxc_ts_with_path(src, &Check, "src/helpers/user.ts").is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, src, "src/helpers/user.ts").is_empty());
     }
 
     #[test]
@@ -363,6 +378,6 @@ export async function loadUser(id: string): Promise<User | null> {
   return x ?? null;
 }
 "#;
-        assert_eq!(run_oxc_ts(src, &Check).len(), 1);
+        assert_eq!(crate::rules::test_helpers::run_rule(&Check, src, "t.ts").len(), 1);
     }
 }

@@ -45,53 +45,60 @@ crate::ast_check! { on ["try_statement"] prefilter = ["try"] => |node, source, c
     }
 }
 
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_ast_check(self, src, path, project, file)
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn flags_fetch_without_await_in_try() {
-        let d = crate::rules::test_helpers::run_ts(
-            r#"
+        let d = crate::rules::test_helpers::run_rule(&Check, r#"
 try {
     const res = fetch("/api");
 } catch (e) {}
-"#,
-            &Check,
-        );
+"#, "t.ts");
         assert_eq!(d.len(), 1);
         assert_eq!(d[0].rule_id, "no-try-promise");
     }
 
     #[test]
     fn flags_then_without_await_in_try() {
-        let d = crate::rules::test_helpers::run_ts(
-            r#"
+        let d = crate::rules::test_helpers::run_rule(&Check, r#"
 try {
     getData().then(r => r.json());
 } catch (e) {}
-"#,
-            &Check,
-        );
+"#, "t.ts");
         assert_eq!(d.len(), 1);
     }
 
     #[test]
     fn allows_awaited_fetch_in_try() {
-        let d = crate::rules::test_helpers::run_ts(
-            r#"
+        let d = crate::rules::test_helpers::run_rule(&Check, r#"
 try {
     const res = await fetch("/api");
 } catch (e) {}
-"#,
-            &Check,
-        );
+"#, "t.ts");
         assert!(d.is_empty());
     }
 
     #[test]
     fn ignores_fetch_outside_try() {
-        let d = crate::rules::test_helpers::run_ts(r#"const res = fetch("/api");"#, &Check);
+        let d = crate::rules::test_helpers::run_rule(&Check, r#"const res = fetch("/api");"#, "t.ts");
         assert!(d.is_empty());
     }
 }

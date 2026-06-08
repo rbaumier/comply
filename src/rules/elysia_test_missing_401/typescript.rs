@@ -114,28 +114,34 @@ crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
     });
 }
 
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_ast_check(self, src, path, project, file)
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn run_on_test(source: &str) -> Vec<Diagnostic> {
         let project = crate::project::ProjectCtx::for_test_with_framework("elysia");
-        crate::rules::test_helpers::run_ts_with_project_and_path(
-            source,
-            &Check,
-            &project,
-            std::path::Path::new("auth.test.ts"),
-        )
+        crate::rules::test_helpers::run_rule_with_ctx(&Check, source, std::path::Path::new("auth.test.ts"), &project, crate::rules::file_ctx::default_static_file_ctx())
     }
 
     fn run_on_path(source: &str, path: &str) -> Vec<Diagnostic> {
         let project = crate::project::ProjectCtx::for_test_with_framework("elysia");
-        crate::rules::test_helpers::run_ts_with_project_and_path(
-            source,
-            &Check,
-            &project,
-            std::path::Path::new(path),
-        )
+        crate::rules::test_helpers::run_rule_with_ctx(&Check, source, std::path::Path::new(path), &project, crate::rules::file_ctx::default_static_file_ctx())
     }
 
     #[test]

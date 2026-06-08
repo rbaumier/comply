@@ -103,17 +103,28 @@ fn is_inside_test_or_hook<'a>(
 }
 
 #[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+#[cfg(test)]
 mod tests {
     use super::*;
 
     const PW_IMPORT: &str = "import { test, expect } from \"@playwright/test\";\n";
 
     fn run_ts(source: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_oxc_ts_with_path(
-            &format!("{PW_IMPORT}{source}"),
-            &Check,
-            "app.test.ts",
-        )
+        crate::rules::test_helpers::run_rule(&Check, &format!("{PW_IMPORT}{source}"), "app.test.ts")
     }
 
     #[test]
@@ -130,16 +141,14 @@ mod tests {
 
     #[test]
     fn allows_expect_in_helper_called_from_test() {
-        let d = run_ts(
-            r#"
+        let d = run_ts(r#"
 function assertUrl(page) {
   expect(page).toHaveURL(/\/dashboard/);
 }
 test('my test', () => {
   assertUrl(page);
 });
-"#,
-        );
+"#);
         assert!(d.is_empty(), "expect in helper called from test should be allowed");
     }
 }

@@ -6,10 +6,9 @@
 
 use super::oxc_typescript::Check;
 use crate::diagnostic::Diagnostic;
-use crate::rules::test_helpers::run_oxc_ts;
 
 fn run_on(source: &str) -> Vec<Diagnostic> {
-    run_oxc_ts(source, &Check)
+    crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
 }
 
 #[test]

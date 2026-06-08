@@ -118,12 +118,28 @@ match node.kind() {
     }
 }
 
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_ast_check(self, src, path, project, file)
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_ts(source, &Check)
+        crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
     }
 
     #[test]
@@ -169,43 +185,27 @@ mod tests {
     #[test]
     fn no_fp_in_test_file() {
         // Mock response data in test fixtures must not be flagged (#542)
-        let d = crate::rules::test_helpers::run_ts_with_path(
-            "const mockResponse = { items: [], pagination: {}, replace: true };
-             type LaboratoriesResponse = { items: string[]; replace: boolean };",
-            &Check,
-            "src/app/features/laboratories/components/laboratories-page.test.tsx",
-        );
+        let d = crate::rules::test_helpers::run_rule(&Check, "const mockResponse = { items: [], pagination: {}, replace: true };
+             type LaboratoriesResponse = { items: string[]; replace: boolean };", "src/app/features/laboratories/components/laboratories-page.test.tsx");
         assert!(d.is_empty(), "unexpected diagnostics in test file: {d:?}");
     }
 
     #[test]
     fn no_fp_in_spec_file() {
-        let d = crate::rules::test_helpers::run_ts_with_path(
-            "type FooResult = { created: boolean };",
-            &Check,
-            "src/foo.spec.ts",
-        );
+        let d = crate::rules::test_helpers::run_rule(&Check, "type FooResult = { created: boolean };", "src/foo.spec.ts");
         assert!(d.is_empty(), "unexpected diagnostics in spec file: {d:?}");
     }
 
     #[test]
     fn no_fp_in_scripts_dir() {
         // Internal CLI result type in scripts/ must not be flagged (#542)
-        let d = crate::rules::test_helpers::run_ts_with_path(
-            "type SeedAdminCdrResult = { user: string; created: boolean };",
-            &Check,
-            "scripts/seed-admin-cdr.ts",
-        );
+        let d = crate::rules::test_helpers::run_rule(&Check, "type SeedAdminCdrResult = { user: string; created: boolean };", "scripts/seed-admin-cdr.ts");
         assert!(d.is_empty(), "unexpected diagnostics in scripts dir: {d:?}");
     }
 
     #[test]
     fn still_flags_in_regular_source_file() {
-        let d = crate::rules::test_helpers::run_ts_with_path(
-            "type SeedAdminCdrResult = { user: string; created: boolean };",
-            &Check,
-            "src/api/seed-admin-cdr.ts",
-        );
+        let d = crate::rules::test_helpers::run_rule(&Check, "type SeedAdminCdrResult = { user: string; created: boolean };", "src/api/seed-admin-cdr.ts");
         assert_eq!(d.len(), 1);
     }
 }

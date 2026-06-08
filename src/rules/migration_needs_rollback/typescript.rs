@@ -113,11 +113,26 @@ fn function_like_name<'a>(node: &tree_sitter::Node<'_>, source: &'a [u8]) -> Opt
 }
 
 #[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_ast_check(self, src, path, project, file)
+    }
+}
+#[cfg(test)]
 mod tests {
     use super::*;
 
     fn run(src: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_ts_with_path(src, &Check, "/app/migrations/001.ts")
+        crate::rules::test_helpers::run_rule(&Check, src, "/app/migrations/001.ts")
     }
 
     #[test]
@@ -179,7 +194,7 @@ mod tests {
     #[test]
     fn skips_non_migration_path() {
         let src = "export async function up(db) { db.exec('CREATE TABLE t (id INT)'); }";
-        let diags = crate::rules::test_helpers::run_ts(src, &Check);
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "t.ts");
         assert!(diags.is_empty());
     }
 }

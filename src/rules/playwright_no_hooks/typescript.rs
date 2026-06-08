@@ -48,6 +48,22 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     });
 }
 
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_ast_check(self, src, path, project, file)
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -56,30 +72,21 @@ mod tests {
 
     fn run_ts(source: &str) -> Vec<Diagnostic> {
         let project = ProjectCtx::for_test_with_framework("playwright");
-        crate::rules::test_helpers::run_ts_with_project_and_path(
-            source,
-            &Check,
-            &project,
-            Path::new("app.test.ts"),
-        )
+        crate::rules::test_helpers::run_rule_with_ctx(&Check, source, Path::new("app.test.ts"), &project, crate::rules::file_ctx::default_static_file_ctx())
     }
 
     #[test]
     fn flags_before_each() {
-        let d = run_ts(
-            r#"import { test } from "@playwright/test";
-beforeEach(() => { setup(); });"#,
-        );
+        let d = run_ts(r#"import { test } from "@playwright/test";
+beforeEach(() => { setup(); });"#);
         assert_eq!(d.len(), 1);
         assert_eq!(d[0].rule_id, "playwright-no-hooks");
     }
 
     #[test]
     fn flags_after_all() {
-        let d = run_ts(
-            r#"import { test } from "@playwright/test";
-afterAll(() => { cleanup(); });"#,
-        );
+        let d = run_ts(r#"import { test } from "@playwright/test";
+afterAll(() => { cleanup(); });"#);
         assert_eq!(d.len(), 1);
     }
 
@@ -139,7 +146,7 @@ beforeEach(() => { reset(); });
 import { test } from "@playwright/test";
 beforeEach(() => { reset(); });
 "#;
-        let d = crate::rules::test_helpers::run_ts_with_path(src, &Check, "app.test.ts");
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "app.test.ts");
         assert!(
             d.is_empty(),
             "framework-scoped rule must be silent without detected Playwright"

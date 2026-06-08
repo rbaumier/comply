@@ -95,15 +95,30 @@ crate::ast_check! { |node, source, ctx, diagnostics|
     }
 }
 
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_ast_check(self, src, path, project, file)
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rules::test_helpers::run_ts_with_path;
-
+    
     const PW_IMPORT: &str = "import { test, expect } from \"@playwright/test\";\n";
 
     fn run_ts(source: &str) -> Vec<Diagnostic> {
-        run_ts_with_path(&format!("{PW_IMPORT}{source}"), &Check, "login.test.ts")
+        crate::rules::test_helpers::run_rule(&Check, &format!("{PW_IMPORT}{source}"), "login.test.ts")
     }
 
     #[test]

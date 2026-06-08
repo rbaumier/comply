@@ -110,11 +110,26 @@ fn is_framework_base_class(parent_name: &str) -> bool {
 }
 
 #[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+#[cfg(test)]
 mod tests {
     use super::*;
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+        crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
     }
 
     #[test]
@@ -150,7 +165,7 @@ mod tests {
     #[test]
     fn allows_extends_in_framework_extension_file() {
         let src = "class JwtGuard extends AuthGuard {}";
-        let d = crate::rules::test_helpers::run_oxc_ts_with_path(src, &Check, "auth.guard.ts");
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "auth.guard.ts");
         assert!(d.is_empty());
     }
 }

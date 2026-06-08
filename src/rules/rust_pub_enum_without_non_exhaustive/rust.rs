@@ -178,6 +178,21 @@ fn has_non_exhaustive(item: tree_sitter::Node, source: &[u8]) -> bool {
 }
 
 #[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_ast_check(self, src, path, project, file)
+    }
+}
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::fs;
@@ -186,7 +201,7 @@ mod tests {
     fn run_on(source: &str) -> Vec<Diagnostic> {
         // Use an absolute path with no Cargo.toml ancestor so is_internal_crate
         // does not accidentally pick up the comply project's own Cargo.toml.
-        crate::rules::test_helpers::run_rust_with_path(source, &Check, "/nonexistent_cargo_project/src/t.rs")
+        crate::rules::test_helpers::run_rule(&Check, source, "/nonexistent_cargo_project/src/t.rs")
     }
 
     #[test]

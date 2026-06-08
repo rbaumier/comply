@@ -88,6 +88,22 @@ crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
     }
 }
 
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_ast_check(self, src, path, project, file)
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -95,8 +111,7 @@ mod tests {
     use crate::diagnostic::Diagnostic;
     use crate::files::{Language, SourceFile};
     use crate::project::ProjectCtx;
-    use crate::rules::test_helpers::run_ts_with_project_and_path;
-    use std::fs;
+        use std::fs;
     use tempfile::TempDir;
 
     fn setup_with_pkg(pkg_json: &str, file_rel: &str, source: &str) -> Vec<Diagnostic> {
@@ -118,7 +133,7 @@ mod tests {
         let project = ProjectCtx::load(&refs, &config);
         let canon = fs::canonicalize(&file_path).unwrap();
 
-        run_ts_with_project_and_path(source, &Check, &project, &canon)
+        crate::rules::test_helpers::run_rule_with_ctx(&Check, source, &canon, &project, crate::rules::file_ctx::default_static_file_ctx())
     }
 
     #[test]
@@ -238,7 +253,7 @@ mod tests {
         let config = Config::default();
         let project = ProjectCtx::load(&refs, &config);
         let canon = fs::canonicalize(&file_path).unwrap();
-        let d = run_ts_with_project_and_path(source, &Check, &project, &canon);
+        let d = crate::rules::test_helpers::run_rule_with_ctx(&Check, source, &canon, &project, crate::rules::file_ctx::default_static_file_ctx());
         assert!(d.is_empty(), "got {d:?}");
     }
 

@@ -24,36 +24,52 @@ crate::ast_check! { on ["member_expression"] prefilter = ["keyCode", "charCode"]
     ));
 }
 
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_ast_check(self, src, path, project, file)
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn run_ts(source: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_ts(source, &Check)
+        crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
     }
 
     #[test]
     fn flags_event_keycode() {
-        assert_eq!(run_ts("if (event.keyCode === 13) {}").len(), 1);
+        assert_eq!(crate::rules::test_helpers::run_rule(&Check, "if (event.keyCode === 13) {}", "t.ts").len(), 1);
     }
 
     #[test]
     fn flags_event_which() {
-        assert_eq!(run_ts("if (e.which === 27) {}").len(), 1);
+        assert_eq!(crate::rules::test_helpers::run_rule(&Check, "if (e.which === 27) {}", "t.ts").len(), 1);
     }
 
     #[test]
     fn flags_event_charcode() {
-        assert_eq!(run_ts("const code = event.charCode;").len(), 1);
+        assert_eq!(crate::rules::test_helpers::run_rule(&Check, "const code = event.charCode;", "t.ts").len(), 1);
     }
 
     #[test]
     fn allows_event_key() {
-        assert!(run_ts("if (event.key === 'Enter') {}").is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, "if (event.key === 'Enter') {}", "t.ts").is_empty());
     }
 
     #[test]
     fn allows_comment() {
-        assert!(run_ts("// event.keyCode is deprecated").is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, "// event.keyCode is deprecated", "t.ts").is_empty());
     }
 }

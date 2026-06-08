@@ -124,17 +124,32 @@ impl OxcCheck for Check {
 }
 
 #[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+#[cfg(test)]
 mod tests {
     use super::*;
 
     fn run_tsx(src: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_oxc_tsx(src, &Check)
+        crate::rules::test_helpers::run_rule(&Check, src, "t.tsx")
     }
 
     #[test]
     fn flags_auth_route_without_rate_limit() {
         let src = r#"app.post("/api/auth/login", handler);"#;
-        assert_eq!(run_tsx(src).len(), 1);
+        assert_eq!(crate::rules::test_helpers::run_rule(&Check, src, "t.tsx").len(), 1);
     }
 
     // Regression for #236: an MSW `http.post` mock of an auth endpoint is a
@@ -146,12 +161,12 @@ mod tests {
                 http.post("*/api/v1/auth/sign-in/email", () => HttpResponse.json({ token: "x" })),
             );
         "#;
-        assert!(run_tsx(src).is_empty(), "{:?}", run_tsx(src));
+        assert!(crate::rules::test_helpers::run_rule(&Check, src, "t.tsx").is_empty(), "{:?}", crate::rules::test_helpers::run_rule(&Check, src, "t.tsx"));
     }
 
     #[test]
     fn allows_wildcard_path_on_other_callee() {
         let src = r#"server.post("*/auth/login", handler);"#;
-        assert!(run_tsx(src).is_empty(), "{:?}", run_tsx(src));
+        assert!(crate::rules::test_helpers::run_rule(&Check, src, "t.tsx").is_empty(), "{:?}", crate::rules::test_helpers::run_rule(&Check, src, "t.tsx"));
     }
 }

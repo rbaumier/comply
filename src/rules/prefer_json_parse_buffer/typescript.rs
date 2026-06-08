@@ -128,34 +128,50 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     ));
 }
 
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_ast_check(self, src, path, project, file)
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn run_ts(source: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_ts(source, &Check)
+        crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
     }
 
     #[test]
     fn flags_readfilesync_utf8() {
-        let d = run_ts(r#"const data = JSON.parse(fs.readFileSync('config.json', 'utf-8'));"#);
+        let d = crate::rules::test_helpers::run_rule(&Check, r#"const data = JSON.parse(fs.readFileSync('config.json', 'utf-8'));"#, "t.ts");
         assert_eq!(d.len(), 1);
         assert_eq!(d[0].rule_id, "prefer-json-parse-buffer");
     }
 
     #[test]
     fn flags_readfilesync_utf8_no_dash() {
-        let d = run_ts(r#"const data = JSON.parse(fs.readFileSync('config.json', 'utf8'));"#);
+        let d = crate::rules::test_helpers::run_rule(&Check, r#"const data = JSON.parse(fs.readFileSync('config.json', 'utf8'));"#, "t.ts");
         assert_eq!(d.len(), 1);
     }
 
     #[test]
     fn allows_readfilesync_without_encoding() {
-        assert!(run_ts(r#"JSON.parse(fs.readFileSync('config.json'))"#).is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, r#"JSON.parse(fs.readFileSync('config.json'))"#, "t.ts").is_empty());
     }
 
     #[test]
     fn allows_non_utf8_encoding() {
-        assert!(run_ts(r#"JSON.parse(fs.readFileSync('file', 'ascii'))"#).is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, r#"JSON.parse(fs.readFileSync('file', 'ascii'))"#, "t.ts").is_empty());
     }
 }

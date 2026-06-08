@@ -80,11 +80,26 @@ fn is_test_callee(expr: &Expression) -> bool {
 }
 
 #[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+#[cfg(test)]
 mod tests {
     use super::*;
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_oxc_ts_with_framework(source, &Check, "jest")
+        crate::rules::test_helpers::run_rule_with_ctx(&Check, source, "t.ts", &crate::project::ProjectCtx::for_test_with_framework("jest"), crate::rules::file_ctx::default_static_file_ctx())
     }
 
     #[test]
@@ -130,6 +145,6 @@ mod tests {
 
     #[test]
     fn ignores_projects_without_jest_or_mocha() {
-        assert!(crate::rules::test_helpers::run_oxc_ts("test('x', (done) => { done(); });", &Check).is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, "test('x', (done) => { done(); });", "t.ts").is_empty());
     }
 }

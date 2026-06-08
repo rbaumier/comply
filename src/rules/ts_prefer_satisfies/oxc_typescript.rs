@@ -78,20 +78,31 @@ impl OxcCheck for Check {
 }
 
 #[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+#[cfg(test)]
 mod tests {
     use super::*;
 
     fn run_ts(s: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_oxc_ts(s, &Check)
-    }
-
-    fn run_tsx(s: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_oxc_tsx(s, &Check)
+        crate::rules::test_helpers::run_rule(&Check, s, "t.ts")
     }
 
     #[test]
     fn flags_object_literal_cast() {
-        assert_eq!(run_ts("const x = { a: 1 } as Config;").len(), 1);
+        assert_eq!(crate::rules::test_helpers::run_rule(&Check, "const x = { a: 1 } as Config;", "t.ts").len(), 1);
     }
 
     #[test]
@@ -103,33 +114,29 @@ mod tests {
             ..Default::default()
         };
         assert!(
-            crate::rules::test_helpers::run_oxc_tsx_with_file_ctx(
-                "const a = { api: { getSession: async () => null } } as Auth;",
-                &Check,
-                &file,
-            )
+            crate::rules::test_helpers::run_rule_with_ctx(&Check, "const a = { api: { getSession: async () => null } } as Auth;", "t.tsx", crate::project::default_static_project_ctx(), &file)
             .is_empty()
         );
     }
 
     #[test]
     fn flags_array_literal_cast() {
-        assert_eq!(run_ts("const y = [1, 2] as Tuple;").len(), 1);
+        assert_eq!(crate::rules::test_helpers::run_rule(&Check, "const y = [1, 2] as Tuple;", "t.ts").len(), 1);
     }
 
     #[test]
     fn allows_non_literal_cast() {
-        assert!(run_ts("const x = foo as Config;").is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, "const x = foo as Config;", "t.ts").is_empty());
     }
 
     #[test]
     fn allows_as_const() {
-        assert!(run_ts("const x = [1, 2] as const;").is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, "const x = [1, 2] as const;", "t.ts").is_empty());
     }
 
     #[test]
     fn allows_satisfies() {
-        assert!(run_ts("const x = { a: 1 } satisfies Config;").is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, "const x = { a: 1 } satisfies Config;", "t.ts").is_empty());
     }
 
     // Regression test for #569: `as React.CSSProperties` on an object with
@@ -137,30 +144,26 @@ mod tests {
     // because @types/react has no index signature for `--*` keys.
     #[test]
     fn allows_css_custom_props_as_react_css_properties() {
-        assert!(run_tsx(
-            r#"import type React from 'react';
-const style = { "--my-var": "100px" } as React.CSSProperties;"#
-        )
+        assert!(crate::rules::test_helpers::run_rule(&Check, r#"import type React from 'react';
+const style = { "--my-var": "100px" } as React.CSSProperties;"#, "t.tsx")
         .is_empty());
     }
 
     #[test]
     fn allows_css_custom_props_with_spread() {
-        assert!(run_tsx(
-            r#"import type React from 'react';
+        assert!(crate::rules::test_helpers::run_rule(&Check, r#"import type React from 'react';
 const s = {
     "--sidebar-width": "200px",
     "--sidebar-width-icon": "48px",
     ...extra,
-} as React.CSSProperties;"#
-        )
+} as React.CSSProperties;"#, "t.tsx")
         .is_empty());
     }
 
     #[test]
     fn still_flags_react_css_properties_without_custom_props() {
         assert_eq!(
-            run_tsx("const s = { color: 'red' } as React.CSSProperties;").len(),
+            crate::rules::test_helpers::run_rule(&Check, "const s = { color: 'red' } as React.CSSProperties;", "t.tsx").len(),
             1
         );
     }

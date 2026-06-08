@@ -58,15 +58,29 @@ crate::ast_check! { prefilter = ["apiVersion"] => |node, source, ctx, diagnostic
     }
 }
 
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_ast_check(self, src, path, project, file)
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rules::test_helpers::{
-        k8s_project_from_sources, run_yaml, run_yaml_with_project_and_path,
-    };
+    use crate::rules::test_helpers::{k8s_project_from_sources};
 
     fn run(s: &str) -> Vec<Diagnostic> {
-        run_yaml(s, &Check)
+        crate::rules::test_helpers::run_rule(&Check, s, "manifest.yaml")
     }
 
     #[test]
@@ -85,7 +99,7 @@ mod tests {
     fn flags_missing_secret_ref_in_project() {
         let pod = "apiVersion: v1\nkind: Pod\nmetadata:\n  name: web\nspec:\n  containers:\n  - name: app\n    image: nginx\n    env:\n    - name: DB_PASSWORD\n      valueFrom:\n        secretKeyRef:\n          name: db-secret\n          key: password\n";
         let (_dir, project, paths) = k8s_project_from_sources(&[("pod.yaml", pod)]);
-        let diags = run_yaml_with_project_and_path(pod, &Check, &project, &paths[0]);
+        let diags = crate::rules::test_helpers::run_rule_with_ctx(&Check, pod, &paths[0], &project, crate::rules::file_ctx::default_static_file_ctx());
         assert_eq!(diags.len(), 1);
     }
 
@@ -95,7 +109,7 @@ mod tests {
         let secret = "apiVersion: v1\nkind: Secret\nmetadata:\n  name: db-secret";
         let (_dir, project, paths) =
             k8s_project_from_sources(&[("pod.yaml", pod), ("secret.yaml", secret)]);
-        let diags = run_yaml_with_project_and_path(pod, &Check, &project, &paths[0]);
+        let diags = crate::rules::test_helpers::run_rule_with_ctx(&Check, pod, &paths[0], &project, crate::rules::file_ctx::default_static_file_ctx());
         assert!(diags.is_empty());
     }
 }

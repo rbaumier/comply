@@ -79,12 +79,28 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     });
 }
 
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_ast_check(self, src, path, project, file)
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_ts_with_framework(source, &Check, "elysia")
+        crate::rules::test_helpers::run_rule_with_ctx(&Check, source, "t.ts", &crate::project::ProjectCtx::for_test_with_framework("elysia"), crate::rules::file_ctx::default_static_file_ctx())
     }
 
     #[test]
@@ -115,7 +131,7 @@ mod tests {
     fn ignores_non_exported_app() {
         let src =
             "import { Elysia } from 'elysia';\nconst app = new Elysia().onBeforeHandle(() => {});";
-        assert!(crate::rules::test_helpers::run_ts(src, &Check).is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, src, "t.ts").is_empty());
     }
 
     #[test]
@@ -140,21 +156,20 @@ mod tests {
     #[test]
     fn ignores_root_app_in_create_app_file() {
         use crate::project::ProjectCtx;
-        use crate::rules::test_helpers::run_ts_with_project_and_path;
-        use std::path::Path;
+                use std::path::Path;
         let project = ProjectCtx::for_test_with_framework("elysia");
         // Regression: `createApp()` returns the root app instance — calls to
         // `onError` / `onRequest` here aren't plugin hooks.
         let src = "import { Elysia } from 'elysia';\nexport const createApp = () => new Elysia().onError(() => {}).onRequest(() => {});";
         assert!(
-            run_ts_with_project_and_path(src, &Check, &project, Path::new("src/create-app.ts"))
+            crate::rules::test_helpers::run_rule_with_ctx(&Check, src, Path::new("src/create-app.ts"), &project, crate::rules::file_ctx::default_static_file_ctx())
                 .is_empty()
         );
         assert!(
-            run_ts_with_project_and_path(src, &Check, &project, Path::new("src/app.ts")).is_empty()
+            crate::rules::test_helpers::run_rule_with_ctx(&Check, src, Path::new("src/app.ts"), &project, crate::rules::file_ctx::default_static_file_ctx()).is_empty()
         );
         assert!(
-            run_ts_with_project_and_path(src, &Check, &project, Path::new("src/server.ts"))
+            crate::rules::test_helpers::run_rule_with_ctx(&Check, src, Path::new("src/server.ts"), &project, crate::rules::file_ctx::default_static_file_ctx())
                 .is_empty()
         );
     }

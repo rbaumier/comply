@@ -87,13 +87,28 @@ impl OxcCheck for Check {
 }
 
 #[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::Config;
     use crate::files::{Language, SourceFile};
     use crate::project::ProjectCtx;
     use crate::rules::file_ctx::{FileCtx, PathSegments};
-    use crate::rules::test_helpers::{run_oxc_tsx, run_oxc_tsx_with_file_ctx};
+    
     use oxc_allocator::Allocator;
     use oxc_parser::Parser as OxcParser;
     use oxc_semantic::SemanticBuilder;
@@ -148,38 +163,38 @@ mod tests {
     #[test]
     fn flags_array_literal_in_prod_file() {
         let src = "const x = <DataTable data={[row1, row2]} />;";
-        assert_eq!(run_oxc_tsx(src, &Check).len(), 1);
+        assert_eq!(crate::rules::test_helpers::run_rule(&Check, src, "t.tsx").len(), 1);
     }
 
     #[test]
     fn no_fp_in_test_file_dot_test_tsx() {
         // Regression: issue #442 — render() in tests is a single render, no re-render cost.
         let src = "render(<DataTable data={[row1, row2]} columns={columns} />);";
-        assert!(run_oxc_tsx_with_file_ctx(src, &Check, &test_file_ctx()).is_empty());
+        assert!(crate::rules::test_helpers::run_rule_with_ctx(&Check, src, "t.tsx", crate::project::default_static_project_ctx(), &test_file_ctx()).is_empty());
     }
 
     #[test]
     fn no_fp_in_spec_file() {
         let src = "render(<AsyncMultiSelect options={[{ value: 'a', label: 'A' }]} />);";
-        assert!(run_oxc_tsx_with_file_ctx(src, &Check, &test_file_ctx()).is_empty());
+        assert!(crate::rules::test_helpers::run_rule_with_ctx(&Check, src, "t.tsx", crate::project::default_static_project_ctx(), &test_file_ctx()).is_empty());
     }
 
     #[test]
     fn no_fp_in_tests_dir() {
         let src = "render(<Comp items={[1, 2, 3]} />);";
-        assert!(run_oxc_tsx_with_file_ctx(src, &Check, &test_file_ctx()).is_empty());
+        assert!(crate::rules::test_helpers::run_rule_with_ctx(&Check, src, "t.tsx", crate::project::default_static_project_ctx(), &test_file_ctx()).is_empty());
     }
 
     #[test]
     fn no_fp_in_storybook_file() {
         let src = "export const Default = () => <Comp items={['a', 'b']} />;";
-        assert!(run_oxc_tsx_with_file_ctx(src, &Check, &storybook_file_ctx()).is_empty());
+        assert!(crate::rules::test_helpers::run_rule_with_ctx(&Check, src, "t.tsx", crate::project::default_static_project_ctx(), &storybook_file_ctx()).is_empty());
     }
 
     #[test]
     fn allows_identifier_in_prod_file() {
         let src = "const x = <Comp items={items} />;";
-        assert!(run_oxc_tsx(src, &Check).is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, src, "t.tsx").is_empty());
     }
 
     #[test]

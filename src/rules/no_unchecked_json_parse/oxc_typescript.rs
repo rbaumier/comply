@@ -115,10 +115,24 @@ impl OxcCheck for Check {
 }
 
 #[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+#[cfg(test)]
 mod tests {
     use super::Check;
-    use crate::rules::test_helpers::run_oxc_ts;
-
+    
     #[test]
     fn allows_json_parse_assigned_to_unknown_issue_512() {
         let src = r#"
@@ -131,21 +145,21 @@ mod tests {
                 }
             }
         "#;
-        let diags = run_oxc_ts(src, &Check);
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "t.ts");
         assert!(diags.is_empty(), "expected no diagnostics, got {diags:?}");
     }
 
     #[test]
     fn allows_json_parse_in_unknown_declarator() {
         let src = "const body: unknown = JSON.parse(text);";
-        let diags = run_oxc_ts(src, &Check);
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "t.ts");
         assert!(diags.is_empty(), "expected no diagnostics, got {diags:?}");
     }
 
     #[test]
     fn still_flags_unwrapped_json_parse() {
         let src = "const data = JSON.parse(text);";
-        let diags = run_oxc_ts(src, &Check);
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "t.ts");
         assert_eq!(diags.len(), 1);
     }
 
@@ -155,7 +169,7 @@ mod tests {
             let cfg: Config = defaultConfig;
             cfg = JSON.parse(text);
         "#;
-        let diags = run_oxc_ts(src, &Check);
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "t.ts");
         assert_eq!(diags.len(), 1);
     }
 }

@@ -93,13 +93,27 @@ impl OxcCheck for Check {
 }
 
 #[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+#[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rules::test_helpers::run_oxc_ts;
-
+    
     #[test]
     fn flags_untyped_assign_then_return() {
-        let d = run_oxc_ts("function f() { const result = computeValue(); return result; }", &Check);
+        let d = crate::rules::test_helpers::run_rule(&Check, "function f() { const result = computeValue(); return result; }", "t.ts");
         assert_eq!(d.len(), 1);
     }
 
@@ -108,10 +122,7 @@ mod tests {
         // `const x: unknown = Reflect.*(...)` narrows the RHS's `any` to
         // `unknown` without a type assertion — the annotation is the type
         // safety mechanism, not a redundant alias.
-        let d = run_oxc_ts(
-            "function trap(source, args) { const proxyResult: unknown = Reflect.apply(source, null, args); return proxyResult; }",
-            &Check,
-        );
+        let d = crate::rules::test_helpers::run_rule(&Check, "function trap(source, args) { const proxyResult: unknown = Reflect.apply(source, null, args); return proxyResult; }", "t.ts");
         assert!(d.is_empty(), "got {d:?}");
     }
 }

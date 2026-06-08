@@ -33,7 +33,6 @@ fn is_test_or_e2e(path: &std::path::Path) -> bool {
 crate::ast_check! { on ["import_statement"] prefilter = ["/pages/", "/routes/", "/views/"] => |node, source, ctx, diagnostics|
     if is_test_or_e2e(ctx.path) { return; }
 
-
     let node_text = node.utf8_text(source).unwrap_or("");
     if node_text.trim_start().starts_with("import type") {
         return;
@@ -65,12 +64,28 @@ crate::ast_check! { on ["import_statement"] prefilter = ["/pages/", "/routes/", 
     ));
 }
 
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_ast_check(self, src, path, project, file)
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn run(s: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_ts(s, &Check)
+        crate::rules::test_helpers::run_rule(&Check, s, "t.ts")
     }
 
     #[test]
@@ -100,11 +115,7 @@ mod tests {
 
     #[test]
     fn skips_e2e_files() {
-        let d = crate::rules::test_helpers::run_ts_with_path(
-            "import LoginPage from './pages/login.page';",
-            &Check,
-            "project/e2e/fixtures.ts",
-        );
+        let d = crate::rules::test_helpers::run_rule(&Check, "import LoginPage from './pages/login.page';", "project/e2e/fixtures.ts");
         assert!(d.is_empty());
     }
 }

@@ -55,40 +55,55 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     });
 }
 
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_ast_check(self, src, path, project, file)
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rules::test_helpers::run_ts;
-
+    
     #[test]
     fn flags_to_be_on_length() {
-        let d = run_ts("expect(arr.length).toBe(3);", &Check);
+        let d = crate::rules::test_helpers::run_rule(&Check, "expect(arr.length).toBe(3);", "t.ts");
         assert_eq!(d.len(), 1);
         assert!(d[0].message.contains("toHaveLength"));
     }
 
     #[test]
     fn flags_to_equal_on_length() {
-        let d = run_ts("expect(items.length).toEqual(0);", &Check);
+        let d = crate::rules::test_helpers::run_rule(&Check, "expect(items.length).toEqual(0);", "t.ts");
         assert_eq!(d.len(), 1);
         assert!(d[0].message.contains("toHaveLength"));
     }
 
     #[test]
     fn allows_to_have_length() {
-        let d = run_ts("expect(arr).toHaveLength(3);", &Check);
+        let d = crate::rules::test_helpers::run_rule(&Check, "expect(arr).toHaveLength(3);", "t.ts");
         assert!(d.is_empty());
     }
 
     #[test]
     fn allows_non_length_property() {
-        let d = run_ts("expect(user.name).toBe('alice');", &Check);
+        let d = crate::rules::test_helpers::run_rule(&Check, "expect(user.name).toBe('alice');", "t.ts");
         assert!(d.is_empty());
     }
 
     #[test]
     fn allows_to_be_on_plain_value() {
-        let d = run_ts("expect(x).toBe(3);", &Check);
+        let d = crate::rules::test_helpers::run_rule(&Check, "expect(x).toBe(3);", "t.ts");
         assert!(d.is_empty());
     }
 }

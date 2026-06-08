@@ -28,32 +28,48 @@ crate::ast_check! { on ["variable_declarator", "assignment_expression"] prefilte
     });
 }
 
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_ast_check(self, src, path, project, file)
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn flags_let_undefined() {
-        let d = crate::rules::test_helpers::run_ts("let x = undefined;", &Check);
+        let d = crate::rules::test_helpers::run_rule(&Check, "let x = undefined;", "t.ts");
         assert_eq!(d.len(), 1);
         assert_eq!(d[0].rule_id, "no-undefined-assignment");
     }
 
     #[test]
     fn flags_reassignment_undefined() {
-        let d = crate::rules::test_helpers::run_ts("x = undefined;", &Check);
+        let d = crate::rules::test_helpers::run_rule(&Check, "x = undefined;", "t.ts");
         assert_eq!(d.len(), 1);
     }
 
     #[test]
     fn allows_comparison_equals() {
-        let d = crate::rules::test_helpers::run_ts("if (x == undefined) {}", &Check);
+        let d = crate::rules::test_helpers::run_rule(&Check, "if (x == undefined) {}", "t.ts");
         assert!(d.is_empty());
     }
 
     #[test]
     fn allows_strict_comparison() {
-        let d = crate::rules::test_helpers::run_ts("if (x === undefined) {}", &Check);
+        let d = crate::rules::test_helpers::run_rule(&Check, "if (x === undefined) {}", "t.ts");
         assert!(d.is_empty());
     }
 }

@@ -66,40 +66,51 @@ impl OxcCheck for Check {
 }
 
 #[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+#[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rules::test_helpers::run_oxc_ts;
-
+    
     #[test]
     fn flags_bare_to_have_been_called() {
-        let d = run_oxc_ts("expect(mock).toHaveBeenCalled();", &Check);
+        let d = crate::rules::test_helpers::run_rule(&Check, "expect(mock).toHaveBeenCalled();", "t.ts");
         assert_eq!(d.len(), 1);
     }
 
     #[test]
     fn allows_to_have_been_called_with() {
-        let d = run_oxc_ts("expect(mock).toHaveBeenCalledWith(1, 2);", &Check);
+        let d = crate::rules::test_helpers::run_rule(&Check, "expect(mock).toHaveBeenCalledWith(1, 2);", "t.ts");
         assert!(d.is_empty());
     }
 
     #[test]
     fn skips_negated_to_have_been_called() {
-        let d = run_oxc_ts(
-            "expect(CAPTURE_EXCEPTION_MOCK).not.toHaveBeenCalled();",
-            &Check,
-        );
+        let d = crate::rules::test_helpers::run_rule(&Check, "expect(CAPTURE_EXCEPTION_MOCK).not.toHaveBeenCalled();", "t.ts");
         assert!(d.is_empty(), "negated assertion should not be flagged");
     }
 
     #[test]
     fn skips_resolves_not_to_have_been_called() {
-        let d = run_oxc_ts("expect(mock).resolves.not.toHaveBeenCalled();", &Check);
+        let d = crate::rules::test_helpers::run_rule(&Check, "expect(mock).resolves.not.toHaveBeenCalled();", "t.ts");
         assert!(d.is_empty());
     }
 
     #[test]
     fn skips_rejects_not_to_have_been_called() {
-        let d = run_oxc_ts("expect(mock).rejects.not.toHaveBeenCalled();", &Check);
+        let d = crate::rules::test_helpers::run_rule(&Check, "expect(mock).rejects.not.toHaveBeenCalled();", "t.ts");
         assert!(d.is_empty());
     }
 }

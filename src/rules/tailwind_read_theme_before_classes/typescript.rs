@@ -154,13 +154,29 @@ crate::ast_check! { on ["string"] prefilter = ["resolveConfig"] => |node, source
     });
 }
 
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_ast_check(self, src, path, project, file)
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::diagnostic::Diagnostic;
 
     fn run(s: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_tsx(s, &Check)
+        crate::rules::test_helpers::run_rule(&Check, s, "t.tsx")
     }
 
     #[test]
@@ -233,9 +249,8 @@ mod tests {
 
     #[test]
     fn allows_shadcn_ui_components() {
-        use crate::rules::test_helpers::run_ts_with_path;
-        let src = r#"export const A = <div className="ring-[3px]" />;"#;
-        let d = run_ts_with_path(src, &Check, "src/components/ui/checkbox.tsx");
+                let src = r#"export const A = <div className="ring-[3px]" />;"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "src/components/ui/checkbox.tsx");
         assert!(d.is_empty());
     }
 }

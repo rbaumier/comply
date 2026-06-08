@@ -55,10 +55,25 @@ impl OxcCheck for Check {
 }
 
 #[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::rules::file_ctx::{FileCtx, PathSegments};
-    use crate::rules::test_helpers::{run_oxc_ts_with_framework, run_oxc_ts_with_framework_and_file};
+    
 
     const SRC: &str = r#"
         const plugin = new Elysia().macro({
@@ -71,7 +86,7 @@ mod tests {
 
     #[test]
     fn flags_missing_null_check_in_production() {
-        assert_eq!(run_oxc_ts_with_framework(SRC, &Check, "elysia").len(), 1);
+        assert_eq!(crate::rules::test_helpers::run_rule_with_ctx(&Check, SRC, "t.ts", &crate::project::ProjectCtx::for_test_with_framework("elysia"), crate::rules::file_ctx::default_static_file_ctx()).len(), 1);
     }
 
     #[test]
@@ -82,6 +97,6 @@ mod tests {
             path_segments: PathSegments { in_test_dir: true, ..Default::default() },
             ..Default::default()
         };
-        assert!(run_oxc_ts_with_framework_and_file(SRC, &Check, "elysia", &file).is_empty());
+        assert!(crate::rules::test_helpers::run_rule_with_ctx(&Check, SRC, "t.ts", &crate::project::ProjectCtx::for_test_with_framework("elysia"), &file).is_empty());
     }
 }

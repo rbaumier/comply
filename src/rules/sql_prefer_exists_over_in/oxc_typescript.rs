@@ -48,11 +48,26 @@ impl OxcCheck for Check {
 }
 
 #[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+#[cfg(test)]
 mod tests {
     use super::*;
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+        crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
     }
 
     #[test]
@@ -71,11 +86,7 @@ mod tests {
     fn no_fp_in_integration_test_teardown() {
         // Regression for #528: DELETE ... IN (SELECT ...) in test teardown files.
         let src = r#"const q = "DELETE FROM users WHERE id IN (SELECT id FROM temp_users)";"#;
-        let diags = crate::rules::test_helpers::run_oxc_ts_with_path(
-            src,
-            &Check,
-            "src/api/features/users/user-scope.integration.test.ts",
-        );
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/api/features/users/user-scope.integration.test.ts");
         assert!(diags.is_empty());
     }
 }

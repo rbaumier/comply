@@ -70,21 +70,33 @@ impl OxcCheck for Check {
 }
 
 #[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+#[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rules::test_helpers::{run_oxc_ts, run_oxc_ts_with_path};
+    
 
     #[test]
     fn flags_use_search_without_validate() {
-        assert_eq!(run_oxc_ts("const { page } = Route.useSearch()", &Check).len(), 1);
+        assert_eq!(crate::rules::test_helpers::run_rule(&Check, "const { page } = Route.useSearch()", "t.ts").len(), 1);
     }
 
     #[test]
     fn allows_with_validate_search() {
-        assert!(run_oxc_ts(
-            "const { page } = Route.useSearch()\nconst route = createFileRoute('/posts')({ validateSearch: z.object({ page: z.number() }) })",
-            &Check,
-        )
+        assert!(crate::rules::test_helpers::run_rule(&Check, "const { page } = Route.useSearch()\nconst route = createFileRoute('/posts')({ validateSearch: z.object({ page: z.number() }) })", "t.ts")
         .is_empty());
     }
 
@@ -92,11 +104,7 @@ mod tests {
     fn skips_lazy_route_files() {
         // Lazy-route files must not be flagged.
         assert!(
-            run_oxc_ts_with_path(
-                "export const Route = createLazyFileRoute('/login')({ component: () => null })\nconst { redirect } = Route.useSearch()",
-                &Check,
-                "src/routes/login.lazy.tsx",
-            )
+            crate::rules::test_helpers::run_rule(&Check, "export const Route = createLazyFileRoute('/login')({ component: () => null })\nconst { redirect } = Route.useSearch()", "src/routes/login.lazy.tsx")
             .is_empty()
         );
     }
@@ -105,11 +113,7 @@ mod tests {
     fn still_flags_non_lazy_route_files() {
         // Positive control — the paired eager `login.tsx` must still be flagged.
         assert_eq!(
-            run_oxc_ts_with_path(
-                "export const Route = createFileRoute('/login')({ component: () => null })\nconst { redirect } = Route.useSearch()",
-                &Check,
-                "src/routes/login.tsx",
-            )
+            crate::rules::test_helpers::run_rule(&Check, "export const Route = createFileRoute('/login')({ component: () => null })\nconst { redirect } = Route.useSearch()", "src/routes/login.tsx")
             .len(),
             1,
         );

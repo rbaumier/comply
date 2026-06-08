@@ -157,6 +157,22 @@ crate::ast_check! { on ["member_expression"] => |node, source, ctx, diagnostics|
     ));
 }
 
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_ast_check(self, src, path, project, file)
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -165,7 +181,7 @@ mod tests {
     use tempfile::TempDir;
 
     fn run_ts(source: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_ts(source, &Check)
+        crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
     }
 
     /// Build a temp project with an optional package.json body, then run
@@ -192,48 +208,48 @@ mod tests {
 
     #[test]
     fn flags_window_location() {
-        let d = run_ts("const url = window.location;");
+        let d = crate::rules::test_helpers::run_rule(&Check, "const url = window.location;", "t.ts");
         assert_eq!(d.len(), 1);
         assert!(d[0].message.contains("globalThis"));
     }
 
     #[test]
     fn flags_self_in_worker() {
-        let d = run_ts("self.fetch('/api');");
+        let d = crate::rules::test_helpers::run_rule(&Check, "self.fetch('/api');", "t.ts");
         assert_eq!(d.len(), 1);
         assert!(d[0].message.contains("globalThis"));
     }
 
     #[test]
     fn flags_global_process() {
-        let d = run_ts("const env = global.process.env;");
+        let d = crate::rules::test_helpers::run_rule(&Check, "const env = global.process.env;", "t.ts");
         assert_eq!(d.len(), 1);
         assert!(d[0].message.contains("globalThis"));
     }
 
     #[test]
     fn allows_global_this() {
-        assert!(run_ts("const url = globalThis.location;").is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, "const url = globalThis.location;", "t.ts").is_empty());
     }
 
     #[test]
     fn allows_window_specific_close() {
-        assert!(run_ts("window.close();").is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, "window.close();", "t.ts").is_empty());
     }
 
     #[test]
     fn allows_window_specific_inner_width() {
-        assert!(run_ts("const w = window.innerWidth;").is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, "const w = window.innerWidth;", "t.ts").is_empty());
     }
 
     #[test]
     fn ignores_typeof_window() {
-        assert!(run_ts("if (typeof window.x !== 'undefined') {}").is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, "if (typeof window.x !== 'undefined') {}", "t.ts").is_empty());
     }
 
     #[test]
     fn ignores_comments() {
-        assert!(run_ts("// window.location is the URL").is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, "// window.location is the URL", "t.ts").is_empty());
     }
 
     #[test]

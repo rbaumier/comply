@@ -196,18 +196,34 @@ crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
     }
 }
 
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_ast_check(self, src, path, project, file)
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::Config;
     use crate::files::{Language, SourceFile};
     use crate::project::ProjectCtx;
-    use crate::rules::test_helpers::{run_ts, run_ts_with_project_and_path};
+    
     use std::fs;
     use tempfile::TempDir;
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
-        run_ts(source, &Check)
+        crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
     }
 
     fn run_with_project(
@@ -234,7 +250,7 @@ mod tests {
         let config = Config::default();
         let project = ProjectCtx::load(&refs, &config);
         let canon = fs::canonicalize(&file_path).unwrap();
-        run_ts_with_project_and_path(source, &Check, &project, &canon)
+        crate::rules::test_helpers::run_rule_with_ctx(&Check, source, &canon, &project, crate::rules::file_ctx::default_static_file_ctx())
     }
 
     fn run_with_config_file(config_file: &str, source: &str) -> Vec<Diagnostic> {
@@ -252,7 +268,7 @@ mod tests {
         let config = Config::default();
         let project = ProjectCtx::load(&refs, &config);
         let canon = fs::canonicalize(&file_path).unwrap();
-        run_ts_with_project_and_path(source, &Check, &project, &canon)
+        crate::rules::test_helpers::run_rule_with_ctx(&Check, source, &canon, &project, crate::rules::file_ctx::default_static_file_ctx())
     }
 
     // -------- baseline (no project context — empty ProjectCtx, no package.json) --------
@@ -539,7 +555,7 @@ mod tests {
         let config = Config::default();
         let project = ProjectCtx::load(&refs, &config);
         let canon = fs::canonicalize(&file_path).unwrap();
-        run_ts_with_project_and_path(source, &Check, &project, &canon)
+        crate::rules::test_helpers::run_rule_with_ctx(&Check, source, &canon, &project, crate::rules::file_ctx::default_static_file_ctx())
     }
 
     #[test]

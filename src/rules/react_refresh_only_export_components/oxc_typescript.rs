@@ -130,18 +130,33 @@ fn extract_default_export_name(decl: &ExportDefaultDeclarationKind) -> Option<St
 }
 
 #[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::project::{Framework, ProjectCtx};
 
     fn run(source: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_oxc_tsx(source, &Check)
+        crate::rules::test_helpers::run_rule(&Check, source, "t.tsx")
     }
 
     fn run_tanstack(source: &str) -> Vec<Diagnostic> {
         let mut project = ProjectCtx::default();
         project.framework = Framework::TanStackStart;
-        crate::rules::test_helpers::run_oxc_tsx_with_project(source, &Check, &project)
+        crate::rules::test_helpers::run_rule_with_ctx(&Check, source, "t.tsx", &project, crate::rules::file_ctx::default_static_file_ctx())
     }
 
     #[test]

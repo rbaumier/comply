@@ -74,12 +74,28 @@ crate::ast_check! { on ["import_statement"] => |node, source, ctx, diagnostics|
     });
 }
 
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_ast_check(self, src, path, project, file)
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_ts(source, &Check)
+        crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
     }
 
     #[test]
@@ -134,11 +150,7 @@ mod tests {
     fn allows_index_import_from_tanstack_route_file() {
         // Regression for #160: TanStack route files (under `routes/`) commonly
         // import `./<segment>/index` as a leaf route module, not a barrel.
-        let d = crate::rules::test_helpers::run_ts_with_path(
-            "import { Route } from './_authed/index';",
-            &Check,
-            "src/routes/__root.tsx",
-        );
+        let d = crate::rules::test_helpers::run_rule(&Check, "import { Route } from './_authed/index';", "src/routes/__root.tsx");
         assert!(d.is_empty(), "expected no diagnostics, got {d:?}");
     }
 }

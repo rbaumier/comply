@@ -108,11 +108,26 @@ crate::ast_check! { on ["statement_block", "program"] prefilter = ["toHaveBeenCa
     }
 }
 
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_ast_check(self, src, path, project, file)
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rules::test_helpers::run_ts;
-
+    
     #[test]
     fn flags_times_one_then_called_with_same_mock() {
         let src = r#"
@@ -121,7 +136,7 @@ mod tests {
                 expect(fn).toHaveBeenCalledWith(1, 2);
             });
         "#;
-        let d = run_ts(src, &Check);
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "t.ts");
         assert_eq!(d.len(), 1);
         assert!(d[0].message.contains("toHaveBeenCalledExactlyOnceWith"));
     }
@@ -135,7 +150,7 @@ mod tests {
                 expect(fn).toHaveBeenCalledWith(1, 2);
             });
         "#;
-        let d = run_ts(src, &Check);
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "t.ts");
         assert!(d.is_empty());
     }
 
@@ -147,7 +162,7 @@ mod tests {
                 expect(b).toHaveBeenCalledWith(1);
             });
         "#;
-        let d = run_ts(src, &Check);
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "t.ts");
         assert!(d.is_empty());
     }
 
@@ -159,7 +174,7 @@ mod tests {
                 expect(fn).toHaveBeenCalledWith(1);
             });
         "#;
-        let d = run_ts(src, &Check);
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "t.ts");
         assert!(d.is_empty());
     }
 
@@ -171,14 +186,14 @@ mod tests {
                 expect(fn).toHaveBeenCalledTimes(1);
             });
         "#;
-        let d = run_ts(src, &Check);
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "t.ts");
         assert!(d.is_empty());
     }
 
     #[test]
     fn flags_at_program_top_level() {
         let src = "expect(fn).toHaveBeenCalledTimes(1);\nexpect(fn).toHaveBeenCalledWith(42);\n";
-        let d = run_ts(src, &Check);
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "t.ts");
         assert_eq!(d.len(), 1);
     }
 }

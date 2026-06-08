@@ -100,24 +100,38 @@ impl OxcCheck for Check {
 }
 
 #[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+#[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rules::test_helpers::run_oxc_ts;
-
+    
     #[test]
     fn flags_class_prefixed_identifier() {
-        assert_eq!(run_oxc_ts("const classThing = 1;", &Check).len(), 1);
+        assert_eq!(crate::rules::test_helpers::run_rule(&Check, "const classThing = 1;", "t.ts").len(), 1);
     }
 
     // Regression for #523: `className` is the canonical DOM property name and
     // cannot be renamed.
     #[test]
     fn allows_classname_issue_523() {
-        assert!(run_oxc_ts("const className = popup.className;", &Check).is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, "const className = popup.className;", "t.ts").is_empty());
     }
 
     #[test]
     fn allows_classlist_issue_523() {
-        assert!(run_oxc_ts("const classList = el.classList;", &Check).is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, "const classList = el.classList;", "t.ts").is_empty());
     }
 }

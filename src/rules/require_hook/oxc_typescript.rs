@@ -210,10 +210,24 @@ fn top_level_is_allowed(stmt: &Statement, node_test_mode: bool) -> bool {
 }
 
 #[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+#[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rules::test_helpers::run_oxc_ts_with_path;
-
+    
     #[test]
     fn allows_contextualize_at_top_level() {
         let src = r#"
@@ -222,7 +236,7 @@ contextualize(() => {
   describe("t", () => { it("works", () => {}); });
 });
 "#;
-        let d = run_oxc_ts_with_path(src, &Check, "foo.test.ts");
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "foo.test.ts");
         assert!(d.is_empty(), "contextualize() must be allowed at top level: {d:?}");
     }
 
@@ -233,7 +247,7 @@ import { test } from "node:test";
 await setup();
 test("x", () => {});
 "#;
-        let d = run_oxc_ts_with_path(src, &Check, "foo.test.ts");
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "foo.test.ts");
         assert!(d.is_empty(), "top-level await must be allowed when node:test is imported: {d:?}");
     }
 
@@ -243,7 +257,7 @@ test("x", () => {});
 await setup();
 describe("x", () => {});
 "#;
-        let d = run_oxc_ts_with_path(src, &Check, "foo.test.ts");
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "foo.test.ts");
         assert_eq!(d.len(), 1, "top-level await without node:test must be flagged: {d:?}");
     }
 }

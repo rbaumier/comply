@@ -4,7 +4,7 @@ mod tests {
     use crate::rules::regex_documented_with_semantics::oxc_typescript::Check;
 
     fn run(source: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+        crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
     }
 
     #[test]

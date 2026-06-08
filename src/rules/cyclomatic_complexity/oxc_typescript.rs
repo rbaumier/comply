@@ -121,10 +121,24 @@ fn nearest_function_span(
 }
 
 #[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+#[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rules::test_helpers::run_oxc_ts;
-
+    
     // The cyclomatic-complexity behaviour itself is exercised by the
     // tree-sitter test module (see `typescript.rs`). The OXC-backend tests
     // below focus on the diagnostic line landing on the actual function
@@ -166,7 +180,7 @@ mod tests {
             "// comply-ignore: cyclomatic-complexity — exhaustive dispatch.\n\
              /**\n * JSDoc.\n */\n",
         );
-        let diags = run_oxc_ts(&src, &Check);
+        let diags = crate::rules::test_helpers::run_rule(&Check, &src, "t.ts");
         assert_eq!(diags.len(), 1, "rule should flag the function pre-suppression");
         let kept = crate::ignore_comments::apply_suppressions(
             diags,
@@ -185,7 +199,7 @@ mod tests {
             "/**\n * JSDoc.\n */\n\
              // comply-ignore: cyclomatic-complexity — exhaustive dispatch.\n",
         );
-        let diags = run_oxc_ts(&src, &Check);
+        let diags = crate::rules::test_helpers::run_rule(&Check, &src, "t.ts");
         assert_eq!(diags.len(), 1);
         let kept = crate::ignore_comments::apply_suppressions(
             diags,
@@ -201,7 +215,7 @@ mod tests {
     #[test]
     fn high_complexity_function_with_jsdoc_still_flagged() {
         let src = fixture("/**\n * JSDoc.\n */\n");
-        let diags = run_oxc_ts(&src, &Check);
+        let diags = crate::rules::test_helpers::run_rule(&Check, &src, "t.ts");
         assert_eq!(diags.len(), 1, "no ignore → diagnostic must remain");
         assert!(diags[0].message.contains("authorize"));
     }

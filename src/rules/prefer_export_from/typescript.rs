@@ -149,18 +149,34 @@ crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
     }
 }
 
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_ast_check(self, src, path, project, file)
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn run_ts(source: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_ts(source, &Check)
+        crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
     }
 
     #[test]
     fn flags_import_then_reexport() {
         let src = "import { foo } from './mod';\nexport { foo };";
-        let d = run_ts(src);
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "t.ts");
         assert_eq!(d.len(), 1);
         assert!(d[0].message.contains("export { foo } from './mod'"));
     }
@@ -168,29 +184,29 @@ mod tests {
     #[test]
     fn flags_multiple_reexports() {
         let src = "import { a, b } from './m';\nexport { a, b };";
-        let d = run_ts(src);
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "t.ts");
         assert_eq!(d.len(), 2);
     }
 
     #[test]
     fn allows_direct_export_from() {
-        assert!(run_ts("export { foo } from './mod';").is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, "export { foo } from './mod';", "t.ts").is_empty());
     }
 
     #[test]
     fn allows_import_used_locally() {
-        assert!(run_ts("import { foo } from './mod';\nconsole.log(foo);").is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, "import { foo } from './mod';\nconsole.log(foo);", "t.ts").is_empty());
     }
 
     #[test]
     fn allows_export_of_local() {
-        assert!(run_ts("const bar = 1;\nexport { bar };").is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, "const bar = 1;\nexport { bar };", "t.ts").is_empty());
     }
 
     #[test]
     fn handles_renamed_import() {
         let src = "import { foo as bar } from './m';\nexport { bar };";
-        let d = run_ts(src);
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "t.ts");
         assert_eq!(d.len(), 1);
         assert!(d[0].message.contains("bar"));
     }
@@ -200,12 +216,12 @@ mod tests {
         // GammeSchema is imported, used locally (GammeSchema.parse), and also
         // exported — cannot be converted to a re-export.
         let src = "import { GammeSchema } from './gamme-schema';\nconst x = GammeSchema.parse({});\nexport { GammeSchema };";
-        assert!(run_ts(src).is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, src, "t.ts").is_empty());
     }
 
     #[test]
     fn no_fp_when_import_aliased_used_locally_and_exported() {
         let src = "import { foo as bar } from './m';\nconsole.log(bar);\nexport { bar };";
-        assert!(run_ts(src).is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, src, "t.ts").is_empty());
     }
 }

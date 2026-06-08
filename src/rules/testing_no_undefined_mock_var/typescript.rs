@@ -42,7 +42,6 @@ crate::ast_check! { on ["variable_declarator"] => |node, source, ctx, diagnostic
     let Ok(var_name) = name_node.utf8_text(source) else { return; };
     if !var_name.chars().all(|c| c.is_alphanumeric() || c == '_') { return; }
 
-
     // Scan the full source for `<var_name>.mockReturnValue|mockResolvedValue|mockImplementation`.
     let configured = ["mockReturnValue", "mockResolvedValue", "mockImplementation"]
         .iter()
@@ -69,16 +68,32 @@ crate::ast_check! { on ["variable_declarator"] => |node, source, ctx, diagnostic
     });
 }
 
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_ast_check(self, src, path, project, file)
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn run(s: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_ts_with_path(s, &Check, "foo.test.ts")
+        crate::rules::test_helpers::run_rule(&Check, s, "foo.test.ts")
     }
 
     fn run_non_test(s: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_ts_with_path(s, &Check, "foo.ts")
+        crate::rules::test_helpers::run_rule(&Check, s, "foo.ts")
     }
 
     #[test]

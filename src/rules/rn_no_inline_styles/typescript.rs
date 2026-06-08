@@ -27,11 +27,27 @@ crate::ast_check! { on ["jsx_attribute"] => |node, source, ctx, diagnostics|
     }
 }
 
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_ast_check(self, src, path, project, file)
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
     fn run(s: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_tsx_with_framework(s, &Check, "react-native")
+        crate::rules::test_helpers::run_rule_with_ctx(&Check, s, "t.tsx", &crate::project::ProjectCtx::for_test_with_framework("react-native"), crate::rules::file_ctx::default_static_file_ctx())
     }
 
     #[test]
@@ -55,6 +71,6 @@ mod tests {
     #[test]
     fn ignores_non_react_native_projects() {
         let src = "const x = <div style={{ padding: 8 }} />;";
-        assert!(crate::rules::test_helpers::run_tsx(src, &Check).is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, src, "t.tsx").is_empty());
     }
 }

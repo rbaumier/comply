@@ -48,12 +48,28 @@ crate::ast_check! { on ["macro_invocation"] => |node, source, ctx, diagnostics|
     });
 }
 
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_ast_check(self, src, path, project, file)
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_rust(source, &Check)
+        crate::rules::test_helpers::run_rule(&Check, source, "t.rs")
     }
 
     #[test]
@@ -72,7 +88,7 @@ mod tests {
     fn ignores_panic_in_test_dir() {
         // Router::new() would trigger is_route_file, but path is under tests/
         let src = "use axum::Router;\nfn setup() { let _ = Router::new(); panic!(\"oops\"); }\n";
-        assert!(crate::rules::test_helpers::run_rust_with_path(src, &Check, "tests/helper.rs").is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, src, "tests/helper.rs").is_empty());
     }
 
     #[test]
