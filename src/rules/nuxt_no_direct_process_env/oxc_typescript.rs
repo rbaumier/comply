@@ -24,7 +24,7 @@ impl OxcCheck for Check {
     }
 
     fn interested_kinds(&self) -> &'static [AstType] {
-        &[AstType::MemberExpression]
+        &[AstType::StaticMemberExpression]
     }
 
     fn run<'a>(
@@ -38,16 +38,15 @@ impl OxcCheck for Check {
             return;
         }
 
-        let AstKind::MemberExpression(member) = node.kind() else { return };
+        let AstKind::StaticMemberExpression(member) = node.kind() else { return };
 
-        let full_span = member.span();
+        let full_span = member.span;
         let full_text = &ctx.source[full_span.start as usize..full_span.end as usize];
         if full_text != "process.env" && !full_text.starts_with("process.env.") {
             return;
         }
 
-        let obj = member.object();
-        let is_process = matches!(obj, Expression::Identifier(id) if id.name == "process");
+        let is_process = matches!(&member.object, Expression::Identifier(id) if id.name == "process");
         if !is_process {
             return;
         }

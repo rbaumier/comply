@@ -318,12 +318,13 @@ impl Config {
     }
 }
 
-const ALL_LANGUAGES: [Language; 12] = [
+const ALL_LANGUAGES: [Language; 13] = [
     Language::TypeScript,
     Language::Tsx,
     Language::JavaScript,
     Language::Rust,
     Language::Vue,
+    Language::Svelte,
     Language::Toml,
     Language::Json,
     Language::Css,

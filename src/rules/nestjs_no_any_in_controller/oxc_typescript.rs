@@ -47,7 +47,7 @@ impl OxcCheck for Check {
             let Some(deco) = deco_text else { continue };
 
             // Check if the type annotation is `any`.
-            let Some(ref type_ann) = param.pattern.type_annotation else { continue };
+            let Some(ref type_ann) = param.type_annotation else { continue };
             let is_any = matches!(&type_ann.type_annotation, TSType::TSAnyKeyword(_));
             if !is_any {
                 continue;

@@ -21,6 +21,7 @@ const TSX_EXTENSIONS: &[&str] = &["tsx", "jsx"];
 const JS_EXTENSIONS: &[&str] = &["js", "mjs"];
 const RUST_EXTENSIONS: &[&str] = &["rs"];
 const VUE_EXTENSIONS: &[&str] = &["vue"];
+const SVELTE_EXTENSIONS: &[&str] = &["svelte"];
 const TOML_EXTENSIONS: &[&str] = &["toml"];
 const JSON_EXTENSIONS: &[&str] = &["json"];
 const CSS_EXTENSIONS: &[&str] = &["css"];
@@ -75,6 +76,8 @@ pub enum Language {
     /// GraphQL schema or operation file `.graphql` / `.gql` — text-based
     /// rules only.
     GraphQl,
+    /// Svelte component `.svelte` — text-based rules only.
+    Svelte,
 }
 
 impl Language {
@@ -95,6 +98,7 @@ impl Language {
             Language::Dockerfile => "dockerfile",
             Language::Sql => "sql",
             Language::GraphQl => "graphql",
+            Language::Svelte => "svelte",
         }
     }
 
@@ -131,6 +135,8 @@ impl Language {
             Some(Language::Rust)
         } else if VUE_EXTENSIONS.contains(&ext) {
             Some(Language::Vue)
+        } else if SVELTE_EXTENSIONS.contains(&ext) {
+            Some(Language::Svelte)
         } else if TOML_EXTENSIONS.contains(&ext) {
             Some(Language::Toml)
         } else if JSON_EXTENSIONS.contains(&ext) {

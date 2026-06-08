@@ -3,6 +3,7 @@ use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::project::Framework;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::Expression;
+use oxc_span::GetSpan;
 use std::sync::Arc;
 
 pub struct Check;
