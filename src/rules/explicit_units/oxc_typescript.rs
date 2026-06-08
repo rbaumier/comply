@@ -34,6 +34,14 @@ const AMBIGUOUS_BASES: &[&str] = &[
 const KNOWN_SUFFIXES: &[&str] = &[
     "Ms", "Sec", "Seconds", "Minutes", "Hours", "Days", "Bytes", "Kb", "Mb", "Gb", "Kib", "Mib",
     "Gib", "Px", "Em", "Rem", "Pct", "Percent", "Rps", "Qps", "Hz", "Khz", "Count",
+    // Distance
+    "Meters", "Kilometers", "Millimeters", "Centimeters",
+    // Weight
+    "Grams", "Kilograms", "Milligrams",
+    // Time (full-word variants; Seconds/Minutes/Hours/Days already above)
+    "Milliseconds", "Microseconds", "Nanoseconds",
+    // Storage (full-word variants; Bytes already above)
+    "Kilobytes", "Megabytes", "Gigabytes", "Terabytes",
 ];
 
 pub struct Check;
@@ -160,5 +168,20 @@ mod tests {
     #[test]
     fn does_not_flag_non_ambiguous_name() {
         assert!(run_on("const count: number = 5;").is_empty());
+    }
+
+    #[test]
+    fn allows_distance_in_meters() {
+        assert!(run_on("function f(distanceInMeters: number = 0) {}").is_empty());
+    }
+
+    #[test]
+    fn allows_delay_in_milliseconds() {
+        assert!(run_on("const delayInMilliseconds: number = 100;").is_empty());
+    }
+
+    #[test]
+    fn allows_size_in_kilobytes() {
+        assert!(run_on("const sizeInKilobytes: number = 1024;").is_empty());
     }
 }
