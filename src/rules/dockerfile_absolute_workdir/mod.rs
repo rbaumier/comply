@@ -1,7 +1,7 @@
 //! dockerfile-absolute-workdir — WORKDIR must use an absolute path so the
 //! working directory is deterministic regardless of the previous WORKDIR.
 
-mod typescript;
+mod check;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
@@ -26,7 +26,7 @@ pub fn register() -> RuleDef {
         meta: META,
         backends: vec![(
             Language::Dockerfile,
-            Backend::TreeSitter(Box::new(typescript::Check)),
+            Backend::TreeSitter(Box::new(check::Check)),
         )],
     }
 }

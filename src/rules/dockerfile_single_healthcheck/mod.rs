@@ -1,7 +1,7 @@
 //! dockerfile-single-healthcheck — only the last HEALTHCHECK takes effect, so
 //! multiple HEALTHCHECKs in the same image are misleading.
 
-mod typescript;
+mod check;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
@@ -26,7 +26,7 @@ pub fn register() -> RuleDef {
         meta: META,
         backends: vec![(
             Language::Dockerfile,
-            Backend::TreeSitter(Box::new(typescript::Check)),
+            Backend::TreeSitter(Box::new(check::Check)),
         )],
     }
 }

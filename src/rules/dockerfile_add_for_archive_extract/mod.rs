@@ -1,7 +1,7 @@
 //! dockerfile-add-for-archive-extract — ADD with a URL leaves the downloaded
 //! file in the layer; use RUN curl/wget + tar instead.
 
-mod typescript;
+mod check;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
@@ -26,7 +26,7 @@ pub fn register() -> RuleDef {
         meta: META,
         backends: vec![(
             Language::Dockerfile,
-            Backend::TreeSitter(Box::new(typescript::Check)),
+            Backend::TreeSitter(Box::new(check::Check)),
         )],
     }
 }
