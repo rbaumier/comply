@@ -34,6 +34,22 @@ fn is_expect_call(callee: &Expression) -> bool {
     }
 }
 
+/// Returns true if the function node at `node_id` is declared at module (program) level.
+/// `ancestor_kinds` starts from the direct parent (does not include the node itself).
+fn is_module_level_function(
+    node_id: oxc_semantic::NodeId,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    for kind in semantic.nodes().ancestor_kinds(node_id) {
+        match kind {
+            AstKind::Program(_) => return true,
+            AstKind::Function(_) | AstKind::ArrowFunctionExpression(_) => return false,
+            _ => {} // skip intermediate AST wrappers (ExportNamedDeclaration, FunctionBody, etc.)
+        }
+    }
+    false
+}
+
 /// Walk up semantic parent nodes to check if this node is inside a test/hook callback.
 fn is_inside_test_or_hook<'a>(
     node: &oxc_semantic::AstNode<'a>,
@@ -71,12 +87,61 @@ fn is_inside_test_or_hook<'a>(
                             }
                     }
                 }
+                // A named function declared at module level is a test helper —
+                // expect() inside it will run in a test context when called.
+                if matches!(parent.kind(), AstKind::Function(_))
+                    && is_module_level_function(parent_id, semantic)
+                {
+                    return true;
+                }
             }
             _ => {}
         }
         cur = parent_id;
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const PW_IMPORT: &str = "import { test, expect } from \"@playwright/test\";\n";
+
+    fn run_ts(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_path(
+            &format!("{PW_IMPORT}{source}"),
+            &Check,
+            "app.test.ts",
+        )
+    }
+
+    #[test]
+    fn flags_standalone_expect() {
+        let d = run_ts("expect(1).toBe(1);");
+        assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn allows_expect_in_test() {
+        let d = run_ts("test('ok', () => { expect(1).toBe(1); });");
+        assert!(d.is_empty());
+    }
+
+    #[test]
+    fn allows_expect_in_helper_called_from_test() {
+        let d = run_ts(
+            r#"
+function assertUrl(page) {
+  expect(page).toHaveURL(/\/dashboard/);
+}
+test('my test', () => {
+  assertUrl(page);
+});
+"#,
+        );
+        assert!(d.is_empty(), "expect in helper called from test should be allowed");
+    }
 }
 
 impl OxcCheck for Check {
