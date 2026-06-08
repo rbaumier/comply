@@ -465,6 +465,12 @@ pub struct ProjectCtx {
     // neither a suppression nor a malformed marker). Keyed by the discovery path
     // (same value `apply_to_all` iterates), so no canonicalization is needed.
     clean_files: Mutex<HashSet<PathBuf>>,
+
+    // Prisma model names (lowercase) that have a `deletedAt` field in the
+    // project's schema.prisma. `None` when no schema.prisma is found (rules
+    // fall back to the old "fire on all" behaviour). Populated lazily on
+    // first access, cached for the lifetime of the run.
+    prisma_soft_delete_models: OnceLock<Option<HashSet<String>>>,
 }
 
 impl ProjectCtx {
@@ -865,6 +871,87 @@ impl ProjectCtx {
                 .collect()
         })
     }
+
+    /// Lazily-loaded set of Prisma model names (lowercase) that declare a
+    /// `deletedAt` field in the project's `schema.prisma`. Returns `None` when
+    /// no `schema.prisma` is found — callers should fire on all models in that
+    /// case to preserve backward-compatible behaviour.
+    pub fn prisma_soft_delete_models(&self) -> Option<&HashSet<String>> {
+        self.prisma_soft_delete_models
+            .get_or_init(|| {
+                let start: PathBuf = self
+                    .project_root
+                    .clone()
+                    .or_else(|| std::env::current_dir().ok())?;
+                let schema_dir = walk_up_finding(&start, "schema.prisma")?;
+                let schema =
+                    std::fs::read_to_string(schema_dir.join("schema.prisma")).ok()?;
+                Some(parse_prisma_soft_delete_models(&schema))
+            })
+            .as_ref()
+    }
+
+    #[cfg(test)]
+    #[must_use]
+    pub fn for_test_with_prisma_models(models: &[&str]) -> Self {
+        let ctx = ProjectCtx::default();
+        let set: HashSet<String> = models.iter().map(|s| s.to_lowercase()).collect();
+        let _ = ctx.prisma_soft_delete_models.set(Some(set));
+        ctx
+    }
+}
+
+/// Parse a `schema.prisma` text and return the lowercase names of models that
+/// declare a `deletedAt` field. Uses a simple line-based scan — no full Prisma
+/// parser needed.
+fn parse_prisma_soft_delete_models(schema: &str) -> HashSet<String> {
+    let mut result = HashSet::new();
+    let mut current_model: Option<String> = None;
+    let mut block_has_deleted_at = false;
+    let mut depth: i32 = 0;
+
+    for line in schema.lines() {
+        let trimmed = line.trim();
+
+        if let Some(ref _name) = current_model {
+            // Count brace depth to detect block end.
+            for c in trimmed.chars() {
+                match c {
+                    '{' => depth += 1,
+                    '}' => depth -= 1,
+                    _ => {}
+                }
+            }
+            if trimmed.contains("deletedAt") {
+                block_has_deleted_at = true;
+            }
+            if depth == 0 {
+                if block_has_deleted_at {
+                    result.insert(current_model.take().unwrap().to_lowercase());
+                } else {
+                    current_model = None;
+                }
+                block_has_deleted_at = false;
+            }
+        } else if trimmed.starts_with("model ") {
+            let rest = &trimmed["model ".len()..];
+            let name = rest.split_whitespace().next().unwrap_or("");
+            if name.is_empty() || name == "{" {
+                continue;
+            }
+            current_model = Some(name.to_string());
+            block_has_deleted_at = false;
+            depth = 0;
+            for c in trimmed.chars() {
+                match c {
+                    '{' => depth += 1,
+                    '}' => depth -= 1,
+                    _ => {}
+                }
+            }
+        }
+    }
+    result
 }
 
 /// Resolve workspace glob patterns to actual package directories.

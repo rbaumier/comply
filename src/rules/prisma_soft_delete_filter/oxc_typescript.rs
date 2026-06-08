@@ -42,6 +42,18 @@ impl OxcCheck for Check {
         if !ctx.source_contains("prisma") {
             return;
         }
+        // When a schema.prisma is available, skip models that don't have a
+        // `deletedAt` field — they can't have soft-deleted rows, so the
+        // missing filter is not a bug. Fall through when no schema is found
+        // (backward-compatible: fire on all).
+        if let Expression::StaticMemberExpression(inner) = &member.object {
+            let model_name = inner.property.name.as_str();
+            if let Some(models) = ctx.project.prisma_soft_delete_models() {
+                if !models.contains(model_name.to_lowercase().as_str()) {
+                    return;
+                }
+            }
+        }
         // Heuristic: scan the entire call source range for
         // `deletedAt` — present anywhere in the where clause is fine.
         let span_text = &ctx.source[call.span.start as usize..call.span.end as usize];
@@ -67,9 +79,14 @@ impl OxcCheck for Check {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::project::ProjectCtx;
 
     fn run(src: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_oxc_ts(src, &Check)
+    }
+
+    fn run_with_project(src: &str, project: &ProjectCtx) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_project(src, &Check, project)
     }
 
     #[test]
@@ -88,5 +105,24 @@ mod tests {
     fn ignores_non_prisma_callers() {
         let src = r#"const r = obj.findMany({ where: { active: true } });"#;
         assert!(run(src).is_empty());
+    }
+
+    // Regression tests for issue #836: FP on models without deletedAt field.
+
+    #[test]
+    fn ignores_find_first_on_model_without_deleted_at_in_schema() {
+        // schema contains "envelope" with deletedAt, but not "user"
+        let project = ProjectCtx::for_test_with_prisma_models(&["envelope"]);
+        let src =
+            r#"const u = await prisma.user.findFirst({ where: { email: "x" } });"#;
+        assert!(run_with_project(src, &project).is_empty());
+    }
+
+    #[test]
+    fn flags_find_first_on_model_with_deleted_at_in_schema() {
+        let project = ProjectCtx::for_test_with_prisma_models(&["envelope"]);
+        let src =
+            r#"const e = await prisma.envelope.findFirst({ where: { id: "1" } });"#;
+        assert_eq!(run_with_project(src, &project).len(), 1);
     }
 }
