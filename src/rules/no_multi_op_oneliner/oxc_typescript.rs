@@ -97,21 +97,35 @@ impl OxcCheck for Check {
 }
 
 #[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+#[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rules::test_helpers::run_oxc_ts;
-
+    
     #[test]
     fn ignores_regex_literal_character_classes() {
         // Regression for issue #524: a regex literal's `-`, `/` and quantifier
         // syntax are not chained operations.
         let src = "const UUIDV7_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[0-9a-f]{4}-[0-9a-f]{12}$/;";
-        assert!(run_oxc_ts(src, &Check).is_empty(), "got {:?}", run_oxc_ts(src, &Check));
+        assert!(crate::rules::test_helpers::run_rule(&Check, src, "t.ts").is_empty(), "got {:?}", crate::rules::test_helpers::run_rule(&Check, src, "t.ts"));
     }
 
     #[test]
     fn still_flags_dense_operator_chain() {
         let src = "const total = items.map(x => x.price).filter(p => p > 0).reduce((a, b) => a + b, 0) + extra;";
-        assert_eq!(run_oxc_ts(src, &Check).len(), 1);
+        assert_eq!(crate::rules::test_helpers::run_rule(&Check, src, "t.ts").len(), 1);
     }
 }

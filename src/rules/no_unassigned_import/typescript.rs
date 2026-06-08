@@ -47,32 +47,48 @@ crate::ast_check! { on ["import_statement"] => |node, source, ctx, diagnostics|
     });
 }
 
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_ast_check(self, src, path, project, file)
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn flags_side_effect_import() {
-        let d = crate::rules::test_helpers::run_ts("import 'polyfill';", &Check);
+        let d = crate::rules::test_helpers::run_rule(&Check, "import 'polyfill';", "t.ts");
         assert_eq!(d.len(), 1);
         assert!(d[0].message.contains("polyfill"));
     }
 
     #[test]
     fn allows_css_import() {
-        let d = crate::rules::test_helpers::run_ts("import './styles.css';", &Check);
+        let d = crate::rules::test_helpers::run_rule(&Check, "import './styles.css';", "t.ts");
         assert!(d.is_empty());
     }
 
     #[test]
     fn allows_named_import() {
-        let d = crate::rules::test_helpers::run_ts("import { foo } from 'bar';", &Check);
+        let d = crate::rules::test_helpers::run_rule(&Check, "import { foo } from 'bar';", "t.ts");
         assert!(d.is_empty());
     }
 
     #[test]
     fn flags_double_quoted_side_effect() {
-        let d = crate::rules::test_helpers::run_ts(r#"import "reflect-metadata";"#, &Check);
+        let d = crate::rules::test_helpers::run_rule(&Check, r#"import "reflect-metadata";"#, "t.ts");
         assert_eq!(d.len(), 1);
     }
 }

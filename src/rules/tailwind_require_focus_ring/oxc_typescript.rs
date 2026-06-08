@@ -120,11 +120,26 @@ impl OxcCheck for Check {
 }
 
 #[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+#[cfg(test)]
 mod tests {
     use super::*;
 
     fn run(s: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_oxc_tsx(s, &Check)
+        crate::rules::test_helpers::run_rule(&Check, s, "t.tsx")
     }
 
     #[test]
@@ -246,7 +261,7 @@ mod tests {
     #[test]
     fn skips_shadcn_ui_components() {
         let src = r#"export const A = <button className="px-4" />;"#;
-        let d = crate::rules::test_helpers::run_oxc_ts_with_path(src, &Check, "src/components/ui/sidebar.tsx");
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "src/components/ui/sidebar.tsx");
         assert!(d.is_empty());
     }
 }

@@ -92,39 +92,55 @@ match node.kind() {
     }
 }
 
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_ast_check(self, src, path, project, file)
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn run_ts(source: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_ts(source, &Check)
+        crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
     }
 
     #[test]
     fn flags_bitwise_or_zero() {
-        let d = run_ts("const n = value | 0;");
+        let d = crate::rules::test_helpers::run_rule(&Check, "const n = value | 0;", "t.ts");
         assert_eq!(d.len(), 1);
         assert_eq!(d[0].rule_id, "prefer-math-trunc");
     }
 
     #[test]
     fn flags_double_tilde() {
-        let d = run_ts("const n = ~~value;");
+        let d = crate::rules::test_helpers::run_rule(&Check, "const n = ~~value;", "t.ts");
         assert_eq!(d.len(), 1);
     }
 
     #[test]
     fn allows_math_trunc() {
-        assert!(run_ts("const n = Math.trunc(value);").is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, "const n = Math.trunc(value);", "t.ts").is_empty());
     }
 
     #[test]
     fn ignores_string_literal() {
-        assert!(run_ts(r#"const s = "value | 0";"#).is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, r#"const s = "value | 0";"#, "t.ts").is_empty());
     }
 
     #[test]
     fn ignores_comment() {
-        assert!(run_ts("// value | 0").is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, "// value | 0", "t.ts").is_empty());
     }
 }

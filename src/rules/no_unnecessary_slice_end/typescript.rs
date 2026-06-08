@@ -45,32 +45,48 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     }
 }
 
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_ast_check(self, src, path, project, file)
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn flags_slice_with_length() {
-        let d = crate::rules::test_helpers::run_ts("arr.slice(2, arr.length);", &Check);
+        let d = crate::rules::test_helpers::run_rule(&Check, "arr.slice(2, arr.length);", "t.ts");
         assert_eq!(d.len(), 1);
         assert_eq!(d[0].rule_id, "no-unnecessary-slice-end");
     }
 
     #[test]
     fn flags_slice_with_infinity() {
-        let d = crate::rules::test_helpers::run_ts("str.slice(0, Infinity);", &Check);
+        let d = crate::rules::test_helpers::run_rule(&Check, "str.slice(0, Infinity);", "t.ts");
         assert_eq!(d.len(), 1);
     }
 
     #[test]
     fn allows_slice_without_end() {
-        let d = crate::rules::test_helpers::run_ts("arr.slice(2);", &Check);
+        let d = crate::rules::test_helpers::run_rule(&Check, "arr.slice(2);", "t.ts");
         assert!(d.is_empty());
     }
 
     #[test]
     fn allows_slice_with_numeric_end() {
-        let d = crate::rules::test_helpers::run_ts("arr.slice(2, 5);", &Check);
+        let d = crate::rules::test_helpers::run_rule(&Check, "arr.slice(2, 5);", "t.ts");
         assert!(d.is_empty());
     }
 }

@@ -45,12 +45,28 @@ crate::ast_check! { |node, source, ctx, diagnostics|
     ));
 }
 
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_ast_check(self, src, path, project, file)
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn run(src: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_ts(src, &Check)
+        crate::rules::test_helpers::run_rule(&Check, src, "t.ts")
     }
 
     #[test]
@@ -86,7 +102,7 @@ mod tests {
             path_segments: PathSegments { in_test_dir: true, ..PathSegments::default() },
             ..Default::default()
         };
-        let diags = crate::rules::test_helpers::run_ts_with_file_ctx(src, &Check, &file);
+        let diags = crate::rules::test_helpers::run_rule_with_ctx(&Check, src, "t.ts", crate::project::default_static_project_ctx(), &file);
         assert!(diags.is_empty());
     }
 }

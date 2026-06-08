@@ -152,11 +152,26 @@ crate::ast_check! { on ["program"] prefilter = ["enum"] => |node, source, ctx, d
     }
 }
 
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_ast_check(self, src, path, project, file)
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rules::test_helpers::run_ts;
-
+    
     #[test]
     fn flags_unused_enum_member() {
         let source = r#"
@@ -168,7 +183,7 @@ enum Color {
 const x = Color.Red;
 const y = Color.Green;
 "#;
-        let diags = run_ts(source, &Check);
+        let diags = crate::rules::test_helpers::run_rule(&Check, source, "t.ts");
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("Blue"));
     }
@@ -183,14 +198,14 @@ enum Status {
 const a = Status.Active;
 const b = Status.Inactive;
 "#;
-        let diags = run_ts(source, &Check);
+        let diags = crate::rules::test_helpers::run_rule(&Check, source, "t.ts");
         assert!(diags.is_empty());
     }
 
     #[test]
     fn allows_no_enums() {
         let source = "const x = 1;";
-        let diags = run_ts(source, &Check);
+        let diags = crate::rules::test_helpers::run_rule(&Check, source, "t.ts");
         assert!(diags.is_empty());
     }
 
@@ -204,7 +219,7 @@ enum Direction {
     Right,
 }
 "#;
-        let diags = run_ts(source, &Check);
+        let diags = crate::rules::test_helpers::run_rule(&Check, source, "t.ts");
         assert_eq!(diags.len(), 4);
     }
 
@@ -217,7 +232,7 @@ export enum CastState {
     PAUSED,
 }
 "#;
-        assert!(run_ts(source, &Check).is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, source, "t.ts").is_empty());
     }
 
     #[test]
@@ -231,7 +246,7 @@ enum Code {
 const a = Code.Ok;
 const b = Code.NotFound;
 "#;
-        let diags = run_ts(source, &Check);
+        let diags = crate::rules::test_helpers::run_rule(&Check, source, "t.ts");
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("Teapot"));
     }

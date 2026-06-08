@@ -56,20 +56,35 @@ impl OxcCheck for Check {
 }
 
 #[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::rules::file_ctx::{FileCtx, PathSegments};
-    use crate::rules::test_helpers::{run_oxc_tsx_with_file_ctx, run_oxc_ts};
+    
 
     #[test]
     fn flags_query_client_without_stale_time() {
-        assert_eq!(run_oxc_ts("const c = new QueryClient();", &Check).len(), 1);
+        assert_eq!(crate::rules::test_helpers::run_rule(&Check, "const c = new QueryClient();", "t.ts").len(), 1);
     }
 
     #[test]
     fn allows_query_client_with_stale_time() {
         let src = "const c = new QueryClient({ defaultOptions: { queries: { staleTime: 60_000 } } });";
-        assert!(run_oxc_ts(src, &Check).is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, src, "t.ts").is_empty());
     }
 
     #[test]
@@ -83,6 +98,6 @@ mod tests {
             path_segments: PathSegments { in_test_dir: true, ..Default::default() },
             ..Default::default()
         };
-        assert!(run_oxc_tsx_with_file_ctx(src, &Check, &file).is_empty());
+        assert!(crate::rules::test_helpers::run_rule_with_ctx(&Check, src, "t.tsx", crate::project::default_static_project_ctx(), &file).is_empty());
     }
 }

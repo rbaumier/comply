@@ -222,48 +222,64 @@ fn has_dirname_wrapper_parent(call: tree_sitter::Node<'_>, source: &[u8]) -> boo
     }
 }
 
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_ast_check(self, src, path, project, file)
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn run_ts(source: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_ts(source, &Check)
+        crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
     }
 
     #[test]
     fn flags_file_url_to_path() {
-        let d = run_ts("const file = fileURLToPath(import.meta.url);");
+        let d = crate::rules::test_helpers::run_rule(&Check, "const file = fileURLToPath(import.meta.url);", "t.ts");
         assert_eq!(d.len(), 1);
         assert!(d[0].message.contains("import.meta.filename"));
     }
 
     #[test]
     fn flags_dirname_pattern() {
-        let d = run_ts("const dir = dirname(fileURLToPath(import.meta.url));");
+        let d = crate::rules::test_helpers::run_rule(&Check, "const dir = dirname(fileURLToPath(import.meta.url));", "t.ts");
         assert_eq!(d.len(), 1);
         assert!(d[0].message.contains("import.meta.dirname"));
     }
 
     #[test]
     fn flags_path_dirname_pattern() {
-        let d = run_ts("const dir = path.dirname(fileURLToPath(import.meta.url));");
+        let d = crate::rules::test_helpers::run_rule(&Check, "const dir = path.dirname(fileURLToPath(import.meta.url));", "t.ts");
         assert_eq!(d.len(), 1);
         assert!(d[0].message.contains("import.meta.dirname"));
     }
 
     #[test]
     fn allows_import_meta_filename() {
-        assert!(run_ts("const file = import.meta.filename;").is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, "const file = import.meta.filename;", "t.ts").is_empty());
     }
 
     #[test]
     fn allows_import_meta_dirname() {
-        assert!(run_ts("const dir = import.meta.dirname;").is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, "const dir = import.meta.dirname;", "t.ts").is_empty());
     }
 
     #[test]
     fn no_duplicate_for_dirname_containing_file_url() {
-        let d = run_ts("const dir = dirname(fileURLToPath(import.meta.url));");
+        let d = crate::rules::test_helpers::run_rule(&Check, "const dir = dirname(fileURLToPath(import.meta.url));", "t.ts");
         assert_eq!(d.len(), 1);
     }
 }

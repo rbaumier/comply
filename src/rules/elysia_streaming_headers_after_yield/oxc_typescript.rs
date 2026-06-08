@@ -95,10 +95,24 @@ fn is_monadic_gen_callback<'a>(
 }
 
 #[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+#[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rules::test_helpers::run_oxc_ts_with_framework;
-
+    
     // Regression for #285: a `Result.gen(async function* () { … })` nested in an
     // arrow handler is a monadic generator — its `yield*` are binds, and the
     // handler returns a buffered value. No streaming, nothing to flag.
@@ -115,7 +129,7 @@ mod tests {
                 }))
             );
         "#;
-        let d = run_oxc_ts_with_framework(src, &Check, "elysia");
+        let d = crate::rules::test_helpers::run_rule_with_ctx(&Check, src, "t.ts", &crate::project::ProjectCtx::for_test_with_framework("elysia"), crate::rules::file_ctx::default_static_file_ctx());
         assert!(d.is_empty(), "monadic generator must not flag: {d:?}");
     }
 
@@ -129,7 +143,7 @@ mod tests {
                 set.headers["content-type"] = "text/event-stream";
             });
         "#;
-        let d = run_oxc_ts_with_framework(src, &Check, "elysia");
+        let d = crate::rules::test_helpers::run_rule_with_ctx(&Check, src, "t.ts", &crate::project::ProjectCtx::for_test_with_framework("elysia"), crate::rules::file_ctx::default_static_file_ctx());
         assert_eq!(d.len(), 1, "headers after yield in a stream must flag: {d:?}");
     }
 }

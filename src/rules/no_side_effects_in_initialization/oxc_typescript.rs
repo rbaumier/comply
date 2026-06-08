@@ -275,37 +275,46 @@ impl OxcCheck for Check {
 }
 
 #[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+#[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rules::test_helpers::{
-        run_oxc_ts, run_oxc_ts_with_path, run_oxc_tsx_with_path_and_framework,
-    };
+    
 
     #[test]
     fn flags_top_level_bare_call() {
-        let diags = run_oxc_ts("doThing();", &Check);
+        let diags = crate::rules::test_helpers::run_rule(&Check, "doThing();", "t.ts");
         assert_eq!(diags.len(), 1);
     }
 
     #[test]
     fn flags_top_level_new_expression() {
-        let diags = run_oxc_ts("new EventEmitter();", &Check);
+        let diags = crate::rules::test_helpers::run_rule(&Check, "new EventEmitter();", "t.ts");
         assert_eq!(diags.len(), 1);
     }
 
     #[test]
     fn allows_pure_annotated_call() {
-        let diags = run_oxc_ts("/*#__PURE__*/ registerSomething();", &Check);
+        let diags = crate::rules::test_helpers::run_rule(&Check, "/*#__PURE__*/ registerSomething();", "t.ts");
         assert!(diags.is_empty());
     }
 
     #[test]
     fn skips_test_files() {
-        let diags = run_oxc_ts_with_path(
-            "expectType<string>(foo());",
-            &Check,
-            "main.test-d.ts",
-        );
+        let diags = crate::rules::test_helpers::run_rule(&Check, "expectType<string>(foo());", "main.test-d.ts");
         assert!(diags.is_empty());
     }
 
@@ -317,11 +326,7 @@ mod tests {
             import { beforeAll, afterEach } from 'vitest';\n\
             beforeAll(() => { startMockServer({ onUnhandledRequest: 'error' }); });\n\
             afterEach(() => { mswServer.resetHandlers(); });\n";
-        let diags = run_oxc_ts_with_path(
-            src,
-            &Check,
-            "src/test-helpers/setup-msw.ts",
-        );
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/test-helpers/setup-msw.ts");
         assert!(
             diags.is_empty(),
             "vitest setup file by convention path should be exempt, got {diags:?}"
@@ -332,26 +337,26 @@ mod tests {
     // contract — the runner imports it to run exactly those effects.
     #[test]
     fn allows_vitest_setup_file_at_root() {
-        let diags = run_oxc_ts_with_path("ensureWorkerDatabase();", &Check, "vitest.setup.ts");
+        let diags = crate::rules::test_helpers::run_rule(&Check, "ensureWorkerDatabase();", "vitest.setup.ts");
         assert!(diags.is_empty(), "vitest.setup.ts should be exempt, got {diags:?}");
     }
 
     #[test]
     fn allows_jest_setup_file() {
-        let diags = run_oxc_ts_with_path("installMatchers();", &Check, "jest.setup.ts");
+        let diags = crate::rules::test_helpers::run_rule(&Check, "installMatchers();", "jest.setup.ts");
         assert!(diags.is_empty(), "jest.setup.ts should be exempt, got {diags:?}");
     }
 
     #[test]
     fn allows_bare_setup_file() {
-        let diags = run_oxc_ts_with_path("provisionDb();", &Check, "test/setup.ts");
+        let diags = crate::rules::test_helpers::run_rule(&Check, "provisionDb();", "test/setup.ts");
         assert!(diags.is_empty(), "setup.ts should be exempt, got {diags:?}");
     }
 
     #[test]
     fn still_flags_regular_module_with_setup_in_name() {
         // `setupRouter.ts` is an ordinary module, not a runner setup file.
-        let diags = run_oxc_ts_with_path("buildRouter();", &Check, "src/setupRouter.ts");
+        let diags = crate::rules::test_helpers::run_rule(&Check, "buildRouter();", "src/setupRouter.ts");
         assert_eq!(diags.len(), 1, "setupRouter.ts must still be flagged, got {diags:?}");
     }
 
@@ -363,7 +368,7 @@ mod tests {
             afterEach(() => { reset(); });\n\
             expect.extend({ toBeFoo() { return { pass: true, message: () => '' }; } });\n";
         // Path does NOT match the convention — content shape carries the exemption.
-        let diags = run_oxc_ts_with_path(src, &Check, "src/some/random/file.ts");
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/some/random/file.ts");
         assert!(
             diags.is_empty(),
             "all-hooks content shape should exempt the file, got {diags:?}"
@@ -376,7 +381,7 @@ mod tests {
         let src = "\
             function beforeAll(fn: () => void) { fn(); }\n\
             beforeAll(() => someSideEffect());\n";
-        let diags = run_oxc_ts_with_path(src, &Check, "src/foo.ts");
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/foo.ts");
         assert_eq!(
             diags.len(),
             1,
@@ -389,7 +394,7 @@ mod tests {
         let src = "\
             beforeAll(() => { boot(); });\n\
             someOtherCall();\n";
-        let diags = run_oxc_ts_with_path(src, &Check, "src/some/file.ts");
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/some/file.ts");
         assert_eq!(
             diags.len(),
             2,
@@ -408,12 +413,7 @@ mod tests {
             initZodLocale();\n\
             stripSensitiveQueryFromUrlBar();\n\
             startTransition(() => { hydrateRoot(document, <StartClient />); });\n";
-        let diags = run_oxc_tsx_with_path_and_framework(
-            src,
-            &Check,
-            "src/app/client.tsx",
-            "tanstack-router",
-        );
+        let diags = crate::rules::test_helpers::run_rule_with_ctx(&Check, src, "src/app/client.tsx", &crate::project::ProjectCtx::for_test_with_framework("tanstack-router"), crate::rules::file_ctx::default_static_file_ctx());
         assert!(
             diags.is_empty(),
             "framework entry point should be exempt, got {diags:?}"
@@ -423,12 +423,7 @@ mod tests {
     #[test]
     fn allows_tanstack_router_entry() {
         let src = "createRouter({ routeTree, defaultPreload: 'intent' });\n";
-        let diags = run_oxc_tsx_with_path_and_framework(
-            src,
-            &Check,
-            "src/app/router.tsx",
-            "tanstack-router",
-        );
+        let diags = crate::rules::test_helpers::run_rule_with_ctx(&Check, src, "src/app/router.tsx", &crate::project::ProjectCtx::for_test_with_framework("tanstack-router"), crate::rules::file_ctx::default_static_file_ctx());
         assert!(diags.is_empty(), "router.tsx entry should be exempt");
     }
 
@@ -439,12 +434,7 @@ mod tests {
             import { startTransition } from 'react';\n\
             import { hydrateRoot } from 'react-dom/client';\n\
             initZodLocale();\n";
-        let diags = run_oxc_tsx_with_path_and_framework(
-            src,
-            &Check,
-            "src/utils/client.tsx",
-            "tanstack-router",
-        );
+        let diags = crate::rules::test_helpers::run_rule_with_ctx(&Check, src, "src/utils/client.tsx", &crate::project::ProjectCtx::for_test_with_framework("tanstack-router"), crate::rules::file_ctx::default_static_file_ctx());
         assert_eq!(
             diags.len(),
             1,
@@ -459,7 +449,7 @@ mod tests {
         let src = "\
             import { startTransition } from 'react';\n\
             startTransition(() => { hydrateRoot(document, null); });\n";
-        let diags = run_oxc_ts(src, &Check);
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "t.ts");
         assert!(
             diags.is_empty(),
             "startTransition imported from react is exempt, got {diags:?}"
@@ -471,7 +461,7 @@ mod tests {
         let src = "\
             import { startTransition as ST } from 'react';\n\
             ST(() => { hydrateRoot(document, null); });\n";
-        let diags = run_oxc_ts(src, &Check);
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "t.ts");
         assert!(
             diags.is_empty(),
             "aliased startTransition import is exempt, got {diags:?}"
@@ -483,7 +473,7 @@ mod tests {
         let src = "\
             import { startTransition } from 'some-other-lib';\n\
             startTransition(() => { boot(); });\n";
-        let diags = run_oxc_ts(src, &Check);
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "t.ts");
         assert_eq!(
             diags.len(),
             1,
@@ -494,7 +484,7 @@ mod tests {
     #[test]
     fn still_flags_bare_start_transition_identifier_without_import() {
         let src = "startTransition(() => { boot(); });\n";
-        let diags = run_oxc_ts(src, &Check);
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "t.ts");
         assert_eq!(
             diags.len(),
             1,
@@ -506,31 +496,19 @@ mod tests {
 
     #[test]
     fn allows_config_file_with_side_effects() {
-        let diags = run_oxc_ts_with_path(
-            "setEnvVariablesThatAreUsedBeforeSetup();",
-            &Check,
-            "vitest.config.mts",
-        );
+        let diags = crate::rules::test_helpers::run_rule(&Check, "setEnvVariablesThatAreUsedBeforeSetup();", "vitest.config.mts");
         assert!(diags.is_empty(), "config files should be exempt, got {diags:?}");
     }
 
     #[test]
     fn allows_dtslint_type_check_file() {
-        let diags = run_oxc_ts_with_path(
-            "foo(bar, baz)(qux);",
-            &Check,
-            "dtslint/Traversable.ts",
-        );
+        let diags = crate::rules::test_helpers::run_rule(&Check, "foo(bar, baz)(qux);", "dtslint/Traversable.ts");
         assert!(diags.is_empty(), "dtslint/ files are type-checking utilities, got {diags:?}");
     }
 
     #[test]
     fn allows_test_d_type_test_file() {
-        let diags = run_oxc_ts_with_path(
-            "expectNotAssignable(foo);",
-            &Check,
-            "test-d/schema.ts",
-        );
+        let diags = crate::rules::test_helpers::run_rule(&Check, "expectNotAssignable(foo);", "test-d/schema.ts");
         assert!(diags.is_empty(), "test-d/ files are tsd type-testing utilities, got {diags:?}");
     }
 

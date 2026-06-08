@@ -55,52 +55,67 @@ crate::ast_check! { on ["integer_literal"] => |node, source, ctx, diagnostics|
     }
 }
 
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_ast_check(self, src, path, project, file)
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rules::test_helpers::run_rust;
-
+    
     #[test]
     fn allows_all_lowercase_hex() {
-        assert!(run_rust("fn f() { let x = 0xff; }", &Check).is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, "fn f() { let x = 0xff; }", "t.rs").is_empty());
     }
 
     #[test]
     fn flags_mixed_case_hex_digits() {
-        let d = run_rust("fn f() { let x = 0xfF; }", &Check);
+        let d = crate::rules::test_helpers::run_rule(&Check, "fn f() { let x = 0xfF; }", "t.rs");
         assert_eq!(d.len(), 1);
         assert!(d[0].message.contains("0xFF"));
     }
 
     #[test]
     fn allows_all_uppercase_hex() {
-        assert!(run_rust("fn f() { let x = 0xFF; }", &Check).is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, "fn f() { let x = 0xFF; }", "t.rs").is_empty());
     }
 
     #[test]
     fn allows_lowercase_hex_with_type_suffix() {
-        assert!(run_rust("fn f() { let x = 0xffu8; }", &Check).is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, "fn f() { let x = 0xffu8; }", "t.rs").is_empty());
     }
 
     #[test]
     fn flags_mixed_hex_preserves_suffix() {
-        let d = run_rust("fn f() { let x = 0xfFu8; }", &Check);
+        let d = crate::rules::test_helpers::run_rule(&Check, "fn f() { let x = 0xfFu8; }", "t.rs");
         assert_eq!(d.len(), 1);
         assert!(d[0].message.contains("0xFFu8"));
     }
 
     #[test]
     fn allows_correct_binary() {
-        assert!(run_rust("fn f() { let x = 0b1010; }", &Check).is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, "fn f() { let x = 0b1010; }", "t.rs").is_empty());
     }
 
     #[test]
     fn allows_correct_octal() {
-        assert!(run_rust("fn f() { let x = 0o777; }", &Check).is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, "fn f() { let x = 0o777; }", "t.rs").is_empty());
     }
 
     #[test]
     fn allows_plain_integer() {
-        assert!(run_rust("fn f() { let x = 42; }", &Check).is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, "fn f() { let x = 42; }", "t.rs").is_empty());
     }
 }

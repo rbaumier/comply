@@ -71,11 +71,26 @@ impl AstCheck for Check {
 }
 
 #[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_ast_check(self, src, path, project, file)
+    }
+}
+#[cfg(test)]
 mod tests {
     use super::*;
 
     fn run(src: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_rust_with_path(src, &Check, "/app/migrations/001.rs")
+        crate::rules::test_helpers::run_rule(&Check, src, "/app/migrations/001.rs")
     }
 
     #[test]
@@ -111,7 +126,7 @@ mod tests {
     #[test]
     fn skips_non_migration_path() {
         let src = "fn up() { println!(\"create table\"); }";
-        let diags = crate::rules::test_helpers::run_rust(src, &Check);
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "t.rs");
         assert!(diags.is_empty());
     }
 }

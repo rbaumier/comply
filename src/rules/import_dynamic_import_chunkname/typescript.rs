@@ -30,12 +30,28 @@ crate::ast_check! { on ["call_expression"] prefilter = ["import("] => |node, sou
     });
 }
 
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_ast_check(self, src, path, project, file)
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_ts_with_framework(source, &Check, "webpack")
+        crate::rules::test_helpers::run_rule_with_ctx(&Check, source, "t.ts", &crate::project::ProjectCtx::for_test_with_framework("webpack"), crate::rules::file_ctx::default_static_file_ctx())
     }
 
     #[test]
@@ -59,7 +75,7 @@ mod tests {
 
     #[test]
     fn ignores_non_webpack_projects() {
-        let d = crate::rules::test_helpers::run_ts("const Foo = import('./foo');", &Check);
+        let d = crate::rules::test_helpers::run_rule(&Check, "const Foo = import('./foo');", "t.ts");
         assert!(
             d.is_empty(),
             "webpack-only rule must be silent without webpack"

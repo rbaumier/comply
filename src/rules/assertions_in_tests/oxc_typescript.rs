@@ -212,17 +212,27 @@ fn find_callback_node_id(
 }
 
 #[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+#[cfg(test)]
 mod tests {
     use super::*;
 
     fn run(src: &str) -> Vec<Diagnostic> {
         // Use a *.test.ts path so the is_test_file gate passes.
-        crate::rules::test_helpers::run_oxc_ts_with_path_and_framework(
-            src,
-            &Check,
-            "/tmp/x.test.ts",
-            "",
-        )
+        crate::rules::test_helpers::run_rule_with_ctx(&Check, src, "/tmp/x.test.ts", &crate::project::ProjectCtx::for_test_with_framework(""), crate::rules::file_ctx::default_static_file_ctx())
     }
 
     #[test]

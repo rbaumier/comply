@@ -166,6 +166,22 @@ crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
     }
 }
 
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_ast_check(self, src, path, project, file)
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -173,8 +189,7 @@ mod tests {
     use crate::diagnostic::Diagnostic;
     use crate::files::{Language, SourceFile};
     use crate::project::ProjectCtx;
-    use crate::rules::test_helpers::run_ts_with_project_and_path;
-    use std::fs;
+        use std::fs;
     use std::path::PathBuf;
     use tempfile::TempDir;
 
@@ -195,7 +210,7 @@ mod tests {
         let config = Config::default();
         let project = ProjectCtx::load(&refs, &config);
 
-        run_ts_with_project_and_path(source, &Check, &project, &src_path)
+        crate::rules::test_helpers::run_rule_with_ctx(&Check, source, &src_path, &project, crate::rules::file_ctx::default_static_file_ctx())
     }
 
     fn setup_without_engine(source: &str) -> Vec<Diagnostic> {
@@ -217,7 +232,7 @@ mod tests {
         let config = Config::default();
         let project = ProjectCtx::load(&refs, &config);
 
-        run_ts_with_project_and_path(source, &Check, &project, &src_path)
+        crate::rules::test_helpers::run_rule_with_ctx(&Check, source, &src_path, &project, crate::rules::file_ctx::default_static_file_ctx())
     }
 
     fn setup_without_package_json(source: &str) -> Vec<Diagnostic> {
@@ -234,7 +249,7 @@ mod tests {
         let config = Config::default();
         let project = ProjectCtx::load(&refs, &config);
 
-        run_ts_with_project_and_path(source, &Check, &project, &src_path)
+        crate::rules::test_helpers::run_rule_with_ctx(&Check, source, &src_path, &project, crate::rules::file_ctx::default_static_file_ctx())
     }
 
     #[test]

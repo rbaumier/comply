@@ -58,14 +58,29 @@ crate::ast_check! { on ["block_mapping_pair"] => |node, source, ctx, diagnostics
     }
 }
 
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_ast_check(self, src, path, project, file)
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::diagnostic::Diagnostic;
-    use crate::rules::test_helpers::run_yaml_with_path;
-
+    
     fn run(source: &str) -> Vec<Diagnostic> {
-        run_yaml_with_path(source, &Check, "docker-compose.yml")
+        crate::rules::test_helpers::run_rule(&Check, source, "docker-compose.yml")
     }
 
     #[test]
@@ -89,7 +104,7 @@ mod tests {
     #[test]
     fn ignores_non_compose_yaml() {
         let src = "name: my-app\n";
-        let run_non = |s: &str| run_yaml_with_path(s, &Check, "config.yml");
+        let run_non = |s: &str| crate::rules::test_helpers::run_rule(&Check, s, "config.yml");
         assert!(run_non(src).is_empty());
     }
 }

@@ -119,22 +119,36 @@ impl OxcCheck for Check {
 }
 
 #[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::rules::file_ctx::{FileCtx, PathSegments};
-    use crate::rules::test_helpers::run_oxc_ts;
-
+    
     fn run_in_test_file(src: &str) -> Vec<Diagnostic> {
         let file = FileCtx {
             path_segments: PathSegments { in_test_dir: true, ..PathSegments::default() },
             ..FileCtx::default()
         };
-        crate::rules::test_helpers::run_oxc_tsx_with_file_ctx(src, &Check, &file)
+        crate::rules::test_helpers::run_rule_with_ctx(&Check, src, "t.tsx", crate::project::default_static_project_ctx(), &file)
     }
 
     #[test]
     fn flags_sole_undefined_arg() {
-        assert_eq!(run_oxc_ts("foo(undefined);", &Check).len(), 1);
+        assert_eq!(crate::rules::test_helpers::run_rule(&Check, "foo(undefined);", "t.ts").len(), 1);
     }
 
     #[test]
@@ -142,13 +156,13 @@ mod tests {
         // `expect(spy).toHaveBeenCalledWith(state, undefined)` — the assertion
         // is the *object* of the matcher callee, not its property name.
         assert!(
-            run_oxc_ts("expect(spy).toHaveBeenCalledWith(state, undefined);", &Check).is_empty()
+            crate::rules::test_helpers::run_rule(&Check, "expect(spy).toHaveBeenCalledWith(state, undefined);", "t.ts").is_empty()
         );
     }
 
     #[test]
     fn allows_undefined_in_expect_resolves_chain_issue_654() {
-        assert!(run_oxc_ts("expect(p).resolves.toBe(undefined);", &Check).is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, "expect(p).resolves.toBe(undefined);", "t.ts").is_empty());
     }
 
     #[test]
@@ -160,24 +174,18 @@ mod tests {
 
     #[test]
     fn still_flags_outside_create_context() {
-        assert_eq!(run_oxc_ts("doStuff(undefined);", &Check).len(), 1);
+        assert_eq!(crate::rules::test_helpers::run_rule(&Check, "doStuff(undefined);", "t.ts").len(), 1);
     }
 
     #[test]
     fn allows_react_create_context_undefined() {
-        assert!(run_oxc_ts(
-            "const Ctx = React.createContext<Foo | undefined>(undefined);",
-            &Check
-        )
+        assert!(crate::rules::test_helpers::run_rule(&Check, "const Ctx = React.createContext<Foo | undefined>(undefined);", "t.ts")
         .is_empty());
     }
 
     #[test]
     fn allows_bare_create_context_undefined() {
-        assert!(run_oxc_ts(
-            "const Ctx = createContext<Foo | undefined>(undefined);",
-            &Check
-        )
+        assert!(crate::rules::test_helpers::run_rule(&Check, "const Ctx = createContext<Foo | undefined>(undefined);", "t.ts")
         .is_empty());
     }
 }

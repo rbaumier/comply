@@ -199,12 +199,28 @@ fn site_from_node(path: &std::path::Path, node: tree_sitter::Node<'_>) -> Site {
     }
 }
 
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_ast_check(self, src, path, project, file)
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_ts(source, &Check)
+        crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
     }
 
     #[test]
@@ -337,7 +353,7 @@ const c = Widget();
 
     fn run_on_file(project: &ProjectCtx, path: &std::path::Path) -> Vec<Diagnostic> {
         let source = fs::read_to_string(path).unwrap();
-        crate::rules::test_helpers::run_ts_with_project_and_path(&source, &Check, project, path)
+        crate::rules::test_helpers::run_rule_with_ctx(&Check, &source, path, project, crate::rules::file_ctx::default_static_file_ctx())
     }
 
     #[test]

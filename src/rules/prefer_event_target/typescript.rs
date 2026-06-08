@@ -130,43 +130,59 @@ crate::ast_check! { on ["program"] prefilter = ["EventEmitter"] => |node, source
     });
 }
 
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_ast_check(self, src, path, project, file)
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn run_ts(source: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_ts(source, &Check)
+        crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
     }
 
     #[test]
     fn flags_extends_event_emitter() {
-        let d = run_ts("class MyEmitter extends EventEmitter {}");
+        let d = crate::rules::test_helpers::run_rule(&Check, "class MyEmitter extends EventEmitter {}", "t.ts");
         assert_eq!(d.len(), 1);
     }
 
     #[test]
     fn flags_new_event_emitter() {
-        let d = run_ts("const emitter = new EventEmitter();");
+        let d = crate::rules::test_helpers::run_rule(&Check, "const emitter = new EventEmitter();", "t.ts");
         assert_eq!(d.len(), 1);
     }
 
     #[test]
     fn allows_event_target() {
-        assert!(run_ts("class MyTarget extends EventTarget {}").is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, "class MyTarget extends EventTarget {}", "t.ts").is_empty());
     }
 
     #[test]
     fn allows_import_from_ignored_package() {
-        assert!(run_ts(r#"import { EventEmitter } from "eventemitter3";"#).is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, r#"import { EventEmitter } from "eventemitter3";"#, "t.ts").is_empty());
     }
 
     #[test]
     fn allows_angular_event_emitter() {
-        assert!(run_ts(r#"import { EventEmitter } from "@angular/core";"#).is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, r#"import { EventEmitter } from "@angular/core";"#, "t.ts").is_empty());
     }
 
     #[test]
     fn does_not_flag_event_emitter_ex() {
-        assert!(run_ts("class MyEmitter extends EventEmitterEx {}").is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, "class MyEmitter extends EventEmitterEx {}", "t.ts").is_empty());
     }
 }

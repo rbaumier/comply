@@ -49,26 +49,41 @@ crate::ast_check! { on ["rule_set"] => |node, source, ctx, diagnostics|
     });
 }
 
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_ast_check(self, src, path, project, file)
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rules::test_helpers::run_css;
-
+    
     #[test]
     fn flags_counter_selector_without_directive() {
         let src = ".counter { color: red; }";
-        assert_eq!(run_css(src, &Check).len(), 1);
+        assert_eq!(crate::rules::test_helpers::run_rule(&Check, src, "t.css").len(), 1);
     }
 
     #[test]
     fn allows_counter_with_tabular_nums() {
         let src = ".counter { font-variant-numeric: tabular-nums; }";
-        assert!(run_css(src, &Check).is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, src, "t.css").is_empty());
     }
 
     #[test]
     fn ignores_unrelated_selector() {
         let src = ".card { color: red; }";
-        assert!(run_css(src, &Check).is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, src, "t.css").is_empty());
     }
 }

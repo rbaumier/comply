@@ -65,13 +65,28 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     }
 }
 
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_ast_check(self, src, path, project, file)
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rules::test_helpers::run_ts_with_path;
-
+    
     fn run_ts(source: &str) -> Vec<Diagnostic> {
-        run_ts_with_path(source, &Check, "app.test.ts")
+        crate::rules::test_helpers::run_rule(&Check, source, "app.test.ts")
     }
 
     #[test]
@@ -107,24 +122,20 @@ mod tests {
 
     #[test]
     fn ignores_non_test_file() {
-        let d = run_ts_with_path("xtest('a', () => {});", &Check, "src/util.ts");
+        let d = crate::rules::test_helpers::run_rule(&Check, "xtest('a', () => {});", "src/util.ts");
         assert!(d.is_empty());
     }
 
     #[test]
     fn flags_skip_with_vitest_import_no_marker() {
-        let d = run_ts_with_path(
-            "import { it } from 'vitest';\nit.skip('login', () => {});",
-            &Check,
-            "tests/login.ts",
-        );
+        let d = crate::rules::test_helpers::run_rule(&Check, "import { it } from 'vitest';\nit.skip('login', () => {});", "tests/login.ts");
         assert_eq!(d.len(), 1);
         assert_eq!(d[0].rule_id, "vitest-no-disabled-tests");
     }
 
     #[test]
     fn ignores_no_marker_no_import() {
-        let d = run_ts_with_path("it.skip('login', () => {});", &Check, "tests/login.ts");
+        let d = crate::rules::test_helpers::run_rule(&Check, "it.skip('login', () => {});", "tests/login.ts");
         assert!(d.is_empty());
     }
 }

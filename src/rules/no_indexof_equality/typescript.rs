@@ -52,11 +52,27 @@ fn is_indexof_call(node: tree_sitter::Node, source: &[u8]) -> bool {
     prop.utf8_text(source).unwrap_or("") == "indexOf"
 }
 
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_ast_check(self, src, path, project, file)
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
     fn run(code: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_ts(code, &Check)
+        crate::rules::test_helpers::run_rule(&Check, code, "t.ts")
     }
 
     #[test]

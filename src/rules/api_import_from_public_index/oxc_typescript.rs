@@ -86,19 +86,29 @@ impl OxcCheck for Check {
 }
 
 #[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+#[cfg(test)]
 mod tests {
-    use crate::rules::test_helpers::run_oxc_ts_with_path;
-
+    
     use super::Check;
 
     #[test]
     fn flags_deep_cross_feature_import() {
         assert_eq!(
-            run_oxc_ts_with_path(
-                "import { query } from '../../users/db/queries'",
-                &Check,
-                "src/api/features/auth/handler.ts"
-            )
+            crate::rules::test_helpers::run_rule(&Check, "import { query } from '../../users/db/queries'", "src/api/features/auth/handler.ts")
             .len(),
             1
         );
@@ -106,43 +116,27 @@ mod tests {
 
     #[test]
     fn allows_index_import() {
-        assert!(run_oxc_ts_with_path(
-            "import { User } from '../../users'",
-            &Check,
-            "src/api/features/auth/handler.ts"
-        )
+        assert!(crate::rules::test_helpers::run_rule(&Check, "import { User } from '../../users'", "src/api/features/auth/handler.ts")
         .is_empty());
     }
 
     // Regression: import from scripts/ (outside src/) must not fire — issue #492
     #[test]
     fn allows_import_outside_src_tree() {
-        assert!(run_oxc_ts_with_path(
-            "import { seedAdminCdr } from '../../../../scripts/seed-admin-cdr'",
-            &Check,
-            "src/api/features/auth/seed-admin-cdr.integration.test.ts"
-        )
+        assert!(crate::rules::test_helpers::run_rule(&Check, "import { seedAdminCdr } from '../../../../scripts/seed-admin-cdr'", "src/api/features/auth/seed-admin-cdr.integration.test.ts")
         .is_empty());
     }
 
     // Regression: test files must be allowed to import internal modules — issue #798
     #[test]
     fn allows_test_file_importing_internal_module() {
-        assert!(run_oxc_ts_with_path(
-            "import { renderToString } from '../../src/adapter/deno/ssg.ts'",
-            &Check,
-            "runtime-tests/deno/ssg.test.tsx"
-        )
+        assert!(crate::rules::test_helpers::run_rule(&Check, "import { renderToString } from '../../src/adapter/deno/ssg.ts'", "runtime-tests/deno/ssg.test.tsx")
         .is_empty());
     }
 
     #[test]
     fn allows_spec_file_importing_internal_module() {
-        assert!(run_oxc_ts_with_path(
-            "import { queryUsers } from '../../api/features/users/db/queries'",
-            &Check,
-            "src/features/auth/handlers.spec.ts"
-        )
+        assert!(crate::rules::test_helpers::run_rule(&Check, "import { queryUsers } from '../../api/features/users/db/queries'", "src/features/auth/handlers.spec.ts")
         .is_empty());
     }
 }

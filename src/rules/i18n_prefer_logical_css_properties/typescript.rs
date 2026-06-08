@@ -86,16 +86,32 @@ crate::ast_check! { on ["string", "template_string"] => |node, source, ctx, diag
     }
 }
 
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_ast_check(self, src, path, project, file)
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn run(src: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_ts(src, &Check)
+        crate::rules::test_helpers::run_rule(&Check, src, "t.ts")
     }
 
     fn run_tsx(src: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_tsx(src, &Check)
+        crate::rules::test_helpers::run_rule(&Check, src, "t.tsx")
     }
 
     #[test]
@@ -139,7 +155,7 @@ mod tests {
     #[test]
     fn flags_inside_tsx_styled_template() {
         let src = r"const Box = styled.div`padding-left: 8px;`;";
-        assert_eq!(run_tsx(src).len(), 1);
+        assert_eq!(crate::rules::test_helpers::run_rule(&Check, src, "t.tsx").len(), 1);
     }
 
     #[test]

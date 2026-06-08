@@ -92,11 +92,26 @@ fn is_inside_mpsc_use(_node: tree_sitter::Node, source: &[u8]) -> bool {
 }
 
 #[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_ast_check(self, src, path, project, file)
+    }
+}
+#[cfg(test)]
 mod tests {
     use super::*;
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_rust(source, &Check)
+        crate::rules::test_helpers::run_rule(&Check, source, "t.rs")
     }
 
     #[test]
@@ -150,6 +165,6 @@ mod tests {
     #[test]
     fn allows_unbounded_channel_in_tests_dir() {
         let source = "fn f() { let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<u8>(); }";
-        assert!(crate::rules::test_helpers::run_rust_with_path(source, &Check, "tests/my_test.rs").is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, source, "tests/my_test.rs").is_empty());
     }
 }

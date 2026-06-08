@@ -40,16 +40,29 @@ crate::ast_check! { on ["jsx_attribute"] => |node, source, ctx, diagnostics|
     });
 }
 
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_ast_check(self, src, path, project, file)
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn flags_math_random_key() {
-        let d = crate::rules::test_helpers::run_tsx(
-            r#"const el = <Item key={Math.random()} />;"#,
-            &Check,
-        );
+        let d = crate::rules::test_helpers::run_rule(&Check, r#"const el = <Item key={Math.random()} />;"#, "t.tsx");
         assert_eq!(d.len(), 1);
         assert_eq!(d[0].rule_id, "no-uniq-key");
     }
@@ -57,26 +70,26 @@ mod tests {
     #[test]
     fn flags_date_now_key() {
         let d =
-            crate::rules::test_helpers::run_tsx(r#"const el = <Item key={Date.now()} />;"#, &Check);
+            crate::rules::test_helpers::run_rule(&Check, r#"const el = <Item key={Date.now()} />;"#, "t.tsx");
         assert_eq!(d.len(), 1);
     }
 
     #[test]
     fn flags_uuid_key() {
-        let d = crate::rules::test_helpers::run_tsx(r#"const el = <Item key={uuid()} />;"#, &Check);
+        let d = crate::rules::test_helpers::run_rule(&Check, r#"const el = <Item key={uuid()} />;"#, "t.tsx");
         assert_eq!(d.len(), 1);
     }
 
     #[test]
     fn allows_stable_key() {
         let d =
-            crate::rules::test_helpers::run_tsx(r#"const el = <Item key={item.id} />;"#, &Check);
+            crate::rules::test_helpers::run_rule(&Check, r#"const el = <Item key={item.id} />;"#, "t.tsx");
         assert!(d.is_empty());
     }
 
     #[test]
     fn allows_index_key() {
-        let d = crate::rules::test_helpers::run_tsx(r#"const el = <Item key={index} />;"#, &Check);
+        let d = crate::rules::test_helpers::run_rule(&Check, r#"const el = <Item key={index} />;"#, "t.tsx");
         assert!(d.is_empty());
     }
 }

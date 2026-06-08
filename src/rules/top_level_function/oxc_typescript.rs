@@ -143,13 +143,28 @@ fn nearest_function_span(
 }
 
 #[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+#[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rules::test_helpers::{run_oxc_ts, run_oxc_tsx, run_oxc_tsx_with_path};
+    
 
     #[test]
     fn flags_simple_top_level_arrow() {
-        assert_eq!(run_oxc_ts("const greet = (n: string) => `hi ${n}`;", &Check).len(), 1);
+        assert_eq!(crate::rules::test_helpers::run_rule(&Check, "const greet = (n: string) => `hi ${n}`;", "t.ts").len(), 1);
     }
 
     #[test]
@@ -162,7 +177,7 @@ mod tests {
             body.push_str(&format!("  if (code === '{c}') return '{c}';\n"));
         }
         body.push_str("  return 'default';\n};\n");
-        let diags = run_oxc_ts(&body, &Check);
+        let diags = crate::rules::test_helpers::run_rule(&Check, &body, "t.ts");
         assert!(diags.is_empty(), "high-complexity arrow should not flag, got {diags:#?}");
     }
 
@@ -170,31 +185,31 @@ mod tests {
 
     #[test]
     fn no_fp_react_component_no_props_tsx() {
-        let diags = run_oxc_tsx("const App = () => 42;", &Check);
+        let diags = crate::rules::test_helpers::run_rule(&Check, "const App = () => 42;", "t.tsx");
         assert!(diags.is_empty(), "PascalCase arrow in .tsx should not flag (React component), got {diags:#?}");
     }
 
     #[test]
     fn no_fp_react_component_with_props_tsx() {
-        let diags = run_oxc_tsx("const MyComponent = (props: Props) => props.name;", &Check);
+        let diags = crate::rules::test_helpers::run_rule(&Check, "const MyComponent = (props: Props) => props.name;", "t.tsx");
         assert!(diags.is_empty(), "PascalCase arrow with props in .tsx should not flag, got {diags:#?}");
     }
 
     #[test]
     fn still_flags_camelcase_arrow_in_tsx() {
-        let diags = run_oxc_tsx("const parseData = (input: string) => input;", &Check);
+        let diags = crate::rules::test_helpers::run_rule(&Check, "const parseData = (input: string) => input;", "t.tsx");
         assert_eq!(diags.len(), 1, "camelCase utility arrow in .tsx should still flag");
     }
 
     #[test]
     fn still_flags_pascalcase_arrow_in_ts() {
-        let diags = run_oxc_ts("const MyHelper = (x: number) => x + 1;", &Check);
+        let diags = crate::rules::test_helpers::run_rule(&Check, "const MyHelper = (x: number) => x + 1;", "t.ts");
         assert_eq!(diags.len(), 1, "PascalCase arrow in .ts should still flag (no JSX)");
     }
 
     #[test]
     fn no_fp_react_component_in_jsx() {
-        let diags = run_oxc_tsx_with_path("const Button = () => 42;", &Check, "t.jsx");
+        let diags = crate::rules::test_helpers::run_rule(&Check, "const Button = () => 42;", "t.jsx");
         assert!(diags.is_empty(), "PascalCase arrow in .jsx should not flag, got {diags:#?}");
     }
 }

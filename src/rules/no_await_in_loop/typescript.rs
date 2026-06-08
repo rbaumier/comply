@@ -4,10 +4,9 @@
 mod tests {
     use crate::diagnostic::Diagnostic;
     use crate::rules::no_await_in_loop::oxc_typescript::Check;
-    use crate::rules::test_helpers::run_oxc_ts;
-
+    
     fn run(source: &str) -> Vec<Diagnostic> {
-        run_oxc_ts(source, &Check)
+        crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
     }
 
     #[test]

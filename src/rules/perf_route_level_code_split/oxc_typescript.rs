@@ -85,11 +85,26 @@ impl OxcCheck for Check {
 }
 
 #[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+#[cfg(test)]
 mod tests {
     use super::*;
 
     fn run(s: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+        crate::rules::test_helpers::run_rule(&Check, s, "t.ts")
     }
 
     #[test]
@@ -119,11 +134,7 @@ mod tests {
 
     #[test]
     fn skips_e2e_files() {
-        let d = crate::rules::test_helpers::run_oxc_ts_with_path(
-            "import LoginPage from './pages/login.page';",
-            &Check,
-            "project/e2e/fixtures.ts",
-        );
+        let d = crate::rules::test_helpers::run_rule(&Check, "import LoginPage from './pages/login.page';", "project/e2e/fixtures.ts");
         assert!(d.is_empty());
     }
 }

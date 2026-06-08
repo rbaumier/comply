@@ -44,14 +44,29 @@ crate::ast_check! { on ["program"] => |node, _source, ctx, diagnostics|
     }
 }
 
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_ast_check(self, src, path, project, file)
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::Config;
     use crate::files::{Language, SourceFile};
     use crate::project::ProjectCtx;
-    use crate::rules::test_helpers::run_ts_with_project_and_path;
-    use std::fs;
+        use std::fs;
     use std::path::PathBuf;
     use tempfile::TempDir;
 
@@ -88,7 +103,7 @@ mod tests {
             ("app.ts", "import { x } from './nonexistent';"),
         ]);
         let source = "import { x } from './nonexistent';";
-        let diags = run_ts_with_project_and_path(source, &Check, &project, &paths[1]);
+        let diags = crate::rules::test_helpers::run_rule_with_ctx(&Check, source, &paths[1], &project, crate::rules::file_ctx::default_static_file_ctx());
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("nonexistent"));
     }
@@ -100,7 +115,7 @@ mod tests {
             ("app.ts", "import { x } from './utils';"),
         ]);
         let source = "import { x } from './utils';";
-        let diags = run_ts_with_project_and_path(source, &Check, &project, &paths[1]);
+        let diags = crate::rules::test_helpers::run_rule_with_ctx(&Check, source, &paths[1], &project, crate::rules::file_ctx::default_static_file_ctx());
         assert!(diags.is_empty());
     }
 
@@ -108,7 +123,7 @@ mod tests {
     fn skips_bare_specifier() {
         let (_dir, project, paths) = setup_project(&[("app.ts", "import React from 'react';")]);
         let source = "import React from 'react';";
-        let diags = run_ts_with_project_and_path(source, &Check, &project, &paths[0]);
+        let diags = crate::rules::test_helpers::run_rule_with_ctx(&Check, source, &paths[0], &project, crate::rules::file_ctx::default_static_file_ctx());
         assert!(diags.is_empty());
     }
 
@@ -117,7 +132,7 @@ mod tests {
         let (_dir, project, paths) =
             setup_project(&[("sub/app.ts", "import { x } from '../missing';")]);
         let source = "import { x } from '../missing';";
-        let diags = run_ts_with_project_and_path(source, &Check, &project, &paths[0]);
+        let diags = crate::rules::test_helpers::run_rule_with_ctx(&Check, source, &paths[0], &project, crate::rules::file_ctx::default_static_file_ctx());
         assert_eq!(diags.len(), 1);
     }
 
@@ -137,7 +152,7 @@ mod tests {
             ),
         ]);
         let source = "import { Route } from './cabinets_.$cabinetId';";
-        let diags = run_ts_with_project_and_path(source, &Check, &project, &paths[1]);
+        let diags = crate::rules::test_helpers::run_rule_with_ctx(&Check, source, &paths[1], &project, crate::rules::file_ctx::default_static_file_ctx());
         assert!(diags.is_empty(), "got unexpected diagnostics: {diags:?}");
     }
 
@@ -159,7 +174,7 @@ mod tests {
         let project = ProjectCtx::load(&refs, &config);
         let canon_ts = fs::canonicalize(&ts_path).unwrap();
         let source = "import type { Schema } from '../index.d.ts';";
-        let diags = run_ts_with_project_and_path(source, &Check, &project, &canon_ts);
+        let diags = crate::rules::test_helpers::run_rule_with_ctx(&Check, source, &canon_ts, &project, crate::rules::file_ctx::default_static_file_ctx());
         assert!(diags.is_empty(), "unexpected FP: {diags:?}");
     }
 
@@ -179,7 +194,7 @@ mod tests {
         let project = ProjectCtx::load(&refs, &config);
         let canon_ts = fs::canonicalize(&ts_path).unwrap();
         let source = "import type { Schema } from '../index.d.ts';";
-        let diags = run_ts_with_project_and_path(source, &Check, &project, &canon_ts);
+        let diags = crate::rules::test_helpers::run_rule_with_ctx(&Check, source, &canon_ts, &project, crate::rules::file_ctx::default_static_file_ctx());
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("index.d.ts"));
     }

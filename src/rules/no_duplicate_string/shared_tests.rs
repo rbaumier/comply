@@ -37,11 +37,11 @@ const SCENARIOS: &[Scenario] = &[
 ];
 
 fn run_ts(src: &str) -> Vec<Diagnostic> {
-    crate::rules::test_helpers::run_oxc_ts(src, &super::oxc_typescript::Check)
+    crate::rules::test_helpers::run_rule(&super::oxc_typescript::Check, src, "t.ts")
 }
 
 fn run_rust(src: &str) -> Vec<Diagnostic> {
-    crate::rules::test_helpers::run_rust(src, &super::rust::Check)
+    crate::rules::test_helpers::run_rule(&super::rust::Check, src, "t.rs")
 }
 
 #[test]

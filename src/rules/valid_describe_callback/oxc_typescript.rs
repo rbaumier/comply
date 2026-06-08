@@ -184,55 +184,55 @@ fn stmt_returns_value(stmt: &oxc_ast::ast::Statement) -> bool {
 }
 
 #[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+#[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rules::test_helpers::{run_oxc_ts, run_oxc_tsx};
+    
 
     // Regression #516 — describe.each callback receives row params; must not be flagged.
     #[test]
     fn allows_describe_each_with_destructured_param() {
-        let d = run_oxc_ts(
-            "const HOOKS = [{ action: 'deactivate' }]; \
-             describe.each(HOOKS)('$action category', ({ action }) => { it('x', () => {}); });",
-            &Check,
-        );
+        let d = crate::rules::test_helpers::run_rule(&Check, "const HOOKS = [{ action: 'deactivate' }]; \
+             describe.each(HOOKS)('$action category', ({ action }) => { it('x', () => {}); });", "t.ts");
         assert!(d.is_empty(), "unexpected diagnostics: {d:?}");
     }
 
     #[test]
     fn allows_describe_each_with_multiple_params() {
-        let d = run_oxc_ts(
-            "describe.each([[1, 2]])('sum', (a, b) => { it('x', () => {}); });",
-            &Check,
-        );
+        let d = crate::rules::test_helpers::run_rule(&Check, "describe.each([[1, 2]])('sum', (a, b) => { it('x', () => {}); });", "t.ts");
         assert!(d.is_empty(), "unexpected diagnostics: {d:?}");
     }
 
     #[test]
     fn allows_describe_each_tsx_with_typed_params() {
-        let d = run_oxc_tsx(
-            "describe.each([['foo', fn1]])('%s', (_label, decision) => { it('x', () => {}); });",
-            &Check,
-        );
+        let d = crate::rules::test_helpers::run_rule(&Check, "describe.each([['foo', fn1]])('%s', (_label, decision) => { it('x', () => {}); });", "t.tsx");
         assert!(d.is_empty(), "unexpected diagnostics: {d:?}");
     }
 
     #[test]
     fn still_flags_describe_each_with_async_callback() {
-        let d = run_oxc_ts(
-            "describe.each([{}])('suite', async ({ x }) => { it('x', () => {}); });",
-            &Check,
-        );
+        let d = crate::rules::test_helpers::run_rule(&Check, "describe.each([{}])('suite', async ({ x }) => { it('x', () => {}); });", "t.ts");
         assert_eq!(d.len(), 1);
         assert!(d[0].message.contains("async"));
     }
 
     #[test]
     fn still_flags_plain_describe_with_params() {
-        let d = run_oxc_ts(
-            "describe('suite', (done) => { it('x', () => {}); });",
-            &Check,
-        );
+        let d = crate::rules::test_helpers::run_rule(&Check, "describe('suite', (done) => { it('x', () => {}); });", "t.ts");
         assert_eq!(d.len(), 1);
         assert!(d[0].message.contains("parameters"));
     }

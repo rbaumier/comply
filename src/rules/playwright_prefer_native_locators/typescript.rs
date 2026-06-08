@@ -64,13 +64,29 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     }
 }
 
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_ast_check(self, src, path, project, file)
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
         let full = format!("import {{ test, expect }} from \"@playwright/test\";\n{source}");
-        crate::rules::test_helpers::run_ts_with_path(&full, &Check, "login.test.ts")
+        crate::rules::test_helpers::run_rule(&Check, &full, "login.test.ts")
     }
 
     #[test]
@@ -100,11 +116,7 @@ mod tests {
 
     #[test]
     fn ignores_non_test_file() {
-        let d = crate::rules::test_helpers::run_ts_with_path(
-            r#"page.locator('[role="button"]');"#,
-            &Check,
-            "helpers.ts",
-        );
+        let d = crate::rules::test_helpers::run_rule(&Check, r#"page.locator('[role="button"]');"#, "helpers.ts");
         assert!(d.is_empty());
     }
 }

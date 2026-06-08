@@ -79,17 +79,28 @@ impl OxcCheck for Check {
 }
 
 #[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+#[cfg(test)]
 mod tests {
     use super::*;
 
     const PW_IMPORT: &str = "import { test, expect } from \"@playwright/test\";\n";
 
     fn run_ts(source: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_oxc_ts_with_path(
-            &format!("{PW_IMPORT}{source}"),
-            &Check,
-            "app.test.ts",
-        )
+        crate::rules::test_helpers::run_rule(&Check, &format!("{PW_IMPORT}{source}"), "app.test.ts")
     }
 
     #[test]
@@ -106,7 +117,7 @@ mod tests {
 
     #[test]
     fn allows_normal_comment() {
-        let d = run_ts("// This is a normal comment");
+        let d = crate::rules::test_helpers::run_rule(&Check, "// This is a normal comment", "t.ts");
         assert!(d.is_empty());
     }
 }

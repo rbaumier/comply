@@ -54,11 +54,26 @@ impl OxcCheck for Check {
 }
 
 #[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+#[cfg(test)]
 mod tests {
     use super::*;
 
     fn run_on(src: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_oxc_ts(src, &Check)
+        crate::rules::test_helpers::run_rule(&Check, src, "t.ts")
     }
 
     #[test]
@@ -78,11 +93,7 @@ mod tests {
     fn no_fp_in_test_file() {
         // Regression for #528: inArray(col, subquery) in test files is not a FP.
         let src = "where(inArray(users.id, db.select({ id: orders.userId }).from(orders)));";
-        let diags = crate::rules::test_helpers::run_oxc_ts_with_path(
-            src,
-            &Check,
-            "src/features/users/users.integration.test.ts",
-        );
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/features/users/users.integration.test.ts");
         assert!(diags.is_empty());
     }
 }

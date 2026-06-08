@@ -39,32 +39,48 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     }
 }
 
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_ast_check(self, src, path, project, file)
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn flags_flat_one() {
-        let d = crate::rules::test_helpers::run_ts("arr.flat(1);", &Check);
+        let d = crate::rules::test_helpers::run_rule(&Check, "arr.flat(1);", "t.ts");
         assert_eq!(d.len(), 1);
         assert_eq!(d[0].rule_id, "no-unnecessary-array-flat-depth");
     }
 
     #[test]
     fn allows_flat_no_args() {
-        let d = crate::rules::test_helpers::run_ts("arr.flat();", &Check);
+        let d = crate::rules::test_helpers::run_rule(&Check, "arr.flat();", "t.ts");
         assert!(d.is_empty());
     }
 
     #[test]
     fn allows_flat_other_depth() {
-        let d = crate::rules::test_helpers::run_ts("arr.flat(2);", &Check);
+        let d = crate::rules::test_helpers::run_rule(&Check, "arr.flat(2);", "t.ts");
         assert!(d.is_empty());
     }
 
     #[test]
     fn allows_flat_infinity() {
-        let d = crate::rules::test_helpers::run_ts("arr.flat(Infinity);", &Check);
+        let d = crate::rules::test_helpers::run_rule(&Check, "arr.flat(Infinity);", "t.ts");
         assert!(d.is_empty());
     }
 }

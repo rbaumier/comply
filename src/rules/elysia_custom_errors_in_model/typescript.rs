@@ -39,18 +39,29 @@ crate::ast_check! { on ["class_declaration"] => |node, source, ctx, diagnostics|
     });
 }
 
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_ast_check(self, src, path, project, file)
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn run_at(path: &str, src: &str) -> Vec<Diagnostic> {
         let project = crate::project::ProjectCtx::for_test_with_framework("elysia");
-        crate::rules::test_helpers::run_ts_with_project_and_path(
-            src,
-            &Check,
-            &project,
-            std::path::Path::new(path),
-        )
+        crate::rules::test_helpers::run_rule_with_ctx(&Check, src, std::path::Path::new(path), &project, crate::rules::file_ctx::default_static_file_ctx())
     }
 
     #[test]
@@ -75,7 +86,7 @@ mod tests {
     fn ignores_non_elysia_files() {
         let src = "export class NotFoundError extends Error {}";
         assert!(
-            crate::rules::test_helpers::run_ts_with_path(src, &Check, "user.service.ts").is_empty()
+            crate::rules::test_helpers::run_rule(&Check, src, "user.service.ts").is_empty()
         );
     }
 }

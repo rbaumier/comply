@@ -111,11 +111,26 @@ fn is_under_tests_dir(path: &std::path::Path) -> bool {
 }
 
 #[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_ast_check(self, src, path, project, file)
+    }
+}
+#[cfg(test)]
 mod tests {
     use super::*;
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_rust(source, &Check)
+        crate::rules::test_helpers::run_rule(&Check, source, "t.rs")
     }
 
     #[test]
@@ -148,7 +163,7 @@ mod tests {
     #[test]
     fn allows_unwrap_in_build_rs() {
         let source = r#"fn main() { let v = std::env::var("TARGET").unwrap(); }"#;
-        assert!(crate::rules::test_helpers::run_rust_with_path(source, &Check, "build.rs").is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, source, "build.rs").is_empty());
     }
 
     #[test]

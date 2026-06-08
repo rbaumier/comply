@@ -89,12 +89,28 @@ fn contains_jsx(root: tree_sitter::Node) -> bool {
     false
 }
 
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_ast_check(self, src, path, project, file)
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn run_on(s: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_tsx(s, &Check)
+        crate::rules::test_helpers::run_rule(&Check, s, "t.tsx")
     }
 
     #[test]
@@ -142,13 +158,7 @@ mod tests {
     #[test]
     fn allows_inline_test_component() {
         let src = "it('works', () => { const Component = () => <div />; render(<Component />); });";
-        let d = crate::rules::test_helpers::run_tsx_with_project_file_and_path(
-            src,
-            &Check,
-            crate::project::default_static_project_ctx(),
-            crate::rules::file_ctx::default_static_file_ctx(),
-            "component.test.tsx",
-        );
+        let d = crate::rules::test_helpers::run_rule_with_ctx(&Check, src, "component.test.tsx", crate::project::default_static_project_ctx(), crate::rules::file_ctx::default_static_file_ctx());
         assert!(d.is_empty());
     }
 }

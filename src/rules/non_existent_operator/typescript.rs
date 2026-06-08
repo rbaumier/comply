@@ -50,50 +50,65 @@ crate::ast_check! { on ["assignment_expression"] => |node, source, ctx, diagnost
     });
 }
 
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_ast_check(self, src, path, project, file)
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rules::test_helpers::run_ts;
-
+    
     #[test]
     fn flags_equals_plus() {
-        let d = run_ts("x =+ 1;", &Check);
+        let d = crate::rules::test_helpers::run_rule(&Check, "x =+ 1;", "t.ts");
         assert_eq!(d.len(), 1);
         assert_eq!(d[0].rule_id, "non-existent-operator");
     }
 
     #[test]
     fn flags_equals_minus() {
-        let d = run_ts("x =- 1;", &Check);
+        let d = crate::rules::test_helpers::run_rule(&Check, "x =- 1;", "t.ts");
         assert_eq!(d.len(), 1);
     }
 
     #[test]
     fn flags_equals_bang() {
-        let d = run_ts("x =! true;", &Check);
+        let d = crate::rules::test_helpers::run_rule(&Check, "x =! true;", "t.ts");
         assert_eq!(d.len(), 1);
     }
 
     #[test]
     fn allows_plus_equals() {
-        assert!(run_ts("x += 1;", &Check).is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, "x += 1;", "t.ts").is_empty());
     }
 
     #[test]
     fn allows_minus_equals() {
-        assert!(run_ts("x -= 1;", &Check).is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, "x -= 1;", "t.ts").is_empty());
     }
 
     #[test]
     fn allows_not_equals() {
-        assert!(run_ts("if (x !== y) {}", &Check).is_empty());
-        assert!(run_ts("if (x != y) {}", &Check).is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, "if (x !== y) {}", "t.ts").is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, "if (x != y) {}", "t.ts").is_empty());
     }
 
     #[test]
     fn allows_unary_with_space() {
-        assert!(run_ts("x = +1;", &Check).is_empty());
-        assert!(run_ts("x = -1;", &Check).is_empty());
-        assert!(run_ts("x = !true;", &Check).is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, "x = +1;", "t.ts").is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, "x = -1;", "t.ts").is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, "x = !true;", "t.ts").is_empty());
     }
 }

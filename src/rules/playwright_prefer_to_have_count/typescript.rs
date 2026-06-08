@@ -83,56 +83,65 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     });
 }
 
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_ast_check(self, src, path, project, file)
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rules::test_helpers::run_ts;
-
+    
     fn pw(s: &str) -> String {
         format!("import {{ test, expect }} from \"@playwright/test\";\n{s}")
     }
 
     #[test]
     fn flags_await_count_to_be() {
-        let d = run_ts(&pw("expect(await locator.count()).toBe(3);"), &Check);
+        let d = crate::rules::test_helpers::run_rule(&Check, &pw("expect(await locator.count()).toBe(3);"), "t.ts");
         assert_eq!(d.len(), 1);
         assert!(d[0].message.contains("toHaveCount"));
     }
 
     #[test]
     fn flags_await_count_to_equal() {
-        let d = run_ts(
-            &pw("expect(await page.locator('.item').count()).toEqual(5);"),
-            &Check,
-        );
+        let d = crate::rules::test_helpers::run_rule(&Check, &pw("expect(await page.locator('.item').count()).toEqual(5);"), "t.ts");
         assert_eq!(d.len(), 1);
     }
 
     #[test]
     fn flags_await_count_to_strict_equal() {
-        let d = run_ts(&pw("expect(await rows.count()).toStrictEqual(0);"), &Check);
+        let d = crate::rules::test_helpers::run_rule(&Check, &pw("expect(await rows.count()).toStrictEqual(0);"), "t.ts");
         assert_eq!(d.len(), 1);
     }
 
     #[test]
     fn allows_to_have_count() {
-        let d = run_ts(&pw("await expect(locator).toHaveCount(3);"), &Check);
+        let d = crate::rules::test_helpers::run_rule(&Check, &pw("await expect(locator).toHaveCount(3);"), "t.ts");
         assert!(d.is_empty());
     }
 
     #[test]
     fn allows_non_count_await() {
-        let d = run_ts(
-            &pw("expect(await locator.textContent()).toBe('hello');"),
-            &Check,
-        );
+        let d = crate::rules::test_helpers::run_rule(&Check, &pw("expect(await locator.textContent()).toBe('hello');"), "t.ts");
         assert!(d.is_empty());
     }
 
     #[test]
     fn allows_count_without_await() {
         // No await → not the target pattern (count() returns Promise, but this code is buggy anyway).
-        let d = run_ts("expect(locator.count()).toBe(3);", &Check);
+        let d = crate::rules::test_helpers::run_rule(&Check, "expect(locator.count()).toBe(3);", "t.ts");
         assert!(d.is_empty());
     }
 }

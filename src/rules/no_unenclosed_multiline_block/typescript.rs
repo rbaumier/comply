@@ -49,13 +49,29 @@ crate::ast_check! { on ["if_statement", "for_statement", "for_in_statement", "wh
     }
 }
 
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_ast_check(self, src, path, project, file)
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn flags_multiline_if_without_braces() {
-        let d = crate::rules::test_helpers::run_ts("if (condition)\n    doSomething();", &Check);
+        let d = crate::rules::test_helpers::run_rule(&Check, "if (condition)\n    doSomething();", "t.ts");
         assert_eq!(d.len(), 1);
         assert_eq!(d[0].rule_id, "no-unenclosed-multiline-block");
     }
@@ -63,26 +79,26 @@ mod tests {
     #[test]
     fn flags_multiline_for_without_braces() {
         let d =
-            crate::rules::test_helpers::run_ts("for (const x of items)\n    process(x);", &Check);
+            crate::rules::test_helpers::run_rule(&Check, "for (const x of items)\n    process(x);", "t.ts");
         assert_eq!(d.len(), 1);
     }
 
     #[test]
     fn allows_braced_if() {
         let d =
-            crate::rules::test_helpers::run_ts("if (condition) {\n    doSomething();\n}", &Check);
+            crate::rules::test_helpers::run_rule(&Check, "if (condition) {\n    doSomething();\n}", "t.ts");
         assert!(d.is_empty());
     }
 
     #[test]
     fn allows_single_line_if() {
-        let d = crate::rules::test_helpers::run_ts("if (condition) doSomething();", &Check);
+        let d = crate::rules::test_helpers::run_rule(&Check, "if (condition) doSomething();", "t.ts");
         assert!(d.is_empty());
     }
 
     #[test]
     fn flags_while_without_braces() {
-        let d = crate::rules::test_helpers::run_ts("while (running)\n    tick();", &Check);
+        let d = crate::rules::test_helpers::run_rule(&Check, "while (running)\n    tick();", "t.ts");
         assert_eq!(d.len(), 1);
     }
 }

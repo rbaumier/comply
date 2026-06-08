@@ -125,41 +125,57 @@ crate::ast_check! { on ["binary_expression"] prefilter = ["indexOf"] => |node, s
     ));
 }
 
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_ast_check(self, src, path, project, file)
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn run_ts(source: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_ts(source, &Check)
+        crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
     }
 
     #[test]
     fn flags_indexof_not_equal_minus_one() {
-        assert_eq!(run_ts("if (arr.indexOf(x) !== -1) {}").len(), 1);
+        assert_eq!(crate::rules::test_helpers::run_rule(&Check, "if (arr.indexOf(x) !== -1) {}", "t.ts").len(), 1);
     }
 
     #[test]
     fn flags_indexof_loose_not_equal() {
-        assert_eq!(run_ts("if (arr.indexOf(x) != -1) {}").len(), 1);
+        assert_eq!(crate::rules::test_helpers::run_rule(&Check, "if (arr.indexOf(x) != -1) {}", "t.ts").len(), 1);
     }
 
     #[test]
     fn flags_indexof_gte_zero() {
-        assert_eq!(run_ts("if (arr.indexOf(x) >= 0) {}").len(), 1);
+        assert_eq!(crate::rules::test_helpers::run_rule(&Check, "if (arr.indexOf(x) >= 0) {}", "t.ts").len(), 1);
     }
 
     #[test]
     fn flags_lastindexof() {
-        assert_eq!(run_ts("if (str.lastIndexOf(c) !== -1) {}").len(), 1);
+        assert_eq!(crate::rules::test_helpers::run_rule(&Check, "if (str.lastIndexOf(c) !== -1) {}", "t.ts").len(), 1);
     }
 
     #[test]
     fn allows_includes() {
-        assert!(run_ts("if (arr.includes(x)) {}").is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, "if (arr.includes(x)) {}", "t.ts").is_empty());
     }
 
     #[test]
     fn allows_indexof_other_comparison() {
-        assert!(run_ts("if (arr.indexOf(x) === 2) {}").is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, "if (arr.indexOf(x) === 2) {}", "t.ts").is_empty());
     }
 }

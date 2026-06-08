@@ -164,36 +164,50 @@ fn has_leading_jsdoc(
 }
 
 #[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+#[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rules::test_helpers::run_oxc_ts;
-
+    
     #[test]
     fn flags_simple_rename() {
-        assert_eq!(run_oxc_ts("type UserID = string;", &Check).len(), 1);
+        assert_eq!(crate::rules::test_helpers::run_rule(&Check, "type UserID = string;", "t.ts").len(), 1);
     }
 
     #[test]
     fn flags_identifier_rename() {
-        assert_eq!(run_oxc_ts("type Alias = OriginalType;", &Check).len(), 1);
+        assert_eq!(crate::rules::test_helpers::run_rule(&Check, "type Alias = OriginalType;", "t.ts").len(), 1);
     }
 
     #[test]
     fn allows_union_type() {
-        assert!(run_oxc_ts("type X = string | number;", &Check).is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, "type X = string | number;", "t.ts").is_empty());
     }
 
     #[test]
     fn skips_exported_alias() {
         // Public surface — exported alias name is the API.
-        assert!(run_oxc_ts("export type UserID = string;", &Check).is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, "export type UserID = string;", "t.ts").is_empty());
     }
 
     #[test]
     fn skips_alias_with_leading_jsdoc() {
         // Documented domain alias — the comment carries semantic value.
         let src = "/** Stable id for a user. */\ntype UserID = string;";
-        assert!(run_oxc_ts(src, &Check).is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, src, "t.ts").is_empty());
     }
 
     #[test]
@@ -201,21 +215,21 @@ mod tests {
         // Regression for https://github.com/rbaumier/comply/issues/145 — `export`
         // alone suppresses, JSDoc alone suppresses, both together suppress.
         let src = "/** Shape produced by every multi-select filter. */\nexport type ListFilterValues = ReadonlyStrings;";
-        assert!(run_oxc_ts(src, &Check).is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, src, "t.ts").is_empty());
     }
 
     #[test]
     fn still_flags_non_jsdoc_line_comment() {
         // `//` comments are not JSDoc — should not suppress.
         let src = "// just a note\ntype Alias = Original;";
-        assert_eq!(run_oxc_ts(src, &Check).len(), 1);
+        assert_eq!(crate::rules::test_helpers::run_rule(&Check, src, "t.ts").len(), 1);
     }
 
     #[test]
     fn still_flags_block_comment_non_jsdoc() {
         // `/* */` (single star) is not JSDoc — should not suppress.
         let src = "/* not jsdoc */\ntype Alias = Original;";
-        assert_eq!(run_oxc_ts(src, &Check).len(), 1);
+        assert_eq!(crate::rules::test_helpers::run_rule(&Check, src, "t.ts").len(), 1);
     }
 
     #[test]
@@ -228,13 +242,13 @@ function applyFilter(v: ListFilterValues) {}
 function validateFilter(v: ListFilterValues) {}
 function resetFilter(v: ListFilterValues) {}
 "#;
-        assert!(run_oxc_ts(src, &Check).is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, src, "t.ts").is_empty());
     }
 
     #[test]
     fn still_flags_alias_used_only_once() {
         // Declaration + 1 use = 2 occurrences — still a redundant rename.
         let src = "type Alias = string;\nfunction foo(v: Alias) {}";
-        assert_eq!(run_oxc_ts(src, &Check).len(), 1);
+        assert_eq!(crate::rules::test_helpers::run_rule(&Check, src, "t.ts").len(), 1);
     }
 }

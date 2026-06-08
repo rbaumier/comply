@@ -96,11 +96,26 @@ fn type_name_str<'a>(name: &'a oxc_ast::ast::TSTypeName<'a>) -> Option<&'a str> 
 }
 
 #[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+#[cfg(test)]
 mod tests {
     use super::*;
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+        crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
     }
 
     #[test]
@@ -157,11 +172,7 @@ mod tests {
 
     #[test]
     fn allows_dts_file() {
-        let diags = crate::rules::test_helpers::run_oxc_ts_with_path(
-            "interface ImportMetaEnv { readonly VITE_API: string; }",
-            &Check,
-            "env.d.ts",
-        );
+        let diags = crate::rules::test_helpers::run_rule(&Check, "interface ImportMetaEnv { readonly VITE_API: string; }", "env.d.ts");
         assert!(diags.is_empty());
     }
 }

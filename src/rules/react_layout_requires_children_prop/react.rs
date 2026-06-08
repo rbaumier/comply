@@ -77,6 +77,22 @@ crate::ast_check! { on ["export_statement"] => |node, source, ctx, diagnostics|
     });
 }
 
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_ast_check(self, src, path, project, file)
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -100,13 +116,7 @@ mod tests {
     }
 
     fn run(source: &str, path: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_tsx_with_project_file_and_path(
-            source,
-            &Check,
-            &next_project(),
-            &app_router_file_ctx(),
-            path,
-        )
+        crate::rules::test_helpers::run_rule_with_ctx(&Check, source, path, &next_project(), &app_router_file_ctx())
     }
 
     #[test]
@@ -151,13 +161,7 @@ export default function Page() {
 
     #[test]
     fn ignores_file_outside_app_router() {
-        let diags = crate::rules::test_helpers::run_tsx_with_project_file_and_path(
-            "export default function Layout() { return <div />; }",
-            &Check,
-            &next_project(),
-            &FileCtx::default(),
-            "/proj/pages/layout.tsx",
-        );
+        let diags = crate::rules::test_helpers::run_rule_with_ctx(&Check, "export default function Layout() { return <div />; }", "/proj/pages/layout.tsx", &next_project(), &FileCtx::default());
         assert!(diags.is_empty());
     }
 }

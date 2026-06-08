@@ -155,33 +155,48 @@ fn receiver_root_identifier(expr: &Expression) -> Option<String> {
 }
 
 #[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+#[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rules::test_helpers::{run_oxc_ts_with_path, run_oxc_tsx};
+    
 
     const NESTED: &str = r#"items.map(i => others.find(o => o.id === i.id));"#;
 
     #[test]
     fn flags_in_tsx() {
-        assert_eq!(run_oxc_tsx(NESTED, &Check).len(), 1);
+        assert_eq!(crate::rules::test_helpers::run_rule(&Check, NESTED, "t.tsx").len(), 1);
     }
 
     // Regression for #280: a plain `.ts` module with no React import is not
     // render-path code — the rule must stay silent there.
     #[test]
     fn allows_plain_ts_without_react() {
-        assert!(run_oxc_ts_with_path(NESTED, &Check, "service.ts").is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, NESTED, "service.ts").is_empty());
     }
 
     #[test]
     fn flags_ts_that_imports_react() {
         let src = format!("import {{ useMemo }} from \"react\";\n{NESTED}");
-        assert_eq!(run_oxc_ts_with_path(&src, &Check, "hook.ts").len(), 1);
+        assert_eq!(crate::rules::test_helpers::run_rule(&Check, &src, "hook.ts").len(), 1);
     }
 
     // Regression for #911: a spread argument to .map() made `Argument::to_expression()` panic.
     #[test]
     fn does_not_panic_on_spread_arg_in_map() {
-        assert!(run_oxc_tsx("arr.map(...fns)", &Check).is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, "arr.map(...fns)", "t.tsx").is_empty());
     }
 }

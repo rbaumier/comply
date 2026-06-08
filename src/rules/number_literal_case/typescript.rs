@@ -54,64 +54,79 @@ crate::ast_check! { on ["number"] => |node, source, ctx, diagnostics|
     }
 }
 
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_ast_check(self, src, path, project, file)
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rules::test_helpers::run_ts;
-
+    
     #[test]
     fn flags_uppercase_hex_prefix() {
-        let d = run_ts("const x = 0XFF;", &Check);
+        let d = crate::rules::test_helpers::run_rule(&Check, "const x = 0XFF;", "t.ts");
         assert_eq!(d.len(), 1);
         assert!(d[0].message.contains("0xFF"));
     }
 
     #[test]
     fn flags_lowercase_hex_digits() {
-        let d = run_ts("const x = 0xff;", &Check);
+        let d = crate::rules::test_helpers::run_rule(&Check, "const x = 0xff;", "t.ts");
         assert_eq!(d.len(), 1);
         assert!(d[0].message.contains("0xFF"));
     }
 
     #[test]
     fn flags_uppercase_exponent() {
-        let d = run_ts("const x = 1E3;", &Check);
+        let d = crate::rules::test_helpers::run_rule(&Check, "const x = 1E3;", "t.ts");
         assert_eq!(d.len(), 1);
         assert!(d[0].message.contains("1e3"));
     }
 
     #[test]
     fn flags_uppercase_binary_prefix() {
-        let d = run_ts("const x = 0B1010;", &Check);
+        let d = crate::rules::test_helpers::run_rule(&Check, "const x = 0B1010;", "t.ts");
         assert_eq!(d.len(), 1);
         assert!(d[0].message.contains("0b1010"));
     }
 
     #[test]
     fn flags_uppercase_octal_prefix() {
-        let d = run_ts("const x = 0O777;", &Check);
+        let d = crate::rules::test_helpers::run_rule(&Check, "const x = 0O777;", "t.ts");
         assert_eq!(d.len(), 1);
         assert!(d[0].message.contains("0o777"));
     }
 
     #[test]
     fn allows_correct_hex() {
-        assert!(run_ts("const x = 0xFF;", &Check).is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, "const x = 0xFF;", "t.ts").is_empty());
     }
 
     #[test]
     fn allows_correct_exponent() {
-        assert!(run_ts("const x = 1e3;", &Check).is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, "const x = 1e3;", "t.ts").is_empty());
     }
 
     #[test]
     fn allows_correct_binary() {
-        assert!(run_ts("const x = 0b1010;", &Check).is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, "const x = 0b1010;", "t.ts").is_empty());
     }
 
     #[test]
     fn flags_bigint_hex() {
-        let d = run_ts("const x = 0XFFn;", &Check);
+        let d = crate::rules::test_helpers::run_rule(&Check, "const x = 0XFFn;", "t.ts");
         assert_eq!(d.len(), 1);
         assert!(d[0].message.contains("0xFFn"));
     }

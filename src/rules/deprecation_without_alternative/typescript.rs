@@ -4,7 +4,7 @@ mod tests {
     use crate::rules::deprecation_without_alternative::oxc_typescript::Check;
 
     fn run(source: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+        crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
     }
 
     #[test]
@@ -42,11 +42,7 @@ mod tests {
     #[test]
     fn allows_bare_deprecated_in_test_file() {
         assert!(
-            crate::rules::test_helpers::run_oxc_ts_with_path(
-                "/** @deprecated */\nfunction old() {}",
-                &Check,
-                "src/user.test.ts",
-            )
+            crate::rules::test_helpers::run_rule(&Check, "/** @deprecated */\nfunction old() {}", "src/user.test.ts")
             .is_empty()
         );
     }

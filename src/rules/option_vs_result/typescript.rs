@@ -97,11 +97,26 @@ crate::ast_check! { |node, source, ctx, diagnostics|
     });
 }
 
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_ast_check(self, src, path, project, file)
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rules::test_helpers::run_ts;
-
+    
     #[test]
     fn flags_find_returning_null() {
         let src = r#"
@@ -110,7 +125,7 @@ function findUser(id: string) {
     return db.get(id);
 }
 "#;
-        let d = run_ts(src, &Check);
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "t.ts");
         assert_eq!(d.len(), 1);
         assert_eq!(d[0].rule_id, "option-vs-result");
     }
@@ -123,7 +138,7 @@ function getConfig(key: string) {
     return map.get(key);
 }
 "#;
-        assert_eq!(run_ts(src, &Check).len(), 1);
+        assert_eq!(crate::rules::test_helpers::run_rule(&Check, src, "t.ts").len(), 1);
     }
 
     #[test]
@@ -133,7 +148,7 @@ function findUser(id: string) {
     return db.get(id);
 }
 "#;
-        assert!(run_ts(src, &Check).is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, src, "t.ts").is_empty());
     }
 
     #[test]
@@ -144,6 +159,6 @@ function createUser(name: string) {
     return { name };
 }
 "#;
-        assert!(run_ts(src, &Check).is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, src, "t.ts").is_empty());
     }
 }

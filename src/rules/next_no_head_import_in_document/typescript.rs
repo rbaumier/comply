@@ -43,6 +43,22 @@ crate::ast_check! { on ["import_statement"] prefilter = ["next/head"] => |node, 
     });
 }
 
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_ast_check(self, src, path, project, file)
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -56,13 +72,7 @@ mod tests {
     }
 
     fn run(source: &str, path: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_tsx_with_project_file_and_path(
-            source,
-            &Check,
-            &next_project(),
-            &FileCtx::default(),
-            path,
-        )
+        crate::rules::test_helpers::run_rule_with_ctx(&Check, source, path, &next_project(), &FileCtx::default())
     }
 
     #[test]

@@ -23,17 +23,33 @@ crate::ast_check! { on ["string", "template_string"] => |node, source, ctx, diag
     });
 }
 
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_ast_check(self, src, path, project, file)
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::diagnostic::Diagnostic;
 
     fn run(src: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_ts_with_path(src, &Check, "/app/migrations/001_add_col.ts")
+        crate::rules::test_helpers::run_rule(&Check, src, "/app/migrations/001_add_col.ts")
     }
 
     fn run_non_migration(src: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_ts(src, &Check)
+        crate::rules::test_helpers::run_rule(&Check, src, "t.ts")
     }
 
     #[test]

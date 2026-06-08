@@ -124,6 +124,11 @@ impl Language {
         {
             return None;
         }
+        // Files with no extension (e.g. `Dockerfile`, `Dockerfile.prod`) must be
+        // checked by name BEFORE the extension-based early-return below.
+        if name == "Dockerfile" || name.starts_with("Dockerfile.") {
+            return Some(Language::Dockerfile);
+        }
         let ext = path.extension()?.to_str()?;
         if TS_EXTENSIONS.contains(&ext) {
             Some(Language::TypeScript)

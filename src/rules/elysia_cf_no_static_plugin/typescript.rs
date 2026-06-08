@@ -31,6 +31,22 @@ crate::ast_check! { on ["call_expression"] prefilter = ["staticPlugin"] => |node
     });
 }
 
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_ast_check(self, src, path, project, file)
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -56,12 +72,7 @@ mod tests {
     }
 
     fn run_in_project(source: &str, project: &ProjectCtx) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_ts_with_project_and_path(
-            source,
-            &Check,
-            project,
-            Path::new("t.ts"),
-        )
+        crate::rules::test_helpers::run_rule_with_ctx(&Check, source, Path::new("t.ts"), project, crate::rules::file_ctx::default_static_file_ctx())
     }
 
     #[test]
@@ -83,7 +94,7 @@ mod tests {
     #[test]
     fn ignores_non_cf_files() {
         let src = "import { staticPlugin } from '@elysiajs/static';\napp.use(staticPlugin());";
-        assert!(crate::rules::test_helpers::run_ts(src, &Check).is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, src, "t.ts").is_empty());
     }
 
     #[test]

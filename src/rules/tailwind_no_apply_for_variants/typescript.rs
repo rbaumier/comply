@@ -14,6 +14,22 @@ crate::ast_check! { |_node, _source, _ctx, _diagnostics|
     // every non-CSS file extension before producing a diagnostic.
 }
 
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_ast_check(self, src, path, project, file)
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -21,12 +37,12 @@ mod tests {
     #[test]
     fn never_flags_typescript_source() {
         let src = r#"const css = "@apply px-4 py-2 rounded";"#;
-        assert!(crate::rules::test_helpers::run_tsx(src, &Check).is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, src, "t.tsx").is_empty());
     }
 
     #[test]
     fn never_flags_layered_apply_in_ts_string() {
         let src = r#"const css = ".btn { @apply px-4; }";"#;
-        assert!(crate::rules::test_helpers::run_tsx(src, &Check).is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, src, "t.tsx").is_empty());
     }
 }

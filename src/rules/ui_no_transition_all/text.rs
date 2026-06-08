@@ -40,13 +40,28 @@ fn first_plain_value<'a>(kids: &[tree_sitter::Node<'_>], source: &'a [u8]) -> Op
         .map(str::trim)
 }
 
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_ast_check(self, src, path, project, file)
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rules::test_helpers::run_css;
-
+    
     fn run(source: &str) -> Vec<Diagnostic> {
-        run_css(source, &Check)
+        crate::rules::test_helpers::run_rule(&Check, source, "t.css")
     }
 
     #[test]
