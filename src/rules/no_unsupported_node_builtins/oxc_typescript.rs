@@ -51,6 +51,11 @@ impl OxcCheck for Check {
             return Vec::new();
         };
 
+        let path_str = ctx.path.to_string_lossy().replace('\\', "/");
+        if super::NON_NODE_RUNTIME_DIRS.iter().any(|p| path_str.contains(p)) {
+            return Vec::new();
+        }
+
         let mut diagnostics = Vec::new();
 
         for node in semantic.nodes().iter() {
@@ -126,5 +131,83 @@ impl OxcCheck for Check {
         }
 
         diagnostics
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Config;
+    use crate::files::{Language, SourceFile};
+    use crate::project::ProjectCtx;
+    use oxc_allocator::Allocator;
+    use oxc_parser::Parser as OxcParser;
+    use oxc_semantic::SemanticBuilder;
+    use oxc_span::SourceType;
+    use std::fs;
+    use tempfile::TempDir;
+
+    fn setup_at_path(
+        node_version: &str,
+        source: &str,
+        rel_path: &str,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        let dir = TempDir::new().unwrap();
+        let pkg =
+            format!(r#"{{"name":"t","version":"0.0.0","engines":{{"node":"{node_version}"}}}}"#);
+        fs::write(dir.path().join("package.json"), pkg).unwrap();
+
+        let full = dir.path().join(rel_path);
+        fs::create_dir_all(full.parent().unwrap()).unwrap();
+        fs::write(&full, source).unwrap();
+        let full = fs::canonicalize(&full).unwrap();
+
+        let lang = Language::from_path(&full).unwrap_or(Language::TypeScript);
+        let sf = SourceFile {
+            path: full.clone(),
+            language: lang,
+        };
+        let refs: Vec<&SourceFile> = vec![&sf];
+        let config = Config::default();
+        let project = ProjectCtx::load(&refs, &config);
+
+        let source_type = match lang {
+            Language::Tsx => SourceType::tsx(),
+            _ => SourceType::ts(),
+        };
+        let allocator = Allocator::default();
+        let parse_ret = OxcParser::new(&allocator, source, source_type).parse();
+        let semantic = SemanticBuilder::new().build(&parse_ret.program).semantic;
+        let ctx = CheckCtx::for_test_with_project(&full, source, &project);
+        Check.run_on_semantic(&semantic, &ctx)
+    }
+
+    #[test]
+    fn skips_file_in_deno_dir() {
+        // Regression for issue #831: Response is a Web API valid in Deno
+        let d = setup_at_path(
+            ">=16",
+            "new Response('auth');",
+            "runtime-tests/deno/middleware.test.tsx",
+        );
+        assert!(d.is_empty());
+    }
+
+    #[test]
+    fn skips_file_in_cloudflare_workers_dir() {
+        let d = setup_at_path(
+            ">=16",
+            "fetch('https://example.com');",
+            "runtime-tests/cloudflare-workers/handler.ts",
+        );
+        assert!(d.is_empty());
+    }
+
+    #[test]
+    fn still_flags_in_regular_dir() {
+        // Guard must not suppress diagnostics for normal Node.js files
+        let d = setup_at_path(">=16", "new Response('auth');", "src/app.ts");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("Response"));
     }
 }
