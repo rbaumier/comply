@@ -66,11 +66,12 @@ pub fn register_all() -> Vec<RuleDef> {
             "Passing `any` to a typed parameter defeats type safety.",
             "Add a type assertion or fix the source of `any`.",
         ),
-        entry(
+        entry_with_filter(
             "no-unsafe-assignment",
             "no-unsafe-assignment",
             "Assigning `any` to a typed variable defeats type safety.",
             "Add a type assertion or fix the source of `any`.",
+            Some(Arc::new(NoUnsafeAssignmentFilter)),
         ),
         entry(
             "no-unsafe-call",
@@ -693,6 +694,40 @@ fn has_empty_braces_then_ampersand(bytes: &[u8]) -> bool {
     false
 }
 
+// ── no-unsafe-assignment post-filter ──────────────────────────────────────
+//
+// Drop `no-unsafe-assignment` diagnostics when casting to Vite's `PluginOption`
+// type. `rollup-plugin-visualizer` returns Rollup's Plugin type, which is
+// structurally valid for PluginOption but causes a type mismatch due to
+// version skew in the Plugin type definitions.
+
+struct NoUnsafeAssignmentFilter;
+
+impl PostFilter for NoUnsafeAssignmentFilter {
+    fn keep(&self, diag: &crate::diagnostic::Diagnostic, source: Option<&str>) -> bool {
+        let Some(src) = source else { return true };
+        !is_plugin_option_cast_fp(src, diag.line)
+    }
+}
+
+fn is_plugin_option_cast_fp(src: &str, line_1based: usize) -> bool {
+    if !imports_plugin_option_from_vite(src) {
+        return false;
+    }
+    let lines: Vec<&str> = src.lines().collect();
+    if line_1based == 0 || line_1based > lines.len() {
+        return false;
+    }
+    lines[line_1based - 1].contains("as PluginOption")
+}
+
+fn imports_plugin_option_from_vite(src: &str) -> bool {
+    src.lines().any(|line| {
+        line.contains("PluginOption")
+            && (line.contains("from \"vite\"") || line.contains("from 'vite'"))
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -791,5 +826,47 @@ mod tests {
         let src_content = source_for(&path);
         let f = BanTypesFilter;
         assert!(f.keep(&ban_types_diag(&path, 1), Some(&src_content)));
+    }
+
+    // ── no-unsafe-assignment ────────────────────────────────────────────────
+
+    fn unsafe_assign_diag(path: &std::path::Path, line: usize) -> Diagnostic {
+        Diagnostic {
+            path: std::sync::Arc::from(path),
+            line,
+            column: 3,
+            rule_id: Cow::Borrowed("no-unsafe-assignment"),
+            message: "Unsafe assignment of an error typed value.".into(),
+            severity: Severity::Error,
+            span: None,
+        }
+    }
+
+    // Regression for #380: visualizer() as PluginOption
+    #[test]
+    fn drops_visualizer_as_plugin_option() {
+        let src = r#"import visualizer from "rollup-plugin-visualizer";
+import type { PluginOption } from "vite";
+const plugins: PluginOption[] = [
+  visualizer({ open: true }) as PluginOption,
+];
+"#;
+        let path = write_temp("drops_visualizer_plugin_option.ts", src);
+        let line = line_of(src, "as PluginOption");
+        let src_content = source_for(&path);
+        let f = NoUnsafeAssignmentFilter;
+        assert!(!f.keep(&unsafe_assign_diag(&path, line), Some(&src_content)));
+    }
+
+    #[test]
+    fn keeps_unsafe_assignment_without_plugin_option() {
+        let src = r#"import { something } from "vite";
+const x: string = unknownAny as string;
+"#;
+        let path = write_temp("no_plugin_option.ts", src);
+        let line = line_of(src, "as string");
+        let src_content = source_for(&path);
+        let f = NoUnsafeAssignmentFilter;
+        assert!(f.keep(&unsafe_assign_diag(&path, line), Some(&src_content)));
     }
 }
