@@ -367,9 +367,7 @@ fn dispatch_with_lang(
             .zip(&ld.applicable_prefilters)
             .any(|((meta, b), pf)| match b {
                 Backend::TreeSitter(_) => {
-                    config.is_rule_enabled(meta.id, path)
-                        && !should_skip_test_fixture_rule(meta, &file_ctx)
-                        && !should_skip_relaxed_directory_rule(meta, &file_ctx)
+                    meta.applies_to(&file_ctx, path, config)
                         && pf
                             .as_ref()
                             .is_none_or(|f| source_matches_prefilter(source, f))
@@ -394,13 +392,7 @@ fn dispatch_with_lang(
     let mut diagnostics = Vec::new();
 
     for (&(meta, ref backend), pf) in ld.applicable.iter().zip(&ld.applicable_prefilters) {
-        if !config.is_rule_enabled(meta.id, path) {
-            continue;
-        }
-        if should_skip_test_fixture_rule(meta, &file_ctx) {
-            continue;
-        }
-        if should_skip_relaxed_directory_rule(meta, &file_ctx) {
+        if !meta.applies_to(&file_ctx, path, config) {
             continue;
         }
         let mut produced = match backend {
@@ -489,30 +481,6 @@ fn should_skip_framework_scoped_rule(meta: &RuleMeta, project: &ProjectCtx) -> b
     })
 }
 
-pub(super) fn should_skip_test_fixture_rule(meta: &RuleMeta, file: &FileCtx) -> bool {
-    if !file.path_segments.in_test_dir {
-        return false;
-    }
-
-    meta.categories
-        .iter()
-        .any(|category| matches!(*category, "a11y" | "accessibility" | "tailwind" | "ui" | "html"))
-        || matches!(meta.id, "react-button-has-type")
-}
-
-pub(super) fn should_skip_relaxed_directory_rule(meta: &RuleMeta, file: &FileCtx) -> bool {
-    if !file.path_segments.is_relaxed_dir {
-        return false;
-    }
-
-    meta.categories
-        .iter()
-        .any(|category| matches!(*category, "api" | "rust" | "security"))
-        || matches!(
-            meta.id,
-            "rust-anyhow-context-on-question-mark" | "rust-serde-deny-unknown-fields"
-        )
-}
 
 /// Dispatch each backend variant to produce diagnostics.
 /// Used by the LSP path (`lint_in_memory`) which doesn't pre-build

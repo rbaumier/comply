@@ -37,9 +37,7 @@ pub(super) fn run_multiplexed_walk(
                 .iter()
                 .zip(&ld.multiplexed_prefilters)
                 .map(|((meta, _), pf)| {
-                    config.is_rule_enabled(meta.id, path)
-                        && !super::should_skip_test_fixture_rule(meta, ctx.file)
-                        && !super::should_skip_relaxed_directory_rule(meta, ctx.file)
+                    meta.applies_to(ctx.file, path, config)
                         && pf
                             .as_ref()
                             .is_none_or(|f| super::source_matches_prefilter(source, f))
@@ -132,13 +130,7 @@ pub(super) fn run_legacy_checks(
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     for ((meta, check), pf) in ld.legacy.iter().zip(&ld.legacy_prefilters) {
-        if !config.is_rule_enabled(meta.id, path) {
-            continue;
-        }
-        if super::should_skip_test_fixture_rule(meta, ctx.file) {
-            continue;
-        }
-        if super::should_skip_relaxed_directory_rule(meta, ctx.file) {
+        if !meta.applies_to(ctx.file, path, config) {
             continue;
         }
         if let Some(f) = pf

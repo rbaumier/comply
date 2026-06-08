@@ -41,6 +41,8 @@ mod tests {
             severity: Severity::Error,
             doc_url: None,
             categories: &[],
+            skip_in_test_dir: false,
+            skip_in_relaxed_dir: false,
         };
         let bindings: Vec<(&'static str, &'static RuleMeta, Severity)> =
             vec![("clippy::unwrap_used", &META, Severity::Error)];
