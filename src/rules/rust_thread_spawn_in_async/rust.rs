@@ -8,7 +8,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::call_expression::call_function_name;
-use crate::rules::rust_helpers::is_inside_async_fn;
+use crate::rules::rust_helpers::{is_inside_async_fn, is_in_test_context, is_under_tests_dir};
 
 const KINDS: &[&str] = &["call_expression"];
 
@@ -35,6 +35,9 @@ impl AstCheck for Check {
             return;
         }
         if !is_inside_async_fn(node, source_bytes) {
+            return;
+        }
+        if is_in_test_context(node, source_bytes) || is_under_tests_dir(ctx.path) {
             return;
         }
         diagnostics.push(Diagnostic::at_node(
@@ -86,6 +89,18 @@ mod tests {
     #[test]
     fn allows_spawn_blocking_in_async() {
         let source = "async fn f() { tokio::task::spawn_blocking(|| {}); }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_thread_spawn_in_test_fn() {
+        let source = "#[test]\nfn f() { thread::spawn(|| {}); }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_thread_spawn_in_tokio_test() {
+        let source = "#[tokio::test]\nasync fn f() { std::thread::spawn(|| {}); }";
         assert!(run_on(source).is_empty());
     }
 }
