@@ -7,7 +7,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::project::Framework;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::Expression;
+use oxc_ast::ast::{BindingPattern, Expression};
 use std::sync::Arc;
 
 pub struct Check;
@@ -48,10 +48,10 @@ impl OxcCheck for Check {
         }
 
         for declarator in &decl.declarations {
-            let Some(name) = declarator.id.get_identifier() else {
+            let BindingPattern::BindingIdentifier(id) = &declarator.id else {
                 continue;
             };
-            if name != "revalidate" {
+            if id.name.as_str() != "revalidate" {
                 continue;
             }
             let Some(init) = &declarator.init else {

@@ -64,7 +64,7 @@ impl OxcCheck for Check {
         // Must be at module scope — no function/arrow ancestor
         for ancestor in semantic.nodes().ancestors(node.id()) {
             match ancestor.kind() {
-                AstKind::FunctionDeclaration(_)
+                AstKind::Function(_)
                 | AstKind::ArrowFunctionExpression(_)
                 | AstKind::FunctionBody(_) => return,
                 _ => {}

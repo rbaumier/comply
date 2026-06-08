@@ -23,6 +23,6 @@ pub const META: RuleMeta = RuleMeta {
 pub fn register() -> RuleDef {
     RuleDef {
         meta: META,
-        backends: vec![(Language::Html, Backend::Text(Box::new(text::Check)))],
+        backends: vec![(Language::Svelte, Backend::Text(Box::new(text::Check)))],
     }
 }

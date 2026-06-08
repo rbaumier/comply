@@ -26,9 +26,6 @@ impl TextCheck for Check {
                 || trimmed.starts_with("input ")
                 || trimmed.starts_with("interface ")
                 || trimmed.starts_with("enum ")
-                || trimmed.starts_with("query ")
-                || trimmed.starts_with("mutation ")
-                || trimmed.starts_with("subscription ")
             {
                 continue;
             }

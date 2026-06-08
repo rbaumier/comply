@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 pub struct Check;
 
-fn has_jsx_attr(attrs: &oxc_ast::ast::JSXAttributeItems, name: &str) -> bool {
+fn has_jsx_attr(attrs: &[oxc_ast::ast::JSXAttributeItem], name: &str) -> bool {
     attrs.iter().any(|item| {
         if let oxc_ast::ast::JSXAttributeItem::Attribute(attr) = item {
             if let oxc_ast::ast::JSXAttributeName::Identifier(id) = &attr.name {

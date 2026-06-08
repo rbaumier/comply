@@ -3,7 +3,6 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::Expression;
 use std::sync::Arc;
 
 const WRITE_METHODS: &[&str] = &[
@@ -25,7 +24,7 @@ impl OxcCheck for Check {
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        semantic: &'a oxc_semantic::Semantic<'a>,
+        _semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let span = match node.kind() {
@@ -40,20 +39,14 @@ impl OxcCheck for Check {
             return;
         }
 
-        // Count Prisma write calls among descendants of this node.
-        let mut writes = 0usize;
-        for descendant in semantic.nodes().descendants(node.id()) {
-            let AstKind::CallExpression(call) = descendant.kind() else {
-                continue;
-            };
-            let Expression::StaticMemberExpression(member) = &call.callee else {
-                continue;
-            };
-            let method = member.property.name.as_str();
-            if WRITE_METHODS.contains(&method) {
-                writes += 1;
-            }
-        }
+        // Count Prisma write calls in the function body text.
+        let writes: usize = WRITE_METHODS
+            .iter()
+            .map(|m| {
+                let needle = format!(".{m}(");
+                body_text.matches(needle.as_str()).count()
+            })
+            .sum();
 
         if writes < 2 {
             return;

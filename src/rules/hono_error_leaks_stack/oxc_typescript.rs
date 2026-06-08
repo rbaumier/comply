@@ -2,6 +2,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::Expression;
+use oxc_span::GetSpan;
 use std::sync::Arc;
 
 pub struct Check;
@@ -25,7 +26,7 @@ fn inside_on_error<'a>(
 
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
-        &[AstType::MemberExpression]
+        &[AstType::StaticMemberExpression]
     }
 
     fn prefilter(&self) -> Option<&'static [&'static str]> {
@@ -43,20 +44,17 @@ impl OxcCheck for Check {
             return;
         }
 
-        let AstKind::MemberExpression(member) = node.kind() else {
+        let AstKind::StaticMemberExpression(member) = node.kind() else {
             return;
         };
 
-        let Some((prop_name, prop_span)) = member.static_property_info() else {
-            return;
-        };
+        let prop_name = member.property.name.as_str();
         if prop_name != "stack" && prop_name != "message" {
             return;
         }
 
         // Object should be a simple identifier like err/error/e/exception
-        let obj = member.object();
-        let Expression::Identifier(obj_id) = obj else {
+        let Expression::Identifier(obj_id) = &member.object else {
             return;
         };
         let obj_name = obj_id.name.as_str();
@@ -69,9 +67,9 @@ impl OxcCheck for Check {
         }
 
         let member_text =
-            &ctx.source[member.span().start as usize..member.span().end as usize];
+            &ctx.source[member.span.start as usize..member.span.end as usize];
         let (line, column) =
-            byte_offset_to_line_col(ctx.source, member.span().start as usize);
+            byte_offset_to_line_col(ctx.source, member.span.start as usize);
         diagnostics.push(Diagnostic {
             path: Arc::clone(&ctx.path_arc),
             line,
