@@ -83,14 +83,14 @@ mod tests {
 
     #[test]
     fn flags_return_in_test_arrow() {
-        let d = run_on("test('x', () => { return expect(1).toBe(1); });");
+        let d = run_on("test('x', () => { return 42; });");
         assert_eq!(d.len(), 1);
         assert_eq!(d[0].rule_id, "no-test-return-statement");
     }
 
     #[test]
     fn flags_return_in_it_function_expression() {
-        let d = run_on("it('x', function () { return doStuff(); });");
+        let d = run_on("it('x', function () { return someVar; });");
         assert_eq!(d.len(), 1);
     }
 
