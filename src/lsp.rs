@@ -24,6 +24,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use rustc_hash::FxHashMap;
 use tokio::sync::RwLock;
 use tower_lsp::jsonrpc::Result as LspResult;
 use tower_lsp::lsp_types::{
@@ -36,7 +37,7 @@ use tower_lsp::{Client, LanguageServer, LspService, Server};
 
 use crate::config::Config;
 use crate::diagnostic::{Diagnostic as ComplyDiagnostic, Severity};
-use crate::engine;
+use crate::engine::{self, LangDispatch};
 use crate::files::Language;
 
 /// Spin up the LSP server on stdio. Blocks until the editor closes
@@ -47,6 +48,7 @@ pub async fn run() {
     let (service, socket) = LspService::new(|client| Backend {
         client,
         config: RwLock::new(Arc::new(Config::default())),
+        dispatch_cache: RwLock::new(FxHashMap::default()),
     });
     Server::new(stdin, stdout, socket).serve(service).await;
 }
@@ -56,9 +58,15 @@ pub async fn run() {
 /// messages); the Config is loaded once at `initialize` and held
 /// behind an RwLock so a future "reload config" command can swap it
 /// in without restarting the server.
+///
+/// `dispatch_cache` holds a pre-built `LangDispatch` per language, keyed by
+/// `Language`. Built lazily on first use and invalidated when the config
+/// changes. This avoids rebuilding the full dispatch table and prefilter
+/// finders on every keystroke.
 struct Backend {
     client: Client,
     config: RwLock<Arc<Config>>,
+    dispatch_cache: RwLock<FxHashMap<Language, Arc<LangDispatch<'static>>>>,
 }
 
 #[tower_lsp::async_trait]
@@ -73,6 +81,7 @@ impl LanguageServer for Backend {
         match Config::load_from(&anchor) {
             Ok(cfg) => {
                 *self.config.write().await = Arc::new(cfg);
+                self.dispatch_cache.write().await.clear();
                 self.client
                     .log_message(
                         MessageType::INFO,
@@ -158,13 +167,38 @@ impl Backend {
     /// LSP diagnostics for the document at `uri`. Skips files whose
     /// extension comply doesn't recognize so we don't pollute the
     /// editor with empty `publishDiagnostics` for unrelated buffers.
+    ///
+    /// The `LangDispatch` for `language` is built lazily and cached so the
+    /// full dispatch-table construction cost is paid at most once per language
+    /// per session, not on every keystroke.
     async fn publish_for(&self, uri: &Url, text: &str) {
         let Some(path) = uri_to_path(uri) else { return };
         let Some(language) = Language::from_path(&path) else {
             return;
         };
         let cfg = self.config.read().await.clone();
-        let diagnostics = engine::lint_in_memory(&path, language, text, &cfg, None);
+
+        // Fast path: read-lock lookup (common case after first keystroke).
+        let dispatch = {
+            let cache = self.dispatch_cache.read().await;
+            cache.get(&language).cloned()
+        };
+
+        // Slow path: build and store the dispatch table (first time per language).
+        let dispatch = match dispatch {
+            Some(d) => d,
+            None => {
+                let mut cache = self.dispatch_cache.write().await;
+                // Double-check: another task may have inserted while we waited.
+                cache
+                    .entry(language)
+                    .or_insert_with(|| Arc::new(engine::build_dispatch_for_lsp(language, &cfg)))
+                    .clone()
+            }
+        };
+
+        let diagnostics =
+            engine::lint_in_memory_with_dispatch(&path, language, text, &cfg, &dispatch, None);
         let lsp_diagnostics: Vec<LspDiagnostic> =
             diagnostics.iter().map(comply_to_lsp_diagnostic).collect();
         self.client

@@ -3918,3 +3918,11 @@ pub fn all_rule_defs() -> Vec<RuleDef> {
     rules.extend(delegated::register_type_aware());
     rules
 }
+
+static RULE_DEFS: std::sync::OnceLock<Vec<RuleDef>> = std::sync::OnceLock::new();
+
+/// Returns the global, lazily-initialised list of all rule definitions.
+/// Initialised on first call; subsequent calls are lock-free reads.
+pub fn all_rule_defs_static() -> &'static [RuleDef] {
+    RULE_DEFS.get_or_init(all_rule_defs)
+}
