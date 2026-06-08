@@ -30,6 +30,19 @@ use crate::rules::file_ctx::FileCtx;
 use std::path::Path;
 use std::sync::Arc;
 
+/// Post-filter for a delegated rule's false-positive narrowing logic.
+///
+/// Implemented by rule-specific structs and attached to `Backend::Oxlint` /
+/// `Backend::Tsgolint` variants. The dispatcher in `crate::oxlint` calls
+/// `keep()` once per diagnostic; returning `false` drops the diagnostic.
+///
+/// `source` is the full text of the file the diagnostic points to, loaded at
+/// most once per file per `lint_files()` call. Rules that only need the path
+/// or the diagnostic message can ignore `source`.
+pub trait PostFilter: Send + Sync {
+    fn keep(&self, diag: &Diagnostic, source: Option<&str>) -> bool;
+}
+
 /// Read-only context handed to in-process check implementations.
 ///
 /// `config` carries the resolved per-project configuration (thresholds,
@@ -274,14 +287,20 @@ pub enum Backend {
     Text(Box<dyn TextCheck>),
     /// Delegate to an oxlint rule. Comply enables the rule in the generated
     /// oxlintrc and remaps oxlint's diagnostic back to our RuleMeta.
-    Oxlint { rule: &'static str },
+    Oxlint {
+        rule: &'static str,
+        post_filter: Option<Arc<dyn PostFilter>>,
+    },
     /// (v2) Delegate to a clippy lint — same remap pattern as Oxlint.
     Clippy { lint: &'static str },
     /// (v1.2) Shell out to `tsc --noEmit` and filter by diagnostic code.
     Tsc { codes: &'static [u32] },
     /// Delegate to a tsgolint rule (type-aware linting via typescript-go).
     /// Only runs when `--type-aware` is passed.
-    Tsgolint { rule: &'static str },
+    Tsgolint {
+        rule: &'static str,
+        post_filter: Option<Arc<dyn PostFilter>>,
+    },
     /// A custom type-aware rule executed by comply's own typescript-go
     /// sidecar (not a typescript-eslint rule). The rule id in `RuleMeta`
     /// selects the implementation in `crate::typeaware`. Only runs when
@@ -296,10 +315,10 @@ impl std::fmt::Debug for Backend {
         match self {
             Self::TreeSitter(_) => f.write_str("Backend::TreeSitter(<dyn AstCheck>)"),
             Self::Text(_) => f.write_str("Backend::Text(<dyn TextCheck>)"),
-            Self::Oxlint { rule } => write!(f, "Backend::Oxlint {{ rule: {rule:?} }}"),
+            Self::Oxlint { rule, .. } => write!(f, "Backend::Oxlint {{ rule: {rule:?} }}"),
             Self::Clippy { lint } => write!(f, "Backend::Clippy {{ lint: {lint:?} }}"),
             Self::Tsc { codes } => write!(f, "Backend::Tsc {{ codes: {codes:?} }}"),
-            Self::Tsgolint { rule } => write!(f, "Backend::Tsgolint {{ rule: {rule:?} }}"),
+            Self::Tsgolint { rule, .. } => write!(f, "Backend::Tsgolint {{ rule: {rule:?} }}"),
             Self::TypeAware => f.write_str("Backend::TypeAware"),
             Self::Oxc(_) => f.write_str("Backend::Oxc(<dyn OxcCheck>)"),
         }
