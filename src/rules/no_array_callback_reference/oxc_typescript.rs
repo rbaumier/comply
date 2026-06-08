@@ -7,6 +7,29 @@ use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::Expression;
 use std::sync::Arc;
 
+/// Returns `true` when `ident` resolves to a locally-declared function whose
+/// formal parameter list has zero named items (covers `() => x` and
+/// `(...rest) => x` alike — rest-only functions safely ignore extra arguments).
+fn is_zero_arity_local<'a>(
+    ident: &oxc_ast::ast::IdentifierReference<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    let Some(ref_id) = ident.reference_id.get() else { return false };
+    let scoping = semantic.scoping();
+    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else { return false };
+    let decl_node_id = scoping.symbol_declaration(sym_id);
+    let nodes = semantic.nodes();
+    match nodes.kind(decl_node_id) {
+        AstKind::VariableDeclarator(decl) => match decl.init.as_ref() {
+            Some(Expression::ArrowFunctionExpression(f)) => f.params.items.is_empty(),
+            Some(Expression::FunctionExpression(f)) => f.params.items.is_empty(),
+            _ => false,
+        },
+        AstKind::Function(f) => f.params.items.is_empty(),
+        _ => false,
+    }
+}
+
 pub struct Check;
 
 const ITERATOR_METHODS: &[&str] = &[
@@ -35,7 +58,7 @@ impl OxcCheck for Check {
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
+        semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let AstKind::CallExpression(call) = node.kind() else {
@@ -63,6 +86,9 @@ impl OxcCheck for Check {
             Expression::Identifier(ident) => {
                 let name = ident.name.as_str();
                 if IGNORED_IDENTIFIERS.contains(&name) {
+                    return;
+                }
+                if is_zero_arity_local(ident, semantic) {
                     return;
                 }
                 let (line, column) =
@@ -98,5 +124,53 @@ impl OxcCheck for Check {
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+    #[test]
+    fn allows_zero_arity_arrow_function() {
+        // Regression for #825 — zero-param arrow safely ignores extra args from .map()
+        let src = "const c = () => 'x'; const arr: string[] = []; arr.map(c);";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_zero_arity_function_expression() {
+        let src = "const c = function() { return 'x'; }; const arr: string[] = []; arr.map(c);";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_zero_arity_function_declaration() {
+        let src = "function c() { return 'x'; } const arr: string[] = []; arr.map(c);";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_rest_only_function() {
+        // (...args) => x has items.is_empty() == true — safely ignored
+        let src = "const c = (..._a: any[]) => undefined; const arr: string[] = []; arr.map(c);";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_function_with_explicit_param() {
+        let src = "const c = (x: number) => x * 2; const arr: number[] = []; arr.map(c);";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_imported_function_conservatively() {
+        // Cross-file import: symbol_id() is None → conservative, must flag
+        let src = "import { importedFn } from './other'; const arr: string[] = []; arr.map(importedFn);";
+        assert_eq!(run_on(src).len(), 1);
     }
 }
