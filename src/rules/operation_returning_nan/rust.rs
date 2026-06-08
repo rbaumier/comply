@@ -16,9 +16,9 @@ crate::ast_check! { on ["binary_expression"] => |node, source, ctx, diagnostics|
     let left_text = left.utf8_text(source).unwrap_or("");
     let right_text = right.utf8_text(source).unwrap_or("");
 
-    // NaN arithmetic.
-    let has_nan = left_text.contains("NAN") || right_text.contains("NAN")
-        || left_text.contains("NaN") || right_text.contains("NaN");
+    // NaN arithmetic — match only the exact f64::NAN / f32::NAN constants.
+    let has_nan = matches!(left_text, "f64::NAN" | "f32::NAN")
+        || matches!(right_text, "f64::NAN" | "f32::NAN");
 
     if has_nan && matches!(op, "+" | "-" | "*" | "/") {
         let pos = node.start_position();
@@ -70,5 +70,27 @@ mod tests {
     #[test]
     fn allows_normal_arithmetic() {
         assert!(run_on("fn f() { let x = 1.0 + 2.0; }").is_empty());
+    }
+
+    #[test]
+    fn allows_constant_with_nan_in_name() {
+        let source = r#"
+            const MAX_SPAN_NANOSECONDS: i128 = 86400000000000i128;
+            fn test() {
+                let nanos = i128::from(MAX_SPAN_NANOSECONDS) + 2;
+            }
+        "#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_nanoseconds_variable() {
+        let source = r#"
+            fn test() {
+                let ns = 1_000_000_000i64;
+                let total_ns = ns * 7;
+            }
+        "#;
+        assert!(run_on(source).is_empty());
     }
 }
