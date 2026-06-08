@@ -1,7 +1,7 @@
 //! dockerfile-wget-progress-flag — `wget` without a quiet/progress flag bloats
 //! build logs with megabytes of progress bars. Hadolint DL3047.
 
-mod typescript;
+mod check;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
@@ -26,7 +26,7 @@ pub fn register() -> RuleDef {
         meta: META,
         backends: vec![(
             Language::Dockerfile,
-            Backend::TreeSitter(Box::new(typescript::Check)),
+            Backend::TreeSitter(Box::new(check::Check)),
         )],
     }
 }

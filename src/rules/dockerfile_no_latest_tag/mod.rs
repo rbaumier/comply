@@ -1,7 +1,7 @@
 //! dockerfile-no-latest-tag — FROM image must pin a version tag; `:latest` or
 //! no tag at all allows silent base-image drift.
 
-mod typescript;
+mod check;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
@@ -26,7 +26,7 @@ pub fn register() -> RuleDef {
         meta: META,
         backends: vec![(
             Language::Dockerfile,
-            Backend::TreeSitter(Box::new(typescript::Check)),
+            Backend::TreeSitter(Box::new(check::Check)),
         )],
     }
 }

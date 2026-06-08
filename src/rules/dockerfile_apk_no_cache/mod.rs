@@ -1,7 +1,7 @@
 //! dockerfile-apk-no-cache — `apk add` should use `--no-cache` to avoid
 //! leaving the apk index in the resulting layer.
 
-mod typescript;
+mod check;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
@@ -26,7 +26,7 @@ pub fn register() -> RuleDef {
         meta: META,
         backends: vec![(
             Language::Dockerfile,
-            Backend::TreeSitter(Box::new(typescript::Check)),
+            Backend::TreeSitter(Box::new(check::Check)),
         )],
     }
 }

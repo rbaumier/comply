@@ -1,7 +1,7 @@
 //! dockerfile-copy-trailing-slash — when COPY has multiple sources, the
 //! destination must end with `/` so Docker treats it as a directory.
 
-mod typescript;
+mod check;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
@@ -26,7 +26,7 @@ pub fn register() -> RuleDef {
         meta: META,
         backends: vec![(
             Language::Dockerfile,
-            Backend::TreeSitter(Box::new(typescript::Check)),
+            Backend::TreeSitter(Box::new(check::Check)),
         )],
     }
 }

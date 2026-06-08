@@ -1,7 +1,7 @@
 //! dockerfile-useradd-low-uid — `useradd` without `-l`/`--no-log-init` can
 //! produce sparse `/var/log/lastlog` files that bloat the image. Hadolint DL3046.
 
-mod typescript;
+mod check;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
@@ -26,7 +26,7 @@ pub fn register() -> RuleDef {
         meta: META,
         backends: vec![(
             Language::Dockerfile,
-            Backend::TreeSitter(Box::new(typescript::Check)),
+            Backend::TreeSitter(Box::new(check::Check)),
         )],
     }
 }

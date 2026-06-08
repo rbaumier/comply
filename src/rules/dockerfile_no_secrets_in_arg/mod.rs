@@ -1,7 +1,7 @@
 //! dockerfile-no-secrets-in-arg — `ARG SECRET=foo` leaks into image history;
 //! use `--mount=type=secret` for build-time secrets.
 
-mod typescript;
+mod check;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
@@ -26,7 +26,7 @@ pub fn register() -> RuleDef {
         meta: META,
         backends: vec![(
             Language::Dockerfile,
-            Backend::TreeSitter(Box::new(typescript::Check)),
+            Backend::TreeSitter(Box::new(check::Check)),
         )],
     }
 }

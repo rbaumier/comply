@@ -1,7 +1,7 @@
 //! dockerfile-no-curl-and-wget — flag images that mix `curl` and `wget`,
 //! since carrying both bloats the image. Hadolint DL4001.
 
-mod typescript;
+mod check;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
@@ -26,7 +26,7 @@ pub fn register() -> RuleDef {
         meta: META,
         backends: vec![(
             Language::Dockerfile,
-            Backend::TreeSitter(Box::new(typescript::Check)),
+            Backend::TreeSitter(Box::new(check::Check)),
         )],
     }
 }
