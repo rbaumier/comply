@@ -37,7 +37,7 @@ fn format_prefixed(prefix: &str, digits: &str, suffix: &str) -> String {
 fn format_decimal(raw: &str, suffix: &str) -> String {
     let clean: String = raw.chars().filter(|&c| c != '_').collect();
     if clean.len() < 5 {
-        return format!("{}{}", clean, suffix);
+        return format!("{}{}", raw, suffix);
     }
     let formatted = add_separators(raw, 3);
     format!("{}{}", formatted, suffix)
@@ -117,5 +117,26 @@ impl OxcCheck for Check {
                 span: None,
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+    #[test]
+    fn allows_separated_four_digit_number() {
+        assert!(run_on("const x = 1_000;").is_empty());
+    }
+
+    #[test]
+    fn flags_unseparated_five_digit_number() {
+        let d = run_on("const x = 10000;");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("10_000"));
     }
 }

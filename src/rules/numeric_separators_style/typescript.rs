@@ -34,7 +34,7 @@ fn format_prefixed(prefix: &str, digits: &str, suffix: &str) -> String {
 fn format_decimal(raw: &str, suffix: &str) -> String {
     let clean: String = raw.chars().filter(|&c| c != '_').collect();
     if clean.len() < 5 {
-        return format!("{}{}", clean, suffix);
+        return format!("{}{}", raw, suffix);
     }
     let formatted = add_separators(raw, 3);
     format!("{}{}", formatted, suffix)
@@ -142,5 +142,10 @@ mod tests {
     #[test]
     fn allows_short_hex() {
         assert!(run_ts("const x = 0xFF;", &Check).is_empty());
+    }
+
+    #[test]
+    fn allows_separated_four_digit_number() {
+        assert!(run_ts("const x = 1_000;", &Check).is_empty());
     }
 }
