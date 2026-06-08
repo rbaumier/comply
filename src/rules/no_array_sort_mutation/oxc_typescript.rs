@@ -98,3 +98,52 @@ mod oxc_tests {
         assert!(run("const s = items.filter((x) => x).sort();").is_empty());
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_sort_without_comparator() {
+        assert_eq!(run_on("const sorted = arr.sort();").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_sort_with_comparator() {
+        assert_eq!(run_on("arr.sort((a, b) => a - b);").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_to_sorted() {
+        assert!(run_on("const sorted = arr.toSorted();").is_empty());
+    }
+
+
+    #[test]
+    fn allows_to_sorted_with_comparator() {
+        assert!(run_on("const sorted = arr.toSorted((a, b) => a - b);").is_empty());
+    }
+
+
+    #[test]
+    fn allows_chained_sort_on_fresh_array() {
+        // `items.filter(...)` returns a fresh array — the in-place sort is not
+        // observable, so there is no aliasing hazard (issue #482).
+        assert!(run_on("const sorted = items.filter(x => x).sort();").is_empty());
+    }
+
+
+    #[test]
+    fn allows_sort_on_object_keys() {
+        assert!(run_on("const sorted = Object.keys(obj).sort();").is_empty());
+    }
+}

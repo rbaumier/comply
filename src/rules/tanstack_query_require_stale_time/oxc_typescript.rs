@@ -85,4 +85,25 @@ mod tests {
         };
         assert!(run_oxc_tsx_with_file_ctx(src, &Check, &file).is_empty());
     }
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_no_stale_time() {
+        assert_eq!(run("const client = new QueryClient({})").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_stale_time() {
+        assert!(run(
+            "const client = new QueryClient({ defaultOptions: { queries: { staleTime: 60_000 } } })"
+        )
+        .is_empty());
+    }
 }

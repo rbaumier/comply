@@ -45,3 +45,42 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_framework(source, &Check, "elysia")
+    }
+
+
+    #[test]
+    fn flags_decorate_with_date_now() {
+        let src = "import { Elysia } from 'elysia';\napp.decorate('startedAt', Date.now());";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_decorate_with_math_random() {
+        let src = "import { Elysia } from 'elysia';\napp.decorate('id', Math.random());";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_decorate_with_static_value() {
+        let src = "import { Elysia } from 'elysia';\napp.decorate('config', { url: 'x' });";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_elysia_files() {
+        let src = "app.decorate('id', Math.random());";
+        assert!(crate::rules::test_helpers::run_oxc_ts(src, &Check).is_empty());
+    }
+}

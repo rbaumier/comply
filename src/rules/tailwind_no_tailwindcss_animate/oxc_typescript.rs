@@ -61,3 +61,41 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_default_import() {
+        assert_eq!(
+            run(r#"import animate from "tailwindcss-animate";"#).len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn flags_side_effect_import() {
+        assert_eq!(run(r#"import "tailwindcss-animate";"#).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_require() {
+        assert_eq!(run(r#"const a = require("tailwindcss-animate");"#).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_tw_animate_css() {
+        assert!(run(r#"import "tw-animate-css";"#).is_empty());
+    }
+}

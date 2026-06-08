@@ -73,3 +73,43 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+    fn run(code: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(code, &Check)
+    }
+
+
+    #[test]
+    fn flags_spread_sort() {
+        assert_eq!(run("[...arr].sort()").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_slice_sort() {
+        assert_eq!(run("arr.slice().sort()").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_slice_sort_with_comparator() {
+        assert_eq!(run("arr.slice().sort((a, b) => a - b)").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_to_sorted() {
+        assert!(run("arr.toSorted()").is_empty());
+    }
+
+
+    #[test]
+    fn allows_mutating_sort() {
+        assert!(run("arr.sort()").is_empty());
+    }
+}

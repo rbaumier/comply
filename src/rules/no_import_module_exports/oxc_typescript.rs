@@ -71,3 +71,37 @@ impl OxcCheck for Check {
             .collect()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_mixed_modules() {
+        let src = "import { a } from 'a';\nmodule.exports = { a };";
+        let diags = run_on(src);
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].line, 2);
+    }
+
+
+    #[test]
+    fn allows_pure_esm() {
+        let src = "import { a } from 'a';\nexport const b = a;";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_pure_cjs() {
+        let src = "const a = require('a');\nmodule.exports = { a };";
+        assert!(run_on(src).is_empty());
+    }
+}

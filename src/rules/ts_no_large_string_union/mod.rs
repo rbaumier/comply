@@ -1,8 +1,6 @@
 //! ts-no-large-string-union — flag string literal unions exceeding 50 members.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

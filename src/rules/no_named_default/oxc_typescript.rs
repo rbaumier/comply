@@ -47,3 +47,42 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_named_default_import() {
+        let d = run_on(r#"import { default as foo } from './m';"#);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("import foo from"));
+    }
+
+
+    #[test]
+    fn flags_named_default_with_others() {
+        let d = run_on(r#"import { default as foo, bar } from './m';"#);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("foo"));
+    }
+
+
+    #[test]
+    fn allows_regular_default_import() {
+        assert!(run_on(r#"import foo from './m';"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_named_imports() {
+        assert!(run_on(r#"import { bar, baz } from './m';"#).is_empty());
+    }
+}

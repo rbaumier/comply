@@ -131,3 +131,50 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_if_true() {
+        let d = run_on("if (true) { doStuff(); }");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("always true"));
+    }
+
+
+    #[test]
+    fn flags_if_false() {
+        let d = run_on("if (false) { doStuff(); }");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("always false"));
+    }
+
+
+    #[test]
+    fn flags_self_comparison() {
+        let d = run_on("if (x === x) { doStuff(); }");
+        assert!(!d.is_empty());
+        assert!(d.iter().any(|d| d.message.contains("always true")));
+    }
+
+
+    #[test]
+    fn allows_normal_conditions() {
+        assert!(run_on("if (x > 0) { doStuff(); }").is_empty());
+    }
+
+
+    #[test]
+    fn allows_different_comparison() {
+        assert!(run_on("if (x === y) { doStuff(); }").is_empty());
+    }
+}

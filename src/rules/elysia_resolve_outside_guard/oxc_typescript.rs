@@ -416,4 +416,12 @@ mod tests {
         "#;
         assert!(run_on(src).is_empty(), "{:?}", run_on(src));
     }
+
+
+
+    #[test]
+    fn ignores_non_elysia_files() {
+        let src = "promise.resolve(1);";
+        assert!(crate::rules::test_helpers::run_oxc_ts(src, &Check).is_empty());
+    }
 }

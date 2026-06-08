@@ -66,3 +66,54 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diagnostic::Diagnostic;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_word_boundary_lookaround() {
+        assert_eq!(run_on(r"const re = /(?=\w)(?<=\W)/;").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_start_anchor_lookaround() {
+        assert_eq!(run_on(r"const re = /(?<=^)foo/;").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_normal_lookaround() {
+        assert!(run_on(r"const re = /(?=foo)/;").is_empty());
+    }
+
+
+    #[test]
+    fn ignores_lookaround_lookalike_in_tailwind_string() {
+        let src = r#"const x = "group-[(?<=^)]:flex";"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_lookaround_lookalike_in_url() {
+        let src = r#"const u = "https://example.com/docs#(?=$)";"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_lookaround_lookalike_in_scoped_import() {
+        let src = r#"import X from "@scope/(?=\\w)(?<=\\W)";"#;
+        assert!(run_on(src).is_empty());
+    }
+}

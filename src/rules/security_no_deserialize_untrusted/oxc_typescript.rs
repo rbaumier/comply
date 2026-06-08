@@ -105,3 +105,38 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_unserialize_on_req_body() {
+        assert_eq!(run("unserialize(req.body.payload);").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_yaml_load_on_req_query() {
+        assert_eq!(run("yaml.load(req.query.config);").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_unserialize_on_constant() {
+        assert!(run("unserialize('fixed-string');").is_empty());
+    }
+
+
+    #[test]
+    fn ignores_safe_parsers() {
+        assert!(run("JSON.parse(req.body.payload);").is_empty());
+    }
+}

@@ -86,3 +86,28 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_ngfor_without_trackby() {
+        let src = "import { Component } from '@angular/core';\n@Component({ template: `<li *ngFor=\"let it of items\">{{it}}</li>` }) class C {}";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_ngfor_with_trackby() {
+        let src = "import { Component } from '@angular/core';\n@Component({ template: `<li *ngFor=\"let it of items; trackBy: trackById\">{{it}}</li>` }) class C {}";
+        assert!(run(src).is_empty());
+    }
+}

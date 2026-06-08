@@ -61,3 +61,58 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diagnostic::Diagnostic;
+
+
+
+    fn run(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_flatmap_filter_chain() {
+        let diags = run(r#"const r = xs.flatMap(x => x.children).filter(c => c.active);"#);
+        assert_eq!(diags.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_flatmap_filter_boolean() {
+        let diags = run(r#"const r = xs.flatMap(x => x.tags).filter(Boolean);"#);
+        assert_eq!(diags.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_flatmap_filter_multiline() {
+        let diags = run(r#"
+const result = items
+    .flatMap(item => item.children)
+    .filter(child => child.visible);
+"#);
+        assert_eq!(diags.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_flatmap_alone() {
+        assert!(run(r#"const r = xs.flatMap(x => x.children);"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_filter_alone() {
+        assert!(run(r#"const r = xs.filter(x => x.active);"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_map_filter_chain() {
+        assert!(run(r#"const r = xs.map(x => x.id).filter(Boolean);"#).is_empty());
+    }
+}

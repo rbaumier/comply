@@ -59,3 +59,38 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_double_quote_star() {
+        assert_eq!(run(r#"window.postMessage(data, "*");"#).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_single_quote_star() {
+        assert_eq!(run("iframe.contentWindow.postMessage(msg, '*');").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_specific_origin() {
+        assert!(run(r#"window.postMessage(data, "https://example.com");"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_variable_origin() {
+        assert!(run("window.postMessage(data, targetOrigin);").is_empty());
+    }
+}

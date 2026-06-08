@@ -71,3 +71,40 @@ mod oxc_tests {
         assert!(run_in_test_file(r#"delete process.env["API_SENTRY_DSN"];"#).is_empty());
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_delete_property() {
+        assert_eq!(run_on("delete obj.prop;").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_delete_computed_property() {
+        assert_eq!(run_on("delete obj[key];").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_rest_destructuring() {
+        assert!(run_on("const { a, ...rest } = obj;").is_empty());
+    }
+
+
+    #[test]
+    fn ignores_other_unary_operators() {
+        assert!(run_on("const x = !flag;").is_empty());
+        assert!(run_on("const y = -value;").is_empty());
+        assert!(run_on("typeof x;").is_empty());
+    }
+}

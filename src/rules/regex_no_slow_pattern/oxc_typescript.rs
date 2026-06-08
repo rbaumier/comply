@@ -84,3 +84,77 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_plus_plus() {
+        assert_eq!(run_on(r#"const re = /(a+)+/;"#).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_star_star() {
+        assert_eq!(run_on(r#"const re = /(.*)*$/;"#).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_plus_star() {
+        assert_eq!(run_on(r#"const re = /(a+)*/;"#).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_single_quantifier() {
+        assert!(run_on(r#"const re = /(a+)/;"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_non_quantified_group() {
+        assert!(run_on(r#"const re = /(abc)/;"#).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_tailwind_arbitrary_value_in_string() {
+        let src = r#"const x = "grid-cols-[(a+)+_1fr]";"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_url_in_string() {
+        let src = r#"const u = "http://a/(b+)+";"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_scoped_import_path() {
+        let src = r#"import X from "@scope/(pkg+)+";"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_plus_literal_in_character_class() {
+        assert!(run_on(r#"const re = /([a+])+/;"#).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_star_literal_in_character_class() {
+        assert!(run_on(r#"const re = /([*])*/;"#).is_empty());
+    }
+}

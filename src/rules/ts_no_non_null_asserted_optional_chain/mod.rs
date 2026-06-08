@@ -1,8 +1,6 @@
 //! ts-no-non-null-asserted-optional-chain — flag `(x?.y)!`.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

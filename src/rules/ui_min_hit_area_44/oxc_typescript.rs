@@ -102,3 +102,72 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_small_button() {
+        let src = r#"const x = <button className="h-4 w-4" />;"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_small_size_anchor() {
+        let src = r##"const x = <a className="size-3" href="#">x</a>;"##;
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_44px_button() {
+        let src = r#"const x = <button className="h-12 w-12" />;"#;
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_interactive() {
+        let src = r#"const x = <div className="h-4 w-4" />;"#;
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn flags_padding_based_small_button() {
+        // `px-2 py-1 text-xs` without explicit sizing → almost certainly below 44px.
+        let src = r#"const x = <button className="px-2 py-1 text-xs">x</button>;"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_padding_based_small_anchor() {
+        let src = r##"const x = <a className="px-1 py-0.5 text-sm" href="#">x</a>;"##;
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_padding_with_min_height() {
+        // Tiny padding but explicit min-h rescues the hit area.
+        let src = r#"const x = <button className="px-2 py-1 text-xs min-h-12">x</button>;"#;
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_padding_with_explicit_height() {
+        let src = r#"const x = <button className="px-2 py-1 text-xs h-12">x</button>;"#;
+        assert!(run(src).is_empty());
+    }
+}

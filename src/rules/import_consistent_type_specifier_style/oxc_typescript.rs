@@ -67,3 +67,50 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_inline_type() {
+        let d = run_on("import { type Foo } from 'bar';");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("top-level"));
+    }
+
+
+    #[test]
+    fn flags_all_inline_types() {
+        let d = run_on("import { type Foo, type Bar } from 'bar';");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("top-level"));
+    }
+
+
+    #[test]
+    fn flags_mixed_import_with_split_message() {
+        let d = run_on("import { value, type Foo } from 'bar';");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("Split mixed imports"));
+    }
+
+
+    #[test]
+    fn allows_top_level_type() {
+        assert!(run_on("import type { Foo } from 'bar';").is_empty());
+    }
+
+
+    #[test]
+    fn allows_normal_import() {
+        assert!(run_on("import { foo } from 'bar';").is_empty());
+    }
+}

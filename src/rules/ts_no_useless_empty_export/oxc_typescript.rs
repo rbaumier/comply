@@ -65,3 +65,40 @@ impl OxcCheck for Check {
             .collect()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_empty_export_with_other_exports() {
+        let diags = run_on("export const x = 1;\nexport {};");
+        assert_eq!(diags.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_empty_export_as_only_export() {
+        assert!(run_on("const x = 1;\nexport {};").is_empty());
+    }
+
+
+    #[test]
+    fn flags_empty_export_with_import() {
+        let diags = run_on("import { foo } from 'bar';\nexport {};");
+        assert_eq!(diags.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_no_empty_export() {
+        assert!(run_on("export const x = 1;").is_empty());
+    }
+}

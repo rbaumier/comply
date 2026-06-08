@@ -156,4 +156,55 @@ mod tests {
 }"#;
         assert!(run_on(src).is_empty());
     }
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_three_optional_fields_sharing_prefix() {
+        let d = run(
+            "interface Order { id: string; cancelReason?: string; cancelNote?: string; cancelCode?: string }",
+        );
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("canc"));
+    }
+
+
+    #[test]
+    fn flags_prefix_in_type_alias() {
+        let d = run(
+            "type Shipment = { id: string; shippedAt?: string; shippedBy?: string; shippedVia?: string };",
+        );
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_optional_fields_without_shared_prefix() {
+        assert!(
+            run("interface User { id: string; name?: string; email?: string; phone?: string }")
+                .is_empty()
+        );
+    }
+
+
+    #[test]
+    fn allows_required_fields_sharing_prefix() {
+        assert!(
+            run(
+                "interface Order { cancelReason: string; cancelledAt: string; cancelledBy: string }"
+            )
+            .is_empty()
+        );
+    }
+
+
+    #[test]
+    fn allows_single_optional_field() {
+        assert!(run("interface Order { id: string; cancelReason?: string }").is_empty());
+    }
 }

@@ -92,3 +92,50 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_bigint_with_decimal() {
+        let d = run_on("const x = BigInt(123);");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("123n"));
+    }
+
+
+    #[test]
+    fn flags_bigint_with_hex() {
+        let d = run_on("const x = BigInt(0xFF);");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("0xFFn"));
+    }
+
+
+    #[test]
+    fn flags_bigint_with_string() {
+        let d = run_on(r#"const x = BigInt("9007199254740991");"#);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("9007199254740991n"));
+    }
+
+
+    #[test]
+    fn allows_bigint_literal() {
+        assert!(run_on("const x = 123n;").is_empty());
+    }
+
+
+    #[test]
+    fn allows_bigint_with_variable() {
+        assert!(run_on("const x = BigInt(y);").is_empty());
+    }
+}

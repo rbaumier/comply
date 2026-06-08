@@ -71,3 +71,42 @@ impl OxcCheck for Check {
         }]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_hono_app_without_secure_headers() {
+        let src = "import { Hono } from 'hono';\nconst app = new Hono();\napp.get('/', handler);";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_hono_app_with_secure_headers() {
+        let src = "import { Hono } from 'hono';\nimport { secureHeaders } from 'hono/secure-headers';\nconst app = new Hono();\napp.use(secureHeaders());\napp.get('/', handler);";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_hono_files() {
+        let src = "app.get('/', handler);";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_hono_import_without_routes() {
+        let src = "import { Hono } from 'hono';\nconst app = new Hono();";
+        assert!(run_on(src).is_empty());
+    }
+}

@@ -66,3 +66,58 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_const_self_equals_this() {
+        let d = run_on("const self = this;");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("self"));
+    }
+
+
+    #[test]
+    fn flags_let_that_equals_this() {
+        let d = run_on("let that = this;");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("that"));
+    }
+
+
+    #[test]
+    fn flags_assignment_expression() {
+        let d = run_on("let x; x = this;");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("`x`"));
+    }
+
+
+    #[test]
+    fn allows_normal_assignment() {
+        assert!(run_on("const x = 42;").is_empty());
+    }
+
+
+    #[test]
+    fn allows_this_member_access() {
+        assert!(run_on("const x = this.foo;").is_empty());
+    }
+
+
+    #[test]
+    fn flags_var_this_equals_this() {
+        let d = run_on("var _this = this;");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("_this"));
+    }
+}

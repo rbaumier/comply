@@ -147,3 +147,51 @@ fn find_classlist_call_in_stmt<'a>(stmt: &'a oxc_ast::ast::Statement<'a>) -> Opt
         _ => None,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_ternary_classlist() {
+        let d = run_on("cond ? el.classList.add('active') : el.classList.remove('active');");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_if_else_classlist() {
+        let code = r#"if (isActive) {
+  el.classList.add('active');
+} else {
+  el.classList.remove('active');
+}"#;
+        assert_eq!(run_on(code).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_computed_classlist() {
+        let d = run_on("el.classList[cond ? 'add' : 'remove']('active');");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_toggle() {
+        assert!(run_on("el.classList.toggle('active', cond);").is_empty());
+    }
+
+
+    #[test]
+    fn allows_standalone_add() {
+        assert!(run_on("el.classList.add('active');").is_empty());
+    }
+}

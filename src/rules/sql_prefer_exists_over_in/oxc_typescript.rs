@@ -78,4 +78,24 @@ mod tests {
         );
         assert!(diags.is_empty());
     }
+
+
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(src, &Check)
+    }
+
+
+    #[test]
+    fn allows_in_value_list() {
+        let src = r#"const q = "WHERE id IN (1, 2, 3)";"#;
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn does_not_flag_in_comment() {
+        let src = "// IN (SELECT id FROM t)\nconst x = 1;";
+        assert!(run(src).is_empty());
+    }
 }

@@ -197,3 +197,54 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_oxc_ts(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_log_div_ln2() {
+        let d = run_oxc_ts("const x = Math.log(n) / Math.LN2;");
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].rule_id, "prefer-modern-math-apis");
+    }
+
+
+    #[test]
+    fn flags_log_div_ln10() {
+        let d = run_oxc_ts("const x = Math.log(n) / Math.LN10;");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_sqrt_sum_of_squares() {
+        let d = run_oxc_ts("const h = Math.sqrt(a ** 2 + b ** 2);");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_math_log2() {
+        assert!(run_oxc_ts("const x = Math.log2(n);").is_empty());
+    }
+
+
+    #[test]
+    fn allows_math_hypot() {
+        assert!(run_oxc_ts("const h = Math.hypot(a, b);").is_empty());
+    }
+
+
+    #[test]
+    fn allows_plain_math_sqrt() {
+        assert!(run_oxc_ts("const r = Math.sqrt(x);").is_empty());
+    }
+}

@@ -127,3 +127,73 @@ impl OxcCheck for Check {
         diagnostics
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_stub_global_without_restore() {
+        assert_eq!(
+            run("beforeEach(() => { vi.stubGlobal('fetch', vi.fn()); });").len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn flags_stub_env_without_restore() {
+        assert_eq!(
+            run("beforeEach(() => { vi.stubEnv('NODE_ENV', 'test'); });").len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn allows_stub_global_with_restore() {
+        let src = "beforeEach(() => { vi.stubGlobal('fetch', vi.fn()); });\n\
+                   afterEach(() => { vi.unstubAllGlobals(); });";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_stub_env_with_restore() {
+        let src = "beforeEach(() => { vi.stubEnv('NODE_ENV', 'test'); });\n\
+                   afterEach(() => { vi.unstubAllEnvs(); });";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn flags_stub_global_even_if_envs_restored() {
+        let src = "beforeEach(() => { vi.stubGlobal('fetch', vi.fn()); });\n\
+                   afterEach(() => { vi.unstubAllEnvs(); });";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_unstub_at_top_level() {
+        // unstubAllGlobals exists, but isn't inside afterEach/afterAll → still leaks.
+        let src = "vi.unstubAllGlobals();\n\
+                   beforeEach(() => { vi.stubGlobal('fetch', vi.fn()); });";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_unstub_in_test_body() {
+        let src = "beforeEach(() => { vi.stubEnv('NODE_ENV', 'test'); });\n\
+                   test('a', () => { vi.unstubAllEnvs(); });";
+        assert_eq!(run(src).len(), 1);
+    }
+}

@@ -64,4 +64,17 @@ mod tests {
         let src = r#"const q = "status TEXT CHECK(status IN ('active', 'inactive'))";"#;
         assert!(run_on(src).is_empty());
     }
+
+
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(src, &Check)
+    }
+
+
+    #[test]
+    fn does_not_flag_in_comment() {
+        let src = "// AS ENUM\nconst x = 1;";
+        assert!(run(src).is_empty());
+    }
 }

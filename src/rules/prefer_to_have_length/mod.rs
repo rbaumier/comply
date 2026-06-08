@@ -1,8 +1,6 @@
 //! prefer-to-have-length — suggest `toHaveLength(n)` over `toBe(n)` / `toEqual(n)` on `.length`.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

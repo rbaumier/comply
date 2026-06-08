@@ -1,8 +1,6 @@
 //! prisma-prefer-create-many-for-bulk — loop of `create()` should use `createMany`.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

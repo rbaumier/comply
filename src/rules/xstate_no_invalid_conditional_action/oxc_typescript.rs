@@ -89,3 +89,95 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diagnostic::Diagnostic;
+    use super::Check;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_branch_missing_guard() {
+        let src = r#"
+            choose([
+                { actions: ['doThing'] },
+            ]);
+        "#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_branch_missing_actions() {
+        let src = r#"
+            choose([
+                { guard: 'isAllowed' },
+            ]);
+        "#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_branch_missing_both() {
+        let src = r#"
+            choose([
+                { target: 'next' },
+            ]);
+        "#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_valid_branch_with_guard_and_actions() {
+        let src = r#"
+            choose([
+                { guard: 'isAllowed', actions: ['doThing'] },
+            ]);
+        "#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_valid_branch_with_cond_and_actions() {
+        let src = r#"
+            choose([
+                { cond: 'isAllowed', actions: ['doThing'] },
+            ]);
+        "#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn flags_only_invalid_branch_among_valid_ones() {
+        let src = r#"
+            choose([
+                { guard: 'a', actions: ['x'] },
+                { actions: ['y'] },
+                { cond: 'b', actions: ['z'] },
+            ]);
+        "#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn ignores_non_choose_calls() {
+        let src = r#"
+            other([
+                { foo: 'bar' },
+            ]);
+        "#;
+        assert!(run_on(src).is_empty());
+    }
+}

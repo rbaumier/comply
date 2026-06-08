@@ -57,3 +57,59 @@ impl OxcCheck for Check {
         diagnostics
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(src, &Check)
+    }
+
+
+    #[test]
+    fn flags_object_typedef_without_property() {
+        let src = r#"
+/**
+ * @typedef {Object} Point
+ */
+"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_object_typedef_with_property() {
+        let src = r#"
+/**
+ * @typedef {Object} Point
+ * @property {number} x
+ */
+"#;
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_primitive_typedef() {
+        let src = r#"
+/**
+ * @typedef {string} UserId
+ */
+"#;
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn flags_lowercase_object_alias() {
+        let src = r#"
+/**
+ * @typedef {object} Bare
+ */
+"#;
+        assert_eq!(run(src).len(), 1);
+    }
+}

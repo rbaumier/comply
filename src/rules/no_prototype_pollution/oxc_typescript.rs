@@ -85,3 +85,44 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_lodash_merge_req_body() {
+        assert_eq!(run_on("_.merge(config, req.body)").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_merge_with_json_parse() {
+        assert_eq!(run_on("deepMerge(defaults, JSON.parse(raw))").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_object_assign_req_body() {
+        assert_eq!(run_on("Object.assign(target, req.body)").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_merge_safe_data() {
+        assert!(run_on("_.merge(config, defaults)").is_empty());
+    }
+
+
+    #[test]
+    fn allows_unrelated_call() {
+        assert!(run_on("add(a, req.body)").is_empty());
+    }
+}

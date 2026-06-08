@@ -80,3 +80,41 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_single_space() {
+        let d = run_on("const obj = { };");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("{}"));
+    }
+
+
+    #[test]
+    fn flags_multiple_spaces() {
+        let d = run_on("class Foo {   }");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_empty_braces_no_space() {
+        assert!(run_on("const obj = {};").is_empty());
+    }
+
+
+    #[test]
+    fn allows_braces_with_content() {
+        assert!(run_on("const obj = { a: 1 };").is_empty());
+    }
+}

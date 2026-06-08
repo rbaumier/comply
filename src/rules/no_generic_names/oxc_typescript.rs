@@ -774,4 +774,267 @@ mod tests {
         let src = r#"function runMigration() {}"#;
         assert_eq!(run(src).len(), 1);
     }
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_const_data_via_prefix() {
+        // `data` is now in BANNED_PREFIXES (superset); matches on exact name.
+        assert_eq!(run_on("const data = 5;").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_let_temp() {
+        assert_eq!(run_on("let temp = 1;").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_function_param_result() {
+        assert_eq!(run_on("function f(result: number) {}").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_val() {
+        assert_eq!(run_on("const val = 1;").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_foo_bar() {
+        assert_eq!(run_on("const foo = 1;").len(), 1);
+        assert_eq!(run_on("const bar = 1;").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_descriptive_names() {
+        assert!(run_on("const parsedOrder = 1;").is_empty());
+        assert!(run_on("const userProfile = {};").is_empty());
+    }
+
+
+    #[test]
+    fn flags_process_prefix_camel_case() {
+        assert!(
+            run_on("function processOrder() {}")
+                .iter()
+                .any(|d| d.message.contains("processOrder"))
+        );
+    }
+
+
+    #[test]
+    fn flags_process_prefix_snake_case() {
+        assert!(
+            run_on("const process_order = 1;")
+                .iter()
+                .any(|d| d.message.contains("process_order"))
+        );
+    }
+
+
+    #[test]
+    fn flags_do_prefix() {
+        assert!(
+            run_on("function doStuff() {}")
+                .iter()
+                .any(|d| d.message.contains("doStuff"))
+        );
+    }
+
+
+    #[test]
+    fn flags_execute_prefix() {
+        assert!(
+            run_on("function executeSomething() {}")
+                .iter()
+                .any(|d| d.message.contains("executeSomething"))
+        );
+    }
+
+
+    #[test]
+    fn flags_run_prefix() {
+        assert!(
+            run_on("function runTask() {}")
+                .iter()
+                .any(|d| d.message.contains("runTask"))
+        );
+    }
+
+
+    #[test]
+    fn flags_perform_prefix() {
+        assert!(
+            run_on("function performAction() {}")
+                .iter()
+                .any(|d| d.message.contains("performAction"))
+        );
+    }
+
+
+    #[test]
+    fn flags_data_prefix_compound() {
+        assert!(
+            run_on("const dataSource = 1;")
+                .iter()
+                .any(|d| d.message.contains("dataSource"))
+        );
+    }
+
+
+    #[test]
+    fn allows_handle_prefix() {
+        // `handleXxx` is the canonical React event-handler naming convention
+        // (`onClick={handleClick}`). Must not be flagged.
+        for name in ["handleClick", "handleSubmit", "handle_change", "handle"] {
+            let source = format!("const {name} = () => {{}};");
+            assert!(
+                run_on(&source).is_empty(),
+                "'{name}' must NOT be flagged — `handle` is a React idiom"
+            );
+        }
+    }
+
+
+    #[test]
+    fn allows_process_global_usage() {
+        // `process` is a Node global; `process.env.NODE_ENV` must not fire.
+        assert!(run_on("const x = process.env.NODE_ENV;").is_empty());
+    }
+
+
+    #[test]
+    fn allows_buffer_global() {
+        assert!(run_on("const b = Buffer.from('x');").is_empty());
+    }
+
+
+    #[test]
+    fn allows_global_this_global() {
+        assert!(run_on("const g = globalThis.something;").is_empty());
+    }
+
+
+    #[test]
+    fn allows_console_require_module_exports() {
+        assert!(run_on("console.log('x');").is_empty());
+        assert!(run_on("const fs = require('fs');").is_empty());
+        assert!(run_on("module.exports = {};").is_empty());
+    }
+
+
+    #[test]
+    fn allows_dirname_filename_globals() {
+        assert!(run_on("const p = __dirname;").is_empty());
+        assert!(run_on("const f = __filename;").is_empty());
+    }
+
+
+    #[test]
+    fn still_flags_derived_process_names() {
+        // Derived names still hit the prefix rule — only the exact global
+        // name `process` is exempted. `processor` has no word boundary so
+        // it's also allowed (no banned-prefix match).
+        assert!(
+            run_on("const processOrder = 1;")
+                .iter()
+                .any(|d| d.message.contains("processOrder"))
+        );
+        assert!(
+            run_on("const process_order = 1;")
+                .iter()
+                .any(|d| d.message.contains("process_order"))
+        );
+    }
+
+
+    #[test]
+    fn does_not_flag_word_with_prefix_letters() {
+        for name in [
+            "document",
+            "database",
+            "domain",
+            "handler",
+            "dataset",
+            "performance",
+            "runtime",
+        ] {
+            let source = format!("const {name} = 5;");
+            assert!(
+                run_on(&source).is_empty(),
+                "'{name}' must NOT be flagged — no word boundary"
+            );
+        }
+    }
+
+
+    #[test]
+    fn allows_destructured_data_from_api() {
+        assert!(run_on("const { data } = useQuery();").is_empty());
+        assert!(run_on("const { data, error } = await authClient.signIn();").is_empty());
+    }
+
+
+    #[test]
+    fn does_not_flag_screaming_snake_with_prefix_substring() {
+        assert!(
+            run_on("const DATABASE_ERROR = 1;").is_empty(),
+            "DATABASE_ERROR must not match prefix 'data'"
+        );
+    }
+
+
+    #[test]
+    fn still_flags_screaming_snake_with_real_boundary() {
+        assert!(
+            !run_on("const DATA_SOURCE = 1;").is_empty(),
+            "DATA_SOURCE should flag — DATA + _ is a word boundary"
+        );
+    }
+
+
+    #[test]
+    fn allows_screaming_snake_with_descriptive_suffix() {
+        assert!(run_on("const DATA_DIR = '/tmp';").is_empty());
+        assert!(run_on("const DATA_PATH = '/tmp/data';").is_empty());
+        assert!(run_on("const DATA_URL = 'https://api';").is_empty());
+        assert!(run_on("const DATA_KEY = 'abc';").is_empty());
+    }
+
+
+    #[test]
+    fn allows_data_as_object_literal_key() {
+        assert!(run_on("return { data: session };").is_empty());
+        assert!(run_on("const x = { data: 1 };").is_empty());
+    }
+
+
+    #[test]
+    fn allows_method_call_with_banned_prefix() {
+        assert!(run_on("db.execute(sql)").is_empty());
+        assert!(run_on("runner.performTask()").is_empty());
+        assert!(run_on("queue.processMessage(msg)").is_empty());
+    }
+
+
+    #[test]
+    fn allows_property_definition_in_object_literal() {
+        // Object literal keys often conform to an interface — skip them.
+        assert!(run_on("const x = { processOrder: fn };").is_empty());
+    }
+
+
+    #[test]
+    fn still_flags_variable_with_banned_prefix() {
+        assert!(!run_on("const processOrder = 1;").is_empty());
+    }
 }

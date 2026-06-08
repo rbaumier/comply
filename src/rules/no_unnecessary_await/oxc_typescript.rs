@@ -74,3 +74,75 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_await_number() {
+        let d = run_on("async function f() { await 42; }");
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].rule_id, "no-unnecessary-await");
+    }
+
+
+    #[test]
+    fn flags_await_string() {
+        let d = run_on("async function f() { await 'hello'; }");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_await_array() {
+        let d = run_on("async function f() { await [1, 2, 3]; }");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_await_arrow_function() {
+        let d = run_on("async function f() { await (() => {}); }");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_await_template_literal() {
+        let d = run_on("async function f() { await `hello`; }");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_await_unary() {
+        let d = run_on("async function f() { await !true; }");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_await_call() {
+        assert!(run_on("async function f() { await fetch(url); }").is_empty());
+    }
+
+
+    #[test]
+    fn allows_await_identifier() {
+        assert!(run_on("async function f() { await promise; }").is_empty());
+    }
+
+
+    #[test]
+    fn allows_await_new_promise() {
+        assert!(run_on("async function f() { await new Promise(r => r()); }").is_empty());
+    }
+}

@@ -52,3 +52,30 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_union_over_threshold() {
+        let members: Vec<String> = (0..60).map(|i| format!("'m{i}'")).collect();
+        let src = format!("type T = {};", members.join(" | "));
+        let diags = run(&src);
+        assert_eq!(diags.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_small_union() {
+        let src = "type T = 'a' | 'b' | 'c';";
+        assert!(run(src).is_empty());
+    }
+}

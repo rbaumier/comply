@@ -90,3 +90,48 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_inline_arrow() {
+        let src = "const x = <FlatList renderItem={({ item }) => <Row item={item} />} />;";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_inline_function_expression() {
+        let src = "const x = <FlatList renderItem={function ({ item }) { return null; }} />;";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_extracted_handler() {
+        let src = "const x = <FlatList renderItem={renderRow} />;";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn flags_inline_arrow_flashlist() {
+        let src = "const x = <FlashList renderItem={({ item }) => <Row />} />;";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_custom_component() {
+        let src = "const x = <CustomRenderer renderItem={() => <View />} />;";
+        assert!(run(src).is_empty());
+    }
+}

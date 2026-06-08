@@ -47,3 +47,41 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_empty_catch() {
+        let d = run_on("try { x(); } catch (e) {}");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("swallows"));
+    }
+
+
+    #[test]
+    fn flags_empty_catch_without_binding() {
+        let d = run_on("try { x(); } catch {}");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_non_empty_catch() {
+        assert!(run_on("try { x(); } catch (e) { log(e); }").is_empty());
+    }
+
+
+    #[test]
+    fn allows_catch_with_comment() {
+        assert!(run_on("try { x(); } catch (e) { /* intentional */ }").is_empty());
+    }
+}

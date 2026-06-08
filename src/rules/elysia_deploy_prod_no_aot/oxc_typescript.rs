@@ -145,4 +145,6 @@ mod tests {
         let src = "import { Elysia } from 'elysia';\nexport const auth = new Elysia({ name: 'auth', prefix: '/auth' });";
         assert!(run_on_at(src, "src/middleware/auth.ts").is_empty());
     }
+
+    use crate::rules::test_helpers::run_oxc_ts_with_project;
 }

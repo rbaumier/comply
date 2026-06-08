@@ -123,3 +123,115 @@ fn check_statements(
             }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_duplicate_describe_titles() {
+        let src = "\
+describe('auth', () => {});
+describe('auth', () => {});";
+        let d = run_on(src);
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].rule_id, "no-identical-title");
+    }
+
+
+    #[test]
+    fn flags_duplicate_test_titles_in_same_describe() {
+        let src = "\
+describe('auth', () => {
+  test('rejects empty', () => {});
+  test('rejects empty', () => {});
+});";
+        let d = run_on(src);
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_duplicate_it_titles() {
+        let src = "\
+it('works', () => {});
+it('works', () => {});";
+        let d = run_on(src);
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_only_and_skip_variants_as_same_title() {
+        let src = "\
+describe('x', () => {});
+describe.only('x', () => {});";
+        let d = run_on(src);
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_same_title_in_different_describes() {
+        let src = "\
+describe('a', () => {
+  test('handles empty', () => {});
+});
+describe('b', () => {
+  test('handles empty', () => {});
+});";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_nested_duplicate_vs_outer() {
+        let src = "\
+describe('outer', () => {
+  test('shared', () => {});
+  describe('inner', () => {
+    test('shared', () => {});
+  });
+});";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_distinct_titles() {
+        let src = "\
+describe('auth', () => {
+  test('a', () => {});
+  test('b', () => {});
+});";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_same_title_on_different_constructs() {
+        // describe('x') and test('x') don't collide — different suite/test scopes.
+        let src = "\
+describe('x', () => {
+  test('x', () => {});
+});";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_dynamic_titles() {
+        let src = "\
+const name = 'x';
+test(`case ${name}`, () => {});
+test(`case ${name}`, () => {});";
+        assert!(run_on(src).is_empty());
+    }
+}

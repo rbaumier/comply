@@ -73,3 +73,44 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_function_without_return_type() {
+        assert_eq!(run_on("function foo() { return 1; }").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_arrow_without_return_type() {
+        assert_eq!(run_on("const f = () => 1;").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_function_with_return_type() {
+        assert!(run_on("function foo(): number { return 1; }").is_empty());
+    }
+
+
+    #[test]
+    fn allows_arrow_with_return_type() {
+        assert!(run_on("const f = (): number => 1;").is_empty());
+    }
+
+
+    #[test]
+    fn allows_constructor_without_return_type() {
+        assert!(run_on("class A { constructor() {} }").is_empty());
+    }
+}

@@ -58,3 +58,32 @@ impl OxcCheck for Check {
         diagnostics
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_inline_options() {
+        assert_eq!(
+            run("useQuery({ queryKey: ['users'], queryFn: fetchUsers })").len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn allows_query_options_factory() {
+        assert!(run(
+            "const opts = queryOptions({ queryKey: ['users'], queryFn: fetchUsers })\nuseQuery(opts)"
+        )
+        .is_empty());
+    }
+}

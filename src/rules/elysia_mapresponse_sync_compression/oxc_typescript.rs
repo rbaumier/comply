@@ -52,3 +52,42 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_framework(source, &Check, "elysia")
+    }
+
+
+    #[test]
+    fn flags_gzip_sync() {
+        let src = "import { Elysia } from 'elysia';\napp.mapResponse(({ response }) => gzipSync(response));";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_deflate_sync() {
+        let src = "import { Elysia } from 'elysia';\napp.mapResponse(({ response }) => deflateSync(Buffer.from(response)));";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_async_gzip() {
+        let src = "import { Elysia } from 'elysia';\nimport { gzip } from 'zlib/promises';\napp.mapResponse(async ({ response }) => await gzip(response));";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_elysia_files() {
+        let src = "app.mapResponse(({ response }) => gzipSync(response));";
+        assert!(crate::rules::test_helpers::run_oxc_ts(src, &Check).is_empty());
+    }
+}

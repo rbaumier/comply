@@ -66,3 +66,54 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diagnostic::Diagnostic;
+
+
+
+    fn run(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_exhaustive_inline_style() {
+        let src = r#"<div style={{
+            color: 'red',
+            fontSize: 14,
+            fontWeight: 'bold',
+            margin: 0,
+            padding: 10,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            border: '1px solid',
+        }} />"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_few_inline_styles() {
+        assert!(run(r#"<div style={{ color: 'red', fontSize: 14 }} />"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_exactly_8() {
+        let src = r#"<div style={{
+            color: 'red',
+            fontSize: 14,
+            fontWeight: 'bold',
+            margin: 0,
+            padding: 10,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+        }} />"#;
+        assert!(run(src).is_empty());
+    }
+}

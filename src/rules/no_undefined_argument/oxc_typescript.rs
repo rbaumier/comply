@@ -180,4 +180,50 @@ mod tests {
         )
         .is_empty());
     }
+
+
+
+    #[test]
+    fn flags_undefined_among_args() {
+        let d = crate::rules::test_helpers::run_oxc_ts("foo(x, undefined, y);", &Check);
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_no_undefined() {
+        let d = crate::rules::test_helpers::run_oxc_ts("foo(x, y);", &Check);
+        assert!(d.is_empty());
+    }
+
+
+    #[test]
+    fn allows_undefined_in_variable_name() {
+        let d = crate::rules::test_helpers::run_oxc_ts("foo(undefinedValue);", &Check);
+        assert!(d.is_empty());
+    }
+
+
+    #[test]
+    fn allows_undefined_in_expect_matcher() {
+        let d = crate::rules::test_helpers::run_oxc_ts(
+            "expect(spy).toHaveBeenCalledWith(state, undefined);",
+            &Check,
+        );
+        assert!(d.is_empty());
+    }
+
+
+    #[test]
+    fn allows_undefined_in_to_equal() {
+        let d = crate::rules::test_helpers::run_oxc_ts("expect(result).toEqual(undefined);", &Check);
+        assert!(d.is_empty());
+    }
+
+
+    #[test]
+    fn still_flags_outside_expect() {
+        let d = crate::rules::test_helpers::run_oxc_ts("doStuff(undefined);", &Check);
+        assert_eq!(d.len(), 1);
+    }
 }

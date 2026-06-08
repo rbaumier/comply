@@ -82,3 +82,53 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_p_5() {
+        assert_eq!(
+            run(r#"export const A = () => <div className="p-5" />;"#).len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn flags_mb_7() {
+        assert_eq!(
+            run(r#"export const A = () => <div className="mb-7" />;"#).len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn flags_gap_9() {
+        assert_eq!(
+            run(r#"export const A = () => <div className="gap-9" />;"#).len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn allows_on_scale() {
+        assert!(run(r#"export const A = () => <div className="p-4 mb-6 gap-8" />;"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_half_step() {
+        assert!(run(r#"export const A = () => <div className="p-2.5" />;"#).is_empty());
+    }
+}

@@ -58,3 +58,35 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_framework(source, &Check, "elysia")
+    }
+
+
+    #[test]
+    fn flags_req_res_context() {
+        let src = "import { apollo } from '@elysiajs/apollo';\napp.use(apollo({ context: ({ req, res }) => ({ token: req.headers.authorization }) }));";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_request_context() {
+        let src = "import { apollo } from '@elysiajs/apollo';\napp.use(apollo({ context: ({ request }) => ({ token: request.headers.get('authorization') }) }));";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_apollo_files() {
+        let src = "app.use(({ context: ({ req, res }) => ({}) }));";
+        assert!(crate::rules::test_helpers::run_oxc_ts(src, &Check).is_empty());
+    }
+}

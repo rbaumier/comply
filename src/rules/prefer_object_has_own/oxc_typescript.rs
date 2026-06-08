@@ -53,3 +53,37 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+    fn run(code: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(code, &Check)
+    }
+
+
+    #[test]
+    fn flags_has_own_property() {
+        assert_eq!(run("obj.hasOwnProperty('key')").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_this_has_own_property() {
+        assert_eq!(run("this.hasOwnProperty('key')").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_object_has_own() {
+        assert!(run("Object.hasOwn(obj, 'key')").is_empty());
+    }
+
+
+    #[test]
+    fn allows_prototype_call() {
+        assert!(run("Object.prototype.hasOwnProperty.call(obj, 'key')").is_empty());
+    }
+}

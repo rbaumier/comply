@@ -118,3 +118,38 @@ fn collect_ts_type_keys(ty: &TSType) -> Option<BTreeSet<String>> {
     }
     if keys.is_empty() { None } else { Some(keys) }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_duplicated_type() {
+        let src = "const UserSchema = z.object({ id: z.string(), name: z.string() });\n\
+                   type User = { id: string; name: string };";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_z_infer() {
+        let src = "const UserSchema = z.object({ id: z.string(), name: z.string() });\n\
+                   type User = z.infer<typeof UserSchema>;";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_unrelated_type() {
+        let src = "const UserSchema = z.object({ id: z.string() });\n\
+                   type Other = { slug: string };";
+        assert!(run(src).is_empty());
+    }
+}

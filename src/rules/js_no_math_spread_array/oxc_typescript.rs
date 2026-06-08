@@ -60,3 +60,51 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diagnostic::Diagnostic;
+
+
+
+    fn run(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_math_min_spread() {
+        assert_eq!(run(r#"const m = Math.min(...values);"#).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_math_max_spread() {
+        assert_eq!(run(r#"const m = Math.max(...values);"#).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_math_max_spread_with_other_args() {
+        assert_eq!(run(r#"const m = Math.max(0, ...values);"#).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_math_min_literal_args() {
+        assert!(run(r#"const m = Math.min(1, 2, 3);"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_math_max_literal_args() {
+        assert!(run(r#"const m = Math.max(a, b);"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_other_math_with_spread() {
+        assert!(run(r#"const m = Math.hypot(...values);"#).is_empty());
+    }
+}

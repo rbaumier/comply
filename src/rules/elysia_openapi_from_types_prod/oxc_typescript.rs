@@ -53,3 +53,42 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_framework(source, &Check, "elysia")
+    }
+
+
+    #[test]
+    fn flags_hardcoded_src_path() {
+        let src = "import { openapi, fromTypes } from '@elysiajs/openapi';\napp.use(openapi({ references: fromTypes('src/index.ts') }));";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_double_quoted_path() {
+        let src = "import { openapi, fromTypes } from '@elysiajs/openapi';\napp.use(openapi({ references: fromTypes(\"src/server.ts\") }));";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_env_gated_path() {
+        let src = "import { openapi, fromTypes } from '@elysiajs/openapi';\nconst refs = fromTypes(process.env.NODE_ENV === 'production' ? 'dist/index.js' : 'src/index.ts');";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_openapi_files() {
+        let src = "fromTypes('src/index.ts');";
+        assert!(crate::rules::test_helpers::run_oxc_ts(src, &Check).is_empty());
+    }
+}

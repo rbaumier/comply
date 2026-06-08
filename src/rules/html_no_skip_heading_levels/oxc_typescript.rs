@@ -84,3 +84,74 @@ impl OxcCheck for Check {
         diagnostics
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_h1_to_h3_skip() {
+        let d = run(r#"const x = <><h1>Title</h1><h3>Subtitle</h3></>;"#);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("h3"));
+        assert!(d[0].message.contains("h1"));
+    }
+
+
+    #[test]
+    fn flags_h2_to_h4_skip() {
+        let d = run(r#"const x = <><h1>A</h1><h2>B</h2><h4>C</h4></>;"#);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("h4"));
+    }
+
+
+    #[test]
+    fn flags_h1_to_h4_double_skip() {
+        let d = run(r#"const x = <><h1>A</h1><h4>B</h4></>;"#);
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_sequential_headings() {
+        assert!(run(r#"const x = <><h1>A</h1><h2>B</h2><h3>C</h3></>;"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_going_back_up() {
+        // h1 -> h2 -> h3 -> h2 -> h3 is fine
+        assert!(
+            run(r#"const x = <><h1>A</h1><h2>B</h2><h3>C</h3><h2>D</h2><h3>E</h3></>;"#).is_empty()
+        );
+    }
+
+
+    #[test]
+    fn allows_h1_alone() {
+        assert!(run(r#"const x = <h1>Title</h1>;"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_starting_with_h2() {
+        // Starting with h2 is ok (component might be used in context)
+        assert!(run(r#"const x = <><h2>A</h2><h3>B</h3></>;"#).is_empty());
+    }
+
+
+    #[test]
+    fn flags_skip_after_going_up() {
+        // h1 -> h2 -> h1 -> h3 (skip!)
+        let d = run(r#"const x = <><h1>A</h1><h2>B</h2><h1>C</h1><h3>D</h3></>;"#);
+        assert_eq!(d.len(), 1);
+    }
+}

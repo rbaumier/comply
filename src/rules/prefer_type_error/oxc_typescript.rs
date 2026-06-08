@@ -202,3 +202,83 @@ fn identifier_name<'a>(expr: &'a Expression<'a>) -> Option<&'a str> {
         None
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_typeof_check_with_error() {
+        let code = r#"if (typeof x !== 'string') { throw new Error('bad'); }"#;
+        let d = run_on(code);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("TypeError"));
+    }
+
+
+    #[test]
+    fn flags_instanceof_check_with_error() {
+        let code = r#"if (!(x instanceof Foo)) { throw new Error('bad'); }"#;
+        let d = run_on(code);
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_isnan_check() {
+        let code = r#"if (isNaN(x)) { throw new Error('not a number'); }"#;
+        let d = run_on(code);
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_array_isarray_check() {
+        let code = r#"if (!Array.isArray(x)) { throw new Error('expected array'); }"#;
+        let d = run_on(code);
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_typeerror_already() {
+        let code = r#"if (typeof x !== 'string') { throw new TypeError('bad'); }"#;
+        assert!(run_on(code).is_empty());
+    }
+
+
+    #[test]
+    fn allows_non_type_check_condition() {
+        let code = r#"if (x > 10) { throw new Error('too big'); }"#;
+        assert!(run_on(code).is_empty());
+    }
+
+
+    #[test]
+    fn allows_multiple_statements_in_body() {
+        let code = r#"if (typeof x !== 'string') { console.log('bad'); throw new Error('bad'); }"#;
+        assert!(run_on(code).is_empty());
+    }
+
+
+    #[test]
+    fn allows_instanceof_error_check() {
+        // instanceof Error on the right side — this is checking FOR an error, not a type check.
+        let code = r#"if (!(x instanceof Error)) { throw new Error('bad'); }"#;
+        assert!(run_on(code).is_empty());
+    }
+
+
+    #[test]
+    fn allows_non_error_throw() {
+        let code = r#"if (typeof x !== 'string') { throw new RangeError('bad'); }"#;
+        assert!(run_on(code).is_empty());
+    }
+}

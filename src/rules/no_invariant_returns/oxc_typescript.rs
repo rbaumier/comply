@@ -116,3 +116,67 @@ fn literal_text(expr: &Expression) -> Option<String> {
         _ => None,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_invariant_true() {
+        let src = r#"
+function isEnabled(x) {
+    if (x > 0) {
+        return true;
+    }
+    return true;
+}
+"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_invariant_number() {
+        let src = r#"
+function getDefault(mode) {
+    if (mode === "a") {
+        return 0;
+    }
+    return 0;
+}
+"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_different_returns() {
+        let src = r#"
+function isPositive(n) {
+    if (n > 0) {
+        return true;
+    }
+    return false;
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_single_return() {
+        let src = r#"
+function getValue() {
+    return 42;
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+}

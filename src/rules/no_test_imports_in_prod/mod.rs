@@ -1,8 +1,6 @@
 //! no-test-imports-in-prod
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 use crate::diagnostic::Severity;
 use crate::files::Language;
 use crate::rules::RuleDef;

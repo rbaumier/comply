@@ -50,3 +50,40 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_namespace() {
+        let diags = run_on("namespace Foo { export const x = 1; }");
+        assert_eq!(diags.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_export_namespace() {
+        let diags = run_on("export namespace Foo { }");
+        assert_eq!(diags.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_declare_namespace() {
+        assert!(run_on("declare namespace NodeJS { }").is_empty());
+    }
+
+
+    #[test]
+    fn allows_regular_code() {
+        assert!(run_on("const x = 1;").is_empty());
+    }
+}

@@ -91,3 +91,42 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_counter_without_tabular_nums() {
+        let src = r#"const x = <span className="counter text-lg">42</span>;"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_price_without_tabular_nums() {
+        let src = r#"const x = <div className="price">$9.99</div>;"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_counter_with_tabular_nums() {
+        let src = r#"const x = <span className="counter tabular-nums">42</span>;"#;
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_numeric_class() {
+        let src = r#"const x = <div className="card hero">hi</div>;"#;
+        assert!(run(src).is_empty());
+    }
+}

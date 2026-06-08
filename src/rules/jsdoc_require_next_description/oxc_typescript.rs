@@ -73,3 +73,36 @@ impl OxcCheck for Check {
         diagnostics
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(src, &Check)
+    }
+
+
+    #[test]
+    fn flags_next_without_description() {
+        let src = "/**\n * @next {string}\n */\nfunction* g() { yield 1; }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_bare_next() {
+        let src = "/**\n * @next\n */\nfunction* g() { yield 1; }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_next_with_description() {
+        let src =
+            "/**\n * @next {string} the string passed into next()\n */\nfunction* g() { yield 1; }";
+        assert!(run(src).is_empty());
+    }
+}

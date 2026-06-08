@@ -100,3 +100,56 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_map_with_parse_int() {
+        assert_eq!(run_on("const x = arr.map(parseInt);").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_filter_with_identifier() {
+        assert_eq!(run_on("const x = arr.filter(myFunc);").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_map_with_member_expression() {
+        assert_eq!(run_on("const x = arr.map(utils.transform);").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_arrow_function() {
+        assert!(run_on("const x = arr.map(x => parseInt(x));").is_empty());
+    }
+
+
+    #[test]
+    fn allows_function_expression() {
+        assert!(run_on("const x = arr.map(function(x) { return x * 2; });").is_empty());
+    }
+
+
+    #[test]
+    fn allows_boolean_constructor() {
+        assert!(run_on("const x = arr.filter(Boolean);").is_empty());
+    }
+
+
+    #[test]
+    fn allows_non_iterator_method() {
+        assert!(run_on("const x = foo.bar(parseInt);").is_empty());
+    }
+}

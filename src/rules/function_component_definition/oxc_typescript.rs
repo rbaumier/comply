@@ -95,3 +95,63 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_arrow_component_self_closing() {
+        let src = "const MyComponent = () => <div />;";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_arrow_component_with_block_body() {
+        let src = "const MyComponent = (props) => { return <div>{props.x}</div>; };";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_exported_arrow_component() {
+        let src = "export const MyComponent = () => <div />;";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_function_declaration_component() {
+        let src = "function MyComponent() { return <div />; }";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_non_pascal_arrow() {
+        let src = "const handler = () => <div />;";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_arrow_without_jsx() {
+        let src = "const myUtil = () => someValue;";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_pascal_arrow_without_jsx() {
+        let src = "const MyThing = () => someValue;";
+        assert!(run_on(src).is_empty());
+    }
+}

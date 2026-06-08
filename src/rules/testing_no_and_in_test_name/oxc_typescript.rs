@@ -62,3 +62,29 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_path(s, &Check, "foo.test.ts")
+    }
+
+
+    #[test]
+    fn flags_and_in_test_name() {
+        assert_eq!(
+            run("test('validates email and sends confirmation', () => {})").len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn allows_single_behavior() {
+        assert!(run("test('validates email format', () => {})").is_empty());
+    }
+}

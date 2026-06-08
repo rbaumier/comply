@@ -59,3 +59,52 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_complex_regex() {
+        let complex =
+            r#"const re = /^(a+|b*|c?)(d{2,3})(e|f|g|h)(i+|j*)(k?|l{1})(m|n|o)(p+|q*)(r?)/;"#;
+        assert_eq!(run_on(complex).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_simple_regex() {
+        assert!(run_on(r#"const re = /^hello$/;"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_moderate_regex() {
+        assert!(run_on(r#"const re = /\d{3}-\d{4}/;"#).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_tailwind_class_string() {
+        assert!(run_on(r#"const x = "has-[>svg]:grid-cols-[auto_1fr]";"#).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_url_string() {
+        assert!(run_on(r#"const u = "http://a/b/c";"#).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_import_path() {
+        assert!(run_on(r#"import X from "@scope/pkg/sub";"#).is_empty());
+    }
+}

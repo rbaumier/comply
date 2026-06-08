@@ -91,3 +91,50 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_buffer_alloc_unsafe() {
+        assert_eq!(run_on("const b = Buffer.allocUnsafe(10);").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_buffer_alloc_unsafe_slow() {
+        assert_eq!(run_on("const b = Buffer.allocUnsafeSlow(10);").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_new_buffer_with_size_literal() {
+        assert_eq!(run_on("const b = new Buffer(10);").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_new_buffer_with_size_variable() {
+        assert_eq!(run_on("const b = new Buffer(size);").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_buffer_alloc() {
+        assert!(run_on("const b = Buffer.alloc(10);").is_empty());
+    }
+
+
+    #[test]
+    fn allows_buffer_from() {
+        assert!(run_on("const b = Buffer.from('hello');").is_empty());
+    }
+}

@@ -176,4 +176,33 @@ mod tests {
         let src = "import { ForbiddenError } from './forbidden-error';\nexport { ForbiddenError };";
         assert!(run_with_flag_enabled(src).is_empty());
     }
+
+
+
+    fn run_oxc_ts(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_multiple_reexports() {
+        let src = "import { a, b } from './m';\nexport { a, b };";
+        let d = run_oxc_ts(src);
+        assert_eq!(d.len(), 2);
+    }
+
+
+    #[test]
+    fn allows_import_used_locally() {
+        assert!(run_oxc_ts("import { foo } from './mod';\nconsole.log(foo);").is_empty());
+    }
+
+
+    #[test]
+    fn handles_renamed_import() {
+        let src = "import { foo as bar } from './m';\nexport { bar };";
+        let d = run_oxc_ts(src);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("bar"));
+    }
 }

@@ -66,3 +66,35 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_method_signature() {
+        let diags = run_on("interface Foo { bar(x: string): void; }");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("bar"));
+    }
+
+
+    #[test]
+    fn allows_property_signature() {
+        assert!(run_on("interface Foo { bar: (x: string) => void; }").is_empty());
+    }
+
+
+    #[test]
+    fn flags_in_type_literal() {
+        let diags = run_on("type Foo = { bar(): void; };");
+        assert_eq!(diags.len(), 1);
+    }
+}

@@ -65,3 +65,40 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_this_alias_const() {
+        let diags = run_on("const self = this;");
+        assert_eq!(diags.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_this_alias_let() {
+        let diags = run_on("let that = this;");
+        assert_eq!(diags.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_destructuring_this() {
+        assert!(run_on("const { a, b } = this;").is_empty());
+    }
+
+
+    #[test]
+    fn allows_normal_assignment() {
+        assert!(run_on("const x = 42;").is_empty());
+    }
+}

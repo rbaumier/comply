@@ -123,3 +123,78 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_path(source, &Check, "module.mjs")
+    }
+
+
+    fn run_on_path(source: &str, path: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_path(source, &Check, path)
+    }
+
+
+    #[test]
+    fn allows_commonjs_when_package_type_is_absent() {
+        let d = run_on_path(
+            r#"
+            const fs = require("fs");
+            module.exports = fs;
+            "#,
+            "server.js",
+        );
+        assert!(d.is_empty());
+    }
+
+
+    #[test]
+    fn flags_require() {
+        let d = run_on(r#"const fs = require("fs");"#);
+        assert!(!d.is_empty());
+        assert!(d[0].message.contains("require()"));
+    }
+
+
+    #[test]
+    fn flags_module_exports() {
+        let d = run_on("module.exports = foo;");
+        assert!(!d.is_empty());
+        assert!(d.iter().any(|d| d.message.contains("module.exports")));
+    }
+
+
+    #[test]
+    fn flags_exports_member() {
+        let d = run_on("exports.bar = 42;");
+        assert!(!d.is_empty());
+        assert!(d.iter().any(|d| d.message.contains("exports.x")));
+    }
+
+
+    #[test]
+    fn flags_dirname() {
+        let d = run_on("const dir = __dirname;");
+        assert!(!d.is_empty());
+        assert!(d.iter().any(|d| d.message.contains("import.meta.dirname")));
+    }
+
+
+    #[test]
+    fn flags_filename() {
+        let d = run_on("const file = __filename;");
+        assert!(!d.is_empty());
+        assert!(d.iter().any(|d| d.message.contains("import.meta.filename")));
+    }
+
+
+    #[test]
+    fn allows_esm_import() {
+        assert!(run_on(r#"import fs from "node:fs";"#).is_empty());
+    }
+}

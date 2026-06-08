@@ -41,3 +41,44 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_unparenthesized_ternary_spread() {
+        assert_eq!(run_on("const arr = [...condition ? ['a'] : []];").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_parenthesized_ternary_spread() {
+        assert!(run_on("const arr = [...(condition ? ['a'] : [])];").is_empty());
+    }
+
+
+    #[test]
+    fn flags_complex_condition() {
+        assert_eq!(run_on("const arr = [...a && b ? [1] : []];").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_normal_spread() {
+        assert!(run_on("const arr = [...items];").is_empty());
+    }
+
+
+    #[test]
+    fn allows_optional_chaining_spread() {
+        assert!(run_on("const arr = [...obj?.items];").is_empty());
+    }
+}

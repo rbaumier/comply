@@ -85,3 +85,49 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_err_stack() {
+        let src = "import { Hono } from 'hono';\nconst app = new Hono();\napp.onError((err, c) => c.json({ stack: err.stack }));";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_err_message() {
+        let src = "import { Hono } from 'hono';\nconst app = new Hono();\napp.onError((err, c) => c.json({ error: err.message }));";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_both() {
+        let src = "import { Hono } from 'hono';\nconst app = new Hono();\napp.onError((err, c) => c.json({ error: err.message, stack: err.stack }));";
+        assert_eq!(run(src).len(), 2);
+    }
+
+
+    #[test]
+    fn allows_generic_message() {
+        let src = "import { Hono } from 'hono';\nconst app = new Hono();\napp.onError((err, c) => c.json({ error: 'Internal Server Error' }, 500));";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_outside_on_error() {
+        let src = "import { Hono } from 'hono';\nconst app = new Hono();\nfunction h(err: Error) { return err.message; }";
+        assert!(run(src).is_empty());
+    }
+}

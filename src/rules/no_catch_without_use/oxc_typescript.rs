@@ -61,3 +61,60 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_unused_binding() {
+        let d = run_on("try { x(); } catch (e) { return null; }");
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].rule_id, "no-catch-without-use");
+    }
+
+
+    #[test]
+    fn flags_unused_binding_with_log() {
+        let d = run_on("try { x(); } catch (e) { console.log('oops'); }");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_used_binding() {
+        assert!(run_on("try { x(); } catch (e) { console.log(e); }").is_empty());
+    }
+
+
+    #[test]
+    fn allows_rethrow() {
+        assert!(run_on("try { x(); } catch (e) { throw e; }").is_empty());
+    }
+
+
+    #[test]
+    fn allows_bare_catch() {
+        assert!(run_on("try { x(); } catch { return null; }").is_empty());
+    }
+
+
+    #[test]
+    fn allows_destructured_binding() {
+        // Destructuring is skipped — conservative.
+        assert!(run_on("try { x(); } catch ({ code }) { return null; }").is_empty());
+    }
+
+
+    #[test]
+    fn allows_used_in_nested_expr() {
+        assert!(run_on("try { x(); } catch (e) { return new Error(e.message); }").is_empty());
+    }
+}

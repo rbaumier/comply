@@ -69,4 +69,17 @@ mod tests {
         let src = "const q = `INSERT INTO log (ts) VALUES (NOW());`;";
         assert!(run_on(src).is_empty());
     }
+
+
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(src, &Check)
+    }
+
+
+    #[test]
+    fn allows_clock_timestamp_in_tx() {
+        let src = "const q = `BEGIN;\nINSERT INTO log (ts) VALUES (clock_timestamp());\nCOMMIT;`;";
+        assert!(run(src).is_empty());
+    }
 }

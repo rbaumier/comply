@@ -5,8 +5,6 @@
 //! at runtime. A regular enum or a literal union type is safer.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

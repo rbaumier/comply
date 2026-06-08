@@ -56,3 +56,92 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_nested_if() {
+        let src = r#"
+if (a) {
+  if (b) {
+    doSomething();
+  }
+}
+"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_if_else_if() {
+        let src = r#"
+if (a) {
+  doSomething();
+} else if (b) {
+  doOther();
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_outer_if_with_else() {
+        // Outer if has an else — not collapsible
+        let src = r#"
+if (a) {
+  if (b) {
+    doSomething();
+  }
+} else {
+  doOther();
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_inner_if_with_else() {
+        // Inner if has an else — not collapsible with &&
+        let src = r#"
+if (a) {
+  if (b) {
+    doSomething();
+  } else {
+    doOther();
+  }
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_multiple_statements_in_body() {
+        let src = r#"
+if (a) {
+  setup();
+  if (b) {
+    doSomething();
+  }
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_single_if() {
+        assert!(run_on("if (a) { doSomething(); }").is_empty());
+    }
+}

@@ -72,3 +72,56 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_null_byte() {
+        assert_eq!(run_on(r#"const re = /\x00/;"#).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_control_char_1f() {
+        assert_eq!(run_on(r#"const re = /\x1f/;"#).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_printable_hex() {
+        assert!(run_on(r#"const re = /\x20/;"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_upper_hex() {
+        assert!(run_on(r#"const re = /\xFF/;"#).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_tailwind_class_string() {
+        assert!(run_on(r#"const x = "has-[>svg]:grid-cols-[auto_1fr]";"#).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_url_string() {
+        assert!(run_on(r#"const u = "http://a/b/c";"#).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_import_path() {
+        assert!(run_on(r#"import X from "@scope/pkg/sub";"#).is_empty());
+    }
+}

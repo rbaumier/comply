@@ -72,3 +72,52 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diagnostic::Diagnostic;
+    use super::Check;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_unsafe_true() {
+        assert_eq!(run("serialize(data, { unsafe: true })").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_unsafe_true_quoted_key() {
+        assert_eq!(run(r#"serialize(data, { "unsafe": true })"#).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_unsafe_false() {
+        assert!(run("serialize(data, { unsafe: false })").is_empty());
+    }
+
+
+    #[test]
+    fn allows_no_options() {
+        assert!(run("serialize(data)").is_empty());
+    }
+
+
+    #[test]
+    fn allows_other_options() {
+        assert!(run("serialize(data, { isJSON: true })").is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_serialize_call() {
+        assert!(run("stringify(data, { unsafe: true })").is_empty());
+    }
+}

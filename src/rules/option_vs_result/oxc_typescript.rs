@@ -172,3 +172,59 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rules::test_helpers::run_oxc_ts;
+
+
+
+    #[test]
+    fn flags_find_returning_null() {
+        let src = r#"
+function findUser(id: string) {
+    if (!id) return null;
+    return db.get(id);
+}
+"#;
+        let d = run_oxc_ts(src, &Check);
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].rule_id, "option-vs-result");
+    }
+
+
+    #[test]
+    fn flags_get_returning_undefined() {
+        let src = r#"
+function getConfig(key: string) {
+    if (!map.has(key)) return undefined;
+    return map.get(key);
+}
+"#;
+        assert_eq!(run_oxc_ts(src, &Check).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_find_without_null_return() {
+        let src = r#"
+function findUser(id: string) {
+    return db.get(id);
+}
+"#;
+        assert!(run_oxc_ts(src, &Check).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_find_get_functions() {
+        let src = r#"
+function createUser(name: string) {
+    if (!name) return null;
+    return { name };
+}
+"#;
+        assert!(run_oxc_ts(src, &Check).is_empty());
+    }
+}

@@ -1,8 +1,6 @@
 //! elysia-jwt-cookie-no-httponly
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

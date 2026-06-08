@@ -138,4 +138,16 @@ mod tests {
             }";
         assert!(run_on(src).is_empty());
     }
+
+    use crate::project::ProjectCtx;
+    use crate::rules::test_helpers::run_oxc_ts_with_project;
+    use std::path::Path;
+
+
+    #[test]
+    fn ignores_non_exported_app() {
+        let src =
+            "import { Elysia } from 'elysia';\nconst app = new Elysia().onBeforeHandle(() => {});";
+        assert!(crate::rules::test_helpers::run_oxc_ts(src, &Check).is_empty());
+    }
 }

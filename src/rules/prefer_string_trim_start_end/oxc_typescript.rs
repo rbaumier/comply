@@ -51,3 +51,54 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_trim_left() {
+        let d = run_on("str.trimLeft()");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("trimStart"));
+    }
+
+
+    #[test]
+    fn flags_trim_right() {
+        let d = run_on("str.trimRight()");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("trimEnd"));
+    }
+
+
+    #[test]
+    fn allows_trim_start() {
+        assert!(run_on("str.trimStart()").is_empty());
+    }
+
+
+    #[test]
+    fn allows_trim_end() {
+        assert!(run_on("str.trimEnd()").is_empty());
+    }
+
+
+    #[test]
+    fn allows_plain_trim() {
+        assert!(run_on("str.trim()").is_empty());
+    }
+
+
+    #[test]
+    fn ignores_standalone_function() {
+        assert!(run_on("trimLeft()").is_empty());
+    }
+}

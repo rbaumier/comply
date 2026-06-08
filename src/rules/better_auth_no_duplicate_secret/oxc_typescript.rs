@@ -68,3 +68,42 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diagnostic::Diagnostic;
+    use super::Check;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_secret_in_config() {
+        let src = "const s = process.env.BETTER_AUTH_SECRET;\nbetterAuth({ secret: \"abc\" })";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_config_without_secret() {
+        assert!(run("betterAuth({ database: db })").is_empty());
+    }
+
+
+    #[test]
+    fn ignores_secret_outside_betterauth() {
+        let src = "const s = process.env.BETTER_AUTH_SECRET;\notherFactory({ secret: \"abc\" })";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_secret_when_no_env_var_referenced() {
+        assert!(run("betterAuth({ secret: \"abc\" })").is_empty());
+    }
+}

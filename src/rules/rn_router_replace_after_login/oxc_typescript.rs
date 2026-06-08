@@ -96,3 +96,41 @@ fn enclosing_function_name<'b>(
     }
     None
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_push_in_login() {
+        let src = "async function handleLogin() { router.push('/home'); }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_push_in_signout_arrow() {
+        let src = "const signOutUser = async () => { router.push('/login'); };";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_replace_in_login() {
+        let src = "async function handleLogin() { router.replace('/home'); }";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_push_outside_auth() {
+        let src = "function openDetails() { router.push('/details'); }";
+        assert!(run(src).is_empty());
+    }
+}

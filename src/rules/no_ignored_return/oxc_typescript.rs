@@ -105,4 +105,42 @@ mod tests {
         let src = "const result = xs.map(x => x);";
         assert!(run(src).is_empty());
     }
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_standalone_map() {
+        let d = run_on("arr.map(x => x + 1);");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains(".map"));
+    }
+
+
+    #[test]
+    fn flags_standalone_filter() {
+        assert_eq!(run_on("items.filter(Boolean);").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_assigned_map() {
+        assert!(run_on("const doubled = arr.map(x => x * 2);").is_empty());
+    }
+
+
+    #[test]
+    fn allows_returned_map() {
+        assert!(run_on("function f() { return arr.map(x => x * 2); }").is_empty());
+    }
+
+
+    #[test]
+    fn flags_standalone_trim() {
+        assert_eq!(run_on("name.trim();").len(), 1);
+    }
 }

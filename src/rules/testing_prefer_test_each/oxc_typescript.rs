@@ -411,4 +411,7 @@ for (const c of cases) {
             diags[0].message
         );
     }
+
+    use crate::rules::backend::{AstCheck, CheckCtx};
+    use std::path::Path;
 }

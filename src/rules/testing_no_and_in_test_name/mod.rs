@@ -1,8 +1,6 @@
 //! testing-no-and-in-test-name — flag " and " in `test` / `it` names.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

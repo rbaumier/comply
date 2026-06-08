@@ -62,3 +62,46 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_zero_fraction() {
+        let d = run_on("const x = 1.0;");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("zero fraction"));
+    }
+
+
+    #[test]
+    fn flags_multiple_trailing_zeros() {
+        assert_eq!(run_on("const x = 1.00;").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_real_fraction() {
+        assert!(run_on("const x = 1.5;").is_empty());
+    }
+
+
+    #[test]
+    fn allows_integer() {
+        assert!(run_on("const x = 1;").is_empty());
+    }
+
+
+    #[test]
+    fn allows_non_zero_fraction() {
+        assert!(run_on("const x = 3.14;").is_empty());
+    }
+}

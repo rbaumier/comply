@@ -51,3 +51,42 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_read_as_text() {
+        let d = run_on("reader.readAsText(blob);");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("Blob#text()"));
+    }
+
+
+    #[test]
+    fn flags_read_as_array_buffer() {
+        let d = run_on("reader.readAsArrayBuffer(blob);");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("Blob#arrayBuffer()"));
+    }
+
+
+    #[test]
+    fn allows_blob_text() {
+        assert!(run_on("const text = await blob.text();").is_empty());
+    }
+
+
+    #[test]
+    fn allows_unrelated_code() {
+        assert!(run_on("const data = JSON.parse(response);").is_empty());
+    }
+}

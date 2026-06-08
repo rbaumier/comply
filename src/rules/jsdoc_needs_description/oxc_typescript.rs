@@ -100,3 +100,82 @@ impl OxcCheck for Check {
         diagnostics
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn allows_param_return_type_signature() {
+        let source = r#"
+/**
+ * @param x - the input
+ * @returns the output
+ */
+function foo(x: number): number { return x; }
+"#;
+        assert!(run_on(source).is_empty());
+    }
+
+
+    #[test]
+    fn allows_type_only_jsdoc_annotation() {
+        let source = r#"
+/** @type {import('@sveltejs/kit').Config} */
+const config = {};
+"#;
+        assert!(run_on(source).is_empty());
+    }
+
+
+    #[test]
+    fn flags_single_line_tag_only() {
+        let source = "/** @deprecated */\nfunction old() {}";
+        let d = run_on(source);
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_jsdoc_with_description() {
+        let source = r#"
+/**
+ * Computes the square of a number.
+ * @param x - the input
+ * @returns the squared value
+ */
+function square(x: number): number { return x * x; }
+"#;
+        assert!(run_on(source).is_empty());
+    }
+
+
+    #[test]
+    fn allows_jsdoc_with_description_only() {
+        let source = r#"
+/**
+ * This function does something important.
+ */
+function important() {}
+"#;
+        assert!(run_on(source).is_empty());
+    }
+
+
+    #[test]
+    fn allows_empty_jsdoc() {
+        let source = r#"
+/**
+ */
+function foo() {}
+"#;
+        assert!(run_on(source).is_empty());
+    }
+}

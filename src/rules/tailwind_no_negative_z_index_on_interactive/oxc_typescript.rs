@@ -70,3 +70,50 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(source: &str) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_button_with_negative_z() {
+        assert_eq!(run(r#"const x = <button className="-z-10" />;"#).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_anchor_with_negative_z() {
+        assert_eq!(
+            run(r#"const x = <a href="/h" className="-z-1">x</a>;"#).len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn flags_role_button_div() {
+        assert_eq!(
+            run(r#"const x = <div role="button" className="-z-50" />;"#).len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn allows_button_without_negative_z() {
+        assert!(run(r#"const x = <button className="z-10" />;"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_div_with_negative_z() {
+        assert!(run(r#"const x = <div className="-z-10" />;"#).is_empty());
+    }
+}

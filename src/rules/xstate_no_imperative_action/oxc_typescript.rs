@@ -73,3 +73,90 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn allows_send_inside_actions_array() {
+        let src = r#"
+            createMachine({
+                on: {
+                    NEXT: {
+                        actions: [send({ type: 'GO' })],
+                    },
+                },
+            });
+        "#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_raise_inside_entry() {
+        let src = r#"
+            createMachine({
+                states: {
+                    idle: {
+                        entry: raise({ type: 'START' }),
+                    },
+                },
+            });
+        "#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_send_inside_entry_arrow() {
+        let src = r#"
+            createMachine({
+                states: {
+                    idle: {
+                        entry: () => send({ type: 'GO' }),
+                    },
+                },
+            });
+        "#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn flags_top_level_send() {
+        let src = "send({ type: 'GO' });";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_raise_inside_guard() {
+        let src = r#"
+            createMachine({
+                on: {
+                    NEXT: {
+                        guard: () => raise({ type: 'X' }),
+                    },
+                },
+            });
+        "#;
+        let diags = run_on(src);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("raise"));
+    }
+
+
+    #[test]
+    fn ignores_unrelated_functions() {
+        let src = "sendEmail({ to: 'a' }); raiseHell();";
+        assert!(run_on(src).is_empty());
+    }
+}

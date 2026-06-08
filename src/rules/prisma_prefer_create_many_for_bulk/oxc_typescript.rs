@@ -82,3 +82,35 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_create_in_for_loop() {
+        let src = "import { PrismaClient } from '@prisma/client';\nconst prisma = new PrismaClient();\nasync function f(items: any[]) { for (const it of items) { await prisma.user.create({ data: it }); } }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_create_in_for_each() {
+        let src = "import { PrismaClient } from '@prisma/client';\nconst prisma = new PrismaClient();\nasync function f(items: any[]) { items.forEach(async (it) => { await prisma.user.create({ data: it }); }); }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_single_create() {
+        let src = "import { PrismaClient } from '@prisma/client';\nconst prisma = new PrismaClient();\nasync function f(it: any) { await prisma.user.create({ data: it }); }";
+        assert!(run(src).is_empty());
+    }
+}

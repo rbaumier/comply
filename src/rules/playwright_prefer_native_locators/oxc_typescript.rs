@@ -82,3 +82,55 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        let full = format!("import {{ test, expect }} from \"@playwright/test\";\n{source}");
+        crate::rules::test_helpers::run_oxc_ts_with_path(&full, &Check, "login.test.ts")
+    }
+
+
+    #[test]
+    fn flags_role_attribute_selector() {
+        let d = run_on(r#"page.locator('[role="button"]');"#);
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].rule_id, "playwright-prefer-native-locators");
+        assert!(d[0].message.contains("getByRole"));
+    }
+
+
+    #[test]
+    fn flags_data_testid_attribute() {
+        let d = run_on(r#"page.locator('[data-testid="card"]');"#);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("getByTestId"));
+    }
+
+
+    #[test]
+    fn allows_get_by_role() {
+        assert!(run_on("page.getByRole('button');").is_empty());
+    }
+
+
+    #[test]
+    fn allows_locator_without_attribute() {
+        assert!(run_on("page.locator('button');").is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_test_file() {
+        let d = crate::rules::test_helpers::run_oxc_ts_with_path(
+            r#"page.locator('[role="button"]');"#,
+            &Check,
+            "helpers.ts",
+        );
+        assert!(d.is_empty());
+    }
+}

@@ -51,3 +51,30 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diagnostic::Diagnostic;
+    use super::Check;
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+    #[test]
+    fn flags_manual_plural() {
+        assert_eq!(run("count === 1 ? t('item') : t('items')").len(), 1);
+    }
+
+    #[test]
+    fn allows_t_with_count() {
+        assert!(run("t('item', { count })").is_empty());
+    }
+
+    #[test]
+    fn allows_non_translation_ternary() {
+        assert!(run("count === 1 ? 'item' : 'items'").is_empty());
+    }
+}

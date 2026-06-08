@@ -250,3 +250,92 @@ fn is_inline_route_callback(
     let method = member.property.name.as_str();
     ROUTE_VERBS.contains(&method)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_parse_in_internal_function() {
+        let d = run("function computeTotal(input: unknown) { return Schema.parse(input); }");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("computeTotal"));
+    }
+
+
+    #[test]
+    fn flags_safeparse_in_internal_arrow() {
+        let d = run("const run = (x: unknown) => Schema.safeParse(x);");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_parse_in_handler_named_function() {
+        assert!(
+            run("function userHandler(req: Request, res: Response) { Schema.parse(req.body); }")
+                .is_empty()
+        );
+    }
+
+
+    #[test]
+    fn allows_parse_in_function_with_request_param() {
+        assert!(
+            run("function run(req: Request, res: Response) { Schema.parse(req.body); }").is_empty()
+        );
+    }
+
+
+    #[test]
+    fn allows_parse_at_module_level() {
+        assert!(run("const config = ConfigSchema.parse(process.env);").is_empty());
+    }
+
+
+    #[test]
+    fn allows_parse_in_verb_prefixed_function_with_request_param() {
+        // Still allowed because of the `req: Request` parameter, not
+        // because of the `getUser` name.
+        assert!(
+            run("function getUser(req: Request) { return Schema.parse(req.body); }").is_empty()
+        );
+    }
+
+
+    #[test]
+    fn flags_parse_in_verb_prefixed_function_without_request_param() {
+        // REVIEW regression: a function named `getUser`/`postProcess`
+        // that takes no Request parameter is NOT a handler; the verb
+        // prefix alone must not exempt it from the rule.
+        let d = run("function getUser(input: unknown) { return Schema.parse(input); }");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("getUser"));
+    }
+
+
+    #[test]
+    fn allows_parse_in_inline_route_callback() {
+        // Inline arrow handler passed to `.get(...)` is treated as a
+        // boundary even when its name (or lack thereof) gives no signal.
+        assert!(run("app.get('/u', (req, res) => { Schema.parse(req.body); });").is_empty());
+    }
+
+
+    #[test]
+    fn allows_parse_in_nextjs_uppercase_route_export() {
+        assert!(
+            run(
+                "export async function GET(req: Request) { return Schema.parse(await req.json()); }"
+            )
+            .is_empty()
+        );
+    }
+}

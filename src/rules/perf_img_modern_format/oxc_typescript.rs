@@ -102,3 +102,41 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_plain_jpg() {
+        assert_eq!(run(r#"const x = <img src="hero.jpg" />;"#).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_plain_png() {
+        assert_eq!(run(r#"const x = <img src="logo.png" alt="" />;"#).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_webp() {
+        assert!(run(r#"const x = <img src="hero.webp" />;"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_img_with_srcset() {
+        assert!(
+            run(r#"const x = <img src="hero.jpg" srcSet="hero.webp 1x, hero.avif 2x" />;"#)
+                .is_empty()
+        );
+    }
+}

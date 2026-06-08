@@ -205,4 +205,123 @@ mod tests {
         assert_eq!(diags.len(), 1, "no ignore → diagnostic must remain");
         assert!(diags[0].message.contains("authorize"));
     }
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn allows_simple_function() {
+        let src = r#"
+function simple() {
+    if (a) {
+        return 1;
+    }
+    return 2;
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn flags_complex_function() {
+        // 1 base + 16 if = 17 complexity (threshold 15)
+        let src = r#"
+function complex(x) {
+    if (a) {}
+    if (b) {}
+    if (c) {}
+    if (d) {}
+    if (e) {}
+    if (f) {}
+    if (g) {}
+    if (h) {}
+    if (i) {}
+    if (j) {}
+    if (k) {}
+    if (l) {}
+    if (m) {}
+    if (n) {}
+    if (o) {}
+    if (p) {}
+}
+"#;
+        let diags = run_on(src);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("17"));
+    }
+
+
+    #[test]
+    fn no_fp_on_exhaustive_switch() {
+        // Regression for #586: exhaustive switches over discriminated unions must
+        // not trigger cyclomatic-complexity. The whole switch counts as +1,
+        // regardless of the number of cases.
+        let src = r#"
+function fromElysiaError(error) {
+    switch (error.code) {
+        case 'NOT_FOUND': return 404;
+        case 'UNAUTHORIZED': return 401;
+        case 'FORBIDDEN': return 403;
+        case 'BAD_REQUEST': return 400;
+        case 'CONFLICT': return 409;
+        case 'UNPROCESSABLE': return 422;
+        case 'TOO_MANY_REQUESTS': return 429;
+        case 'INTERNAL_SERVER_ERROR': return 500;
+        case 'SERVICE_UNAVAILABLE': return 503;
+        case 'VALIDATION': return 400;
+        case 'PARSE': return 400;
+        default: return 500;
+    }
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn counts_logical_operators() {
+        // 1 base + 1 if + 4 && = 6 — under threshold
+        let src = r#"
+function check(a, b, c, d, e) {
+    if (a && b && c && d && e) {
+        return true;
+    }
+    return false;
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn counts_ternary() {
+        // 1 base + 16 ternaries = 17 (threshold 15)
+        let src = r#"
+function ternaries(x) {
+    const a = x ? 1 : 0;
+    const b = x ? 1 : 0;
+    const c = x ? 1 : 0;
+    const d = x ? 1 : 0;
+    const e = x ? 1 : 0;
+    const f = x ? 1 : 0;
+    const g = x ? 1 : 0;
+    const h = x ? 1 : 0;
+    const i = x ? 1 : 0;
+    const j = x ? 1 : 0;
+    const k = x ? 1 : 0;
+    const l = x ? 1 : 0;
+    const m = x ? 1 : 0;
+    const n = x ? 1 : 0;
+    const o = x ? 1 : 0;
+    const p = x ? 1 : 0;
+}
+"#;
+        let diags = run_on(src);
+        assert_eq!(diags.len(), 1);
+    }
 }

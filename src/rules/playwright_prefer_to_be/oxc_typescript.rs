@@ -121,3 +121,46 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rules::test_helpers::run_oxc_ts_with_path;
+
+    const PW_IMPORT: &str = "import { test, expect } from \"@playwright/test\";\n";
+
+
+    fn run_oxc_ts(source: &str) -> Vec<Diagnostic> {
+        run_oxc_ts_with_path(&format!("{PW_IMPORT}{source}"), &Check, "app.test.ts")
+    }
+
+
+    #[test]
+    fn flags_to_equal_with_number() {
+        let d = run_oxc_ts("expect(x).toEqual(1);");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("toBe"));
+    }
+
+
+    #[test]
+    fn flags_to_equal_null() {
+        let d = run_oxc_ts("expect(x).toEqual(null);");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("toBeNull"));
+    }
+
+
+    #[test]
+    fn allows_to_equal_with_object() {
+        let d = run_oxc_ts("expect(x).toEqual({a: 1});");
+        assert!(d.is_empty());
+    }
+
+
+    #[test]
+    fn allows_to_be() {
+        let d = run_oxc_ts("expect(x).toBe(1);");
+        assert!(d.is_empty());
+    }
+}

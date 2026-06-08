@@ -2,8 +2,6 @@
 //! `json()` from `@tanstack/react-start`, not `new Response(JSON.stringify())`.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

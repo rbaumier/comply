@@ -41,3 +41,38 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_new_require() {
+        assert_eq!(run_on("const app = new require('express');").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_new_require_start_of_line() {
+        assert_eq!(run_on("new require('foo');").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_regular_require() {
+        assert!(run_on("const express = require('express');").is_empty());
+    }
+
+
+    #[test]
+    fn allows_new_other() {
+        assert!(run_on("const app = new Express();").is_empty());
+    }
+}

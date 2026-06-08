@@ -52,3 +52,41 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diagnostic::Diagnostic;
+
+
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_path(src, &Check, "drizzle.config.ts")
+    }
+
+
+    fn run_other(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_path(src, &Check, "other.ts")
+    }
+
+
+    #[test]
+    fn flags_const_config_type_annotation() {
+        let src = "const config: Config = { out: './drizzle' }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_satisfies_config() {
+        let src = "export default { out: './drizzle' } satisfies Config";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_drizzle_config_files() {
+        let src = "const config: Config = { out: './drizzle' }";
+        assert!(run_other(src).is_empty());
+    }
+}

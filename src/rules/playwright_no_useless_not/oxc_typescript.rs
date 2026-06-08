@@ -72,3 +72,39 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rules::test_helpers::run_oxc_ts_with_path;
+
+    const PW_IMPORT: &str = "import { test, expect } from \"@playwright/test\";\n";
+
+
+    fn run_oxc_ts(source: &str) -> Vec<Diagnostic> {
+        run_oxc_ts_with_path(&format!("{PW_IMPORT}{source}"), &Check, "app.test.ts")
+    }
+
+
+    #[test]
+    fn flags_not_to_be_visible() {
+        let d = run_oxc_ts("await expect(el).not.toBeVisible();");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("toBeHidden"));
+    }
+
+
+    #[test]
+    fn flags_not_to_be_enabled() {
+        let d = run_oxc_ts("await expect(el).not.toBeEnabled();");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("toBeDisabled"));
+    }
+
+
+    #[test]
+    fn allows_not_to_be() {
+        let d = run_oxc_ts("await expect(el).not.toBe(1);");
+        assert!(d.is_empty());
+    }
+}

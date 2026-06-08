@@ -45,3 +45,43 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_catch_without_annotation() {
+        let diags = run_on("try { f(); } catch (e) { log(e); }");
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].rule_id, "ts-no-implicit-any-catch");
+    }
+
+
+    #[test]
+    fn allows_catch_with_unknown_annotation() {
+        let diags = run_on("try { f(); } catch (e: unknown) { log(e); }");
+        assert!(diags.is_empty());
+    }
+
+
+    #[test]
+    fn allows_catch_with_any_annotation() {
+        let diags = run_on("try { f(); } catch (e: any) { log(e); }");
+        assert!(diags.is_empty());
+    }
+
+
+    #[test]
+    fn allows_catch_without_binding() {
+        let diags = run_on("try { f(); } catch { log('fail'); }");
+        assert!(diags.is_empty());
+    }
+}

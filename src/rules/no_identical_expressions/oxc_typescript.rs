@@ -87,3 +87,43 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_identical_strict_eq() {
+        let d = run_on("if (a === a) {}");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("==="));
+    }
+
+
+    #[test]
+    fn flags_identical_and() {
+        let d = run_on("const ok = valid && valid;");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("&&"));
+    }
+
+
+    #[test]
+    fn flags_identical_subtraction() {
+        let d = run_on("const zero = count - count;");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_different_sides() {
+        assert!(run_on("if (a === b) {}").is_empty());
+    }
+}

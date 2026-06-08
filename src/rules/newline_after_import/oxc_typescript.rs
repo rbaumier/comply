@@ -85,3 +85,37 @@ impl OxcCheck for Check {
         Vec::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_missing_newline() {
+        let src = "import { a } from 'a';\nconst x = 1;\n";
+        let diags = run_on(src);
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].line, 1);
+    }
+
+
+    #[test]
+    fn allows_blank_line_after_import() {
+        let src = "import { a } from 'a';\n\nconst x = 1;\n";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_consecutive_imports_without_blank() {
+        let src = "import { a } from 'a';\nimport { b } from 'b';\n\nconst x = 1;\n";
+        assert!(run_on(src).is_empty());
+    }
+}

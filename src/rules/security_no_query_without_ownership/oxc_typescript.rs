@@ -192,3 +192,71 @@ fn function_has_request_param_oxc(
     }
     false
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    fn run_with_path(source: &str, path: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_path(source, &Check, path)
+    }
+
+
+    #[test]
+    fn flags_find_by_id_without_owner() {
+        let src = "app.get('/orders/:id', (req, res) => { Order.findById(req.params.id); });";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_find_unique_without_owner() {
+        let src = "app.get('/orders/:id', (req, res) => { prisma.order.findUnique({ where: { id: req.params.id } }); });";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_find_with_user_id() {
+        let src = "app.get('/orders/:id', (req, res) => { prisma.order.findFirst({ where: { id: req.params.id, userId: req.user.id } }); });";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_find_with_org_id() {
+        let src = "app.post('/orders', (req, res) => { prisma.order.findUnique({ where: { id, orgId } }); });";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_query_in_scripts_dir() {
+        // Admin scripts/jobs aren't end-user requests; IDOR doesn't apply.
+        let src = "Order.findById(someId);";
+        assert!(run_with_path(src, "scripts/seed.ts").is_empty());
+    }
+
+
+    #[test]
+    fn ignores_query_outside_route_handler() {
+        // Bare top-level call with no handler context.
+        let src = "Order.findById(someId);";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn flags_in_exported_get_route() {
+        // Next.js / Remix-style route export.
+        let src = "export async function GET(req) { return Order.findById(req.params.id); }";
+        assert_eq!(run(src).len(), 1);
+    }
+}

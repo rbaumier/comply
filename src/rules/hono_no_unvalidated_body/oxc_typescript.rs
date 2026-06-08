@@ -62,3 +62,49 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_unvalidated_json() {
+        let src = "import { Hono } from 'hono';\nconst app = new Hono();\napp.post('/api', async (c) => { const body = await c.req.json(); });";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_unvalidated_parse_body() {
+        let src = "import { Hono } from 'hono';\nconst app = new Hono();\napp.post('/api', async (c) => { const body = await c.req.parseBody(); });";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_validated_body() {
+        let src = "import { Hono } from 'hono';\nimport { validator } from 'hono/validator';\nconst app = new Hono();\napp.post('/api', validator('json', s), async (c) => { const body = c.req.valid('json'); });";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_zvalidator() {
+        let src = "import { Hono } from 'hono';\nimport { zValidator } from '@hono/zod-validator';\nconst app = new Hono();\napp.post('/api', zValidator('json', schema), async (c) => { const body = await c.req.json(); });";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_hono_files() {
+        let src = "app.post('/api', async (c) => { const body = await c.req.json(); });";
+        assert!(run(src).is_empty());
+    }
+}

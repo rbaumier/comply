@@ -81,3 +81,57 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diagnostic::Diagnostic;
+
+
+
+    fn run(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_will_change_transform() {
+        assert_eq!(
+            run(r#"<div style={{ willChange: 'transform' }} />"#).len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn flags_will_change_opacity() {
+        assert_eq!(run(r#"<div style={{ willChange: 'opacity' }} />"#).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_will_change_multiple() {
+        assert_eq!(
+            run(r#"<div style={{ willChange: 'transform, opacity' }} />"#).len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn allows_will_change_auto() {
+        assert!(run(r#"<div style={{ willChange: 'auto' }} />"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_other_style_keys() {
+        assert!(run(r#"<div style={{ transform: 'translateZ(0)' }} />"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_non_style_object() {
+        assert!(run(r#"const config = { willChange: 'transform' };"#).is_empty());
+    }
+}

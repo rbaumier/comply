@@ -54,3 +54,36 @@ impl OxcCheck for Check {
         diagnostics
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_framework(source, &Check, "elysia")
+    }
+
+
+    #[test]
+    fn flags_unvalidated_bearer() {
+        let src =
+            "import { bearer } from '@elysiajs/bearer';\napp.get('/me', ({ bearer }) => bearer);";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_validated_bearer() {
+        let src = "import { bearer } from '@elysiajs/bearer';\napp.get('/me', async ({ bearer }) => { const p = await jwt.verify(bearer); return p; });";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_elysia_files() {
+        let src = "app.get('/me', ({ bearer }) => bearer);";
+        assert!(crate::rules::test_helpers::run_oxc_ts(src, &Check).is_empty());
+    }
+}

@@ -75,3 +75,35 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_generator_without_yield() {
+        let src = "function* gen() {\n  return 42;\n}";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_generator_with_yield() {
+        let src = "function* gen() {\n  yield 1;\n  yield 2;\n}";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_regular_function() {
+        let src = "function foo() {\n  return 1;\n}";
+        assert!(run_on(src).is_empty());
+    }
+}

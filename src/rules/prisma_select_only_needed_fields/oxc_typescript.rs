@@ -108,3 +108,28 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_find_many_without_select() {
+        let src = "import { PrismaClient } from '@prisma/client';\nconst prisma = new PrismaClient();\nasync function f() { return prisma.user.findMany({ where: { active: true } }); }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_find_many_with_select() {
+        let src = "import { PrismaClient } from '@prisma/client';\nconst prisma = new PrismaClient();\nasync function f() { return prisma.user.findMany({ where: { active: true }, select: { id: true } }); }";
+        assert!(run(src).is_empty());
+    }
+}

@@ -53,3 +53,48 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_duplicate_number_values() {
+        let diags = run_on("enum E { A = 1, B = 1 }");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("Duplicate"));
+    }
+
+
+    #[test]
+    fn flags_duplicate_string_values() {
+        let diags = run_on(r#"enum E { A = "x", B = "x" }"#);
+        assert_eq!(diags.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_unique_values() {
+        assert!(run_on("enum E { A = 1, B = 2 }").is_empty());
+    }
+
+
+    #[test]
+    fn allows_no_initializer() {
+        assert!(run_on("enum E { A, B, C }").is_empty());
+    }
+
+
+    #[test]
+    fn flags_multiple_duplicates() {
+        let diags = run_on("enum E { A = 1, B = 1, C = 1 }");
+        assert_eq!(diags.len(), 2);
+    }
+}

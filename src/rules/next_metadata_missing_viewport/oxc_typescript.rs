@@ -51,3 +51,54 @@ impl OxcCheck for Check {
         }]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::project::ProjectCtx;
+    use crate::rules::file_ctx::FileCtx;
+
+
+
+    fn next_project() -> ProjectCtx {
+        let mut project = ProjectCtx::empty();
+        project.framework = Framework::NextJs;
+        project
+    }
+
+
+    fn run(source: &str, project: &ProjectCtx) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx_with_project(
+            source,
+            &Check,
+            project)
+    }
+
+
+    #[test]
+    fn flags_metadata_without_viewport() {
+        let src = "export const metadata = { title: 'X' };\nexport default function Page() { return <div />; }";
+        assert_eq!(run(src, &next_project()).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_metadata_with_viewport() {
+        let src = "export const metadata = { title: 'X' };\nexport const viewport = { width: 'device-width' };\nexport default function Page() { return <div />; }";
+        assert!(run(src, &next_project()).is_empty());
+    }
+
+
+    #[test]
+    fn allows_no_metadata() {
+        let src = "export default function Page() { return <div />; }";
+        assert!(run(src, &next_project()).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_nextjs_project() {
+        let src = "export const metadata = { title: 'X' };";
+        assert!(run(src, &ProjectCtx::empty()).is_empty());
+    }
+}

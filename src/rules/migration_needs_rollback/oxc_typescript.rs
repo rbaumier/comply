@@ -76,3 +76,87 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_path(src, &Check, "/app/migrations/001.ts")
+    }
+
+
+    #[test]
+    fn flags_up_without_down() {
+        let src = "export async function up(db) { db.exec('CREATE TABLE t (id INT)'); }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_up_with_down() {
+        let src = "export async function up(db) {} export async function down(db) {}";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_up_with_rollback() {
+        let src = "export async function up(db) {} export async function rollback(db) {}";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_migration() {
+        let src = "function doStuff() {}";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_setup_and_lookup() {
+        // `setup` / `lookup` contain "up" but are not migration entry
+        // points — substring matching used to flag these.
+        let src = "function setup() {} function lookup() {}";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn flags_up_method_on_object() {
+        let src = "module.exports = { async up(db) { return 1; } };";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_up_down_methods_on_object() {
+        let src = "module.exports = { async up(db) {}, async down(db) {} };";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn flags_exports_up_assignment() {
+        let src = "exports.up = async function (db) {};";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_exports_up_and_down_assignment() {
+        let src = "exports.up = async () => {}; exports.down = async () => {};";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn skips_non_migration_path() {
+        let src = "export async function up(db) { db.exec('CREATE TABLE t (id INT)'); }";
+        let diags = crate::rules::test_helpers::run_oxc_ts(src, &Check);
+        assert!(diags.is_empty());
+    }
+}

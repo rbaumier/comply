@@ -87,3 +87,49 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_at(src: &str, fake: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_path(src, &Check, fake)
+    }
+
+
+    #[test]
+    fn flags_import_in_runtime() {
+        let src = "import { defineConfig } from 'drizzle-kit';";
+        assert_eq!(run_at(src, "src/api/handler.ts").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_require_in_runtime() {
+        let src = "const k = require('drizzle-kit');";
+        assert_eq!(run_at(src, "src/api/handler.ts").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_import_in_drizzle_config() {
+        let src = "import { defineConfig } from 'drizzle-kit';";
+        assert!(run_at(src, "drizzle.config.ts").is_empty());
+    }
+
+
+    #[test]
+    fn allows_import_in_migrate_script() {
+        let src = "import { drizzle } from 'drizzle-kit/dist';";
+        assert!(run_at(src, "scripts/migrate.ts").is_empty());
+    }
+
+
+    #[test]
+    fn allows_drizzle_orm_import() {
+        let src = "import { drizzle } from 'drizzle-orm';";
+        assert!(run_at(src, "src/api/handler.ts").is_empty());
+    }
+}

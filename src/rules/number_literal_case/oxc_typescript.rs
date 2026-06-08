@@ -76,3 +76,68 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rules::test_helpers::run_oxc_ts;
+
+
+
+    #[test]
+    fn flags_uppercase_hex_prefix() {
+        let d = run_oxc_ts("const x = 0XFF;", &Check);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("0xFF"));
+    }
+
+
+    #[test]
+    fn flags_lowercase_hex_digits() {
+        let d = run_oxc_ts("const x = 0xff;", &Check);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("0xFF"));
+    }
+
+
+    #[test]
+    fn flags_uppercase_exponent() {
+        let d = run_oxc_ts("const x = 1E3;", &Check);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("1e3"));
+    }
+
+
+    #[test]
+    fn flags_uppercase_binary_prefix() {
+        let d = run_oxc_ts("const x = 0B1010;", &Check);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("0b1010"));
+    }
+
+
+    #[test]
+    fn flags_uppercase_octal_prefix() {
+        let d = run_oxc_ts("const x = 0O777;", &Check);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("0o777"));
+    }
+
+
+    #[test]
+    fn allows_correct_hex() {
+        assert!(run_oxc_ts("const x = 0xFF;", &Check).is_empty());
+    }
+
+
+    #[test]
+    fn allows_correct_exponent() {
+        assert!(run_oxc_ts("const x = 1e3;", &Check).is_empty());
+    }
+
+
+    #[test]
+    fn allows_correct_binary() {
+        assert!(run_oxc_ts("const x = 0b1010;", &Check).is_empty());
+    }
+}

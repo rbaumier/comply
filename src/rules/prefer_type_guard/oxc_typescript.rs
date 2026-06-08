@@ -133,4 +133,43 @@ mod tests {
                 .is_empty()
         );
     }
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_is_function_with_typeof() {
+        let src = r#"
+function isString(x: unknown): boolean {
+    return typeof x === "string";
+}
+"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_is_function_with_instanceof() {
+        let src = r#"
+function isError(x: unknown): boolean {
+    return x instanceof Error;
+}
+"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_non_is_function() {
+        let src = r#"
+function checkValue(x: unknown): boolean {
+    return typeof x === "string";
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
 }

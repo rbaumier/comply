@@ -125,3 +125,72 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_missing_user_id() {
+        assert_eq!(
+            run_on("auditLog({ action: 'login', timestamp: Date.now() })").len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn flags_missing_timestamp() {
+        assert_eq!(
+            run_on("auditLog({ userId: u.id, action: 'login' })").len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn flags_missing_action() {
+        assert_eq!(
+            run_on("auditLog({ userId: u.id, timestamp: Date.now() })").len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn flags_audit_log_method_call() {
+        assert_eq!(
+            run_on("audit.log({ userId: u.id, timestamp: Date.now() })").len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn allows_complete_audit_entry() {
+        assert!(
+            run_on("auditLog({ userId: u.id, action: 'login', timestamp: Date.now() })").is_empty()
+        );
+    }
+
+
+    #[test]
+    fn accepts_actor_id_alias() {
+        assert!(
+            run_on("auditLog({ actorId: u.id, event: 'login', createdAt: Date.now() })").is_empty()
+        );
+    }
+
+
+    #[test]
+    fn ignores_unrelated_log_call() {
+        assert!(run_on("logger.info('hello')").is_empty());
+    }
+}

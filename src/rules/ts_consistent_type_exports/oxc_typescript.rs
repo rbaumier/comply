@@ -52,3 +52,46 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_all_inline_type_specifiers() {
+        let d = run_on("export { type Foo, type Bar };");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_inline_type_reexport() {
+        let d = run_on("export { type Foo } from './baz';");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_export_type() {
+        assert!(run_on("export type { Foo } from './baz';").is_empty());
+    }
+
+
+    #[test]
+    fn allows_mixed_value_and_type() {
+        assert!(run_on("export { Foo, type Bar } from './baz';").is_empty());
+    }
+
+
+    #[test]
+    fn allows_plain_value_export() {
+        assert!(run_on("export { foo } from './baz';").is_empty());
+    }
+}

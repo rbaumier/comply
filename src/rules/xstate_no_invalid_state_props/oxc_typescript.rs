@@ -107,3 +107,132 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diagnostic::Diagnostic;
+    use super::Check;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_unknown_prop_in_state_node() {
+        let src = r#"
+            createMachine({
+                states: {
+                    idle: {
+                        entires: ["log"],
+                    },
+                },
+            });
+        "#;
+        let diags = run(src);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("entires"));
+    }
+
+
+    #[test]
+    fn flags_multiple_unknown_props() {
+        let src = r#"
+            createMachine({
+                states: {
+                    idle: {
+                        entry: "log",
+                        foobar: 1,
+                        bazqux: 2,
+                    },
+                },
+            });
+        "#;
+        assert_eq!(run(src).len(), 2);
+    }
+
+
+    #[test]
+    fn allows_all_valid_props() {
+        let src = r#"
+            createMachine({
+                states: {
+                    idle: {
+                        id: "idle",
+                        initial: "a",
+                        type: "atomic",
+                        context: {},
+                        states: {},
+                        on: {},
+                        entry: "log",
+                        exit: "cleanup",
+                        invoke: { src: "x" },
+                        after: {},
+                        always: [],
+                        onDone: "next",
+                        meta: {},
+                        tags: [],
+                        description: "idle state",
+                        history: "shallow",
+                        target: "next",
+                        actions: [],
+                        data: {},
+                        output: {},
+                    },
+                },
+            });
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn flags_unknown_in_nested_states() {
+        let src = r#"
+            createMachine({
+                states: {
+                    parent: {
+                        initial: "child",
+                        states: {
+                            child: {
+                                typo: true,
+                            },
+                        },
+                    },
+                },
+            });
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn ignores_non_xstate_objects() {
+        let src = r#"
+            const config = {
+                states: "california",
+            };
+            const obj = {
+                things: { one: { whatever: 1 } },
+            };
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_state_value_that_is_not_object() {
+        let src = r#"
+            createMachine({
+                states: {
+                    idle: "atomic",
+                    running: 42,
+                },
+            });
+        "#;
+        assert!(run(src).is_empty());
+    }
+}

@@ -93,3 +93,58 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diagnostic::Diagnostic;
+    use super::Check;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_baseurl_in_config() {
+        let src = "betterAuth({ baseURL: process.env.BETTER_AUTH_URL })";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_config_without_baseurl() {
+        assert!(run("betterAuth({ database: db })").is_empty());
+    }
+
+
+    #[test]
+    fn ignores_baseurl_outside_betterauth() {
+        let src = "const url = process.env.BETTER_AUTH_URL;\nmakeClient({ baseURL: \"https://app.example.com\" })";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_baseurl_when_no_env_var_referenced() {
+        assert!(run("betterAuth({ baseURL: \"https://app.example.com\" })").is_empty());
+    }
+
+
+    #[test]
+    fn allows_baseurl_with_config_value_security_override() {
+        // issue #537: baseURL: config.auth.url is a validated security override,
+        // not a duplicate of BETTER_AUTH_URL — must not be flagged.
+        let src = "const u = process.env.BETTER_AUTH_URL;\nbetterAuth({ baseURL: config.auth.url })";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn flags_baseurl_that_is_the_env_var_itself() {
+        let src = "betterAuth({ baseURL: process.env.BETTER_AUTH_URL })";
+        assert_eq!(run(src).len(), 1);
+    }
+}

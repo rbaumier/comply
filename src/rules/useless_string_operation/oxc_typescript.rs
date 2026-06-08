@@ -75,3 +75,50 @@ fn is_concise_arrow_body(node: &oxc_semantic::AstNode, semantic: &oxc_semantic::
     let Some(grandparent) = ancestors.next() else { return false };
     matches!(grandparent.kind(), AstKind::ArrowFunctionExpression(arrow) if arrow.expression)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_standalone_trim() {
+        assert_eq!(run_on("name.trim();").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_standalone_replace() {
+        assert_eq!(run_on(r#"str.replace("a", "b");"#).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_standalone_to_upper() {
+        assert_eq!(run_on("title.toUpperCase();").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_assigned_trim() {
+        assert!(run_on("const cleaned = name.trim();").is_empty());
+    }
+
+
+    #[test]
+    fn allows_returned_value() {
+        assert!(run_on("return name.trim();").is_empty());
+    }
+
+
+    #[test]
+    fn allows_as_argument() {
+        assert!(run_on("console.log(name.trim());").is_empty());
+    }
+}

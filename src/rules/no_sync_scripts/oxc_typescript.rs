@@ -67,3 +67,44 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_sync_external_script() {
+        assert_eq!(run(r#"const x = <script src="a.js" />;"#).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_async_script() {
+        assert!(run(r#"const x = <script src="a.js" async />;"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_defer_script() {
+        assert!(run(r#"const x = <script src="a.js" defer />;"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_inline_script() {
+        assert!(run(r#"const x = <script>{code}</script>;"#).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_script() {
+        assert!(run(r#"const x = <div />;"#).is_empty());
+    }
+}

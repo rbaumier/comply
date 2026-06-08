@@ -73,3 +73,33 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_all_inline_type_specifiers() {
+        let diags = run_on("import { type A, type B } from 'mod';");
+        assert_eq!(diags.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_top_level_import_type() {
+        assert!(run_on("import type { A, B } from 'mod';").is_empty());
+    }
+
+
+    #[test]
+    fn allows_mixed_specifiers() {
+        assert!(run_on("import { type A, B } from 'mod';").is_empty());
+    }
+}

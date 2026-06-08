@@ -236,4 +236,79 @@ mod tests {
         let diags = run_on(src);
         assert!(!diags.is_empty(), "expected at least one diag for inner `as A` cast");
     }
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_cast_to_string_literal() {
+        let diags = run("const x = val as 'foo';");
+        assert_eq!(diags.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_cast_to_number_literal() {
+        let diags = run("const x = val as 42;");
+        assert_eq!(diags.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_as_const() {
+        assert!(run("const x = [1, 2] as const;").is_empty());
+    }
+
+
+    #[test]
+    fn allows_cast_to_regular_type() {
+        assert!(run("const x = val as string;").is_empty());
+    }
+
+
+    #[test]
+    fn flags_cast_to_pascal_case_type() {
+        assert_eq!(run("const x = value as AdminUser;").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_cast_to_non_nullable() {
+        assert_eq!(run("const x = value as NonNullable<T>;").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_cast_to_exclude() {
+        assert_eq!(run("const x = value as Exclude<T, null>;").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_cast_to_any() {
+        assert!(run("const x = value as any;").is_empty());
+    }
+
+
+    #[test]
+    fn allows_cast_to_unknown() {
+        assert!(run("const x = value as unknown;").is_empty());
+    }
+
+
+    #[test]
+    fn allows_cast_to_lowercase_alias() {
+        assert!(run("const x = value as myAlias;").is_empty());
+    }
+
+
+    #[test]
+    fn still_flags_non_framework_pascal_case() {
+        // Regular user-defined PascalCase types must still be flagged
+        assert_eq!(run("const x = value as AdminUser;").len(), 1);
+    }
 }

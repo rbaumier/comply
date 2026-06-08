@@ -162,3 +162,59 @@ fn has_top_level_async_function(
     }
     false
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_async_arrow_iife() {
+        let d = run_on("(async () => { await fetch('/api'); })();");
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].rule_id, "prefer-top-level-await");
+    }
+
+
+    #[test]
+    fn flags_async_function_iife() {
+        let d = run_on("(async function() { await fetch('/api'); })();");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_async_function_then_call() {
+        let src = "async function main() {\n  await fetch('/api');\n}\nmain();";
+        let d = run_on(src);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("main"));
+    }
+
+
+    #[test]
+    fn flags_async_function_with_then() {
+        let src = "async function bootstrap() {\n  await init();\n}\nbootstrap().then(() => {});";
+        let d = run_on(src);
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_regular_function() {
+        let src = "function main() {\n  console.log('hello');\n}\nmain();";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_top_level_await_directly() {
+        assert!(run_on("const data = await fetch('/api');").is_empty());
+    }
+}

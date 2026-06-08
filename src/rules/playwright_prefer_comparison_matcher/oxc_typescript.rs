@@ -102,3 +102,39 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rules::test_helpers::run_oxc_ts_with_path;
+
+    const PW_IMPORT: &str = "import { test, expect } from \"@playwright/test\";\n";
+
+
+    fn run_oxc_ts(source: &str) -> Vec<Diagnostic> {
+        run_oxc_ts_with_path(&format!("{PW_IMPORT}{source}"), &Check, "app.test.ts")
+    }
+
+
+    #[test]
+    fn flags_greater_than_comparison() {
+        let d = run_oxc_ts("expect(a > b).toBe(true);");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("toBeGreaterThan"));
+    }
+
+
+    #[test]
+    fn flags_less_than_or_equal() {
+        let d = run_oxc_ts("expect(a <= b).toEqual(true);");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("toBeLessThanOrEqual"));
+    }
+
+
+    #[test]
+    fn allows_non_comparison() {
+        let d = run_oxc_ts("expect(a).toBe(true);");
+        assert!(d.is_empty());
+    }
+}

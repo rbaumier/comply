@@ -114,3 +114,46 @@ fn is_preceded_by_odd_backslashes(bytes: &[u8], pos: usize) -> bool {
     }
     count % 2 == 1
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_dollar_backslash_brace() {
+        let d = run_on(r#"const s = `$\{foo}`;"#);
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_escaped_dollar_and_brace() {
+        let d = run_on(r#"const s = `\$\{foo}`;"#);
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_backslash_dollar_brace() {
+        assert!(run_on(r#"const s = `\${foo}`;"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_normal_interpolation() {
+        assert!(run_on(r#"const s = `${foo}`;"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_plain_template() {
+        assert!(run_on(r#"const s = `hello world`;"#).is_empty());
+    }
+}

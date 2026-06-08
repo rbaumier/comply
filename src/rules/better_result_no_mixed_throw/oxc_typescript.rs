@@ -114,3 +114,25 @@ impl OxcCheck for Check {
         diagnostics
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+    #[test]
+    fn flags_throw_in_result_function() {
+        let src = "function f(): Result<number, E> { throw new Error('x'); }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_throw_inside_result_try() {
+        let src = "function f(): Result<number, E> { return Result.try({ try: () => { throw new Error('x'); }, catch: (e) => new E() }); }";
+        assert!(run(src).is_empty());
+    }
+}

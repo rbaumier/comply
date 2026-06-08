@@ -81,3 +81,28 @@ impl OxcCheck for Check {
         diagnostics
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn allows_specific_type() {
+        let src = "/**\n * @param {string} x - the value\n */\nfunction f(x) {}";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_jsdoc_comment() {
+        // Regular `// {any}` comment must not be flagged.
+        let src = "// @param {any}\nfunction f() {}";
+        assert!(run(src).is_empty());
+    }
+}

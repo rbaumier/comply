@@ -107,3 +107,63 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rules::test_helpers::run_oxc_ts_with_path;
+
+    const PW_IMPORT: &str = "import { test, expect } from \"@playwright/test\";\n";
+
+
+    fn run_oxc_ts(source: &str) -> Vec<Diagnostic> {
+        run_oxc_ts_with_path(&format!("{PW_IMPORT}{source}"), &Check, "login.test.ts")
+    }
+
+
+    #[test]
+    fn flags_test_without_expect() {
+        let d = run_oxc_ts("test('should work', () => { const x = 1; });");
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].rule_id, "playwright-expect-expect");
+    }
+
+
+    #[test]
+    fn allows_test_with_expect() {
+        let d = run_oxc_ts("test('should work', () => { expect(1).toBe(1); });");
+        assert!(d.is_empty());
+    }
+
+
+    #[test]
+    fn flags_it_without_expect() {
+        let d = run_oxc_ts("it('works', async () => { await page.click('#btn'); });");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn skips_non_playwright_test_file() {
+        let d = run_oxc_ts_with_path(
+            "test('should work', () => { const x = 1; });",
+            &Check,
+            "login.test.ts",
+        );
+        assert!(d.is_empty());
+    }
+
+
+    #[test]
+    fn skips_non_playwright_file_with_marker_in_string() {
+        let d = run_oxc_ts_with_path(
+            r#"
+const packageName = "@playwright/test";
+test('should work', () => { const x = 1; });
+"#,
+            &Check,
+            "login.test.ts",
+        );
+        assert!(d.is_empty());
+    }
+}

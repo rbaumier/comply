@@ -66,3 +66,66 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::project::ProjectCtx;
+    use crate::rules::file_ctx::FileCtx;
+
+
+
+    fn next_project() -> ProjectCtx {
+        let mut project = ProjectCtx::empty();
+        project.framework = Framework::NextJs;
+        project
+    }
+
+
+    fn client_ctx() -> FileCtx {
+        FileCtx {
+            rsc_context: RscContext::ClientComponent,
+            ..Default::default()
+        }
+    }
+
+
+    fn run(source: &str, file: &FileCtx) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx_with_project(
+            source,
+            &Check,
+            &next_project())
+    }
+
+
+    #[test]
+    fn flags_fs_import_in_client() {
+        let src = "\"use client\";\nimport fs from 'fs';";
+        assert_eq!(run(src, &client_ctx()).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_next_server_import_in_client() {
+        let src = "\"use client\";\nimport { NextResponse } from 'next/server';";
+        assert_eq!(run(src, &client_ctx()).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_react_import_in_client() {
+        let src = "\"use client\";\nimport { useState } from 'react';";
+        assert!(run(src, &client_ctx()).is_empty());
+    }
+
+
+    #[test]
+    fn allows_fs_import_in_server() {
+        let src = "import fs from 'fs';";
+        let server = FileCtx {
+            rsc_context: RscContext::ServerComponent,
+            ..Default::default()
+        };
+        assert!(run(src, &server).is_empty());
+    }
+}

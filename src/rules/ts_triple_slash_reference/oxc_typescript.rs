@@ -45,3 +45,40 @@ impl OxcCheck for Check {
         diagnostics
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_path_reference() {
+        let diags = run_on("/// <reference path=\"foo\" />\nconst x = 1;");
+        assert_eq!(diags.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_types_reference() {
+        let diags = run_on("/// <reference types=\"node\" />\nconst x = 1;");
+        assert_eq!(diags.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_lib_reference() {
+        assert!(run_on("/// <reference lib=\"es2015\" />\nconst x = 1;").is_empty());
+    }
+
+
+    #[test]
+    fn allows_regular_comments() {
+        assert!(run_on("// just a comment\nconst x = 1;").is_empty());
+    }
+}

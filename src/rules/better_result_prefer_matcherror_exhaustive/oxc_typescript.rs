@@ -76,3 +76,37 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+    #[test]
+    fn flags_match_error_partial_with_three_tags() {
+        let src = "result.matchErrorPartial({ NotFound: () => 0, NetworkError: () => 1, ParseError: () => 2 });";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_match_error_partial_with_one_tag() {
+        let src = "result.matchErrorPartial({ NotFound: () => 0 });";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_match_error_partial_with_two_tags() {
+        let src = "result.matchErrorPartial({ NotFound: () => 0, NetworkError: () => 1 });";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_match_error() {
+        let src = "result.matchError({ NotFound: () => 0, NetworkError: () => 1 });";
+        assert!(run(src).is_empty());
+    }
+}

@@ -48,3 +48,47 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::project::ProjectCtx;
+    use crate::rules::file_ctx::FileCtx;
+
+
+
+    fn next_project() -> ProjectCtx {
+        let mut project = ProjectCtx::empty();
+        project.framework = Framework::NextJs;
+        project
+    }
+
+
+    fn run(source: &str, project: &ProjectCtx) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx_with_project(
+            source,
+            &Check,
+            project)
+    }
+
+
+    #[test]
+    fn flags_img_element() {
+        let src = "export default function Page() { return <img src='/photo.jpg' />; }";
+        assert_eq!(run(src, &next_project()).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_next_image() {
+        let src = "import Image from 'next/image';\nexport default function Page() { return <Image src='/photo.jpg' width={100} height={100} />; }";
+        assert!(run(src, &next_project()).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_nextjs_project() {
+        let src = "export default function Page() { return <img src='/photo.jpg' />; }";
+        assert!(run(src, &ProjectCtx::empty()).is_empty());
+    }
+}

@@ -46,3 +46,34 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diagnostic::Diagnostic;
+    use super::Check;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_disable_origin() {
+        assert_eq!(run("betterAuth({ disableOriginCheck: true })").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_trusted_origins() {
+        assert!(run("betterAuth({ trustedOrigins: ['https://app.example.com'] })").is_empty());
+    }
+
+
+    #[test]
+    fn allows_disable_origin_false() {
+        assert!(run("betterAuth({ disableOriginCheck: false })").is_empty());
+    }
+}

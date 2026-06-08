@@ -86,3 +86,51 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_mixed_interface() {
+        let d = run_on("interface User { name: string; greet(): void; }");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("User"));
+    }
+
+
+    #[test]
+    fn allows_all_property_interface() {
+        assert!(run_on("interface User { name: string; age: number; }").is_empty());
+    }
+
+
+    #[test]
+    fn allows_all_method_interface() {
+        assert!(run_on("interface Api { get(): string; set(v: string): void; }").is_empty());
+    }
+
+
+    #[test]
+    fn flags_mixed_type_alias() {
+        let d = run_on("type User = { name: string; greet(): void; };");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("User"));
+    }
+
+
+    #[test]
+    fn allows_property_with_function_type_value() {
+        // `greet: () => void` is a property signature with a function type —
+        // not a method signature. All members are property_signature, so no
+        // mix. This is the canonical "use consistent signatures" fix.
+        assert!(run_on("interface User { name: string; greet: () => void; }").is_empty());
+    }
+}

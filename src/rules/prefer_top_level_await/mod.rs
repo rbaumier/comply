@@ -1,8 +1,6 @@
 //! prefer-top-level-await — flag async IIFE and `async main(); main()` patterns.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

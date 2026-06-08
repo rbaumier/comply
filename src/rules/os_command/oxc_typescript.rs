@@ -115,4 +115,69 @@ mod tests {
     fn allows_regexp_literal_exec_issue_522() {
         assert!(run_oxc_ts("const m = /foo(.*)/.exec(html);", &Check).is_empty());
     }
+
+
+    fn run(code: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(code, &Check)
+    }
+
+
+    #[test]
+    fn flags_exec_template() {
+        assert_eq!(run("exec(`rm -rf ${userInput}`)").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_exec_concat() {
+        assert_eq!(run("exec('rm -rf ' + path)").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_spawn_variable() {
+        assert_eq!(run("spawn(command)").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_exec_sync() {
+        assert_eq!(run("execSync(`cat ${file}`)").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_static_command() {
+        assert!(run("exec('ls -la')").is_empty());
+    }
+
+
+    #[test]
+    fn allows_exec_file() {
+        assert!(run("execFile('rm', ['-rf', path])").is_empty());
+    }
+
+
+    #[test]
+    fn allows_regexp_exec() {
+        assert!(run("pattern.exec(content)").is_empty());
+    }
+
+
+    #[test]
+    fn allows_regex_exec() {
+        assert!(run("regex.exec(line)").is_empty());
+    }
+
+
+    #[test]
+    fn allows_re_exec() {
+        assert!(run("re.exec(input)").is_empty());
+    }
+
+
+    #[test]
+    fn allows_uppercase_pattern_exec() {
+        assert!(run("LINK_PATTERN.exec(content)").is_empty());
+    }
 }

@@ -61,3 +61,43 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_framework(source, &Check, "elysia")
+    }
+
+
+    #[test]
+    fn flags_manual_302_redirect() {
+        let src = "import { Elysia } from 'elysia';\napp.get('/', ({ set }) => { set.status = 302; set.headers.location = '/new'; });";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_manual_301_redirect() {
+        let src = "import { Elysia } from 'elysia';\napp.get('/', ({ set }) => { set.status = 301; set.headers['Location'] = '/new'; });";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_redirect_helper() {
+        let src = "import { Elysia } from 'elysia';\napp.get('/', ({ redirect }) => redirect('/new', 302));";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_redirect_status() {
+        let src =
+            "import { Elysia } from 'elysia';\napp.get('/', ({ set }) => { set.status = 401; });";
+        assert!(crate::rules::test_helpers::run_oxc_ts(src, &Check).is_empty());
+    }
+}

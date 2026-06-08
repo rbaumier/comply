@@ -1,8 +1,6 @@
 //! ts-assertion-fn-must-be-declaration — assertion functions cannot be arrows.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

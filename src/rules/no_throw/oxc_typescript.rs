@@ -38,3 +38,35 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_throw_statement() {
+        let diags = run_on("function f() { throw new Error('boom'); }");
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].rule_id, "no-throw");
+    }
+
+
+    #[test]
+    fn allows_code_without_throw() {
+        assert!(run_on("function f() { return 42; }").is_empty());
+    }
+
+
+    #[test]
+    fn flags_multiple_throws() {
+        let diags = run_on("function f() { throw 1; } function g() { throw 2; }");
+        assert_eq!(diags.len(), 2);
+    }
+}

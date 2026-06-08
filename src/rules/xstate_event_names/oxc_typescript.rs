@@ -107,3 +107,85 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn allows_screaming_snake_events() {
+        let src = r#"
+            createMachine({
+                on: {
+                    NEXT: 'b',
+                    FETCH_DATA: { target: 'loading' },
+                    DONE_2: 'idle',
+                },
+            });
+        "#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn flags_camel_case_event() {
+        let src = r#"
+            createMachine({
+                on: {
+                    fetchData: 'loading',
+                },
+            });
+        "#;
+        let diags = run_on(src);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("fetchData"));
+    }
+
+
+    #[test]
+    fn flags_kebab_case_event() {
+        let src = r#"
+            createMachine({
+                on: {
+                    'fetch-data': 'loading',
+                },
+            });
+        "#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_wildcard_and_xstate_builtins() {
+        let src = r#"
+            createMachine({
+                on: {
+                    '*': 'fallback',
+                    'xstate.init': 'starting',
+                    'xstate.done.actor.foo': 'ok',
+                },
+            });
+        "#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_keys_outside_on() {
+        let src = r#"
+            const cfg = {
+                states: {
+                    idle: { entry: 'log' },
+                },
+            };
+        "#;
+        assert!(run_on(src).is_empty());
+    }
+}

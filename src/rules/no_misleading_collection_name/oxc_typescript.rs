@@ -117,4 +117,6 @@ mod tests {
     fn ignores_unsuffixed_name() {
         assert!(run("const cache = new Set();").is_empty());
     }
+
+    use std::path::Path;
 }

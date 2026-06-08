@@ -4,8 +4,6 @@
 //! load. `react-native-reanimated` runs animations on the UI thread.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

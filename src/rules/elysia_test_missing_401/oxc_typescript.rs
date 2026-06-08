@@ -122,3 +122,98 @@ impl OxcCheck for Check {
         }]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on_test(source: &str) -> Vec<Diagnostic> {
+        let project = crate::project::ProjectCtx::for_test_with_framework("elysia");
+        crate::rules::test_helpers::run_oxc_ts_with_project(
+            source,
+            &Check,
+            &project)
+    }
+
+
+    fn run_on_path(source: &str, path: &str) -> Vec<Diagnostic> {
+        let project = crate::project::ProjectCtx::for_test_with_framework("elysia");
+        crate::rules::test_helpers::run_oxc_ts_with_project(
+            source,
+            &Check,
+            &project)
+    }
+
+
+    #[test]
+    fn allows_auth_test_with_401_assertion() {
+        let src = "import { Elysia } from 'elysia';\nconst app = new Elysia().use(bearer()).get('/me', requireAuth);\ntest('bearer rejects', () => { expect(r.status).toBe(401); });";
+        assert!(run_on_test(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_auth_test() {
+        let src = "import { Elysia } from 'elysia';\ntest('list users', () => { expect(r.status).toBe(200); });";
+        assert!(run_on_test(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_authplugin_composition_when_cors_in_path() {
+        let src = r#"import { authPlugin } from './auth';
+import { corsPlugin } from './cors';
+describe('cors headers', () => {
+  test('includes access-control-allow-origin', async () => {
+    const app = new Elysia().use(authPlugin()).use(corsPlugin({ origin: 'https://example.com' }));
+    const res = await app.handle(new Request('http://localhost/health'));
+    expect(res.headers.get('access-control-allow-origin')).toBe('https://example.com');
+  });
+});
+"#;
+        assert!(run_on_path(src, "cors.test.ts").is_empty());
+    }
+
+    #[test]
+    fn ignores_betterauth_when_describe_says_cors() {
+        let src = r#"import { betterAuth } from 'better-auth';
+describe('cors headers propagation', () => {
+  test('exposes ratelimit headers', async () => {
+    const app = new Elysia().use(betterAuth()).get('/ping', () => 'ok');
+    const res = await app.handle(new Request('http://localhost/ping'));
+    expect(res.headers.get('access-control-expose-headers')).toContain('ratelimit-limit');
+  });
+});
+"#;
+        assert!(run_on_test(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_authplugin_when_test_says_rate_limit() {
+        let src = r#"import { authPlugin } from './auth';
+test('rate-limit headers are present on all responses', async () => {
+  const app = new Elysia().use(authPlugin()).get('/ping', () => 'ok');
+  const res = await app.handle(new Request('http://localhost/ping'));
+  expect(res.headers.get('ratelimit-limit')).toBeTruthy();
+});
+"#;
+        assert!(run_on_test(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_cors_test_with_auth_headers_in_fixture() {
+        let src = r#"import { coreMiddlewarePlugin } from './composition';
+test('exposes only allowlisted headers', async () => {
+  const app = coreMiddlewarePlugin({ config, errorReporter: { capture() {} } });
+  const res = await app.handle(new Request('http://example.test:3000/', {
+    method: 'GET',
+    headers: { Origin: 'https://x', Cookie: 'stub', Authorization: 'stub' },
+  }));
+  const raw = res.headers.get('access-control-expose-headers');
+  expect(raw.split(',')).toEqual(['x-request-id', 'ratelimit-limit']);
+});
+"#;
+        assert!(run_on_test(src).is_empty());
+    }
+}

@@ -61,3 +61,52 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_try_finally_close() {
+        assert_eq!(
+            run("const c = connect(); try { use(c) } finally { c.close() }").len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn flags_try_finally_dispose() {
+        assert_eq!(
+            run("const r = open(); try { r.read() } finally { r.dispose() }").len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn flags_try_finally_disconnect() {
+        assert_eq!(
+            run("try { query(db) } finally { db.disconnect() }").len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn allows_finally_with_multiple_statements() {
+        assert!(run("try { f() } finally { cleanup(); log() }").is_empty());
+    }
+
+
+    #[test]
+    fn allows_finally_with_non_cleanup_call() {
+        assert!(run("try { f() } finally { logger.flush() }").is_empty());
+    }
+}

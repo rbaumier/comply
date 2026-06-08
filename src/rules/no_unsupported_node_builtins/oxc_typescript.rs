@@ -128,3 +128,135 @@ impl OxcCheck for Check {
         diagnostics
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Config;
+    use crate::diagnostic::Diagnostic;
+    use crate::files::{Language, SourceFile};
+    use crate::project::ProjectCtx;
+    use crate::rules::test_helpers::run_oxc_ts_with_project;
+    use std::fs;
+    use std::path::PathBuf;
+    use tempfile::TempDir;
+
+
+
+    fn setup_with_engine(node_version: &str, source: &str) -> Vec<Diagnostic> {
+        let dir = TempDir::new().unwrap();
+        let pkg =
+            format!(r#"{{"name":"t","version":"0.0.0","engines":{{"node":"{node_version}"}}}}"#);
+        fs::write(dir.path().join("package.json"), pkg).unwrap();
+        let src_path = dir.path().join("app.ts");
+        fs::write(&src_path, source).unwrap();
+        let src_path = fs::canonicalize(&src_path).unwrap();
+
+        let source_file = SourceFile {
+            path: src_path.clone(),
+            language: Language::TypeScript,
+        };
+        let refs: Vec<&SourceFile> = vec![&source_file];
+        let config = Config::default();
+        let project = ProjectCtx::load(&refs, &config);
+
+        run_oxc_ts_with_project(source, &Check, &project)
+    }
+
+
+    fn setup_without_engine(source: &str) -> Vec<Diagnostic> {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"t","version":"0.0.0"}"#,
+        )
+        .unwrap();
+        let src_path = dir.path().join("app.ts");
+        fs::write(&src_path, source).unwrap();
+        let src_path = fs::canonicalize(&src_path).unwrap();
+
+        let source_file = SourceFile {
+            path: src_path.clone(),
+            language: Language::TypeScript,
+        };
+        let refs: Vec<&SourceFile> = vec![&source_file];
+        let config = Config::default();
+        let project = ProjectCtx::load(&refs, &config);
+
+        run_oxc_ts_with_project(source, &Check, &project)
+    }
+
+
+    fn setup_without_package_json(source: &str) -> Vec<Diagnostic> {
+        let dir = TempDir::new().unwrap();
+        let src_path = dir.path().join("app.ts");
+        fs::write(&src_path, source).unwrap();
+        let src_path: PathBuf = fs::canonicalize(&src_path).unwrap();
+
+        let source_file = SourceFile {
+            path: src_path.clone(),
+            language: Language::TypeScript,
+        };
+        let refs: Vec<&SourceFile> = vec![&source_file];
+        let config = Config::default();
+        let project = ProjectCtx::load(&refs, &config);
+
+        run_oxc_ts_with_project(source, &Check, &project)
+    }
+
+
+    #[test]
+    fn allows_fetch_at_18() {
+        let d = setup_with_engine(">=18", "const res = fetch('http://example.com');");
+        assert!(d.is_empty());
+    }
+
+
+    #[test]
+    fn allows_structured_clone_at_17() {
+        let d = setup_with_engine(">=17", "const copy = structuredClone(obj);");
+        assert!(d.is_empty());
+    }
+
+
+    #[test]
+    fn skips_no_engine_field() {
+        let d = setup_without_engine("const copy = structuredClone(obj);");
+        assert!(d.is_empty());
+    }
+
+
+    #[test]
+    fn skips_no_package_json() {
+        let d = setup_without_package_json("const copy = structuredClone(obj);");
+        assert!(d.is_empty());
+    }
+
+
+    #[test]
+    fn allows_object_group_by_at_21() {
+        let d = setup_with_engine(">=21", "Object.groupBy(arr, fn);");
+        assert!(d.is_empty());
+    }
+
+
+    #[test]
+    fn allows_older_apis() {
+        let d = setup_with_engine(">=16", "setTimeout(() => {}, 1000); arr.map(x => x);");
+        assert!(d.is_empty());
+    }
+
+
+    #[test]
+    fn does_not_flag_member_property_named_fetch() {
+        let d = setup_with_engine(">=16", "obj.fetch();");
+        assert!(d.is_empty());
+    }
+
+
+    #[test]
+    fn parses_caret_range() {
+        let d = setup_with_engine("^18.0.0", "const res = fetch('u');");
+        assert!(d.is_empty());
+    }
+}

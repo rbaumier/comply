@@ -96,3 +96,28 @@ impl OxcCheck for Check {
         diagnostics
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(src, &Check)
+    }
+
+
+    #[test]
+    fn allows_valid_semver() {
+        let src = "/**\n * @version 1.2.3\n * @since v0.9\n */\n";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_spdx_license() {
+        let src = "/**\n * @license MIT\n */\n";
+        assert!(run(src).is_empty());
+    }
+}

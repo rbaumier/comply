@@ -48,3 +48,32 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_cookie_read() {
+        assert_eq!(run_on("const c = document.cookie;").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_cookie_write() {
+        assert_eq!(run_on(r#"document.cookie = "a=1";"#).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_unrelated_member() {
+        assert!(run_on("const t = document.title;").is_empty());
+    }
+}

@@ -51,3 +51,37 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_framework(source, &Check, "elysia")
+    }
+
+
+    #[test]
+    fn flags_object_first_arg() {
+        let src =
+            "import { Elysia } from 'elysia';\nnew Elysia().macro({ isAuth: { resolve() {} } });";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_named_form() {
+        let src =
+            "import { Elysia } from 'elysia';\nnew Elysia().macro('isAuth', { resolve() {} });";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_elysia_files() {
+        let src = "obj.macro({ isAuth: {} });";
+        assert!(crate::rules::test_helpers::run_oxc_ts(src, &Check).is_empty());
+    }
+}

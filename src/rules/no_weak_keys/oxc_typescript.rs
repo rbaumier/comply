@@ -105,3 +105,46 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_rsa_1024() {
+        let d = run_on("const opts = { modulusLength: 1024 };");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("RSA"));
+    }
+
+
+    #[test]
+    fn flags_rsa_512() {
+        assert_eq!(run_on("const opts = { modulusLength: 512 };").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_rsa_2048() {
+        assert!(run_on("const opts = { modulusLength: 2048 };").is_empty());
+    }
+
+
+    #[test]
+    fn flags_weak_ec_curve_p192() {
+        assert_eq!(run_on("const opts = { namedCurve: 'P-192' };").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_p256() {
+        assert!(run_on("const opts = { namedCurve: 'P-256' };").is_empty());
+    }
+}

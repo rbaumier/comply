@@ -280,4 +280,68 @@ mod tests {
         "#;
         assert!(run(src).is_empty());
     }
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_push() {
+        assert_eq!(run_on("arr.push(1);").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_sort() {
+        assert_eq!(run_on("arr.sort();").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_splice() {
+        assert_eq!(run_on("arr.splice(0, 1);").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_reverse() {
+        assert_eq!(run_on("arr.reverse();").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_non_mutating_alternatives() {
+        assert!(run_on("const next = [...arr, 1];").is_empty());
+        assert!(run_on("arr.toSorted();").is_empty());
+        assert!(run_on("arr.toReversed();").is_empty());
+        assert!(run_on("arr.slice(0, 1);").is_empty());
+        assert!(run_on("arr.map(x => x + 1);").is_empty());
+    }
+
+
+    #[test]
+    fn ignores_plain_function_call() {
+        assert!(run_on("push(arr, 1);").is_empty());
+    }
+
+
+    #[test]
+    fn allows_chained_fill_playwright() {
+        assert!(run_on(r#"page.getByLabel("Email").fill(user.email);"#).is_empty());
+    }
+
+
+    #[test]
+    fn still_flags_direct_fill() {
+        assert_eq!(run_on("arr.fill(0);").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_member_expression_fill_playwright() {
+        assert!(run_on(r#"this.input.fill(title);"#).is_empty());
+    }
 }

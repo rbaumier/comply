@@ -105,4 +105,12 @@ mod tests {
             }";
         assert!(run_on(src).is_empty());
     }
+
+
+
+    #[test]
+    fn ignores_non_elysia_files() {
+        let src = "app.onError(() => 'oops');";
+        assert!(crate::rules::test_helpers::run_oxc_ts(src, &Check).is_empty());
+    }
 }

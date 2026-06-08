@@ -110,3 +110,44 @@ fn has_protection(args: &[Argument]) -> bool {
     }
     false
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_dom_parser() {
+        assert_eq!(run_on("const parser = new DOMParser();").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_xml2js_require() {
+        assert_eq!(run_on("const parser = require('xml2js');").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_xml_parser() {
+        assert_eq!(run_on("const p = new XMLParser();").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_xml_parser_with_protection() {
+        assert!(run_on("new XMLParser({ noent: false });").is_empty());
+    }
+
+
+    #[test]
+    fn allows_external_entities_false() {
+        assert!(run_on("new XMLParser({ externalEntities: false });").is_empty());
+    }
+}

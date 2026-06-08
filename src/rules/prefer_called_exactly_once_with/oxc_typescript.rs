@@ -151,3 +151,85 @@ impl OxcCheck for Check {
         diagnostics
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rules::test_helpers::run_oxc_ts;
+
+
+
+    #[test]
+    fn flags_times_one_then_called_with_same_mock() {
+        let src = r#"
+            test('x', () => {
+                expect(fn).toHaveBeenCalledTimes(1);
+                expect(fn).toHaveBeenCalledWith(1, 2);
+            });
+        "#;
+        let d = run_oxc_ts(src, &Check);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("toHaveBeenCalledExactlyOnceWith"));
+    }
+
+
+    #[test]
+    fn ignores_non_consecutive_statements() {
+        let src = r#"
+            test('x', () => {
+                expect(fn).toHaveBeenCalledTimes(1);
+                doSomething();
+                expect(fn).toHaveBeenCalledWith(1, 2);
+            });
+        "#;
+        let d = run_oxc_ts(src, &Check);
+        assert!(d.is_empty());
+    }
+
+
+    #[test]
+    fn ignores_different_mocks() {
+        let src = r#"
+            test('x', () => {
+                expect(a).toHaveBeenCalledTimes(1);
+                expect(b).toHaveBeenCalledWith(1);
+            });
+        "#;
+        let d = run_oxc_ts(src, &Check);
+        assert!(d.is_empty());
+    }
+
+
+    #[test]
+    fn ignores_times_not_equal_to_one() {
+        let src = r#"
+            test('x', () => {
+                expect(fn).toHaveBeenCalledTimes(2);
+                expect(fn).toHaveBeenCalledWith(1);
+            });
+        "#;
+        let d = run_oxc_ts(src, &Check);
+        assert!(d.is_empty());
+    }
+
+
+    #[test]
+    fn ignores_reversed_order() {
+        let src = r#"
+            test('x', () => {
+                expect(fn).toHaveBeenCalledWith(1);
+                expect(fn).toHaveBeenCalledTimes(1);
+            });
+        "#;
+        let d = run_oxc_ts(src, &Check);
+        assert!(d.is_empty());
+    }
+
+
+    #[test]
+    fn flags_at_program_top_level() {
+        let src = "expect(fn).toHaveBeenCalledTimes(1);\nexpect(fn).toHaveBeenCalledWith(42);\n";
+        let d = run_oxc_ts(src, &Check);
+        assert_eq!(d.len(), 1);
+    }
+}

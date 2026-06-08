@@ -1,8 +1,6 @@
 //! no-nullish-default-on-input — don't silently default function inputs.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::rules::backend::Backend;

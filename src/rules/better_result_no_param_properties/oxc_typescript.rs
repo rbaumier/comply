@@ -65,3 +65,25 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+    #[test]
+    fn flags_param_property() {
+        let src = "class E extends TaggedError('E') { constructor(public id: string) { super({ id, message: 'x' }); } }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_plain_parameter() {
+        let src = "class E extends TaggedError('E') { constructor(id: string) { super({ id, message: 'x' }); } }";
+        assert!(run(src).is_empty());
+    }
+}

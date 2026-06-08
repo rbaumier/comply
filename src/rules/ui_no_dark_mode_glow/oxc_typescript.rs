@@ -217,3 +217,82 @@ fn has_colored_box_shadow(obj: &oxc_ast::ast::ObjectExpression, source: &str) ->
     }
     false
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diagnostic::Diagnostic;
+
+
+
+    fn run(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_colored_glow_on_dark() {
+        let src = r#"<div style={{
+            backgroundColor: '#111',
+            boxShadow: '0 0 20px rgba(0, 100, 255, 0.5)',
+        }} />"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_neutral_shadow_on_dark() {
+        let src = r#"<div style={{
+            backgroundColor: '#111',
+            boxShadow: '0 0 20px rgba(0, 0, 0, 0.3)',
+        }} />"#;
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_colored_shadow_on_light() {
+        let src = r#"<div style={{
+            backgroundColor: '#fff',
+            boxShadow: '0 0 20px rgba(0, 100, 255, 0.5)',
+        }} />"#;
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_no_shadow() {
+        let src = r#"<div style={{ backgroundColor: '#111' }} />"#;
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_neutral_hex_shadow_on_dark() {
+        let src = r#"<div style={{
+            backgroundColor: '#111',
+            boxShadow: '0 0 20px #000',
+        }} />"#;
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_bright_bg_with_rgb_zero_first_channel() {
+        let src = r#"<div style={{
+            backgroundColor: 'rgb(0, 200, 200)',
+            boxShadow: '0 0 20px rgba(0, 100, 255, 0.5)',
+        }} />"#;
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn flags_hex_colored_shadow_on_dark() {
+        let src = r#"<div style={{
+            backgroundColor: '#0a0a0a',
+            boxShadow: '0 0 20px #0064ff',
+        }} />"#;
+        assert_eq!(run(src).len(), 1);
+    }
+}

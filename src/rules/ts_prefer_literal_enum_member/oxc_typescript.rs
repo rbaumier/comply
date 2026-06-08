@@ -72,3 +72,52 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn allows_string_literal() {
+        assert!(run_on(r#"enum E { A = "hello" }"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_number_literal() {
+        assert!(run_on("enum E { A = 1 }").is_empty());
+    }
+
+
+    #[test]
+    fn allows_no_initializer() {
+        assert!(run_on("enum E { A, B, C }").is_empty());
+    }
+
+
+    #[test]
+    fn flags_computed_expression() {
+        let diags = run_on("enum E { A = getValue() }");
+        assert_eq!(diags.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_reference_to_variable() {
+        let diags = run_on("const x = 1; enum E { A = x }");
+        assert_eq!(diags.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_negative_number() {
+        assert!(run_on("enum E { A = -1 }").is_empty());
+    }
+}

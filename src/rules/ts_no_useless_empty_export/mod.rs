@@ -1,8 +1,6 @@
 //! ts-no-useless-empty-export — flag `export {}` when other exports exist.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

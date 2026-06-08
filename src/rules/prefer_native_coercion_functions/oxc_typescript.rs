@@ -114,3 +114,77 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_map_arrow_number() {
+        let d = run_on("arr.map(x => Number(x))");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("Number"));
+    }
+
+
+    #[test]
+    fn flags_map_arrow_string_parens() {
+        let d = run_on("arr.map((s) => String(s))");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("String"));
+    }
+
+
+    #[test]
+    fn flags_map_arrow_boolean() {
+        let d = run_on("arr.filter(v => Boolean(v))");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("Boolean"));
+    }
+
+
+    #[test]
+    fn flags_block_body_return() {
+        let d = run_on("arr.map(x => { return Number(x); })");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_direct_usage() {
+        assert!(run_on("arr.map(Number)").is_empty());
+    }
+
+
+    #[test]
+    fn allows_different_param() {
+        assert!(run_on("arr.map(x => Number(y))").is_empty());
+    }
+
+
+    #[test]
+    fn allows_multiple_args() {
+        assert!(run_on("arr.map(x => Number(x, 10))").is_empty());
+    }
+
+
+    #[test]
+    fn flags_bigint_coercion() {
+        let d = run_on("items.map(v => BigInt(v))");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("BigInt"));
+    }
+
+
+    #[test]
+    fn allows_non_coercion_function() {
+        assert!(run_on("arr.map(x => parseInt(x))").is_empty());
+    }
+}

@@ -117,3 +117,84 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_for_with_unconditional_return() {
+        let src = r#"function f() {
+    for (let i = 0; i < 10; i++) {
+        doWork();
+        return;
+    }
+}"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_while_with_unconditional_break() {
+        let src = r#"function f() {
+    while (true) {
+        doWork();
+        break;
+    }
+}"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_for_in_with_unconditional_throw() {
+        let src = r#"function f(obj: Record<string, unknown>) {
+    for (const k in obj) {
+        throw new Error(k);
+    }
+}"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_loop_with_conditional_break() {
+        let src = r#"function f() {
+    for (let i = 0; i < 10; i++) {
+        if (cond(i)) break;
+        doWork(i);
+    }
+}"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_loop_with_continue() {
+        let src = r#"function f() {
+    for (let i = 0; i < 10; i++) {
+        if (i === 0) continue;
+        return;
+    }
+}"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_normal_loop() {
+        let src = r#"function f() {
+    for (let i = 0; i < 10; i++) {
+        doWork(i);
+    }
+}"#;
+        assert!(run_on(src).is_empty());
+    }
+}

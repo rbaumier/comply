@@ -80,3 +80,36 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_junction_without_pk() {
+        let src = "const t = pgTable('users_roles', {\n  userId: integer('user_id').references(() => users.id),\n  roleId: integer('role_id').references(() => roles.id),\n})";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_junction_with_composite_pk() {
+        let src = "const t = pgTable('users_roles', {\n  userId: integer('user_id').references(() => users.id),\n  roleId: integer('role_id').references(() => roles.id),\n}, (t) => ({ pk: primaryKey({ columns: [t.userId, t.roleId] }) }))";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_junction() {
+        let src =
+            "const t = pgTable('users', { id: serial('id').primaryKey(), name: text('name') })";
+        assert!(run(src).is_empty());
+    }
+}

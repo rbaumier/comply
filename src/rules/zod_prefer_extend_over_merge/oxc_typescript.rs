@@ -68,3 +68,41 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_merge_on_z_object() {
+        assert_eq!(
+            run("const S = z.object({ a: z.string() }).merge(Other);").len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn flags_merge_on_schema_variable() {
+        assert_eq!(run("const S = UserSchema.merge(AdminSchema);").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_extend() {
+        assert!(run("const S = UserSchema.extend({ role: z.string() });").is_empty());
+    }
+
+
+    #[test]
+    fn ignores_unrelated_merge() {
+        assert!(run("const r = _.merge(a, b);").is_empty());
+    }
+}

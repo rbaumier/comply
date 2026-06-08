@@ -190,3 +190,45 @@ fn collect_from_stmt(stmt: &Statement, source: &str, out: &mut Vec<ReturnKind>) 
         _ => {}
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_mixed_promise_resolve_and_sync() {
+        let src = "function f(x: boolean) { if (x) return 1; else return Promise.resolve(2); }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_mixed_cached_and_then() {
+        let src = "function f(x: boolean) { if (x) return cached; return fetch('/').then(r => r.json()); }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_all_sync() {
+        assert!(run("function f(x: number) { return x ? 1 : 2; }").is_empty());
+    }
+
+
+    #[test]
+    fn allows_async_function() {
+        assert!(run("async function f() { return 1; }").is_empty());
+    }
+
+
+    #[test]
+    fn allows_all_promise() {
+        assert!(run("function f() { return fetch('/').then(r => r.json()); }").is_empty());
+    }
+}

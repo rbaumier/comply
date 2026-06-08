@@ -69,3 +69,56 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_framework(source, &Check, "elysia")
+    }
+
+
+    #[test]
+    fn flags_set_headers_in_after() {
+        let src = "import { Elysia } from 'elysia';\napp.onAfterResponse(({ set }) => {\n  set.headers['x-trace'] = 'late';\n});";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_set_status_in_after() {
+        let src = "import { Elysia } from 'elysia';\napp.onAfterResponse(({ set }) => {\n  set.status = 500;\n});";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_return_in_after() {
+        let src = "import { Elysia } from 'elysia';\napp.onAfterResponse(() => {\n  return { rewritten: true };\n});";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_logging_in_after() {
+        let src = "import { Elysia } from 'elysia';\napp.onAfterResponse(({ request }) => {\n  console.log(request.url);\n});";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_read_only_set_status() {
+        let src = "import { Elysia } from 'elysia';\napp.onAfterResponse(({ set }) => {\n  const status = typeof set.status === 'number' ? set.status : 200;\n  counter.add(1, { status });\n});";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_elysia_files() {
+        let src = "app.onAfterResponse(({ set }) => set.status = 500);";
+        assert!(crate::rules::test_helpers::run_oxc_ts(src, &Check).is_empty());
+    }
+}

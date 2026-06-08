@@ -133,3 +133,28 @@ impl OxcCheck for Check {
         diagnostics
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(src, &Check)
+    }
+
+
+    #[test]
+    fn allows_exported_fn_with_param_and_returns() {
+        let src = "/**\n * @param x - input\n * @returns output\n */\nexport function f(x: number): number { return x; }";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_exported_fn() {
+        let src = "/**\n * internal\n */\nfunction f(x: number): number { return x; }";
+        assert!(run(src).is_empty());
+    }
+}

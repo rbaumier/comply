@@ -51,3 +51,64 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rules::test_helpers::run_oxc_ts_with_path;
+
+
+
+    fn run_on_path(source: &str, path: &str) -> Vec<Diagnostic> {
+        run_oxc_ts_with_path(source, &Check, path)
+    }
+
+
+    #[test]
+    fn flags_import_of_test_file_from_prod() {
+        let d = run_on_path("import { fixture } from './foo.test.ts';", "src/foo.ts");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("foo.test.ts"));
+    }
+
+
+    #[test]
+    fn flags_import_of_spec_file_from_prod() {
+        let d = run_on_path("import { stub } from './bar.spec.ts';", "src/bar.ts");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_import_from_tests_folder() {
+        let d = run_on_path(
+            "import { helper } from './__tests__/helpers';",
+            "src/mod.ts",
+        );
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_import_from_mocks_folder() {
+        let d = run_on_path("import svc from './__mocks__/service';", "src/app.ts");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_test_file_importing_other_test_file() {
+        let d = run_on_path(
+            "import { fixture } from './util.test.ts';",
+            "src/foo.test.ts",
+        );
+        assert!(d.is_empty());
+    }
+
+
+    #[test]
+    fn allows_normal_import() {
+        let d = run_on_path("import { foo } from './foo';", "src/bar.ts");
+        assert!(d.is_empty());
+    }
+}

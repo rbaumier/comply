@@ -71,4 +71,48 @@ mod tests {
         let src = r#"const cls = "truncate flex items-center";"#;
         assert!(run_on(src).is_empty());
     }
+
+
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(src, &Check)
+    }
+
+
+    #[test]
+    fn flags_truncate_bare_with_sql_signal() {
+        // `TRUNCATE <ident>` alone is ambiguous with Tailwind's
+        // `truncate <class>` strings. We require an extra SQL signal
+        // (here, the trailing `;`) to confirm intent.
+        let src = r#"const q = "TRUNCATE users;";"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_truncate_with_cascade() {
+        let src = r#"const q = "TRUNCATE users CASCADE";"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_tailwind_truncate_in_jsx_classname() {
+        let src = r#"const el = <span className="truncate">hello</span>;"#;
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_tailwind_arbitrary_variant_truncate() {
+        let src = r#"const cls = "[&>span:last-child]:truncate";"#;
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_tailwind_truncate_in_template_literal() {
+        let src = r#"const cls = `truncate text-sm text-gray-500`;"#;
+        assert!(run(src).is_empty());
+    }
 }

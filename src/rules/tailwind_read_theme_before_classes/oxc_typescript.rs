@@ -153,3 +153,102 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diagnostic::Diagnostic;
+    use crate::rules::test_helpers::run_oxc_ts_with_path;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_arbitrary_padding_without_theme_read() {
+        assert_eq!(
+            run(r#"export const A = () => <div className="p-[13px]" />;"#).len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn flags_arbitrary_color_without_theme_read() {
+        assert_eq!(
+            run(r#"export const A = () => <div className="bg-[#ff0000]" />;"#).len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn allows_arbitrary_when_file_imports_tailwind_config() {
+        let src = r#"
+            import tailwindConfig from '../../tailwind.config';
+            export const A = () => <div className="p-[13px]" />;
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_arbitrary_when_file_calls_resolve_config() {
+        let src = r#"
+            import resolveConfig from 'tailwindcss/resolveConfig';
+            const full = resolveConfig(config);
+            export const A = () => <div className="p-[13px]" />;
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_arbitrary_when_file_uses_theme_helper() {
+        let src = r#"
+            const spacing = theme('spacing.4');
+            export const A = () => <div className="p-[13px]" />;
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_token_classes() {
+        assert!(run(r#"export const A = () => <div className="p-4 bg-blue-500" />;"#).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_arbitrary_values_outside_classname() {
+        // The arbitrary-looking text sits in a SQL string, not a className.
+        let src = r#"export const q = "SELECT * FROM t WHERE p = 'p-[13px]'";"#;
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_css_variable_in_arbitrary_value() {
+        let src = r#"export const A = () => <div className="w-[var(--sidebar-width)]" />;"#;
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_bare_custom_property_tailwind_v4() {
+        let src = r#"export const A = () => <div className="w-[--sidebar-width]" />;"#;
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_shadcn_ui_components() {
+        use crate::rules::test_helpers::run_oxc_ts_with_path;
+        let src = r#"export const A = <div className="ring-[3px]" />;"#;
+        let d = run_oxc_ts_with_path(src, &Check, "src/components/ui/checkbox.tsx");
+        assert!(d.is_empty());
+    }
+}

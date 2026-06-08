@@ -74,3 +74,11 @@ impl OxcCheck for Check {
         diagnostics
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rules::backend::{AstCheck, CheckCtx};
+    use std::path::Path;
+
+}

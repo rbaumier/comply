@@ -65,3 +65,35 @@ impl OxcCheck for Check {
         }]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn allows_with_export_empty() {
+        let src = "declare global { interface Window { foo: string; } }\nexport {};";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_with_import() {
+        let src = "import './side-effect';\ndeclare global { interface Window { foo: string; } }";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_file_without_declare_global() {
+        let src = "const x = 1;";
+        assert!(run(src).is_empty());
+    }
+}

@@ -93,4 +93,17 @@ mod tests {
         let src = "const a = `SELECT id FROM user WHERE email = $1`; const b = `INSERT INTO user (email) VALUES ($1) ON CONFLICT (email) DO NOTHING`;";
         assert!(run_on(src).is_empty());
     }
+
+
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(src, &Check)
+    }
+
+
+    #[test]
+    fn allows_different_tables() {
+        let src = "const a = `SELECT id FROM user`; const b = `INSERT INTO audit (x) VALUES (1)`;";
+        assert!(run(src).is_empty());
+    }
 }

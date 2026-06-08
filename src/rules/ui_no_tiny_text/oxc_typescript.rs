@@ -80,3 +80,51 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diagnostic::Diagnostic;
+
+
+
+    fn run(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_font_size_10() {
+        assert_eq!(run(r#"<span style={{ fontSize: 10 }} />"#).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_font_size_8() {
+        assert_eq!(run(r#"<span style={{ fontSize: 8 }} />"#).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_font_size_14() {
+        assert!(run(r#"<span style={{ fontSize: 14 }} />"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_font_size_12() {
+        assert!(run(r#"<span style={{ fontSize: 12 }} />"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_string_rem_value() {
+        assert!(run(r#"<span style={{ fontSize: '0.8rem' }} />"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_non_style_object() {
+        assert!(run(r#"const config = { fontSize: 10 };"#).is_empty());
+    }
+}

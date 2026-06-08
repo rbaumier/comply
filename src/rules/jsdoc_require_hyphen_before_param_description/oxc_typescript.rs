@@ -98,3 +98,35 @@ impl OxcCheck for Check {
         diagnostics
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(src, &Check)
+    }
+
+
+    #[test]
+    fn allows_hyphen_separator() {
+        let src = "/**\n * @param {string} id - the user id\n */\n";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_param_without_description() {
+        let src = "/**\n * @param {string} id\n */\n";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_param_tags() {
+        let src = "/**\n * @returns {string} the id\n */\n";
+        assert!(run(src).is_empty());
+    }
+}

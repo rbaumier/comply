@@ -149,3 +149,56 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+    #[test]
+    fn flags_raw_error_in_catch() {
+        let src = "const r = Result.tryPromise({ try: () => fetch('/'), catch: (e) => new Error('boom') });";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_tagged_error_in_catch() {
+        let src = "const r = Result.tryPromise({ try: () => fetch('/'), catch: (e) => new NetworkError({ cause: e, message: 'boom' }) });";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_string_in_catch() {
+        let src = "const r = Result.tryPromise({ try: () => fetch('/'), catch: (e) => 'boom' });";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_plain_object_in_catch() {
+        let src = "const r = Result.tryPromise({ try: () => fetch('/'), catch: (e) => ({ message: 'boom' }) });";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_raw_error_variable_in_catch() {
+        let src = "const r = Result.tryPromise({ try: () => fetch('/'), catch: (e) => e });";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_error_call_without_new() {
+        let src =
+            "const r = Result.tryPromise({ try: () => fetch('/'), catch: (e) => Error('boom') });";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_tagged_error_with_block_body() {
+        let src = "const r = Result.tryPromise({ try: () => fetch('/'), catch: (e) => { return new NetworkError({ cause: e }); } });";
+        assert!(run(src).is_empty());
+    }
+}

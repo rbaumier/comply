@@ -205,4 +205,15 @@ mod tests {
         let diags = run_oxc_in_project(&file, source);
         assert_eq!(diags.len(), 1, "unlisted dep in flat project must be flagged, got {diags:?}");
     }
+
+    use crate::rules::backend::{AstCheck, CheckCtx};
+
+
+    #[test]
+    fn root_package_name_collapses_scoped_subpath() {
+        assert_eq!(root_package_name("@base-ui/react/button"), "@base-ui/react");
+        assert_eq!(root_package_name("@scope/pkg"), "@scope/pkg");
+        assert_eq!(root_package_name("react-dom/client"), "react-dom");
+        assert_eq!(root_package_name("react"), "react");
+    }
 }

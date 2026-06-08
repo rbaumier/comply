@@ -64,3 +64,45 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_z_string_uuid() {
+        assert_eq!(run_on("const s = z.string().uuid();").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_z_uuid() {
+        assert!(run_on("const s = z.uuid();").is_empty());
+    }
+
+
+    #[test]
+    fn allows_z_string_email() {
+        assert!(run_on("const s = z.string().email();").is_empty());
+    }
+
+
+    #[test]
+    fn flags_in_object_schema() {
+        let src = "const User = z.object({ id: z.string().uuid() });";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_bare_z_string() {
+        assert!(run_on("const s = z.string();").is_empty());
+    }
+}

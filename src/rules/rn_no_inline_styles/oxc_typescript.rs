@@ -47,3 +47,41 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx_with_framework(s, &Check, "react-native")
+    }
+
+
+    #[test]
+    fn flags_inline_style() {
+        let src = "const x = <View style={{ padding: 8 }} />;";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_stylesheet_reference() {
+        let src = "const x = <View style={styles.container} />;";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_array_style_with_refs() {
+        let src = "const x = <View style={[styles.a, styles.b]} />;";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_react_native_projects() {
+        let src = "const x = <div style={{ padding: 8 }} />;";
+        assert!(crate::rules::test_helpers::run_oxc_tsx(src, &Check).is_empty());
+    }
+}

@@ -294,3 +294,73 @@ fn classify_return_expr(expr: &Expression, source: &str) -> ReturnKind {
         _ => ReturnKind::Unknown,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_mixed_return_type() {
+        let src = "function f(): string | Promise<string> { return 'x'; }";
+        let diags = run(src);
+        assert_eq!(diags.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_mixed_method_signature() {
+        let src = "interface I { run(): number | Promise<number>; }";
+        let diags = run(src);
+        assert_eq!(diags.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_pure_promise_return() {
+        let src = "function f(): Promise<string> { return Promise.resolve('x'); }";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_union_in_parameter() {
+        let src = "function f(x: string | Promise<string>): void {}";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn flags_unannotated_mixed_returns_new_promise() {
+        let src = "function f(x) { if (x) { return new Promise((r) => r(1)); } return 1; }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_unannotated_mixed_returns_promise_resolve() {
+        let src = "function f(x) { if (x) { return Promise.resolve(1); } return 2; }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_async_function_with_mixed_returns() {
+        // Async functions always wrap in a Promise; this is fine.
+        let src = "async function f(x) { if (x) { return Promise.resolve(1); } return 2; }";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_only_sync_returns() {
+        let src = "function f(x) { if (x) { return 1; } return 2; }";
+        assert!(run(src).is_empty());
+    }
+}

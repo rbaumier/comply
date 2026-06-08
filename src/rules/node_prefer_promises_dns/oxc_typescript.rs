@@ -68,3 +68,40 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_dns_lookup() {
+        let d = run_on("dns.lookup('example.com', cb);");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("dns.promises.lookup"));
+    }
+
+
+    #[test]
+    fn flags_dns_resolve() {
+        assert_eq!(run_on("dns.resolve('example.com', cb);").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_dns_promises() {
+        assert!(run_on("dns.promises.lookup('example.com');").is_empty());
+    }
+
+
+    #[test]
+    fn allows_other_object() {
+        assert!(run_on("myDns.lookup('example.com', cb);").is_empty());
+    }
+}

@@ -1,8 +1,6 @@
 //! no-auth-token-in-localstorage — XSS exfiltration risk.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::rules::backend::Backend;

@@ -1,8 +1,6 @@
 //! zod-validate-env-at-startup — flag unvalidated `process.env.X` access in Zod projects.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

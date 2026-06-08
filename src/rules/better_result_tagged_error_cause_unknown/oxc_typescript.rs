@@ -64,3 +64,25 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+    #[test]
+    fn flags_cause_error_type() {
+        let src = "class E extends TaggedError('E') { cause: Error = new Error(); }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_cause_unknown() {
+        let src = "class E extends TaggedError('E') { cause: unknown = undefined; }";
+        assert!(run(src).is_empty());
+    }
+}

@@ -1,8 +1,6 @@
 //! angular-prefer-standalone — prefer standalone components over NgModule.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

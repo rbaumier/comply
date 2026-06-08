@@ -77,3 +77,37 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diagnostic::Diagnostic;
+    use super::Check;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_missing_handler() {
+        let src = "betterAuth({ emailVerification: { sendOnSignUp: true } })";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_with_handler() {
+        let src = "betterAuth({ emailVerification: { sendOnSignUp: true, sendVerificationEmail: async (u) => {} } })";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_when_disabled() {
+        let src = "betterAuth({ emailVerification: { sendOnSignUp: false } })";
+        assert!(run(src).is_empty());
+    }
+}

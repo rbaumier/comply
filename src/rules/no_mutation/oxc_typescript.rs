@@ -665,6 +665,268 @@ mod tests {
         "#;
         assert_eq!(run(src).len(), 1);
     }
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_property_mutation_on_const() {
+        let d = run_on("const obj = {}; obj.prop = 1;");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_subscript_mutation_on_const() {
+        assert_eq!(run_on("const obj = {}; obj['prop'] = 1;").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_compound_assignment_on_const() {
+        assert_eq!(run_on("const c = { n: 0 }; c.n += 1;").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_nested_member_on_const() {
+        assert_eq!(run_on("const a = { b: { c: 0 } }; a.b.c = 1;").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_mutation_on_exported_const() {
+        assert_eq!(run_on("export const obj = {}; obj.x = 1;").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_array_push_on_const() {
+        assert_eq!(run_on("const arr = []; arr.push(1);").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_array_pop_on_const() {
+        assert_eq!(run_on("const arr = [1]; arr.pop();").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_array_splice_on_const() {
+        assert_eq!(run_on("const arr = [1, 2, 3]; arr.splice(0, 1);").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_array_sort_on_const() {
+        assert_eq!(run_on("const arr = [3, 1, 2]; arr.sort();").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_array_reverse_on_const() {
+        assert_eq!(run_on("const arr = [1, 2]; arr.reverse();").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_map_set_on_const() {
+        assert!(run_on("const map = new Map(); map.set('a', 1);").is_empty());
+    }
+
+
+    #[test]
+    fn allows_map_delete_on_const() {
+        assert!(run_on("const map = new Map(); map.delete('a');").is_empty());
+    }
+
+
+    #[test]
+    fn allows_set_add_on_const() {
+        assert!(run_on("const set = new Set(); set.add(1);").is_empty());
+    }
+
+
+    #[test]
+    fn allows_set_clear_on_const() {
+        assert!(run_on("const set = new Set([1]); set.clear();").is_empty());
+    }
+
+
+    #[test]
+    fn flags_nested_array_push() {
+        assert_eq!(
+            run_on("const obj = { items: [] }; obj.items.push(1);").len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn flags_increment_on_const_property() {
+        assert_eq!(run_on("const obj = { n: 0 }; obj.n++;").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_decrement_on_const_property() {
+        assert_eq!(run_on("const obj = { n: 0 }; --obj.n;").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_delete_on_const_property() {
+        assert_eq!(run_on("const obj = { a: 1 }; delete obj.a;").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_object_assign_on_const() {
+        assert_eq!(
+            run_on("const obj = {}; Object.assign(obj, { a: 1 });").len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn flags_object_define_property_on_const() {
+        assert_eq!(
+            run_on("const obj = {}; Object.defineProperty(obj, 'a', { value: 1 });").len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn allows_ref_current_assignment() {
+        assert!(
+            run_on("const timerRef = useRef(null); timerRef.current = setTimeout(() => {}, 100);")
+                .is_empty()
+        );
+        assert!(
+            run_on("const newKeyRef = useRef(null); newKeyRef.current = data?.key;").is_empty()
+        );
+    }
+
+
+    #[test]
+    fn allows_mutation_on_let_binding() {
+        assert!(run_on("let obj = {}; obj.prop = 1;").is_empty());
+    }
+
+
+    #[test]
+    fn allows_array_push_on_let() {
+        assert!(run_on("let arr = []; arr.push(1);").is_empty());
+    }
+
+
+    #[test]
+    fn allows_plain_reassignment() {
+        assert!(run_on("let x = 1; x = 2;").is_empty());
+    }
+
+
+    #[test]
+    fn allows_mutation_on_unknown_binding() {
+        assert!(run_on("function f(obj: { x: number }) { obj.x = 1; }").is_empty());
+    }
+
+
+    #[test]
+    fn allows_push_on_parameter() {
+        assert!(run_on("function f(arr: number[]) { arr.push(1); }").is_empty());
+    }
+
+
+    #[test]
+    fn allows_new_object_via_spread() {
+        assert!(run_on("const obj = { a: 1 }; const next = { ...obj, b: 2 };").is_empty());
+    }
+
+
+    #[test]
+    fn allows_non_mutating_methods() {
+        assert!(run_on("const arr = [1, 2, 3]; const x = arr.map(n => n * 2);").is_empty());
+        assert!(run_on("const arr = [1, 2, 3]; const x = arr.filter(n => n > 1);").is_empty());
+        assert!(run_on("const arr = [1, 2, 3]; const x = arr.slice(0, 1);").is_empty());
+    }
+
+
+    #[test]
+    fn allows_object_assign_to_new_object() {
+        assert!(
+            run_on("const obj = {}; const next = Object.assign({}, obj, { a: 1 });").is_empty()
+        );
+    }
+
+
+    #[test]
+    fn allows_object_assign_on_const_arrow_function() {
+        // Attaching metadata to a named handler — not a data mutation (issue #364).
+        assert!(run_on(
+            r#"const handler = async (ctx) => { return ctx.body; };
+Object.assign(handler, { displayName: "myHandler" });"#
+        )
+        .is_empty());
+    }
+
+
+    #[test]
+    fn allows_object_assign_on_const_function_declaration() {
+        assert!(run_on(
+            r#"function handler(ctx) { return ctx.body; }
+Object.assign(handler, { displayName: "myHandler" });"#
+        )
+        .is_empty());
+    }
+
+
+    #[test]
+    fn still_flags_object_assign_on_const_plain_object() {
+        // Object target — must still be flagged.
+        assert_eq!(
+            run_on("const obj = {}; Object.assign(obj, { a: 1 });").len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn allows_const_alias_mutation_inside_before_send() {
+        // const alias of nested property mutated inside an inline beforeSend hook
+        let src = r#"
+            Sentry.init({
+                beforeSend: (event) => {
+                    const req = event.request;
+                    if (req) req.url = scrubSensitiveQueryFromUrl(req.url);
+                    return event;
+                },
+            });
+        "#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_const_alias_mutation_in_named_function_registered_as_before_send() {
+        // Named function with const alias — registered as beforeSend — issue #581
+        let src = r#"
+            function scrubEvent(event) {
+                const req = event.request;
+                if (req) req.url = scrub(req.url);
+                return event;
+            }
+            Sentry.init({ beforeSend: scrubEvent });
+        "#;
+        assert!(run_on(src).is_empty());
+    }
 }
 
 fn report(diagnostics: &mut Vec<Diagnostic>, ctx: &CheckCtx, span_start: u32, root: &str, kind: &str) {

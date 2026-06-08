@@ -4,8 +4,6 @@
 //! string route name bypasses that type-checking.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

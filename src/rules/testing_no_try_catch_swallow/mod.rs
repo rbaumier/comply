@@ -2,8 +2,6 @@
 //! `test()` / `it()` callback where the catch clause is empty.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

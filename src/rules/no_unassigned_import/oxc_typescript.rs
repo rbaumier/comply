@@ -53,3 +53,38 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    #[test]
+    fn flags_side_effect_import() {
+        let d = crate::rules::test_helpers::run_oxc_ts("import 'polyfill';", &Check);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("polyfill"));
+    }
+
+
+    #[test]
+    fn allows_css_import() {
+        let d = crate::rules::test_helpers::run_oxc_ts("import './styles.css';", &Check);
+        assert!(d.is_empty());
+    }
+
+
+    #[test]
+    fn allows_named_import() {
+        let d = crate::rules::test_helpers::run_oxc_ts("import { foo } from 'bar';", &Check);
+        assert!(d.is_empty());
+    }
+
+
+    #[test]
+    fn flags_double_quoted_side_effect() {
+        let d = crate::rules::test_helpers::run_oxc_ts(r#"import "reflect-metadata";"#, &Check);
+        assert_eq!(d.len(), 1);
+    }
+}

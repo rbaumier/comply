@@ -49,3 +49,41 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_match_with_regex() {
+        let d = run_on("const m = str.match(/foo/);");
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].rule_id, "prefer-regexp-exec");
+    }
+
+
+    #[test]
+    fn flags_match_with_complex_regex() {
+        let d = run_on("const m = input.match(/^[a-z]+$/i);");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_match_with_variable() {
+        assert!(run_on("const m = str.match(pattern);").is_empty());
+    }
+
+
+    #[test]
+    fn allows_exec() {
+        assert!(run_on("const m = /foo/.exec(str);").is_empty());
+    }
+}

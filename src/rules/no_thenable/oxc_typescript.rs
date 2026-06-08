@@ -180,3 +180,80 @@ fn is_then_key(key: &PropertyKey) -> bool {
         _ => false,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_object_with_then_method() {
+        let d = run_on("const obj = { then() {} };");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("object"));
+    }
+
+
+    #[test]
+    fn flags_object_with_then_property() {
+        let d = run_on("const obj = { then: function() {} };");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("object"));
+    }
+
+
+    #[test]
+    fn flags_class_with_then_method() {
+        let d = run_on("class Foo { then() {} }");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("class"));
+    }
+
+
+    #[test]
+    fn flags_class_with_then_field() {
+        let d = run_on("class Foo { then = 42; }");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("class"));
+    }
+
+
+    #[test]
+    fn flags_class_with_static_then() {
+        let d = run_on("class Foo { static then() {} }");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_object_without_then() {
+        assert!(run_on("const obj = { foo() {} };").is_empty());
+    }
+
+
+    #[test]
+    fn allows_class_without_then() {
+        assert!(run_on("class Foo { bar() {} }").is_empty());
+    }
+
+
+    #[test]
+    fn flags_exported_function_then() {
+        let d = run_on("export function then() {}");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("export"));
+    }
+
+
+    #[test]
+    fn flags_export_specifier_then() {
+        let d = run_on("const then = 1; export { then };");
+        assert_eq!(d.len(), 1);
+    }
+}

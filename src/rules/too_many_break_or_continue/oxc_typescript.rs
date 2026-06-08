@@ -110,3 +110,42 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_two_breaks() {
+        let src = "for (const x of arr) {\n  if (a) break;\n  if (b) break;\n}";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_break_and_continue() {
+        let src = "while (true) {\n  if (a) continue;\n  if (b) break;\n}";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_single_break() {
+        let src = "for (const x of arr) {\n  if (a) break;\n  doWork();\n}";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_no_break() {
+        let src = "for (const x of arr) {\n  doWork(x);\n}";
+        assert!(run_on(src).is_empty());
+    }
+}

@@ -116,3 +116,34 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_method_before_field() {
+        let diags = run_on("class Foo {\n  bar() {}\n  x = 1;\n}");
+        assert_eq!(diags.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_correct_order() {
+        assert!(run_on("class Foo {\n  x = 1;\n  constructor() {}\n  bar() {}\n}").is_empty());
+    }
+
+
+    #[test]
+    fn flags_constructor_before_field() {
+        let diags = run_on("class Foo {\n  constructor() {}\n  x = 1;\n}");
+        assert_eq!(diags.len(), 1);
+    }
+}

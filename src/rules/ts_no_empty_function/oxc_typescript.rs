@@ -209,4 +209,36 @@ mod tests {
         let diags = run_oxc_tsx(src, &Check);
         assert_eq!(diags.len(), 1);
     }
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_empty_function() {
+        let diags = run_on("function foo() {}");
+        assert_eq!(diags.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_empty_arrow_function() {
+        let diags = run_on("const foo = () => {};");
+        assert_eq!(diags.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_function_with_body() {
+        assert!(run_on("function foo() { return 1; }").is_empty());
+    }
+
+
+    #[test]
+    fn allows_function_with_comment() {
+        assert!(run_on("function foo() { /* intentional */ }").is_empty());
+    }
 }

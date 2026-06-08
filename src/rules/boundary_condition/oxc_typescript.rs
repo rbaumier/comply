@@ -341,4 +341,7 @@ mod tests {
         let src = "if (arr.length > 0) { doSomething(); } const x = arr[0];";
         assert_eq!(run_on(src).len(), 1);
     }
+
+    use crate::diagnostic::Diagnostic;
+    use super::*;
 }

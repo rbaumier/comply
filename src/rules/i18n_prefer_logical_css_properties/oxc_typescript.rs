@@ -104,3 +104,80 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(src, &Check)
+    }
+
+
+    fn run_oxc_tsx(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(src, &Check)
+    }
+
+
+    #[test]
+    fn flags_margin_left_in_template_literal() {
+        assert_eq!(run("const s = css`margin-left: 10px;`").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_text_align_left_in_string() {
+        assert_eq!(run(r#"const s = "text-align: left;""#).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_border_right_in_template() {
+        assert_eq!(run("const s = css`border-right: 1px solid;`").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_logical_margin() {
+        assert!(run("const s = css`margin-inline-start: 10px;`").is_empty());
+    }
+
+
+    #[test]
+    fn allows_logical_text_align() {
+        assert!(run("const s = css`text-align: start;`").is_empty());
+    }
+
+
+    #[test]
+    fn allows_commented_line() {
+        // Comments are not string nodes, so the AST walk skips them.
+        assert!(run("// margin-left: 10px;\nconst x = 1;").is_empty());
+    }
+
+
+    #[test]
+    fn allows_identifier_resembling_property() {
+        // `marginLeft` as an identifier (camelCase) is not a physical
+        // CSS property literal — the rule only fires inside strings.
+        assert!(run("const marginLeft = 10;").is_empty());
+    }
+
+
+    #[test]
+    fn flags_inside_tsx_styled_template() {
+        let src = r"const Box = styled.div`padding-left: 8px;`;";
+        assert_eq!(run_oxc_tsx(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_multiline_template() {
+        let src = "const s = css`\n  color: red;\n  margin-right: 5px;\n`;";
+        let diags = run(src);
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].line, 3);
+    }
+}

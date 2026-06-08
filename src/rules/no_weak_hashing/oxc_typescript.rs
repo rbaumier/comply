@@ -90,3 +90,56 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_md5_single_quotes() {
+        let d = run_on("const h = crypto.createHash('md5');");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("md5"));
+    }
+
+
+    #[test]
+    fn flags_sha1_double_quotes() {
+        let d = run_on("const h = crypto.createHash(\"sha1\");");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("sha1"));
+    }
+
+
+    #[test]
+    fn flags_md5_function() {
+        let d = run_on("const hash = MD5(data);");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_sha1_function() {
+        let d = run_on("const hash = SHA1(data);");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_sha256() {
+        assert!(run_on("const h = crypto.createHash('sha256');").is_empty());
+    }
+
+
+    #[test]
+    fn allows_non_hash_call() {
+        assert!(run_on("const x = foo('md5');").is_empty());
+    }
+}

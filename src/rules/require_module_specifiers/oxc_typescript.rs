@@ -68,3 +68,48 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_import_with_empty_specifiers() {
+        let diags = run_on("import {} from './module';");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("import"));
+    }
+
+
+    #[test]
+    fn flags_export_with_empty_specifiers() {
+        let diags = run_on("export {} from './module';");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("export"));
+    }
+
+
+    #[test]
+    fn allows_import_with_specifiers() {
+        assert!(run_on("import { foo } from './module';").is_empty());
+    }
+
+
+    #[test]
+    fn allows_side_effect_import() {
+        assert!(run_on("import './module';").is_empty());
+    }
+
+
+    #[test]
+    fn allows_default_import() {
+        assert!(run_on("import foo from './module';").is_empty());
+    }
+}

@@ -73,3 +73,35 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_two_writes_no_transaction() {
+        let src = "import { PrismaClient } from '@prisma/client';\nconst prisma = new PrismaClient();\nasync function f() { await prisma.user.create({ data: {} }); await prisma.post.create({ data: {} }); }";
+        assert!(!run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_writes_in_transaction() {
+        let src = "import { PrismaClient } from '@prisma/client';\nconst prisma = new PrismaClient();\nasync function f() { await prisma.$transaction([prisma.user.create({ data: {} }), prisma.post.create({ data: {} })]); }";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_single_write() {
+        let src = "import { PrismaClient } from '@prisma/client';\nconst prisma = new PrismaClient();\nasync function f() { await prisma.user.create({ data: {} }); }";
+        assert!(run(src).is_empty());
+    }
+}

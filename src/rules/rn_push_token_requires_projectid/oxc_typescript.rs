@@ -77,3 +77,41 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_no_args() {
+        let src = "await Notifications.getExpoPushTokenAsync();";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_empty_object() {
+        let src = "await Notifications.getExpoPushTokenAsync({});";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_with_project_id() {
+        let src = "await Notifications.getExpoPushTokenAsync({ projectId: 'abc' });";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_with_shorthand_project_id() {
+        let src = "await Notifications.getExpoPushTokenAsync({ projectId });";
+        assert!(run(src).is_empty());
+    }
+}

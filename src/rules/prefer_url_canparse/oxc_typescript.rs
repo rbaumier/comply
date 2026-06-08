@@ -62,3 +62,53 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+    fn run(code: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(code, &Check)
+    }
+
+
+    #[test]
+    fn flags_try_catch_url_validation() {
+        let code = r#"
+            function isValidUrl(url) {
+                try { new URL(url); return true; }
+                catch { return false; }
+            }
+        "#;
+        assert_eq!(run(code).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_try_catch_return_null() {
+        let code = r#"
+            function parseUrl(url) {
+                try { return new URL(url); }
+                catch { return null; }
+            }
+        "#;
+        assert_eq!(run(code).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_url_canparse() {
+        assert!(run("const valid = URL.canParse(url);").is_empty());
+    }
+
+
+    #[test]
+    fn allows_try_catch_without_validation_return() {
+        let code = r#"
+            try { const u = new URL(url); process(u); }
+            catch (e) { console.error(e); }
+        "#;
+        assert!(run(code).is_empty());
+    }
+}

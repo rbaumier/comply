@@ -198,3 +198,93 @@ fn should_flag(name: &str, inputs: &HashSet<String>, outputs: &HashSet<String>) 
         used_in && used_out
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_input_type_with_server_fields_when_used_as_param() {
+        let d = run(
+            "interface CreateUserInput { id: string; name: string; createdAt: string }\n\
+             function create(input: CreateUserInput) { return input; }",
+        );
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("CreateUserInput"));
+    }
+
+
+    #[test]
+    fn flags_bare_entity_used_as_both_input_and_output() {
+        let d = run(
+            "interface User { id: string; name: string; createdAt: string }\n\
+             function save(u: User): User { return u; }",
+        );
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_type_alias_request_with_server_fields_when_used_as_param() {
+        let d = run(
+            "type UpdateOrderRequest = { id: string; total: number; updatedAt: string };\n\
+             function upd(r: UpdateOrderRequest) { return r; }",
+        );
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_response_type_with_server_fields() {
+        // Response suffix used as return type only — that's fine.
+        assert!(
+            run(
+                "interface UserResponse { id: string; name: string; createdAt: string }\n\
+             function get(): UserResponse { return {} as UserResponse; }",
+            )
+            .is_empty()
+        );
+    }
+
+
+    #[test]
+    fn allows_input_without_server_fields() {
+        assert!(
+            run(
+                "interface CreateUserInput { name: string; email: string }\n\
+             function create(input: CreateUserInput) { return input; }",
+            )
+            .is_empty()
+        );
+    }
+
+
+    #[test]
+    fn allows_bare_entity_used_only_as_output() {
+        // REVIEW regression: a "bare entity" type with server fields used
+        // *only* in a return position should NOT be flagged — it is acting
+        // purely as an output DTO.
+        assert!(
+            run(
+                "interface User { id: string; name: string; createdAt: string }\n\
+             function getUser(): User { return {} as User; }",
+            )
+            .is_empty()
+        );
+    }
+
+
+    #[test]
+    fn allows_unused_declaration() {
+        // A standalone declaration with no input/output usage in the file
+        // shouldn't be flagged — we can't prove it's misused.
+        assert!(run("interface User { id: string; name: string; createdAt: string }").is_empty());
+    }
+}

@@ -80,3 +80,84 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    fn run_at(source: &str, path: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_path(source, &Check, path)
+    }
+
+
+    #[test]
+    fn flags_top_level_await() {
+        let d = run_on("const data = await fetch('/api');");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("Top-level"));
+    }
+
+
+    #[test]
+    fn allows_await_in_async_function() {
+        assert!(run_on("async function load() { const data = await fetch('/api'); }").is_empty());
+    }
+
+
+    #[test]
+    fn allows_await_in_arrow() {
+        assert!(run_on("const load = async () => { await fetch('/api'); };").is_empty());
+    }
+
+
+    #[test]
+    fn allows_top_level_await_in_test_file() {
+        let src = "const data = await fetch('/api');";
+        assert!(run_at(src, "src/foo.test.ts").is_empty());
+        assert!(run_at(src, "src/foo.spec.ts").is_empty());
+        assert!(run_at(src, "src/__tests__/foo.ts").is_empty());
+        assert!(run_at(src, "tests/foo.ts").is_empty());
+        assert!(run_at(src, "e2e/foo.ts").is_empty());
+    }
+
+
+    #[test]
+    fn allows_top_level_await_in_scripts_dir() {
+        let src = "const data = await fetch('/api');";
+        assert!(run_at(src, "scripts/seed.ts").is_empty());
+    }
+
+
+    #[test]
+    fn allows_top_level_await_in_shebang_script() {
+        let src = "#!/usr/bin/env tsx\nconst data = await fetch('/api');";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_top_level_await_in_listen_entrypoint() {
+        let src = r#"
+const port = await getPort();
+app.listen(port);
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_top_level_await_with_process_exit() {
+        let src = r#"
+const ok = await runMigration();
+if (!ok) process.exit(1);
+"#;
+        assert!(run_on(src).is_empty());
+    }
+}

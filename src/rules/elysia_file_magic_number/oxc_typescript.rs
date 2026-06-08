@@ -43,3 +43,42 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_framework(source, &Check, "elysia")
+    }
+
+
+    #[test]
+    fn flags_bare_z_file() {
+        let src = "import { Elysia } from 'elysia';\nimport { z } from 'zod';\napp.post('/upload', h, { body: z.object({ file: z.file() }) });";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_z_file_with_options() {
+        let src = "import { Elysia } from 'elysia';\nimport { z } from 'zod';\nconst s = z.file({ type: 'image/png' });";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_z_file_with_filetype_refine() {
+        let src = "import { Elysia } from 'elysia';\nimport { z } from 'zod';\nimport { fileType } from 'file-type';\nconst s = z.file().refine(b => fileType(b)?.mime === 'image/png');";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_elysia_files() {
+        let src = "import { z } from 'zod';\nconst s = z.file();";
+        assert!(crate::rules::test_helpers::run_oxc_ts(src, &Check).is_empty());
+    }
+}

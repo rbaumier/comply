@@ -76,3 +76,37 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_stylesheet_without_media() {
+        assert_eq!(
+            run(r#"const x = <link rel="stylesheet" href="/a.css" />;"#).len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn allows_stylesheet_with_media() {
+        assert!(
+            run(r#"const x = <link rel="stylesheet" href="/a.css" media="print" />;"#).is_empty()
+        );
+    }
+
+
+    #[test]
+    fn ignores_non_stylesheet_link() {
+        assert!(run(r#"const x = <link rel="preload" as="style" href="/a.css" />;"#).is_empty());
+    }
+}

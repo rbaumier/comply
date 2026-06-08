@@ -267,4 +267,141 @@ mod tests {
         let src = "function move(x, y) { return x + y; }";
         assert!(run(src).is_empty(), "{:?}", run(src));
     }
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    fn run_oxc_tsx(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(source, &Check)
+    }
+
+
+    #[test]
+    fn allows_conventional_const() {
+        // `x` is a conventional single-letter name in a variable_declarator
+        assert!(run_on("const x = 1;").is_empty());
+    }
+
+
+    #[test]
+    fn flags_unconventional_const() {
+        let diags = run_on("const q = 1;");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("`q`"));
+    }
+
+
+    #[test]
+    fn allows_long_const() {
+        assert!(run_on("const foo = 1;").is_empty());
+    }
+
+
+    #[test]
+    fn default_exceptions_allow_t_binding() {
+        // `t` is in `exceptions` in defaults.toml — must not be flagged.
+        assert!(run_on("const t = 1;").is_empty());
+    }
+
+
+    #[test]
+    fn allows_conventional_function_parameter() {
+        // `x` is conventional in a parameter
+        assert!(run_on("function fn(x: number) { return x; }").is_empty());
+    }
+
+
+    #[test]
+    fn flags_unconventional_function_parameter() {
+        let diags = run_on("function fn(q: number) { return q; }");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("`q`"));
+    }
+
+
+    #[test]
+    fn does_not_flag_usage_only_references() {
+        // `foo(x)` references `x`; the declaration of `x` is elsewhere,
+        // so we should NOT flag the call site.
+        assert!(run_on("function myFunction() { foo(x); }").is_empty());
+    }
+
+
+    #[test]
+    fn allows_conventional_destructuring_binding() {
+        assert!(run_on("const { x } = someObj;").is_empty());
+    }
+
+
+    #[test]
+    fn flags_unconventional_destructuring_binding() {
+        let diags = run_on("const { q } = someObj;");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("`q`"));
+    }
+
+
+    #[test]
+    fn default_exceptions_allow_t_destructuring() {
+        // The whole point of the `exceptions = ["t", "T"]` default:
+        // `const { t } = useTranslation()` must stay clean.
+        assert!(run_on("const { t } = useTranslation();").is_empty());
+    }
+
+
+    #[test]
+    fn allows_single_uppercase_class_name() {
+        // Single uppercase letter = conventional generic-style naming
+        assert!(run_on("class X {}").is_empty());
+    }
+
+
+    #[test]
+    fn allows_single_uppercase_interface_name() {
+        assert!(run_on("interface U {}").is_empty());
+    }
+
+
+    #[test]
+    fn allows_single_uppercase_type_alias() {
+        assert!(run_on("type U = number;").is_empty());
+    }
+
+
+    #[test]
+    fn tsx_allows_conventional_component_names() {
+        // `D` single uppercase = allowed, `x` conventional = allowed
+        assert!(run_oxc_tsx("const D = ({ x }: { x: string }) => <div>{x}</div>;").is_empty());
+    }
+
+
+    #[test]
+    fn allows_conventional_callback_arrow_params() {
+        assert!(run_on("arr.map((x) => x + 1);").is_empty());
+        assert!(run_on("arr.forEach((v, i) => console.log(v, i));").is_empty());
+    }
+
+
+    #[test]
+    fn allows_conventional_for_loop_variable() {
+        assert!(run_on("for (let i = 0; i < 10; i++) {}").is_empty());
+    }
+
+
+    #[test]
+    fn allows_underscore_discard() {
+        assert!(run_on("const _ = unused();").is_empty());
+    }
+
+
+    #[test]
+    fn message_names_the_identifier() {
+        let diags = run_on("const abc = 1;\nconst q = 2;");
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].message, "Identifier `q` is too short (< 2).");
+    }
 }

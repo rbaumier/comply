@@ -197,4 +197,53 @@ mod tests {
         let diags = run_oxc_tsx_with_path("const Button = () => 42;", &Check, "t.jsx");
         assert!(diags.is_empty(), "PascalCase arrow in .jsx should not flag, got {diags:#?}");
     }
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_top_level_const_arrow() {
+        let diags = run_on("const foo = () => 42;");
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].rule_id, "top-level-function");
+        assert!(diags[0].message.contains("foo"));
+    }
+
+
+    #[test]
+    fn flags_top_level_let_arrow() {
+        let diags = run_on("let foo = () => 42;");
+        assert_eq!(diags.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_function_declaration() {
+        assert!(run_on("function foo() { return 42; }").is_empty());
+    }
+
+
+    #[test]
+    fn allows_nested_arrow() {
+        // Inside a function body — not top-level.
+        let src = "function outer() { const inner = () => 1; return inner; }";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_non_function_top_level_const() {
+        assert!(run_on("const x = 42;").is_empty());
+    }
+
+
+    #[test]
+    fn allows_arrow_as_callback() {
+        let src = "[1, 2, 3].map(x => x * 2);";
+        assert!(run_on(src).is_empty());
+    }
 }

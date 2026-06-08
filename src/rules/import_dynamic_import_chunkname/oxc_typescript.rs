@@ -46,3 +46,46 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_framework(source, &Check, "webpack")
+    }
+
+
+    #[test]
+    fn flags_missing_chunkname() {
+        let d = run_on("const Foo = import('./foo');");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("chunkname"));
+    }
+
+
+    #[test]
+    fn allows_chunkname_comment() {
+        let src = r#"const Foo = import(/* webpackChunkName: "foo" */ './foo');"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn flags_wrong_comment() {
+        let d = run_on("const Foo = import(/* some comment */ './foo');");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn ignores_non_webpack_projects() {
+        let d = crate::rules::test_helpers::run_oxc_ts("const Foo = import('./foo');", &Check);
+        assert!(
+            d.is_empty(),
+            "webpack-only rule must be silent without webpack"
+        );
+    }
+}

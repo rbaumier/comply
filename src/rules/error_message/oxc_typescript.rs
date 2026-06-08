@@ -193,3 +193,105 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_new_error_without_message() {
+        let d = run_on("throw new Error();");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("Pass a message"));
+    }
+
+
+    #[test]
+    fn flags_empty_string_message() {
+        let d = run_on("throw new Error('');");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("empty string"));
+    }
+
+
+    #[test]
+    fn flags_non_string_message() {
+        let d = run_on("throw new TypeError(123);");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("should be a string"));
+    }
+
+
+    #[test]
+    fn flags_array_message() {
+        let d = run_on("throw new Error([]);");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("should be a string"));
+    }
+
+
+    #[test]
+    fn flags_object_message() {
+        let d = run_on("throw new Error({});");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("should be a string"));
+    }
+
+
+    #[test]
+    fn allows_string_message() {
+        assert!(run_on("throw new Error('Something went wrong');").is_empty());
+    }
+
+
+    #[test]
+    fn allows_template_string_message() {
+        assert!(run_on("throw new Error(`Expected ${type}`);").is_empty());
+    }
+
+
+    #[test]
+    fn allows_variable_message() {
+        assert!(run_on("throw new Error(message);").is_empty());
+    }
+
+
+    #[test]
+    fn flags_aggregate_error_without_message() {
+        // AggregateError(errors, message) — message is at index 1
+        let d = run_on("throw new AggregateError(errors);");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_aggregate_error_with_message() {
+        assert!(run_on("throw new AggregateError(errors, 'msg');").is_empty());
+    }
+
+
+    #[test]
+    fn allows_spread_arguments() {
+        assert!(run_on("throw new Error(...args);").is_empty());
+    }
+
+
+    #[test]
+    fn flags_call_without_new() {
+        let d = run_on("throw Error();");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_non_error_constructor() {
+        assert!(run_on("new MyClass();").is_empty());
+    }
+}

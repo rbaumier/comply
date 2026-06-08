@@ -114,4 +114,61 @@ mod tests {
         );
         assert!(d.is_empty(), "got {d:?}");
     }
+
+
+
+    fn run(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_const_then_return() {
+        let src = "function f() { const result = computeValue(); return result; }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_let_then_return() {
+        let src = "function f() { let x = a + b; return x; }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_assign_used_later() {
+        let src =
+            "function f() { const result = computeValue(); console.log(result); return result; }";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_different_variable_returned() {
+        let src = "function f() { const result = computeValue(); return other; }";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn does_not_flag_destructuring() {
+        let src = "function f() { const { a, b } = getValues(); return a; }";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn does_not_flag_method_chain_on_next_statement() {
+        // TS equivalent of the user's FP: declaration followed by a
+        // method chain on the same variable, then a return.
+        let src = r#"
+            function run() {
+                const parser = new Parser();
+                parser.setLanguage(Lang.TypeScript);
+                return parser;
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
 }

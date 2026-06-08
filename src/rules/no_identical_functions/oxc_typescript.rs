@@ -165,3 +165,95 @@ impl OxcCheck for Check {
         diagnostics
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_identical_functions() {
+        let src = r#"
+function foo(x: number) {
+    const a = x + 1;
+    const b = a * 2;
+    console.log(b);
+    return b;
+}
+
+function bar(x: number) {
+    const a = x + 1;
+    const b = a * 2;
+    console.log(b);
+    return b;
+}
+"#;
+        let d = run_on(src);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("bar"));
+        assert!(d[0].message.contains("foo"));
+    }
+
+
+    #[test]
+    fn allows_different_functions() {
+        let src = r#"
+function foo(x: number) {
+    const a = x + 1;
+    const b = a * 2;
+    console.log(b);
+    return b;
+}
+
+function bar(x: number) {
+    const a = x - 1;
+    const b = a / 2;
+    console.log(b);
+    return b;
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_short_identical_bodies() {
+        let src = r#"
+function foo() {
+    return 1;
+}
+
+function bar() {
+    return 1;
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_identical_bodies_below_char_threshold() {
+        // Four lines but trivially short once normalized — below the
+        // 51-char normalized floor.
+        let src = r#"
+function foo() {
+    let a = 1;
+    let b = 2;
+    return a;
+}
+
+function bar() {
+    let a = 1;
+    let b = 2;
+    return a;
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+}

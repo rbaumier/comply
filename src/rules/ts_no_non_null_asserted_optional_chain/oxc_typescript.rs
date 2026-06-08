@@ -83,3 +83,40 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_optional_member_with_non_null() {
+        let diags = run_on("const x = (a?.b)!;");
+        assert_eq!(diags.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_optional_call_with_non_null() {
+        let diags = run_on("const x = (a?.())!;");
+        assert_eq!(diags.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_non_null_without_optional_chain() {
+        assert!(run_on("const x = a.b!;").is_empty());
+    }
+
+
+    #[test]
+    fn allows_optional_chain_without_non_null() {
+        assert!(run_on("const x = a?.b;").is_empty());
+    }
+}

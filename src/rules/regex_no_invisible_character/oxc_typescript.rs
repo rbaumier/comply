@@ -59,3 +59,56 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_zero_width_space() {
+        assert_eq!(run_on("const re = /foo\u{200B}bar/;").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_soft_hyphen() {
+        assert_eq!(run_on("const re = /test\u{00AD}word/;").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_clean_regex() {
+        assert!(run_on("const re = /foo/;").is_empty());
+    }
+
+
+    #[test]
+    fn allows_non_regex_line() {
+        assert!(run_on("const x = 42;").is_empty());
+    }
+
+
+    #[test]
+    fn ignores_tailwind_class_string() {
+        assert!(run_on(r#"const x = "has-[>svg]:grid-cols-[auto_1fr]";"#).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_url_string() {
+        assert!(run_on(r#"const u = "http://a/b/c";"#).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_import_path() {
+        assert!(run_on(r#"import X from "@scope/pkg/sub";"#).is_empty());
+    }
+}

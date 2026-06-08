@@ -1,8 +1,6 @@
 //! no-keyword-prefix — disallow identifiers starting with `new` or `class`.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

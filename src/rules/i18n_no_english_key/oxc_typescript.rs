@@ -68,3 +68,31 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_sentence_key() {
+        assert_eq!(run("t('Hello world')").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_uppercase_start() {
+        assert_eq!(run("t('Welcome')").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_identifier_key() {
+        assert!(run("t('auth.login.title')").is_empty());
+    }
+}

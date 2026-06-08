@@ -104,3 +104,56 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_assertion_in_optional_group() {
+        assert_eq!(run_on(r#"const re = /(?:^foo)?bar/;"#).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_assertion_in_required_group() {
+        assert!(run_on(r#"const re = /(?:^foo)bar/;"#).is_empty());
+    }
+
+
+    #[test]
+    fn flags_assertion_in_star_group() {
+        assert_eq!(run_on(r#"const re = /(?:^foo)*bar/;"#).len(), 1);
+    }
+
+
+    #[test]
+    fn ignores_tailwind_arbitrary_value_in_string() {
+        // Tailwind arbitrary-value classes contain `(` and `)?` sequences
+        // that the old text scanner would flag.
+        let src = r#"const x = "has-[>svg]:grid-cols-[auto_1fr] (^foo)?";"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_url_in_string() {
+        // URLs with query params can produce `(^...)?`-looking substrings.
+        let src = r#"const u = "https://example.com/x?y=(^a)?";"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_empty_scoped_import_path() {
+        let src = r#"import X from "";"#;
+        assert!(run_on(src).is_empty());
+    }
+}

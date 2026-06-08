@@ -233,3 +233,47 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rules::test_helpers::run_oxc_ts;
+
+    const PW: &str = "import { test, expect } from \"@playwright/test\";\n";
+
+
+    fn pw(s: &str) -> String {
+        format!("{PW}{s}")
+    }
+
+
+    #[test]
+    fn flags_missing_await_on_page_click() {
+        let d = run_oxc_ts(&pw("page.click('#button');"), &Check);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("page.click"));
+    }
+
+
+    #[test]
+    fn flags_missing_await_on_expect() {
+        let d = run_oxc_ts(&pw("expect(locator).toBeVisible();"), &Check);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("toBeVisible"));
+    }
+
+
+    #[test]
+    fn allows_awaited_calls() {
+        let source = pw("await page.click('#button');\nawait expect(locator).toBeVisible();");
+        assert!(run_oxc_ts(&source, &Check).is_empty());
+    }
+
+
+    #[test]
+    fn flags_locator_fill() {
+        let d = run_oxc_ts(&pw("locator.fill('hello');"), &Check);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("fill"));
+    }
+}

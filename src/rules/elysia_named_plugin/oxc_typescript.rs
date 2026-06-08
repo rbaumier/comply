@@ -66,3 +66,43 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_framework(source, &Check, "elysia")
+    }
+
+
+    #[test]
+    fn flags_exported_unnamed_plugin() {
+        let src = "import { Elysia } from 'elysia';\nexport const plugin = new Elysia();";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_exported_options_without_name() {
+        let src = "import { Elysia } from 'elysia';\nexport const plugin = new Elysia({ prefix: '/v1' });";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_named_plugin() {
+        let src =
+            "import { Elysia } from 'elysia';\nexport const plugin = new Elysia({ name: 'auth' });";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_non_exported_app() {
+        let src = "import { Elysia } from 'elysia';\nconst app = new Elysia();";
+        assert!(run_on(src).is_empty());
+    }
+}

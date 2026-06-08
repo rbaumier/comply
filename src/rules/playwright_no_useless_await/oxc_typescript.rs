@@ -193,4 +193,25 @@ mod tests {
     fn allows_await_rejects() {
         assert!(run("await expect(p).rejects.toThrow('boom');").is_empty());
     }
+
+
+
+    fn run_oxc_ts(source: &str) -> Vec<Diagnostic> {
+        run_oxc_ts_with_path(&format!("{PW_IMPORT}{source}"), &Check, "app.test.ts")
+    }
+
+
+    #[test]
+    fn flags_await_locator() {
+        let d = run_oxc_ts("const el = await page.locator('.btn');");
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].rule_id, "playwright-no-useless-await");
+    }
+
+
+    #[test]
+    fn allows_await_click() {
+        let d = run_oxc_ts("await page.click('.btn');");
+        assert!(d.is_empty());
+    }
 }

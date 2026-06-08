@@ -116,3 +116,73 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_with_path(path: &str, source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_path(source, &Check, path)
+    }
+
+
+    #[test]
+    fn flags_domain_importing_infrastructure() {
+        let diags = run_with_path(
+            "src/domain/user.ts",
+            "import { db } from '../infrastructure/database';",
+        );
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("domain"));
+        assert!(diags[0].message.contains("infrastructure"));
+    }
+
+
+    #[test]
+    fn flags_domain_importing_application() {
+        let diags = run_with_path(
+            "src/domain/user.ts",
+            "import { handler } from '../application/userHandler';",
+        );
+        assert_eq!(diags.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_application_importing_infrastructure() {
+        let diags = run_with_path(
+            "src/application/userService.ts",
+            "import { pg } from '../infrastructure/pg';",
+        );
+        assert_eq!(diags.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_infrastructure_importing_domain() {
+        let diags = run_with_path(
+            "src/infrastructure/repo.ts",
+            "import { User } from '../domain/user';",
+        );
+        assert!(diags.is_empty());
+    }
+
+
+    #[test]
+    fn allows_domain_importing_domain() {
+        let diags = run_with_path("src/domain/order.ts", "import { User } from './user';");
+        assert!(diags.is_empty());
+    }
+
+
+    #[test]
+    fn ignores_files_outside_layers() {
+        let diags = run_with_path(
+            "src/utils/helper.ts",
+            "import { db } from '../infrastructure/database';",
+        );
+        assert!(diags.is_empty());
+    }
+}

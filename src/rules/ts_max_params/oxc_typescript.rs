@@ -171,3 +171,42 @@ mod oxc_tests {
         assert!(run(src).is_empty());
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn allows_three_params() {
+        assert!(run_on("function f(a: number, b: string, c: boolean) {}").is_empty());
+    }
+
+
+    #[test]
+    fn flags_four_params() {
+        let d = run_on("function f(a: number, b: string, c: boolean, d: number) {}");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("4 parameters"));
+    }
+
+
+    #[test]
+    fn flags_arrow_function() {
+        let d = run_on("const f = (a: number, b: string, c: boolean, d: number) => {};");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn skips_this_parameter() {
+        // `this` is a TS-specific parameter that shouldn't count
+        assert!(run_on("function f(this: Foo, a: number, b: string, c: boolean) {}").is_empty());
+    }
+}

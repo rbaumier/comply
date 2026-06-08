@@ -44,3 +44,35 @@ impl OxcCheck for Check {
         diagnostics
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_framework(source, &Check, "elysia")
+    }
+
+
+    #[test]
+    fn flags_401_without_www_authenticate() {
+        let src = "import { bearer } from '@elysiajs/bearer';\nreturn status(401, 'unauthorized');";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_401_with_www_authenticate() {
+        let src = "import { bearer } from '@elysiajs/bearer';\nset.headers['WWW-Authenticate'] = 'Bearer realm=\"api\"';\nreturn status(401, 'unauthorized');";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_elysia_files() {
+        let src = "return status(401, 'unauthorized');";
+        assert!(crate::rules::test_helpers::run_oxc_ts(src, &Check).is_empty());
+    }
+}

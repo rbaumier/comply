@@ -91,3 +91,35 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_ng_on_init_in_injectable() {
+        let src = "import { Injectable } from '@angular/core';\n@Injectable() class S { ngOnInit() {} }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_ng_on_init_in_component() {
+        let src = "import { Component } from '@angular/core';\n@Component({}) class C { ngOnInit() {} }";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_ng_on_destroy_in_service() {
+        let src = "import { Injectable } from '@angular/core';\n@Injectable() class S { ngOnDestroy() {} }";
+        assert!(run(src).is_empty());
+    }
+}

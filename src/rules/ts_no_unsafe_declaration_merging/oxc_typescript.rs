@@ -77,3 +77,39 @@ impl OxcCheck for Check {
         diagnostics
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_class_and_interface_same_name() {
+        let diags = run_on("interface Foo {} class Foo {}");
+        assert_eq!(diags.len(), 2); // one for each declaration
+    }
+
+
+    #[test]
+    fn allows_different_names() {
+        assert!(run_on("interface Foo {} class Bar {}").is_empty());
+    }
+
+
+    #[test]
+    fn allows_class_only() {
+        assert!(run_on("class Foo {}").is_empty());
+    }
+
+
+    #[test]
+    fn allows_interface_only() {
+        assert!(run_on("interface Foo { x: number }").is_empty());
+    }
+}

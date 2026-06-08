@@ -68,3 +68,34 @@ impl OxcCheck for Check {
         diagnostics
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_mixed_declarations() {
+        let d = run_on("var fs = require('fs'), foo = 42;");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("mix"));
+    }
+
+
+    #[test]
+    fn allows_only_requires() {
+        assert!(run_on("var fs = require('fs'), path = require('path');").is_empty());
+    }
+
+
+    #[test]
+    fn allows_only_non_requires() {
+        assert!(run_on("var a = 1, b = 2;").is_empty());
+    }
+}

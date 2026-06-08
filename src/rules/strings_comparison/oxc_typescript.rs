@@ -52,3 +52,44 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_string_less_than() {
+        assert_eq!(run_on(r#"if ("abc" < "def") {}"#).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_var_greater_than_string() {
+        assert_eq!(run_on(r#"if (name > "xyz") {}"#).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_string_gte() {
+        assert_eq!(run_on(r#"return str >= "aaa";"#).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_equality_comparison() {
+        assert!(run_on(r#"if (x === "hello") {}"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_number_comparison() {
+        assert!(run_on(r#"if (x > 5) {}"#).is_empty());
+    }
+}

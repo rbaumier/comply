@@ -163,3 +163,55 @@ fn outermost_call_span(
     }
     outer_start
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(src, &Check)
+    }
+
+
+    #[test]
+    fn flags_delete_without_where() {
+        assert_eq!(run_on("await db.delete(usersTable)").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_delete_with_returning_but_no_where() {
+        assert_eq!(run_on("await db.delete(usersTable).returning()").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_delete_with_where() {
+        assert!(run_on("await db.delete(usersTable).where(eq(usersTable.id, 1))").is_empty());
+    }
+
+
+    #[test]
+    fn allows_delete_with_where_and_returning() {
+        assert!(
+            run_on("await db.delete(usersTable).where(eq(usersTable.id, 1)).returning()")
+                .is_empty()
+        );
+    }
+
+
+    #[test]
+    fn ignores_map_delete() {
+        // Receiver isn't a plausible db handle — Map/Set/cache cleanup
+        // must not trip this rule.
+        assert!(run_on("const m = new Map(); m.delete('k')").is_empty());
+    }
+
+
+    #[test]
+    fn flags_tx_delete_without_where() {
+        assert_eq!(run_on("await tx.delete(usersTable)").len(), 1);
+    }
+}

@@ -136,3 +136,53 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_nested_plus_optional() {
+        assert_eq!(run_on(r#"const re = /(?:a+)?/;"#).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_multi_element_group() {
+        assert!(run_on(r#"const re = /(?:ab)+/;"#).is_empty());
+    }
+
+
+    #[test]
+    fn flags_nested_star_plus() {
+        assert_eq!(run_on(r#"const re = /(?:a*)+/;"#).len(), 1);
+    }
+
+
+    #[test]
+    fn ignores_quantifier_lookalike_in_tailwind_string() {
+        let src = r#"const x = "has-[(?:a+)?]:block";"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_quantifier_lookalike_in_url() {
+        let src = r#"const u = "http://ex/(?:a+)?";"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_empty_scoped_import_path() {
+        let src = r#"import X from "@scope/(?:a+)?";"#;
+        assert!(run_on(src).is_empty());
+    }
+}

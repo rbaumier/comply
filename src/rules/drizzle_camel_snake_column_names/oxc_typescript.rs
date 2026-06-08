@@ -161,3 +161,35 @@ impl OxcCheck for Check {
         diagnostics
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_camel_key_with_camel_column() {
+        let src = "const t = { userId: varchar('userId', { length: 10 }) }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_camel_key_with_snake_column() {
+        let src = "const t = { userId: varchar('user_id', { length: 10 }) }";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_non_column_call() {
+        let src = "const t = { userId: myHelper('userId') }";
+        assert!(run(src).is_empty());
+    }
+}

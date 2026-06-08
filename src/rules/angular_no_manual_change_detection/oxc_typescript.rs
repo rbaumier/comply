@@ -53,3 +53,35 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_detect_changes() {
+        let src = "import { ChangeDetectorRef } from '@angular/core';\nfunction f(cdr: ChangeDetectorRef) { cdr.detectChanges(); }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_mark_for_check() {
+        let src = "import { ChangeDetectorRef } from '@angular/core';\nfunction f(cdr: ChangeDetectorRef) { cdr.markForCheck(); }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn ignores_non_angular_files() {
+        let src = "function f(x: any) { x.detectChanges(); }";
+        assert!(run(src).is_empty());
+    }
+}

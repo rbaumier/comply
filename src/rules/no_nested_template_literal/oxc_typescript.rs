@@ -76,3 +76,48 @@ fn has_nested_template<'a>(
     }
     false
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn allows_single_interpolation() {
+        assert!(run(r#"const msg = `Hello ${name}`;"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_no_interpolation() {
+        assert!(run(r#"const msg = `plain string`;"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_multiple_interpolations_in_same_template() {
+        // Regression: previously flagged because the check counted
+        // `${` occurrences. Two interpolations in the same template
+        // literal are not nesting — the tree-sitter AST has a single
+        // `template_string` node with two `template_substitution`
+        // children.
+        assert!(
+            run(r#"const url = baseUrl + `${baseUrl}/api/v1/subscriptions/${subscriptionId}`;"#)
+                .is_empty()
+        );
+    }
+
+
+    #[test]
+    fn allows_function_call_in_interpolation() {
+        // A function call inside `${}` is not a nested template —
+        // just an expression that happens to produce a string.
+        assert!(run(r#"const msg = `id: ${String(id)}`;"#).is_empty());
+    }
+}

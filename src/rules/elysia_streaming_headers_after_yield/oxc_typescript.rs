@@ -132,4 +132,38 @@ mod tests {
         let d = run_oxc_ts_with_framework(src, &Check, "elysia");
         assert_eq!(d.len(), 1, "headers after yield in a stream must flag: {d:?}");
     }
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_framework(source, &Check, "elysia")
+    }
+
+
+    #[test]
+    fn flags_headers_after_yield() {
+        let src = "import { Elysia } from 'elysia';\nasync function* handler({ set }) {\n  yield 'first chunk';\n  set.headers['x-trace'] = '1';\n  yield 'second';\n}";
+        assert!(!run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn flags_arrow_generator_like_with_yield_then_headers() {
+        let src = "import { Elysia } from 'elysia';\nasync function* handler({ set }) {\n  yield 'a';\n  yield 'b';\n  set.headers['content-type'] = 'text/plain';\n}";
+        assert!(!run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_headers_before_yield() {
+        let src = "import { Elysia } from 'elysia';\nasync function* handler({ set }) {\n  set.headers['x-trace'] = '1';\n  yield 'first';\n}";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_elysia_files() {
+        let src = "async function* handler({ set }) {\n  yield 'x';\n  set.headers['x'] = '1';\n}";
+        assert!(crate::rules::test_helpers::run_oxc_ts(src, &Check).is_empty());
+    }
 }

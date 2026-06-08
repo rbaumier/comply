@@ -70,3 +70,49 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_framework(source, &Check, "elysia")
+    }
+
+
+    #[test]
+    fn flags_lowercase_html_import() {
+        let src = "import { html } from '@elysiajs/html';";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_default_import_only() {
+        let src = "import elysiaHtml from '@elysiajs/html';";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_uppercase_html_import() {
+        let src = "import { Html } from '@elysiajs/html';";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_combined_import() {
+        let src = "import { html, Html } from '@elysiajs/html';";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_html_packages() {
+        let src = "import { html } from 'other-lib';";
+        assert!(crate::rules::test_helpers::run_oxc_ts(src, &Check).is_empty());
+    }
+}

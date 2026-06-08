@@ -70,3 +70,45 @@ impl OxcCheck for Check {
         diagnostics
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_ts_ignore() {
+        let diags = run_on("// @ts-ignore\nconst x = 1;");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("@ts-expect-error"));
+    }
+
+
+    #[test]
+    fn flags_ts_nocheck() {
+        let diags = run_on("// @ts-nocheck\nconst x = 1;");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("@ts-nocheck"));
+    }
+
+
+    #[test]
+    fn flags_bare_ts_expect_error() {
+        let diags = run_on("// @ts-expect-error\nconst x = 1;");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("description"));
+    }
+
+
+    #[test]
+    fn allows_ts_expect_error_with_description() {
+        let diags = run_on("// @ts-expect-error legacy API returns wrong type\nconst x = 1;");
+        assert!(diags.is_empty());
+    }
+}

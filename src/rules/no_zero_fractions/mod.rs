@@ -3,8 +3,6 @@
 //! explicit f64 typing (`1.0` vs `1` = f64 vs i32).
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

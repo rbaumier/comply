@@ -165,3 +165,37 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_unused_es_private_field() {
+        let d = run_on("class A { #unused = 42; }");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("#unused"));
+    }
+
+
+    #[test]
+    fn allows_used_es_private_field() {
+        let d = run_on("class A { #foo = 42; method() { return this.#foo; } }");
+        assert!(d.is_empty());
+    }
+
+
+    #[test]
+    fn flags_unused_private_method() {
+        let d = run_on("class A { #unused() {} doStuff() { return 1; } }");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("#unused"));
+    }
+}

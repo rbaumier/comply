@@ -1,8 +1,6 @@
 //! playwright-prefer-to-be — suggest `toBe()` for primitive literals.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

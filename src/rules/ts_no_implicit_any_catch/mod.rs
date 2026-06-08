@@ -4,8 +4,6 @@
 //! defaults to `any`, silently disabling type checking inside the handler.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

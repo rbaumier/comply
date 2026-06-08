@@ -77,3 +77,55 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_grid_cols_3_no_responsive() {
+        assert_eq!(
+            run(r#"export const A = () => <div className="grid grid-cols-3" />;"#).len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn flags_grid_cols_2_no_responsive() {
+        assert_eq!(
+            run(r#"export const A = () => <div className="grid grid-cols-2 gap-4" />;"#).len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn allows_mobile_first_pair() {
+        assert!(
+            run(r#"export const A = () => <div className="grid grid-cols-1 md:grid-cols-3" />;"#)
+                .is_empty()
+        );
+    }
+
+
+    #[test]
+    fn allows_only_responsive() {
+        assert!(
+            run(r#"export const A = () => <div className="grid md:grid-cols-3" />;"#).is_empty()
+        );
+    }
+
+
+    #[test]
+    fn allows_grid_cols_1() {
+        assert!(run(r#"export const A = () => <div className="grid grid-cols-1" />;"#).is_empty());
+    }
+}

@@ -249,4 +249,6 @@ mod tests {
         let d = crate::rules::test_helpers::run_oxc_ts_with_path(src, &Check, "src/components/ui/sidebar.tsx");
         assert!(d.is_empty());
     }
+
+    use crate::rules::test_helpers::run_oxc_ts_with_path;
 }

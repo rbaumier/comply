@@ -88,3 +88,27 @@ impl OxcCheck for Check {
         diagnostics
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn allows_specific_signature() {
+        let src = "/**\n * @param {(x: string) => void} cb\n */\nfunction f(cb) {}";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_jsdoc_comment() {
+        let src = "// @param {Function} cb\nfunction f(cb) {}";
+        assert!(run(src).is_empty());
+    }
+}

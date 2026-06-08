@@ -60,3 +60,50 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_default_throw_no_assertion() {
+        let src = "function f(x: 'a' | 'b') { switch (x) { case 'a': return 1; case 'b': return 2; default: throw new Error('unreachable'); } }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_default_with_assert_never() {
+        let src = "function f(x: 'a' | 'b') { switch (x) { case 'a': return 1; case 'b': return 2; default: throw assertNever(x); } }";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_default_with_never_annotation() {
+        let src = "function f(x: 'a' | 'b') { switch (x) { case 'a': return 1; case 'b': return 2; default: { const _: never = x; throw new Error(_); } } }";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_default_returning_value() {
+        let src = "function f(x: string) { switch (x) { case 'a': return 1; default: return 0; } }";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_no_default() {
+        let src =
+            "function f(x: 'a' | 'b') { switch (x) { case 'a': return 1; case 'b': return 2; } }";
+        assert!(run(src).is_empty());
+    }
+}

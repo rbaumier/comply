@@ -154,3 +154,65 @@ fn jsx_tag_name<'a>(name: &'a JSXElementName<'a>) -> Option<&'a str> {
         _ => None,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_map_button_conditional_variant() {
+        let src = r#"
+            const x = items.map((item) => (
+                <Button variant={selected === item ? "default" : "outline"}>{item}</Button>
+            ));
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_map_button_conditional_variant_expr_body() {
+        let src = r#"
+            const x = items.map((item) =>
+                <Button variant={selected === item ? "default" : "outline"}>{item}</Button>
+            );
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_map_button_static_variant() {
+        let src = r#"
+            const x = items.map((item) => <Button variant="outline">{item}</Button>);
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_toggle_group() {
+        let src = r#"
+            const x = <ToggleGroup value={selected}>
+                {items.map((item) => <ToggleGroupItem value={item}>{item}</ToggleGroupItem>)}
+            </ToggleGroup>;
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_non_button_map() {
+        let src = r#"
+            const x = items.map((item) => <Card variant={selected === item ? "a" : "b"}>{item}</Card>);
+        "#;
+        assert!(run(src).is_empty());
+    }
+}

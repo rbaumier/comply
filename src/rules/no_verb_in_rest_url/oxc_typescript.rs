@@ -55,3 +55,58 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_create_order_url() {
+        assert_eq!(run_on("fetch('/api/createOrder');").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_delete_user_url() {
+        assert_eq!(run_on("const u = '/api/deleteUser';").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_resource_url() {
+        assert!(run_on("fetch('/api/orders');").is_empty());
+        assert!(run_on("fetch('/api/orders/123');").is_empty());
+    }
+
+
+    #[test]
+    fn allows_verb_in_non_api_string() {
+        // Not a URL — regular string.
+        assert!(run_on("const label = 'createOrder';").is_empty());
+    }
+
+
+    #[test]
+    fn flags_static_template_literal() {
+        assert_eq!(run_on("fetch(`/api/createOrder`);").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_template_literal_route_definition() {
+        assert_eq!(run_on("router.post(`/api/deleteUser`, handler);").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_dynamic_template_without_verb_segment() {
+        assert!(run_on("fetch(`/api/orders/${id}`);").is_empty());
+    }
+}

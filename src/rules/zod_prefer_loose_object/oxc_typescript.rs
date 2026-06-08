@@ -57,3 +57,35 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_passthrough_chain() {
+        assert_eq!(
+            run("const S = z.object({ a: z.string() }).passthrough();").len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn allows_loose_object_factory() {
+        assert!(run("const S = z.looseObject({ a: z.string() });").is_empty());
+    }
+
+
+    #[test]
+    fn ignores_bare_object() {
+        assert!(run("const S = z.object({ a: z.string() });").is_empty());
+    }
+}

@@ -54,3 +54,34 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_express_without_helmet() {
+        let src = "import express from 'express';\nconst app = express();\napp.get('/', handler);";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_express_with_helmet() {
+        let src = "import express from 'express';\nimport helmet from 'helmet';\nconst app = express();\napp.use(helmet());";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_files_without_express() {
+        assert!(run("const x = 1;").is_empty());
+    }
+}

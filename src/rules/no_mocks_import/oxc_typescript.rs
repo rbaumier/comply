@@ -39,3 +39,48 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_relative_mocks_import() {
+        let d = run_on("import foo from './__mocks__/foo';");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("__mocks__"));
+    }
+
+
+    #[test]
+    fn flags_nested_mocks_import() {
+        let d = run_on("import bar from '../utils/__mocks__/bar';");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_package_mocks_import() {
+        let d = run_on("import baz from 'pkg/__mocks__/baz';");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_normal_relative_import() {
+        assert!(run_on("import foo from './foo';").is_empty());
+    }
+
+
+    #[test]
+    fn allows_normal_package_import() {
+        assert!(run_on("import foo from 'pkg';").is_empty());
+    }
+}

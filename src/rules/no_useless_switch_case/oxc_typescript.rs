@@ -74,3 +74,103 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_single_empty_case_before_default() {
+        let src = r#"
+switch (x) {
+    case 1:
+    default:
+        break;
+}
+"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_multiple_empty_cases_before_default() {
+        let src = r#"
+switch (x) {
+    case 1:
+    case 2:
+    case 3:
+    default:
+        break;
+}
+"#;
+        assert_eq!(run_on(src).len(), 3);
+    }
+
+
+    #[test]
+    fn allows_case_with_body() {
+        let src = r#"
+switch (x) {
+    case 1:
+        console.log('one');
+        break;
+    default:
+        break;
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_no_default() {
+        let src = r#"
+switch (x) {
+    case 1:
+    case 2:
+        break;
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_fallthrough_to_case_not_default() {
+        let src = r#"
+switch (x) {
+    case 1:
+    case 2:
+        console.log('1 or 2');
+        break;
+    default:
+        break;
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn flags_only_empty_trailing_cases() {
+        // case 1 has a body, case 2 is empty before default
+        let src = r#"
+switch (x) {
+    case 1:
+        console.log('one');
+        break;
+    case 2:
+    default:
+        break;
+}
+"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+}

@@ -70,3 +70,73 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_createcipheriv_des_ecb() {
+        let src = r#"const c = crypto.createCipheriv("des-ecb", key, iv);"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_createcipheriv_rc4() {
+        let src = r#"const c = crypto.createCipheriv("rc4", key, iv);"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_createcipheriv_blowfish() {
+        let src = r#"const c = crypto.createCipheriv("blowfish", key, iv);"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_bare_createcipheriv_call() {
+        // Imported via `import { createCipheriv } from 'crypto';`
+        let src = r#"const c = createCipheriv("des-cbc", key, iv);"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_createcipheriv_aes_256_gcm() {
+        let src = r#"const c = crypto.createCipheriv("aes-256-gcm", key, iv);"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_unrelated_string_outside_createcipheriv() {
+        let src = r#"const id = "jsdoc-require-throws-description";"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_createcipheriv_with_non_literal_arg() {
+        // Variable reference — we don't do constant propagation v1.
+        let src = r#"const c = crypto.createCipheriv(algo, key, iv);"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_unrelated_call_with_des_string() {
+        // `console.log("des-ecb")` is obviously not a crypto call.
+        let src = r#"console.log("des-ecb");"#;
+        assert!(run_on(src).is_empty());
+    }
+}

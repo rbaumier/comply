@@ -82,3 +82,56 @@ fn unserializable_reason(expr: &Expression<'_>) -> Option<&'static str> {
         _ => None,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_arrow_in_key() {
+        assert_eq!(
+            run("useQuery({ queryKey: ['x', () => 1], queryFn: f });").len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn flags_new_date_in_key() {
+        assert_eq!(
+            run("useQuery({ queryKey: ['x', new Date()], queryFn: f });").len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn flags_symbol_in_key() {
+        assert_eq!(
+            run("useQuery({ queryKey: [Symbol('k')], queryFn: f });").len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn flags_class_instance_in_key() {
+        assert_eq!(
+            run("useQuery({ queryKey: [new Foo()], queryFn: f });").len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn allows_primitive_key() {
+        assert!(run("useQuery({ queryKey: ['todos', id, 42], queryFn: f });").is_empty());
+    }
+}

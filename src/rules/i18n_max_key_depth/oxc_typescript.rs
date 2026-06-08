@@ -65,3 +65,31 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_deep_key() {
+        assert_eq!(run("t('a.b.c.d')").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_two_levels() {
+        assert!(run("t('auth.login.title')").is_empty());
+    }
+
+
+    #[test]
+    fn allows_one_level() {
+        assert!(run("t('auth.title')").is_empty());
+    }
+}

@@ -82,3 +82,55 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        let full = format!("import {{ test, expect }} from \"@playwright/test\";\n{source}");
+        crate::rules::test_helpers::run_oxc_ts_with_path(&full, &Check, "login.test.ts")
+    }
+
+
+    #[test]
+    fn flags_is_visible_assertion() {
+        let d = run_on("expect(await page.locator('#btn').isVisible()).toBe(true);");
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].rule_id, "playwright-prefer-web-first-assertions");
+    }
+
+
+    #[test]
+    fn flags_text_content_assertion() {
+        let d = run_on("expect(await el.textContent()).toContain('Hello');");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_web_first_assertion() {
+        let d = run_on("await expect(page.locator('#btn')).toBeVisible();");
+        assert!(d.is_empty());
+    }
+
+
+    #[test]
+    fn allows_expect_await_with_non_locator() {
+        let d = run_on("expect(await fetch('/api')).toBeDefined();");
+        assert!(d.is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_test_file() {
+        let d = crate::rules::test_helpers::run_oxc_ts_with_path(
+            "expect(await el.isVisible()).toBe(true);",
+            &Check,
+            "helpers.ts",
+        );
+        assert!(d.is_empty());
+    }
+}

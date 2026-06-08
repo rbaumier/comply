@@ -48,3 +48,42 @@ impl OxcCheck for Check {
         }]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_framework(source, &Check, "elysia")
+    }
+
+
+    #[test]
+    fn flags_schema_without_static_type() {
+        let src = "import { t } from 'elysia';\nexport const User = t.Object({ id: t.Number() });";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_schema_with_static_type() {
+        let src = "import { t } from 'elysia';\nexport const User = t.Object({ id: t.Number() });\nexport type User = typeof User.static;";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_file_with_no_typebox_export() {
+        let src = "import { Elysia } from 'elysia';\nexport const app = new Elysia();";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_elysia_files() {
+        let src = "export const User = t.Object({ id: t.Number() });";
+        assert!(crate::rules::test_helpers::run_oxc_ts(src, &Check).is_empty());
+    }
+}

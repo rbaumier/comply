@@ -82,3 +82,38 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_redirect_with_query_param() {
+        assert_eq!(run_on("res.redirect(req.query.returnUrl)").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_redirect_with_search_params() {
+        assert_eq!(run_on("res.redirect(searchParams.get('next'))").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_literal_redirect() {
+        assert!(run_on("res.redirect('/dashboard')").is_empty());
+    }
+
+
+    #[test]
+    fn allows_validated_redirect() {
+        assert!(run_on("res.redirect(safeUrl)").is_empty());
+    }
+}

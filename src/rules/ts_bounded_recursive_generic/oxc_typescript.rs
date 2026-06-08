@@ -107,3 +107,37 @@ fn has_depth_parameter(
     }
     false
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_recursive_conditional_without_depth() {
+        let src = "type Flatten<T> = T extends Array<infer U> ? Flatten<U> : T;";
+        let diags = run(src);
+        assert_eq!(diags.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_recursive_with_depth() {
+        let src =
+            "type Flatten<T, Depth extends number = 5> = Depth extends 0 ? T : Flatten<T, 0>;";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_non_recursive_conditional() {
+        let src = "type IsString<T> = T extends string ? true : false;";
+        assert!(run(src).is_empty());
+    }
+}

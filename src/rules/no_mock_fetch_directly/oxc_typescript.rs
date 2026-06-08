@@ -111,3 +111,10 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rules::backend::AstCheck;
+
+}

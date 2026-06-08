@@ -66,4 +66,24 @@ mod tests {
         let src = r#"const q = "SELECT id, name FROM a UNION ALL SELECT id, name FROM b";"#;
         assert!(run_on(src).is_empty());
     }
+
+
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(src, &Check)
+    }
+
+
+    #[test]
+    fn allows_union_different_tables_with_ids() {
+        let src = r#"const q = "SELECT id FROM archived_users UNION SELECT id FROM active_users";"#;
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn skips_union_without_id_context() {
+        let src = r#"const q = "SELECT label FROM a UNION SELECT label FROM b";"#;
+        assert!(run(src).is_empty());
+    }
 }

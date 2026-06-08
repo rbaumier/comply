@@ -115,3 +115,60 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diagnostic::Diagnostic;
+
+
+
+    fn run(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_blur_30px() {
+        assert_eq!(run(r#"<div style={{ filter: 'blur(30px)' }} />"#).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_blur_50px_backdrop() {
+        assert_eq!(
+            run(r#"<div style={{ backdropFilter: 'blur(50px)' }} />"#).len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn flags_blur_25px() {
+        assert_eq!(run(r#"<div style={{ filter: 'blur(25px)' }} />"#).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_blur_10px() {
+        assert!(run(r#"<div style={{ filter: 'blur(10px)' }} />"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_blur_at_threshold() {
+        assert!(run(r#"<div style={{ filter: 'blur(20px)' }} />"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_non_blur_filter() {
+        assert!(run(r#"<div style={{ filter: 'brightness(1.2) contrast(1.1)' }} />"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_non_style_object() {
+        assert!(run(r#"const config = { filter: 'blur(50px)' };"#).is_empty());
+    }
+}

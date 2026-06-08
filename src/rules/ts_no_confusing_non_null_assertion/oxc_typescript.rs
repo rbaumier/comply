@@ -55,3 +55,40 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_non_null_before_equality() {
+        let diags = run_on("const r = a! == b;");
+        assert_eq!(diags.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_non_null_before_strict_equality() {
+        let diags = run_on("const r = a! === b;");
+        assert_eq!(diags.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_proper_not_equal() {
+        assert!(run_on("const r = a !== b;").is_empty());
+    }
+
+
+    #[test]
+    fn allows_proper_not_strict_equal() {
+        assert!(run_on("const r = a != b;").is_empty());
+    }
+}

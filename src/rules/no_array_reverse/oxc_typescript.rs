@@ -51,3 +51,38 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_reverse() {
+        assert_eq!(run_on("const rev = arr.reverse();").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_chained_reverse() {
+        assert_eq!(run_on("arr.filter(x => x > 0).reverse();").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_to_reversed() {
+        assert!(run_on("const rev = arr.toReversed();").is_empty());
+    }
+
+
+    #[test]
+    fn allows_unrelated() {
+        assert!(run_on("const x = arr.map(x => x * 2);").is_empty());
+    }
+}

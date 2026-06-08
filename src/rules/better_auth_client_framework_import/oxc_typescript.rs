@@ -36,3 +36,37 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diagnostic::Diagnostic;
+    use super::Check;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_generic_client_import() {
+        assert_eq!(
+            run("import { createAuthClient } from \"better-auth/client\"").len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn allows_react_client_import() {
+        assert!(run("import { createAuthClient } from \"better-auth/react\"").is_empty());
+    }
+
+
+    #[test]
+    fn allows_vue_client_import() {
+        assert!(run("import { createAuthClient } from \"better-auth/vue\"").is_empty());
+    }
+}

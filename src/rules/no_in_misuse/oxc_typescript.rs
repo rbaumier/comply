@@ -61,3 +61,38 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_in_on_array_name() {
+        assert_eq!(run_on("if (\"x\" in myItems) {}").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_in_on_arr_suffix() {
+        assert_eq!(run_on("if (val in userList) {}").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_for_in_loop() {
+        assert!(run_on("for (const key in obj) {}").is_empty());
+    }
+
+
+    #[test]
+    fn allows_in_on_object() {
+        assert!(run_on("if (\"name\" in config) {}").is_empty());
+    }
+}

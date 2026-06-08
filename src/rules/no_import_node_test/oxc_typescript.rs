@@ -41,3 +41,54 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_default_node_test_import() {
+        let d = run_on("import test from 'node:test';");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("node:test"));
+    }
+
+
+    #[test]
+    fn flags_named_node_test_import() {
+        let d = run_on("import { describe, it } from 'node:test';");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_double_quoted_node_test_import() {
+        let d = run_on("import { test } from \"node:test\";");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_vitest_import() {
+        assert!(run_on("import { describe, it } from 'vitest';").is_empty());
+    }
+
+
+    #[test]
+    fn allows_jest_import() {
+        assert!(run_on("import { jest } from '@jest/globals';").is_empty());
+    }
+
+
+    #[test]
+    fn allows_other_node_builtin() {
+        assert!(run_on("import { readFile } from 'node:fs';").is_empty());
+    }
+}

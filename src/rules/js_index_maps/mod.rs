@@ -2,8 +2,6 @@
 //! build a `Map` for O(1) lookups.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

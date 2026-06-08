@@ -236,4 +236,98 @@ mod tests {
         assert_eq!(d.len(), 1);
         assert!(d[0].message.contains("parameters"));
     }
+
+
+
+    fn run(source: &str) -> Vec<Diagnostic> {
+        run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_async_arrow_callback() {
+        let d = run("describe('suite', async () => { it('x', () => {}); });");
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].rule_id, "valid-describe-callback");
+        assert!(d[0].message.contains("async"));
+    }
+
+
+    #[test]
+    fn flags_async_function_expression() {
+        let d = run("describe('suite', async function () { it('x', () => {}); });");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("async"));
+    }
+
+
+    #[test]
+    fn flags_callback_with_parameters() {
+        let d = run("describe('suite', (done) => { it('x', () => {}); });");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("parameters"));
+    }
+
+
+    #[test]
+    fn flags_callback_returning_value() {
+        let src = "describe('suite', () => { it('x', () => {}); return 42; });";
+        let d = run(src);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("return"));
+    }
+
+
+    #[test]
+    fn flags_arrow_with_implicit_return() {
+        let d = run("describe('suite', () => 42);");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("return"));
+    }
+
+
+    #[test]
+    fn allows_valid_sync_callback() {
+        let d = run("describe('suite', () => { it('x', () => {}); });");
+        assert!(d.is_empty());
+    }
+
+
+    #[test]
+    fn allows_sync_function_expression() {
+        let d = run("describe('suite', function () { it('x', () => {}); });");
+        assert!(d.is_empty());
+    }
+
+
+    #[test]
+    fn allows_bare_return_without_value() {
+        let d = run("describe('suite', () => { if (skip) return; it('x', () => {}); });");
+        assert!(d.is_empty());
+    }
+
+
+    #[test]
+    fn ignores_return_inside_nested_function() {
+        let src = "describe('suite', () => { it('x', () => { return 1; }); });";
+        let d = run(src);
+        assert!(d.is_empty());
+    }
+
+
+    #[test]
+    fn flags_describe_only_with_async_callback() {
+        let d = run("describe.only('suite', async () => {});");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("async"));
+    }
+
+    #[test]
+    fn allows_describe_each_with_params() {
+        let d = run(
+            "const CASES = [{ action: 'deactivate' }]; \
+             describe.each(CASES)('$action category', ({ action }) => { it('x', () => {}); });",
+        );
+        assert!(d.is_empty(), "unexpected diagnostics: {d:?}");
+    }
 }

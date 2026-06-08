@@ -1,8 +1,6 @@
 //! drizzle-created-at-default-now
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

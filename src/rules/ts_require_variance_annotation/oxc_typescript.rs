@@ -53,3 +53,39 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_exported_interface_without_variance() {
+        let diags = run("export interface Box<T> { value: T; }");
+        assert_eq!(diags.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_exported_interface_with_out_variance() {
+        assert!(run("export interface Box<out T> { value: T; }").is_empty());
+    }
+
+
+    #[test]
+    fn allows_non_exported_interface() {
+        assert!(run("interface Box<T> { value: T; }").is_empty());
+    }
+
+
+    #[test]
+    fn allows_interface_without_generics() {
+        assert!(run("export interface Plain { x: number; }").is_empty());
+    }
+}

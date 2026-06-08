@@ -165,4 +165,112 @@ export {};
         );
     }
 
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_unused_variable() {
+        let d = run_on("const unused = 42;");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("`unused`"));
+    }
+
+
+    #[test]
+    fn allows_used_variable() {
+        assert!(run_on("const x = 1; console.log(x);").is_empty());
+    }
+
+
+    #[test]
+    fn allows_underscore_prefix() {
+        assert!(run_on("const _unused = 42;").is_empty());
+    }
+
+
+    #[test]
+    fn allows_exported_variable() {
+        assert!(run_on("export const foo = 42;").is_empty());
+    }
+
+
+    #[test]
+    fn flags_multiple_unused() {
+        let d = run_on("const aaa = 1; const bbb = 2;");
+        assert_eq!(d.len(), 2);
+    }
+
+
+    #[test]
+    fn flags_unused_destructured_binding() {
+        let d = run_on("const obj = { a: 1, b: 2 }; const { a, b } = obj; console.log(a);");
+        assert_eq!(d.len(), 1, "destructured `b` is unused");
+        assert!(d[0].message.contains("`b`"));
+    }
+
+
+    #[test]
+    fn allows_shared_name_with_outer_use() {
+        let d = run_on("const x = 1; function f(x: number) { return x; } f(2); console.log(x);");
+        assert!(
+            d.is_empty(),
+            "param `x` is used in body, outer `x` is logged"
+        );
+    }
+
+
+    #[test]
+    fn flags_unused_import() {
+        let d = run_on("import { foo } from './x'; console.log('hello');");
+        assert_eq!(d.len(), 1, "imported `foo` is never used");
+        assert!(d[0].message.contains("`foo`"));
+    }
+
+
+    #[test]
+    fn skips_params_in_type_alias() {
+        let src = r#"
+type JsonReplacer = (key: string, value: unknown) => unknown;
+export const x: JsonReplacer = (k, v) => v;
+"#;
+        let d = run_on(src);
+        assert!(
+            !d.iter().any(|d| d.message.contains("`key`") || d.message.contains("`value`")),
+            "params in type signatures are not runtime vars"
+        );
+    }
+
+
+    #[test]
+    fn skips_params_in_interface_method() {
+        let src = r#"
+interface Store {
+  subscribe(listener: () => void): () => void;
+}
+export function createStore(): Store { return null as any; }
+"#;
+        let d = run_on(src);
+        assert!(
+            !d.iter().any(|d| d.message.contains("`listener`")),
+            "interface method params are not runtime vars"
+        );
+    }
+
+
+    #[test]
+    fn skips_type_params_in_declare_module() {
+        let src = r#"
+declare module '../vanilla' {
+  interface StoreMutators<S, A> {
+    ['test']: S;
+  }
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
 }

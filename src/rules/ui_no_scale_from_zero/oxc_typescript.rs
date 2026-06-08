@@ -96,3 +96,63 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diagnostic::Diagnostic;
+
+
+
+    fn run(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_scale_zero() {
+        assert_eq!(run(r#"<div style={{ transform: 'scale(0)' }} />"#).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_scale_zero_zero() {
+        assert_eq!(
+            run(r#"<div style={{ transform: 'scale(0, 0)' }} />"#).len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn flags_scale_decimal_zero() {
+        assert_eq!(
+            run(r#"<div style={{ transform: 'scale(0.0)' }} />"#).len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn allows_scale_one() {
+        assert!(run(r#"<div style={{ transform: 'scale(1)' }} />"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_scale_point_nine_five() {
+        assert!(run(r#"<div style={{ transform: 'scale(0.95)' }} />"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_translate() {
+        assert!(run(r#"<div style={{ transform: 'translateX(0)' }} />"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_non_style_object() {
+        assert!(run(r#"const config = { transform: 'scale(0)' };"#).is_empty());
+    }
+}

@@ -86,3 +86,35 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_sync_get_handler() {
+        let src = "import { Controller, Get } from '@nestjs/common';\n@Controller() class C { @Get() find() { return []; } }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_async_handler() {
+        let src = "import { Controller, Get } from '@nestjs/common';\n@Controller() class C { @Get() async find() { return []; } }";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_promise_return_type() {
+        let src = "import { Controller, Get } from '@nestjs/common';\n@Controller() class C { @Get() find(): Promise<any> { return Promise.resolve([]); } }";
+        assert!(run(src).is_empty());
+    }
+}

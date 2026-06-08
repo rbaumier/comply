@@ -149,3 +149,63 @@ fn names_match(arg: &str, param: &str) -> bool {
 fn normalize_name(name: &str) -> String {
     name.to_lowercase().trim_start_matches('_').to_string()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+    fn run(code: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(code, &Check)
+    }
+
+
+    #[test]
+    fn flags_swapped_args() {
+        let code = r#"
+            function createUser(name, email) { }
+            createUser(email, name);
+        "#;
+        assert_eq!(run(code).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_correct_order() {
+        let code = r#"
+            function createUser(name, email) { }
+            createUser(name, email);
+        "#;
+        assert!(run(code).is_empty());
+    }
+
+
+    #[test]
+    fn allows_different_names() {
+        let code = r#"
+            function createUser(name, email) { }
+            createUser(foo, bar);
+        "#;
+        assert!(run(code).is_empty());
+    }
+
+
+    #[test]
+    fn allows_expressions() {
+        let code = r#"
+            function createUser(name, email) { }
+            createUser(getName(), getEmail());
+        "#;
+        assert!(run(code).is_empty());
+    }
+
+
+    #[test]
+    fn flags_with_underscore_prefix() {
+        let code = r#"
+            function foo(_a, _b) { }
+            foo(b, a);
+        "#;
+        assert_eq!(run(code).len(), 1);
+    }
+}

@@ -127,3 +127,50 @@ fn is_existence_check(op: &str, lit: &str, lhs_call: bool) -> bool {
             | (">", "0", false)
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_oxc_ts(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_indexof_not_equal_minus_one() {
+        assert_eq!(run_oxc_ts("if (arr.indexOf(x) !== -1) {}").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_indexof_loose_not_equal() {
+        assert_eq!(run_oxc_ts("if (arr.indexOf(x) != -1) {}").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_indexof_gte_zero() {
+        assert_eq!(run_oxc_ts("if (arr.indexOf(x) >= 0) {}").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_lastindexof() {
+        assert_eq!(run_oxc_ts("if (str.lastIndexOf(c) !== -1) {}").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_includes() {
+        assert!(run_oxc_ts("if (arr.includes(x)) {}").is_empty());
+    }
+
+
+    #[test]
+    fn allows_indexof_other_comparison() {
+        assert!(run_oxc_ts("if (arr.indexOf(x) === 2) {}").is_empty());
+    }
+}

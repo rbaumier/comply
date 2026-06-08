@@ -154,3 +154,44 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_small_button() {
+        assert_eq!(
+            run(r#"export const A = () => <button className="px-2 py-1 text-xs" />;"#).len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn flags_tiny_anchor() {
+        assert_eq!(
+            run(r#"export const A = () => <a className="p-1" />;"#).len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn allows_explicit_height() {
+        assert!(run(r#"export const A = () => <button className="h-11 px-2 py-1" />;"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_generous_padding() {
+        assert!(run(r#"export const A = () => <button className="px-4 py-3" />;"#).is_empty());
+    }
+}

@@ -71,3 +71,43 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_framework(source, &Check, "elysia")
+    }
+
+
+    #[test]
+    fn flags_guard_with_header_read_and_no_schema() {
+        let src = "import { Elysia } from 'elysia';\napp.guard({ beforeHandle: ({ headers }) => headers.authorization }, app => app);";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_resolve_reading_header() {
+        let src = "import { Elysia } from 'elysia';\napp.guard({ resolve: ({ headers }) => ({ token: headers.authorization }) }, app => app);";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_guard_with_headers_schema() {
+        let src = "import { Elysia, t } from 'elysia';\napp.guard({ headers: t.Object({ authorization: t.String() }), beforeHandle: ({ headers }) => headers.authorization }, app => app);";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_elysia_files() {
+        let src =
+            "app.guard({ beforeHandle: ({ headers }) => headers.authorization }, app => app);";
+        assert!(crate::rules::test_helpers::run_oxc_ts(src, &Check).is_empty());
+    }
+}

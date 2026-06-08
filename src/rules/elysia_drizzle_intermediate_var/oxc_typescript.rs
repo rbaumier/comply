@@ -80,3 +80,42 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_framework(source, &Check, "elysia")
+    }
+
+
+    #[test]
+    fn flags_inline_omit() {
+        let src = "import { createInsertSchema } from 'drizzle-typebox';\nconst body = t.Omit(createInsertSchema(users), ['id']);";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_inline_pick() {
+        let src = "import { createInsertSchema } from 'drizzle-typebox';\nconst body = t.Pick(createInsertSchema(users), ['name']);";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_intermediate_variable() {
+        let src = "import { createInsertSchema } from 'drizzle-typebox';\nconst schema = createInsertSchema(users);\nconst body = t.Omit(schema, ['id']);";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_drizzle_files() {
+        let src = "const body = t.Omit(createInsertSchema(users), ['id']);";
+        assert!(crate::rules::test_helpers::run_oxc_ts(src, &Check).is_empty());
+    }
+}

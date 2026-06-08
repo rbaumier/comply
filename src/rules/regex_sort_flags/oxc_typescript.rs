@@ -54,3 +54,65 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_unsorted_gi() {
+        assert_eq!(run_on(r#"const re = /foo/ig;"#).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_unsorted_mig() {
+        assert_eq!(run_on(r#"const re = /bar/mig;"#).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_sorted_flags() {
+        assert!(run_on(r#"const re = /foo/gi;"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_single_flag() {
+        assert!(run_on(r#"const re = /foo/g;"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_no_flags() {
+        assert!(run_on(r#"const re = /foo/;"#).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_tailwind_arbitrary_value() {
+        let src = r#"const x = "has-[>svg]:grid";"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_url_string() {
+        let src = r#"const u = "http://a/b";"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_import_path() {
+        let src = r#"import X from "@scope/pkg";"#;
+        assert!(run_on(src).is_empty());
+    }
+}

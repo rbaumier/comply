@@ -60,3 +60,52 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    #[test]
+    fn flags_splice_with_length() {
+        let d = crate::rules::test_helpers::run_oxc_ts("arr.splice(2, arr.length);", &Check);
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].rule_id, "no-unnecessary-array-splice-count");
+    }
+
+
+    #[test]
+    fn flags_splice_with_infinity() {
+        let d = crate::rules::test_helpers::run_oxc_ts("arr.splice(0, Infinity);", &Check);
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_to_spliced_with_length() {
+        let d = crate::rules::test_helpers::run_oxc_ts("arr.toSpliced(2, arr.length);", &Check);
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_splice_without_count() {
+        let d = crate::rules::test_helpers::run_oxc_ts("arr.splice(2);", &Check);
+        assert!(d.is_empty());
+    }
+
+
+    #[test]
+    fn allows_splice_with_numeric_count() {
+        let d = crate::rules::test_helpers::run_oxc_ts("arr.splice(2, 3);", &Check);
+        assert!(d.is_empty());
+    }
+
+
+    #[test]
+    fn allows_splice_with_replacement_items() {
+        let d = crate::rules::test_helpers::run_oxc_ts("arr.splice(2, arr.length, 'a', 'b');", &Check);
+        assert!(d.is_empty());
+    }
+}

@@ -1,8 +1,6 @@
 //! Forbids global `types.ts` files — colocate types with their usage.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

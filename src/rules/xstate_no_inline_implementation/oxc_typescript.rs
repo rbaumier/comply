@@ -82,3 +82,137 @@ impl OxcCheck for Check {
         diagnostics
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diagnostic::Diagnostic;
+    use super::Check;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_inline_entry_action() {
+        let src = r#"
+            createMachine({
+                entry: () => console.log("hi"),
+            });
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_inline_exit_function_expression() {
+        let src = r#"
+            createMachine({
+                exit: function () { doStuff(); },
+            });
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_inline_guard() {
+        let src = r#"
+            createMachine({
+                on: { EVENT: { guard: (ctx, e) => ctx.ok } },
+            });
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_inline_cond_legacy_name() {
+        let src = r#"
+            createMachine({
+                on: { EVENT: { cond: () => true } },
+            });
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_inline_invoke_src() {
+        let src = r#"
+            createMachine({
+                invoke: { src: () => fetch("/api") },
+            });
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_named_string_action() {
+        let src = r#"
+            createMachine({
+                entry: "logIt",
+                exit: "cleanup",
+            });
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_named_guard_reference() {
+        let src = r#"
+            createMachine({
+                on: { EVENT: { guard: "isReady" } },
+            });
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_invoke_src_string() {
+        let src = r#"
+            createMachine({
+                invoke: { src: "fetchUser" },
+            });
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_inline_entry_outside_machine() {
+        let src = r#"
+            import { createMachine } from 'xstate';
+            const uiConfig = { entry: () => openPanel() };
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn flags_inline_entry_inside_create_machine() {
+        let src = r#"
+            import { createMachine } from 'xstate';
+            createMachine({ entry: () => openPanel() });
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_inline_inside_setup() {
+        let src = r#"
+            import { setup } from 'xstate';
+            setup({}).createMachine({
+                entry: () => console.log("hi"),
+            });
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+}

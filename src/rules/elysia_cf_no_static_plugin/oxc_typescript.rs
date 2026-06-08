@@ -63,6 +63,14 @@ mod tests {
         let src = "import { staticPlugin } from '@elysiajs/static';\napp.use(staticPlugin());";
         assert_eq!(run_in_project(src, &project).len(), 1);
     }
+
+
+
+    #[test]
+    fn ignores_non_cf_files() {
+        let src = "import { staticPlugin } from '@elysiajs/static';\napp.use(staticPlugin());";
+        assert!(crate::rules::test_helpers::run_oxc_ts(src, &Check).is_empty());
+    }
 }
 
 impl OxcCheck for Check {

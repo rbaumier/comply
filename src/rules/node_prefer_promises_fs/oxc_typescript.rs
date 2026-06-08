@@ -89,3 +89,46 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_fs_read_file() {
+        let d = run_on("fs.readFile('f.txt', cb);");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("fs.promises.readFile"));
+    }
+
+
+    #[test]
+    fn flags_fs_write_file() {
+        assert_eq!(run_on("fs.writeFile('f.txt', data, cb);").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_fs_promises() {
+        assert!(run_on("fs.promises.readFile('f.txt');").is_empty());
+    }
+
+
+    #[test]
+    fn allows_sync_variant() {
+        assert!(run_on("fs.readFileSync('f.txt');").is_empty());
+    }
+
+
+    #[test]
+    fn allows_other_object() {
+        assert!(run_on("myFs.readFile('f.txt', cb);").is_empty());
+    }
+}

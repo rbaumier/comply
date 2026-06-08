@@ -139,4 +139,72 @@ mod tests {
         let src = "const v = x < -1 ? x : -1;";
         assert_eq!(run(src).len(), 1);
     }
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_gt_min_pattern() {
+        // height > 50 ? 50 : height -> Math.min(height, 50)
+        let d = run_on("const x = height > 50 ? 50 : height;");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("Math.min"));
+    }
+
+
+    #[test]
+    fn flags_lt_min_pattern() {
+        // height < 50 ? height : 50 -> Math.min(height, 50)
+        let d = run_on("const x = height < 50 ? height : 50;");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("Math.min"));
+    }
+
+
+    #[test]
+    fn flags_gte_min_pattern() {
+        let d = run_on("const x = height >= 50 ? 50 : height;");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("Math.min"));
+    }
+
+
+    #[test]
+    fn flags_gt_max_pattern() {
+        // height > 50 ? height : 50 -> Math.max(height, 50)
+        let d = run_on("const x = height > 50 ? height : 50;");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("Math.max"));
+    }
+
+
+    #[test]
+    fn flags_lt_max_pattern() {
+        // height < 50 ? 50 : height -> Math.max(height, 50)
+        let d = run_on("const x = height < 50 ? 50 : height;");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("Math.max"));
+    }
+
+
+    #[test]
+    fn allows_unrelated_ternary() {
+        assert!(run_on("const x = a > b ? c : d;").is_empty());
+    }
+
+
+    #[test]
+    fn allows_equality_ternary() {
+        assert!(run_on("const x = a === b ? a : b;").is_empty());
+    }
+
+
+    #[test]
+    fn allows_already_using_math_min() {
+        assert!(run_on("const x = Math.min(a, b);").is_empty());
+    }
 }

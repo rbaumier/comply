@@ -227,3 +227,57 @@ fn earlier_param_types_more_general(a: &SigInfo, b: &SigInfo) -> bool {
     }
     a_more_general
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_general_before_specific() {
+        let src = "function f(a: string): void;\nfunction f(a: string, b: number): void;\nfunction f(a: string, b?: number): void {}";
+        let diags = run(src);
+        assert_eq!(diags.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_specific_before_general() {
+        let src = "function f(a: string, b: number): void;\nfunction f(a: string): void;\nfunction f(a: string, b?: number): void {}";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_no_overloads() {
+        let src = "function f(a: string): void {}";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn flags_general_string_before_literal() {
+        let src = "function f(a: string): void;\nfunction f(a: 'x'): void;\nfunction f(a: string): void {}";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_literal_before_general_string() {
+        let src = "function f(a: 'x'): void;\nfunction f(a: string): void;\nfunction f(a: string): void {}";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn flags_wide_union_before_narrow_union() {
+        let src = "function f(a: 'x' | 'y' | 'z'): void;\nfunction f(a: 'x' | 'y'): void;\nfunction f(a: string): void {}";
+        assert_eq!(run(src).len(), 1);
+    }
+}

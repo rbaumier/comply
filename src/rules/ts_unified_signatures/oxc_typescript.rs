@@ -88,3 +88,37 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_duplicate_method_signatures() {
+        let diags = run_on("interface Foo {\n  bar(x: string): void;\n  bar(x: number): void;\n}");
+        assert_eq!(diags.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_different_method_names() {
+        assert!(
+            run_on("interface Foo {\n  bar(x: string): void;\n  baz(x: number): void;\n}")
+                .is_empty()
+        );
+    }
+
+
+    #[test]
+    fn flags_duplicate_call_signatures() {
+        let diags = run_on("interface Foo {\n  (x: string): void;\n  (x: number): void;\n}");
+        assert_eq!(diags.len(), 1);
+    }
+}

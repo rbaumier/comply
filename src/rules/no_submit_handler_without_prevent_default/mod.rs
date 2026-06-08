@@ -7,8 +7,6 @@
 //! so it does not false-positive on handlers defined elsewhere.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

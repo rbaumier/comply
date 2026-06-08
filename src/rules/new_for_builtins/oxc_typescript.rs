@@ -115,3 +115,175 @@ fn is_name_locally_bound(
     }
     false
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_map_without_new() {
+        let d = run_on("const m = Map();");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("new Map()"));
+    }
+
+
+    #[test]
+    fn flags_set_without_new() {
+        let d = run_on("const s = Set();");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("new Set()"));
+    }
+
+
+    #[test]
+    fn flags_promise_without_new() {
+        let d = run_on("const p = Promise(() => {});");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("new Promise()"));
+    }
+
+
+    #[test]
+    fn flags_new_symbol() {
+        let d = run_on("const s = new Symbol('foo');");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("Symbol()"));
+        assert!(d[0].message.contains("not a constructor"));
+    }
+
+
+    #[test]
+    fn flags_new_bigint() {
+        let d = run_on("const b = new BigInt(42);");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("BigInt()"));
+    }
+
+
+    #[test]
+    fn allows_new_map() {
+        assert!(run_on("const m = new Map();").is_empty());
+    }
+
+
+    #[test]
+    fn allows_new_set() {
+        assert!(run_on("const s = new Set();").is_empty());
+    }
+
+
+    #[test]
+    fn allows_symbol_factory() {
+        assert!(run_on("const s = Symbol('foo');").is_empty());
+    }
+
+
+    #[test]
+    fn allows_custom_class_without_new() {
+        assert!(run_on("const x = myFunction();").is_empty());
+    }
+
+
+    #[test]
+    fn allows_new_custom_class() {
+        assert!(run_on("const x = new MyClass();").is_empty());
+    }
+
+
+    #[test]
+    fn allows_shadowed_by_function_param() {
+        let src = r#"
+function make(Map: () => unknown) {
+  return Map();
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_shadowed_by_const() {
+        let src = r#"
+const Map = () => ({});
+const m = Map();
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_shadowed_by_let() {
+        let src = r#"
+let Promise = (cb: any) => cb();
+const p = Promise(() => {});
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_shadowed_by_import() {
+        let src = r#"
+import { Map } from './custom-map';
+const m = Map();
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_shadowed_by_import_alias() {
+        let src = r#"
+import { MyMap as Map } from './custom-map';
+const m = Map();
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_shadowed_by_default_import() {
+        let src = r#"
+import Map from './custom-map';
+const m = Map();
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_disallow_new_shadowed_by_param() {
+        // Symbol is a local param here, not the global.
+        let src = r#"
+function make(Symbol: new (s: string) => unknown) {
+  return new Symbol('foo');
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn still_flags_global_map_call() {
+        // No local binding — should still flag.
+        let d = run_on("const m = Map();");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("new Map()"));
+    }
+
+
+    #[test]
+    fn still_flags_global_promise_call() {
+        let d = run_on("const p = Promise(() => {});");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("new Promise()"));
+    }
+}

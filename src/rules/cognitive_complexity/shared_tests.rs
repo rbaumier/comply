@@ -110,15 +110,3 @@ fn rust_backend_matches_spec() {
         );
     }
 }
-
-#[test]
-fn typescript_backend_matches_spec() {
-    for s in SCENARIOS {
-        let got = super::typescript::compute_source(s.ts);
-        assert_eq!(
-            got, s.expected,
-            "typescript backend, scenario `{}`: expected {}, got {}",
-            s.name, s.expected, got
-        );
-    }
-}

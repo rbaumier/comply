@@ -118,3 +118,62 @@ fn template_has_sensitive_substitution(tpl: &TemplateLiteral, source: &str) -> b
     }
     false
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_console_log_with_password() {
+        assert_eq!(run_on("console.log('password:', userPassword);").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_console_error_with_token() {
+        assert_eq!(run_on("console.error(`token=${token}`);").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_logger_with_api_key() {
+        assert_eq!(run_on("logger.info('label:', apiKey);").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_logging_without_sensitive_data() {
+        assert!(run_on("console.log('User logged in');").is_empty());
+    }
+
+
+    #[test]
+    fn allows_non_logging_with_sensitive_word() {
+        assert!(run_on("const password = getPassword();").is_empty());
+    }
+
+
+    #[test]
+    fn allows_string_literal_mentioning_token() {
+        assert!(run_on(r#"console.log("Token refresh succeeded");"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_descriptive_message_about_tokens() {
+        assert!(run_on(r#"logger.info("Start cleaning up expired tokens...");"#).is_empty());
+    }
+
+
+    #[test]
+    fn flags_identifier_token_variable() {
+        assert_eq!(run_on("console.log(userToken);").len(), 1);
+    }
+}

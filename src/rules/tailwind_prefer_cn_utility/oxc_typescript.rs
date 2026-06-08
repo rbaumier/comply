@@ -61,3 +61,34 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diagnostic::Diagnostic;
+    use super::Check;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_ternary_classname() {
+        assert_eq!(run(r#"<div className={x ? 'flex' : 'hidden'} />"#).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_cn_utility() {
+        assert!(run(r#"<div className={cn('p-4', x && 'flex')} />"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_static_classname() {
+        assert!(run(r#"<div className="flex p-4" />"#).is_empty());
+    }
+}

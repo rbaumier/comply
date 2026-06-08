@@ -162,3 +162,72 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_icon_with_mr_2() {
+        let src = r#"const x = <Button><Icon className="mr-2" />Save</Button>;"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_icon_with_ml_2() {
+        let src = r#"const x = <Button>Save<Icon className="ml-2" /></Button>;"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_data_icon_attribute() {
+        let src = r#"const x = <Button><Icon data-icon="inline-start" />Save</Button>;"#;
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn flags_icon_without_data_icon_attr() {
+        // `<Icon />` is icon-shaped but missing `data-icon` — still wrong
+        // because the parent button can't size/space it via CSS.
+        let src = r#"const x = <Button><Icon />Save</Button>;"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_lucide_named_icon_without_data_icon() {
+        let src = r#"const x = <Button><ChevronRight />Next</Button>;"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_data_icon_on_lucide_named_icon() {
+        let src = r#"const x = <Button><ChevronRight data-icon="inline-end" />Next</Button>;"#;
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_button() {
+        let src = r#"const x = <div><Icon className="mr-2" />hi</div>;"#;
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_icon_child() {
+        let src = r#"const x = <Button><span>Save</span></Button>;"#;
+        assert!(run(src).is_empty());
+    }
+}

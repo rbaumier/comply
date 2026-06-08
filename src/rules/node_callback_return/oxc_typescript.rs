@@ -305,4 +305,17 @@ mod tests {
         let src = "async function wrap(callback) { return await callback(conn); }";
         assert!(run(src).is_empty());
     }
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_cb_followed_by_more_work() {
+        let src = "function handle(err) { if (err) { cb(err); doMore(); } finish(); }";
+        assert_eq!(run_on(src).len(), 1);
+    }
 }

@@ -75,3 +75,35 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_framework(source, &Check, "elysia")
+    }
+
+
+    #[test]
+    fn flags_enabled_true_literal() {
+        let src = "import { serverTiming } from '@elysiajs/server-timing';\napp.use(serverTiming({ enabled: true }));";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_env_gated_enabled() {
+        let src = "import { serverTiming } from '@elysiajs/server-timing';\napp.use(serverTiming({ enabled: process.env.NODE_ENV !== 'production' }));";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_server_timing_files() {
+        let src = "serverTiming({ enabled: true });";
+        assert!(crate::rules::test_helpers::run_oxc_ts(src, &Check).is_empty());
+    }
+}

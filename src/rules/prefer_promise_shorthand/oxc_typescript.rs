@@ -114,3 +114,42 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_promise_resolve_shorthand() {
+        let d = run_on(r#"const p = new Promise((resolve) => resolve(42));"#);
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].rule_id, "prefer-promise-shorthand");
+    }
+
+
+    #[test]
+    fn flags_promise_reject_shorthand() {
+        let d = run_on(r#"const p = new Promise((_, reject) => reject(new Error("fail")));"#);
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_promise_with_logic() {
+        let src = "const p = new Promise((resolve, reject) => {\n  fetchData().then(resolve).catch(reject);\n});";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_promise_resolve_static() {
+        assert!(run_on("const p = Promise.resolve(42);").is_empty());
+    }
+}

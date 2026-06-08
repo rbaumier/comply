@@ -230,3 +230,82 @@ fn tokenize_comment(body: &str) -> Vec<String> {
         .filter(|w| !STOP_WORDS.contains(&w.as_str()))
         .collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_paraphrase() {
+        // "handle click" tokens [handle, click] all in identifier
+        // [handle, click], 100% overlap → flag.
+        let source = "// handle click\nfunction handleClick() {}";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_snake_case_paraphrase() {
+        let source = "// fetch user data\nconst fetch_user_data = () => {};";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_informative_comment() {
+        // Comment explains WHY, vocabulary diverges → no flag.
+        let source =
+            "// Avoid double-fire when the user double-clicks fast\nfunction handleClick() {}";
+        assert!(run_on(source).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_jsdoc() {
+        // JSDoc is handled by a different rule.
+        let source = "/** Handle click */\nfunction handleClick() {}";
+        assert!(run_on(source).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_long_comments() {
+        // > 6 tokens → not a paraphrase candidate.
+        let source = "// handle click event by deduping fast double click bursts and recording metrics\nfunction handleClick() {}";
+        assert!(run_on(source).is_empty());
+    }
+
+
+    #[test]
+    fn unit_tokenize_identifier() {
+        assert_eq!(tokenize_identifier("handleClick"), vec!["handle", "click"]);
+        assert_eq!(
+            tokenize_identifier("fetch_user_data"),
+            vec!["fetch", "user", "data"]
+        );
+        assert_eq!(
+            tokenize_identifier("HTTPClient"),
+            vec!["h", "t", "t", "p", "client"]
+        );
+    }
+
+
+    #[test]
+    fn unit_tokenize_comment() {
+        assert_eq!(
+            tokenize_comment("the handle click"),
+            vec!["handle", "click"]
+        );
+        assert_eq!(
+            tokenize_comment("a fetch and a parse"),
+            vec!["fetch", "parse"]
+        );
+    }
+}

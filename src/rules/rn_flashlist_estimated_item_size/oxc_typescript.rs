@@ -51,3 +51,27 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(s, &Check)
+    }
+
+
+    #[test]
+    fn allows_with_estimated() {
+        let src = "const x = <FlashList data={items} renderItem={r} estimatedItemSize={64} />;";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_flatlist() {
+        let src = "const x = <FlatList data={items} renderItem={r} />;";
+        assert!(run(src).is_empty());
+    }
+}

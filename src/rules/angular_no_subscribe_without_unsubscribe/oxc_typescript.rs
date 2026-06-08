@@ -65,3 +65,28 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_bare_subscribe() {
+        let src = "import { Component } from '@angular/core';\n@Component({}) class C { f() { obs.subscribe(v => v); } }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_take_until_destroyed() {
+        let src = "import { Component, takeUntilDestroyed } from '@angular/core';\n@Component({}) class C { f() { obs.pipe(takeUntilDestroyed()).subscribe(v => v); } }";
+        assert!(run(src).is_empty());
+    }
+}

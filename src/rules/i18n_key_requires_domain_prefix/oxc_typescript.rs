@@ -95,3 +95,44 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_missing_domain() {
+        assert_eq!(run("t('title')").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_domain_key() {
+        assert!(run("t('auth.title')").is_empty());
+    }
+
+
+    #[test]
+    fn flags_uppercase_leading_segment() {
+        // `Auth.Title` has uppercase-leading segments — invalid.
+        assert_eq!(run("t('Auth.Title')").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_consecutive_dots() {
+        assert_eq!(run("t('auth..title')").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_slash_separator() {
+        assert_eq!(run("t('auth/title')").len(), 1);
+    }
+}

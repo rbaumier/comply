@@ -1,8 +1,6 @@
 //! ts-ban-ts-comment — disallow `@ts-<directive>` comments or require descriptions.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

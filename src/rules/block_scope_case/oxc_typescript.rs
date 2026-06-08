@@ -60,3 +60,88 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_const_in_case_without_block() {
+        let src = r#"switch (x) {
+    case 1:
+        const y = 2;
+        break;
+    case 2:
+        break;
+}"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_let_in_case_without_block() {
+        let src = r#"switch (x) {
+    case 1:
+        let y = 2;
+        break;
+}"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_class_decl_in_case() {
+        let src = r#"switch (x) {
+    case 1:
+        class Foo {}
+        break;
+}"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_case_with_block() {
+        let src = r#"switch (x) {
+    case 1: {
+        const y = 2;
+        break;
+    }
+    case 2:
+        break;
+}"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_case_without_declaration() {
+        let src = r#"switch (x) {
+    case 1:
+        doSomething();
+        break;
+}"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_default_with_block() {
+        let src = r#"switch (x) {
+    case 1:
+        break;
+    default: {
+        const y = 2;
+        break;
+    }
+}"#;
+        assert!(run_on(src).is_empty());
+    }
+}

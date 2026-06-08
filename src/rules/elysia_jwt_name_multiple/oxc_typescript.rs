@@ -108,3 +108,49 @@ impl OxcCheck for Check {
         diagnostics
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_framework(source, &Check, "elysia")
+    }
+
+
+    #[test]
+    fn flags_two_jwt_one_unnamed() {
+        let src = "import { jwt } from '@elysiajs/jwt';\napp.use(jwt({ name: 'access', secret: 'a' })).use(jwt({ secret: 'b' }));";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_duplicate_names() {
+        let src = "import { jwt } from '@elysiajs/jwt';\napp.use(jwt({ name: 'auth', secret: 'a' })).use(jwt({ name: 'auth', secret: 'b' }));";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_distinct_names() {
+        let src = "import { jwt } from '@elysiajs/jwt';\napp.use(jwt({ name: 'access', secret: 'a' })).use(jwt({ name: 'refresh', secret: 'b' }));";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_single_jwt() {
+        let src = "import { jwt } from '@elysiajs/jwt';\napp.use(jwt({ secret: 'a' }));";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_jwt_files() {
+        let src = "app.use(jwt({})).use(jwt({}));";
+        assert!(crate::rules::test_helpers::run_oxc_ts(src, &Check).is_empty());
+    }
+}

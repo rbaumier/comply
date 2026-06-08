@@ -175,3 +175,68 @@ fn collect_stmt_mutations(stmt: &Statement, source: &str, out: &mut Vec<u32>) {
         _ => {}
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_two_sequential_mutations() {
+        let src = "async function f() {\n  await db.insert(users).values({ id: 1 });\n  await db.update(posts).set({ x: 1 });\n}";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_inside_transaction() {
+        let src = "async function f() { await db.transaction(async (tx) => {\n  await tx.insert(users).values({ id: 1 });\n  await tx.update(posts).set({ x: 1 });\n}); }";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_single_mutation() {
+        let src = "async function f() { await db.insert(users).values({ id: 1 }); }";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn flags_mutations_split_across_if_else() {
+        // REVIEW regression: mutations buried inside if/else branches
+        // were missed by the previous direct-children-only count.
+        let src = "async function f(c) {\n  \
+                   if (c) {\n    await db.insert(users).values({ id: 1 });\n  } else {\n    await db.update(posts).set({ x: 1 });\n  }\n}";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_top_level_then_nested_mutation() {
+        let src = "async function f(c) {\n  \
+                   await db.insert(users).values({ id: 1 });\n  \
+                   if (c) { await db.update(posts).set({ x: 1 }); }\n}";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_hmac_update() {
+        let src = "function sign() {\n  hmac.update(Buffer.from(ts));\n  hmac.update(sep);\n}";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_cache_update() {
+        let src = "function f() {\n  cache.update(k, v);\n  cache.delete(old);\n}";
+        assert!(run(src).is_empty());
+    }
+}

@@ -119,3 +119,52 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rules::test_helpers::run_oxc_ts;
+
+
+
+    #[test]
+    fn flags_large_decimal_without_separators() {
+        let d = run_oxc_ts("const x = 1000000;", &Check);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("1_000_000"));
+    }
+
+
+    #[test]
+    fn flags_five_digit_number() {
+        let d = run_oxc_ts("const x = 10000;", &Check);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("10_000"));
+    }
+
+
+    #[test]
+    fn allows_four_digit_number() {
+        assert!(run_oxc_ts("const x = 1000;", &Check).is_empty());
+    }
+
+
+    #[test]
+    fn allows_already_separated() {
+        assert!(run_oxc_ts("const x = 1_000_000;", &Check).is_empty());
+    }
+
+
+    #[test]
+    fn flags_hex_without_separators() {
+        let d = run_oxc_ts("const x = 0xFF00FF;", &Check);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("0xFF_00_FF"));
+    }
+
+
+    #[test]
+    fn allows_short_hex() {
+        assert!(run_oxc_ts("const x = 0xFF;", &Check).is_empty());
+    }
+}

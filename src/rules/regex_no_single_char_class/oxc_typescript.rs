@@ -62,3 +62,69 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_single_char_class() {
+        let diags = run_on(r#"const re = /[a]bc/;"#);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("[a]"));
+    }
+
+
+    #[test]
+    fn flags_dot_in_class() {
+        let diags = run_on(r#"const re = /[.]foo/;"#);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("[.]"));
+    }
+
+
+    #[test]
+    fn allows_multi_char_class() {
+        assert!(run_on(r#"const re = /[abc]/;"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_negated_class() {
+        assert!(run_on(r#"const re = /[^a]/;"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_escape_in_class() {
+        assert!(run_on(r#"const re = /[\d]/;"#).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_tailwind_arbitrary_value_in_string() {
+        let src = r#"const x = "has-[>svg]:grid-cols-[a]";"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_url_in_string() {
+        let src = r#"const u = "http://example.com/[a]/path";"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_scoped_import_empty_class_lookalike() {
+        let src = r#"import X from "@scope/[a]-pkg";"#;
+        assert!(run_on(src).is_empty());
+    }
+}

@@ -1,8 +1,6 @@
 //! ts-max-params — enforce a maximum number of parameters in function definitions.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

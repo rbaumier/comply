@@ -75,3 +75,47 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_logical_or_reassignment() {
+        let d = run_on("function f(x) {\n  x = x || 'default';\n}");
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].rule_id, "prefer-default-parameters");
+    }
+
+
+    #[test]
+    fn flags_nullish_coalescing_reassignment() {
+        let d = run_on("function f(x) {\n  x = x ?? 42;\n}");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_default_parameter() {
+        assert!(run_on("function f(x = 'default') {}").is_empty());
+    }
+
+
+    #[test]
+    fn allows_different_identifiers() {
+        assert!(run_on("function f(x) {\n  x = y || 'default';\n}").is_empty());
+    }
+
+
+    #[test]
+    fn allows_non_literal_rhs() {
+        assert!(run_on("function f(x) {\n  x = x || getValue();\n}").is_empty());
+    }
+}

@@ -96,3 +96,43 @@ impl OxcCheck for Check {
         out
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_framework(source, &Check, "elysia")
+    }
+
+
+    #[test]
+    fn flags_imported_schema_used_inline() {
+        let src = "import { UserSchema } from './schema';\napp.post('/x', () => 1, { body: UserSchema });";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_string_reference() {
+        let src =
+            "import { UserSchema } from './schema';\napp.post('/x', () => 1, { body: 'user' });";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_inline_typebox() {
+        let src = "import { t } from 'elysia';\napp.post('/x', () => 1, { body: t.Object({}) });";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_elysia_files() {
+        let src = "import { UserSchema } from './schema';\napp.post('/x', () => 1, { body: UserSchema });";
+        assert!(crate::rules::test_helpers::run_oxc_ts(src, &Check).is_empty());
+    }
+}

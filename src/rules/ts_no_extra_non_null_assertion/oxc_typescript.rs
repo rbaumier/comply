@@ -37,3 +37,41 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_double_bang_on_expression() {
+        let diags = run_on("const x = value!!;");
+        assert_eq!(diags.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_single_non_null_assertion() {
+        assert!(run_on("const x = value!;").is_empty());
+    }
+
+
+    #[test]
+    fn allows_boolean_coercion() {
+        assert!(run_on("const x = !!value;").is_empty());
+    }
+
+
+    #[test]
+    fn flags_triple_bang() {
+        let diags = run_on("const x = value!!!;");
+        // triple produces nested non_null_expression nodes
+        assert!(!diags.is_empty());
+    }
+}

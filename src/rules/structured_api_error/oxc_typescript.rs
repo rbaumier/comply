@@ -61,3 +61,49 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_bare_error_in_route_file() {
+        let src = r#"
+import { Hono } from "hono";
+app.get("/foo", (c) => {
+    throw new Error("not found");
+});
+"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_error_in_non_route_file() {
+        let src = r#"
+function validate(x: string) {
+    throw new Error("invalid input");
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn flags_multiple_errors() {
+        let src = r#"
+app.post("/bar", (c) => {
+    if (!x) throw new Error("missing x");
+    if (!y) throw new Error("missing y");
+});
+"#;
+        assert_eq!(run_on(src).len(), 2);
+    }
+}

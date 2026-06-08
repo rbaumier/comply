@@ -112,3 +112,50 @@ fn callee_chain_has_create_server_fn(expr: &Expression) -> bool {
         _ => false,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_not_found_error_in_server_fn() {
+        let src = "const fn = createServerFn().handler(async () => { \
+                   if (!user) { throw new Error('user not found'); } });";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_case_insensitive_in_server_fn() {
+        let src = "const fn = createServerFn()(async () => { throw new Error('Not Found'); });";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_notfound_helper_in_server_fn() {
+        let src = "const fn = createServerFn().handler(async () => { throw notFound(); });";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_unrelated_error_in_server_fn() {
+        let src = "const fn = createServerFn().handler(async () => { throw new Error('permission denied'); });";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_not_found_outside_server_fn() {
+        // Outside a createServerFn callback we don't have enough signal.
+        assert!(run("if (!user) { throw new Error('user not found'); }").is_empty());
+    }
+}

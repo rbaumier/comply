@@ -62,3 +62,47 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_gettime() {
+        let d = run_on("const clone = new Date(d.getTime());");
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].rule_id, "consistent-date-clone");
+    }
+
+
+    #[test]
+    fn flags_valueof() {
+        let d = run_on("const clone = new Date(d.valueOf());");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_direct_clone() {
+        assert!(run_on("const clone = new Date(d);").is_empty());
+    }
+
+
+    #[test]
+    fn allows_date_with_number() {
+        assert!(run_on("const d = new Date(1234567890);").is_empty());
+    }
+
+
+    #[test]
+    fn allows_date_now() {
+        assert!(run_on("const d = new Date(Date.now());").is_empty());
+    }
+}

@@ -121,3 +121,26 @@ impl OxcCheck for Check {
         diagnostics
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn allows_json_parse_with_as() {
+        assert!(run_on("const data = JSON.parse(raw) as Config;").is_empty());
+    }
+
+
+    #[test]
+    fn allows_response_json_with_satisfies() {
+        assert!(run_on("const data = await response.json() satisfies User;").is_empty());
+    }
+}

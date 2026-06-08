@@ -49,3 +49,38 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_empty_join() {
+        assert_eq!(run_on("const s = arr.join();").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_chained_join() {
+        assert_eq!(run_on("foo.map(x => x.id).join()").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_join_with_separator() {
+        assert!(run_on("const s = arr.join(',');").is_empty());
+    }
+
+
+    #[test]
+    fn allows_join_with_variable() {
+        assert!(run_on("const s = arr.join(sep);").is_empty());
+    }
+}

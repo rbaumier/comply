@@ -105,3 +105,42 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_on_error_in_default_queries() {
+        let src = "new QueryClient({ defaultOptions: { queries: { onError: handle } } });";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_on_error_with_arrow() {
+        let src = "new QueryClient({ defaultOptions: { queries: { onError: (e) => log(e) } } });";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_query_cache_on_error() {
+        let src = "new QueryClient({ queryCache: new QueryCache({ onError: handle }) });";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_no_default_options() {
+        let src = "new QueryClient({});";
+        assert!(run(src).is_empty());
+    }
+}

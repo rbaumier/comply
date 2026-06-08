@@ -74,3 +74,37 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+    fn run(code: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(code, &Check)
+    }
+
+
+    #[test]
+    fn flags_wildcard_origin() {
+        assert_eq!(run("window.postMessage(data, '*')").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_missing_origin() {
+        assert_eq!(run("iframe.contentWindow.postMessage(data)").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_explicit_origin() {
+        assert!(run("window.postMessage(data, 'https://example.com')").is_empty());
+    }
+
+
+    #[test]
+    fn allows_location_origin() {
+        assert!(run("window.postMessage(data, location.origin)").is_empty());
+    }
+}

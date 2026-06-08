@@ -62,3 +62,37 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+    fn run(code: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(code, &Check)
+    }
+
+
+    #[test]
+    fn flags_slice_splice() {
+        assert_eq!(run("arr.slice().splice(1, 2)").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_spread_splice() {
+        assert_eq!(run("[...arr].splice(1, 2)").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_direct_splice() {
+        assert!(run("arr.splice(1, 2)").is_empty());
+    }
+
+
+    #[test]
+    fn allows_to_spliced() {
+        assert!(run("arr.toSpliced(1, 2)").is_empty());
+    }
+}

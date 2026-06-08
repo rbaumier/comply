@@ -63,3 +63,38 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_positional_use_query() {
+        assert_eq!(run("useQuery(['todos'], fetchTodos);").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_positional_use_mutation_with_string_key() {
+        assert_eq!(run("useMutation('todos', createTodo);").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_object_syntax() {
+        assert!(run("useQuery({ queryKey: ['todos'], queryFn: f });").is_empty());
+    }
+
+
+    #[test]
+    fn allows_mutation_object_syntax() {
+        assert!(run("useMutation({ mutationFn: f });").is_empty());
+    }
+}

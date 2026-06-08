@@ -53,3 +53,30 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diagnostic::Diagnostic;
+    use super::Check;
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+    #[test]
+    fn flags_no_locale() {
+        assert_eq!(run("date.toLocaleDateString()").len(), 1);
+    }
+
+    #[test]
+    fn flags_tolocalestring_no_args() {
+        assert_eq!(run("n.toLocaleString()").len(), 1);
+    }
+
+    #[test]
+    fn allows_with_locale() {
+        assert!(run("date.toLocaleDateString(i18n.language, { dateStyle: 'short' })").is_empty());
+    }
+}

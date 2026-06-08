@@ -63,3 +63,35 @@ impl OxcCheck for Check {
         diagnostics
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_create_with_many_params() {
+        let src = "export function createService(db: DB, cache: Cache, logger: Logger) {}";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_create_with_deps_object() {
+        let src = "export function createService({ db, cache, logger }: Deps) {}";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_create_with_two_params() {
+        let src = "export function createService(db: DB, logger: Logger) {}";
+        assert!(run_on(src).is_empty());
+    }
+}

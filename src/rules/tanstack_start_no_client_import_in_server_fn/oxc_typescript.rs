@@ -92,3 +92,84 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(path: &str, src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_path(src, &Check, path)
+    }
+
+
+    #[test]
+    fn flags_use_state_in_functions_file() {
+        let diags = run(
+            "src/users/foo.functions.ts",
+            "import { useState } from 'react'",
+        );
+        assert_eq!(diags.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_react_dom_import() {
+        let diags = run(
+            "src/users/bar.functions.ts",
+            "import ReactDOM from 'react-dom'",
+        );
+        assert_eq!(diags.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_safe_import() {
+        let diags = run("src/users/foo.functions.ts", "import { z } from 'zod'");
+        assert!(diags.is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_functions_file() {
+        let diags = run("src/users/regular.ts", "import { useState } from 'react'");
+        assert!(diags.is_empty());
+    }
+
+
+    #[test]
+    fn flags_multiple_hooks() {
+        let diags = run(
+            "src/users/foo.functions.tsx",
+            "import { useState, useEffect } from 'react'",
+        );
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn flags_use_state_in_server_file() {
+        let diags = run(
+            "src/users/foo.server.ts",
+            "import { useState } from 'react'",
+        );
+        assert_eq!(diags.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_react_dom_in_server_file() {
+        let diags = run(
+            "src/users/bar.server.tsx",
+            "import ReactDOM from 'react-dom'",
+        );
+        assert_eq!(diags.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_safe_import_in_server_file() {
+        let diags = run("src/users/foo.server.ts", "import { z } from 'zod'");
+        assert!(diags.is_empty());
+    }
+}

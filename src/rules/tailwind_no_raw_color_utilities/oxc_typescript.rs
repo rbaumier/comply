@@ -99,3 +99,61 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_bg_white() {
+        assert_eq!(
+            run(r#"export const A = () => <div className="bg-white" />;"#).len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn flags_text_gray_900() {
+        assert_eq!(
+            run(r#"export const A = () => <div className="text-gray-900" />;"#).len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn flags_bg_blue_500() {
+        assert_eq!(
+            run(r#"export const A = () => <div className="p-4 bg-blue-500" />;"#).len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn allows_semantic_tokens() {
+        assert!(
+            run(r#"export const A = () => <div className="bg-background text-foreground" />;"#)
+                .is_empty()
+        );
+    }
+
+
+    #[test]
+    fn allows_bg_primary() {
+        assert!(
+            run(
+                r#"export const A = () => <div className="bg-primary text-primary-foreground" />;"#
+            )
+            .is_empty()
+        );
+    }
+}

@@ -66,4 +66,17 @@ mod tests {
         let src = r#"const m = "CREATE TABLE t (trace_id UUID DEFAULT gen_random_uuid())";"#;
         assert!(run_on(src).is_empty());
     }
+
+
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(src, &Check)
+    }
+
+
+    #[test]
+    fn flags_uuid_generate_v4() {
+        let src = r#"const q = "CREATE TABLE t (id UUID PRIMARY KEY DEFAULT uuid_generate_v4())";"#;
+        assert_eq!(run(src).len(), 1);
+    }
 }

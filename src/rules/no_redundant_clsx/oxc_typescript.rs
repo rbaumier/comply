@@ -60,3 +60,74 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_clsx_single_string() {
+        assert_eq!(run_on(r#"const c = clsx("foo");"#).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_cn_single_string() {
+        assert_eq!(run_on(r#"const c = cn("foo bar");"#).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_clsx_single_quoted_string() {
+        assert_eq!(run_on("const c = clsx('foo');").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_clsx_with_variable() {
+        assert!(run_on(r#"const c = clsx(className);"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_clsx_with_template_literal() {
+        assert!(run_on("const c = clsx(`foo ${x}`);").is_empty());
+    }
+
+
+    #[test]
+    fn allows_clsx_multiple_args() {
+        assert!(run_on(r#"const c = clsx("foo", "bar");"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_clsx_with_object() {
+        assert!(run_on(r#"const c = clsx({ foo: true });"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_clsx_no_args() {
+        assert!(run_on("const c = clsx();").is_empty());
+    }
+
+
+    #[test]
+    fn ignores_other_calls() {
+        assert!(run_on(r#"const c = other("foo");"#).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_member_call() {
+        assert!(run_on(r#"const c = utils.clsx("foo");"#).is_empty());
+    }
+}

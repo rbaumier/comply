@@ -104,3 +104,73 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_duplicate_chars() {
+        assert_eq!(run_on("const re = /[aab]/;").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_duplicate_chars_non_adjacent() {
+        assert_eq!(run_on("const re = /[aba]/;").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_unique_chars() {
+        assert!(run_on("const re = /[abc]/;").is_empty());
+    }
+
+
+    #[test]
+    fn allows_ranges() {
+        assert!(run_on("const re = /[a-z]/;").is_empty());
+    }
+
+
+    #[test]
+    fn ignores_tailwind_arbitrary_value_in_string() {
+        let src = r#"const x = "has-[>svg]:grid-cols-[auto_1fr]";"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_tailwind_data_slot_in_string() {
+        let src = r#"const x = "[data-slot=alert]";"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_url_in_string() {
+        let src = r#"const u = "http://a/b";"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_import_path() {
+        let src = r#"import X from "@tanstack/react-query";"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_char_class_lookalike_in_comment() {
+        let src = "// regex looks like /[aab]/ but this is a comment\nconst x = 1;";
+        assert!(run_on(src).is_empty());
+    }
+}

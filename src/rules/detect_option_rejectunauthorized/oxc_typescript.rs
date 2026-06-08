@@ -53,3 +53,42 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_reject_unauthorized_false() {
+        let source = "const opts = { rejectUnauthorized: false };";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_string_key() {
+        let source = r#"const opts = { "rejectUnauthorized": false };"#;
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_reject_unauthorized_true() {
+        let source = "const opts = { rejectUnauthorized: true };";
+        assert!(run_on(source).is_empty());
+    }
+
+
+    #[test]
+    fn allows_other_option_false() {
+        let source = "const opts = { somethingElse: false };";
+        assert!(run_on(source).is_empty());
+    }
+}

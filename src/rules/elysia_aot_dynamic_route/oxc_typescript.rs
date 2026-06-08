@@ -107,3 +107,70 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::project::ProjectCtx;
+    use crate::rules::test_helpers::run_oxc_ts_with_project;
+    use std::path::Path;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_framework(source, &Check, "elysia")
+    }
+
+
+    #[test]
+    fn flags_template_literal_with_substitution() {
+        let src = "import { Elysia } from 'elysia';\napp.get(`/users/${id}`, () => 'ok');";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_string_concatenation() {
+        let src = "import { Elysia } from 'elysia';\napp.post('/users/' + id, () => 'ok');";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_static_string() {
+        let src = "import { Elysia } from 'elysia';\napp.get('/users/:id', () => 'ok');";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_plain_template_string() {
+        let src = "import { Elysia } from 'elysia';\napp.get(`/users/:id`, () => 'ok');";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_elysia_files() {
+        let src = "app.get(`/users/${id}`, () => 'ok');";
+        assert!(crate::rules::test_helpers::run_oxc_ts(src, &Check).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_fetch_with_template_literal() {
+        // Regression: `fetch(`...`)` is a global call, not a route definition.
+        // Its callee is an identifier, not a member_expression — already
+        // filtered, but we keep this test to lock the behaviour.
+        let src = "import { Elysia } from 'elysia';\nconst body = await fetch(`/users/${id}`);";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_file_without_elysia_import() {
+        // Regression: a fetch helper in a non-Elysia file with `someClient.get(`/x/${id}`)`.
+        let src = "const client = makeClient();\nawait client.get(`/users/${id}`);";
+        assert!(run_on(src).is_empty());
+    }
+}

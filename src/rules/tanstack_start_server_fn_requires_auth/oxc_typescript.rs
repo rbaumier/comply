@@ -85,3 +85,42 @@ impl OxcCheck for Check {
             .collect()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_path(s, &Check, "api.functions.ts")
+    }
+
+
+    #[test]
+    fn flags_mutation_without_auth() {
+        assert_eq!(
+            run("const del = createServerFn().handler(async () => { await db.delete(posts) })")
+                .len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn allows_with_get_session() {
+        assert!(run(
+            "const del = createServerFn().handler(async () => { const s = await getSession(); await db.delete(posts) })"
+        )
+        .is_empty());
+    }
+
+
+    #[test]
+    fn allows_read_only() {
+        assert!(
+            run("const get = createServerFn().handler(async () => db.select().from(posts))")
+                .is_empty()
+        );
+    }
+}

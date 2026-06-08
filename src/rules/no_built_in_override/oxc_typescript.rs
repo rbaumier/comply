@@ -81,3 +81,64 @@ fn has_initializer(nodes: &oxc_semantic::AstNodes, decl_id: oxc_semantic::NodeId
     }
     false
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_const_array_override() {
+        let d = run_on("const Array = [];");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("Array"));
+    }
+
+
+    #[test]
+    fn flags_let_object_override() {
+        let d = run_on("let Object = {};");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("Object"));
+    }
+
+
+    #[test]
+    fn flags_promise_override() {
+        assert_eq!(run_on("const Promise = null;").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_undefined_override() {
+        let d = run_on("const undefined = 42;");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("undefined"));
+    }
+
+
+    #[test]
+    fn allows_normal_variables() {
+        assert!(run_on("const myArray = [];").is_empty());
+    }
+
+
+    #[test]
+    fn allows_usage_not_assignment() {
+        assert!(run_on("const x = Array.from([1, 2, 3]);").is_empty());
+    }
+
+
+    #[test]
+    fn flags_function_param_array() {
+        // `function f(Array) {}` overrides the global within the
+        // function — the previous walker missed parameters entirely.
+        assert_eq!(run_on("function f(Array: any) { return Array; }").len(), 1);
+    }
+}

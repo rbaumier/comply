@@ -67,4 +67,17 @@ mod tests {
         let src = r#"const m = "CREATE TABLE t (is_active BOOLEAN NOT NULL)";"#;
         assert!(run_on(src).is_empty());
     }
+
+
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(src, &Check)
+    }
+
+
+    #[test]
+    fn allows_has_prefix() {
+        let src = r#"const m = "CREATE TABLE t (has_admin BOOLEAN NOT NULL)";"#;
+        assert!(run(src).is_empty());
+    }
 }

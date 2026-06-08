@@ -45,3 +45,35 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_append_child() {
+        let d = run_on("node.appendChild(child);");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("append"));
+    }
+
+
+    #[test]
+    fn flags_chained_call() {
+        let d = run_on("document.body.appendChild(el);");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_append() {
+        assert!(run_on("node.append(child);").is_empty());
+    }
+}

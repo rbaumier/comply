@@ -322,3 +322,67 @@ fn is_guarded_by_typeof(source: &str, offset: usize, name: &str) -> bool {
     }
     false
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_window_in_component() {
+        let src = "function Page() { const w = window.innerWidth; return w; }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_document_in_component() {
+        let src = "const Page = () => { const el = document.body; return el; };";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_in_use_effect() {
+        let src = "function Page() { useEffect(() => { const w = window.innerWidth; }, []); return null; }";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_in_event_handler() {
+        let src = "function Page() { const onClick = () => { document.title = 'x'; }; return <button onClick={onClick}/>; }";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_non_component() {
+        let src = "function helper() { return window.location.href; }";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_typeof_guarded_window() {
+        let src = "function Page() { \
+                   if (typeof window !== 'undefined') { const w = window.innerWidth; } \
+                   return null; }";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_typeof_guarded_document_double_quoted() {
+        let src = "function Page() { \
+                   if (typeof document !== \"undefined\") { const t = document.title; } \
+                   return null; }";
+        assert!(run(src).is_empty());
+    }
+}

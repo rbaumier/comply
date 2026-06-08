@@ -1,8 +1,6 @@
 //! ts-no-generic-return-only — forbid generics used only in return position.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

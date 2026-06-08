@@ -1,8 +1,6 @@
 //! no-enum — replace TS enums with `as const satisfies` or discriminated unions.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::rules::backend::Backend;

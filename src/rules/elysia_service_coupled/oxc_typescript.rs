@@ -67,3 +67,34 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::project::ProjectCtx;
+
+
+
+    fn run_on(path: &str, source: &str) -> Vec<Diagnostic> {
+        let project = ProjectCtx::for_test_with_framework("elysia");
+        crate::rules::test_helpers::run_oxc_ts_with_project(
+            source,
+            &Check,
+            &project)
+    }
+
+
+    #[test]
+    fn allows_status_only_import() {
+        let src =
+            "import { status } from 'elysia';\nexport const notFound = () => status(404, 'gone');";
+        assert!(run_on("src/services/user.ts", src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_service_files() {
+        let src = "import { Elysia } from 'elysia';\nexport const app = new Elysia();";
+        assert!(run_on("src/routes/index.ts", src).is_empty());
+    }
+}

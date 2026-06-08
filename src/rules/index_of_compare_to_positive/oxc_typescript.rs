@@ -62,3 +62,38 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_indexof_gt_zero() {
+        assert_eq!(run_on("if (arr.indexOf(x) > 0) {}").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_indexof_lt_one() {
+        assert_eq!(run_on("if (str.indexOf('a') < 1) {}").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_indexof_gte_zero() {
+        assert!(run_on("if (arr.indexOf(x) >= 0) {}").is_empty());
+    }
+
+
+    #[test]
+    fn allows_indexof_neq_minus_one() {
+        assert!(run_on("if (arr.indexOf(x) !== -1) {}").is_empty());
+    }
+}

@@ -3,8 +3,6 @@
 //! `await` and just return the inner promise.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

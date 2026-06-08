@@ -82,3 +82,72 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_else_if_without_else() {
+        let src = r#"
+if (a) {
+  doA();
+} else if (b) {
+  doB();
+}
+"#;
+        let d = run_on(src);
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].rule_id, "elseif-without-else");
+    }
+
+
+    #[test]
+    fn allows_else_if_with_else() {
+        let src = r#"
+if (a) {
+  doA();
+} else if (b) {
+  doB();
+} else {
+  doC();
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn flags_chained_else_if_without_final_else() {
+        let src = r#"
+if (a) {
+  doA();
+} else if (b) {
+  doB();
+} else if (c) {
+  doC();
+}
+"#;
+        let d = run_on(src);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].line > 2);
+    }
+
+
+    #[test]
+    fn allows_plain_if_without_else() {
+        let src = r#"
+if (a) {
+  doA();
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+}

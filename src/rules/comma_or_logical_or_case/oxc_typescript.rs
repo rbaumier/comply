@@ -59,3 +59,55 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_comma_in_case() {
+        let src = r#"switch (x) {
+    case 1, 2:
+        break;
+}"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_logical_or_in_case() {
+        let src = r#"switch (x) {
+    case 1 || 2:
+        break;
+}"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_simple_case() {
+        let src = r#"switch (x) {
+    case 1:
+        break;
+}"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_fallthrough_pattern() {
+        let src = r#"switch (x) {
+    case 1:
+    case 2:
+        break;
+}"#;
+        assert!(run_on(src).is_empty());
+    }
+}

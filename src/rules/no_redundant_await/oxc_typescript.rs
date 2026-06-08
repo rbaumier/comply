@@ -90,3 +90,59 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_return_await() {
+        let d = run_on("async function f() { return await g(); }");
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].rule_id, "no-redundant-await");
+    }
+
+
+    #[test]
+    fn flags_return_await_in_arrow() {
+        let d = run_on("const f = async () => { return await g(); };");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_return_await_inside_try() {
+        assert!(
+            run_on("async function f() { try { return await g(); } catch (e) { throw e; } }")
+                .is_empty()
+        );
+    }
+
+
+    #[test]
+    fn flags_return_await_inside_catch() {
+        // In catch, the enclosing try no longer helps — catch handles its own errors.
+        // But since catch is not inside the try's body field, it's still redundant.
+        let d = run_on("async function f() { try { x(); } catch (e) { return await g(); } }");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_return_without_await() {
+        assert!(run_on("async function f() { return g(); }").is_empty());
+    }
+
+
+    #[test]
+    fn allows_await_without_return() {
+        assert!(run_on("async function f() { await g(); }").is_empty());
+    }
+}

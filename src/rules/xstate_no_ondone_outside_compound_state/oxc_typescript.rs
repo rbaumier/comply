@@ -152,4 +152,7 @@ mod tests {
         "#;
         assert!(run(src).is_empty());
     }
+
+    use crate::diagnostic::Diagnostic;
+    use super::Check;
 }

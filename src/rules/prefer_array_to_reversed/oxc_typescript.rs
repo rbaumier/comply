@@ -70,3 +70,37 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+    fn run(code: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(code, &Check)
+    }
+
+
+    #[test]
+    fn flags_spread_reverse() {
+        assert_eq!(run("[...arr].reverse()").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_slice_reverse() {
+        assert_eq!(run("arr.slice().reverse()").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_to_reversed() {
+        assert!(run("arr.toReversed()").is_empty());
+    }
+
+
+    #[test]
+    fn allows_mutating_reverse() {
+        assert!(run("arr.reverse()").is_empty());
+    }
+}

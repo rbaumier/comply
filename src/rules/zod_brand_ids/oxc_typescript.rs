@@ -84,3 +84,69 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_bare_id_field() {
+        let d = run_on("const S = z.object({ id: z.string() });");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_user_id_camel() {
+        let d = run_on("const S = z.object({ userId: z.string().uuid() });");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_post_id_snake() {
+        let d = run_on("const S = z.object({ post_id: z.string() });");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_branded_id() {
+        assert!(
+            run_on("const S = z.object({ userId: z.string().brand<\"UserId\">() });",).is_empty()
+        );
+    }
+
+
+    #[test]
+    fn ignores_non_id_fields() {
+        assert!(run_on("const S = z.object({ name: z.string() });").is_empty());
+    }
+
+
+    #[test]
+    fn ignores_words_ending_in_caps_id() {
+        // `VALID` ends in `ID` but is not an ID-like field.
+        assert!(run_on("const S = z.object({ VALID: z.string() });").is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_zod_values() {
+        assert!(run_on("const obj = { userId: \"abc\" };").is_empty());
+    }
+
+
+    #[test]
+    fn flags_multiple_ids() {
+        let d = run_on("const S = z.object({ userId: z.string(), postId: z.string() });");
+        assert_eq!(d.len(), 2);
+    }
+}

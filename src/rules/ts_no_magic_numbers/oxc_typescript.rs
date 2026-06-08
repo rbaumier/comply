@@ -136,3 +136,110 @@ fn is_allowed_context(
         current_id = parent_id;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_magic_number() {
+        let diags = run_on("const timeout = getTimeout(); if (timeout > 3000) {}");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("3000"));
+    }
+
+
+    #[test]
+    fn allows_const_declaration() {
+        assert!(run_on("const MAX_TIMEOUT = 3000;").is_empty());
+    }
+
+
+    #[test]
+    fn allows_zero_and_one() {
+        assert!(run_on("const arr = items[0]; const len = arr.length - 1;").is_empty());
+    }
+
+
+    #[test]
+    fn allows_enum_values() {
+        assert!(run_on("enum Status { Active = 200, Error = 500 }").is_empty());
+    }
+
+    #[test]
+    fn allowlist_zero() {
+        assert!(run_on("function f(x) { return x + 0; }").is_empty());
+    }
+
+
+    #[test]
+    fn allowlist_one() {
+        assert!(run_on("function f(x) { return x + 1; }").is_empty());
+    }
+
+
+    #[test]
+    fn allowlist_minus_one_unary() {
+        // `-1` parses as unary_expression(- , number(1)) — the walker
+        // must recognise the wrapped form, not just a literal token.
+        assert!(run_on("function f(x) { return x + -1; }").is_empty());
+    }
+
+    #[test]
+    fn flags_bare_forty_two() {
+        let diags = run_on("function f(x) { return x + 42; }");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("42"));
+    }
+
+
+    #[test]
+    fn flags_negative_forty_two() {
+        let diags = run_on("function f(x) { return x + -42; }");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("42"));
+    }
+
+
+    #[test]
+    fn allows_two() {
+        assert!(run_on("function f(x) { return x + 2; }").is_empty());
+    }
+
+
+    #[test]
+    fn allows_http_status_codes() {
+        assert!(run_on("if (res.status === 200) {}").is_empty());
+        assert!(run_on("if (res.status === 404) {}").is_empty());
+        assert!(run_on("if (res.status === 500) {}").is_empty());
+    }
+
+
+    #[test]
+    fn still_flags_non_standard_numbers() {
+        assert_eq!(run_on("function f(x) { return x + 42; }").len(), 1);
+    }
+
+
+    #[test]
+    fn ignores_numbers_inside_string_literals() {
+        // Tailwind utilities like `"p-4"` are CSS class names, not
+        // programmatic magic numbers. The AST only exposes a `string`
+        // node here — no `number` child is walked, so nothing to skip.
+        assert!(run_on(r#"function f() { return "p-4 mb-6 h-2.5"; }"#).is_empty());
+    }
+
+
+    #[test]
+    fn flags_both_operands_of_arithmetic() {
+        let diags = run_on("function f(x) { return x + 5 * 60; }");
+        assert_eq!(diags.len(), 2);
+    }
+}

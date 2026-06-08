@@ -72,3 +72,49 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_framework(source, &Check, "elysia")
+    }
+
+
+    #[test]
+    fn flags_get_with_body_schema() {
+        let src = "import { Elysia, t } from 'elysia';\nnew Elysia().get('/x', () => 'ok', { body: t.Object({ a: t.String() }) });";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_head_with_body_model_ref() {
+        let src = "import { Elysia } from 'elysia';\nnew Elysia().head('/x', () => 'ok', { body: 'model.x' });";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_get_with_query_only() {
+        let src = "import { Elysia, t } from 'elysia';\nnew Elysia().get('/x', () => 'ok', { query: t.Object({ q: t.String() }) });";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_elysia_files() {
+        let src = "app.get('/x', () => 'ok', { body: t.Object({}) });";
+        assert!(crate::rules::test_helpers::run_oxc_ts(src, &Check).is_empty());
+    }
+
+
+    #[test]
+    fn flags_get_with_typed_reference_body() {
+        let src = "import { Elysia } from 'elysia';\nimport { UserSchema } from './schemas';\nnew Elysia().get('/x', () => 'ok', { body: UserSchema });";
+        assert_eq!(run_on(src).len(), 1);
+    }
+}

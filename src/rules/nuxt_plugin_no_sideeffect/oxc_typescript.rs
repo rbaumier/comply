@@ -65,3 +65,35 @@ impl OxcCheck for Check {
         diagnostics
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on_path(source: &str, path: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_path(source, &Check, path)
+    }
+
+
+    #[test]
+    fn flags_top_level_call_in_plugin() {
+        let src = "console.log('init');\nexport default defineNuxtPlugin(() => {});";
+        assert!(!run_on_path(src, "plugins/auth.ts").is_empty());
+    }
+
+
+    #[test]
+    fn allows_only_define_nuxt_plugin() {
+        let src = "export default defineNuxtPlugin((nuxtApp) => { nuxtApp.provide('x', 1); });";
+        assert!(run_on_path(src, "plugins/auth.ts").is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_plugin_files() {
+        let src = "console.log('init');";
+        assert!(run_on_path(src, "src/utils/log.ts").is_empty());
+    }
+}

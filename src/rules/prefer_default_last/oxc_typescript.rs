@@ -55,3 +55,38 @@ impl OxcCheck for Check {
             }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_default_before_case() {
+        let src = "switch (x) {\n  default:\n    break;\n  case 1:\n    break;\n}";
+        let d = run_on(src);
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_default_last() {
+        let src = "switch (x) {\n  case 1:\n    break;\n  default:\n    break;\n}";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn flags_default_in_middle() {
+        let src =
+            "switch (x) {\n  case 1:\n    break;\n  default:\n    break;\n  case 2:\n    break;\n}";
+        let d = run_on(src);
+        assert_eq!(d.len(), 1);
+    }
+}

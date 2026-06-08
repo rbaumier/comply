@@ -91,3 +91,25 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+    #[test]
+    fn flags_missing_catch() {
+        let src = "const r = Result.try({ try: () => foo() });";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_both_keys() {
+        let src = "const r = Result.try({ try: () => foo(), catch: (e) => new E() });";
+        assert!(run(src).is_empty());
+    }
+}

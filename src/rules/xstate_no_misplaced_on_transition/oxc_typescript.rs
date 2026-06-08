@@ -84,3 +84,110 @@ fn enclosing_property_key<'a>(
     };
     Some(key)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diagnostic::Diagnostic;
+    use super::Check;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_on_inside_invoke() {
+        let src = r#"
+            const machine = createMachine({
+                invoke: {
+                    src: "fetchUser",
+                    id: "user",
+                    on: { DONE: "idle" },
+                },
+            });
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_on_directly_under_states() {
+        let src = r#"
+            const machine = createMachine({
+                initial: "idle",
+                states: {
+                    idle: {},
+                    on: { EVENT: "idle" },
+                },
+            });
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_on_inside_state_node() {
+        let src = r#"
+            const machine = createMachine({
+                initial: "idle",
+                states: {
+                    idle: {
+                        on: { EVENT: "active" },
+                    },
+                    active: {},
+                },
+            });
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_on_at_machine_root() {
+        let src = r#"
+            const machine = createMachine({
+                on: {
+                    GLOBAL: { target: ".idle" },
+                },
+                states: { idle: {} },
+            });
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_invoke_without_on() {
+        let src = r#"
+            const machine = createMachine({
+                invoke: {
+                    src: "fetchUser",
+                    onDone: { target: "success" },
+                    onError: { target: "failure" },
+                },
+            });
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn flags_on_inside_invoke_within_state_node() {
+        let src = r#"
+            const machine = createMachine({
+                states: {
+                    loading: {
+                        invoke: {
+                            src: "fetchUser",
+                            on: { CANCEL: "idle" },
+                        },
+                    },
+                },
+            });
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+}

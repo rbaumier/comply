@@ -57,3 +57,56 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_leading_pipe() {
+        assert_eq!(run_on("const re = /|foo/;").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_trailing_pipe() {
+        assert_eq!(run_on("const re = /foo|/;").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_consecutive_pipes() {
+        assert_eq!(run_on("const re = /foo||bar/;").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_valid_alternatives() {
+        assert!(run_on("const re = /foo|bar/;").is_empty());
+    }
+
+
+    #[test]
+    fn ignores_tailwind_class_string() {
+        assert!(run_on(r#"const x = "has-[>svg]:grid-cols-[auto_1fr]";"#).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_url_string() {
+        assert!(run_on(r#"const u = "http://a/b/c";"#).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_import_path() {
+        assert!(run_on(r#"import X from "@scope/pkg/sub";"#).is_empty());
+    }
+}

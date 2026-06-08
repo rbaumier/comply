@@ -103,3 +103,31 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_cache_time() {
+        assert_eq!(
+            run("new QueryClient({ defaultOptions: { queries: { cacheTime: 5000 } } })").len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn allows_gc_time() {
+        assert!(
+            run("new QueryClient({ defaultOptions: { queries: { gcTime: 5000 } } })").is_empty()
+        );
+    }
+}

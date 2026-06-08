@@ -64,3 +64,93 @@ impl OxcCheck for Check {
         }]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_pure_barrel_file() {
+        let src = "\
+export { a } from './a';
+export { b } from './b';
+export { c } from './c';
+";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_barrel_with_star_reexports() {
+        let src = "\
+export * from './a';
+export * from './b';
+export { c, d } from './c';
+";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_two_reexports_below_threshold() {
+        let src = "\
+export { a } from './a';
+export { b } from './b';
+";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_mixed_file_with_local_code() {
+        let src = "\
+export { a } from './a';
+export { b } from './b';
+export { c } from './c';
+export function helper() { return 1; }
+";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_normal_module() {
+        let src = "\
+import { x } from './x';
+export function doStuff() { return x + 1; }
+export const y = 2;
+";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_top_level_comments() {
+        let src = "\
+// Public API surface.
+export { a } from './a';
+export { b } from './b';
+export { c } from './c';
+";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn does_not_flag_when_imports_present() {
+        // Top-level imports mean the file pulls in code beyond re-exports.
+        let src = "\
+import './side-effect';
+export { a } from './a';
+export { b } from './b';
+export { c } from './c';
+";
+        assert!(run(src).is_empty());
+    }
+}

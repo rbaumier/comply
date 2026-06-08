@@ -37,3 +37,35 @@ impl OxcCheck for Check {
         }]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_framework(source, &Check, "elysia")
+    }
+
+
+    #[test]
+    fn flags_server_without_export_type() {
+        let src = "import { Elysia } from 'elysia';\nconst app = new Elysia().get('/', () => 'hi').listen(3000);";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_server_with_export_type() {
+        let src = "import { Elysia } from 'elysia';\nconst app = new Elysia().get('/', () => 'hi').listen(3000);\nexport type App = typeof app;";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_server_files() {
+        let src = "import { Elysia } from 'elysia';\nexport const plugin = new Elysia().get('/', () => 'hi');";
+        assert!(crate::rules::test_helpers::run_oxc_ts(src, &Check).is_empty());
+    }
+}

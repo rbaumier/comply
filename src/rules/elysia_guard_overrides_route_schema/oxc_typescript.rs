@@ -104,3 +104,42 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_framework(source, &Check, "elysia")
+    }
+
+
+    #[test]
+    fn flags_inner_body_overriding_guard() {
+        let src = "import { Elysia } from 'elysia';\napp.guard({ body: t.Object({ a: t.String() }) }, (g) => g.post('/x', () => 'ok', { body: t.Object({ a: t.Number() }) }));";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_guard_without_inner_body() {
+        let src = "import { Elysia } from 'elysia';\napp.guard({ body: t.Object({ a: t.String() }) }, (g) => g.post('/x', () => 'ok'));";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_guard_without_body() {
+        let src = "import { Elysia } from 'elysia';\napp.guard({ headers: t.Object({}) }, (g) => g.post('/x', () => 'ok', { body: t.Object({}) }));";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_elysia_files() {
+        let src = "app.guard({ body: 1 }, (g) => g.post('/x', () => 1, { body: 2 }));";
+        assert!(crate::rules::test_helpers::run_oxc_ts(src, &Check).is_empty());
+    }
+}

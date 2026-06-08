@@ -44,3 +44,36 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_extends_any() {
+        let diags = run_on("function f<T extends any>(x: T): T { return x; }");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("`any`"));
+    }
+
+
+    #[test]
+    fn flags_extends_unknown() {
+        let diags = run_on("function f<T extends unknown>(x: T): T { return x; }");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("`unknown`"));
+    }
+
+
+    #[test]
+    fn allows_extends_string() {
+        assert!(run_on("function f<T extends string>(x: T): T { return x; }").is_empty());
+    }
+}

@@ -86,3 +86,44 @@ impl OxcCheck for Check {
         diagnostics
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_generic_only_in_return() {
+        let src = "function parse<T>(): T { return {} as T; }";
+        let diags = run(src);
+        assert_eq!(diags.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_arrow_generic_only_in_return() {
+        let src = "const f = <T>(): T => ({} as T);";
+        let diags = run(src);
+        assert_eq!(diags.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_generic_used_in_parameter() {
+        let src = "function identity<T>(x: T): T { return x; }";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_non_generic_function() {
+        let src = "function plain(): string { return 'x'; }";
+        assert!(run(src).is_empty());
+    }
+}

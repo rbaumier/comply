@@ -48,3 +48,55 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diagnostic::Diagnostic;
+
+
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_path(src, &Check, "/app/migrations/001_add_col.ts")
+    }
+
+
+    fn run_non_migration(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(src, &Check)
+    }
+
+
+    #[test]
+    fn flags_alter_table_without_lock_timeout() {
+        let src = r#"const m = "ALTER TABLE users ADD COLUMN age INT";"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_alter_table_with_lock_timeout() {
+        let src = r#"const m = "SET lock_timeout = '5s'; ALTER TABLE users ADD COLUMN age INT";"#;
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn flags_create_index_in_template_literal() {
+        let src = "const m = `CREATE INDEX idx_users_age ON users(age)`;";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn skips_non_migration_path() {
+        let src = r#"const m = "ALTER TABLE users ADD COLUMN age INT";"#;
+        assert!(run_non_migration(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_ddl_string() {
+        let src = r#"const greeting = "hello world";"#;
+        assert!(run(src).is_empty());
+    }
+}

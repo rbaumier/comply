@@ -89,3 +89,49 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_framework(source, &Check, "elysia")
+    }
+
+
+    #[test]
+    fn flags_404_not_in_schema() {
+        let src = "import { Elysia, t } from 'elysia';\napp.get('/u', ({ status }) => status(404, 'nope'), { response: { 200: t.String() } });";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_401_not_in_schema() {
+        let src = "import { Elysia, t } from 'elysia';\napp.post('/login', ({ status }) => status(401, 'no'), { response: { 200: t.String() } });";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_when_status_in_schema() {
+        let src = "import { Elysia, t } from 'elysia';\napp.get('/u', ({ status }) => status(404, 'nope'), { response: { 200: t.String(), 404: t.String() } });";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_when_no_response_schema() {
+        let src = "import { Elysia, t } from 'elysia';\napp.get('/u', ({ status }) => status(404, 'nope'));";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_elysia_files() {
+        let src = "app.get('/u', () => status(404, 'nope'), { response: { 200: 'x' } });";
+        assert!(crate::rules::test_helpers::run_oxc_ts(src, &Check).is_empty());
+    }
+}

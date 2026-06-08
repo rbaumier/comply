@@ -79,3 +79,38 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_positive_tabindex_string() {
+        assert_eq!(run(r#"const x = <div tabindex="5" />;"#).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_positive_tabindex_expr() {
+        assert_eq!(run(r#"const x = <div tabindex={3} />;"#).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_zero() {
+        assert!(run(r#"const x = <div tabindex="0" />;"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_negative() {
+        assert!(run(r#"const x = <div tabindex={-1} />;"#).is_empty());
+    }
+}

@@ -41,3 +41,51 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diagnostic::Diagnostic;
+
+
+
+    fn run(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_default_import() {
+        assert_eq!(run(r#"import _ from 'lodash';"#).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_named_import() {
+        assert_eq!(run(r#"import { map } from 'lodash';"#).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_namespace_import() {
+        assert_eq!(run(r#"import * as _ from 'lodash';"#).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_subpath_import() {
+        assert!(run(r#"import map from 'lodash/map';"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_lodash_es() {
+        assert!(run(r#"import { map } from 'lodash-es';"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_lodash_es_subpath() {
+        assert!(run(r#"import map from 'lodash-es/map';"#).is_empty());
+    }
+}

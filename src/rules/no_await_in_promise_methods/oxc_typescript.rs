@@ -70,3 +70,61 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_await_in_promise_all() {
+        let d = run_on("await Promise.all([await fetchA(), await fetchB()]);");
+        assert_eq!(d.len(), 2);
+        assert_eq!(d[0].rule_id, "no-await-in-promise-methods");
+    }
+
+
+    #[test]
+    fn flags_single_await_in_promise_race() {
+        let d = run_on("await Promise.race([await fetchA(), fetchB()]);");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_await_in_promise_all_settled() {
+        let d = run_on("await Promise.allSettled([await a(), await b()]);");
+        assert_eq!(d.len(), 2);
+    }
+
+
+    #[test]
+    fn flags_await_in_promise_any() {
+        let d = run_on("await Promise.any([await fetchA()]);");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_no_await_in_promise_all() {
+        assert!(run_on("await Promise.all([fetchA(), fetchB()]);").is_empty());
+    }
+
+
+    #[test]
+    fn allows_promise_resolve() {
+        assert!(run_on("await Promise.resolve(42);").is_empty());
+    }
+
+
+    #[test]
+    fn allows_non_promise_call() {
+        assert!(run_on("foo([await bar()]);").is_empty());
+    }
+}

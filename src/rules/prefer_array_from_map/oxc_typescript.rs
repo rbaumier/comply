@@ -53,3 +53,38 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+    fn run(code: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(code, &Check)
+    }
+
+
+    #[test]
+    fn flags_spread_map() {
+        assert_eq!(run("[...set].map(x => x * 2)").len(), 1);
+        assert_eq!(run("[...iter].map(fn)").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_array_from() {
+        assert!(run("Array.from(set, x => x * 2)").is_empty());
+    }
+
+
+    #[test]
+    fn allows_array_literal_map() {
+        assert!(run("[1, 2, 3].map(x => x * 2)").is_empty());
+    }
+
+
+    #[test]
+    fn allows_variable_map() {
+        assert!(run("arr.map(x => x * 2)").is_empty());
+    }
+}

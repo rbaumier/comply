@@ -254,4 +254,122 @@ mod tests {
         "#;
         assert!(run(src).is_empty());
     }
+
+    use crate::rules::file_ctx::{FileCtx, PathSegments};
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    fn run_on_path(source: &str, path: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_path(source, &Check, path)
+    }
+
+
+    #[test]
+    fn flags_nested_function_without_capture() {
+        let src = "function outer() {\n  const x = 1;\n  function helper(a: number) { return a * 2; }\n  return helper(x);\n}\n";
+        let d = run_on(src);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("helper"));
+    }
+
+
+    #[test]
+    fn allows_nested_function_with_capture() {
+        let src = "function outer() {\n  const multiplier = 2;\n  function helper(a: number) { return a * multiplier; }\n  return helper(3);\n}\n";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_top_level_function() {
+        assert!(run_on("function topLevel() { return 1; }\n").is_empty());
+    }
+
+
+    #[test]
+    fn skips_iife() {
+        assert!(run_on("(function() { return 1; })();\n").is_empty());
+    }
+
+
+    #[test]
+    fn skips_inline_arrow_callback() {
+        assert!(run_on("const arr = [1,2,3]; arr.map((x) => x * 2);\n").is_empty());
+    }
+
+
+    #[test]
+    fn skips_inline_function_callback() {
+        assert!(
+            run_on("const arr = [1,2,3]; arr.forEach(function(x) { console.log(x); });\n")
+                .is_empty()
+        );
+    }
+
+
+    #[test]
+    fn skips_class_method() {
+        assert!(run_on("class Foo { bar() { return 1; } }\n").is_empty());
+    }
+
+
+    #[test]
+    fn skips_function_using_this() {
+        let src =
+            "function outer() {\n  function inner() { return this.value; }\n  return inner;\n}\n";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn flags_nested_arrow_without_capture() {
+        let src =
+            "function outer() {\n  const helper = (a: number) => a * 2;\n  return helper(3);\n}\n";
+        let d = run_on(src);
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_arrow_capturing_outer_param() {
+        let src = "function outer(factor: number) {\n  const helper = (a: number) => a * factor;\n  return helper(3);\n}\n";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn flags_deeply_nested_function_without_capture() {
+        let src = "function a() {\n  function b() {\n    function c() { return 42; }\n    return c();\n  }\n  return b();\n}\n";
+        // `c` captures nothing and `b` captures nothing — both flagged.
+        let d = run_on(src);
+        assert_eq!(d.len(), 2);
+    }
+
+
+    #[test]
+    fn allows_function_capturing_transitive_outer() {
+        // Both `b` and `c` are considered to capture `x`: `c` directly,
+        // and `b` because `c`'s reference to `x` is lexically inside
+        // `b`'s body.
+        let src = "function a() {\n  const x = 1;\n  function b() {\n    function c() { return x; }\n    return c();\n  }\n  return b();\n}\n";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn skips_test_files() {
+        use crate::rules::file_ctx::{FileCtx, PathSegments};
+        let src =
+            "function outer() {\n  function helper(a: number) { return a * 2; }\n  return helper(3);\n}";
+        let file = FileCtx {
+            path_segments: PathSegments { in_test_dir: true, ..Default::default() },
+            ..Default::default()
+        };
+        let diags = crate::rules::test_helpers::run_oxc_tsx_with_file_ctx(src, &Check, &file);
+        assert!(diags.is_empty());
+    }
 }

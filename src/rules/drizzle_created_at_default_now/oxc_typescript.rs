@@ -76,3 +76,35 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_created_at_without_default_now() {
+        let src = "const t = { createdAt: timestamp('created_at').notNull() }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_created_at_with_default_now() {
+        let src = "const t = { createdAt: timestamp('created_at').defaultNow().notNull() }";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_non_timestamp() {
+        let src = "const t = { createdAt: text('created_at') }";
+        assert!(run(src).is_empty());
+    }
+}

@@ -61,3 +61,67 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_unicode_prop_without_u() {
+        let diags = run_on(r#"const re = /\p{Letter}/;"#);
+        assert_eq!(diags.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_uppercase_p_without_u() {
+        let diags = run_on(r#"const re = /\P{Number}/i;"#);
+        assert_eq!(diags.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_unicode_prop_with_u() {
+        assert!(run_on(r#"const re = /\p{Letter}/u;"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_unicode_prop_with_v() {
+        assert!(run_on(r#"const re = /\p{Letter}/v;"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_regex_without_unicode_escape() {
+        assert!(run_on(r#"const re = /abc/;"#).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_tailwind_class_in_string() {
+        let src = r#"const x = "has-[\p{foo}]:grid";"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_url_in_string() {
+        let src = r#"const u = "http://example.com/\\p{Letter}/path";"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_scoped_import_with_empty_flags() {
+        let src = r#"import X from "@scope/pkg";"#;
+        assert!(run_on(src).is_empty());
+    }
+}

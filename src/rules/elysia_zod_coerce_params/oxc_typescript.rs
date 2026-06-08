@@ -71,3 +71,42 @@ impl OxcCheck for Check {
         result
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_framework(source, &Check, "elysia")
+    }
+
+
+    #[test]
+    fn flags_z_number_in_params() {
+        let src = "import { Elysia } from 'elysia';\nimport { z } from 'zod';\nnew Elysia().get('/x/:id', () => 1, { params: z.object({ id: z.number() }) });";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_z_boolean_in_query() {
+        let src = "import { Elysia } from 'elysia';\nimport { z } from 'zod';\nnew Elysia().get('/x', () => 1, { query: z.object({ flag: z.boolean() }) });";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_z_coerce_number() {
+        let src = "import { Elysia } from 'elysia';\nimport { z } from 'zod';\nnew Elysia().get('/x/:id', () => 1, { params: z.object({ id: z.coerce.number() }) });";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_elysia_files() {
+        let src = "import { z } from 'zod';\nconst s = z.object({ id: z.number() });";
+        assert!(crate::rules::test_helpers::run_oxc_ts(src, &Check).is_empty());
+    }
+}

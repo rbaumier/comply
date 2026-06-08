@@ -3,8 +3,6 @@
 //! string literal. Any non-literal value is a potential XSS vector.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

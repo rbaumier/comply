@@ -1,8 +1,6 @@
 //! i18n-no-unnecessary-trans-component — use `t()` when there is no JSX inside.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

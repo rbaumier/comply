@@ -34,3 +34,41 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_export_equal_value() {
+        let d = run_on("const x = 1;\nexport = x;");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("export = "));
+    }
+
+
+    #[test]
+    fn flags_export_equal_class() {
+        let d = run_on("class Foo {}\nexport = Foo;");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_export_default() {
+        assert!(run_on("const x = 1;\nexport default x;").is_empty());
+    }
+
+
+    #[test]
+    fn allows_named_export() {
+        assert!(run_on("export const x = 1;").is_empty());
+    }
+}

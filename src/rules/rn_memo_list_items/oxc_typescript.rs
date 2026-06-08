@@ -79,3 +79,42 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_unmemoized_component() {
+        let src = "function Row() { return null; }\nconst x = <FlatList renderItem={Row} />;";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_memo_wrapped() {
+        let src = "const Row = memo(function Row() { return null; });\nconst x = <FlatList renderItem={Row} />;";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_react_memo_wrapped() {
+        let src = "const Row = React.memo(RowImpl);\nconst x = <FlatList renderItem={Row} />;";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_pascal_reference() {
+        // A camelCase identifier likely points to a stable callback, not a component.
+        let src = "const x = <FlatList renderItem={renderRow} />;";
+        assert!(run(src).is_empty());
+    }
+}

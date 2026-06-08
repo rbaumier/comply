@@ -94,3 +94,46 @@ fn find_create_server_fn_call<'a>(
         _ => None,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_create_without_post() {
+        assert_eq!(
+            run("const createUser = createServerFn({}).handler(fn);").len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn flags_delete_with_get() {
+        assert_eq!(
+            run("const deletePost = createServerFn({ method: 'GET' }).handler(fn);").len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn allows_create_with_post() {
+        assert!(
+            run("const createUser = createServerFn({ method: 'POST' }).handler(fn);").is_empty()
+        );
+    }
+
+
+    #[test]
+    fn allows_getter_name() {
+        assert!(run("const getUser = createServerFn({ method: 'GET' }).handler(fn);").is_empty());
+    }
+}

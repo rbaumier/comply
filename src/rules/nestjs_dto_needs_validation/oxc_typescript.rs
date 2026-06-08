@@ -83,3 +83,35 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_dto_without_validators() {
+        let src = "import { Module } from '@nestjs/common';\nexport class CreateUserDto { name: string; email: string; }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_dto_with_validators() {
+        let src = "import { IsString } from 'class-validator';\nexport class CreateUserDto { @IsString() name: string; @IsString() email: string; }";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_dto_class() {
+        let src = "import { Module } from '@nestjs/common';\nexport class UserService {}";
+        assert!(run(src).is_empty());
+    }
+}

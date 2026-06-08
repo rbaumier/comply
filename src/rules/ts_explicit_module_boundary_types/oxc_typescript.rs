@@ -117,3 +117,58 @@ fn param_pattern_name<'a>(pattern: &'a BindingPattern<'a>) -> &'a str {
         _ => "<param>",
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn allows_missing_return_type_to_dedicated_rule() {
+        let diags = run_on("export function foo(a: number) { return a; }");
+        assert!(
+            diags.is_empty(),
+            "return types are owned by ts-explicit-function-return-type"
+        );
+    }
+
+
+    #[test]
+    fn flags_missing_param_type() {
+        let diags = run_on("export function foo(a): number { return 1; }");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("parameter"));
+    }
+
+
+    #[test]
+    fn allows_fully_typed_export() {
+        assert!(run_on("export function foo(a: number): number { return a; }").is_empty());
+    }
+
+
+    #[test]
+    fn does_not_flag_non_exported_function() {
+        assert!(run_on("function helper(a) { return a; }").is_empty());
+    }
+
+
+    #[test]
+    fn flags_exported_arrow_without_types() {
+        let diags = run_on("export const foo = (a) => a;");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("parameter"));
+    }
+
+
+    #[test]
+    fn allows_typed_exported_arrow() {
+        assert!(run_on("export const foo = (a: number): number => a;").is_empty());
+    }
+}

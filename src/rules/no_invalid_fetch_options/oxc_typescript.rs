@@ -211,3 +211,89 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_body_with_default_get() {
+        let code = r#"fetch(url, { body: 'hello' });"#;
+        let d = run_on(code);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("GET"));
+    }
+
+
+    #[test]
+    fn flags_body_with_explicit_get() {
+        let code = r#"fetch(url, { method: 'GET', body: 'hello' });"#;
+        let d = run_on(code);
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_body_with_head() {
+        let code = r#"fetch(url, { method: 'HEAD', body: 'hello' });"#;
+        let d = run_on(code);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("HEAD"));
+    }
+
+
+    #[test]
+    fn flags_new_request_with_body_get() {
+        let code = r#"new Request(url, { body: 'hello' });"#;
+        let d = run_on(code);
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_body_with_post() {
+        let code = r#"fetch(url, { method: 'POST', body: JSON.stringify(data) });"#;
+        assert!(run_on(code).is_empty());
+    }
+
+
+    #[test]
+    fn allows_body_null() {
+        let code = r#"fetch(url, { body: null });"#;
+        assert!(run_on(code).is_empty());
+    }
+
+
+    #[test]
+    fn allows_body_undefined() {
+        let code = r#"fetch(url, { body: undefined });"#;
+        assert!(run_on(code).is_empty());
+    }
+
+
+    #[test]
+    fn allows_spread_without_method() {
+        let code = r#"fetch(url, { ...options, body: 'hello' });"#;
+        assert!(run_on(code).is_empty());
+    }
+
+
+    #[test]
+    fn flags_multiline_fetch() {
+        let code = r#"
+fetch(url, {
+    body: JSON.stringify(data),
+    method: 'GET',
+});
+"#;
+        let d = run_on(code);
+        assert_eq!(d.len(), 1);
+    }
+}

@@ -1,8 +1,6 @@
 //! playwright-no-element-handle — flag `page.$()` and `page.$$()`.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

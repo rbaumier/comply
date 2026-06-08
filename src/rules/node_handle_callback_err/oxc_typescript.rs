@@ -100,3 +100,56 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_unused_err_param() {
+        let d = run_on("function handle(err, data) { console.log(data); }");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("err"));
+    }
+
+
+    #[test]
+    fn flags_unused_error_param() {
+        let d = run_on("const fn = (error, result) => { return result; };");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("error"));
+    }
+
+
+    #[test]
+    fn allows_used_err_param() {
+        assert!(run_on("function handle(err, data) { if (err) throw err; }").is_empty());
+    }
+
+
+    #[test]
+    fn allows_used_error_param_in_arrow() {
+        assert!(run_on("const fn = (error) => { console.error(error); };").is_empty());
+    }
+
+
+    #[test]
+    fn allows_non_error_param() {
+        assert!(run_on("function handle(result) { return result; }").is_empty());
+    }
+
+
+    #[test]
+    fn allows_underscore_prefix() {
+        // _err is intentionally unused — should not be flagged (but our check
+        // only matches "err", "error", "e" — `_err` doesn't match).
+        assert!(run_on("function handle(_err, data) { return data; }").is_empty());
+    }
+}

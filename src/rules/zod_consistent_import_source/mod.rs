@@ -1,8 +1,6 @@
 //! zod-consistent-import-source — flag imports from non-standard zod subpaths.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

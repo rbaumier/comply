@@ -64,3 +64,42 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_new_object() {
+        let d = run_on("const obj = new Object();");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("new Object()"));
+    }
+
+
+    #[test]
+    fn flags_object_create_null() {
+        let d = run_on("const obj = Object.create(null);");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("Object.create(null)"));
+    }
+
+
+    #[test]
+    fn allows_object_literal() {
+        assert!(run_on("const obj = {};").is_empty());
+    }
+
+
+    #[test]
+    fn allows_object_create_with_prototype() {
+        assert!(run_on("const obj = Object.create(proto);").is_empty());
+    }
+}

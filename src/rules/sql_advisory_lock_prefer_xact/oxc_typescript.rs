@@ -72,4 +72,24 @@ mod tests {
         let src = r#"const q = `psql -c "SELECT pg_advisory_lock(6210)" -c "CREATE DATABASE worker_db TEMPLATE shared_template"`;"#;
         assert!(run_on(src).is_empty(), "{:?}", run_on(src));
     }
+
+
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(src, &Check)
+    }
+
+
+    #[test]
+    fn allows_try_lock() {
+        let src = r#"const q = "SELECT pg_try_advisory_lock(123)";"#;
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn does_not_flag_in_comment() {
+        let src = "// pg_advisory_lock(123)\nconst x = 1;";
+        assert!(run(src).is_empty());
+    }
 }

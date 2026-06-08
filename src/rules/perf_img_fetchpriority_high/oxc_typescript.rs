@@ -124,3 +124,63 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_hero_without_fetchpriority() {
+        assert_eq!(
+            run(r#"const x = <img src="h.jpg" width="1200" height="800" />;"#).len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn flags_conflicting_high_and_lazy() {
+        assert_eq!(
+            run(r#"const x = <img src="h.jpg" fetchpriority="high" loading="lazy" />;"#).len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn allows_small_img_without_fetchpriority() {
+        assert!(run(r#"const x = <img src="a.jpg" width="48" height="48" />;"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_hero_with_fetchpriority_high() {
+        assert!(
+            run(r#"const x = <img src="h.jpg" width="1200" fetchpriority="high" />;"#).is_empty()
+        );
+    }
+
+
+    #[test]
+    fn flags_hero_with_numeric_expression_dimensions() {
+        // width={1200} is a JSX expression container around a number,
+        // not a string attribute. The rule must still detect hero size.
+        assert_eq!(
+            run(r#"const x = <img src="h.jpg" width={1200} height={800} />;"#).len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn allows_small_img_with_numeric_expression_dimensions() {
+        assert!(run(r#"const x = <img src="a.jpg" width={48} height={48} />;"#).is_empty());
+    }
+}

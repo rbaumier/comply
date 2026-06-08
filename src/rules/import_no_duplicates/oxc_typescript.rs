@@ -51,3 +51,67 @@ impl OxcCheck for Check {
         diagnostics
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_duplicate_imports() {
+        let src = "import { foo } from './utils';\nimport { bar } from './utils';";
+        let d = run_on(src);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("./utils"));
+    }
+
+
+    #[test]
+    fn allows_different_sources() {
+        let src = "import { foo } from './utils';\nimport { bar } from './other';";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_import_and_import_type_from_same_module() {
+        let src = "import { foo } from './utils';\nimport type { FooType } from './utils';";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn flags_duplicate_type_imports() {
+        let src = "import type { Foo } from './utils';\nimport type { Bar } from './utils';";
+        let d = run_on(src);
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_single_import() {
+        assert!(run_on("import { foo, bar } from './utils';").is_empty());
+    }
+
+
+    #[test]
+    fn flags_side_effect_duplicate() {
+        let src = "import './init';\nimport './init';";
+        let d = run_on(src);
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_triple_import() {
+        let src = "import { a } from './m';\nimport { b } from './m';\nimport { c } from './m';";
+        let d = run_on(src);
+        assert_eq!(d.len(), 2);
+    }
+}

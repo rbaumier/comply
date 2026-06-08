@@ -84,3 +84,123 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    fn run_on_path(source: &str, path: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_path(source, &Check, path)
+    }
+
+
+    #[test]
+    fn allows_sync_calls_in_scripts_dir() {
+        assert!(run_on_path("const out = execSync('ls');", "scripts/check-dependencies.js").is_empty());
+    }
+
+
+    #[test]
+    fn allows_sync_calls_in_config_files() {
+        assert!(run_on_path("const data = fs.readFileSync('x');", "svelte.config.js").is_empty());
+        assert!(run_on_path("const data = fs.readFileSync('x');", "vite.config.ts").is_empty());
+    }
+
+
+    #[test]
+    fn allows_sync_calls_in_node_shebang_cli() {
+        let source = "#!/usr/bin/env node\nconst out = execSync('ls');";
+        assert!(run_on_path(source, "src/check.js").is_empty());
+    }
+
+
+    #[test]
+    fn flags_read_file_sync() {
+        let d = run_on("const data = fs.readFileSync('f.txt');");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("readFileSync"));
+    }
+
+
+    #[test]
+    fn flags_exec_sync() {
+        assert_eq!(run_on("const out = execSync('ls');").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_async_method() {
+        assert!(run_on("fs.readFile('f.txt', cb);").is_empty());
+    }
+
+
+    #[test]
+    fn allows_non_sync_identifier() {
+        assert!(run_on("const isInSync = true;").is_empty());
+    }
+
+
+    #[test]
+    fn allows_react_hook_sync_call() {
+        // Issue #110 — `useListSearchSync` is a React hook synchronising state,
+        // not Node sync I/O.
+        let source = "const [state, onChange] = useListSearchSync(Route, { filterKeys: ['level'] });";
+        assert!(run_on(source).is_empty());
+    }
+
+
+    #[test]
+    fn allows_other_react_hook_sync_variants() {
+        assert!(run_on("const x = useStateSync();").is_empty());
+        assert!(run_on("const x = useSearchParamsSync();").is_empty());
+    }
+
+
+    #[test]
+    fn still_flags_lowercase_use_prefix() {
+        // `users` is not a hook — must still be flagged if it ends in Sync.
+        assert_eq!(run_on("const x = usersSync();").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_react_on_callback_sync() {
+        // Issue #359 — `onSearchSync` is a React event-callback prop (sync search
+        // variant), not a Node sync I/O method.
+        let source = r#"
+            const { onSearchSync } = projection;
+            if (onSearchSync !== null) {
+                const results = onSearchSync(debouncedTerm);
+            }
+        "#;
+        assert!(run_on(source).is_empty());
+    }
+
+
+    #[test]
+    fn allows_other_on_callback_sync_variants() {
+        assert!(run_on("const x = onChangeSync(val);").is_empty());
+        assert!(run_on("const x = onStateSync(val);").is_empty());
+    }
+
+
+    #[test]
+    fn allows_on_callback_as_method() {
+        // Issue #359 — `obj.onSearchSync()` accessed via MemberExpression.
+        assert!(run_on("hooks.onSearchSync(term);").is_empty());
+    }
+
+
+    #[test]
+    fn still_flags_lowercase_on_prefix() {
+        // `once` is not a React callback — must still be flagged if it ends in Sync.
+        assert_eq!(run_on("const x = onceSync();").len(), 1);
+    }
+}

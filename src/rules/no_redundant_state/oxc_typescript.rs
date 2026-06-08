@@ -115,3 +115,64 @@ fn is_use_state_call(expr: &Expression) -> bool {
         _ => false,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_no_setter_destructured() {
+        let d = run_on("const [count] = useState(0);");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("never destructured"));
+    }
+
+
+    #[test]
+    fn flags_setter_never_called() {
+        let src = "const [count, setCount] = useState(0);\nconsole.log(count);";
+        let d = run_on(src);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("setCount"));
+    }
+
+
+    #[test]
+    fn allows_setter_used() {
+        let src = "const [count, setCount] = useState(0);\nsetCount(1);";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_non_use_state() {
+        assert!(run_on("const [data] = useQuery();").is_empty());
+    }
+
+
+    #[test]
+    fn flags_react_dot_use_state() {
+        let d = run_on("const [x] = React.useState(0);");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_state_without_destructuring() {
+        assert!(run_on("const state = useState(0);").is_empty());
+    }
+
+
+    #[test]
+    fn flags_setter_with_underscore_prefix() {
+        let d = run_on("const [val, _setVal] = useState(0);");
+        assert_eq!(d.len(), 1);
+    }
+}

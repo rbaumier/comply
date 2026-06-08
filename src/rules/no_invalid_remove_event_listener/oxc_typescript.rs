@@ -71,3 +71,49 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_bind_call() {
+        let code = r#"el.removeEventListener('click', handler.bind(this));"#;
+        assert_eq!(run_on(code).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_arrow_function() {
+        let code = r#"el.removeEventListener('click', () => handler());"#;
+        assert_eq!(run_on(code).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_function_expression() {
+        let code = r#"el.removeEventListener('click', function() { handler(); });"#;
+        assert_eq!(run_on(code).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_function_reference() {
+        let code = r#"el.removeEventListener('click', handler);"#;
+        assert!(run_on(code).is_empty());
+    }
+
+
+    #[test]
+    fn allows_variable_reference() {
+        let code = r#"el.removeEventListener('click', this.onClickBound);"#;
+        assert!(run_on(code).is_empty());
+    }
+}

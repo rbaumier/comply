@@ -46,3 +46,42 @@ impl OxcCheck for Check {
         diagnostics
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_framework(source, &Check, "elysia")
+    }
+
+
+    #[test]
+    fn flags_context_param() {
+        let src = "import { Context } from 'elysia';\nfunction h(ctx: Context) { return 1; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_context_arrow_param() {
+        let src = "import { Elysia } from 'elysia';\nconst h = (context: Context) => 1;";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_destructured_param() {
+        let src = "import { Elysia } from 'elysia';\nconst h = ({ body, set }) => 1;";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_elysia_files() {
+        let src = "function h(ctx: Context) { return 1; }";
+        assert!(crate::rules::test_helpers::run_oxc_ts(src, &Check).is_empty());
+    }
+}

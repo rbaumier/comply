@@ -66,4 +66,43 @@ mod tests {
         let src = r#"const q = "CREATE INDEX CONCURRENTLY idx_email ON users(email)";"#;
         assert!(run_on(src).is_empty());
     }
+
+
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_path(src, &Check, "/app/migrations/001.ts")
+    }
+
+
+    fn run_non_migration(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(src, &Check)
+    }
+
+
+    #[test]
+    fn flags_create_index_in_template() {
+        let src = r#"const q = `CREATE INDEX idx_email ON users(email)`;"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_create_unique_index() {
+        let src = r#"const q = "CREATE UNIQUE INDEX idx_ref ON orders(reference)";"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn does_not_flag_in_comment() {
+        let src = "// CREATE INDEX idx_email ON users(email)\nconst x = 1;";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn skips_non_migration_path() {
+        let src = r#"const q = `CREATE INDEX idx_email ON users(email)`;"#;
+        assert!(run_non_migration(src).is_empty());
+    }
 }

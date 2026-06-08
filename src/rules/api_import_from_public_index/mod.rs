@@ -8,8 +8,6 @@
 //! public surface and keeps module boundaries honest.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

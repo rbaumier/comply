@@ -70,3 +70,44 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_backspace_in_char_class() {
+        assert_eq!(run_on(r#"const re = /[\b]/;"#).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_word_boundary() {
+        assert!(run_on(r#"const re = /\bfoo\b/;"#).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_tailwind_class_string() {
+        assert!(run_on(r#"const x = "has-[>svg]:grid-cols-[auto_1fr]";"#).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_url_string() {
+        assert!(run_on(r#"const u = "http://a/b/c";"#).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_import_path() {
+        assert!(run_on(r#"import X from "@scope/pkg/sub";"#).is_empty());
+    }
+}

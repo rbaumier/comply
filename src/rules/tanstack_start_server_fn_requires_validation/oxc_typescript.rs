@@ -108,3 +108,69 @@ impl OxcCheck for Check {
             .collect()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_path(s, &Check, "api.functions.ts")
+    }
+
+
+    #[test]
+    fn flags_no_input_validation() {
+        assert_eq!(
+            run("const fn = createServerFn().handler(async ({ id }) => { await db.delete(id) })").len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn allows_with_input() {
+        assert!(run(
+            "const fn = createServerFn().input(z.object({ id: z.string() })).handler(async (ctx) => {})"
+        )
+        .is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_server_fn_files() {
+        assert!(run("const x = 1;").is_empty());
+    }
+
+
+    #[test]
+    fn no_fp_handler_with_no_params() {
+        // Regression for #484 — server function that reads from request headers
+        // has no caller-supplied input; requiring .input() here is meaningless.
+        assert!(run(
+            "const getSessionSsr = createServerFn().handler(async () => { return getSessionFromHeaders(auth, getRequest().headers); })"
+        )
+        .is_empty());
+    }
+
+
+    #[test]
+    fn flags_handler_with_params_no_validation() {
+        // A handler that receives data must still be validated.
+        assert_eq!(
+            run("const fn = createServerFn().handler(async ({ data }) => { await db.insert(data) })").len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn no_fp_async_no_params_handler() {
+        // Async arrow function with no params should not trigger the rule.
+        assert!(run(
+            "const fn = createServerFn().handler(async () => { return fetchData(); })"
+        )
+        .is_empty());
+    }
+}

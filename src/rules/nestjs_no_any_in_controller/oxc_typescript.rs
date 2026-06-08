@@ -68,3 +68,28 @@ impl OxcCheck for Check {
         diagnostics
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_body_any() {
+        let src = "import { Controller, Post, Body } from '@nestjs/common';\n@Controller() class C { @Post() create(@Body() body: any) { return body; } }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_body_with_dto() {
+        let src = "import { Controller, Post, Body } from '@nestjs/common';\n@Controller() class C { @Post() create(@Body() body: CreateUserDto) { return body; } }";
+        assert!(run(src).is_empty());
+    }
+}

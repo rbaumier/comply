@@ -213,4 +213,7 @@ mod tests {
         "#;
         assert_eq!(run(src).len(), 1);
     }
+
+    use crate::rules::backend::{AstCheck, CheckCtx};
+    use std::path::Path;
 }

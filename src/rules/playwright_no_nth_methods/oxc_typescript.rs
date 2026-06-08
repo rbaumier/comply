@@ -162,4 +162,32 @@ mod tests {
         // No accessible-name filter — `.first()` is a brittle pick.
         assert_eq!(run(r#"page.getByRole("button").first();"#).len(), 1);
     }
+
+
+
+    fn run_oxc_ts(source: &str) -> Vec<Diagnostic> {
+        run_oxc_ts_with_path(&format!("{PW_IMPORT}{source}"), &Check, "app.test.ts")
+    }
+
+
+    #[test]
+    fn flags_first() {
+        let d = run_oxc_ts("const el = page.locator('.btn').first();");
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].rule_id, "playwright-no-nth-methods");
+    }
+
+
+    #[test]
+    fn flags_nth() {
+        let d = run_oxc_ts("const el = page.locator('.btn').nth(2);");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_other_methods() {
+        let d = run_oxc_ts("const el = page.locator('.btn').click();");
+        assert!(d.is_empty());
+    }
 }

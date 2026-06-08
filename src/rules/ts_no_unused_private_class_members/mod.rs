@@ -1,8 +1,6 @@
 //! ts-no-unused-private-class-members — flag private class members that are never used.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

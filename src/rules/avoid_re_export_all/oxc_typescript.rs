@@ -34,3 +34,49 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_star_reexport() {
+        assert_eq!(run("export * from './foo';").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_star_reexport_double_quotes() {
+        assert_eq!(run("export * from \"./foo\";").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_named_reexport() {
+        assert!(run("export { foo, bar } from './foo';").is_empty());
+    }
+
+
+    #[test]
+    fn allows_namespace_reexport() {
+        assert!(run("export * as foo from './foo';").is_empty());
+    }
+
+
+    #[test]
+    fn allows_local_named_export() {
+        assert!(run("export function foo() {}").is_empty());
+    }
+
+
+    #[test]
+    fn allows_default_export() {
+        assert!(run("export default function foo() {}").is_empty());
+    }
+}

@@ -51,3 +51,44 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_two_arguments() {
+        assert_eq!(run_on("const x = require('foo', 'bar');").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_three_arguments() {
+        assert_eq!(run_on("require('a', 'b', 'c');").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_no_arguments() {
+        assert_eq!(run_on("const x = require();").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_single_argument() {
+        assert!(run_on("const x = require('foo');").is_empty());
+    }
+
+
+    #[test]
+    fn ignores_other_callees() {
+        assert!(run_on("load('a', 'b');").is_empty());
+    }
+}

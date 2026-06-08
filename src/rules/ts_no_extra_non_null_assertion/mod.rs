@@ -1,8 +1,6 @@
 //! ts-no-extra-non-null-assertion — flag `x!!` (double non-null assertion).
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

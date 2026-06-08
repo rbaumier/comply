@@ -156,3 +156,57 @@ fn is_inside_nested_function(
     }
     false
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_return_await_in_block() {
+        let src = "async function f() { return await fetch(url); }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_arrow_return_await() {
+        let src = "const f = async () => { return await fetch(url); };";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_arrow_expression_await() {
+        let src = "const f = async () => await fetch(url);";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_try_catch() {
+        let src =
+            "async function f() { try { return await fetch(url); } catch (e) { return null; } }";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_multiple_awaits() {
+        let src = "async function f() { const a = await one(); return await two(a); }";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_non_async_function() {
+        let src = "function f() { return fetch(url); }";
+        assert!(run(src).is_empty());
+    }
+}

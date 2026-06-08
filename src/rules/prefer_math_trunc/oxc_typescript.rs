@@ -125,3 +125,47 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_oxc_ts(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_bitwise_or_zero() {
+        let d = run_oxc_ts("const n = value | 0;");
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].rule_id, "prefer-math-trunc");
+    }
+
+
+    #[test]
+    fn flags_double_tilde() {
+        let d = run_oxc_ts("const n = ~~value;");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_math_trunc() {
+        assert!(run_oxc_ts("const n = Math.trunc(value);").is_empty());
+    }
+
+
+    #[test]
+    fn ignores_string_literal() {
+        assert!(run_oxc_ts(r#"const s = "value | 0";"#).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_comment() {
+        assert!(run_oxc_ts("// value | 0").is_empty());
+    }
+}

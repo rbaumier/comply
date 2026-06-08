@@ -66,3 +66,44 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_length_gte_zero() {
+        assert_eq!(run_on("if (arr.length >= 0) {}").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_length_lt_zero() {
+        assert_eq!(run_on("if (arr.length < 0) {}").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_size_gte_zero() {
+        assert_eq!(run_on("if (set.size >= 0) {}").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_length_gt_zero() {
+        assert!(run_on("if (arr.length > 0) {}").is_empty());
+    }
+
+
+    #[test]
+    fn allows_length_eq_zero() {
+        assert!(run_on("if (arr.length === 0) {}").is_empty());
+    }
+}

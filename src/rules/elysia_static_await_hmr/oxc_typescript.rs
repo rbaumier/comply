@@ -49,3 +49,35 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_framework(source, &Check, "elysia")
+    }
+
+
+    #[test]
+    fn flags_use_static_plugin_without_await() {
+        let src = "import { Elysia } from 'elysia';\nimport { staticPlugin } from '@elysiajs/static';\nnew Elysia().use(staticPlugin());";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_use_static_plugin_with_await() {
+        let src = "import { Elysia } from 'elysia';\nimport { staticPlugin } from '@elysiajs/static';\nasync function main() { return new Elysia().use(await staticPlugin()); }";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_files_without_static_import() {
+        let src = "import { Elysia } from 'elysia';\nnew Elysia().use(staticPlugin());";
+        assert!(crate::rules::test_helpers::run_oxc_ts(src, &Check).is_empty());
+    }
+}

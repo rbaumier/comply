@@ -88,3 +88,35 @@ fn inside_query_hook<'a>(
     }
     false
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_enabled_true() {
+        assert_eq!(
+            run("useQuery({ queryKey: ['x'], queryFn: f, enabled: true })").len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn allows_enabled_condition() {
+        assert!(run("useQuery({ queryKey: ['x'], queryFn: f, enabled: !!userId })").is_empty());
+    }
+
+
+    #[test]
+    fn allows_no_enabled() {
+        assert!(run("useQuery({ queryKey: ['x'], queryFn: f })").is_empty());
+    }
+}

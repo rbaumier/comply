@@ -77,3 +77,62 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_foreach_async_arrow() {
+        let d = run_on("arr.forEach(async (x) => { await f(x); });");
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].rule_id, "no-async-array-callback");
+    }
+
+
+    #[test]
+    fn flags_filter_async_fn() {
+        let d = run_on("arr.filter(async function (x) { return await g(x); });");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_some() {
+        let d = run_on("arr.some(async (x) => await g(x));");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_find() {
+        let d = run_on("arr.find(async (x) => await g(x));");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_sync_foreach() {
+        assert!(run_on("arr.forEach((x) => f(x));").is_empty());
+    }
+
+
+    #[test]
+    fn allows_map_async() {
+        // map with async is the idiomatic Promise.all pattern — don't flag it.
+        assert!(run_on("Promise.all(arr.map(async (x) => await g(x)));").is_empty());
+    }
+
+
+    #[test]
+    fn allows_non_array_method() {
+        assert!(run_on("obj.handle(async () => {});").is_empty());
+    }
+}

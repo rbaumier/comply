@@ -137,3 +137,58 @@ impl OxcCheck for Check {
         diagnostics
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(src, &Check)
+    }
+
+
+    #[test]
+    fn flags_empty_type() {
+        let src = "/**\n * @param {} x\n */\n";
+        let diags = run(src);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("empty"));
+    }
+
+
+    #[test]
+    fn flags_unbalanced_braces() {
+        let src = "/**\n * @param {string x\n */\n";
+        let diags = run(src);
+        assert_eq!(diags.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_dangling_pipe() {
+        let src = "/**\n * @param {string |} x\n */\n";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_valid_types() {
+        let src = r#"
+/**
+ * @param {string} x
+ * @param {Array<number>} arr
+ * @returns {Promise<void>}
+ */
+"#;
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_union_type() {
+        let src = "/**\n * @param {string | number} x\n */\n";
+        assert!(run(src).is_empty());
+    }
+}

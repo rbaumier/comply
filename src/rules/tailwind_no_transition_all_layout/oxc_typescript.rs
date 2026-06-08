@@ -81,3 +81,52 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_transition_all_with_width() {
+        assert_eq!(
+            run(r#"export const A = () => <div className="transition-all w-64" />;"#).len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn flags_transition_all_with_top() {
+        assert_eq!(
+            run(r#"export const A = () => <div className="transition-all top-4" />;"#).len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn allows_transition_transform() {
+        assert!(
+            run(
+                r#"export const A = () => <div className="transition-transform translate-x-4" />;"#
+            )
+            .is_empty()
+        );
+    }
+
+
+    #[test]
+    fn allows_transition_all_without_layout() {
+        assert!(
+            run(r#"export const A = () => <div className="transition-all opacity-50" />;"#)
+                .is_empty()
+        );
+    }
+}

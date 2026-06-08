@@ -1,8 +1,6 @@
 //! no-catch-without-use — flag `catch (e)` where `e` is never referenced.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

@@ -60,3 +60,120 @@ impl OxcCheck for Check {
         diagnostics
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_undefined_component() {
+        let src = r#"
+function App() {
+  return <MyComponent />;
+}
+"#;
+        let d = run_on(src);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("MyComponent"));
+    }
+
+
+    #[test]
+    fn allows_imported_component() {
+        let src = r#"
+import { Button } from './Button';
+function App() {
+  return <Button />;
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_default_imported_component() {
+        let src = r#"
+import Modal from './Modal';
+function App() {
+  return <Modal />;
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_locally_declared_component() {
+        let src = r#"
+function App() {
+  const Card = (props: any) => <div />;
+  return <Card />;
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_top_level_function_component() {
+        let src = r#"
+function MyComponent() { return <div />; }
+function App() {
+  return <MyComponent />;
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_lowercase_html_intrinsics() {
+        let src = r#"
+function App() {
+  return <div><span /></div>;
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_fragment() {
+        let src = r#"
+function App() {
+  return <></>;
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_member_expression_tag() {
+        let src = r#"
+function App() {
+  return <React.Fragment>hi</React.Fragment>;
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn flags_multiple_undefined_components() {
+        let src = r#"
+function App() {
+  return <Foo><Bar /></Foo>;
+}
+"#;
+        let d = run_on(src);
+        assert_eq!(d.len(), 2);
+    }
+}

@@ -174,4 +174,7 @@ mod tests {
         let src = "new BrowserWindow({ nodeIntegration: true });";
         assert!(run(src).is_empty());
     }
+
+    use crate::diagnostic::Diagnostic;
+    use super::Check;
 }

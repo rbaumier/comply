@@ -83,3 +83,38 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_json_without_type() {
+        assert_eq!(run("const c = json('payload')").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_jsonb_without_type() {
+        assert_eq!(run("const c = jsonb('payload').notNull()").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_json_with_type() {
+        assert!(run("const c = json('payload').$type<{ id: string }>()").is_empty());
+    }
+
+
+    #[test]
+    fn allows_jsonb_with_type_later_in_chain() {
+        assert!(run("const c = jsonb('payload').notNull().$type<Foo>()").is_empty());
+    }
+}

@@ -248,4 +248,27 @@ export function increment() { counter += 1; }
         assert_eq!(d.len(), 1);
         assert!(d[0].message.contains("increment"));
     }
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn ignores_let_inside_function() {
+        let src = "function foo() { let x = 1; return x; }\n";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_inner_shadow_of_outer_name() {
+        // Outer `counter` is mutable but `inner()` declares its own
+        // local `counter` — the text-based heuristic flagged this
+        // anyway. Semantic resolution sees the binding is local.
+        let src = "let counter = 0;\nfunction inner() { let counter = 0; counter += 1; }\n";
+        assert!(run_on(src).is_empty());
+    }
 }

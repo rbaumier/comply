@@ -109,3 +109,41 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_onclick_assignment() {
+        let d = run_on("element.onclick = handler;");
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].rule_id, "prefer-add-event-listener");
+    }
+
+
+    #[test]
+    fn flags_onkeydown_assignment() {
+        let d = run_on("document.onkeydown = (e) => {};");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_add_event_listener() {
+        assert!(run_on("element.addEventListener('click', handler);").is_empty());
+    }
+
+
+    #[test]
+    fn allows_equality_check() {
+        assert!(run_on("if (element.onclick === null) {}").is_empty());
+    }
+}

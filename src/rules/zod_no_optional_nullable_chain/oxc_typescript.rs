@@ -75,3 +75,32 @@ fn static_method_call<'a>(expr: &'a Expression<'a>) -> Option<(&'a str, &'a Expr
     };
     Some((mem.property.name.as_str(), &mem.object))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_optional_nullable() {
+        assert_eq!(run("z.string().optional().nullable()").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_nullable_optional() {
+        assert_eq!(run("z.string().nullable().optional()").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_nullish() {
+        assert!(run("z.string().nullish()").is_empty());
+    }
+}

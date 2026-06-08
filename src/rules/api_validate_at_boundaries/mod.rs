@@ -5,8 +5,6 @@
 //! typed contract between internal functions isn't trusted.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

@@ -53,3 +53,43 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_duplicate_named_specifier() {
+        let d = run_on("import { a, a } from 'x';");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("Duplicate specifier `a`"));
+    }
+
+
+    #[test]
+    fn flags_duplicate_alias() {
+        let d = run_on("import { a as x, b as x } from 'x';");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("`x`"));
+    }
+
+
+    #[test]
+    fn allows_distinct_specifiers() {
+        assert!(run_on("import { a, b } from 'x';").is_empty());
+    }
+
+
+    #[test]
+    fn allows_alias_with_same_source_name() {
+        // `a` and `a as b` bind different locals: `a` and `b`.
+        assert!(run_on("import { a, a as b } from 'x';").is_empty());
+    }
+}

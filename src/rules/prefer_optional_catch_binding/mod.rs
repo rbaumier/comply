@@ -1,8 +1,6 @@
 //! prefer-optional-catch-binding — prefer omitting unused `catch` binding parameter.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

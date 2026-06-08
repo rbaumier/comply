@@ -89,3 +89,48 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_missing_crossorigin_and_type() {
+        assert_eq!(
+            run(r#"const x = <link rel="preload" as="font" href="/f.woff2" />;"#).len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn flags_missing_crossorigin_only() {
+        assert_eq!(
+            run(r#"const x = <link rel="preload" as="font" type="font/woff2" href="/f.woff2" />;"#)
+                .len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn allows_complete_font_preload() {
+        assert!(
+            run(r#"const x = <link rel="preload" as="font" type="font/woff2" crossOrigin="anonymous" href="/f.woff2" />;"#)
+                .is_empty()
+        );
+    }
+
+
+    #[test]
+    fn ignores_non_font_preload() {
+        assert!(run(r#"const x = <link rel="preload" as="script" href="/a.js" />;"#).is_empty());
+    }
+}

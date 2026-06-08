@@ -50,3 +50,41 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_flatlist_import() {
+        let src = "import { FlatList } from 'react-native';";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_flatlist_among_others() {
+        let src = "import { View, FlatList, Text } from 'react-native';";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_flashlist() {
+        let src = "import { FlashList } from '@shopify/flash-list';";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_other_rn_imports() {
+        let src = "import { View, Text } from 'react-native';";
+        assert!(run(src).is_empty());
+    }
+}

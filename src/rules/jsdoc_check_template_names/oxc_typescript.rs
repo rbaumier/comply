@@ -124,3 +124,27 @@ fn contains_identifier(hay: &str, needle: &str) -> bool {
 fn is_ident_byte(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_' || b == b'$'
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(src, &Check)
+    }
+
+
+    #[test]
+    fn allows_referenced_template() {
+        let src = r#"
+/**
+ * @template T
+ * @param {T} x
+ * @returns {T}
+ */
+"#;
+        assert!(run(src).is_empty());
+    }
+}

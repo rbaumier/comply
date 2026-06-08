@@ -1,8 +1,6 @@
 //! Detects likely argument order mistakes at call sites.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

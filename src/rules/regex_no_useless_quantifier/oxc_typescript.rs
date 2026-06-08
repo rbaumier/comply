@@ -88,3 +88,63 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_quantifier_one() {
+        assert_eq!(run_on(r#"const re = /a{1}/;"#).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_quantifier_one_one() {
+        assert_eq!(run_on(r#"const re = /a{1,1}/;"#).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_meaningful_quantifier() {
+        assert!(run_on(r#"const re = /a{2}/;"#).is_empty());
+    }
+
+
+    #[test]
+    fn flags_empty_group_quantified() {
+        assert_eq!(run_on(r#"const re = /()+/;"#).len(), 1);
+    }
+
+
+    #[test]
+    fn ignores_tailwind_arbitrary_value_in_string() {
+        // A Tailwind arbitrary value contains `{1}`-looking syntax in JSX/strings;
+        // we must never flag string contents.
+        let src = r#"const x = "grid-cols-[minmax(0,1fr)]";"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_url_in_string() {
+        // URLs with `()` sequences should not false-positive.
+        let src = r#"const u = "https://example.com/path()+/resource";"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_scoped_import_empty_group_lookalike() {
+        // `()` lookalikes in scoped imports must never trip the rule.
+        let src = r#"import X from "@scope/pkg-()+";"#;
+        assert!(run_on(src).is_empty());
+    }
+}

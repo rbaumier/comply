@@ -68,3 +68,25 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+    #[test]
+    fn flags_two_andthen_chain() {
+        let src = "const r = getUser().andThen(u => getOrders(u)).andThen(o => getItems(o));";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_single_andthen() {
+        let src = "const r = getUser().andThen(u => getOrders(u));";
+        assert!(run(src).is_empty());
+    }
+}

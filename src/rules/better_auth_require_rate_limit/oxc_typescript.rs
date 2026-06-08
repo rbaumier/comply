@@ -65,3 +65,43 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diagnostic::Diagnostic;
+    use super::Check;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_missing_rate_limit() {
+        assert_eq!(
+            run("export const auth = betterAuth({ database: db })").len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn flags_missing_rate_limit_on_create_auth() {
+        assert_eq!(run("createAuth({ database: db })").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_with_rate_limit() {
+        assert!(run("export const auth = betterAuth({ rateLimit: { enabled: true } })").is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_auth_files() {
+        assert!(run("const x = doSomething()").is_empty());
+    }
+}

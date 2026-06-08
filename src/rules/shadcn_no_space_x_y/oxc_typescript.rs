@@ -52,3 +52,44 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_space_x() {
+        assert_eq!(
+            run(r#"const x = <div className="space-x-2">x</div>;"#).len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn flags_space_y_with_other_classes() {
+        assert_eq!(
+            run(r#"const x = <div className="p-4 space-y-4 items-start">x</div>;"#).len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn allows_flex_gap() {
+        assert!(run(r#"const x = <div className="flex gap-2">x</div>;"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_no_classname() {
+        assert!(run(r#"const x = <div>x</div>;"#).is_empty());
+    }
+}

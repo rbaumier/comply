@@ -87,3 +87,29 @@ fn inside_hook<'a>(
     }
     false
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags() {
+        assert_eq!(
+            run("useQuery({ queryKey: ['x'], queryFn: f, useErrorBoundary: true })").len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn allows() {
+        assert!(run("useQuery({ queryKey: ['x'], queryFn: f, throwOnError: true })").is_empty());
+    }
+}

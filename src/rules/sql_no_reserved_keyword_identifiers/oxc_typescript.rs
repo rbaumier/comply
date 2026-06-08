@@ -74,4 +74,17 @@ mod tests {
         let src = r#"const m = "CREATE TABLE account (id INT);";"#;
         assert!(run_on(src).is_empty());
     }
+
+
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(src, &Check)
+    }
+
+
+    #[test]
+    fn flags_add_column_order() {
+        let src = r#"const m = "ALTER TABLE t ADD COLUMN order INT;";"#;
+        assert_eq!(run(src).len(), 1);
+    }
 }

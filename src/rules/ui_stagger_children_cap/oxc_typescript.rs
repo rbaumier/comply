@@ -57,3 +57,42 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_large_stagger() {
+        let src = r#"const v = { staggerChildren: 0.15 };"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_quarter_second() {
+        let src = r#"const v = { staggerChildren: 0.25 };"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_small_stagger() {
+        let src = r#"const v = { staggerChildren: 0.03 };"#;
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_at_cap() {
+        let src = r#"const v = { staggerChildren: 0.05 };"#;
+        assert!(run(src).is_empty());
+    }
+}

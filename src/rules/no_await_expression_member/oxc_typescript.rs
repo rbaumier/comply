@@ -140,4 +140,41 @@ mod tests {
     fn allows_plain_await() {
         assert!(run("async function f() { await fetch('/'); }").is_empty());
     }
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_member_access_on_await() {
+        let d = run_on("const x = (await fetch(url)).json();");
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].rule_id, "no-await-expression-member");
+    }
+
+
+    #[test]
+    fn flags_property_access_on_await() {
+        let d = run_on("const x = (await getUser()).name;");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_await_without_member_access() {
+        assert!(run_on("const x = await fetch(url);").is_empty());
+    }
+
+
+    #[test]
+    fn flags_chained_member_access() {
+        // (await fetch(url)).headers.get('content-type')
+        // The outer member_expression `.get(...)` has object `.headers`
+        // which itself is a member_expression on await — so the inner one fires.
+        let d = run_on("const x = (await fetch(url)).headers.get('ct');");
+        assert!(!d.is_empty());
+    }
 }

@@ -67,3 +67,43 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_framework(source, &Check, "elysia")
+    }
+
+
+    #[test]
+    fn flags_credentials_without_methods() {
+        let src = "import { cors } from '@elysiajs/cors';\napp.use(cors({ origin: 'https://x.com', credentials: true }));";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_credentials_with_methods() {
+        let src = "import { cors } from '@elysiajs/cors';\napp.use(cors({ origin: 'https://x.com', credentials: true, methods: ['GET', 'POST'] }));";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_no_credentials() {
+        let src =
+            "import { cors } from '@elysiajs/cors';\napp.use(cors({ origin: 'https://x.com' }));";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_elysia_cors() {
+        let src = "app.use(cors({ credentials: true }));";
+        assert!(crate::rules::test_helpers::run_oxc_ts(src, &Check).is_empty());
+    }
+}

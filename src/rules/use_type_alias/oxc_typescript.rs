@@ -275,4 +275,61 @@ mod tests {
         "#;
         assert!(!run_with_path(src, "foo.ts").is_empty());
     }
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_repeated_union_annotation() {
+        let src = r#"
+function foo(x: string | number) {}
+function bar(y: string | number) {}
+"#;
+        assert_eq!(run_on(src).len(), 2);
+    }
+
+
+    #[test]
+    fn flags_repeated_intersection_annotation() {
+        let src = r#"
+function foo(x: Foo & Bar) {}
+function bar(y: Foo & Bar) {}
+"#;
+        assert_eq!(run_on(src).len(), 2);
+    }
+
+
+    #[test]
+    fn allows_unique_annotations() {
+        let src = r#"
+function foo(x: string | number) {}
+function bar(y: boolean | null) {}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_simple_annotations() {
+        let src = r#"
+function foo(x: string) {}
+function bar(y: string) {}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn no_fp_on_type_alias_declaration_bodies() {
+        // Regression #379 — union in type alias bodies must not be counted.
+        let src = r#"
+type ApiResponse = string | number;
+type CacheEntry = string | number;
+"#;
+        assert!(run_on(src).is_empty());
+    }
 }

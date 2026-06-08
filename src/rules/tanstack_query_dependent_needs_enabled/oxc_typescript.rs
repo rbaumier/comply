@@ -116,3 +116,56 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_optional_chain_without_enabled() {
+        let src =
+            "useQuery({ queryKey: ['u', user?.id], queryFn: () => fetch('/u/' + user?.id) });";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_non_null_assertion_without_enabled() {
+        let src = "useQuery({ queryKey: ['u'], queryFn: () => fetchUser(user!.id) });";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_optional_chain_with_enabled() {
+        let src = "useQuery({ queryKey: ['u'], queryFn: () => fetch('/u/' + user?.id), enabled: !!user });";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_non_dependent_query() {
+        let src = "useQuery({ queryKey: ['u'], queryFn: () => fetch('/u') });";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn documents_type_info_limitation() {
+        // REVIEW: this rule is intentionally syntactic. A dependency
+        // visible only to a TypeScript type-checker (e.g. `user: User |
+        // undefined` referenced as `user.id` without `?.` / `!`) is a
+        // known false negative. Expanding the heuristic would require
+        // type info, which tree-sitter does not provide. We assert the
+        // current behaviour so any future change is intentional.
+        let src = "useQuery({ queryKey: ['u'], queryFn: () => fetchUser(user.id) });";
+        assert!(run(src).is_empty());
+    }
+}

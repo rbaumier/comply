@@ -73,3 +73,50 @@ impl OxcCheck for Check {
             }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_test_equals_consequent() {
+        let d = run_on("const x = foo ? foo : bar;");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("||"));
+    }
+
+
+    #[test]
+    fn flags_negated_test_equals_alternate() {
+        let d = run_on("const x = !bar ? foo : bar;");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("||"));
+    }
+
+
+    #[test]
+    fn allows_distinct_arms() {
+        assert!(run_on("const x = a ? b : c;").is_empty());
+    }
+
+
+    #[test]
+    fn allows_test_equals_alternate_no_negation() {
+        // `foo ? bar : foo` — not a simple || pattern
+        assert!(run_on("const x = foo ? bar : foo;").is_empty());
+    }
+
+
+    #[test]
+    fn flags_member_expression() {
+        let d = run_on("const x = a.b ? a.b : c;");
+        assert_eq!(d.len(), 1);
+    }
+}

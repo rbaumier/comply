@@ -65,4 +65,17 @@ mod tests {
         let src = "const q = `CREATE TABLE t (\n  email TEXT NOT NULL,\n)`;";
         assert!(run_on(src).is_empty());
     }
+
+
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(src, &Check)
+    }
+
+
+    #[test]
+    fn allows_inline_comment() {
+        let src = "const q = `CREATE TABLE t (\n  deleted_at TIMESTAMP, -- nullable until soft-delete\n)`;";
+        assert!(run(src).is_empty());
+    }
 }

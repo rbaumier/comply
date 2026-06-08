@@ -47,3 +47,47 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::project::ProjectCtx;
+    use crate::rules::file_ctx::FileCtx;
+
+
+
+    fn next_project() -> ProjectCtx {
+        let mut project = ProjectCtx::empty();
+        project.framework = Framework::NextJs;
+        project
+    }
+
+
+    fn run(source: &str, project: &ProjectCtx) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx_with_project(
+            source,
+            &Check,
+            project)
+    }
+
+
+    #[test]
+    fn flags_window_next_data() {
+        let src = "const v = window.__NEXT_DATA__.props;";
+        assert_eq!(run(src, &next_project()).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_process_env_next_public() {
+        let src = "const v = process.env.NEXT_PUBLIC_API_URL;";
+        assert!(run(src, &next_project()).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_nextjs_project() {
+        let src = "const v = window.__NEXT_DATA__;";
+        assert!(run(src, &ProjectCtx::empty()).is_empty());
+    }
+}

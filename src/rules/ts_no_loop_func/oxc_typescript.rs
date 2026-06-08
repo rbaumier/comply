@@ -84,3 +84,34 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_function_in_for_loop() {
+        let diags = run_on("for (var i = 0; i < 10; i++) { function foo() { return i; } }");
+        assert_eq!(diags.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_arrow_in_while_loop() {
+        let diags = run_on("while (true) { const fn = () => 1; }");
+        assert_eq!(diags.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_function_outside_loop() {
+        assert!(run_on("function foo() { return 1; }").is_empty());
+    }
+}

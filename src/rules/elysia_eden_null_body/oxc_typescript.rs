@@ -61,3 +61,50 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_framework(source, &Check, "elysia")
+    }
+
+
+    #[test]
+    fn flags_undefined_post_body() {
+        let src = "import { treaty } from '@elysiajs/eden';\nawait treaty.users.post(undefined, { headers: {} });";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_undefined_patch_body() {
+        let src = "import { treaty } from '@elysiajs/eden';\nawait api.users({ id: 1 }).patch(undefined);";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_null_body() {
+        let src = "import { treaty } from '@elysiajs/eden';\nawait treaty.users.post(null);";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_payload_body() {
+        let src =
+            "import { treaty } from '@elysiajs/eden';\nawait treaty.users.post({ name: 'a' });";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_eden_files() {
+        let src = "fetch.post(undefined);";
+        assert!(crate::rules::test_helpers::run_oxc_ts(src, &Check).is_empty());
+    }
+}

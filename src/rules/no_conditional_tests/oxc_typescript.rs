@@ -74,3 +74,49 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_test_inside_if() {
+        let src = "if (flag) { test('a', () => {}); }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_describe_inside_ternary() {
+        let src = "flag ? describe('a', () => {}) : null;";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_it_inside_switch_case() {
+        let src = "switch (x) { case 1: it('a', () => {}); break; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_top_level_test() {
+        let src = "test('a', () => {});";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_describe_with_inner_if() {
+        let src = "describe('a', () => { if (flag) { doStuff(); } });";
+        assert!(run_on(src).is_empty());
+    }
+}

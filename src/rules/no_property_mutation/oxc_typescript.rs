@@ -507,4 +507,30 @@ mod tests {
         "#;
         assert_eq!(run(src).len(), 1);
     }
+
+
+
+    fn run_test(code: &str) -> Vec<Diagnostic> {
+        use crate::rules::file_ctx::{FileCtx, PathSegments};
+        let file = FileCtx {
+            path_segments: PathSegments { in_test_dir: true, ..Default::default() },
+            ..Default::default()
+        };
+        crate::rules::test_helpers::run_oxc_tsx_with_file_ctx(code, &Check, &file)
+    }
+
+
+    #[test]
+    fn allows_test_global_mutations() {
+        assert!(run_test("console.error = vi.fn();").is_empty());
+        assert!(run_test("window.localStorage = mockStorage;").is_empty());
+        assert!(run_test("globalThis.fetch = vi.fn();").is_empty());
+    }
+
+
+    #[test]
+    fn allows_mutations_inside_test_hooks() {
+        let src = "beforeEach(() => { store.state = initialState; });";
+        assert!(run_test(src).is_empty());
+    }
 }

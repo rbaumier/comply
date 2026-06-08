@@ -171,3 +171,80 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_button_in_button() {
+        let d = run(r#"const x = <button><button>nested</button></button>;"#);
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_link_in_button() {
+        let d = run(r#"const x = <button><a href="/">link</a></button>;"#);
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_button_in_link() {
+        let d = run(r#"const x = <a href="/"><button>btn</button></a>;"#);
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_input_in_button() {
+        let d = run(r#"const x = <button><input type="text" /></button>;"#);
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_role_button_nested() {
+        let d = run(r#"const x = <div role="button"><button>x</button></div>;"#);
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_tabindex_nested() {
+        let d = run(r#"const x = <div tabIndex={0}><button>x</button></div>;"#);
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_button_alone() {
+        assert!(run(r#"const x = <button>click me</button>;"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_non_interactive_in_button() {
+        assert!(run(r#"const x = <button><span>text</span></button>;"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_tabindex_negative_one() {
+        assert!(run(r#"const x = <div tabIndex="-1"><button>ok</button></div>;"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_sibling_buttons() {
+        assert!(run(r#"const x = <><button>a</button><button>b</button></>;"#).is_empty());
+    }
+}

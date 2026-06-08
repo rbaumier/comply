@@ -80,3 +80,69 @@ fn enclosing_for_body_span(
 fn span_contains(outer: Span, inner: Span) -> bool {
     inner.start >= outer.start && inner.end <= outer.end
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_counter_reassign() {
+        let src = "for (let i = 0; i < n; i++) {\n  i = 5;\n}";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_counter_reassign_var() {
+        let src = "for (var j = 0; j < 10; j++) {\n  j = 0;\n}";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_normal_loop() {
+        let src = "for (let i = 0; i < n; i++) {\n  console.log(i);\n}";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_different_var() {
+        let src = "for (let i = 0; i < n; i++) {\n  x = 5;\n}";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_object_literal_with_curly_braces() {
+        // The previous text scan tracked `{` / `}` to find the body
+        // end and broke when an object literal closed the depth too
+        // early. The semantic version uses real spans.
+        let src = "for (let i = 0; i < n; i++) {\n  const obj = { i, k: 1 };\n  use(obj);\n}";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_substring_name_collision() {
+        // A reassignment to `iteration` should not be picked up when
+        // the counter is `i` — the text-scan used `find(var_name)`
+        // and would over-fire.
+        let src = "for (let i = 0; i < n; i++) {\n  let iteration = 0; iteration = 1;\n}";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn flags_for_of_counter_reassign() {
+        let src = "for (let k of items) {\n  k = 'x';\n}";
+        assert_eq!(run_on(src).len(), 1);
+    }
+}

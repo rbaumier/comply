@@ -66,4 +66,24 @@ mod tests {
         let src = r#"const m = "ALTER TABLE t ADD CONSTRAINT t_age_chk CHECK (age > 0) NOT VALID;";"#;
         assert!(run_on(src).is_empty());
     }
+
+
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(src, &Check)
+    }
+
+
+    #[test]
+    fn flags_add_fk_without_not_valid() {
+        let src = r#"const m = "ALTER TABLE t ADD CONSTRAINT t_u_fk FOREIGN KEY (u) REFERENCES user(id);";"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn does_not_flag_comment_with_pattern() {
+        let src = "// ALTER TABLE t ADD CONSTRAINT foo CHECK (x > 0)\nconst x = 1;";
+        assert!(run(src).is_empty());
+    }
 }

@@ -64,3 +64,45 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rules::test_helpers::run_oxc_ts_with_path;
+
+    const PW_IMPORT: &str = "import { test, expect } from \"@playwright/test\";\n";
+
+
+    fn run_oxc_ts(source: &str) -> Vec<Diagnostic> {
+        run_oxc_ts_with_path(&format!("{PW_IMPORT}{source}"), &Check, "app.test.ts")
+    }
+
+
+    #[test]
+    fn flags_wait_for_timeout() {
+        let d = run_oxc_ts("await page.waitForTimeout(1000);");
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].rule_id, "playwright-no-wait-for-timeout");
+    }
+
+
+    #[test]
+    fn allows_wait_for_selector() {
+        let d = run_oxc_ts("await page.waitForSelector('.btn');");
+        assert!(d.is_empty());
+    }
+
+
+    #[test]
+    fn allows_web_first_assertion() {
+        let d = run_oxc_ts("await expect(page.locator('.btn')).toBeVisible();");
+        assert!(d.is_empty());
+    }
+
+
+    #[test]
+    fn flags_nested_wait_for_timeout() {
+        let d = run_oxc_ts("test('x', async ({ page }) => { await page.waitForTimeout(500); });");
+        assert_eq!(d.len(), 1);
+    }
+}

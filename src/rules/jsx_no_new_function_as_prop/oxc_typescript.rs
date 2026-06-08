@@ -48,3 +48,57 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_arrow_in_prop() {
+        let src = "const x = <button onClick={() => doThing()}>ok</button>;";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_function_expression_in_prop() {
+        let src = "const x = <button onClick={function () { doThing(); }}>ok</button>;";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_stable_handler_reference() {
+        let src = "const x = <button onClick={handleClick}>ok</button>;";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_member_expression_handler() {
+        let src = "const x = <button onClick={obj.handler}>ok</button>;";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_string_attribute() {
+        let src = r#"const x = <div className="foo" />;"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn does_not_flag_bind_call() {
+        // `.bind()` is out of scope here (covered by `react-jsx-no-bind`).
+        let src = "const x = <button onClick={handler.bind(this)}>ok</button>;";
+        assert!(run_on(src).is_empty());
+    }
+}

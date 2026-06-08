@@ -76,3 +76,45 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_transition_without_motion_reduce() {
+        assert_eq!(
+            run(r#"export const A = () => <div className="transition-colors duration-300" />;"#)
+                .len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn flags_animate_spin_without_motion_reduce() {
+        assert_eq!(
+            run(r#"export const A = () => <div className="animate-spin" />;"#).len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn allows_motion_reduce_pair() {
+        assert!(run(r#"export const A = () => <div className="transition-colors motion-reduce:transition-none" />;"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_static_classes() {
+        assert!(run(r#"export const A = () => <div className="p-4 bg-card" />;"#).is_empty());
+    }
+}

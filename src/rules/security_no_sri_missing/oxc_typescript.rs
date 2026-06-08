@@ -106,3 +106,49 @@ fn extract_string_value<'a>(value: &'a Option<JSXAttributeValue<'a>>) -> Option<
         _ => None,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_external_script_without_integrity() {
+        let src = r#"const x = <script src="https://cdn.example.com/lib.js" />;"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_external_stylesheet_without_integrity() {
+        let src = r#"const x = <link rel="stylesheet" href="https://cdn.example.com/lib.css" />;"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_script_with_integrity() {
+        let src = r#"const x = <script src="https://cdn.example.com/lib.js" integrity="sha384-abc" crossOrigin="anonymous" />;"#;
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_relative_script_without_integrity() {
+        let src = r#"const x = <script src="/local.js" />;"#;
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_stylesheet_link() {
+        let src = r#"const x = <link rel="icon" href="https://example.com/fav.ico" />;"#;
+        assert!(run(src).is_empty());
+    }
+}

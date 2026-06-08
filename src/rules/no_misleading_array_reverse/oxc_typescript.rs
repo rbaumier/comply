@@ -89,3 +89,44 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_const_reverse() {
+        assert_eq!(run_on("const reversed = arr.reverse();").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_return_sort() {
+        assert_eq!(run_on("function f() { return arr.sort(); }").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_let_fill() {
+        assert_eq!(run_on("let filled = arr.fill(0);").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_standalone_call() {
+        assert!(run_on("arr.reverse();").is_empty());
+    }
+
+
+    #[test]
+    fn allows_spread_copy() {
+        assert!(run_on("const reversed = [...arr].reverse();").is_empty());
+    }
+}

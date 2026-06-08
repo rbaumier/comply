@@ -96,4 +96,60 @@ mod tests {
         "#;
         assert!(run(src).is_empty());
     }
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_framework(source, &Check, "elysia")
+    }
+
+
+    #[test]
+    fn flags_listen_without_health() {
+        let src =
+            "import { Elysia } from 'elysia';\nnew Elysia().get('/users', () => []).listen(3000);";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_listen_with_health_route() {
+        let src = "import { Elysia } from 'elysia';\nnew Elysia().get('/health', () => 'ok').listen(3000);";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_elysia_files() {
+        let src = "app.listen(3000);";
+        assert!(crate::rules::test_helpers::run_oxc_ts(src, &Check).is_empty());
+    }
+
+
+    #[test]
+    fn allows_listen_with_healthz() {
+        let src = "import { Elysia } from 'elysia';\nnew Elysia().get('/healthz', () => 'ok').listen(3000);";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_listen_with_readyz() {
+        let src = "import { Elysia } from 'elysia';\nnew Elysia().get('/readyz', () => 'ok').listen(3000);";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_listen_with_livez() {
+        let src = "import { Elysia } from 'elysia';\nnew Elysia().get('/livez', () => 'ok').listen(3000);";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_listen_with_underscore_health() {
+        let src = "import { Elysia } from 'elysia';\nnew Elysia().get('/_health', () => 'ok').listen(3000);";
+        assert!(run_on(src).is_empty());
+    }
 }

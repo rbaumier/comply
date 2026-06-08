@@ -50,3 +50,43 @@ impl OxcCheck for Check {
         diagnostics
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_tslint_disable() {
+        let diags = run_on("// tslint:disable\nconst x = 1;");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("tslint"));
+    }
+
+
+    #[test]
+    fn flags_tslint_enable() {
+        let diags = run_on("// tslint:enable\nconst x = 1;");
+        assert_eq!(diags.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_tslint_disable_next_line() {
+        let diags = run_on("// tslint:disable-next-line: no-any\nconst x: any = 1;");
+        assert_eq!(diags.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_normal_comments() {
+        let diags = run_on("// This uses tslint-style formatting\nconst x = 1;");
+        assert!(diags.is_empty());
+    }
+}

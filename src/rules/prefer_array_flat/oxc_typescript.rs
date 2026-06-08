@@ -102,3 +102,56 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_empty_concat_spread() {
+        assert_eq!(run_on("const flat = [].concat(...arr);").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_reduce_concat() {
+        assert_eq!(
+            run_on("const flat = arr.reduce((a, b) => a.concat(b), []);").len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn flags_reduce_spread() {
+        assert_eq!(
+            run_on("const flat = arr.reduce((a, b) => [...a, ...b], []);").len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn allows_flat() {
+        assert!(run_on("const flat = arr.flat();").is_empty());
+    }
+
+
+    #[test]
+    fn allows_concat_without_spread() {
+        assert!(run_on("const merged = [].concat(arr);").is_empty());
+    }
+
+
+    #[test]
+    fn allows_reduce_without_empty_init() {
+        assert!(run_on("const sum = arr.reduce((a, b) => a + b, 0);").is_empty());
+    }
+}

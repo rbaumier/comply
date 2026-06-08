@@ -46,3 +46,44 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_new_array_numeric() {
+        assert_eq!(run_on("const a = new Array(3);").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_new_array_with_elements() {
+        assert_eq!(run_on("const a = new Array(1, 2, 3);").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_array_literal() {
+        assert!(run_on("const a = [1, 2, 3];").is_empty());
+    }
+
+
+    #[test]
+    fn allows_array_from() {
+        assert!(run_on("const a = Array.from({ length: 3 });").is_empty());
+    }
+
+
+    #[test]
+    fn allows_new_map() {
+        assert!(run_on("const m = new Map();").is_empty());
+    }
+}

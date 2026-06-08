@@ -51,3 +51,41 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_at(path: &str, src: &str) -> Vec<Diagnostic> {
+        let project = crate::project::ProjectCtx::for_test_with_framework("elysia");
+        crate::rules::test_helpers::run_oxc_ts_with_project(
+            src,
+            &Check,
+            &project)
+    }
+
+
+    #[test]
+    fn allows_error_class_in_model_file() {
+        let src = "import { Elysia } from 'elysia';\nexport class NotFoundError extends Error {}";
+        assert!(run_at("user.model.ts", src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_non_error_class_in_service_file() {
+        let src = "import { Elysia } from 'elysia';\nexport class UserService { greet() { return 'hi'; } }";
+        assert!(run_at("user.service.ts", src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_elysia_files() {
+        let src = "export class NotFoundError extends Error {}";
+        assert!(
+            crate::rules::test_helpers::run_oxc_ts_with_path(src, &Check, "user.service.ts").is_empty()
+        );
+    }
+}

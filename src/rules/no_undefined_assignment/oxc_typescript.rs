@@ -58,3 +58,38 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    #[test]
+    fn flags_let_undefined() {
+        let d = crate::rules::test_helpers::run_oxc_ts("let x = undefined;", &Check);
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].rule_id, "no-undefined-assignment");
+    }
+
+
+    #[test]
+    fn flags_reassignment_undefined() {
+        let d = crate::rules::test_helpers::run_oxc_ts("x = undefined;", &Check);
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_comparison_equals() {
+        let d = crate::rules::test_helpers::run_oxc_ts("if (x == undefined) {}", &Check);
+        assert!(d.is_empty());
+    }
+
+
+    #[test]
+    fn allows_strict_comparison() {
+        let d = crate::rules::test_helpers::run_oxc_ts("if (x === undefined) {}", &Check);
+        assert!(d.is_empty());
+    }
+}

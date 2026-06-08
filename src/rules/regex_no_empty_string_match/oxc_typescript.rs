@@ -99,3 +99,62 @@ fn is_arg_of_split_or_replace<'a>(
         cur_id = nodes.parent_id(cur_id);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_split_with_star() {
+        assert_eq!(run_on(r#""abc".split(/a*/);"#).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_replace_with_optional() {
+        assert_eq!(run_on(r#"str.replace(/x?/g, '-');"#).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_replace_with_star() {
+        assert_eq!(run_on(r#"s.replace(/\s*/g, '');"#).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_split_with_plus() {
+        assert!(run_on(r#""abc".split(/a+/);"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_replace_with_anchored() {
+        assert!(run_on(r#"s.replace(/^x*$/, '-');"#).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_tailwind_class_string() {
+        assert!(run_on(r#"const x = "has-[>svg]:grid-cols-[auto_1fr]";"#).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_url_string() {
+        assert!(run_on(r#"const u = "http://a/b/c";"#).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_import_path() {
+        assert!(run_on(r#"import X from "@scope/pkg/sub";"#).is_empty());
+    }
+}

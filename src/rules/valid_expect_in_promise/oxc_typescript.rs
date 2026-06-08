@@ -100,3 +100,81 @@ fn is_returned_or_awaited(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_unhandled_then_with_expect() {
+        let src = r#"
+it('test', () => {
+  promise.then(val => {
+    expect(val).toBe(1);
+  });
+});
+"#;
+        let d = run_on(src);
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_returned_then() {
+        let src = r#"
+it('test', () => {
+  return promise.then(val => {
+    expect(val).toBe(1);
+  });
+});
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_awaited_then() {
+        let src = r#"
+it('test', async () => {
+  await promise.then(val => {
+    expect(val).toBe(1);
+  });
+});
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_then_without_expect() {
+        let src = r#"
+it('test', () => {
+  promise.then(val => {
+    console.log(val);
+  });
+});
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn flags_catch_with_expect() {
+        let src = r#"
+it('test', () => {
+  promise.catch(err => {
+    expect(err).toBeDefined();
+  });
+});
+"#;
+        let d = run_on(src);
+        assert_eq!(d.len(), 1);
+    }
+}

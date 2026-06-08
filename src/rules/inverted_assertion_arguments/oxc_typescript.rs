@@ -118,3 +118,23 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rules::backend::{AstCheck, CheckCtx};
+    use std::path::Path;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn ignores_non_test_files() {
+        // run_on uses "t.ts" (not a test file).
+        assert!(run_on(r#"expect(42).toBe(result);"#).is_empty());
+    }
+}

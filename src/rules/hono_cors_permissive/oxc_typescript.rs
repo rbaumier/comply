@@ -87,3 +87,57 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_bare_cors() {
+        let src = "import { cors } from 'hono/cors';\napp.use(cors());";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_wildcard_origin() {
+        let src = "import { cors } from 'hono/cors';\napp.use(cors({ origin: '*' }));";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_credentials_without_origin() {
+        let src = "import { cors } from 'hono/cors';\napp.use(cors({\n  credentials: true\n}));";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_specific_origin() {
+        let src =
+            "import { cors } from 'hono/cors';\napp.use(cors({ origin: 'https://example.com' }));";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_credentials_with_specific_origin() {
+        let src = "import { cors } from 'hono/cors';\napp.use(cors({\n  origin: 'https://example.com',\n  credentials: true\n}));";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_hono_files() {
+        let src = "app.use(cors());";
+        assert!(run_on(src).is_empty());
+    }
+}

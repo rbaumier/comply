@@ -76,3 +76,31 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(src, &Check)
+    }
+
+
+    #[test]
+    fn flags_response_json_array() {
+        assert_eq!(
+            run("export async function GET() { return Response.json([...users]) }").len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn allows_object_response() {
+        assert!(
+            run("export async function GET() { return Response.json({ data: users }) }").is_empty()
+        );
+    }
+}

@@ -59,3 +59,58 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diagnostic::Diagnostic;
+    use super::Check;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_missing_name() {
+        assert_eq!(
+            run("app.use(session({ secret: 'keyboard cat', resave: false }));").len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn allows_with_name() {
+        assert!(
+            run("app.use(session({ name: 'sid', secret: 'keyboard cat', resave: false }));")
+                .is_empty()
+        );
+    }
+
+
+    #[test]
+    fn allows_with_quoted_name_key() {
+        assert!(run("session({ 'name': 'sid', secret: 's' })").is_empty());
+    }
+
+
+    #[test]
+    fn ignores_session_without_args() {
+        assert!(run("session()").is_empty());
+    }
+
+
+    #[test]
+    fn ignores_unrelated_call() {
+        assert!(run("configure({ secret: 's' })").is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_object_argument() {
+        assert!(run("session(opts)").is_empty());
+    }
+}

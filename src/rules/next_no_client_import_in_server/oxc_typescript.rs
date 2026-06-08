@@ -51,3 +51,59 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::project::ProjectCtx;
+    use crate::rules::file_ctx::FileCtx;
+
+
+
+    fn next_project() -> ProjectCtx {
+        let mut project = ProjectCtx::empty();
+        project.framework = Framework::NextJs;
+        project
+    }
+
+
+    fn server_ctx() -> FileCtx {
+        FileCtx {
+            rsc_context: RscContext::ServerComponent,
+            ..Default::default()
+        }
+    }
+
+
+    fn run(source: &str, file: &FileCtx) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx_with_project(
+            source,
+            &Check,
+            &next_project())
+    }
+
+
+    #[test]
+    fn flags_client_only_in_server() {
+        let src = "import 'client-only';";
+        assert_eq!(run(src, &server_ctx()).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_client_only_in_client_component() {
+        let src = "\"use client\";\nimport 'client-only';";
+        let client = FileCtx {
+            rsc_context: RscContext::ClientComponent,
+            ..Default::default()
+        };
+        assert!(run(src, &client).is_empty());
+    }
+
+
+    #[test]
+    fn allows_server_safe_imports() {
+        let src = "import { db } from '@/lib/db';";
+        assert!(run(src, &server_ctx()).is_empty());
+    }
+}

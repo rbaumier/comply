@@ -109,3 +109,57 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_rethrow_without_cause() {
+        let d = run_on("try { x(); } catch (e) { throw new Error('boom'); }");
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].rule_id, "exception-use-error-cause");
+    }
+
+
+    #[test]
+    fn flags_rethrow_typeerror_without_cause() {
+        let d = run_on("try { x(); } catch (e) { throw new TypeError('boom'); }");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_rethrow_with_cause() {
+        assert!(
+            run_on("try { x(); } catch (e) { throw new Error('boom', { cause: e }); }").is_empty()
+        );
+    }
+
+
+    #[test]
+    fn allows_throw_outside_catch() {
+        assert!(run_on("function f() { throw new Error('boom'); }").is_empty());
+    }
+
+
+    #[test]
+    fn allows_throw_existing_error() {
+        // Re-throwing the caught error directly — not a wrap.
+        assert!(run_on("try { x(); } catch (e) { throw e; }").is_empty());
+    }
+
+
+    #[test]
+    fn allows_bare_new_error() {
+        // No args — placeholder, not a wrap.
+        assert!(run_on("try { x(); } catch (e) { throw new Error(); }").is_empty());
+    }
+}

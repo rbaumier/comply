@@ -70,3 +70,36 @@ impl OxcCheck for Check {
         }]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_mixed_decorators_with_reflect_metadata() {
+        let src = "import 'reflect-metadata';\n@Injectable() class Svc {}";
+        let diags = run(src);
+        assert_eq!(diags.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_decorators_without_reflect_metadata() {
+        let src = "@Injectable() class Svc {}";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_reflect_metadata_without_decorators() {
+        let src = "import 'reflect-metadata';\nconst x = 1;";
+        assert!(run(src).is_empty());
+    }
+}

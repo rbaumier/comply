@@ -49,3 +49,49 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_double_dot() {
+        assert_eq!(run("t('auth..title')").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_trailing_dot() {
+        assert_eq!(run("t('auth.title.')").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_normal_key() {
+        assert!(run("t('auth.title')").is_empty());
+    }
+
+
+    #[test]
+    fn flags_leading_dot() {
+        assert_eq!(run("t('.auth.title')").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_slash_in_key() {
+        assert_eq!(run("t('auth/title')").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_special_char_in_key() {
+        assert_eq!(run("t('auth.title!')").len(), 1);
+    }
+}

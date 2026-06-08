@@ -113,3 +113,104 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_this_name_in_constructor() {
+        let code = r#"
+class MyError extends Error {
+    constructor(message) {
+        super(message);
+        this.name = 'MyError';
+    }
+}
+"#;
+        let d = run_on(code);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("class field"));
+    }
+
+
+    #[test]
+    fn flags_this_message_in_constructor() {
+        let code = r#"
+class MyError extends Error {
+    constructor(message) {
+        super();
+        this.message = message;
+    }
+}
+"#;
+        let d = run_on(code);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("super()"));
+    }
+
+
+    #[test]
+    fn flags_both_name_and_message() {
+        let code = r#"
+class MyError extends Error {
+    constructor(msg) {
+        super();
+        this.name = 'MyError';
+        this.message = msg;
+    }
+}
+"#;
+        let d = run_on(code);
+        assert_eq!(d.len(), 2);
+    }
+
+
+    #[test]
+    fn allows_class_field_name() {
+        let code = r#"
+class MyError extends Error {
+    name = 'MyError';
+    constructor(message) {
+        super(message);
+    }
+}
+"#;
+        assert!(run_on(code).is_empty());
+    }
+
+
+    #[test]
+    fn allows_non_error_class() {
+        let code = r#"
+class MyThing extends Base {
+    constructor() {
+        super();
+        this.name = 'MyThing';
+    }
+}
+"#;
+        assert!(run_on(code).is_empty());
+    }
+
+
+    #[test]
+    fn allows_empty_constructor() {
+        let code = r#"
+class MyError extends Error {
+    name = 'MyError';
+    constructor(msg) {
+        super(msg);
+    }
+}
+"#;
+        assert!(run_on(code).is_empty());
+    }
+}

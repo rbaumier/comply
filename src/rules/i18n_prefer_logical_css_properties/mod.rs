@@ -1,8 +1,6 @@
 //! i18n-prefer-logical-css-properties — physical properties break RTL.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

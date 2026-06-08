@@ -53,3 +53,32 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_single_arg_record() {
+        assert_eq!(run("const S = z.record(z.string());").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_two_arg_record() {
+        assert!(run("const S = z.record(z.string(), z.number());").is_empty());
+    }
+
+
+    #[test]
+    fn ignores_unrelated_record_call() {
+        assert!(run("const S = foo.record(x);").is_empty());
+    }
+}

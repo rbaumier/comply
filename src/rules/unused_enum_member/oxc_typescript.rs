@@ -142,3 +142,95 @@ impl OxcCheck for Check {
         diagnostics
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rules::test_helpers::run_oxc_ts;
+
+
+
+    #[test]
+    fn flags_unused_enum_member() {
+        let source = r#"
+enum Color {
+    Red,
+    Green,
+    Blue,
+}
+const x = Color.Red;
+const y = Color.Green;
+"#;
+        let diags = run_oxc_ts(source, &Check);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("Blue"));
+    }
+
+
+    #[test]
+    fn allows_all_used_members() {
+        let source = r#"
+enum Status {
+    Active,
+    Inactive,
+}
+const a = Status.Active;
+const b = Status.Inactive;
+"#;
+        let diags = run_oxc_ts(source, &Check);
+        assert!(diags.is_empty());
+    }
+
+
+    #[test]
+    fn allows_no_enums() {
+        let source = "const x = 1;";
+        let diags = run_oxc_ts(source, &Check);
+        assert!(diags.is_empty());
+    }
+
+
+    #[test]
+    fn flags_all_unused_in_unused_enum() {
+        let source = r#"
+enum Direction {
+    Up,
+    Down,
+    Left,
+    Right,
+}
+"#;
+        let diags = run_oxc_ts(source, &Check);
+        assert_eq!(diags.len(), 4);
+    }
+
+
+    #[test]
+    fn skips_exported_enums() {
+        let source = r#"
+export enum CastState {
+    IDLE,
+    PLAYING,
+    PAUSED,
+}
+"#;
+        assert!(run_oxc_ts(source, &Check).is_empty());
+    }
+
+
+    #[test]
+    fn handles_initialized_members() {
+        let source = r#"
+enum Code {
+    Ok = 200,
+    NotFound = 404,
+    Teapot = 418,
+}
+const a = Code.Ok;
+const b = Code.NotFound;
+"#;
+        let diags = run_oxc_ts(source, &Check);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("Teapot"));
+    }
+}

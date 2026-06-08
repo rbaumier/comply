@@ -66,3 +66,71 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Config;
+    use crate::files::{Language, SourceFile};
+    use crate::project::ProjectCtx;
+    use std::fs;
+    use tempfile::TempDir;
+
+
+
+    fn run_xstate(source: &str) -> Vec<Diagnostic> {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"dependencies":{"xstate":"^5"}}"#,
+        )
+        .unwrap();
+        let file_path = dir.path().join("src/machine.ts");
+        fs::create_dir_all(file_path.parent().unwrap()).unwrap();
+        fs::write(&file_path, source).unwrap();
+        let source_file = SourceFile {
+            path: file_path.clone(),
+            language: Language::from_path(&file_path).unwrap(),
+        };
+        let project = ProjectCtx::load(&[&source_file], &Config::default());
+        let canon = fs::canonicalize(&file_path).unwrap();
+        crate::rules::test_helpers::run_oxc_tsx_with_project(
+            source,
+            &Check,
+            &project)
+    }
+
+
+    fn run_no_xstate(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn allows_spawn_inside_assign() {
+        assert!(
+            run_xstate("const action = assign({ ref: () => spawn(childMachine) });").is_empty()
+        );
+    }
+
+
+    #[test]
+    fn allows_spawn_inside_assign_with_context_arg() {
+        assert!(
+            run_xstate("const action = assign((ctx) => ({ ref: spawn(childMachine) }));")
+                .is_empty()
+        );
+    }
+
+
+    #[test]
+    fn allows_no_spawn_call() {
+        assert!(run_no_xstate("const x = foo(childMachine);").is_empty());
+    }
+
+
+    #[test]
+    fn skips_non_xstate_project() {
+        assert!(run_no_xstate("const actor = spawn(childMachine);").is_empty());
+    }
+}

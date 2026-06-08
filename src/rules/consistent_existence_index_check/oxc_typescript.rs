@@ -91,3 +91,70 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_inline_index_of_less_than_zero() {
+        let d = run_on("if (foo.indexOf('bar') < 0) {}");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("=== -1"));
+    }
+
+
+    #[test]
+    fn flags_inline_index_of_gte_zero() {
+        let d = run_on("if (foo.indexOf('bar') >= 0) {}");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("!== -1"));
+    }
+
+
+    #[test]
+    fn flags_inline_index_of_gt_minus_one() {
+        let d = run_on("if (foo.indexOf('bar') > -1) {}");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("!== -1"));
+    }
+
+
+    #[test]
+    fn flags_find_last_index() {
+        let d = run_on("if (arr.findLastIndex(x => x) > -1) {}");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_last_index_of() {
+        let d = run_on("if (str.lastIndexOf('a') < 0) {}");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_triple_equals_minus_one() {
+        assert!(run_on("if (foo.indexOf('bar') === -1) {}").is_empty());
+    }
+
+
+    #[test]
+    fn allows_not_equals_minus_one() {
+        assert!(run_on("if (foo.indexOf('bar') !== -1) {}").is_empty());
+    }
+
+
+    #[test]
+    fn allows_unrelated_comparison() {
+        assert!(run_on("if (count < 0) {}").is_empty());
+    }
+}

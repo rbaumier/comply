@@ -45,3 +45,35 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_remove_child() {
+        let d = run_on("parent.removeChild(child);");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("remove"));
+    }
+
+
+    #[test]
+    fn flags_parent_node_remove_child() {
+        let d = run_on("el.parentNode.removeChild(el);");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_remove() {
+        assert!(run_on("child.remove();").is_empty());
+    }
+}

@@ -75,3 +75,81 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_error_without_new() {
+        let d = run_on("throw Error('oops');");
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].rule_id, "throw-new-error");
+    }
+
+
+    #[test]
+    fn flags_typeerror_without_new() {
+        let d = run_on("throw TypeError('bad type');");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_custom_error_without_new() {
+        let d = run_on("throw MyCustomError('fail');");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_new_error() {
+        assert!(run_on("throw new Error('oops');").is_empty());
+    }
+
+
+    #[test]
+    fn allows_new_typeerror() {
+        assert!(run_on("throw new TypeError('bad');").is_empty());
+    }
+
+
+    #[test]
+    fn allows_non_error_call() {
+        assert!(run_on("console.log('hello');").is_empty());
+    }
+
+
+    #[test]
+    fn allows_non_error_function() {
+        assert!(run_on("foo();").is_empty());
+    }
+
+
+    #[test]
+    fn flags_member_error_without_new() {
+        let d = run_on("throw lib.CustomError('x');");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_data_tagged_error() {
+        // Effect library exception — Data.TaggedError is not an error constructor.
+        assert!(run_on("Data.TaggedError('x');").is_empty());
+    }
+
+
+    #[test]
+    fn allows_lowercase_function() {
+        // `error()` is not PascalCase — not an error constructor.
+        assert!(run_on("error('x');").is_empty());
+    }
+}

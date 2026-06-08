@@ -89,3 +89,44 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_missing_samesite() {
+        assert_eq!(
+            run("useSession({ cookie: { httpOnly: true, secure: true } });").len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn flags_samesite_none() {
+        assert_eq!(
+            run("useSession({ cookie: { sameSite: 'none' } });").len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn allows_samesite_lax() {
+        assert!(run("useSession({ cookie: { sameSite: 'lax' } });").is_empty());
+    }
+
+
+    #[test]
+    fn allows_samesite_strict() {
+        assert!(run("useSession({ cookie: { sameSite: 'strict' } });").is_empty());
+    }
+}

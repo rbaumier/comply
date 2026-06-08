@@ -273,4 +273,6 @@ mod tests {
         "#;
         assert!(run(src).is_empty(), "{:?}", run(src));
     }
+
+    use crate::rules::backend::AstCheck;
 }

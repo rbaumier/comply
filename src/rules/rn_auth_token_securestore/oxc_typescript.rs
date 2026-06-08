@@ -67,3 +67,41 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_auth_token_set() {
+        let src = "AsyncStorage.setItem('auth_token', v);";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_authtoken_get() {
+        let src = "AsyncStorage.getItem('authToken');";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_non_sensitive_key() {
+        let src = "AsyncStorage.setItem('lastScreen', v);";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_securestore() {
+        let src = "SecureStore.setItemAsync('auth_token', v);";
+        assert!(run(src).is_empty());
+    }
+}

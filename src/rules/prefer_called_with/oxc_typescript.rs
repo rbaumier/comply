@@ -102,4 +102,19 @@ mod tests {
         let d = run_oxc_ts("expect(mock).rejects.not.toHaveBeenCalled();", &Check);
         assert!(d.is_empty());
     }
+
+
+
+    #[test]
+    fn allows_unrelated_matcher() {
+        let d = run_oxc_ts("expect(x).toBe(1);", &Check);
+        assert!(d.is_empty());
+    }
+
+
+    #[test]
+    fn flags_chained_expect_to_have_been_called() {
+        let d = run_oxc_ts("expect(fn).toHaveBeenCalled();", &Check);
+        assert_eq!(d.len(), 1);
+    }
 }

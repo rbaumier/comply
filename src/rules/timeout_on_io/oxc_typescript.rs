@@ -217,4 +217,51 @@ mod tests {
         let src = "async function f() { await fetch('/api', { method: 'POST' }); }";
         assert_eq!(run(src).len(), 1);
     }
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    fn run_on_path(source: &str, path: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_path(source, &Check, path)
+    }
+
+
+    #[test]
+    fn allows_fetch_with_abort_signal() {
+        let source =
+            "async function f() { await fetch(url, { signal: AbortSignal.timeout(5000) }); }";
+        assert!(run_on(source).is_empty());
+    }
+
+
+    #[test]
+    fn allows_with_timeout_wrapper() {
+        let source = "async function f() { await withTimeout(fetch(url), 5000); }";
+        assert!(run_on(source).is_empty());
+    }
+
+
+    #[test]
+    fn flags_bare_db_query() {
+        assert_eq!(
+            run_on("async function f() { await db.query('SELECT *'); }").len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn allows_io_await_in_test_files() {
+        assert!(run_on_path("async function f() { await fetch(url); }", "foo.test.ts").is_empty());
+    }
+
+
+    #[test]
+    fn allows_non_io_await() {
+        assert!(run_on("async function f() { await Promise.resolve(1); }").is_empty());
+    }
 }

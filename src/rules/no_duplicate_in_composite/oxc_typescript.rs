@@ -58,3 +58,38 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_duplicate_in_union() {
+        assert_eq!(run_on("type X = string | string;").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_duplicate_in_intersection() {
+        assert_eq!(run_on("type X = A & A;").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_unique_members() {
+        assert!(run_on("type X = string | number;").is_empty());
+    }
+
+
+    #[test]
+    fn allows_single_type() {
+        assert!(run_on("type X = string;").is_empty());
+    }
+}

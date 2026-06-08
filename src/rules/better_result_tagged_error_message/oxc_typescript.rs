@@ -58,3 +58,25 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+    #[test]
+    fn flags_tagged_error_without_message() {
+        let src = "class NotFoundError extends TaggedError('NotFoundError') { id: string = ''; }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_tagged_error_with_message() {
+        let src = "class NotFoundError extends TaggedError('NotFoundError') { message: string = 'not found'; }";
+        assert!(run(src).is_empty());
+    }
+}

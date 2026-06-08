@@ -90,3 +90,34 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_short_literal() {
+        assert_eq!(run("useSession({ password: 'too-short' });").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_long_literal() {
+        assert!(
+            run("useSession({ password: 'abcdefghijklmnopqrstuvwxyz0123456789' });").is_empty()
+        );
+    }
+
+
+    #[test]
+    fn allows_env_var() {
+        assert!(run("useSession({ password: process.env.SECRET });").is_empty());
+    }
+}

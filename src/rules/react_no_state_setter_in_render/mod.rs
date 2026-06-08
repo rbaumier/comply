@@ -3,8 +3,6 @@
 //! conditional updater pattern, React's "Maximum update depth exceeded").
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

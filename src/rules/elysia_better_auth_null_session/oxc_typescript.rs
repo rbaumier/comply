@@ -84,4 +84,31 @@ mod tests {
         };
         assert!(run_oxc_ts_with_framework_and_file(SRC, &Check, "elysia", &file).is_empty());
     }
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_framework(source, &Check, "elysia")
+    }
+
+
+    #[test]
+    fn flags_resolve_without_null_check() {
+        let src = "import { auth } from 'better-auth';\nnew Elysia().macro('user', { resolve: async ({ request }) => { const session = await auth.api.getSession({ headers: request.headers }); return { user: session.user, session }; } });";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_resolve_with_null_check() {
+        let src = "import { auth } from 'better-auth';\nnew Elysia().macro('user', { resolve: async ({ request, status }) => { const session = await auth.api.getSession({ headers: request.headers }); if (!session) return status(401); return { user: session.user, session }; } });";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_files_without_better_auth() {
+        let src = "const session = await getSession(); return { user: session.user, session };";
+        assert!(run_on(src).is_empty());
+    }
 }

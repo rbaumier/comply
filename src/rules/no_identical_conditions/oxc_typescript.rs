@@ -78,3 +78,55 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_duplicate_condition() {
+        let src = "\
+if (x > 0) {
+  doA();
+} else if (x > 0) {
+  doB();
+}";
+        let d = run_on(src);
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_different_conditions() {
+        let src = "\
+if (x > 0) {
+  doA();
+} else if (x < 0) {
+  doB();
+}";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn flags_multiple_duplicates() {
+        let src = "\
+if (a === 1) {
+  x();
+} else if (b === 2) {
+  y();
+} else if (a === 1) {
+  z();
+} else if (b === 2) {
+  w();
+}";
+        assert_eq!(run_on(src).len(), 2);
+    }
+}

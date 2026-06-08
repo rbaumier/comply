@@ -68,4 +68,17 @@ mod tests {
         let src = r#"const q = "SELECT id FROM user WHERE email = 'a@b.c'";"#;
         assert!(run_on(src).is_empty());
     }
+
+
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(src, &Check)
+    }
+
+
+    #[test]
+    fn flags_lower() {
+        let src = r#"const q = "SELECT id FROM user WHERE LOWER(email) = 'a@b.c'";"#;
+        assert_eq!(run(src).len(), 1);
+    }
 }

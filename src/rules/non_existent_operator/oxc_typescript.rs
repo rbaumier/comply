@@ -68,3 +68,59 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rules::test_helpers::run_oxc_ts;
+
+
+
+    #[test]
+    fn flags_equals_plus() {
+        let d = run_oxc_ts("x =+ 1;", &Check);
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].rule_id, "non-existent-operator");
+    }
+
+
+    #[test]
+    fn flags_equals_minus() {
+        let d = run_oxc_ts("x =- 1;", &Check);
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_equals_bang() {
+        let d = run_oxc_ts("x =! true;", &Check);
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_plus_equals() {
+        assert!(run_oxc_ts("x += 1;", &Check).is_empty());
+    }
+
+
+    #[test]
+    fn allows_minus_equals() {
+        assert!(run_oxc_ts("x -= 1;", &Check).is_empty());
+    }
+
+
+    #[test]
+    fn allows_not_equals() {
+        assert!(run_oxc_ts("if (x !== y) {}", &Check).is_empty());
+        assert!(run_oxc_ts("if (x != y) {}", &Check).is_empty());
+    }
+
+
+    #[test]
+    fn allows_unary_with_space() {
+        assert!(run_oxc_ts("x = +1;", &Check).is_empty());
+        assert!(run_oxc_ts("x = -1;", &Check).is_empty());
+        assert!(run_oxc_ts("x = !true;", &Check).is_empty());
+    }
+}

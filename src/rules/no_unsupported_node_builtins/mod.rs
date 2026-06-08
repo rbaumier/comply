@@ -2,8 +2,6 @@
 //! available in the minimum Node version declared in `engines.node`.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

@@ -79,3 +79,49 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_framework(source, &Check, "elysia")
+    }
+
+
+    #[test]
+    fn flags_three_segment_path() {
+        let src = "import { Elysia } from 'elysia';\napp.get('/v1/users/profile', handler);";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_four_segment_path() {
+        let src = "import { Elysia } from 'elysia';\napp.post('/api/v2/users/me', handler);";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_shallow_path() {
+        let src = "import { Elysia } from 'elysia';\napp.get('/users', handler);";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_grouped_routes() {
+        let src = "import { Elysia } from 'elysia';\napp.group('/v1/users', g => g.get('/profile/edit/save', handler));";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_elysia_files() {
+        let src = "app.get('/v1/users/profile', handler);";
+        assert!(crate::rules::test_helpers::run_oxc_ts(src, &Check).is_empty());
+    }
+}

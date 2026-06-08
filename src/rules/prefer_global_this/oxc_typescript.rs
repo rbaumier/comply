@@ -119,3 +119,71 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rules::backend::{AstCheck, CheckCtx};
+    use std::fs;
+    use tempfile::TempDir;
+
+
+
+    fn run_oxc_ts(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_window_location() {
+        let d = run_oxc_ts("const url = window.location;");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("globalThis"));
+    }
+
+
+    #[test]
+    fn flags_self_in_worker() {
+        let d = run_oxc_ts("self.fetch('/api');");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("globalThis"));
+    }
+
+
+    #[test]
+    fn flags_global_process() {
+        let d = run_oxc_ts("const env = global.process.env;");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("globalThis"));
+    }
+
+
+    #[test]
+    fn allows_global_this() {
+        assert!(run_oxc_ts("const url = globalThis.location;").is_empty());
+    }
+
+
+    #[test]
+    fn allows_window_specific_close() {
+        assert!(run_oxc_ts("window.close();").is_empty());
+    }
+
+
+    #[test]
+    fn allows_window_specific_inner_width() {
+        assert!(run_oxc_ts("const w = window.innerWidth;").is_empty());
+    }
+
+
+    #[test]
+    fn ignores_typeof_window() {
+        assert!(run_oxc_ts("if (typeof window.x !== 'undefined') {}").is_empty());
+    }
+
+
+    #[test]
+    fn ignores_comments() {
+        assert!(run_oxc_ts("// window.location is the URL").is_empty());
+    }
+}

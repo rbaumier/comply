@@ -152,3 +152,80 @@ fn has_id_equality(lower: &str) -> bool {
 fn is_ident_byte(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_'
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(src, &Check)
+    }
+
+
+    #[test]
+    fn flags_select_without_limit_plain_string() {
+        let src = r#"const q = "SELECT * FROM users WHERE active = true";"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_select_without_limit_tagged_template() {
+        let src = r#"const q = sql`SELECT * FROM users WHERE active = true`;"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_select_with_limit() {
+        let src = r#"const q = "SELECT * FROM users WHERE active = true LIMIT 10";"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_select_with_id_equality() {
+        let src = r#"const q = "SELECT * FROM users WHERE id = $1";"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_select_with_table_alias_id_equality() {
+        let src = r#"const q = "SELECT u.* FROM users u WHERE u.id = $1";"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_count_aggregate() {
+        let src = r#"const q = "SELECT COUNT(*) FROM users WHERE active = true";"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_count_with_group_by_is_still_flagged() {
+        // GROUP BY means COUNT per group — can still be unbounded rows.
+        let src = r#"const q = "SELECT tenant_id, COUNT(*) FROM users GROUP BY tenant_id";"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn ignores_non_sql_strings() {
+        let src = r#"const greeting = "SELECT your plan";"#;
+        // No FROM/WHERE clause — is_sql_string returns false.
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_update_statements() {
+        // Rule only covers SELECT; UPDATE/DELETE have their own rules.
+        let src = r#"const q = "UPDATE users SET active = false WHERE tenant_id = $1";"#;
+        assert!(run_on(src).is_empty());
+    }
+}

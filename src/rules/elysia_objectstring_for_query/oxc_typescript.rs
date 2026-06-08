@@ -75,3 +75,42 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_framework(source, &Check, "elysia")
+    }
+
+
+    #[test]
+    fn flags_nested_object_in_query() {
+        let src = "import { Elysia, t } from 'elysia';\nnew Elysia().get('/x', () => 1, { query: t.Object({ filter: t.Object({ a: t.String() }) }) });";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_object_string_in_query() {
+        let src = "import { Elysia, t } from 'elysia';\nnew Elysia().get('/x', () => 1, { query: t.Object({ filter: t.ObjectString({ a: t.String() }) }) });";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_flat_query_schema() {
+        let src = "import { Elysia, t } from 'elysia';\nnew Elysia().get('/x', () => 1, { query: t.Object({ q: t.String() }) });";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_elysia_files() {
+        let src = "app.get('/x', () => 1, { query: t.Object({ filter: t.Object({ a: 1 }) }) });";
+        assert!(crate::rules::test_helpers::run_oxc_ts(src, &Check).is_empty());
+    }
+}

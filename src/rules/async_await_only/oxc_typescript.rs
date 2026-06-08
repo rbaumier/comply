@@ -134,4 +134,7 @@ mod tests {
         let src = "async function f() { return await foo().then((x) => x + 1); }";
         assert_eq!(run(src).len(), 1);
     }
+
+    use crate::diagnostic::Diagnostic;
+    use crate::rules::async_await_only::oxc_typescript::Check;
 }

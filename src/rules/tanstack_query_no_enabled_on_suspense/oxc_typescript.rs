@@ -79,3 +79,42 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_enabled_on_suspense_query() {
+        let src = "useSuspenseQuery({ queryKey: ['x'], queryFn: f, enabled: !!id });";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_enabled_on_suspense_infinite_query() {
+        let src = "useSuspenseInfiniteQuery({ queryKey: ['x'], queryFn: f, initialPageParam: 0, enabled: false });";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_suspense_without_enabled() {
+        let src = "useSuspenseQuery({ queryKey: ['x'], queryFn: f });";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_enabled_on_regular_use_query() {
+        let src = "useQuery({ queryKey: ['x'], queryFn: f, enabled: !!id });";
+        assert!(run(src).is_empty());
+    }
+}

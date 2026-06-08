@@ -44,3 +44,44 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_arrow_with_asserts_predicate() {
+        let src = "const assertIsString = (x: unknown): asserts x is string => { if (typeof x !== 'string') throw 0; };";
+        let diags = run(src);
+        assert_eq!(diags.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_arrow_with_bare_asserts() {
+        let src = "const check = (x: unknown): asserts x => { if (!x) throw 0; };";
+        let diags = run(src);
+        assert_eq!(diags.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_function_declaration_with_asserts() {
+        let src = "function assertIsString(x: unknown): asserts x is string { if (typeof x !== 'string') throw 0; }";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_regular_arrow() {
+        let src = "const f = (x: number): string => String(x);";
+        assert!(run(src).is_empty());
+    }
+}

@@ -85,3 +85,45 @@ impl OxcCheck for Check {
         diagnostics
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_consecutive_accesses() {
+        let src = "const x = obj.x;\nconst y = obj.y;";
+        let diags = run_on(src);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("obj"));
+    }
+
+
+    #[test]
+    fn flags_three_consecutive() {
+        let src = "const a = config.a;\nconst b = config.b;\nconst c = config.c;";
+        let diags = run_on(src);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("3"));
+    }
+
+
+    #[test]
+    fn allows_single_access() {
+        assert!(run_on("const x = obj.x;").is_empty());
+    }
+
+
+    #[test]
+    fn allows_different_objects() {
+        let src = "const x = obj1.x;\nconst y = obj2.y;";
+        assert!(run_on(src).is_empty());
+    }
+}

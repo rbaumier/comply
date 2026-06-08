@@ -56,3 +56,47 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::project::ProjectCtx;
+    use crate::rules::file_ctx::FileCtx;
+
+
+
+    fn next_project() -> ProjectCtx {
+        let mut project = ProjectCtx::empty();
+        project.framework = Framework::NextJs;
+        project
+    }
+
+
+    fn run(source: &str, project: &ProjectCtx, path: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx_with_project(
+            source,
+            &Check,
+            project)
+    }
+
+
+    #[test]
+    fn flags_head_element_in_page() {
+        let src = "export default function Page() { return <head><title>X</title></head>; }";
+        assert_eq!(run(src, &next_project(), "pages/index.tsx").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_head_in_document() {
+        let src = "export default function MyDocument() { return <head><title>X</title></head>; }";
+        assert!(run(src, &next_project(), "pages/_document.tsx").is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_nextjs_project() {
+        let src = "export default function Page() { return <head /> ; }";
+        assert!(run(src, &ProjectCtx::empty(), "src/page.tsx").is_empty());
+    }
+}

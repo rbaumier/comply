@@ -56,3 +56,68 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_sslv2() {
+        assert_eq!(
+            run_on(r#"const opts = { secureProtocol: 'SSLv2' };"#).len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn flags_sslv3() {
+        assert_eq!(
+            run_on(r#"const opts = { secureProtocol: 'SSLv3' };"#).len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn flags_tls10() {
+        assert_eq!(
+            run_on(r#"tls.connect({ secureProtocol: 'TLSv1.0' });"#).len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn flags_tls11() {
+        assert_eq!(
+            run_on(r#"tls.connect({ secureProtocol: 'TLSv1.1' });"#).len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn flags_bare_tlsv1() {
+        assert_eq!(run_on(r#"const p = 'TLSv1';"#).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_tls12() {
+        assert!(run_on(r#"tls.connect({ secureProtocol: 'TLSv1.2' });"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_tls13() {
+        assert!(run_on(r#"tls.connect({ secureProtocol: 'TLSv1.3' });"#).is_empty());
+    }
+}

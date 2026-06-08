@@ -1,8 +1,6 @@
 //! no-await-expression-member — flag `(await expr).prop` / `(await expr)[0]`.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

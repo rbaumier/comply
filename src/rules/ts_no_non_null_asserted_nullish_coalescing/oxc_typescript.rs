@@ -49,3 +49,33 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_non_null_with_nullish_coalescing() {
+        let diags = run_on("const x = value! ?? 'default';");
+        assert_eq!(diags.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_nullish_coalescing_without_non_null() {
+        assert!(run_on("const x = value ?? 'default';").is_empty());
+    }
+
+
+    #[test]
+    fn allows_non_null_without_nullish_coalescing() {
+        assert!(run_on("const x = value!;").is_empty());
+    }
+}

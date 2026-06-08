@@ -56,3 +56,38 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_img_without_alt() {
+        assert_eq!(run(r#"const x = <img src="x.png" />;"#).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_img_with_alt() {
+        assert!(run(r#"const x = <img src="x.png" alt="logo" />;"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_empty_alt_for_decorative() {
+        assert!(run(r#"const x = <img src="x.png" alt="" />;"#).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_img() {
+        assert!(run(r#"const x = <div />;"#).is_empty());
+    }
+}

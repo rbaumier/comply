@@ -96,3 +96,89 @@ impl OxcCheck for Check {
         diagnostics
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_extra_argument() {
+        let src = r#"
+            function foo(a, b) {}
+            foo(1, 2, 3);
+        "#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_arrow_function_extra_args() {
+        let src = r#"
+            const bar = (x) => x * 2;
+            bar(1, 2);
+        "#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_correct_args() {
+        let src = r#"
+            function foo(a, b) {}
+            foo(1, 2);
+        "#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_fewer_args() {
+        let src = r#"
+            function foo(a, b) {}
+            foo(1);
+        "#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_rest_params() {
+        let src = r#"
+            function foo(a, ...rest) {}
+            foo(1, 2, 3, 4, 5);
+        "#;
+        let diags = run_on(src);
+        if !diags.is_empty() {
+            // Debug: print what we got
+            for d in &diags {
+                eprintln!("Diagnostic: {}", d.message);
+            }
+        }
+        assert!(diags.is_empty(), "Expected no diagnostics for rest params");
+    }
+
+
+    #[test]
+    fn allows_unknown_function() {
+        let src = "externalFn(1, 2, 3, 4, 5);";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn flags_multiple_extra_calls() {
+        let src = r#"
+            function foo(a) {}
+            foo(1, 2);
+            foo(1, 2, 3);
+        "#;
+        assert_eq!(run_on(src).len(), 2);
+    }
+}

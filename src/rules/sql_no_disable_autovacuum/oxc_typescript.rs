@@ -66,4 +66,17 @@ mod tests {
         let src = r#"const m = "ALTER TABLE t SET (autovacuum_vacuum_scale_factor = 0.01)";"#;
         assert!(run_on(src).is_empty());
     }
+
+
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(src, &Check)
+    }
+
+
+    #[test]
+    fn flags_off_variant() {
+        let src = r#"const m = "ALTER TABLE t SET (autovacuum_enabled = off)";"#;
+        assert_eq!(run(src).len(), 1);
+    }
 }

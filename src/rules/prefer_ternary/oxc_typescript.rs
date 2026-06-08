@@ -162,3 +162,75 @@ fn operator_str(op: AssignmentOperator) -> &'static str {
         AssignmentOperator::LogicalNullish => "??=",
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_simple_assignment_if_else() {
+        let d = run_on("if (cond) { x = a; } else { x = b; }");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("ternary"));
+    }
+
+
+    #[test]
+    fn flags_return_if_else() {
+        let d = run_on("function f() { if (cond) { return a; } else { return b; } }");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("return"));
+    }
+
+
+    #[test]
+    fn allows_different_targets() {
+        assert!(run_on("if (c) { x = 1; } else { y = 2; }").is_empty());
+    }
+
+
+    #[test]
+    fn allows_multi_statement_branches() {
+        assert!(run_on("if (c) { x = 1; log(); } else { x = 2; }").is_empty());
+    }
+
+
+    #[test]
+    fn allows_if_without_else() {
+        assert!(run_on("if (c) { x = 1; }").is_empty());
+    }
+
+
+    #[test]
+    fn allows_else_if_chain() {
+        assert!(run_on("if (a) { x = 1; } else if (b) { x = 2; } else { x = 3; }").is_empty());
+    }
+
+
+    #[test]
+    fn flags_compound_assignment() {
+        let d = run_on("if (cond) { x += a; } else { x += b; }");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn rejects_different_operators() {
+        // `=` vs `+=` are different node kinds, so they don't match.
+        assert!(run_on("if (c) { x = 1; } else { x += 2; }").is_empty());
+    }
+
+
+    #[test]
+    fn rejects_different_augmented_operators() {
+        // `+=` vs `-=` are both augmented but different operators.
+        assert!(run_on("if (c) { x += 1; } else { x -= 2; }").is_empty());
+    }
+}

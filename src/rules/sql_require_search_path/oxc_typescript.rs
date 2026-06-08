@@ -87,4 +87,7 @@ mod tests {
         let src = r#"const m = "SET search_path = pg_catalog, public; CREATE TABLE account (id INT);";"#;
         assert!(run_on(src).is_empty());
     }
+
+    use crate::rules::backend::CheckCtx;
+    use std::path::Path;
 }

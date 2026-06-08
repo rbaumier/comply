@@ -63,3 +63,50 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_empty_char_class_in_literal() {
+        assert_eq!(run_on("const re = /[]/g;").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_non_empty_char_class() {
+        assert!(run_on("const re = /[a-z]/;").is_empty());
+    }
+
+
+    #[test]
+    fn allows_bracket_in_string() {
+        assert!(run_on("const s = \"no regex here\";").is_empty());
+    }
+
+
+    #[test]
+    fn ignores_tailwind_class_string() {
+        assert!(run_on(r#"const x = "has-[]:grid";"#).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_url_string() {
+        assert!(run_on(r#"const u = "http://a/b/c";"#).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_import_path() {
+        assert!(run_on(r#"import X from "@scope/pkg/sub";"#).is_empty());
+    }
+}

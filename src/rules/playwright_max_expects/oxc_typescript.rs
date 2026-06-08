@@ -188,4 +188,59 @@ mod tests {
         "#;
         assert_eq!(run(body).len(), 1);
     }
+
+    const PW_IMPORT: &str = "import { test, expect } from \"@playwright/test\";\n";
+
+
+    fn run_oxc_ts(source: &str) -> Vec<Diagnostic> {
+        run_oxc_ts_with_path(&format!("{PW_IMPORT}{source}"), &Check, "login.test.ts")
+    }
+
+
+    #[test]
+    fn flags_too_many_expects() {
+        let src = "test('many', () => {
+            expect(1).toBe(1);
+            expect(2).toBe(2);
+            expect(3).toBe(3);
+            expect(4).toBe(4);
+            expect(5).toBe(5);
+            expect(6).toBe(6);
+        });";
+        let d = run_oxc_ts(src);
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].rule_id, "playwright-max-expects");
+    }
+
+
+    #[test]
+    fn allows_five_expects() {
+        let src = "test('ok', () => {
+            expect(1).toBe(1);
+            expect(2).toBe(2);
+            expect(3).toBe(3);
+            expect(4).toBe(4);
+            expect(5).toBe(5);
+        });";
+        let d = run_oxc_ts(src);
+        assert!(d.is_empty());
+    }
+
+
+    #[test]
+    fn handles_deeply_nested_test_body() {
+        let mut src = String::from("test('deep', () => {");
+        for _ in 0..600 {
+            src.push_str("if (true) {");
+        }
+        src.push_str("expect(1).toBe(1);");
+        for _ in 0..600 {
+            src.push('}');
+        }
+        src.push_str("});");
+
+        let d = run_oxc_ts(&src);
+
+        assert!(d.is_empty());
+    }
 }

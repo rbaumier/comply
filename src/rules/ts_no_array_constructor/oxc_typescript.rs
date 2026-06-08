@@ -81,3 +81,40 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_new_array_no_args() {
+        let diags = run_on("const a = new Array();");
+        assert_eq!(diags.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_new_array_multiple_args() {
+        let diags = run_on("const a = new Array(1, 2, 3);");
+        assert_eq!(diags.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_single_arg() {
+        assert!(run_on("const a = new Array(5);").is_empty());
+    }
+
+
+    #[test]
+    fn allows_typed_array() {
+        assert!(run_on("const a = new Array<string>();").is_empty());
+    }
+}

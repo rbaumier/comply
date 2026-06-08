@@ -67,3 +67,56 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_greater_than() {
+        let d = run_on("const r = b > a;");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("`<`"));
+    }
+
+
+    #[test]
+    fn flags_greater_or_equal() {
+        let d = run_on("const r = b >= a;");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("`<=`"));
+    }
+
+
+    #[test]
+    fn allows_variable_vs_literal() {
+        assert!(run_on("if (x > 0) { f(); }").is_empty());
+        assert!(run_on("if (arr.length >= 1) { f(); }").is_empty());
+        assert!(run_on("const ok = count > 5;").is_empty());
+    }
+
+
+    #[test]
+    fn allows_less_than() {
+        assert!(run_on("const r = a < b;").is_empty());
+    }
+
+
+    #[test]
+    fn allows_less_or_equal() {
+        assert!(run_on("const r = a <= b;").is_empty());
+    }
+
+
+    #[test]
+    fn allows_equality() {
+        assert!(run_on("const r = a === b;").is_empty());
+    }
+}

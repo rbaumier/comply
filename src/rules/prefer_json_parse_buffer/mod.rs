@@ -1,8 +1,6 @@
 //! prefer-json-parse-buffer — prefer reading a JSON file as a buffer.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

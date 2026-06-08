@@ -66,3 +66,50 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_vi_mock_relative_same_dir() {
+        assert_eq!(run("vi.mock('./internal');").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_vi_mock_relative_parent() {
+        assert_eq!(run("vi.mock('../utils/helpers');").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_jest_mock_relative() {
+        assert_eq!(run("jest.mock('./service');").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_mocking_external_package() {
+        assert!(run("vi.mock('axios');").is_empty());
+    }
+
+
+    #[test]
+    fn allows_mocking_scoped_package() {
+        assert!(run("jest.mock('@scope/pkg');").is_empty());
+    }
+
+
+    #[test]
+    fn ignores_unrelated_call() {
+        assert!(run("foo.mock('./internal');").is_empty());
+    }
+}

@@ -91,3 +91,48 @@ impl OxcCheck for Check {
             .collect()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_manual_zod_in_drizzle_file() {
+        let src = r#"
+import { pgTable, text } from 'drizzle-orm/pg-core'
+import { z } from 'zod'
+export const users = pgTable('users', { name: text('name') })
+export const insertUserSchema = z.object({ name: z.string() })
+"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_generated_schema() {
+        let src = r#"
+import { pgTable, text } from 'drizzle-orm/pg-core'
+import { createInsertSchema } from 'drizzle-zod'
+export const users = pgTable('users', { name: text('name') })
+export const insertUserSchema = createInsertSchema(users)
+"#;
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_drizzle_zod_files() {
+        let src = r#"
+import { z } from 'zod'
+export const schema = z.object({ name: z.string() })
+"#;
+        assert!(run(src).is_empty());
+    }
+}

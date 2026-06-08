@@ -81,3 +81,32 @@ impl OxcCheck for Check {
         diagnostics
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(src, &Check)
+    }
+
+
+    #[test]
+    fn flags_get_without_pagination() {
+        assert_eq!(
+            run("export async function GET() { return db.select().from(users) }").len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn allows_get_with_limit() {
+        assert!(run(
+            "export async function GET(req: Request) { const { limit } = await req.json(); return db.select().from(users).limit(limit) }"
+        )
+        .is_empty());
+    }
+}

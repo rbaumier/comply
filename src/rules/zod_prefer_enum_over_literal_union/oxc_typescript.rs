@@ -77,3 +77,74 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diagnostic::Diagnostic;
+    use super::Check;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_union_of_string_literals() {
+        assert_eq!(
+            run("const s = z.union([z.literal('a'), z.literal('b')]);").len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn flags_union_of_many_string_literals() {
+        assert_eq!(
+            run("const s = z.union([z.literal('a'), z.literal('b'), z.literal('c')]);").len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn flags_zod_alias() {
+        assert_eq!(
+            run("const s = zod.union([zod.literal('a'), zod.literal('b')]);").len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn allows_z_enum() {
+        assert!(run("const s = z.enum(['a', 'b']);").is_empty());
+    }
+
+
+    #[test]
+    fn allows_mixed_literal_types() {
+        assert!(run("const s = z.union([z.literal('a'), z.literal(1)]);").is_empty());
+    }
+
+
+    #[test]
+    fn allows_union_with_non_literal_branch() {
+        assert!(run("const s = z.union([z.literal('a'), z.string()]);").is_empty());
+    }
+
+
+    #[test]
+    fn allows_union_of_number_literals() {
+        assert!(run("const s = z.union([z.literal(1), z.literal(2)]);").is_empty());
+    }
+
+
+    #[test]
+    fn allows_empty_union() {
+        // Empty array is degenerate; don't suggest a rewrite.
+        assert!(run("const s = z.union([]);").is_empty());
+    }
+}

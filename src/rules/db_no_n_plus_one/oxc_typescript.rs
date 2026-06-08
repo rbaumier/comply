@@ -133,3 +133,27 @@ fn is_db_call(expr: &Expression) -> bool {
     }
     false
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_await_in_for_each() {
+        let s = "users.forEach(async (u) => {\n  await prisma.findMany({ where: { userId: u.id } });\n});";
+        assert_eq!(run_on(s).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_batch_query() {
+        assert!(run_on("const orders = await db.query('SELECT * FROM orders WHERE user_id IN ($1)', [ids]);").is_empty());
+    }
+}

@@ -92,3 +92,88 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_this_string_literal_in_constructor() {
+        let code = r#"
+class Foo {
+    constructor() {
+        this.name = 'hello';
+    }
+}
+"#;
+        let d = run_on(code);
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].rule_id, "prefer-class-fields");
+    }
+
+
+    #[test]
+    fn flags_this_number_literal_in_constructor() {
+        let code = "class Foo { constructor() { this.count = 0; } }";
+        let d = run_on(code);
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_this_boolean_literal_in_constructor() {
+        let code = "class Foo { constructor() { this.active = true; } }";
+        let d = run_on(code);
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_this_with_non_literal() {
+        let code = "class Foo { constructor(name) { this.name = name; } }";
+        assert!(run_on(code).is_empty());
+    }
+
+
+    #[test]
+    fn allows_this_with_function_call() {
+        let code = "class Foo { constructor() { this.id = generateId(); } }";
+        assert!(run_on(code).is_empty());
+    }
+
+
+    #[test]
+    fn allows_class_field_declaration() {
+        let code = "class Foo { name = 'hello'; }";
+        assert!(run_on(code).is_empty());
+    }
+
+
+    #[test]
+    fn flags_multiple_literal_assignments() {
+        let code = r#"
+class Foo {
+    constructor() {
+        this.a = 1;
+        this.b = 'two';
+    }
+}
+"#;
+        let d = run_on(code);
+        assert_eq!(d.len(), 2);
+    }
+
+
+    #[test]
+    fn allows_compound_assignment() {
+        let code = "class Foo { constructor() { this.count += 1; } }";
+        assert!(run_on(code).is_empty());
+    }
+}

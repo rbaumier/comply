@@ -74,3 +74,54 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::project::ProjectCtx;
+    use crate::rules::file_ctx::FileCtx;
+
+
+
+    fn next_project() -> ProjectCtx {
+        let mut project = ProjectCtx::empty();
+        project.framework = Framework::NextJs;
+        project
+    }
+
+
+    fn run(source: &str, path: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx_with_project(
+            source,
+            &Check,
+            &next_project())
+    }
+
+
+    #[test]
+    fn flags_fetch_api_in_middleware() {
+        let src = "export async function middleware() { await fetch('/api/auth'); }";
+        assert_eq!(run(src, "middleware.ts").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_fetch_external_in_middleware() {
+        let src = "export async function middleware() { await fetch('https://example.com/x'); }";
+        assert!(run(src, "middleware.ts").is_empty());
+    }
+
+
+    #[test]
+    fn allows_fetch_api_outside_middleware() {
+        let src = "async function load() { await fetch('/api/auth'); }";
+        assert!(run(src, "src/lib/load.ts").is_empty());
+    }
+
+
+    #[test]
+    fn flags_src_middleware_file() {
+        let src = "export async function middleware() { await fetch('/api/x'); }";
+        assert_eq!(run(src, "src/middleware.ts").len(), 1);
+    }
+}

@@ -87,3 +87,51 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diagnostic::Diagnostic;
+
+
+
+    fn run(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_high_z_index() {
+        assert_eq!(run(r#"<div style={{ zIndex: 9999 }} />"#).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_z_index_999() {
+        assert_eq!(run(r#"<div style={{ zIndex: 999 }} />"#).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_z_index_50() {
+        assert!(run(r#"<div style={{ zIndex: 50 }} />"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_z_index_100() {
+        assert!(run(r#"<div style={{ zIndex: 100 }} />"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_non_z_index_property() {
+        assert!(run(r#"<div style={{ fontSize: 9999 }} />"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_non_style_object() {
+        assert!(run(r#"const theme = { zIndex: { modal: 1000, tooltip: 1100 } };"#).is_empty());
+    }
+}

@@ -74,3 +74,47 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_dot_slash_single_quotes() {
+        assert_eq!(run_on("const url = new URL('./file.js', base);").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_dot_slash_double_quotes() {
+        assert_eq!(
+            run_on(r#"const url = new URL("./file.js", base);"#).len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn allows_without_dot_slash() {
+        assert!(run_on("const url = new URL('file.js', base);").is_empty());
+    }
+
+
+    #[test]
+    fn allows_single_argument_url() {
+        assert!(run_on("const url = new URL('./file.js');").is_empty());
+    }
+
+
+    #[test]
+    fn allows_absolute_url() {
+        assert!(run_on("const url = new URL('https://example.com', base);").is_empty());
+    }
+}

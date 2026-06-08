@@ -56,3 +56,42 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_set_attribute_data() {
+        let d = run_on(r#"el.setAttribute('data-foo', 'bar');"#);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("setAttribute"));
+    }
+
+
+    #[test]
+    fn flags_get_attribute_data() {
+        let d = run_on(r#"const v = el.getAttribute("data-id");"#);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("getAttribute"));
+    }
+
+
+    #[test]
+    fn allows_non_data_attribute() {
+        assert!(run_on(r#"el.setAttribute('class', 'active');"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_dataset() {
+        assert!(run_on(r#"el.dataset.foo = 'bar';"#).is_empty());
+    }
+}

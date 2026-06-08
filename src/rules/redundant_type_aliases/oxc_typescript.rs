@@ -237,4 +237,28 @@ function resetFilter(v: ListFilterValues) {}
         let src = "type Alias = string;\nfunction foo(v: Alias) {}";
         assert_eq!(run_oxc_ts(src, &Check).len(), 1);
     }
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn allows_intersection_type() {
+        assert!(run_on("type X = A & B;").is_empty());
+    }
+
+
+    #[test]
+    fn allows_generic_type() {
+        assert!(run_on("type X = Array<string>;").is_empty());
+    }
+
+
+    #[test]
+    fn allows_object_type() {
+        assert!(run_on("type X = { name: string };").is_empty());
+    }
 }

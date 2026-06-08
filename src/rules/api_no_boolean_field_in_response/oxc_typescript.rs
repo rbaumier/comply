@@ -103,6 +103,58 @@ mod tests {
         );
         assert_eq!(d.len(), 1);
     }
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_boolean_in_response_interface() {
+        let d = run_on("interface UserResponse { id: string; isActive: boolean }");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("isActive"));
+    }
+
+
+    #[test]
+    fn flags_boolean_in_dto_type_alias() {
+        let d = run_on("type OrderDto = { id: string; isPaid: boolean };");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("isPaid"));
+    }
+
+
+    #[test]
+    fn flags_multiple_boolean_fields() {
+        let d = run_on(
+            "interface AccountPayload { isActive: boolean; isVerified: boolean; name: string }",
+        );
+        assert_eq!(d.len(), 2);
+    }
+
+
+    #[test]
+    fn allows_boolean_in_non_response_type() {
+        assert!(run_on("interface UserModel { isActive: boolean }").is_empty());
+    }
+
+
+    #[test]
+    fn allows_string_union_in_response() {
+        assert!(
+            run_on("interface UserResponse { id: string; status: 'active' | 'inactive' }")
+                .is_empty()
+        );
+    }
+
+
+    #[test]
+    fn allows_non_boolean_fields() {
+        assert!(run_on("interface UserResponse { id: string; name: string }").is_empty());
+    }
 }
 
 impl OxcCheck for Check {

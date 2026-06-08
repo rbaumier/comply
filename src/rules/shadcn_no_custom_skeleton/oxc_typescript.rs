@@ -74,3 +74,44 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_div_with_animate_pulse() {
+        assert_eq!(
+            run(r#"const x = <div className="animate-pulse h-4 w-20 rounded" />;"#).len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn flags_div_with_other_classes_plus_animate_pulse() {
+        assert_eq!(
+            run(r#"const x = <div className="rounded-md bg-muted animate-pulse" />;"#).len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn allows_skeleton_component() {
+        assert!(run(r#"const x = <Skeleton className="h-4 w-20" />;"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_plain_div() {
+        assert!(run(r#"const x = <div className="rounded-md" />;"#).is_empty());
+    }
+}

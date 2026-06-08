@@ -123,3 +123,52 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_z_on_dialog_content() {
+        assert_eq!(
+            run(r#"const x = <DialogContent className="z-50">x</DialogContent>;"#).len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn flags_z_on_dotted_popover() {
+        assert_eq!(
+            run(r#"const x = <Popover.Content className="p-4 z-[999]">x</Popover.Content>;"#).len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn allows_z_on_non_overlay() {
+        assert!(run(r#"const x = <div className="z-10">x</div>;"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_overlay_without_z() {
+        assert!(run(r#"const x = <DialogContent className="p-4">x</DialogContent>;"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_z_auto() {
+        assert!(
+            run(r#"const x = <DialogContent className="z-auto">x</DialogContent>;"#).is_empty()
+        );
+    }
+}

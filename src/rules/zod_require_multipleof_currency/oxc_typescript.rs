@@ -77,3 +77,38 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_price_without_multipleof() {
+        assert_eq!(run("const S = z.object({ price: z.number() });").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_multipleof() {
+        assert!(run("const S = z.object({ price: z.number().multipleOf(0.01) });").is_empty());
+    }
+
+
+    #[test]
+    fn allows_int_minor_units() {
+        assert!(run("const S = z.object({ priceCents: z.number().int() });").is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_currency_field() {
+        assert!(run("const S = z.object({ age: z.number() });").is_empty());
+    }
+}

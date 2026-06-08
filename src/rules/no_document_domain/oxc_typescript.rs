@@ -51,3 +51,32 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_document_domain_assignment() {
+        assert_eq!(run_on(r#"document.domain = "example.com";"#).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_reading_document_domain() {
+        assert!(run_on("const d = document.domain;").is_empty());
+    }
+
+
+    #[test]
+    fn allows_unrelated_assignment() {
+        assert!(run_on(r#"document.title = "hello";"#).is_empty());
+    }
+}

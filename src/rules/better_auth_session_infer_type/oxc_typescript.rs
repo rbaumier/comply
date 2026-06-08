@@ -79,3 +79,53 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diagnostic::Diagnostic;
+    use super::Check;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_manual_interface_session() {
+        let src = r#"
+            import { betterAuth } from "better-auth";
+            export interface Session { userId: string }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_manual_type_session() {
+        let src = r#"
+            import { betterAuth } from "better-auth";
+            export type Session = { userId: string };
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_infer_session() {
+        let src = r#"
+            import { betterAuth } from "better-auth";
+            export type Session = typeof auth.$Infer.Session;
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_when_no_better_auth_import() {
+        let src = "export interface Session { userId: string }";
+        assert!(run(src).is_empty());
+    }
+}

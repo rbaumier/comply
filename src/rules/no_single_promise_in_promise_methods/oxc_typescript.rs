@@ -67,3 +67,61 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_promise_all_single() {
+        let d = run_on("await Promise.all([fetchData()]);");
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].rule_id, "no-single-promise-in-promise-methods");
+    }
+
+
+    #[test]
+    fn flags_promise_race_single() {
+        let d = run_on("await Promise.race([fetchData()]);");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_promise_any_single() {
+        let d = run_on("await Promise.any([fetchData()]);");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_multiple_elements() {
+        assert!(run_on("await Promise.all([fetchA(), fetchB()]);").is_empty());
+    }
+
+
+    #[test]
+    fn allows_spread_element() {
+        assert!(run_on("await Promise.all([...promises]);").is_empty());
+    }
+
+
+    #[test]
+    fn allows_promise_all_settled() {
+        // allSettled is not in the list — semantics differ
+        assert!(run_on("await Promise.allSettled([fetchData()]);").is_empty());
+    }
+
+
+    #[test]
+    fn allows_empty_array() {
+        assert!(run_on("await Promise.all([]);").is_empty());
+    }
+}

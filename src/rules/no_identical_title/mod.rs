@@ -1,8 +1,6 @@
 //! no-identical-title — flag duplicate `describe`/`test`/`it` titles within the same scope.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

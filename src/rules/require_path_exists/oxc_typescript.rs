@@ -138,3 +138,38 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    #[test]
+    fn is_relative_detects_dot_slash() {
+        assert!(is_relative_path("./foo"));
+        assert!(is_relative_path("../bar"));
+        assert!(!is_relative_path("lodash"));
+        assert!(!is_relative_path("@scope/pkg"));
+    }
+
+
+    #[test]
+    fn ignores_package_imports() {
+        // Package imports should not trigger any diagnostic
+        // This is tested via the is_relative_path check
+        assert!(!is_relative_path("react"));
+        assert!(!is_relative_path("@tanstack/react-query"));
+    }
+
+
+    #[test]
+    fn detects_generated_specifiers_issue_487() {
+        // Gitignored build artifacts (e.g. TanStack Router) are exempt.
+        assert!(is_generated_specifier("./routeTree.gen"));
+        assert!(is_generated_specifier("./routeTree.gen.ts"));
+        assert!(is_generated_specifier("../app/routeTree.gen"));
+        assert!(!is_generated_specifier("./routeTree"));
+        assert!(!is_generated_specifier("./generated"));
+    }
+}

@@ -98,3 +98,49 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+    fn run(code: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(code, &Check)
+    }
+
+
+    #[test]
+    fn flags_indexof_not_minus_one() {
+        assert_eq!(run("str.indexOf('x') !== -1").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_indexof_equals_zero() {
+        assert_eq!(run("str.indexOf('x') === 0").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_indexof_gte_zero() {
+        assert_eq!(run("arr.indexOf(item) >= 0").len(), 0); // Not a common pattern we flag
+    }
+
+
+    #[test]
+    fn flags_indexof_gt_minus_one() {
+        assert_eq!(run("arr.indexOf(item) > -1").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_includes() {
+        assert!(run("str.includes('x')").is_empty());
+    }
+
+
+    #[test]
+    fn allows_starts_with() {
+        assert!(run("str.startsWith('x')").is_empty());
+    }
+}

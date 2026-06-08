@@ -222,3 +222,93 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_nonexistent_group_ref() {
+        assert_eq!(run_on(r#"str.replace(/(a)/, "$2");"#).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_valid_group_ref() {
+        assert!(run_on(r#"str.replace(/(a)/, "$1");"#).is_empty());
+    }
+
+
+    #[test]
+    fn flags_replaceall_nonexistent() {
+        assert_eq!(run_on(r#"str.replaceAll(/(a)/g, "$3");"#).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_no_groups_no_refs() {
+        assert!(run_on(r#"str.replace(/a/, "b");"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_escaped_dollar() {
+        // `$$` is a literal dollar sign, not a numeric reference.
+        assert!(run_on(r#"str.replace(/(a)/, "$$1");"#).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_capturing_groups() {
+        // `(?:...)` doesn't contribute to the group count.
+        assert_eq!(run_on(r#"str.replace(/(?:a)/, "$1");"#).len(), 1);
+    }
+
+
+    #[test]
+    fn respects_named_capturing_groups() {
+        // `(?<name>...)` is still a capturing group (referenceable as `$1`).
+        assert!(run_on(r#"str.replace(/(?<name>a)/, "$1");"#).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_lookahead_groups() {
+        // `(?=...)` is not capturing.
+        assert_eq!(run_on(r#"str.replace(/(?=a)/, "$1");"#).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_template_literal_replacement() {
+        assert_eq!(run_on(r#"str.replace(/(a)/, `$2`);"#).len(), 1);
+    }
+
+
+    #[test]
+    fn ignores_tailwind_arbitrary_value_in_string() {
+        let src = r#"const x = "has-[>svg]:grid-cols-[auto_1fr]";"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_url_in_string() {
+        let src = r#"const u = "http://example.com/a/b";"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_scoped_import_path() {
+        let src = r#"import X from "@tanstack/react-query";"#;
+        assert!(run_on(src).is_empty());
+    }
+}

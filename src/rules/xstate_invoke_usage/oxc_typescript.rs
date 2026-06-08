@@ -132,3 +132,122 @@ fn validate_invoke_object(
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn allows_invoke_with_src() {
+        let src = r#"
+            createMachine({
+                states: {
+                    loading: {
+                        invoke: {
+                            src: 'fetchData',
+                            onDone: 'success',
+                            onError: 'failure',
+                        },
+                    },
+                },
+            });
+        "#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_invoke_array() {
+        let src = r#"
+            createMachine({
+                states: {
+                    loading: {
+                        invoke: [
+                            { src: 'a' },
+                            { src: 'b', onDone: 'ok' },
+                        ],
+                    },
+                },
+            });
+        "#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn flags_missing_src() {
+        let src = r#"
+            createMachine({
+                states: {
+                    loading: {
+                        invoke: { onDone: 'success' },
+                    },
+                },
+            });
+        "#;
+        let diags = run_on(src);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("missing required `src`"));
+    }
+
+
+    #[test]
+    fn flags_unknown_invoke_prop() {
+        let src = r#"
+            createMachine({
+                states: {
+                    loading: {
+                        invoke: { src: 'fetchData', onDon: 'ok' },
+                    },
+                },
+            });
+        "#;
+        let diags = run_on(src);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("onDon"));
+    }
+
+
+    #[test]
+    fn flags_invoke_as_string() {
+        let src = r#"
+            createMachine({
+                states: {
+                    loading: { invoke: 'fetchData' },
+                },
+            });
+        "#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_all_known_invoke_props() {
+        let src = r#"
+            createMachine({
+                states: {
+                    loading: {
+                        invoke: {
+                            src: 'fetch',
+                            id: 'x',
+                            input: {},
+                            onDone: 'ok',
+                            onError: 'err',
+                            onSnapshot: 'snap',
+                            systemId: 'sys',
+                            autoForward: true,
+                        },
+                    },
+                },
+            });
+        "#;
+        assert!(run_on(src).is_empty());
+    }
+}

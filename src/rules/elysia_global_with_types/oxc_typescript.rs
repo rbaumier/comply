@@ -69,3 +69,42 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_framework(source, &Check, "elysia")
+    }
+
+
+    #[test]
+    fn flags_global_with_state() {
+        let src = "import { Elysia } from 'elysia';\nexport const p = new Elysia().state('x', 1).onBeforeHandle({ as: 'global' }, () => {});";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_global_with_decorate() {
+        let src = "import { Elysia } from 'elysia';\nexport const p = new Elysia().decorate('foo', 1).as('global');";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_scoped_with_state() {
+        let src = "import { Elysia } from 'elysia';\nexport const p = new Elysia().state('x', 1).as('scoped');";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_global_without_typed_state() {
+        let src = "import { Elysia } from 'elysia';\nexport const p = new Elysia().onBeforeHandle({ as: 'global' }, () => {});";
+        assert!(run_on(src).is_empty());
+    }
+}

@@ -107,3 +107,32 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(source: &str) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(source, &Check)
+    }
+
+
+    #[test]
+    fn allows_button_with_text() {
+        assert!(run(r#"const x = <button>Save</button>;"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_button_with_aria_label() {
+        assert!(run(r#"const x = <button aria-label="Close"><CloseIcon /></button>;"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_icon_button_with_visible_text() {
+        assert!(run(r#"const x = <button><CloseIcon />Close</button>;"#).is_empty());
+    }
+}

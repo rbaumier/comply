@@ -123,3 +123,58 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(src, &Check)
+    }
+
+
+    #[test]
+    fn flags_update_without_where() {
+        assert_eq!(
+            run_on("await db.update(usersTable).set({ active: true })").len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn flags_update_set_returning_without_where() {
+        assert_eq!(
+            run_on("await db.update(usersTable).set({ active: true }).returning()").len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn allows_update_with_where() {
+        assert!(
+            run_on("await db.update(usersTable).set({ active: true }).where(eq(usersTable.id, 1))")
+                .is_empty()
+        );
+    }
+
+
+    #[test]
+    fn ignores_unrelated_update() {
+        // State setter / react-query mutate / generic `.update(..)` must
+        // not be flagged.
+        assert!(run_on("store.update({ count: 1 })").is_empty());
+    }
+
+
+    #[test]
+    fn flags_tx_update_without_where() {
+        assert_eq!(
+            run_on("await tx.update(usersTable).set({ active: true })").len(),
+            1
+        );
+    }
+}

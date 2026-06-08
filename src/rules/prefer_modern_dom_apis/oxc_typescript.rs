@@ -57,3 +57,48 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_oxc_ts(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_insert_before() {
+        let d = run_oxc_ts("parent.insertBefore(newNode, refNode);");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("before"));
+    }
+
+
+    #[test]
+    fn flags_replace_child() {
+        let d = run_oxc_ts("parent.replaceChild(newEl, oldEl);");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("replaceWith"));
+    }
+
+
+    #[test]
+    fn allows_modern_before() {
+        assert!(run_oxc_ts("refNode.before(newNode);").is_empty());
+    }
+
+
+    #[test]
+    fn allows_modern_replace_with() {
+        assert!(run_oxc_ts("oldEl.replaceWith(newEl);").is_empty());
+    }
+
+
+    #[test]
+    fn ignores_comment() {
+        assert!(run_oxc_ts("// parent.insertBefore(a, b)").is_empty());
+    }
+}

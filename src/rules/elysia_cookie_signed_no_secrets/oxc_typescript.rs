@@ -53,3 +53,35 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_framework(source, &Check, "elysia")
+    }
+
+
+    #[test]
+    fn flags_signed_without_secrets() {
+        let src = "import { Elysia, t } from 'elysia';\nconst c = t.Cookie({ token: t.String() }, { sign: ['token'] });";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_signed_with_secrets() {
+        let src = "import { Elysia, t } from 'elysia';\nnew Elysia({ cookie: { secrets: 'k' } });\nconst c = t.Cookie({ token: t.String() }, { sign: ['token'] });";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_elysia_files() {
+        let src = "const c = t.Cookie({ token: t.String() }, { sign: ['token'] });";
+        assert!(crate::rules::test_helpers::run_oxc_ts(src, &Check).is_empty());
+    }
+}

@@ -178,3 +178,44 @@ fn source_text_of_expr<'a>(expr: &Expression<'a>, source: &str) -> Option<String
     let span = expr.span();
     Some(source[span.start as usize..span.end as usize].to_string())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_new_buffer() {
+        assert_eq!(run_on("const buf = new Buffer(10);").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_url_parse() {
+        assert_eq!(run_on("const parsed = url.parse(myUrl);").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_require_domain() {
+        assert_eq!(run_on("const d = require('domain');").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_buffer_from() {
+        assert!(run_on("const buf = Buffer.from('hello');").is_empty());
+    }
+
+
+    #[test]
+    fn allows_new_url() {
+        assert!(run_on("const u = new URL(myUrl);").is_empty());
+    }
+}

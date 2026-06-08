@@ -187,4 +187,7 @@ expect(result).toMatch(/^[a-z]+@[a-z]+\.[a-z]{2,4}$/);"#;
         let src = r#"const r = /^[a-z]+@[a-z]+\.[a-z]{2,4}$/;"#;
         assert_eq!(run_with_path(src, "src/auth.ts").len(), 1);
     }
+
+    use crate::diagnostic::Diagnostic;
+    use crate::rules::regex_documented_with_semantics::oxc_typescript::Check;
 }

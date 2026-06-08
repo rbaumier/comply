@@ -101,3 +101,67 @@ fn contains_and_boundary(name: &str) -> bool {
     }
     false
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_get_user_and_update_cache() {
+        let diags = run_on("function getUserAndUpdateCache() {}");
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].rule_id, "no-and-in-function-name");
+    }
+
+
+    #[test]
+    fn flags_method() {
+        let diags = run_on("class A { fetchAndParse() {} }");
+        assert_eq!(diags.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_arrow_function() {
+        let diags = run_on("const validateAndSave = () => {};");
+        assert_eq!(diags.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_get_user() {
+        assert!(run_on("function getUser() {}").is_empty());
+    }
+
+
+    #[test]
+    fn allows_command_handler() {
+        // `command` contains `and` but not on a camelCase boundary.
+        assert!(run_on("function commandHandler() {}").is_empty());
+    }
+
+
+    #[test]
+    fn allows_understanding() {
+        assert!(run_on("function understandingMode() {}").is_empty());
+    }
+
+
+    #[test]
+    fn unit_pattern_match() {
+        assert!(contains_and_boundary("fetchAndParse"));
+        assert!(contains_and_boundary("validateAndSave"));
+        assert!(contains_and_boundary("getUserAndUpdateCache"));
+        assert!(!contains_and_boundary("getUser"));
+        assert!(!contains_and_boundary("commandHandler"));
+        assert!(!contains_and_boundary("understandingMode"));
+        assert!(!contains_and_boundary("Android"));
+    }
+}

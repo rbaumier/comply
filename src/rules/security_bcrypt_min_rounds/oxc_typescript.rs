@@ -114,3 +114,65 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_low_rounds_hash() {
+        assert_eq!(run("bcrypt.hash(pw, 8);").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_low_rounds_hash_sync() {
+        assert_eq!(run("bcrypt.hashSync(pw, 10);").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_sufficient_rounds() {
+        assert!(run("bcrypt.hash(pw, 12);").is_empty());
+    }
+
+
+    #[test]
+    fn allows_high_rounds() {
+        assert!(run("bcrypt.hashSync(pw, 14);").is_empty());
+    }
+
+
+    #[test]
+    fn ignores_unrelated_calls() {
+        assert!(run("crypto.hash(pw, 8);").is_empty());
+    }
+
+
+    #[test]
+    fn flags_low_rounds_via_const() {
+        assert_eq!(
+            run("const SALT_ROUNDS = 8;\nbcrypt.hash(pw, SALT_ROUNDS);").len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn allows_sufficient_rounds_via_const() {
+        assert!(run("const SALT_ROUNDS = 12;\nbcrypt.hash(pw, SALT_ROUNDS);").is_empty());
+    }
+
+
+    #[test]
+    fn ignores_dynamic_identifier() {
+        assert!(run("bcrypt.hash(pw, rounds);").is_empty());
+    }
+}

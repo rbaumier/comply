@@ -2,8 +2,6 @@
 //! too small for comfortable reading on most screens.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

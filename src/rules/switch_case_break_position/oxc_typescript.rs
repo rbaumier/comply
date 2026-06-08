@@ -75,3 +75,92 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_break_outside_block() {
+        let src = r#"
+switch (x) {
+    case 'a': {
+        doStuff();
+    }
+    break;
+}
+"#;
+        let d = run_on(src);
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].rule_id, "switch-case-break-position");
+        assert!(d[0].message.contains("break"));
+    }
+
+
+    #[test]
+    fn flags_return_outside_block() {
+        let src = r#"
+function f(x: string) {
+    switch (x) {
+        case 'a': {
+            doStuff();
+        }
+        return 1;
+    }
+}
+"#;
+        let d = run_on(src);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("return"));
+    }
+
+
+    #[test]
+    fn allows_break_inside_block() {
+        let src = r#"
+switch (x) {
+    case 'a': {
+        doStuff();
+        break;
+    }
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_case_without_block() {
+        let src = r#"
+switch (x) {
+    case 'a':
+        doStuff();
+        break;
+}
+"#;
+        // No block statement, so rule doesn't apply (break is not "after a block")
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_fallthrough_case() {
+        let src = r#"
+switch (x) {
+    case 'a':
+    case 'b': {
+        doStuff();
+        break;
+    }
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+}

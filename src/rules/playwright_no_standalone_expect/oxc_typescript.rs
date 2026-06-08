@@ -125,3 +125,38 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rules::test_helpers::run_oxc_ts_with_path;
+
+    const PW_IMPORT: &str = "import { test, expect } from \"@playwright/test\";\n";
+
+
+    fn run_oxc_ts(source: &str) -> Vec<Diagnostic> {
+        run_oxc_ts_with_path(&format!("{PW_IMPORT}{source}"), &Check, "app.test.ts")
+    }
+
+
+    #[test]
+    fn flags_standalone_expect() {
+        let d = run_oxc_ts("expect(1).toBe(1);");
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].rule_id, "playwright-no-standalone-expect");
+    }
+
+
+    #[test]
+    fn allows_expect_in_test() {
+        let d = run_oxc_ts("test('ok', () => { expect(1).toBe(1); });");
+        assert!(d.is_empty());
+    }
+
+
+    #[test]
+    fn allows_expect_in_hook() {
+        let d = run_oxc_ts("beforeEach(() => { expect(setup).toBeDefined(); });");
+        assert!(d.is_empty());
+    }
+}

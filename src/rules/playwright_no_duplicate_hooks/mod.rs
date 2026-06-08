@@ -1,8 +1,6 @@
 //! playwright-no-duplicate-hooks — disallow duplicate setup/teardown hooks.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

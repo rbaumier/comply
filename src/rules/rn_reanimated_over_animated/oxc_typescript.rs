@@ -104,3 +104,41 @@ fn check_animated_member<'a>(expr: &'a oxc_ast::ast::Expression<'a>) -> Option<(
     }
     Some((prop_name, member.span.start as usize))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_animated_timing() {
+        let src = "Animated.timing(val, { toValue: 1 }).start();";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_animated_value() {
+        let src = "const v = new Animated.Value(0);";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_animated_import() {
+        let src = "import { Animated } from 'react-native';";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_reanimated() {
+        let src = "import { useSharedValue, withTiming } from 'react-native-reanimated';";
+        assert!(run(src).is_empty());
+    }
+}

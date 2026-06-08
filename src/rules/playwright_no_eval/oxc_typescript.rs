@@ -66,3 +66,49 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rules::test_helpers::run_oxc_ts_with_path;
+
+    const PW_IMPORT: &str = "import { test, expect } from \"@playwright/test\";\n";
+
+
+    fn run_oxc_ts(source: &str) -> Vec<Diagnostic> {
+        run_oxc_ts_with_path(&format!("{PW_IMPORT}{source}"), &Check, "login.test.ts")
+    }
+
+
+    #[test]
+    fn flags_page_dollar_eval() {
+        let d = run_oxc_ts("const t = await page.$eval('.btn', el => el.textContent);");
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].rule_id, "playwright-no-eval");
+    }
+
+
+    #[test]
+    fn flags_page_dollar_dollar_eval() {
+        let d = run_oxc_ts("const ts = await page.$$eval('li', els => els.map(e => e.textContent));");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_locator_text_content() {
+        let d = run_oxc_ts("const t = await page.locator('.btn').textContent();");
+        assert!(d.is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_test_file() {
+        let d = run_oxc_ts_with_path(
+            "const t = await page.$eval('.btn', el => el.textContent);",
+            &Check,
+            "helpers.ts",
+        );
+        assert!(d.is_empty());
+    }
+}

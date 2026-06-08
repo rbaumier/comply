@@ -53,3 +53,54 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_replace_with_global_regex() {
+        let d = run_on(r#"str.replace(/foo/g, 'bar')"#);
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].rule_id, "prefer-string-replace-all");
+    }
+
+
+    #[test]
+    fn flags_replace_with_gu_flags() {
+        let d = run_on(r#"str.replace(/foo/gu, 'bar')"#);
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_replace_without_global() {
+        assert!(run_on(r#"str.replace(/foo/, 'bar')"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_replace_with_string_arg() {
+        assert!(run_on(r#"str.replace('foo', 'bar')"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_replace_all_already() {
+        assert!(run_on(r#"str.replaceAll('foo', 'bar')"#).is_empty());
+    }
+
+
+    #[test]
+    fn flags_replace_with_case_insensitive_global() {
+        let d = run_on(r#"str.replace(/foo/gi, 'bar')"#);
+        assert_eq!(d.len(), 1);
+    }
+}

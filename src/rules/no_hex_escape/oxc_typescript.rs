@@ -103,3 +103,32 @@ impl OxcCheck for Check {
         diagnostics
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn allows_unicode_escape() {
+        assert!(run_on(r#"const x = '\u0041';"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_escaped_backslash_before_x() {
+        assert!(run_on(r#"const x = '\\x41';"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_normal_string() {
+        assert!(run_on(r#"const x = "hello";"#).is_empty());
+    }
+}

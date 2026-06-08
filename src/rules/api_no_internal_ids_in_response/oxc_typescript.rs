@@ -123,3 +123,54 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_snake_case_foreign_key() {
+        let d = run("interface OrderResponse { user_id: string; total: number }");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("user_id"));
+    }
+
+
+    #[test]
+    fn flags_pk_field() {
+        let d = run("interface UserDto { pk: number; name: string }");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_internal_prefixed_field() {
+        let d = run("interface AccountResponse { internal_tier: string; name: string }");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_camelcase_id() {
+        assert!(run("interface OrderResponse { userId: string; total: number }").is_empty());
+    }
+
+
+    #[test]
+    fn allows_plain_id() {
+        assert!(run("interface UserResponse { id: string; name: string }").is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_response_types() {
+        assert!(run("interface UserRow { user_id: string; pk: number }").is_empty());
+    }
+}

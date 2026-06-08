@@ -52,3 +52,35 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_framework(source, &Check, "elysia")
+    }
+
+
+    #[test]
+    fn flags_typeof_window_in_treaty_file() {
+        let src = "import { treaty } from '@elysiajs/eden';\nconst isServer = typeof window === 'undefined';";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_typeof_process() {
+        let src = "import { treaty } from '@elysiajs/eden';\nconst isServer = typeof process !== 'undefined';";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_eden_files() {
+        let src = "const isServer = typeof window === 'undefined';";
+        assert!(crate::rules::test_helpers::run_oxc_ts(src, &Check).is_empty());
+    }
+}

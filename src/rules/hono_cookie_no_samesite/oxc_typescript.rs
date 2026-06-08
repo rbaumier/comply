@@ -77,3 +77,35 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_set_cookie_without_samesite() {
+        let src = "import { setCookie } from 'hono/cookie';\nsetCookie(c, 'token', val, { httpOnly: true });";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_samesite_lax() {
+        let src = "import { setCookie } from 'hono/cookie';\nsetCookie(c, 'token', val, { sameSite: 'Lax' });";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn flags_samesite_none() {
+        let src = "import { setCookie } from 'hono/cookie';\nsetCookie(c, 'token', val, { sameSite: 'None' });";
+        assert_eq!(run_on(src).len(), 1);
+    }
+}

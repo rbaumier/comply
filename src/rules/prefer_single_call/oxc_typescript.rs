@@ -100,3 +100,47 @@ impl OxcCheck for Check {
         diagnostics
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_consecutive_push() {
+        let d = run_on("arr.push(1);\narr.push(2);");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("arr.push"));
+    }
+
+
+    #[test]
+    fn flags_three_consecutive_push() {
+        let d = run_on("arr.push(1);\narr.push(2);\narr.push(3);");
+        assert_eq!(d.len(), 2);
+    }
+
+
+    #[test]
+    fn allows_single_push() {
+        assert!(run_on("arr.push(1);").is_empty());
+    }
+
+
+    #[test]
+    fn allows_different_receivers() {
+        assert!(run_on("arr1.push(1);\narr2.push(2);").is_empty());
+    }
+
+
+    #[test]
+    fn allows_non_consecutive() {
+        assert!(run_on("arr.push(1);\nconsole.log('x');\narr.push(2);").is_empty());
+    }
+}

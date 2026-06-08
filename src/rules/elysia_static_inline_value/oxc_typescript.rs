@@ -88,3 +88,42 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_framework(source, &Check, "elysia")
+    }
+
+
+    #[test]
+    fn flags_arrow_returning_string_literal() {
+        let src = "import { Elysia } from 'elysia';\napp.get('/health', () => 'ok');";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_arrow_with_block_returning_string() {
+        let src = "import { Elysia } from 'elysia';\napp.get('/health', () => { return 'ok'; });";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_static_string_arg() {
+        let src = "import { Elysia } from 'elysia';\napp.get('/health', 'ok');";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_elysia_files() {
+        let src = "app.get('/health', () => 'ok');";
+        assert!(crate::rules::test_helpers::run_oxc_ts(src, &Check).is_empty());
+    }
+}

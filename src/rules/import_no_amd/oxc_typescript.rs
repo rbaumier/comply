@@ -55,3 +55,36 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_amd_require() {
+        let d = run_on("require(['dep'], function(dep) {});");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("AMD"));
+    }
+
+
+    #[test]
+    fn flags_amd_define() {
+        let d = run_on("define(['dep'], function(dep) {});");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("define"));
+    }
+
+
+    #[test]
+    fn allows_normal_require() {
+        assert!(run_on("const x = require('fs');").is_empty());
+    }
+}

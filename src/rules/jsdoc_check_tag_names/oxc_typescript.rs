@@ -175,3 +175,54 @@ impl OxcCheck for Check {
         diagnostics
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(src, &Check)
+    }
+
+
+    #[test]
+    fn flags_unknown_tag() {
+        let src = "/**\n * @bogus foo\n */\n";
+        let diags = run(src);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("@bogus"));
+    }
+
+
+    #[test]
+    fn suggests_canonical_for_common_typos() {
+        let src = "/**\n * @return thing\n */\n";
+        let diags = run(src);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("@returns"));
+    }
+
+
+    #[test]
+    fn allows_known_tags() {
+        let src = r#"
+/**
+ * Summary.
+ * @param x
+ * @returns y
+ * @throws Error
+ * @deprecated
+ */
+"#;
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn accepts_camel_inheritdoc() {
+        let src = "/**\n * @inheritDoc\n */\n";
+        assert!(run(src).is_empty());
+    }
+}

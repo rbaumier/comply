@@ -76,3 +76,35 @@ fn is_module_exports_target(target: &AssignmentTarget) -> bool {
         _ => false,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_exports_assignment() {
+        let d = run_on("exports = { foo: 1 };");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("module.exports"));
+    }
+
+
+    #[test]
+    fn allows_module_exports() {
+        assert!(run_on("module.exports = { foo: 1 };").is_empty());
+    }
+
+
+    #[test]
+    fn allows_exports_property() {
+        // `exports.foo = 1` is setting a property, not reassigning `exports` itself.
+        assert!(run_on("exports.foo = 1;").is_empty());
+    }
+}

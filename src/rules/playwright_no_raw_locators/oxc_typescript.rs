@@ -74,3 +74,53 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        let full = format!("import {{ test, expect }} from \"@playwright/test\";\n{source}");
+        crate::rules::test_helpers::run_oxc_ts_with_path(&full, &Check, "login.test.ts")
+    }
+
+
+    #[test]
+    fn flags_class_selector() {
+        let d = run_on("page.locator('.submit-btn');");
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].rule_id, "playwright-no-raw-locators");
+    }
+
+
+    #[test]
+    fn flags_id_selector() {
+        let d = run_on("page.locator('#login-form');");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_text_locator() {
+        assert!(run_on("page.locator('Submit');").is_empty());
+    }
+
+
+    #[test]
+    fn allows_get_by_role() {
+        assert!(run_on("page.getByRole('button');").is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_test_file() {
+        let d = crate::rules::test_helpers::run_oxc_ts_with_path(
+            "page.locator('.btn');",
+            &Check,
+            "helpers.ts",
+        );
+        assert!(d.is_empty());
+    }
+}

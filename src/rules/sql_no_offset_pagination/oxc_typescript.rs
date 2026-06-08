@@ -66,4 +66,48 @@ mod tests {
         let src = r#"const q = "SELECT * FROM users LIMIT 10";"#;
         assert!(run_on(src).is_empty());
     }
+
+
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(src, &Check)
+    }
+
+
+    #[test]
+    fn flags_template_literal_pagination() {
+        let src = r"const q = `SELECT * FROM users LIMIT 10 OFFSET 100`;";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_string_literal_pagination_with_placeholders() {
+        let src = r#"const q = "SELECT * FROM users LIMIT ? OFFSET ?";"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn does_not_flag_string_array_with_keyword_words() {
+        // The user's reported FP family — a Rust-style identifier list
+        // ported to TS: each "offset"/"limit" is its OWN string literal,
+        // not a SQL query.
+        let src = r#"const bases = ["delay", "offset", "width", "limit", "rate"];"#;
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn does_not_flag_comment_with_pattern() {
+        let src = "// SELECT ... LIMIT 10 OFFSET 100\nconst x = 1;";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn does_not_flag_non_sql_string_with_keywords() {
+        let src = r#"const x = "the limit is the offset of the field";"#;
+        assert!(run(src).is_empty());
+    }
 }

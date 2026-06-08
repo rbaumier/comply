@@ -105,3 +105,35 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_constructor_param_property_in_component() {
+        let src = "import { Component } from '@angular/core';\n@Component({}) class C { constructor(private svc: Svc) {} }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_inject_function() {
+        let src = "import { Component, inject } from '@angular/core';\n@Component({}) class C { svc = inject(Svc); }";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_angular_classes() {
+        let src = "class C { constructor(private svc: Svc) {} }";
+        assert!(run(src).is_empty());
+    }
+}

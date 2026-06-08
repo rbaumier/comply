@@ -69,3 +69,38 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_import_from_react_query() {
+        assert_eq!(run("import { useQuery } from 'react-query';").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_require_react_query() {
+        assert_eq!(run("const q = require('react-query');").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_tanstack_import() {
+        assert!(run("import { useQuery } from '@tanstack/react-query';").is_empty());
+    }
+
+
+    #[test]
+    fn allows_unrelated_imports() {
+        assert!(run("import React from 'react';").is_empty());
+    }
+}

@@ -78,3 +78,39 @@ impl OxcCheck for Check {
         diagnostics
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_idx(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_path(s, &Check, "index.ts")
+    }
+
+    fn run_other(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_path(s, &Check, "thing.ts")
+    }
+
+
+    #[test]
+    fn flags_side_effect_in_barrel() {
+        let src = "export * from './a';\nconsole.log('side');";
+        assert_eq!(run_idx(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_pure_reexports() {
+        let src = "export * from './a';\nexport { B } from './b';";
+        assert!(run_idx(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_barrel_files() {
+        let src = "console.log('side');";
+        assert!(run_other(src).is_empty());
+    }
+}

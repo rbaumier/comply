@@ -36,8 +36,6 @@
 //! there is no equivalent that makes sense for Rust `while`/`loop`.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

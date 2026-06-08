@@ -62,3 +62,49 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_framework(source, &Check, "elysia")
+    }
+
+
+    #[test]
+    fn flags_wildcard_with_credentials() {
+        let src = "import { cors } from '@elysiajs/cors';\napp.use(cors({ credentials: true, allowedHeaders: '*' }));";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_omitted_with_credentials() {
+        let src = "import { cors } from '@elysiajs/cors';\napp.use(cors({ credentials: true, origin: 'https://x.example' }));";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_explicit_headers() {
+        let src = "import { cors } from '@elysiajs/cors';\napp.use(cors({ credentials: true, allowedHeaders: ['content-type', 'authorization'] }));";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_credentials_false() {
+        let src = "import { cors } from '@elysiajs/cors';\napp.use(cors({ credentials: false }));";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_cors_files() {
+        let src = "app.use(cors({ credentials: true }));";
+        assert!(crate::rules::test_helpers::run_oxc_ts(src, &Check).is_empty());
+    }
+}

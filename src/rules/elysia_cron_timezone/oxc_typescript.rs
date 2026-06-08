@@ -79,3 +79,42 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_framework(source, &Check, "elysia")
+    }
+
+
+    #[test]
+    fn flags_pst_abbreviation() {
+        let src = "import { cron } from '@elysiajs/cron';\napp.use(cron({ name: 'job', pattern: '0 * * * *', timezone: 'PST', run() {} }));";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_est_abbreviation() {
+        let src = "import { cron } from '@elysiajs/cron';\napp.use(cron({ pattern: '*/5 * * * *', timezone: 'EST' }));";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_iana_timezone() {
+        let src = "import { cron } from '@elysiajs/cron';\napp.use(cron({ pattern: '0 * * * *', timezone: 'America/Los_Angeles' }));";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_cron_files() {
+        let src = "cron({ timezone: 'PST' });";
+        assert!(crate::rules::test_helpers::run_oxc_ts(src, &Check).is_empty());
+    }
+}

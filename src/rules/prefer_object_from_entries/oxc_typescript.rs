@@ -83,3 +83,50 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_reduce_with_empty_object() {
+        let d = run_on("const obj = pairs.reduce((acc, [k, v]) => ({ ...acc, [k]: v }), {});");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_reduce_with_object_create_null() {
+        let d = run_on(
+            "const obj = pairs.reduce((acc, [k, v]) => { acc[k] = v; return acc; }, Object.create(null));",
+        );
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_reduce_with_non_object_init() {
+        assert!(run_on("const sum = nums.reduce((acc, n) => acc + n, 0);").is_empty());
+    }
+
+
+    #[test]
+    fn allows_object_from_entries() {
+        assert!(
+            run_on("const obj = Object.fromEntries(pairs.map(([k, v]) => [k, v]));").is_empty()
+        );
+    }
+
+
+    #[test]
+    fn allows_reduce_with_array_init() {
+        assert!(run_on("const arr = items.reduce((acc, x) => [...acc, x], []);").is_empty());
+    }
+}

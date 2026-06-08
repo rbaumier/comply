@@ -73,3 +73,42 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_framework(source, &Check, "elysia")
+    }
+
+
+    #[test]
+    fn flags_open_add_without_error_handler() {
+        let src = "import { Elysia } from 'elysia';\nconst peers = new Set();\napp.ws('/chat', { open(ws) { peers.add(ws); } });";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_error_without_delete() {
+        let src = "import { Elysia } from 'elysia';\nconst peers = new Set();\napp.ws('/chat', { open(ws) { peers.add(ws); }, error(ws) { console.log('err'); } });";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_error_with_delete() {
+        let src = "import { Elysia } from 'elysia';\nconst peers = new Set();\napp.ws('/chat', { open(ws) { peers.add(ws); }, error(ws) { peers.delete(ws); } });";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_elysia_files() {
+        let src = "app.ws('/chat', { open(ws) { peers.add(ws); } });";
+        assert!(crate::rules::test_helpers::run_oxc_ts(src, &Check).is_empty());
+    }
+}

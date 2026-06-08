@@ -70,3 +70,56 @@ fn unwrap_parens<'a>(expr: &'a oxc_ast::ast::Expression<'a>) -> &'a oxc_ast::ast
     }
     current
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_parenthesized_arrow_iife() {
+        let d = run_on("const foo = (() => (bar))();");
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].rule_id, "no-unreadable-iife");
+    }
+
+
+    #[test]
+    fn flags_multiline_parenthesized_arrow_iife() {
+        let d = run_on("const foo = (() => (bar + baz))();");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_arrow_iife_without_parens_body() {
+        // `(() => bar)()` — body is not parenthesized, fine.
+        assert!(run_on("const foo = (() => bar)();").is_empty());
+    }
+
+
+    #[test]
+    fn allows_arrow_iife_with_block_body() {
+        // `(() => { return bar; })()` — block body, fine.
+        assert!(run_on("const foo = (() => { return bar; })();").is_empty());
+    }
+
+
+    #[test]
+    fn allows_regular_function_iife() {
+        // `(function() { return 42; })()` — not an arrow function, fine.
+        assert!(run_on("(function() { return 42; })();").is_empty());
+    }
+
+
+    #[test]
+    fn allows_normal_call() {
+        assert!(run_on("foo(bar);").is_empty());
+    }
+}

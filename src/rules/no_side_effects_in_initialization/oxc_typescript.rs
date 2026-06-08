@@ -534,4 +534,71 @@ mod tests {
         assert!(diags.is_empty(), "test-d/ files are tsd type-testing utilities, got {diags:?}");
     }
 
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_top_level_iife() {
+        let diags = run_on("(function () { doThing(); })();");
+        assert_eq!(diags.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_top_level_arrow_iife() {
+        let diags = run_on("(() => { doThing(); })();");
+        assert_eq!(diags.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_call_inside_function_body() {
+        assert!(run_on("export function run() { doThing(); }").is_empty());
+    }
+
+
+    #[test]
+    fn allows_call_inside_arrow_body() {
+        assert!(run_on("export const run = () => doThing();").is_empty());
+    }
+
+
+    #[test]
+    fn allows_pure_annotated_new() {
+        assert!(run_on("/*@__PURE__*/ new Heavy();").is_empty());
+    }
+
+
+    #[test]
+    fn allows_imports_and_declarations() {
+        let src = "import { x } from 'mod';\n\
+                   const y = 1;\n\
+                   let z = 2;\n\
+                   function f() {}\n\
+                   class C {}\n\
+                   export const w = compute();";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_call_inside_class_method() {
+        assert!(run_on("class Foo { bar() { doThing(); } }").is_empty());
+    }
+
+
+    #[test]
+    fn skips_type_test_files() {
+        let diags = crate::rules::test_helpers::run_oxc_ts_with_path(
+            "expectType<string>(foo());",
+            &Check,
+            "main.test-d.ts",
+        );
+        assert!(diags.is_empty());
+    }
 }

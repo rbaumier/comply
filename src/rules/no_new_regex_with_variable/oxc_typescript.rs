@@ -56,3 +56,32 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_regex_with_variable() {
+        assert_eq!(run_on("const r = new RegExp(userInput);").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_regex_with_string_literal() {
+        assert!(run_on("const r = new RegExp('foo[a-z]+');").is_empty());
+    }
+
+
+    #[test]
+    fn allows_literal_regex() {
+        assert!(run_on("const r = /foo/g;").is_empty());
+    }
+}

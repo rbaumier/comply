@@ -57,3 +57,31 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rules::test_helpers::run_oxc_ts_with_path;
+
+    const PW_IMPORT: &str = "import { test, expect } from \"@playwright/test\";\n";
+
+
+    fn run_oxc_ts(source: &str) -> Vec<Diagnostic> {
+        run_oxc_ts_with_path(&format!("{PW_IMPORT}{source}"), &Check, "app.test.ts")
+    }
+
+
+    #[test]
+    fn flags_wait_for_navigation() {
+        let d = run_oxc_ts("await page.waitForNavigation();");
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].rule_id, "playwright-no-wait-for-navigation");
+    }
+
+
+    #[test]
+    fn allows_wait_for_url() {
+        let d = run_oxc_ts("await page.waitForURL('/dashboard');");
+        assert!(d.is_empty());
+    }
+}

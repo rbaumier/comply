@@ -86,3 +86,49 @@ fn is_async_fn(code: &str) -> bool {
 fn has_rejection_path(code: &str) -> bool {
     code.contains("Promise.reject(") || code.contains("throw ")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(src, &Check)
+    }
+
+
+    #[test]
+    fn flags_async_fn_with_throw_and_no_rejects_tag() {
+        let src = "/**\n * does things\n */\nasync function f() { throw new Error('x'); }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_async_with_promise_reject() {
+        let src = "/**\n * does things\n */\nasync function f() { return Promise.reject(new Error('x')); }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_async_fn_with_rejects_tag() {
+        let src = "/**\n * does things\n * @rejects {Error} when broken\n */\nasync function f() { throw new Error('x'); }";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_sync_fn_with_throw() {
+        let src = "/**\n * does things\n */\nfunction f() { throw new Error('x'); }";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_async_fn_with_no_rejection_path() {
+        let src = "/**\n * ok\n */\nasync function f() { return 1; }";
+        assert!(run(src).is_empty());
+    }
+}

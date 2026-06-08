@@ -186,3 +186,78 @@ fn is_property_assignment_text(stmt: &str, var_name: &str) -> bool {
     }
     false
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_array_sort() {
+        let d = run_on("const arr = [3, 1, 2];\narr.sort();");
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].rule_id, "no-immediate-mutation");
+    }
+
+
+    #[test]
+    fn flags_array_push() {
+        let d = run_on("const arr = [];\narr.push(1);");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_array_reverse() {
+        let d = run_on("const arr = [1, 2, 3];\narr.reverse();");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_object_property_assignment() {
+        let d = run_on("const obj = {};\nobj.foo = 'bar';");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_set_add() {
+        let d = run_on("const s = new Set();\ns.add(1);");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_map_set() {
+        let d = run_on("const m = new Map();\nm.set('a', 1);");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_non_immediate_mutation() {
+        // If there's a statement between declaration and mutation, it's fine.
+        assert!(run_on("const arr = [3, 1, 2];\nconsole.log('hi');\narr.sort();").is_empty());
+    }
+
+
+    #[test]
+    fn allows_chained_init() {
+        // Already chained — no issue.
+        assert!(run_on("const arr = [3, 1, 2].sort();").is_empty());
+    }
+
+
+    #[test]
+    fn allows_non_literal_init() {
+        // If init is not a literal, don't flag.
+        assert!(run_on("const arr = getItems();\narr.sort();").is_empty());
+    }
+}

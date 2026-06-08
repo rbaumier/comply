@@ -158,3 +158,49 @@ fn handler_calls_cache_update(expr: &Expression<'_>, source: &str) -> bool {
         || body_source.contains("refetchQueries")
         || body_source.contains("removeQueries")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_post_without_on_success() {
+        let src = "useMutation({ mutationFn: (t) => fetch('/t', { method: 'POST', body: t }) });";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_delete_without_handlers() {
+        let src = "useMutation({ mutationFn: (id) => fetch('/t/' + id, { method: 'DELETE' }) });";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_post_with_invalidate_queries() {
+        let src = "useMutation({ mutationFn: (t) => fetch('/t', { method: 'POST' }), onSuccess: () => qc.invalidateQueries({ queryKey: ['t'] }) });";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_post_with_set_query_data() {
+        let src = "useMutation({ mutationFn: (t) => fetch('/t', { method: 'POST' }), onSettled: () => qc.setQueryData(['t'], []) });";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_get_mutation() {
+        let src = "useMutation({ mutationFn: () => fetch('/t', { method: 'GET' }) });";
+        assert!(run(src).is_empty());
+    }
+}

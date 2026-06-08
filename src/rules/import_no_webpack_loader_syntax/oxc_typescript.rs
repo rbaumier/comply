@@ -77,3 +77,35 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_loader_in_import() {
+        let d = run_on("import foo from 'style-loader!css-loader!./styles.css';");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("webpack"));
+    }
+
+
+    #[test]
+    fn flags_loader_in_require() {
+        let d = run_on("const x = require('babel-loader!./file.js');");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_normal_import() {
+        assert!(run_on("import foo from './styles.css';").is_empty());
+    }
+}

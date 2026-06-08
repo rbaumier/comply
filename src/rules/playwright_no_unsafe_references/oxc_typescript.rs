@@ -73,3 +73,55 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        let full = format!("import {{ test, expect }} from \"@playwright/test\";\n{source}");
+        crate::rules::test_helpers::run_oxc_ts_with_path(&full, &Check, "login.test.ts")
+    }
+
+
+    #[test]
+    fn flags_evaluate_with_single_arrow() {
+        let d = run_on("await page.evaluate(() => document.title);");
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].rule_id, "playwright-no-unsafe-references");
+    }
+
+
+    #[test]
+    fn flags_evaluate_with_arrow_body() {
+        let d = run_on("await page.evaluate(() => { return window.scrollY; });");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_evaluate_with_second_arg() {
+        let d = run_on("await page.evaluate((name) => document.title + name, userName);");
+        assert!(d.is_empty());
+    }
+
+
+    #[test]
+    fn allows_evaluate_with_string_arg() {
+        let d = run_on("await page.evaluate('document.title');");
+        assert!(d.is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_test_file() {
+        let d = crate::rules::test_helpers::run_oxc_ts_with_path(
+            "await page.evaluate(() => document.title);",
+            &Check,
+            "helpers.ts",
+        );
+        assert!(d.is_empty());
+    }
+}

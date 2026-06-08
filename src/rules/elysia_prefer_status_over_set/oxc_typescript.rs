@@ -46,3 +46,51 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_framework(source, &Check, "elysia")
+    }
+
+
+    #[test]
+    fn flags_set_status_assignment() {
+        let src = "import { Elysia } from 'elysia';\napp.get('/', ({ set }) => { set.status = 401; return 'no'; });";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_numeric_status() {
+        let src = "import { Elysia } from 'elysia';\nfunction h(set) { set.status = 500; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_status_helper() {
+        let src =
+            "import { Elysia, status } from 'elysia';\napp.get('/', () => status(401, 'no'));";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_elysia_files() {
+        let src = "function h(set) { set.status = 401; }";
+        assert!(crate::rules::test_helpers::run_oxc_ts(src, &Check).is_empty());
+    }
+
+
+    #[test]
+    fn still_flags_set_status_outside_on_error() {
+        let src = r#"import { Elysia } from 'elysia';
+app.get('/', ({ set }) => { set.status = 404; return 'not found'; });"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+}

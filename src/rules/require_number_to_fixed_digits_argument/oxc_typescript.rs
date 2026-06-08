@@ -49,3 +49,38 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_empty_to_fixed() {
+        assert_eq!(run_on("const s = num.toFixed();").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_chained_to_fixed() {
+        assert_eq!(run_on("price.toFixed().padStart(5)").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_to_fixed_with_digits() {
+        assert!(run_on("const s = num.toFixed(2);").is_empty());
+    }
+
+
+    #[test]
+    fn allows_to_fixed_with_zero() {
+        assert!(run_on("const s = num.toFixed(0);").is_empty());
+    }
+}

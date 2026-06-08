@@ -120,3 +120,61 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_three_char_alternation() {
+        assert_eq!(run_on("const re = /a|b|c/;").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_four_char_alternation() {
+        assert_eq!(run_on("const re = /x|y|z|w/;").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_multi_char_alternatives() {
+        assert!(run_on("const re = /foo|bar|baz/;").is_empty());
+    }
+
+
+    #[test]
+    fn allows_two_char_alternation() {
+        assert!(run_on("const re = /a|b/;").is_empty());
+    }
+
+
+    #[test]
+    fn ignores_tailwind_pipe_in_string() {
+        // Tailwind arbitrary-value with pipe-separated tokens in a string.
+        let src = r#"const x = "grid-cols-[a|b|c]";"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_url_with_pipes_in_string() {
+        let src = r#"const u = "https://example.com/?q=a|b|c";"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_scoped_import_with_pipe_like_chars() {
+        // Single-char alternation look-alike inside an import specifier.
+        let src = r#"import X from "@scope/a|b|c";"#;
+        assert!(run_on(src).is_empty());
+    }
+}

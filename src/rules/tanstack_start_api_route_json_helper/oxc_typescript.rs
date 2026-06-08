@@ -72,3 +72,42 @@ fn is_json_stringify_call(arg: &Argument) -> bool {
     }
     matches!(&mem.object, Expression::Identifier(id) if id.name.as_str() == "JSON")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_new_response_json_stringify() {
+        assert_eq!(
+            run("return new Response(JSON.stringify({ ok: true }));").len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn flags_with_headers_opts() {
+        let src = "return new Response(JSON.stringify(data), { headers: { 'content-type': 'application/json' } });";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_json_helper() {
+        assert!(run("return json({ ok: true });").is_empty());
+    }
+
+
+    #[test]
+    fn allows_new_response_text() {
+        assert!(run("return new Response('hello');").is_empty());
+    }
+}

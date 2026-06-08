@@ -79,3 +79,42 @@ impl OxcCheck for Check {
         diagnostics
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Config;
+    use crate::files::{Language, SourceFile};
+    use crate::project::ProjectCtx;
+    use crate::rules::test_helpers::run_oxc_ts_with_project;
+    use std::fs;
+    use tempfile::TempDir;
+
+
+
+    fn setup_project(files: &[(&str, &str)]) -> (TempDir, ProjectCtx, Vec<PathBuf>) {
+        let dir = TempDir::new().unwrap();
+        let mut source_files = Vec::new();
+        let mut paths = Vec::new();
+
+        for (rel, content) in files {
+            let p = dir.path().join(rel);
+            if let Some(parent) = p.parent() {
+                fs::create_dir_all(parent).unwrap();
+            }
+            fs::write(&p, content).unwrap();
+            let lang = Language::from_path(&p).unwrap();
+            source_files.push(SourceFile {
+                path: p.clone(),
+                language: lang,
+            });
+            paths.push(fs::canonicalize(&p).unwrap());
+        }
+
+        let refs: Vec<&SourceFile> = source_files.iter().collect();
+        let config = Config::default();
+        let project = ProjectCtx::load(&refs, &config);
+
+        (dir, project, paths)
+    }
+}

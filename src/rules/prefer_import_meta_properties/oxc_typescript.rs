@@ -211,3 +211,57 @@ fn has_dirname_wrapper_parent(
         _ => false,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_oxc_ts(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_file_url_to_path() {
+        let d = run_oxc_ts("const file = fileURLToPath(import.meta.url);");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("import.meta.filename"));
+    }
+
+
+    #[test]
+    fn flags_dirname_pattern() {
+        let d = run_oxc_ts("const dir = dirname(fileURLToPath(import.meta.url));");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("import.meta.dirname"));
+    }
+
+
+    #[test]
+    fn flags_path_dirname_pattern() {
+        let d = run_oxc_ts("const dir = path.dirname(fileURLToPath(import.meta.url));");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("import.meta.dirname"));
+    }
+
+
+    #[test]
+    fn allows_import_meta_filename() {
+        assert!(run_oxc_ts("const file = import.meta.filename;").is_empty());
+    }
+
+
+    #[test]
+    fn allows_import_meta_dirname() {
+        assert!(run_oxc_ts("const dir = import.meta.dirname;").is_empty());
+    }
+
+
+    #[test]
+    fn no_duplicate_for_dirname_containing_file_url() {
+        let d = run_oxc_ts("const dir = dirname(fileURLToPath(import.meta.url));");
+        assert_eq!(d.len(), 1);
+    }
+}

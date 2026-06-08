@@ -195,3 +195,39 @@ fn check_program_stmts(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rules::test_helpers::run_oxc_ts_with_path;
+
+    const PW_IMPORT: &str = "import { test, expect } from \"@playwright/test\";\n";
+
+
+    fn run_oxc_ts(source: &str) -> Vec<Diagnostic> {
+        run_oxc_ts_with_path(&format!("{PW_IMPORT}{source}"), &Check, "app.test.ts")
+    }
+
+
+    #[test]
+    fn flags_wrong_order() {
+        let src = "\
+afterEach(() => {});
+beforeEach(() => {});";
+        let d = run_oxc_ts(src);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("beforeEach"));
+    }
+
+
+    #[test]
+    fn allows_correct_order() {
+        let src = "\
+beforeAll(() => {});
+beforeEach(() => {});
+afterEach(() => {});
+afterAll(() => {});";
+        let d = run_oxc_ts(src);
+        assert!(d.is_empty());
+    }
+}

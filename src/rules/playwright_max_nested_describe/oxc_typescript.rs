@@ -91,3 +91,57 @@ impl OxcCheck for Check {
         diagnostics
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rules::test_helpers::run_oxc_ts_with_path;
+
+    const PW_IMPORT: &str = "import { test, expect } from \"@playwright/test\";\n";
+
+
+    fn run_oxc_ts(source: &str) -> Vec<Diagnostic> {
+        run_oxc_ts_with_path(&format!("{PW_IMPORT}{source}"), &Check, "app.test.ts")
+    }
+
+
+    #[test]
+    fn flags_deeply_nested_describe() {
+        let src = "\
+describe('1', () => {
+  describe('2', () => {
+    describe('3', () => {
+      describe('4', () => {
+        describe('5', () => {
+          describe('6', () => {
+            test('deep', () => {});
+          });
+        });
+      });
+    });
+  });
+});";
+        let d = run_oxc_ts(src);
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].rule_id, "playwright-max-nested-describe");
+    }
+
+
+    #[test]
+    fn allows_five_levels() {
+        let src = "\
+describe('1', () => {
+  describe('2', () => {
+    describe('3', () => {
+      describe('4', () => {
+        describe('5', () => {
+          test('ok', () => {});
+        });
+      });
+    });
+  });
+});";
+        let d = run_oxc_ts(src);
+        assert!(d.is_empty());
+    }
+}

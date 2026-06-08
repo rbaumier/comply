@@ -72,3 +72,50 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_dark_bg_raw() {
+        assert_eq!(
+            run(r#"export const A = () => <div className="bg-white dark:bg-zinc-900" />;"#).len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn flags_dark_text_raw() {
+        assert_eq!(
+            run(r#"export const A = () => <div className="dark:text-gray-100" />;"#).len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn allows_semantic_token() {
+        assert!(
+            run(r#"export const A = () => <div className="bg-background text-foreground" />;"#)
+                .is_empty()
+        );
+    }
+
+
+    #[test]
+    fn allows_dark_on_semantic_token() {
+        // `dark:bg-muted` is fine — `muted` is a token, not a raw color.
+        assert!(
+            run(r#"export const A = () => <div className="bg-card dark:bg-muted" />;"#).is_empty()
+        );
+    }
+}

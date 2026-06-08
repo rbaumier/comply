@@ -72,3 +72,95 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_lonely_if_in_else() {
+        let src = r#"
+if (a) {
+    foo();
+} else {
+    if (b) {
+        bar();
+    }
+}
+"#;
+        let d = run_on(src);
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].rule_id, "no-lonely-if");
+    }
+
+
+    #[test]
+    fn flags_lonely_if_else_in_else() {
+        // The inner if has its own else — still flaggable since
+        // it should be `else if (b) { ... } else { ... }`
+        let src = r#"
+if (a) {
+    foo();
+} else {
+    if (b) {
+        bar();
+    } else {
+        baz();
+    }
+}
+"#;
+        let d = run_on(src);
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_else_if() {
+        let src = r#"
+if (a) {
+    foo();
+} else if (b) {
+    bar();
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_else_with_multiple_statements() {
+        let src = r#"
+if (a) {
+    foo();
+} else {
+    doSetup();
+    if (b) {
+        bar();
+    }
+}
+"#;
+        // The else block has 2 statements, so the if is not "lonely"
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_nested_if_without_else() {
+        // This is `no-collapsible-if` territory, not `no-lonely-if`
+        let src = r#"
+if (a) {
+    if (b) {
+        foo();
+    }
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+}

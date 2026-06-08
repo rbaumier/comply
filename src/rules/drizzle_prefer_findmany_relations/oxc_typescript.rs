@@ -66,3 +66,46 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_left_join_with_relations_defined() {
+        let src = "export const userRelations = relations(users, ({ many }) => ({ posts: many(posts) }));\n\
+                   const r = db.select().from(users).leftJoin(posts, eq(users.id, posts.userId))";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_inner_join_with_relations_defined() {
+        let src = "export const userRelations = relations(users, ({ many }) => ({ posts: many(posts) }));\n\
+                   const r = db.select().from(users).innerJoin(posts, eq(users.id, posts.userId))";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_query_findmany_with() {
+        let src = "const r = db.query.users.findMany({ with: { posts: true } })";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_join_when_no_relations_defined() {
+        // REVIEW regression: without `relations()` in the file, the
+        // manual join is the only option — don't flag it.
+        let src = "const r = db.select().from(users).leftJoin(posts, eq(users.id, posts.userId))";
+        assert!(run(src).is_empty());
+    }
+}

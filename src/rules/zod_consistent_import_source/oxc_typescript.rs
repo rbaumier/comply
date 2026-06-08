@@ -42,3 +42,40 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_zod_v4_import() {
+        let d = run_on("import { z } from 'zod/v4';");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_zod_mini_import() {
+        let d = run_on("import { z } from 'zod/mini';");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_main_zod_import() {
+        assert!(run_on("import { z } from 'zod';").is_empty());
+    }
+
+
+    #[test]
+    fn allows_scoped_zod_package() {
+        assert!(run_on("import { foo } from '@zod/utils';").is_empty());
+    }
+}

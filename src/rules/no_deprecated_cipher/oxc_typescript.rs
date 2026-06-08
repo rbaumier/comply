@@ -55,3 +55,41 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_create_cipher() {
+        assert_eq!(
+            run_on("const cipher = crypto.createCipher('aes256', password);").len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn flags_bare_create_cipher() {
+        assert_eq!(run_on("createCipher('aes-128-cbc', pw)").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_create_cipheriv() {
+        assert!(run_on("const cipher = crypto.createCipheriv('aes-256-cbc', key, iv);").is_empty());
+    }
+
+
+    #[test]
+    fn allows_unrelated_code() {
+        assert!(run_on("const x = encrypt(data);").is_empty());
+    }
+}

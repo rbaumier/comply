@@ -76,3 +76,64 @@ impl OxcCheck for Check {
         diagnostics
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_const_array_with_includes() {
+        let source = "\
+const items = [1, 2, 3];
+for (const x of data) {
+  if (items.includes(x)) {}
+}";
+        let d = run_on(source);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("items"));
+        assert!(d[0].message.contains("Set"));
+    }
+
+
+    #[test]
+    fn flags_multiple_includes_calls() {
+        let source = "\
+const allowed = ['a', 'b', 'c'];
+allowed.includes(x);
+allowed.includes(y);";
+        let d = run_on(source);
+        assert_eq!(d.len(), 2);
+    }
+
+
+    #[test]
+    fn allows_let_array_with_includes() {
+        let source = "\
+let items = [1, 2, 3];
+items.includes(1);";
+        assert!(run_on(source).is_empty());
+    }
+
+
+    #[test]
+    fn allows_no_includes_call() {
+        let source = "const items = [1, 2, 3];\nconsole.log(items);";
+        assert!(run_on(source).is_empty());
+    }
+
+
+    #[test]
+    fn allows_set_has() {
+        let source = "\
+const items = new Set([1, 2, 3]);
+items.has(1);";
+        assert!(run_on(source).is_empty());
+    }
+}

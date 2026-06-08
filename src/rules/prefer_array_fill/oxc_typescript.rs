@@ -104,3 +104,39 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+    fn run(code: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(code, &Check)
+    }
+
+
+    #[test]
+    fn flags_array_from_constant() {
+        assert_eq!(run("Array.from({length: 5}, () => 0)").len(), 1);
+        assert_eq!(run("Array.from({length: n}, () => null)").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_array_from_with_index() {
+        // Uses index parameter, can't use fill
+        assert!(run("Array.from({length: 5}, (_, i) => i)").is_empty());
+    }
+
+
+    #[test]
+    fn allows_array_fill() {
+        assert!(run("Array(5).fill(0)").is_empty());
+    }
+
+
+    #[test]
+    fn allows_array_from_iterable() {
+        assert!(run("Array.from(set)").is_empty());
+    }
+}

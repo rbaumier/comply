@@ -127,3 +127,116 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_capture_stack_trace_with_class_name() {
+        let code = r#"
+class MyError extends Error {
+    constructor(message) {
+        super(message);
+        Error.captureStackTrace(this, MyError);
+    }
+}
+"#;
+        let d = run_on(code);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("Unnecessary"));
+    }
+
+
+    #[test]
+    fn flags_capture_stack_trace_with_new_target() {
+        let code = r#"
+class MyError extends TypeError {
+    constructor(message) {
+        super(message);
+        Error.captureStackTrace(this, new.target);
+    }
+}
+"#;
+        let d = run_on(code);
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_capture_stack_trace_with_this_constructor() {
+        let code = r#"
+class MyError extends RangeError {
+    constructor(message) {
+        super(message);
+        Error.captureStackTrace(this, this.constructor);
+    }
+}
+"#;
+        let d = run_on(code);
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_non_error_subclass() {
+        let code = r#"
+class MyClass extends Base {
+    constructor() {
+        super();
+        Error.captureStackTrace(this, MyClass);
+    }
+}
+"#;
+        assert!(run_on(code).is_empty());
+    }
+
+
+    #[test]
+    fn allows_different_second_argument() {
+        let code = r#"
+class MyError extends Error {
+    constructor(message) {
+        super(message);
+        Error.captureStackTrace(this, SomeOtherClass);
+    }
+}
+"#;
+        assert!(run_on(code).is_empty());
+    }
+
+
+    #[test]
+    fn allows_no_capture_stack_trace() {
+        let code = r#"
+class MyError extends Error {
+    constructor(message) {
+        super(message);
+    }
+}
+"#;
+        assert!(run_on(code).is_empty());
+    }
+
+
+    #[test]
+    fn allows_single_argument_capture() {
+        // Only 1 argument — not the pattern we flag (needs 2).
+        let code = r#"
+class MyError extends Error {
+    constructor(message) {
+        super(message);
+        Error.captureStackTrace(this);
+    }
+}
+"#;
+        assert!(run_on(code).is_empty());
+    }
+}

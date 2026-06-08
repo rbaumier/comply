@@ -88,3 +88,85 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_insert_adjacent_html_variable() {
+        let src = "el.insertAdjacentHTML('beforeend', userInput);";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_document_write_concat() {
+        let src = "document.write('<p>' + name + '</p>');";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_document_writeln_template() {
+        let src = "document.writeln(`<p>${name}</p>`);";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_set_html_unsafe_variable() {
+        let src = "el.setHTMLUnsafe(userInput);";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_create_contextual_fragment_variable() {
+        let src = "range.createContextualFragment(userInput);";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_insert_adjacent_html_literal() {
+        let src = "el.insertAdjacentHTML('beforeend', '<p>static</p>');";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_document_write_literal() {
+        let src = "document.write('<p>static</p>');";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_set_html_unsafe_static_template() {
+        let src = "el.setHTMLUnsafe(`<p>static</p>`);";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_unrelated_method() {
+        let src = "el.appendChild(child);";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_bare_identifier_call() {
+        // Callee is not a member_expression — skip.
+        let src = "write(userInput);";
+        assert!(run_on(src).is_empty());
+    }
+}

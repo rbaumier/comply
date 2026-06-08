@@ -1,8 +1,6 @@
 //! prefer-reflect-apply — prefer `Reflect.apply()` over `Function#apply()`.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

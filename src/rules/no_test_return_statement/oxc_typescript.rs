@@ -128,4 +128,66 @@ mod tests {
         let d = run("it('x', () => { return 42; });");
         assert_eq!(d.len(), 1);
     }
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_return_in_test_arrow() {
+        let d = run_on("test('x', () => { return 42; });");
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].rule_id, "no-test-return-statement");
+    }
+
+
+    #[test]
+    fn flags_return_in_it_function_expression() {
+        let d = run_on("it('x', function () { return someVar; });");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_return_in_nested_function() {
+        let d = run_on(
+            "test('x', () => { const helper = () => { return 1; }; expect(helper()).toBe(1); });",
+        );
+        assert!(d.is_empty());
+    }
+
+
+    #[test]
+    fn allows_test_without_return() {
+        let d = run_on("test('x', () => { expect(1).toBe(1); });");
+        assert!(d.is_empty());
+    }
+
+
+    #[test]
+    fn allows_return_outside_test() {
+        let d = run_on("function foo() { return 1; }");
+        assert!(d.is_empty());
+    }
+
+
+    #[test]
+    fn allows_return_in_nested_function_declaration() {
+        let d = run_on(
+            "test('x', () => { function Page() { return <div/>; } expect(Page).toBeDefined(); });",
+        );
+        assert!(d.is_empty());
+    }
+
+
+    #[test]
+    fn allows_return_in_object_method() {
+        let d = run_on(
+            "test('x', () => { const cfg = { init() { return cleanup; } }; expect(cfg).toBeDefined(); });",
+        );
+        assert!(d.is_empty());
+    }
 }

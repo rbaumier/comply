@@ -41,3 +41,39 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_let_declaration() {
+        assert_eq!(run_on("let x = 1;").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_let_with_type_annotation() {
+        assert_eq!(run_on("let x: number = 1;").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_const_declaration() {
+        assert!(run_on("const x = 1;").is_empty());
+    }
+
+
+    #[test]
+    fn ignores_var_declaration() {
+        // `var` is a variable_declaration node, not lexical_declaration.
+        assert!(run_on("var x = 1;").is_empty());
+    }
+}

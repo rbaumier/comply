@@ -54,3 +54,45 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diagnostic::Diagnostic;
+    use super::Check;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_missing_secure_cookies() {
+        assert_eq!(
+            run("export const auth = betterAuth({ database: db });").len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn allows_with_secure_cookies() {
+        assert!(
+            run("betterAuth({ advanced: { useSecureCookies: true }, database: db })").is_empty()
+        );
+    }
+
+
+    #[test]
+    fn ignores_file_without_better_auth() {
+        assert!(run("const x = doSomething()").is_empty());
+    }
+
+
+    #[test]
+    fn ignores_unrelated_call() {
+        assert!(run("configure({ database: db })").is_empty());
+    }
+}

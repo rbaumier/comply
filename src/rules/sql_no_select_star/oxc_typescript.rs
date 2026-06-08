@@ -63,4 +63,24 @@ mod tests {
         let src = r#"const q = `SELECT id, name FROM users`;"#;
         assert!(run_on(src).is_empty());
     }
+
+
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(src, &Check)
+    }
+
+
+    #[test]
+    fn flags_lowercase_select_star() {
+        let src = r#"const q = "select * from users";"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn does_not_flag_in_comment() {
+        let src = "// SELECT * FROM users\nconst x = 1;";
+        assert!(run(src).is_empty());
+    }
 }

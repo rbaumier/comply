@@ -86,3 +86,56 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rules::test_helpers;
+
+
+
+    fn run(source: &str) -> Vec<Diagnostic> {
+        test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_unused_catch_parameter() {
+        let d = run("try { foo(); } catch (error) { console.log('failed'); }");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("Unused catch binding"));
+        assert!(d[0].message.contains("error"));
+    }
+
+
+    #[test]
+    fn flags_unused_underscore_param() {
+        let d = run("try { foo(); } catch (_) { handleError(); }");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_used_catch_parameter() {
+        assert!(run("try { foo(); } catch (error) { console.log(error); }").is_empty());
+    }
+
+
+    #[test]
+    fn allows_omitted_catch_binding() {
+        assert!(run("try { foo(); } catch { console.log('failed'); }").is_empty());
+    }
+
+
+    #[test]
+    fn allows_error_rethrown() {
+        assert!(run("try { foo(); } catch (e) { throw e; }").is_empty());
+    }
+
+
+    #[test]
+    fn flags_unused_in_empty_catch_body() {
+        let d = run("try { risky(); } catch (err) { }");
+        assert_eq!(d.len(), 1);
+    }
+}

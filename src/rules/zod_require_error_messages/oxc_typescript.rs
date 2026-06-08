@@ -46,3 +46,29 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_single_arg_refine() {
+        assert_eq!(run("z.string().refine(val => val.includes('@'))").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_refine_with_message() {
+        assert!(
+            run("z.string().refine(val => val.includes('@'), { message: 'Must be email' })")
+                .is_empty()
+        );
+    }
+}

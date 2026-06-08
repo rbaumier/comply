@@ -71,3 +71,35 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_require_in_function() {
+        let d = run_on("function init() { const x = require('fs'); }");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("top-level"));
+    }
+
+
+    #[test]
+    fn flags_require_in_if() {
+        let d = run_on("if (true) { const x = require('fs'); }");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_top_level_require() {
+        assert!(run_on("const fs = require('fs');").is_empty());
+    }
+}

@@ -64,3 +64,31 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Config;
+    use crate::rules::backend::{AstCheck, CheckCtx};
+    use std::fs;
+    use std::path::Path;
+    use tempfile::TempDir;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn allows_any_import_when_no_restrictions_configured() {
+        // Default config has no patterns set for this rule.
+        let d = run_on("import type { Foo } from '@tanstack/react-table';");
+        assert!(d.is_empty());
+        let d = run_on("import { Foo } from 'bar';");
+        assert!(d.is_empty());
+        let d = run_on("import type Foo from './types';");
+        assert!(d.is_empty());
+    }
+}

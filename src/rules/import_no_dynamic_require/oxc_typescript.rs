@@ -64,3 +64,35 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_dynamic_require() {
+        let d = run_on("const x = require(getPath());");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("string literals"));
+    }
+
+
+    #[test]
+    fn flags_variable_require() {
+        let d = run_on("const x = require(moduleName);");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_static_require() {
+        assert!(run_on("const x = require('fs');").is_empty());
+    }
+}

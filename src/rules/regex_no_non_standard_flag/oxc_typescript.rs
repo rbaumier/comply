@@ -49,3 +49,48 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn allows_standard_flags() {
+        assert!(run_on(r#"const re = /foo/gim;"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_no_flags() {
+        assert!(run_on(r#"const re = /foo/;"#).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_url_with_y_segment() {
+        // /query was flagged as `q` flag under the text-based impl.
+        let src = r#"const u = "http://localhost:6762/api/v1/diffs/query";"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_import_path_with_y() {
+        let src = r#"import X from "@tanstack/react-query";"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_tailwind_arbitrary_value() {
+        let src = r#"const x = "has-[>svg]:grid-cols-[auto_1fr]";"#;
+        assert!(run_on(src).is_empty());
+    }
+}

@@ -39,3 +39,33 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_nested_ternary() {
+        let diags = run_on("const x = a ? b ? 1 : 2 : 3;");
+        assert_eq!(diags.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_single_ternary() {
+        assert!(run_on("const x = a ? 1 : 2;").is_empty());
+    }
+
+
+    #[test]
+    fn flags_deeply_nested_ternaries() {
+        assert_eq!(run_on("const x = a ? b ? c ? 1 : 2 : 3 : 4;").len(), 2);
+    }
+}

@@ -106,3 +106,47 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_mismatched_keys() {
+        let src = r#"
+            const x = <motion.div
+                initial={{ opacity: 0, y: 10 }}
+                exit={{ opacity: 0 }}
+            />;
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_matching_keys() {
+        let src = r#"
+            const x = <motion.div
+                initial={{ opacity: 0, y: 10 }}
+                exit={{ opacity: 0, y: 10 }}
+            />;
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_without_exit() {
+        let src = r#"
+            const x = <motion.div initial={{ opacity: 0 }} />;
+        "#;
+        assert!(run(src).is_empty());
+    }
+}

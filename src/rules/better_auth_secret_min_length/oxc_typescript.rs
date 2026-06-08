@@ -51,3 +51,36 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diagnostic::Diagnostic;
+    use super::Check;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_short_secret() {
+        assert_eq!(run("betterAuth({ secret: \"short\" })").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_long_secret() {
+        assert!(
+            run("betterAuth({ secret: \"a-very-long-secret-value-with-32-chars\" })").is_empty()
+        );
+    }
+
+
+    #[test]
+    fn ignores_env_secret() {
+        assert!(run("betterAuth({ secret: process.env.BETTER_AUTH_SECRET })").is_empty());
+    }
+}

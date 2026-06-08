@@ -79,3 +79,35 @@ fn inside_query_hook<'a>(
     }
     false
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_on_success() {
+        assert_eq!(
+            run("useQuery({ queryKey: ['x'], queryFn: f, onSuccess: () => {} })").len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn allows_no_callbacks() {
+        assert!(run("useQuery({ queryKey: ['x'], queryFn: f })").is_empty());
+    }
+
+
+    #[test]
+    fn ignores_use_mutation() {
+        assert!(run("useMutation({ onSuccess: () => {} })").is_empty());
+    }
+}

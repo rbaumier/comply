@@ -89,3 +89,27 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_outside_component() {
+        let src = "function head() { const { t } = useTranslation(); return t('x'); }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_inside_component() {
+        let src = "function MyComponent() { const { t } = useTranslation(); return null; }";
+        assert!(run(src).is_empty());
+    }
+}

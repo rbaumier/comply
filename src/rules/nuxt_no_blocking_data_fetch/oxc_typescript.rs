@@ -71,3 +71,42 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_use_fetch_in_middleware() {
+        let src = "export default defineNuxtRouteMiddleware(async () => { const { data } = await useFetch('/api/me'); });";
+        assert!(!run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn flags_raw_fetch_in_middleware() {
+        let src = "export default defineNuxtRouteMiddleware(async () => { const r = await fetch('/api/me'); });";
+        assert!(!run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_in_setup() {
+        let src = "export default defineComponent({ async setup() { const { data } = await useFetch('/api/me'); return { data }; } });";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_pure_middleware() {
+        let src = "export default defineNuxtRouteMiddleware((to) => { if (!to.params.id) return navigateTo('/'); });";
+        assert!(run_on(src).is_empty());
+    }
+}

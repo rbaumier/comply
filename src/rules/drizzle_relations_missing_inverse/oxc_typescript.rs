@@ -125,3 +125,42 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(src, &Check)
+    }
+
+
+    #[test]
+    fn flags_one_without_inverse() {
+        let src = "export const usersRelations = relations(users, ({ one }) => ({ profile: one(profiles) }));";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_inverse_present() {
+        let src = "export const usersRelations = relations(users, ({ one }) => ({ profile: one(profiles) }));\nexport const profilesRelations = relations(profiles, ({ one }) => ({ user: one(users) }));";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn flags_many_without_inverse() {
+        let src = "export const usersRelations = relations(users, ({ many }) => ({ posts: many(posts) }));";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn ignores_call_outside_relations() {
+        let src = "function one() {}\nfunction many() {}\nconst x = one(profiles);";
+        assert!(run(src).is_empty());
+    }
+}

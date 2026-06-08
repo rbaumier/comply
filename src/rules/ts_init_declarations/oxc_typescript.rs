@@ -110,4 +110,30 @@ describe('example', () => {
     fn still_flags_uninitialized_let_at_runtime() {
         assert_eq!(run("let x: number;").len(), 1);
     }
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_let_without_init() {
+        let diags = run_on("let x: number;");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("x"));
+    }
+
+
+    #[test]
+    fn allows_let_with_init() {
+        assert!(run_on("let x: number = 0;").is_empty());
+    }
+
+
+    #[test]
+    fn allows_declare_context() {
+        assert!(run_on("declare let x: number;").is_empty());
+    }
 }

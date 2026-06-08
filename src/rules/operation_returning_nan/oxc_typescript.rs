@@ -74,3 +74,52 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rules::test_helpers::run_oxc_ts;
+
+
+
+    #[test]
+    fn flags_undefined_plus() {
+        let d = run_oxc_ts("const x = undefined + 1;", &Check);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("undefined"));
+    }
+
+
+    #[test]
+    fn flags_undefined_minus() {
+        let d = run_oxc_ts("const x = undefined - 5;", &Check);
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_string_multiply() {
+        let d = run_oxc_ts("const x = \"hello\" * 2;", &Check);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("string"));
+    }
+
+
+    #[test]
+    fn flags_string_minus() {
+        let d = run_oxc_ts("const x = \"text\" - 1;", &Check);
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_number_arithmetic() {
+        assert!(run_oxc_ts("const x = 10 + 5;", &Check).is_empty());
+    }
+
+
+    #[test]
+    fn allows_string_concat() {
+        assert!(run_oxc_ts("const x = \"hello\" + \" world\";", &Check).is_empty());
+    }
+}

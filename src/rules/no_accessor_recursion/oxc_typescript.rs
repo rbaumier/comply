@@ -136,3 +136,49 @@ fn is_assignment_target<'a>(
         _ => false,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn allows_getter_reading_different_property() {
+        let code = r#"
+class Foo {
+    get bar() { return this._bar; }
+}
+"#;
+        assert!(run_on(code).is_empty());
+    }
+
+
+    #[test]
+    fn allows_setter_writing_different_property() {
+        let code = r#"
+class Foo {
+    set bar(value) { this._bar = value; }
+}
+"#;
+        assert!(run_on(code).is_empty());
+    }
+
+
+    #[test]
+    fn allows_regular_method() {
+        let code = r#"
+class Foo {
+    bar() { return this.bar; }
+}
+"#;
+        // Regular methods can reference themselves (e.g., recursion is intentional).
+        // This rule only targets get/set accessors.
+        assert!(run_on(code).is_empty());
+    }
+}

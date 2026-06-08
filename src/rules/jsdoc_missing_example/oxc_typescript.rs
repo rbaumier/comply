@@ -124,3 +124,45 @@ fn find_jsdoc_above<'a>(
         None
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::path::Path;
+    use tempfile::TempDir;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_jsdoc_without_example() {
+        let source = "/** Does foo. */\nexport function foo() {}";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_jsdoc_with_example() {
+        let source = "/** Does foo.\n * @example\n *   foo();\n */\nexport function foo() {}";
+        assert!(run_on(source).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_export_without_jsdoc() {
+        // No JSDoc at all — jsdoc-on-exported's job, not ours.
+        assert!(run_on("export function foo() {}").is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_exported_function() {
+        let source = "/** Helper. */\nfunction helper() {}";
+        assert!(run_on(source).is_empty());
+    }
+}

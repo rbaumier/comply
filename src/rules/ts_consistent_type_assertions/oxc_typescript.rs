@@ -42,3 +42,29 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_angle_bracket_assertion() {
+        let diags = run_on("const x = <string>value;");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("as"));
+    }
+
+
+    #[test]
+    fn allows_as_assertion() {
+        let diags = run_on("const x = value as string;");
+        assert!(diags.is_empty());
+    }
+}

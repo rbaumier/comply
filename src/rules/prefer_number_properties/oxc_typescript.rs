@@ -128,3 +128,63 @@ impl OxcCheck for Check {
         diagnostics
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_global_is_nan() {
+        let d = run_on("if (isNaN(value)) {}");
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].rule_id, "prefer-number-properties");
+        assert!(d[0].message.contains("Number.isNaN"));
+    }
+
+
+    #[test]
+    fn flags_global_parse_int() {
+        let d = run_on("const n = parseInt('10', 10);");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("Number.parseInt"));
+    }
+
+
+    #[test]
+    fn flags_global_parse_float() {
+        let d = run_on("const n = parseFloat('3.14');");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_global_is_finite() {
+        let d = run_on("if (isFinite(x)) {}");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_number_is_nan() {
+        assert!(run_on("if (Number.isNaN(value)) {}").is_empty());
+    }
+
+
+    #[test]
+    fn allows_number_parse_int() {
+        assert!(run_on("const n = Number.parseInt('10', 10);").is_empty());
+    }
+
+
+    #[test]
+    fn ignores_member_access() {
+        assert!(run_on("foo.isNaN(value);").is_empty());
+    }
+}

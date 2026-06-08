@@ -1,8 +1,6 @@
 //! xstate-no-misplaced-on-transition
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

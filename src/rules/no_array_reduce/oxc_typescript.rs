@@ -146,3 +146,68 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn allows_simple_sum() {
+        assert!(run_on("const sum = arr.reduce((acc, x) => acc + x, 0);").is_empty());
+    }
+
+
+    #[test]
+    fn allows_simple_product() {
+        assert!(run_on("const prod = arr.reduce((acc, x) => acc * x, 1);").is_empty());
+    }
+
+
+    #[test]
+    fn allows_simple_sum_block_body() {
+        assert!(run_on("const sum = arr.reduce((acc, x) => { return acc + x; }, 0);").is_empty());
+    }
+
+
+    #[test]
+    fn allows_math_min() {
+        assert!(run_on("const min = arr.reduce((a, b) => Math.min(a, b));").is_empty());
+    }
+
+
+    #[test]
+    fn flags_complex_reduce() {
+        assert_eq!(
+            run_on("const obj = arr.reduce((acc, x) => ({ ...acc, [x.id]: x }), {});").len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn flags_reduce_right_complex() {
+        assert_eq!(
+            run_on("const r = arr.reduceRight((acc, x) => acc.concat(x.items), []);").len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn allows_non_reduce() {
+        assert!(run_on("const x = arr.map(x => x * 2);").is_empty());
+    }
+
+
+    #[test]
+    fn allows_direct_function_call() {
+        assert!(run_on("reduce(acc, x);").is_empty());
+    }
+}

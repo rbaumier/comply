@@ -145,4 +145,17 @@ mod tests {
         )
         .is_empty());
     }
+
+    use crate::diagnostic::Diagnostic;
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn allows_single_parent() {
+        assert!(run("import { helper } from '../utils/format'").is_empty());
+    }
 }

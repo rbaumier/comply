@@ -74,4 +74,17 @@ mod tests {
         let src = r#"const m = "ALTER TABLE t ADD CONSTRAINT order_user_id_user_id_fk FOREIGN KEY (user_id) REFERENCES user(id)";"#;
         assert!(run_on(src).is_empty());
     }
+
+
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(src, &Check)
+    }
+
+
+    #[test]
+    fn flags_short_name() {
+        let src = r#"const m = "ALTER TABLE t ADD CONSTRAINT user_fk FOREIGN KEY (user_id) REFERENCES users(id)";"#;
+        assert_eq!(run(src).len(), 1);
+    }
 }

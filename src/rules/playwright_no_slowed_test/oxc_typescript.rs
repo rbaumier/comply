@@ -52,3 +52,50 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        let full = format!("import {{ test, expect }} from \"@playwright/test\";\n{source}");
+        crate::rules::test_helpers::run_oxc_ts(&full, &Check)
+    }
+
+
+    #[test]
+    fn flags_bare_test_slow() {
+        let src = "test.slow();";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_test_slow_inside_test() {
+        let src = "test('my test', () => { test.slow(); });";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_conditional_test_slow() {
+        let src = "test('my test', () => { test.slow(process.env.CI, 'CI is slow'); });";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_normal_test() {
+        let src = "test('my test', () => { expect(1).toBe(1); });";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_other_slow_methods() {
+        let src = "foo.slow();";
+        assert!(run_on(src).is_empty());
+    }
+}

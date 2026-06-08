@@ -68,3 +68,46 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_abstract_role_widget() {
+        let d = run(r#"const x = <div role="widget" />;"#);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("widget"));
+    }
+
+
+    #[test]
+    fn flags_abstract_role_section() {
+        assert_eq!(run(r#"const x = <div role="section" />;"#).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_abstract_role_range() {
+        assert_eq!(run(r#"const x = <div role="range" />;"#).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_concrete_role() {
+        assert!(run(r#"const x = <div role="button" />;"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_navigation_role() {
+        assert!(run(r#"const x = <nav role="navigation" />;"#).is_empty());
+    }
+}

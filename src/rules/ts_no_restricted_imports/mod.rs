@@ -11,8 +11,6 @@
 //! Absent or empty list → rule is a no-op.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

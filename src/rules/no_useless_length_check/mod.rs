@@ -1,8 +1,6 @@
 //! no-useless-length-check — flag redundant `.length` checks before `.some()`/`.every()`.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

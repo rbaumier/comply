@@ -45,3 +45,36 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_export_let() {
+        let d = run_on("export let count = 0;");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("`let`"));
+    }
+
+
+    #[test]
+    fn flags_export_var() {
+        let d = run_on("export var name = 'x';");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("`var`"));
+    }
+
+
+    #[test]
+    fn allows_export_const() {
+        assert!(run_on("export const MAX = 10;").is_empty());
+    }
+}

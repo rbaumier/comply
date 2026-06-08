@@ -71,3 +71,42 @@ fn collect_cookie_block(lines: &[&str], start: usize) -> String {
     }
     lines[start..=last].join("\n")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_framework(source, &Check, "elysia")
+    }
+
+
+    #[test]
+    fn flags_missing_httponly() {
+        let src = "import { Elysia, t } from 'elysia';\nt.Cookie({ token: t.String() }, { secure: true });";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_with_httponly() {
+        let src = "import { Elysia, t } from 'elysia';\nt.Cookie({ token: t.String() }, { httpOnly: true, secure: true });";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_elysia_files() {
+        let src = "t.Cookie({ token: t.String() });";
+        assert!(crate::rules::test_helpers::run_oxc_ts(src, &Check).is_empty());
+    }
+
+
+    #[test]
+    fn allows_multiline_cookie_with_httponly_beyond_six_lines() {
+        let src = "import { Elysia, t } from 'elysia';\nt.Cookie(\n  { token: t.String() },\n  {\n    secure: true,\n    sameSite: 'lax',\n    path: '/',\n    domain: 'example.com',\n    maxAge: 3600,\n    httpOnly: true,\n  },\n);";
+        assert!(run_on(src).is_empty());
+    }
+}

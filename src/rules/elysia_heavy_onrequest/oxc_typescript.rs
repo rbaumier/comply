@@ -54,3 +54,42 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_framework(source, &Check, "elysia")
+    }
+
+
+    #[test]
+    fn flags_await_in_on_request() {
+        let src = "import { Elysia } from 'elysia';\nnew Elysia().onRequest(async ({ request }) => { await fetch('/x'); });";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_db_in_on_request() {
+        let src = "import { Elysia } from 'elysia';\nnew Elysia().onRequest(({ request }) => { db.query('SELECT 1'); });";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_lightweight_on_request() {
+        let src = "import { Elysia } from 'elysia';\nnew Elysia().onRequest(({ request }) => { console.log(request.url); });";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_elysia_files() {
+        let src = "app.onRequest(async () => { await fetch('/x'); });";
+        assert!(crate::rules::test_helpers::run_oxc_ts(src, &Check).is_empty());
+    }
+}

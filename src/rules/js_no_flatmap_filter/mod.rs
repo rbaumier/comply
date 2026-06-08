@@ -2,8 +2,6 @@
 //! return an empty array from `flatMap` to combine map+filter in one pass.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

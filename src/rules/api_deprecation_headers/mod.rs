@@ -9,8 +9,6 @@
 //! wire gives SDKs and monitoring a chance to react early.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

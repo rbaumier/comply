@@ -61,3 +61,34 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_import_from_stack() {
+        let src = "import { createStackNavigator } from '@react-navigation/stack';";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_create_stack_call() {
+        let src = "const Stack = createStackNavigator();";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_expo_router() {
+        let src = "import { Stack } from 'expo-router';";
+        assert!(run(src).is_empty());
+    }
+}

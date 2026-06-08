@@ -52,3 +52,35 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_vue_router_import_in_nuxt_file() {
+        let src = "import { useRouter } from 'vue-router';\nconst plugin = defineNuxtPlugin(() => {});";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_other_imports() {
+        let src = "import { ref } from 'vue';\nconst plugin = defineNuxtPlugin(() => {});";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_nuxt_files() {
+        let src = "import { useRouter } from 'vue-router';";
+        assert!(run_on(src).is_empty());
+    }
+}

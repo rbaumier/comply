@@ -91,3 +91,61 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(src, &Check)
+    }
+
+
+    fn make_array(n: usize) -> String {
+        let rows: Vec<String> = (0..n).map(|i| format!("{{ name: 'u{i}' }}")).collect();
+        format!("[{}]", rows.join(", "))
+    }
+
+
+    #[test]
+    fn flags_large_array_literal() {
+        let arr = make_array(501);
+        let src = format!("await db.insert(users).values({arr})");
+        assert_eq!(run_on(&src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_small_array_literal() {
+        let arr = make_array(3);
+        let src = format!("await db.insert(users).values({arr})");
+        assert!(run_on(&src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_array_at_threshold() {
+        let arr = make_array(500);
+        let src = format!("await db.insert(users).values({arr})");
+        assert!(run_on(&src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_values_not_on_insert_chain() {
+        // Not a drizzle insert — same `.values()` name, different receiver.
+        let arr = make_array(1000);
+        let src = format!("await db.update(users).set({{}}).values({arr})");
+        assert!(run_on(&src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_values_with_variable_arg() {
+        // We only flag direct array literals — variables are ambiguous.
+        let src = "await db.insert(users).values(bigArray)";
+        assert!(run_on(src).is_empty());
+    }
+}

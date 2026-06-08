@@ -73,3 +73,43 @@ impl OxcCheck for Check {
         diagnostics
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(src, &Check)
+    }
+
+
+    #[test]
+    fn flags_template_without_description() {
+        let src = "/**\n * @template T\n */\nfunction id<T>(x: T): T { return x; }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_template_with_constraint_but_no_description() {
+        let src = "/**\n * @template {string} K\n */\nfunction f<K extends string>(x: K): K { return x; }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_template_with_description() {
+        let src =
+            "/**\n * @template T - the element type\n */\nfunction id<T>(x: T): T { return x; }";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_multiple_templates_with_description() {
+        let src = "/**\n * @template T, U - a pair\n */\nfunction f<T, U>(t: T, u: U): [T, U] { return [t, u]; }";
+        assert!(run(src).is_empty());
+    }
+}

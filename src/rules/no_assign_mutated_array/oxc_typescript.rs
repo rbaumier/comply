@@ -121,3 +121,68 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_const_sort() {
+        assert_eq!(run_on("const x = arr.sort();").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_const_reverse() {
+        assert_eq!(run_on("const x = arr.reverse();").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_const_fill() {
+        assert_eq!(run_on("const x = arr.fill(0);").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_let_sort_with_comparator() {
+        assert_eq!(run_on("let x = items.sort((a, b) => a - b);").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_reassignment() {
+        assert_eq!(run_on("x = arr.reverse();").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_to_sorted() {
+        assert!(run_on("const x = arr.toSorted();").is_empty());
+    }
+
+
+    #[test]
+    fn allows_to_reversed() {
+        assert!(run_on("const x = arr.toReversed();").is_empty());
+    }
+
+
+    #[test]
+    fn allows_inline_sort_without_assignment() {
+        assert!(run_on("arr.sort();").is_empty());
+    }
+
+
+    #[test]
+    fn allows_spread_then_sort() {
+        assert!(run_on("const x = [...arr].sort();").is_empty());
+    }
+}

@@ -51,3 +51,92 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_case_without_braces() {
+        let src = r#"
+switch (x) {
+    case 'a':
+        const y = 1;
+        break;
+}
+"#;
+        let d = run_on(src);
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].rule_id, "switch-case-braces");
+    }
+
+
+    #[test]
+    fn allows_case_with_braces() {
+        let src = r#"
+switch (x) {
+    case 'a': {
+        const y = 1;
+        break;
+    }
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_fallthrough_case() {
+        let src = r#"
+switch (x) {
+    case 'a':
+    case 'b': {
+        doSomething();
+        break;
+    }
+}
+"#;
+        // case 'a' is a fall-through (no body), case 'b' has braces
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn flags_default_without_braces() {
+        let src = r#"
+switch (x) {
+    case 'a': {
+        break;
+    }
+    default:
+        const z = 2;
+        break;
+}
+"#;
+        let d = run_on(src);
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_multiple_cases_without_braces() {
+        let src = r#"
+switch (x) {
+    case 'a':
+        foo();
+        break;
+    case 'b':
+        bar();
+        break;
+}
+"#;
+        assert_eq!(run_on(src).len(), 2);
+    }
+}

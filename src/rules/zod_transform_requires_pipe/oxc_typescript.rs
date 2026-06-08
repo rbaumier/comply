@@ -205,4 +205,7 @@ mod tests {
         let src = "const s = z.unknown().transform(o => JSON.stringify(o));";
         assert!(run(src).is_empty());
     }
+
+    use crate::diagnostic::Diagnostic;
+    use super::Check;
 }

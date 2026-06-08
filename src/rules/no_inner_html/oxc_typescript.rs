@@ -45,3 +45,44 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_inner_html_assignment() {
+        assert_eq!(run_on("el.innerHTML = raw;").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_outer_html_assignment() {
+        assert_eq!(run_on("el.outerHTML = raw;").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_inner_html_plus_equals() {
+        assert_eq!(run_on("el.innerHTML += raw;").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_text_content_assignment() {
+        assert!(run_on("el.textContent = raw;").is_empty());
+    }
+
+
+    #[test]
+    fn allows_reading_inner_html() {
+        assert!(run_on("const s = el.innerHTML;").is_empty());
+    }
+}

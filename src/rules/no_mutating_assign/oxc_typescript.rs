@@ -296,3 +296,74 @@ mod oxc_tests {
         assert_eq!(run(src).len(), 1);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_identifier_target() {
+        assert_eq!(run_on("Object.assign(foo, bar);").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_non_empty_object_literal_target() {
+        assert_eq!(run_on("Object.assign({ a: 1 }, bar);").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_member_expression_target() {
+        assert_eq!(run_on("Object.assign(this.state, patch);").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_empty_object_target() {
+        assert!(run_on("const merged = Object.assign({}, foo, bar);").is_empty());
+    }
+
+
+    #[test]
+    fn ignores_other_calls() {
+        assert!(run_on("assign(foo, bar);").is_empty());
+    }
+
+
+    #[test]
+    fn ignores_unrelated_object_method() {
+        assert!(run_on("Object.keys(foo);").is_empty());
+    }
+
+
+    #[test]
+    fn ignores_no_arguments() {
+        assert!(run_on("Object.assign();").is_empty());
+    }
+
+
+    #[test]
+    fn allows_arrow_function_target() {
+        // Attaching metadata to a named handler — not a data mutation.
+        assert!(run_on(
+            r#"const handler = async (ctx) => { return ctx.body; };
+Object.assign(handler, { displayName: "myHandler" });"#
+        )
+        .is_empty());
+    }
+
+
+    #[test]
+    fn still_flags_plain_object_identifier() {
+        // No function binding in scope — must still be flagged.
+        assert_eq!(run_on("Object.assign(foo, bar);").len(), 1);
+    }
+}

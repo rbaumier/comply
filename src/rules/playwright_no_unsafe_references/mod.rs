@@ -1,8 +1,6 @@
 //! playwright-no-unsafe-references — flag `page.evaluate()` with only a function argument (no explicit args).
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

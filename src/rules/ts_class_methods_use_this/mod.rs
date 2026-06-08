@@ -1,8 +1,6 @@
 //! ts-class-methods-use-this — enforce that class methods utilize `this`.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

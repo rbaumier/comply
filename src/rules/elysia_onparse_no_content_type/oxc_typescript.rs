@@ -52,3 +52,42 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_framework(source, &Check, "elysia")
+    }
+
+
+    #[test]
+    fn flags_onparse_without_content_type() {
+        let src = "import { Elysia } from 'elysia';\napp.onParse(({ request }) => request.text());";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_onparse_with_unrelated_logic() {
+        let src = "import { Elysia } from 'elysia';\napp.onParse(async ({ request }) => {\n  const body = await request.text();\n  return JSON.parse(body);\n});";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_onparse_with_content_type_check() {
+        let src = "import { Elysia } from 'elysia';\napp.onParse(({ request, contentType }) => {\n  if (contentType === 'application/x-yaml') return parseYaml(request);\n});";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_elysia_files() {
+        let src = "app.onParse(() => null);";
+        assert!(crate::rules::test_helpers::run_oxc_ts(src, &Check).is_empty());
+    }
+}

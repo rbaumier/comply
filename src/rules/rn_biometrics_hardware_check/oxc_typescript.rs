@@ -126,3 +126,43 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_without_checks() {
+        let src = "async function unlock() { await LocalAuthentication.authenticateAsync(); }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_only_hardware() {
+        let src = "async function unlock() { await LocalAuthentication.hasHardwareAsync(); await LocalAuthentication.authenticateAsync(); }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_both_checks() {
+        let src = "async function unlock() { await LocalAuthentication.hasHardwareAsync(); await LocalAuthentication.isEnrolledAsync(); await LocalAuthentication.authenticateAsync(); }";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn flags_when_checks_come_after_authenticate() {
+        // Both checks exist, but they run AFTER authenticateAsync — useless,
+        // the call has already failed by then.
+        let src = "async function unlock() { await LocalAuthentication.authenticateAsync(); await LocalAuthentication.hasHardwareAsync(); await LocalAuthentication.isEnrolledAsync(); }";
+        assert_eq!(run(src).len(), 1);
+    }
+}

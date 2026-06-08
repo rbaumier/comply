@@ -65,3 +65,53 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_lookahead_with_char_class() {
+        assert_eq!(run_on(r"const re = /(?=\d)\w/;").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_negative_lookahead_char_class() {
+        assert_eq!(run_on(r"const re = /(?!\d)\w/;").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_unrelated_lookahead() {
+        assert!(run_on(r"const re = /(?=foo)bar/;").is_empty());
+    }
+
+
+    #[test]
+    fn ignores_tailwind_class_in_string() {
+        let src = r#"const x = "has-[(?=\\d)\\w]:hidden";"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_url_in_string() {
+        let src = r#"const u = "http://example.com/(?=\\d)\\w";"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_scoped_import_empty_flag_pattern() {
+        let src = r#"import X from "@scope/(?=\\d)\\w";"#;
+        assert!(run_on(src).is_empty());
+    }
+}

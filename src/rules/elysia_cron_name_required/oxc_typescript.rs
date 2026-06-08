@@ -50,3 +50,35 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_framework(source, &Check, "elysia")
+    }
+
+
+    #[test]
+    fn flags_cron_without_name() {
+        let src = "import { cron } from '@elysiajs/cron';\napp.use(cron({ pattern: '* * * * *', run() {} }));";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_cron_with_name() {
+        let src = "import { cron } from '@elysiajs/cron';\napp.use(cron({ name: 'cleanup', pattern: '* * * * *', run() {} }));";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_cron_files() {
+        let src = "cron({ pattern: '* * * * *' });";
+        assert!(crate::rules::test_helpers::run_oxc_ts(src, &Check).is_empty());
+    }
+}

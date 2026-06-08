@@ -70,3 +70,43 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+    fn run(code: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(code, &Check)
+    }
+
+
+    #[test]
+    fn flags_select_template() {
+        assert_eq!(run("xpath.select(`//user[@name='${name}']`, doc)").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_select_concat() {
+        assert_eq!(run("xpath.select('//user[@id=' + id + ']', doc)").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_evaluate_variable() {
+        assert_eq!(run("doc.evaluate(query, doc)").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_static_xpath() {
+        assert!(run("xpath.select('//user', doc)").is_empty());
+    }
+
+
+    #[test]
+    fn allows_static_template() {
+        assert!(run("xpath.select(`//user[@active='true']`, doc)").is_empty());
+    }
+}

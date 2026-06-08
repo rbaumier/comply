@@ -69,3 +69,43 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_new_response_json_stringify() {
+        let d = run_on(
+            r#"return new Response(JSON.stringify(data), { headers: { "Content-Type": "application/json" } });"#,
+        );
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].rule_id, "prefer-response-static-json");
+    }
+
+
+    #[test]
+    fn flags_bare_new_response_json_stringify() {
+        let d = run_on("const res = new Response(JSON.stringify({ ok: true }));");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_response_json() {
+        assert!(run_on("return Response.json(data);").is_empty());
+    }
+
+
+    #[test]
+    fn allows_new_response_with_string() {
+        assert!(run_on(r#"return new Response("hello");"#).is_empty());
+    }
+}

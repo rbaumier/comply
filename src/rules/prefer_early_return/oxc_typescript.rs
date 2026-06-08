@@ -66,3 +66,106 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_single_if_wrapping_body() {
+        let src = r#"function f(x: number) {
+    if (x > 0) {
+        doA();
+        doB();
+        doC();
+    }
+}"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_arrow_function() {
+        let src = r#"const f = (x: number) => {
+    if (x > 0) {
+        doA();
+        doB();
+    }
+};"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_method() {
+        let src = r#"class C {
+    m(x: number) {
+        if (x > 0) {
+            doA();
+            doB();
+        }
+    }
+}"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_if_with_else() {
+        let src = r#"function f(x: number) {
+    if (x > 0) {
+        doA();
+        doB();
+    } else {
+        doC();
+    }
+}"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_single_line_if_body() {
+        let src = r#"function f(x: number) {
+    if (x > 0) {
+        doA();
+    }
+}"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_multiple_statements_in_function() {
+        let src = r#"function f(x: number) {
+    const y = x * 2;
+    if (y > 0) {
+        doA();
+        doB();
+    }
+}"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_else_if_chain() {
+        let src = r#"function f(x: number) {
+    if (x > 0) {
+        doA();
+        doB();
+    } else if (x < 0) {
+        doC();
+        doD();
+    }
+}"#;
+        assert!(run_on(src).is_empty());
+    }
+}

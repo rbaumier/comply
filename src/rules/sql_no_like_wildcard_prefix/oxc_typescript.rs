@@ -63,4 +63,17 @@ mod tests {
         let src = r#"const q = "SELECT * FROM t WHERE name LIKE 'test%'";"#;
         assert!(run_on(src).is_empty());
     }
+
+
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(src, &Check)
+    }
+
+
+    #[test]
+    fn does_not_flag_in_comment() {
+        let src = "// LIKE '%test%'\nconst x = 1;";
+        assert!(run(src).is_empty());
+    }
 }

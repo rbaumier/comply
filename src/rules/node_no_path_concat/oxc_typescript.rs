@@ -65,3 +65,45 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_dirname_plus_string() {
+        let d = run_on(r#"const p = __dirname + '/foo';"#);
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_filename_plus_string() {
+        assert_eq!(run_on(r#"const p = __filename + '/bar';"#).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_string_plus_dirname() {
+        assert_eq!(run_on(r#"const p = '/prefix' + __dirname;"#).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_path_join() {
+        assert!(run_on("const p = path.join(__dirname, 'foo');").is_empty());
+    }
+
+
+    #[test]
+    fn allows_normal_concat() {
+        assert!(run_on("const p = a + b;").is_empty());
+    }
+}

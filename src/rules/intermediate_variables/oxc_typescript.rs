@@ -83,3 +83,74 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_three_operand_and_chain() {
+        assert_eq!(run_on("if (a && b && c) { x(); }").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_four_operand_or_chain() {
+        assert_eq!(run_on("if (a || b || c || d) { x(); }").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_nullish_coalesce_chain() {
+        assert_eq!(run_on("if (a ?? b ?? c) { x(); }").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_two_operand_and() {
+        assert!(run_on("if (a && b) { x(); }").is_empty());
+    }
+
+
+    #[test]
+    fn allows_single_condition() {
+        assert!(run_on("if (a) { x(); }").is_empty());
+    }
+
+
+    #[test]
+    fn allows_condition_with_comparisons_only() {
+        assert!(run_on("if (a === 1 && b === 2) { x(); }").is_empty());
+    }
+
+
+    #[test]
+    fn allows_long_expression_inside_comparison_chain() {
+        assert!(run_on("if (a + b * c / d === e) { x(); }").is_empty());
+    }
+
+
+    #[test]
+    fn does_not_flag_call_with_complex_arg() {
+        // The outer node is a call_expression; the rule never inspects
+        // calls at all, so complex arguments don't matter.
+        assert!(run_on("doSomething(a + b * c / d);").is_empty());
+    }
+
+
+    #[test]
+    fn closure_predicate_inside_condition_does_not_count() {
+        // `.some(x => x.a && x.b && x.c)` is a lambda inside the call
+        // argument. The walk stops at the arrow_function so its
+        // operators don't contribute to the enclosing if's count.
+        let src = "if (items.some(x => x.a && x.b && x.c && x.d)) { go(); }";
+        assert!(run_on(src).is_empty());
+    }
+}

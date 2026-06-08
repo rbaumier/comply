@@ -59,3 +59,35 @@ impl OxcCheck for Check {
         diagnostics
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_framework(source, &Check, "elysia")
+    }
+
+
+    #[test]
+    fn flags_unchecked_verify() {
+        let src = "import { jwt } from 'elysia';\nconst payload = await jwt.verify(token);\nreturn payload.userId;";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_checked_verify() {
+        let src = "import { jwt } from 'elysia';\nconst payload = await jwt.verify(token);\nif (!payload) return status(401);\nreturn payload.userId;";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_elysia_files() {
+        let src = "const payload = await jwt.verify(token);\nreturn payload.userId;";
+        assert!(crate::rules::test_helpers::run_oxc_ts(src, &Check).is_empty());
+    }
+}

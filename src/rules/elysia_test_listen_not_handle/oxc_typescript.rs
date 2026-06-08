@@ -47,3 +47,33 @@ impl OxcCheck for Check {
         }]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on_test(source: &str) -> Vec<Diagnostic> {
+        let project = crate::project::ProjectCtx::for_test_with_framework("elysia");
+        crate::rules::test_helpers::run_oxc_ts_with_project(
+            source,
+            &Check,
+            &project)
+    }
+
+
+    #[test]
+    fn allows_handle_in_test() {
+        let src = "import { Elysia } from 'elysia';\nconst app = new Elysia();\nconst res = await app.handle(new Request('http://x/'));";
+        assert!(run_on_test(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_test_files() {
+        let src = "import { Elysia } from 'elysia';\nconst app = new Elysia().listen(3000);\nfetch('http://localhost:3000');";
+        let diags = crate::rules::test_helpers::run_oxc_ts_with_path(src, &Check, "app.ts");
+        assert!(diags.is_empty());
+    }
+}

@@ -98,3 +98,76 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_deeply_nested_calls() {
+        // 5 levels: a(b(c(d(e(x)))))
+        let src = "const x = a(b(c(d(e(1)))));";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_nested_with_multiple_args() {
+        // 5 levels: outer(process(transform(parse(read(file)))))
+        let src = "const x = outer(process(transform(parse(read(file)))));";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_shallow_nesting() {
+        // 2 levels is fine
+        let src = "const x = foo(bar(1));";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_four_levels() {
+        // max is 4, so exactly 4 is ok
+        let src = "const x = a(b(c(d(1))));";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn single_call_ok() {
+        let src = "const x = foo(1);";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn reports_only_once_per_chain() {
+        let src = "const x = a(b(c(d(e(f(1))))));";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn method_chain_not_flagged() {
+        // Method chains are different — this should NOT be flagged
+        let src = "const x = a.b().c().d().e().f();";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn sibling_calls_not_nested() {
+        // These are siblings, not nested
+        let src = "const x = combine(foo(1), bar(2), baz(3));";
+        assert!(run_on(src).is_empty());
+    }
+}

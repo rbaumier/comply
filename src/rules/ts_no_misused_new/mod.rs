@@ -1,8 +1,6 @@
 //! ts-no-misused-new — flag `new()` in classes and `constructor()` in interfaces.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

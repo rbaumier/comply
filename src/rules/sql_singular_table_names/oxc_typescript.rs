@@ -65,4 +65,24 @@ mod tests {
         let src = r#"const m = "CREATE TABLE user_account (id INT);";"#;
         assert!(run_on(src).is_empty());
     }
+
+
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(src, &Check)
+    }
+
+
+    #[test]
+    fn flags_if_not_exists_orders() {
+        let src = r#"const m = "CREATE TABLE IF NOT EXISTS orders (id INT);";"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_status_exception() {
+        let src = r#"const m = "CREATE TABLE status (id INT);";"#;
+        assert!(run(src).is_empty());
+    }
 }

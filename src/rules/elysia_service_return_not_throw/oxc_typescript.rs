@@ -247,4 +247,85 @@ mod tests {
         "#;
         assert!(run(src).is_empty());
     }
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_framework(source, &Check, "elysia")
+    }
+
+
+    #[test]
+    fn flags_throw_new_error() {
+        let src = "import { Elysia } from 'elysia';\nfunction svc() { throw new Error('boom'); }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_throw_string() {
+        let src = "import { Elysia } from 'elysia';\nfunction svc() { throw 'no'; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_status_return() {
+        let src = "import { Elysia, status } from 'elysia';\nfunction svc() { return status(404, 'not found'); }";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_elysia_files() {
+        let src = "function svc() { throw new Error('boom'); }";
+        assert!(crate::rules::test_helpers::run_oxc_ts(src, &Check).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_react_context_provider() {
+        // Regression: React context providers `throw` to detect missing
+        // providers. Even in a project that has Elysia somewhere, files that
+        // import React are not Elysia services.
+        let src = "import { createContext, useContext } from 'react';\nconst Ctx = createContext(null);\nexport function useCtx() { const v = useContext(Ctx); if (!v) throw new Error('missing provider'); return v; }";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_tanstack_route_loader() {
+        // Regression: TanStack Router uses `throw redirect(...)` in loaders.
+        let src = "import { redirect } from '@tanstack/react-router';\nexport const loader = () => { throw redirect({ to: '/login' }); };";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_file_without_elysia_import() {
+        // Plain backend util that doesn't import Elysia — leave it alone.
+        let src = "export function parse(x: string) { if (!x) throw new Error('empty'); return JSON.parse(x); }";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_throw_in_guard() {
+        let src = "import { Elysia } from 'elysia';\nconst app = new Elysia().guard({}, (app) => app.onBeforeHandle(() => { throw new Error('forbidden'); }));";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_throw_in_on_error() {
+        let src = "import { Elysia } from 'elysia';\nconst app = new Elysia().onError(({ error }) => { throw error; });";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_throw_in_derive() {
+        let src = "import { Elysia } from 'elysia';\nconst app = new Elysia().derive(() => { throw new Error('no'); });";
+        assert!(run_on(src).is_empty());
+    }
 }

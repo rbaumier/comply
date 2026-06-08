@@ -62,3 +62,35 @@ impl OxcCheck for Check {
         diagnostics
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_unsanitized_v_html() {
+        let src = "// <template><div v-html=\"raw\" /></template>\nimport {} from '#imports';";
+        assert!(!run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_v_html_with_dompurify() {
+        let src = "// <template><div v-html=\"clean\" /></template>\nimport DOMPurify from 'dompurify';\nimport {} from '#imports';\nconst clean = DOMPurify.sanitize(raw);";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_nuxt_files() {
+        let src = "<div v-html=\"raw\" />";
+        assert!(run_on(src).is_empty());
+    }
+}

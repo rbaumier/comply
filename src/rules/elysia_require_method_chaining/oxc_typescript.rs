@@ -117,4 +117,39 @@ mod tests {
         "#;
         assert!(run(src).is_empty());
     }
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_framework(source, &Check, "elysia")
+    }
+
+
+    #[test]
+    fn flags_broken_chain() {
+        let src = "import { Elysia } from 'elysia';\nconst app = new Elysia();\napp.get('/', () => 'ok');";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_broken_state_call() {
+        let src =
+            "import { Elysia } from 'elysia';\nconst app = new Elysia();\napp.state('count', 0);";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_proper_chain() {
+        let src = "import { Elysia } from 'elysia';\nconst app = new Elysia().state('count', 0).get('/', () => 'ok');";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_elysia_files() {
+        let src = "const app = new Hono();\napp.get('/', () => 'ok');";
+        assert!(crate::rules::test_helpers::run_oxc_ts(src, &Check).is_empty());
+    }
 }

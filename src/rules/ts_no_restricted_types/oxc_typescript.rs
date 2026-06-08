@@ -62,3 +62,42 @@ impl OxcCheck for Check {
         diagnostics
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_function_type() {
+        let d = run_on("const f: Function = () => {};");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("Function"));
+    }
+
+
+    #[test]
+    fn flags_object_type() {
+        let d = run_on("const o: Object = {};");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("Object"));
+    }
+
+
+    #[test]
+    fn allows_specific_function_type() {
+        assert!(run_on("const f: () => void = () => {};").is_empty());
+    }
+
+
+    #[test]
+    fn allows_record_type() {
+        assert!(run_on("const o: Record<string, unknown> = {};").is_empty());
+    }
+}

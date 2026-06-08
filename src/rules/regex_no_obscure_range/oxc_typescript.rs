@@ -40,3 +40,59 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_a_to_z_upper_lower() {
+        assert_eq!(run_on("const re = /[A-z]/;").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_zero_to_z() {
+        assert_eq!(run_on("const re = /[0-z]/;").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_proper_range() {
+        assert!(run_on("const re = /[A-Za-z]/;").is_empty());
+    }
+
+
+    #[test]
+    fn allows_digit_range() {
+        assert!(run_on("const re = /[0-9]/;").is_empty());
+    }
+
+
+    #[test]
+    fn ignores_tailwind_class_string() {
+        let src = r#"const x = "grid-cols-[A-z]";"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_url_in_string() {
+        let src = r#"const u = "http://example.com/A-z/path";"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_scoped_import_path() {
+        let src = r#"import X from "@scope/0-z-pkg";"#;
+        assert!(run_on(src).is_empty());
+    }
+}

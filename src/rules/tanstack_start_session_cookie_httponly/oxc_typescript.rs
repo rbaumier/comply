@@ -96,3 +96,38 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_missing_httponly() {
+        assert_eq!(
+            run("useSession({ password: env.SECRET, cookie: { secure: true } });").len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn flags_httponly_false() {
+        assert_eq!(
+            run("useSession({ cookie: { httpOnly: false, secure: true } });").len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn allows_httponly_true() {
+        assert!(run("useSession({ cookie: { httpOnly: true, secure: true } });").is_empty());
+    }
+}

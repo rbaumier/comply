@@ -111,3 +111,86 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diagnostic::Diagnostic;
+
+
+
+    fn run(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_border_left_with_border_bottom() {
+        let diags = run(
+            r#"<div style={{ borderLeft: '1px solid red', borderBottom: '2px solid blue' }} />"#,
+        );
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("borderLeft"));
+    }
+
+
+    #[test]
+    fn flags_border_right_with_border_bottom() {
+        let diags = run(
+            r#"<div style={{ borderRight: '1px solid red', borderBottom: '2px solid blue' }} />"#,
+        );
+        assert_eq!(diags.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_border_left_width_with_border_bottom_width() {
+        let diags = run(r#"<div style={{ borderLeftWidth: 1, borderBottomWidth: 2 }} />"#);
+        assert_eq!(diags.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_both_sides_with_border_bottom() {
+        let diags = run(
+            r#"<div style={{ borderLeft: '1px solid red', borderRight: '1px solid red', borderBottom: '2px solid blue' }} />"#,
+        );
+        assert_eq!(diags.len(), 2);
+    }
+
+
+    #[test]
+    fn allows_border_left_without_bottom() {
+        assert!(run(r#"<div style={{ borderLeft: '1px solid red' }} />"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_border_bottom_alone() {
+        assert!(run(r#"<div style={{ borderBottom: '2px solid blue' }} />"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_zero_width_side_border() {
+        assert!(
+            run(r#"<div style={{ borderLeftWidth: 0, borderBottom: '2px solid blue' }} />"#)
+                .is_empty()
+        );
+    }
+
+
+    #[test]
+    fn allows_zero_px_width_side_border() {
+        assert!(
+            run(r#"<div style={{ borderRightWidth: '0px', borderBottom: '2px solid blue' }} />"#)
+                .is_empty()
+        );
+    }
+
+
+    #[test]
+    fn allows_non_style_object() {
+        assert!(run(r#"const config = { borderLeft: '1px', borderBottom: '2px' };"#).is_empty());
+    }
+}

@@ -61,3 +61,55 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diagnostic::Diagnostic;
+    use super::Check;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_transform_in_record_key() {
+        assert_eq!(
+            run("const r = z.record(z.string().transform(s => s.toLowerCase()), z.number());")
+                .len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn flags_transform_in_record_key_chained() {
+        assert_eq!(
+            run("const r = z.record(z.string().trim().transform(s => s), valueSchema);").len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn allows_plain_key_schema() {
+        assert!(run("const r = z.record(z.string(), z.number());").is_empty());
+    }
+
+
+    #[test]
+    fn allows_transform_in_value_schema() {
+        assert!(
+            run("const r = z.record(z.string(), z.number().transform(n => n * 2));").is_empty()
+        );
+    }
+
+
+    #[test]
+    fn ignores_unrelated_record_call() {
+        assert!(run("const r = other.record(z.string().transform(s => s), v);").is_empty());
+    }
+}

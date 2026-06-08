@@ -85,3 +85,35 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_pool_missing_timeouts() {
+        let src = "const pool = new Pool({ connectionString: 'x' })";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_pool_only_one_timeout() {
+        let src = "const pool = new Pool({ connectionString: 'x', idleTimeoutMillis: 30000 })";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_pool_with_both_timeouts() {
+        let src = "const pool = new Pool({ connectionString: 'x', idleTimeoutMillis: 30000, connectionTimeoutMillis: 2000 })";
+        assert!(run(src).is_empty());
+    }
+}

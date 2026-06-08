@@ -282,4 +282,69 @@ function updateUser(name: string, email: string, age: number) {}
 "#;
         assert_eq!(run(src).len(), 2);
     }
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    fn run_on_path(source: &str, path: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_path(source, &Check, path)
+    }
+
+
+    #[test]
+    fn flags_repeated_param_group() {
+        let src = r#"
+function createUser(name: string, email: string, age: number) {}
+function updateUser(name: string, email: string, age: number) {}
+"#;
+        assert_eq!(run_on(src).len(), 2);
+    }
+
+
+    #[test]
+    fn allows_fastify_register_callback_signature() {
+        let src = r#"
+fastify.register((instance, opts, done) => {
+  done();
+});
+app.register((instance, opts, done) => {
+  done();
+});
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_repeated_param_groups_in_test_files() {
+        let src = r#"
+function arrangeUser(req: Request, reply: Reply, done: Done) {}
+function arrangeAccount(req: Request, reply: Reply, done: Done) {}
+"#;
+        assert!(run_on_path(src, "plugin.test.ts").is_empty());
+    }
+
+
+    #[test]
+    fn allows_different_params() {
+        let src = r#"
+function createUser(name: string, email: string, age: number) {}
+function sendEmail(to: string, subject: string, body: string) {}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_fewer_than_three_shared() {
+        let src = r#"
+function foo(a: string, b: string, c: number) {}
+function bar(a: string, b: string, d: number) {}
+"#;
+        assert!(run_on(src).is_empty());
+    }
 }

@@ -91,3 +91,48 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_trailing_space_in_first_arg() {
+        let d = run_on(r#"console.log("val: ", x);"#);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("trailing"));
+    }
+
+
+    #[test]
+    fn flags_leading_space_in_last_arg() {
+        let d = run_on(r#"console.log(x, " val");"#);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("leading"));
+    }
+
+
+    #[test]
+    fn allows_no_spaces() {
+        assert!(run_on(r#"console.log("hello", x);"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_single_arg_with_trailing_space() {
+        assert!(run_on(r#"console.log("hello ");"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_multiple_spaces() {
+        assert!(run_on(r#"console.log("  hello", x);"#).is_empty());
+    }
+}

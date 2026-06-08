@@ -131,3 +131,77 @@ fn return_bool_value(ret: &oxc_ast::ast::ReturnStatement) -> Option<bool> {
         _ => None,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_if_else_block_true_false() {
+        let src = r#"function f(x: boolean) { if (x) { return true; } else { return false; } }"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_if_else_block_false_true() {
+        let src = r#"function f(x: boolean) { if (x) { return false; } else { return true; } }"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_if_else_no_braces() {
+        let src = r#"function f(x: boolean) { if (x) return true; else return false; }"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_different_return_values() {
+        let src = r#"function f(x: boolean) { if (x) { return 1; } else { return 2; } }"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_same_bool_both_branches() {
+        let src = r#"function f(x: boolean) { if (x) { return true; } else { return true; } }"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn skips_outer_else_if_chain() {
+        // The outer `if` has an `else if` tail so it is NOT flagged.
+        // The inner `if (x === 2) return false; else return true;` IS a
+        // simplifiable shape — one diagnostic is expected.
+        let src = r#"function f(x: number) {
+    if (x === 1) return true;
+    else if (x === 2) return false;
+    else return true;
+}"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_extra_statement_in_branch() {
+        let src = r#"function f(x: boolean) {
+    if (x) {
+        log();
+        return true;
+    } else {
+        return false;
+    }
+}"#;
+        assert!(run_on(src).is_empty());
+    }
+}

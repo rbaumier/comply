@@ -65,3 +65,63 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_emoji_in_char_class() {
+        // U+1F468 is above U+FFFF
+        let code = "const re = /[\u{1F468}]/;";
+        assert_eq!(run_on(code).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_zwj_in_char_class() {
+        // Family emoji with ZWJ
+        let code = "const re = /[\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}]/;";
+        assert_eq!(run_on(code).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_ascii_char_class() {
+        assert!(run_on("const re = /[abc]/;").is_empty());
+    }
+
+
+    #[test]
+    fn allows_emoji_outside_char_class() {
+        assert!(run_on("const re = /\u{1F468}/;").is_empty());
+    }
+
+
+    #[test]
+    fn ignores_tailwind_class_string() {
+        let src = r#"const x = "has-[>svg]:grid-cols-[auto_1fr] [\u{1F468}]";"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_url_in_string() {
+        let src = r#"const u = "https://example.com/[\u{1F468}]/path";"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_scoped_import_path() {
+        let src = r#"import X from "@scope/[\u{1F468}]-pkg";"#;
+        assert!(run_on(src).is_empty());
+    }
+}

@@ -125,3 +125,44 @@ impl OxcCheck for Check {
         diagnostics
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_avatar_without_fallback() {
+        assert_eq!(
+            run(r#"const x = <Avatar><AvatarImage src="/a.png" /></Avatar>;"#).len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn flags_self_closing_avatar() {
+        assert_eq!(run(r#"const x = <Avatar />;"#).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_avatar_with_fallback() {
+        assert!(run(r#"const x = <Avatar><AvatarImage src="/a.png" /><AvatarFallback>AB</AvatarFallback></Avatar>;"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_dotted_avatar_with_fallback() {
+        assert!(
+            run(r#"const x = <Avatar.Root><Avatar.Fallback>AB</Avatar.Fallback></Avatar.Root>;"#)
+                .is_empty()
+        );
+    }
+}

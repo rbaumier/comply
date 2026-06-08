@@ -128,3 +128,34 @@ impl OxcCheck for Check {
         diagnostics
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_trivial_doc() {
+        let src = "/** The foo function. */\nfunction foo() {}";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_informative_doc() {
+        let src = "/** Calculates the total price including tax. */\nfunction calculateTotal() {}";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn flags_just_name() {
+        let src = "/** foo */\nconst foo = 1;";
+        assert_eq!(run(src).len(), 1);
+    }
+}

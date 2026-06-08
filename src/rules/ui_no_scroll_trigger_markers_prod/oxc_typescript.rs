@@ -82,3 +82,59 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_markers_true_in_scrolltrigger() {
+        let src = r#"
+            ScrollTrigger.create({
+                trigger: ".box",
+                markers: true,
+            });
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_markers_true_in_scroll_trigger_field() {
+        let src = r#"
+            gsap.to(".box", {
+                scrollTrigger: { trigger: ".hero", markers: true },
+                x: 100,
+            });
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_guarded_markers() {
+        let src = r#"
+            ScrollTrigger.create({
+                trigger: ".box",
+                markers: process.env.NODE_ENV !== "production",
+            });
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_markers_outside_scrolltrigger() {
+        let src = r#"
+            const cfg = { markers: true };
+        "#;
+        assert!(run(src).is_empty());
+    }
+}

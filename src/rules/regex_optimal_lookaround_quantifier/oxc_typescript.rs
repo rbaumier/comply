@@ -102,3 +102,53 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_quantifier_in_lookahead() {
+        assert_eq!(run_on(r#"const re = /(?=a+)/;"#).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_no_quantifier_in_lookahead() {
+        assert!(run_on(r#"const re = /(?=a)/;"#).is_empty());
+    }
+
+
+    #[test]
+    fn flags_star_in_negative_lookahead() {
+        assert_eq!(run_on(r#"const re = /(?!a*)/;"#).len(), 1);
+    }
+
+
+    #[test]
+    fn ignores_tailwind_arbitrary_value_in_string() {
+        let src = r#"const x = "has-[(?=a+)]:grid";"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_url_in_string() {
+        let src = r#"const u = "http://a/(?=b+)/c";"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_scoped_import_empty() {
+        let src = r#"import "";"#;
+        assert!(run_on(src).is_empty());
+    }
+}

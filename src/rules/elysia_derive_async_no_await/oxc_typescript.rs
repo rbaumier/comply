@@ -56,3 +56,42 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_framework(source, &Check, "elysia")
+    }
+
+
+    #[test]
+    fn flags_async_derive_no_await() {
+        let src = "import { Elysia } from 'elysia';\napp.derive(async () => ({ id: 1 }));";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_async_derive_with_await() {
+        let src = "import { Elysia } from 'elysia';\napp.derive(async () => ({ user: await getUser() }));";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_sync_derive() {
+        let src = "import { Elysia } from 'elysia';\napp.derive(() => ({ id: 1 }));";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_elysia_files() {
+        let src = "app.derive(async () => ({ id: 1 }));";
+        assert!(crate::rules::test_helpers::run_oxc_ts(src, &Check).is_empty());
+    }
+}

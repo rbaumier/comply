@@ -63,3 +63,30 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diagnostic::Diagnostic;
+    use super::Check;
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+    #[test]
+    fn flags_concat_key() {
+        assert_eq!(run("t('section.' + name)").len(), 1);
+    }
+
+    #[test]
+    fn flags_template_key() {
+        assert_eq!(run("t(`nav.${route}`)").len(), 1);
+    }
+
+    #[test]
+    fn allows_static_key() {
+        assert!(run("t('section.home')").is_empty());
+    }
+}

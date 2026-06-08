@@ -71,3 +71,25 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+    #[test]
+    fn flags_mismatched_tag() {
+        let src = "class NotFoundError extends TaggedError('NotFound') {}";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_matching_tag() {
+        let src = "class NotFoundError extends TaggedError('NotFoundError') {}";
+        assert!(run(src).is_empty());
+    }
+}

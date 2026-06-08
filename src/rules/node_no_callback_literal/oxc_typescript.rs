@@ -56,3 +56,50 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_cb_with_single_quote_string() {
+        assert_eq!(run_on("cb('something went wrong');").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_callback_with_double_quote_string() {
+        assert_eq!(run_on(r#"callback("error occurred");"#).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_next_with_string() {
+        assert_eq!(run_on("next('fail');").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_cb_with_error_object() {
+        assert!(run_on("cb(new Error('oops'));").is_empty());
+    }
+
+
+    #[test]
+    fn allows_cb_with_null() {
+        assert!(run_on("cb(null, data);").is_empty());
+    }
+
+
+    #[test]
+    fn allows_cb_with_variable() {
+        assert!(run_on("cb(err);").is_empty());
+    }
+}

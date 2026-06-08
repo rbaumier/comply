@@ -102,3 +102,52 @@ fn imports_event_emitter_from_ignored(program: &oxc_ast::ast::Program) -> bool {
     }
     false
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_oxc_ts(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_extends_event_emitter() {
+        let d = run_oxc_ts("class MyEmitter extends EventEmitter {}");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_new_event_emitter() {
+        let d = run_oxc_ts("const emitter = new EventEmitter();");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_event_target() {
+        assert!(run_oxc_ts("class MyTarget extends EventTarget {}").is_empty());
+    }
+
+
+    #[test]
+    fn allows_import_from_ignored_package() {
+        assert!(run_oxc_ts(r#"import { EventEmitter } from "eventemitter3";"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_angular_event_emitter() {
+        assert!(run_oxc_ts(r#"import { EventEmitter } from "@angular/core";"#).is_empty());
+    }
+
+
+    #[test]
+    fn does_not_flag_event_emitter_ex() {
+        assert!(run_oxc_ts("class MyEmitter extends EventEmitterEx {}").is_empty());
+    }
+}

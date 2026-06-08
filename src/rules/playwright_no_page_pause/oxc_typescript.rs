@@ -63,3 +63,16 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rules::backend::{AstCheck, CheckCtx};
+    use std::path::Path;
+
+
+
+    fn with_import(source: &str) -> String {
+        format!("import {{ test }} from \"@playwright/test\";\n{source}")
+    }
+}

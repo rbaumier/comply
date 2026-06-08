@@ -62,3 +62,17 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    #[test]
+    fn ignores_non_test_files() {
+        // Use run_oxc_ts which defaults to "t.ts" (not a test file)
+        let d = crate::rules::test_helpers::run_oxc_ts("expect(() => doThing()).toThrow();", &Check);
+        assert!(d.is_empty());
+    }
+}

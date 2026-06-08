@@ -56,3 +56,42 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_async_constructor() {
+        let src = "class Foo { async constructor() { await init(); } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_async_constructor_with_params() {
+        let src = "class Foo { async constructor(name: string) { } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_regular_constructor() {
+        let src = "class Foo { constructor() { } }";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_async_method() {
+        let src = "class Foo { async initialize() { } }";
+        assert!(run_on(src).is_empty());
+    }
+}

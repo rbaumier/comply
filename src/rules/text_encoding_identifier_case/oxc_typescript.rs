@@ -48,3 +48,50 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_uppercase_utf8_dash() {
+        let d = run_on(r#"const enc = "UTF-8";"#);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("utf-8"));
+    }
+
+
+    #[test]
+    fn flags_mixed_case_utf8() {
+        let d = run_on(r#"const enc = 'Utf-8';"#);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("utf-8"));
+    }
+
+
+    #[test]
+    fn flags_uppercase_ascii() {
+        let d = run_on(r#"const enc = "ASCII";"#);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("ascii"));
+    }
+
+
+    #[test]
+    fn allows_lowercase_utf8() {
+        assert!(run_on(r#"const enc = "utf-8";"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_lowercase_ascii() {
+        assert!(run_on(r#"const enc = 'ascii';"#).is_empty());
+    }
+}

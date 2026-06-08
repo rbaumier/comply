@@ -63,3 +63,42 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_framework(source, &Check, "elysia")
+    }
+
+
+    #[test]
+    fn flags_transform_without_schema() {
+        let src = "import { Elysia } from 'elysia';\napp.transform(({ body }) => { body.email = body.email.toLowerCase(); });";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_on_transform_without_schema() {
+        let src = "import { Elysia } from 'elysia';\napp.onTransform(({ body }) => { body.normalized = true; });";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_transform_with_body_schema() {
+        let src = "import { Elysia, t } from 'elysia';\napp.post('/u', handler, { body: t.Object({ email: t.String() }) });\napp.transform(({ body }) => { body.email = body.email.toLowerCase(); });";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_elysia_files() {
+        let src = "app.transform(({ body }) => body);";
+        assert!(crate::rules::test_helpers::run_oxc_ts(src, &Check).is_empty());
+    }
+}

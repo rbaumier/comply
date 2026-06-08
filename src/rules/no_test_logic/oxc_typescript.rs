@@ -284,4 +284,7 @@ mod tests {
         let source = "if (condition) {\n    doSomething();\n}";
         assert!(run_test_file("src/utils.ts", source).is_empty());
     }
+
+    use crate::rules::backend::{AstCheck, CheckCtx};
+    use std::path::Path;
 }

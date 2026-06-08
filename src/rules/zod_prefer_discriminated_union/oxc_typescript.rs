@@ -107,3 +107,29 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_union_with_literals() {
+        let src = "z.union([\n  z.object({ type: z.literal('a') }),\n  z.object({ type: z.literal('b') }),\n])";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_discriminated_union() {
+        assert!(
+            run("z.discriminatedUnion('type', [z.object({ type: z.literal('a') })])").is_empty()
+        );
+    }
+}

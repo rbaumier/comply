@@ -86,3 +86,65 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rules::test_helpers::run_oxc_ts;
+
+
+
+    fn pw(s: &str) -> String {
+        format!("import {{ test, expect }} from \"@playwright/test\";\n{s}")
+    }
+
+
+    #[test]
+    fn flags_await_count_to_be() {
+        let d = run_oxc_ts(&pw("expect(await locator.count()).toBe(3);"), &Check);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("toHaveCount"));
+    }
+
+
+    #[test]
+    fn flags_await_count_to_equal() {
+        let d = run_oxc_ts(
+            &pw("expect(await page.locator('.item').count()).toEqual(5);"),
+            &Check,
+        );
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_await_count_to_strict_equal() {
+        let d = run_oxc_ts(&pw("expect(await rows.count()).toStrictEqual(0);"), &Check);
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_to_have_count() {
+        let d = run_oxc_ts(&pw("await expect(locator).toHaveCount(3);"), &Check);
+        assert!(d.is_empty());
+    }
+
+
+    #[test]
+    fn allows_non_count_await() {
+        let d = run_oxc_ts(
+            &pw("expect(await locator.textContent()).toBe('hello');"),
+            &Check,
+        );
+        assert!(d.is_empty());
+    }
+
+
+    #[test]
+    fn allows_count_without_await() {
+        // No await → not the target pattern (count() returns Promise, but this code is buggy anyway).
+        let d = run_oxc_ts("expect(locator.count()).toBe(3);", &Check);
+        assert!(d.is_empty());
+    }
+}

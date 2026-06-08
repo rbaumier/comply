@@ -71,3 +71,82 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn allows_string_entry() {
+        let src = r#"
+            createMachine({
+                states: { idle: { entry: 'log' } },
+            });
+        "#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_array_entry() {
+        let src = r#"
+            createMachine({
+                states: { idle: { entry: ['log', 'notify'] } },
+            });
+        "#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_call_entry() {
+        let src = r#"
+            createMachine({
+                states: { idle: { entry: assign({ count: 0 }) } },
+            });
+        "#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_arrow_exit() {
+        let src = r#"
+            createMachine({
+                states: { idle: { exit: () => console.log('bye') } },
+            });
+        "#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn flags_object_entry() {
+        let src = r#"
+            createMachine({
+                states: { idle: { entry: { type: 'log' } } },
+            });
+        "#;
+        let diags = run_on(src);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("entry"));
+    }
+
+
+    #[test]
+    fn flags_number_exit() {
+        let src = r#"
+            createMachine({
+                states: { idle: { exit: 42 } },
+            });
+        "#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+}

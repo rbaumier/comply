@@ -4,8 +4,6 @@
 //! the built-in `react-native` FlatList on most devices.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

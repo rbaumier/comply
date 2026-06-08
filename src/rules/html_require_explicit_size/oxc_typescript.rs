@@ -66,3 +66,52 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_img_without_size() {
+        assert_eq!(run(r#"const x = <img src="x.png" />;"#).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_img_with_only_width() {
+        let d = run(r#"const x = <img src="x.png" width={100} />;"#);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("height"));
+    }
+
+
+    #[test]
+    fn flags_video_without_size() {
+        assert_eq!(run(r#"const x = <video src="x.mp4" />;"#).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_img_with_both() {
+        assert!(run(r#"const x = <img src="x.png" width={100} height={100} />;"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_video_with_both() {
+        assert!(run(r#"const x = <video width="320" height="240" />;"#).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_media() {
+        assert!(run(r#"const x = <div />;"#).is_empty());
+    }
+}

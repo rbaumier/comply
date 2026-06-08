@@ -83,3 +83,68 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_exec_with_variable() {
+        assert_eq!(run_on("exec(cmd);").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_exec_with_template_interpolation() {
+        assert_eq!(run_on("exec(`ls ${dir}`);").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_cp_exec_with_variable() {
+        assert_eq!(run_on("cp.exec(cmd);").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_exec_sync_with_concat() {
+        assert_eq!(run_on(r#"execSync("ls " + dir);"#).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_exec_with_string_literal() {
+        assert!(run_on(r#"exec("ls");"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_exec_with_template_no_interp() {
+        assert!(run_on("exec(`ls`);").is_empty());
+    }
+
+
+    #[test]
+    fn allows_unrelated_call() {
+        assert!(run_on("runSomething(cmd);").is_empty());
+    }
+
+
+    #[test]
+    fn allows_regexp_exec() {
+        assert!(run_on("pattern.exec(content);").is_empty());
+    }
+
+
+    #[test]
+    fn allows_regex_exec() {
+        assert!(run_on("regex.exec(line);").is_empty());
+    }
+}

@@ -71,3 +71,52 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_vi_fn_reassignment() {
+        let d = run_on("obj.method = vi.fn()");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("vi.spyOn"));
+        assert!(d[0].message.contains("method"));
+    }
+
+
+    #[test]
+    fn flags_jest_fn_reassignment() {
+        let d = run_on("service.fetchUser = jest.fn()");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("jest.spyOn"));
+    }
+
+
+    #[test]
+    fn allows_spy_on() {
+        assert!(run_on("vi.spyOn(obj, 'method')").is_empty());
+        assert!(run_on("jest.spyOn(service, 'fetchUser')").is_empty());
+    }
+
+
+    #[test]
+    fn allows_local_var_fn() {
+        assert!(run_on("const mock = vi.fn()").is_empty());
+        assert!(run_on("let stub = jest.fn()").is_empty());
+    }
+
+
+    #[test]
+    fn allows_non_fn_reassignment() {
+        assert!(run_on("obj.method = () => 42").is_empty());
+        assert!(run_on("obj.method = otherFn").is_empty());
+    }
+}

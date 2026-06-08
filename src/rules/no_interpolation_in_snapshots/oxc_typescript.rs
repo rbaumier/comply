@@ -54,3 +54,56 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_interpolation_in_to_match_snapshot() {
+        assert_eq!(
+            run_on("expect(x).toMatchSnapshot(`hello ${name}`)").len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn flags_interpolation_in_to_match_inline_snapshot() {
+        assert_eq!(
+            run_on("expect(x).toMatchInlineSnapshot(`value is ${v}`)").len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn allows_plain_template_literal() {
+        assert!(run_on("expect(x).toMatchSnapshot(`hello world`)").is_empty());
+    }
+
+
+    #[test]
+    fn allows_plain_string_argument() {
+        assert!(run_on("expect(x).toMatchSnapshot('hello')").is_empty());
+    }
+
+
+    #[test]
+    fn allows_no_arguments() {
+        assert!(run_on("expect(x).toMatchSnapshot()").is_empty());
+    }
+
+
+    #[test]
+    fn ignores_unrelated_matcher() {
+        assert!(run_on("expect(x).toEqual(`hello ${name}`)").is_empty());
+    }
+}

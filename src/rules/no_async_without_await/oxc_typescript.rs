@@ -247,4 +247,13 @@ mod tests {
         let d = run_on("async function f() { return 42; }");
         assert_eq!(d.len(), 1);
     }
+
+
+
+    #[test]
+    fn allows_async_without_await_in_test_file() {
+        let src = "it('works', async () => { return request(server).expect(200); });";
+        let d = crate::rules::test_helpers::run_oxc_ts_with_path(src, &Check, "handler.test.ts");
+        assert!(d.is_empty());
+    }
 }

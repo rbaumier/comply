@@ -47,3 +47,38 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    #[test]
+    fn flags_flat_one() {
+        let d = crate::rules::test_helpers::run_oxc_ts("arr.flat(1);", &Check);
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].rule_id, "no-unnecessary-array-flat-depth");
+    }
+
+
+    #[test]
+    fn allows_flat_no_args() {
+        let d = crate::rules::test_helpers::run_oxc_ts("arr.flat();", &Check);
+        assert!(d.is_empty());
+    }
+
+
+    #[test]
+    fn allows_flat_other_depth() {
+        let d = crate::rules::test_helpers::run_oxc_ts("arr.flat(2);", &Check);
+        assert!(d.is_empty());
+    }
+
+
+    #[test]
+    fn allows_flat_infinity() {
+        let d = crate::rules::test_helpers::run_oxc_ts("arr.flat(Infinity);", &Check);
+        assert!(d.is_empty());
+    }
+}

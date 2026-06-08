@@ -114,3 +114,51 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diagnostic::Diagnostic;
+
+
+
+    fn run(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_2000ms_transition() {
+        assert_eq!(
+            run(r#"<div style={{ transitionDuration: '2000ms' }} />"#).len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn flags_3s_animation() {
+        assert_eq!(
+            run(r#"<div style={{ animationDuration: '3s' }} />"#).len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn allows_300ms_transition() {
+        assert!(run(r#"<div style={{ transitionDuration: '300ms' }} />"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_half_second_transition() {
+        assert!(run(r#"<div style={{ transitionDuration: '0.5s' }} />"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_non_style_object() {
+        assert!(run(r#"const config = { transitionDuration: '3s' };"#).is_empty());
+    }
+}

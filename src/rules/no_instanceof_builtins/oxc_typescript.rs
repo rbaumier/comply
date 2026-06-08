@@ -115,4 +115,54 @@ mod tests {
             assert!(run(&src).is_empty(), "{cls} should be allowed");
         }
     }
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_instanceof_promise() {
+        let d = run_on("if (p instanceof Promise) {}");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_instanceof_set() {
+        assert_eq!(run_on("x instanceof Set").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_instanceof_weakmap() {
+        assert_eq!(run_on("x instanceof WeakMap").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_instanceof_regexp() {
+        assert_eq!(run_on("x instanceof RegExp").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_instanceof_custom_class() {
+        assert!(run_on("if (x instanceof MyClass) {}").is_empty());
+    }
+
+
+    #[test]
+    fn allows_instanceof_member_expression() {
+        // `x instanceof foo.Bar` — right side is member_expression, not identifier.
+        assert!(run_on("if (x instanceof foo.Bar) {}").is_empty());
+    }
+
+
+    #[test]
+    fn allows_non_instanceof_binary() {
+        assert!(run_on("x === Array").is_empty());
+    }
 }

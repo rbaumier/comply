@@ -154,3 +154,36 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_simple_index_loop() {
+        let src = "for (let i = 0; i < arr.length; i++) { console.log(arr[i]); }";
+        let diags = run_on(src);
+        assert_eq!(diags.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_index_used_standalone() {
+        let src = "for (let i = 0; i < arr.length; i++) { console.log(i); }";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_non_standard_for() {
+        let src = "for (let i = 1; i < arr.length; i++) { console.log(arr[i]); }";
+        assert!(run_on(src).is_empty());
+    }
+}

@@ -93,3 +93,50 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_bare_json_parse() {
+        let d = run_on("const data = JSON.parse(input);");
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].rule_id, "try-catch-json-parse");
+    }
+
+
+    #[test]
+    fn flags_inside_function() {
+        let d = run_on("function f(s) { return JSON.parse(s); }");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_inside_try() {
+        assert!(run_on("try { const data = JSON.parse(input); } catch (e) { log(e); }").is_empty());
+    }
+
+
+    #[test]
+    fn flags_when_try_only_around_outer_fn() {
+        // The try is in the outer fn; the parse is inside a nested arrow.
+        // That try can't catch it — flag the parse.
+        let d = run_on("function outer() { try { arr.map((s) => JSON.parse(s)); } catch (e) {} }");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_non_json_parse() {
+        assert!(run_on("const data = myParse(input);").is_empty());
+    }
+}

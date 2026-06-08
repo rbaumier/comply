@@ -96,3 +96,47 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_export_without_schema_suffix() {
+        assert_eq!(
+            run_on("export const User = z.object({ id: z.string() });").len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn flags_export_of_z_string() {
+        assert_eq!(run_on("export const Email = z.string().email();").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_export_with_schema_suffix() {
+        assert!(run_on("export const UserSchema = z.object({ id: z.string() });").is_empty());
+    }
+
+
+    #[test]
+    fn allows_non_exported_declaration() {
+        assert!(run_on("const User = z.object({ id: z.string() });").is_empty());
+    }
+
+
+    #[test]
+    fn allows_export_that_is_not_zod() {
+        assert!(run_on("export const User = { id: 1 };").is_empty());
+    }
+}

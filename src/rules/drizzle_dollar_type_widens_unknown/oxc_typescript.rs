@@ -68,3 +68,42 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(src, &Check)
+    }
+
+
+    #[test]
+    fn flags_dollar_type_unknown() {
+        let src = "const c = json('payload').$type<unknown>();";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_dollar_type_any() {
+        let src = "const c = json('payload').$type<any>();";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_dollar_type_concrete() {
+        let src = "const c = json('payload').$type<{ a: string }>();";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_dollar_type_named() {
+        let src = "const c = json('payload').$type<Payload>();";
+        assert!(run(src).is_empty());
+    }
+}

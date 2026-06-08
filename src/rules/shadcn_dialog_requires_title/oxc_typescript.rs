@@ -131,3 +131,53 @@ impl OxcCheck for Check {
         diagnostics
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_dialog_content_without_title() {
+        assert_eq!(
+            run(r#"const x = <DialogContent><p>hi</p></DialogContent>;"#).len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn flags_self_closing_dialog_content() {
+        assert_eq!(run(r#"const x = <DialogContent />;"#).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_dialog_content_with_title() {
+        assert!(
+            run(r#"const x = <DialogContent><DialogTitle>Hi</DialogTitle></DialogContent>;"#)
+                .is_empty()
+        );
+    }
+
+
+    #[test]
+    fn allows_dotted_dialog_content_with_title() {
+        assert!(
+            run(r#"const x = <Dialog.Content><Dialog.Title>Hi</Dialog.Title></Dialog.Content>;"#)
+                .is_empty()
+        );
+    }
+
+
+    #[test]
+    fn ignores_popover_content() {
+        assert!(run(r#"const x = <Popover.Content>hi</Popover.Content>;"#).is_empty());
+    }
+}

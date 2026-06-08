@@ -66,3 +66,13 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diagnostic::{Diagnostic, Severity};
+    use crate::rules::backend::{AstCheck, CheckCtx};
+    use std::path::Path;
+    use super::Check;
+
+}

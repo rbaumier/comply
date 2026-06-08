@@ -219,6 +219,63 @@ mod tests {
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains('y'));
     }
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_property_access_after_destructuring() {
+        let diags = run_on("const { name } = user;\nconsole.log(user.age);");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("age"));
+    }
+
+
+    #[test]
+    fn allows_fully_destructured() {
+        assert!(run_on("const { name, age } = user;\nconsole.log(name, age);").is_empty());
+    }
+
+
+    #[test]
+    fn allows_different_object() {
+        assert!(run_on("const { name } = user;\nconsole.log(other.age);").is_empty());
+    }
+
+
+    #[test]
+    fn skips_method_calls() {
+        assert!(run_on("const { name } = user;\nuser.greet();").is_empty());
+    }
+
+
+    #[test]
+    fn skips_assignment_to_property() {
+        assert!(run_on("const { name } = user;\nuser.age = 5;").is_empty());
+    }
+
+
+    #[test]
+    fn skips_computed_access() {
+        assert!(run_on("const { name } = user;\nconsole.log(user[key]);").is_empty());
+    }
+
+
+    #[test]
+    fn skips_rest_destructuring() {
+        assert!(run_on("const { name, ...rest } = user;\nconsole.log(user.age);").is_empty());
+    }
+
+
+    #[test]
+    fn skips_nested_member() {
+        // user.address.city — nested access, don't flag
+        assert!(run_on("const { name } = user;\nconsole.log(user.address.city);").is_empty());
+    }
 }
 
 fn is_simple_expression(expr: &Expression) -> bool {

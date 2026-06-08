@@ -74,3 +74,49 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_public_parameter_property() {
+        let diags = run_on("class Foo { constructor(public name: string) {} }");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("name"));
+    }
+
+
+    #[test]
+    fn flags_readonly_parameter_property() {
+        let diags = run_on("class Foo { constructor(readonly id: number) {} }");
+        assert_eq!(diags.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_normal_parameter() {
+        assert!(run_on("class Foo { constructor(name: string) {} }").is_empty());
+    }
+
+
+    #[test]
+    fn allows_parameter_property_in_decorated_class() {
+        let src = "@Injectable()\nclass Foo { constructor(private readonly service: Service) {} }";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_parameter_property_in_exported_decorated_class() {
+        let src = "@Controller()\nexport class Foo { constructor(private readonly service: Service) {} }";
+        assert!(run_on(src).is_empty());
+    }
+}

@@ -98,3 +98,38 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_fs_read_with_req_params() {
+        assert_eq!(run_on("fs.readFile(req.params.filename)").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_write_with_query() {
+        assert_eq!(run_on("fs.writeFile(req.query.path, data)").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_basename_sanitization() {
+        assert!(run_on("fs.readFile(path.basename(req.params.filename))").is_empty());
+    }
+
+
+    #[test]
+    fn allows_literal_path() {
+        assert!(run_on("fs.readFile('/data/file.txt')").is_empty());
+    }
+}

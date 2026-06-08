@@ -1,8 +1,6 @@
 //! prefer-native-coercion-functions — prefer passing `Number`, `String`, etc. directly.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

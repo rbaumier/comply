@@ -88,3 +88,39 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+    fn run(code: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(code, &Check)
+    }
+
+
+    #[test]
+    fn flags_lodash() {
+        assert_eq!(run("import _ from 'lodash'").len(), 1);
+        assert_eq!(run("import merge from 'lodash/merge'").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_moment() {
+        assert_eq!(run("import moment from 'moment'").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_require() {
+        assert_eq!(run("const _ = require('lodash')").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_alternatives() {
+        assert!(run("import { format } from 'date-fns'").is_empty());
+        assert!(run("import _ from 'es-toolkit'").is_empty());
+    }
+}

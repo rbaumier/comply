@@ -62,3 +62,59 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(src, &Check)
+    }
+
+
+    #[test]
+    fn flags_leftjoin_without_null_check() {
+        let src = "const rows = await db.select().from(users).leftJoin(posts, eq(posts.userId, users.id));";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_leftjoin_with_isnotnull() {
+        let src = "const rows = await db.select().from(users).leftJoin(posts, eq(posts.userId, users.id)).where(isNotNull(posts.id));";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_leftjoin_with_optional_chain_consumer() {
+        let src = "const rows = await db.select().from(users).leftJoin(posts, eq(posts.userId, users.id)).then((r) => r?.map((x) => x));";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_innerjoin() {
+        let src = "const rows = await db.select().from(users).innerJoin(posts, eq(posts.userId, users.id));";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn still_flags_wildcard_select_even_with_nullable_schema_in_file() {
+        let src = r#"
+const schema = z.object({ name: z.string().nullable() });
+const rows = await db.select().from(users).leftJoin(posts, eq(posts.userId, users.id));
+"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn still_flags_explicit_select_without_nullable_schema_in_file() {
+        let src = "const rows = db.select({ userId: posts.userId }).from(users).leftJoin(posts, eq(posts.userId, users.id));";
+        assert_eq!(run(src).len(), 1);
+    }
+}

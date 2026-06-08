@@ -67,3 +67,47 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rules::test_helpers::run_oxc_ts;
+
+
+
+    #[test]
+    fn flags_to_be_on_length() {
+        let d = run_oxc_ts("expect(arr.length).toBe(3);", &Check);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("toHaveLength"));
+    }
+
+
+    #[test]
+    fn flags_to_equal_on_length() {
+        let d = run_oxc_ts("expect(items.length).toEqual(0);", &Check);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("toHaveLength"));
+    }
+
+
+    #[test]
+    fn allows_to_have_length() {
+        let d = run_oxc_ts("expect(arr).toHaveLength(3);", &Check);
+        assert!(d.is_empty());
+    }
+
+
+    #[test]
+    fn allows_non_length_property() {
+        let d = run_oxc_ts("expect(user.name).toBe('alice');", &Check);
+        assert!(d.is_empty());
+    }
+
+
+    #[test]
+    fn allows_to_be_on_plain_value() {
+        let d = run_oxc_ts("expect(x).toBe(3);", &Check);
+        assert!(d.is_empty());
+    }
+}

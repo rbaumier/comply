@@ -67,3 +67,49 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_disabled_hsts() {
+        let src = "import { secureHeaders } from 'hono/secure-headers';\napp.use(secureHeaders({\n  strictTransportSecurity: false\n}));";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_disabled_x_frame_options() {
+        let src = "import { secureHeaders } from 'hono/secure-headers';\napp.use(secureHeaders({ xFrameOptions: false }));";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_multiple_disabled() {
+        let src = "import { secureHeaders } from 'hono/secure-headers';\nsecureHeaders({\n  xFrameOptions: false,\n  removePoweredBy: false\n});";
+        assert_eq!(run_on(src).len(), 2);
+    }
+
+
+    #[test]
+    fn allows_default_secure_headers() {
+        let src = "import { secureHeaders } from 'hono/secure-headers';\napp.use(secureHeaders());";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_hono_files() {
+        let src = "secureHeaders({ xFrameOptions: false });";
+        assert!(run_on(src).is_empty());
+    }
+}

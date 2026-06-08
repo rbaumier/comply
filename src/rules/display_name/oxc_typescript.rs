@@ -114,3 +114,68 @@ fn contains_jsx(outer: oxc_span::Span, semantic: &oxc_semantic::Semantic) -> boo
     }
     false
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_anonymous_arrow_default_export() {
+        let d = run_on("export default () => <div />;");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_anonymous_memo_default_export() {
+        let d = run_on("export default React.memo(() => <div />);");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_anonymous_forward_ref_default_export() {
+        let d = run_on("export default React.forwardRef((props, ref) => <div ref={ref} />);");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_bare_memo_default_export() {
+        let d = run_on("export default memo(() => <div />);");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_named_function_default_export() {
+        assert!(run_on("export default function MyComponent() { return <div />; }").is_empty());
+    }
+
+
+    #[test]
+    fn allows_named_arrow_then_export() {
+        let src = "const Foo = () => <div />;\nexport default Foo;";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_memo_with_named_component() {
+        let src = "const Foo = () => <div />;\nexport default React.memo(Foo);";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_jsx_default_export() {
+        assert!(run_on("export default () => 42;").is_empty());
+    }
+}

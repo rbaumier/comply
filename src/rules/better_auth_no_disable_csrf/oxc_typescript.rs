@@ -46,3 +46,34 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diagnostic::Diagnostic;
+    use super::Check;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_disable_csrf() {
+        assert_eq!(run("betterAuth({ disableCSRFCheck: true })").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_csrf_enabled() {
+        assert!(run("betterAuth({ database: db })").is_empty());
+    }
+
+
+    #[test]
+    fn allows_csrf_false() {
+        assert!(run("betterAuth({ disableCSRFCheck: false })").is_empty());
+    }
+}

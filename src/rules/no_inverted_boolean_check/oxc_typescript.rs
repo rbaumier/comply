@@ -50,3 +50,50 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_not_a_strict_equals_b() {
+        assert_eq!(run_on("if (!a === b) {}").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_not_a_strict_not_equals_b() {
+        assert_eq!(run_on("if (!a !== b) {}").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_with_member_access() {
+        assert_eq!(run_on("if (!foo.bar === baz) {}").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_normal_comparison() {
+        assert!(run_on("if (a === b) {}").is_empty());
+    }
+
+
+    #[test]
+    fn allows_negated_result() {
+        assert!(run_on("if (!(a === b)) {}").is_empty());
+    }
+
+
+    #[test]
+    fn allows_not_equals_operator() {
+        assert!(run_on("if (a !== b) {}").is_empty());
+    }
+}

@@ -154,4 +154,60 @@ mod tests {
         let src = r#"server.post("*/auth/login", handler);"#;
         assert!(run_tsx(src).is_empty(), "{:?}", run_tsx(src));
     }
+
+
+
+    fn run(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_login_without_rate_limit() {
+        assert_eq!(run("app.post('/login', loginHandler);").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_signup_without_rate_limit() {
+        assert_eq!(run("router.post('/signup', signupHandler);").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_login_with_rate_limit() {
+        assert!(run("app.post('/login', rateLimit(), loginHandler);").is_empty());
+    }
+
+
+    #[test]
+    fn allows_login_with_throttle() {
+        assert!(run("app.post('/login', throttle, loginHandler);").is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_auth_paths() {
+        assert!(run("app.post('/widgets', createWidget);").is_empty());
+    }
+
+
+    #[test]
+    fn allows_global_rate_limit_via_app_use() {
+        let src = "app.use(rateLimit({ windowMs: 60000 }));\napp.post('/login', loginHandler);";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_global_rate_limit_via_router_use() {
+        let src = "router.use(rateLimit());\nrouter.post('/signup', signupHandler);";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn flags_without_global_rate_limit() {
+        assert_eq!(run("app.post('/login', handler);").len(), 1);
+    }
 }

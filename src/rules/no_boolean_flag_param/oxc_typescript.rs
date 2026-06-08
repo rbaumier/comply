@@ -114,4 +114,41 @@ mod tests {
             run("function getTeamsColumns({ canEdit }: { canEdit: boolean }) {}").is_empty()
         );
     }
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_arrow_function_boolean_param() {
+        assert_eq!(run_on("const f = (ready: boolean) => ready;").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_non_boolean_params() {
+        assert!(run_on("function f(a: number, b: string) {}").is_empty());
+    }
+
+
+    #[test]
+    fn allows_boolean_variable_not_in_params() {
+        assert!(run_on("const isReady: boolean = true;").is_empty());
+    }
+
+
+    #[test]
+    fn allows_controlled_component_props() {
+        assert!(run_on("function Dialog(open: boolean) {}").is_empty());
+        assert!(run_on("function Input(disabled: boolean) {}").is_empty());
+    }
+
+
+    #[test]
+    fn flags_multiple_bare_boolean_params() {
+        assert_eq!(run_on("function f(foo: boolean, bar: boolean) {}").len(), 2);
+    }
 }

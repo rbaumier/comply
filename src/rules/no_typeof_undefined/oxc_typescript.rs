@@ -208,4 +208,27 @@ mod tests {
         let d = run_on("if (typeof globalThis.myCustomGlobal === 'undefined') {}");
         assert_eq!(d.len(), 1, "{d:?}");
     }
+
+
+
+    #[test]
+    fn flags_typeof_member_expression_double_quotes() {
+        let d =
+            crate::rules::test_helpers::run_oxc_ts(r#"if (typeof obj.foo === "undefined") {}"#, &Check);
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_direct_undefined_comparison() {
+        let d = crate::rules::test_helpers::run_oxc_ts("if (x === undefined) {}", &Check);
+        assert!(d.is_empty());
+    }
+
+
+    #[test]
+    fn allows_typeof_for_other_types() {
+        let d = crate::rules::test_helpers::run_oxc_ts("if (typeof x === 'string') {}", &Check);
+        assert!(d.is_empty());
+    }
 }

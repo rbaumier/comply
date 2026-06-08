@@ -47,3 +47,43 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_substring() {
+        let d = run_on("str.substring(1, 3)");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("substring"));
+    }
+
+
+    #[test]
+    fn flags_substr() {
+        let d = run_on("str.substr(0, 5)");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("substr"));
+    }
+
+
+    #[test]
+    fn allows_slice() {
+        assert!(run_on("str.slice(1, 3)").is_empty());
+    }
+
+
+    #[test]
+    fn flags_chained_call() {
+        let d = run_on("foo().substring(0)");
+        assert_eq!(d.len(), 1);
+    }
+}

@@ -161,3 +161,114 @@ fn enclosing_state_name<'a>(
     }
     None
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_unguarded_self_loop_no_target() {
+        let src = r#"
+            const machine = createMachine({
+                states: {
+                    idle: {
+                        always: [
+                            { actions: 'doSomething' },
+                        ],
+                    },
+                },
+            });
+        "#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_unguarded_explicit_self_target() {
+        let src = r#"
+            const machine = createMachine({
+                states: {
+                    idle: {
+                        always: [
+                            { target: 'idle', actions: 'doSomething' },
+                        ],
+                    },
+                },
+            });
+        "#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_guarded_always_transition() {
+        let src = r#"
+            const machine = createMachine({
+                states: {
+                    idle: {
+                        always: [
+                            { guard: 'isReady', actions: 'doSomething' },
+                        ],
+                    },
+                },
+            });
+        "#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_cond_legacy_guard() {
+        let src = r#"
+            const machine = createMachine({
+                states: {
+                    idle: {
+                        always: [
+                            { cond: 'isReady', target: 'idle' },
+                        ],
+                    },
+                },
+            });
+        "#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_always_with_different_target() {
+        let src = r#"
+            const machine = createMachine({
+                states: {
+                    idle: {
+                        always: [
+                            { target: 'next' },
+                        ],
+                    },
+                },
+            });
+        "#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn flags_single_object_always_without_guard_or_target() {
+        let src = r#"
+            const machine = createMachine({
+                states: {
+                    idle: {
+                        always: { actions: 'doSomething' },
+                    },
+                },
+            });
+        "#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+}

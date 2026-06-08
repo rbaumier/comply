@@ -1,8 +1,6 @@
 //! no-useless-error-capture-stack-trace — flag unnecessary Error.captureStackTrace() calls.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

@@ -83,3 +83,47 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    #[test]
+    fn flags_multiline_if_without_braces() {
+        let d = crate::rules::test_helpers::run_oxc_ts("if (condition)\n    doSomething();", &Check);
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].rule_id, "no-unenclosed-multiline-block");
+    }
+
+
+    #[test]
+    fn flags_multiline_for_without_braces() {
+        let d =
+            crate::rules::test_helpers::run_oxc_ts("for (const x of items)\n    process(x);", &Check);
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_braced_if() {
+        let d =
+            crate::rules::test_helpers::run_oxc_ts("if (condition) {\n    doSomething();\n}", &Check);
+        assert!(d.is_empty());
+    }
+
+
+    #[test]
+    fn allows_single_line_if() {
+        let d = crate::rules::test_helpers::run_oxc_ts("if (condition) doSomething();", &Check);
+        assert!(d.is_empty());
+    }
+
+
+    #[test]
+    fn flags_while_without_braces() {
+        let d = crate::rules::test_helpers::run_oxc_ts("while (running)\n    tick();", &Check);
+        assert_eq!(d.len(), 1);
+    }
+}

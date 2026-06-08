@@ -81,4 +81,40 @@ mod tests {
         let src = "const m = new Map();";
         assert!(run(src).is_empty());
     }
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_standalone_new() {
+        assert_eq!(run_on("new MyService();").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_standalone_new_indented() {
+        assert_eq!(run_on("  new MyService();").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_assigned_new() {
+        assert!(run_on("const svc = new MyService();").is_empty());
+    }
+
+
+    #[test]
+    fn allows_returned_new() {
+        assert!(run_on("function f() { return new MyService(); }").is_empty());
+    }
+
+
+    #[test]
+    fn allows_thrown_new() {
+        assert!(run_on("throw new Error('fail');").is_empty());
+    }
 }

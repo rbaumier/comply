@@ -67,3 +67,67 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_static_only_methods() {
+        let d = run_on("class Foo { static bar() {} static baz() {} }");
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].rule_id, "no-static-only-class");
+    }
+
+
+    #[test]
+    fn flags_static_only_fields() {
+        let d = run_on("class Foo { static x = 1; static y = 2; }");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_mixed_static_methods_and_fields() {
+        let d = run_on("class Foo { static x = 1; static bar() {} }");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_class_with_instance_member() {
+        assert!(run_on("class Foo { static bar() {} baz() {} }").is_empty());
+    }
+
+
+    #[test]
+    fn allows_class_with_only_instance_methods() {
+        assert!(run_on("class Foo { bar() {} }").is_empty());
+    }
+
+
+    #[test]
+    fn allows_class_extending_superclass() {
+        assert!(run_on("class Foo extends Base { static bar() {} }").is_empty());
+    }
+
+
+    #[test]
+    fn allows_empty_class() {
+        assert!(run_on("class Foo {}").is_empty());
+    }
+
+
+    #[test]
+    fn flags_class_expression() {
+        let d = run_on("const Foo = class { static bar() {} };");
+        assert_eq!(d.len(), 1);
+    }
+}

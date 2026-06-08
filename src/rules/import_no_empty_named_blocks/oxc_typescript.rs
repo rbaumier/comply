@@ -53,3 +53,35 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_empty_braces() {
+        let d = run_on("import { } from 'foo';");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("empty named import"));
+    }
+
+
+    #[test]
+    fn flags_empty_braces_no_space() {
+        let d = run_on("import {} from 'foo';");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_named_imports() {
+        assert!(run_on("import { foo } from 'bar';").is_empty());
+    }
+}

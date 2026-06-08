@@ -166,4 +166,11 @@ mod tests {
         let pkg = r#"{"dependencies":{"react-i18next":"^14"}}"#;
         assert!(run_with_pkg(pkg, "<span>:</span>").is_empty());
     }
+
+    use crate::rules::test_helpers::run_oxc_tsx;
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        run_oxc_tsx(s, &Check)
+    }
 }

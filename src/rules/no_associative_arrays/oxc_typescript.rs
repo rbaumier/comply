@@ -107,3 +107,42 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_bracket_string_key_assignment() {
+        let src = "const arr = [];\narr[\"key\"] = 1;";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_single_quote_bracket_key() {
+        let src = "let items = [];\nitems['name'] = \"hello\";";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_numeric_index() {
+        let src = "const arr = [];\narr[0] = 1;";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_non_array_bracket_access() {
+        let src = "const obj = {};\nobj[\"key\"] = 1;";
+        assert!(run_on(src).is_empty());
+    }
+}

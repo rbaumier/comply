@@ -1,8 +1,6 @@
 //! no-nested-ternary — flag ternaries whose parent is also a ternary.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

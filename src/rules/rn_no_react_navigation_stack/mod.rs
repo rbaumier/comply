@@ -4,8 +4,6 @@
 //! duplicated navigation state and type-unsafe route references.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

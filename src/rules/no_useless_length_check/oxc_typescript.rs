@@ -122,3 +122,55 @@ impl OxcCheck for Check {
                     }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_length_gt_zero_and_some() {
+        let d = run_on("const ok = arr.length > 0 && arr.some(fn);");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("some()"));
+    }
+
+
+    #[test]
+    fn flags_length_not_equal_zero_and_some() {
+        let d = run_on("const ok = arr.length !== 0 && arr.some(fn);");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_length_equal_zero_or_every() {
+        let d = run_on("const ok = arr.length === 0 || arr.every(fn);");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("every()"));
+    }
+
+
+    #[test]
+    fn allows_some_without_length_check() {
+        assert!(run_on("const ok = arr.some(fn);").is_empty());
+    }
+
+
+    #[test]
+    fn allows_different_arrays() {
+        assert!(run_on("const ok = a.length > 0 && b.some(fn);").is_empty());
+    }
+
+
+    #[test]
+    fn allows_length_with_non_some_method() {
+        assert!(run_on("const ok = arr.length > 0 && arr.filter(fn);").is_empty());
+    }
+}

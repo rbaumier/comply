@@ -234,4 +234,150 @@ export default defineConfig({});"#;
         assert_eq!(d.len(), 1, "production code should still flag: {d:?}");
         assert!(d[0].message.contains("vitest"));
     }
+
+    use crate::rules::test_helpers::run_oxc_ts_with_project;
+    use super::*;
+
+
+    fn setup_with_pkg(pkg_json: &str, file_rel: &str, source: &str) -> Vec<Diagnostic> {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("package.json"), pkg_json).unwrap();
+        let file_path = dir.path().join(file_rel);
+        if let Some(parent) = file_path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(&file_path, source).unwrap();
+
+        let lang = Language::from_path(&file_path).unwrap();
+        let source_file = SourceFile {
+            path: file_path.clone(),
+            language: lang,
+        };
+        let refs = vec![&source_file];
+        let config = Config::default();
+        let project = ProjectCtx::load(&refs, &config);
+        let canon = fs::canonicalize(&file_path).unwrap();
+
+        run_oxc_ts_with_project(source, &Check, &project)
+    }
+
+
+    #[test]
+    fn allows_dep_in_prod_code() {
+        let pkg = r#"{"dependencies":{"express":"4"}}"#;
+        let d = setup_with_pkg(pkg, "src/server.ts", "import express from 'express';");
+        assert!(d.is_empty(), "got {d:?}");
+    }
+
+
+    #[test]
+    fn allows_dev_dep_in_test_file() {
+        let pkg = r#"{"devDependencies":{"jest":"29"}}"#;
+        let d = setup_with_pkg(
+            pkg,
+            "src/__tests__/server.test.ts",
+            "import { jest } from 'jest';",
+        );
+        assert!(d.is_empty(), "got {d:?}");
+    }
+
+
+    #[test]
+    fn allows_dev_dep_in_spec_file() {
+        let pkg = r#"{"devDependencies":{"jest":"29"}}"#;
+        let d = setup_with_pkg(pkg, "src/server.spec.ts", "import { jest } from 'jest';");
+        assert!(d.is_empty(), "got {d:?}");
+    }
+
+
+    #[test]
+    fn allows_dev_dep_in_stories_file() {
+        let pkg = r#"{"devDependencies":{"@storybook/react":"7"}}"#;
+        let d = setup_with_pkg(
+            pkg,
+            "src/Button.stories.ts",
+            "import { Meta } from '@storybook/react';",
+        );
+        assert!(d.is_empty(), "got {d:?}");
+    }
+
+
+    #[test]
+    fn skips_relative_import() {
+        let pkg = r#"{"dependencies":{}}"#;
+        let d = setup_with_pkg(pkg, "src/server.ts", "import { foo } from './utils';");
+        assert!(d.is_empty(), "got {d:?}");
+    }
+
+
+    #[test]
+    fn skips_node_builtin() {
+        let pkg = r#"{"dependencies":{}}"#;
+        let d = setup_with_pkg(pkg, "src/server.ts", "import fs from 'node:fs';");
+        assert!(d.is_empty(), "got {d:?}");
+    }
+
+
+    #[test]
+    fn allows_peer_dep() {
+        let pkg = r#"{"peerDependencies":{"react":"18"}}"#;
+        let d = setup_with_pkg(pkg, "src/app.ts", "import React from 'react';");
+        assert!(d.is_empty(), "got {d:?}");
+    }
+
+
+    #[test]
+    fn allows_optional_dep() {
+        let pkg = r#"{"optionalDependencies":{"fsevents":"2"}}"#;
+        let d = setup_with_pkg(pkg, "src/app.ts", "import {} from 'fsevents';");
+        assert!(d.is_empty(), "got {d:?}");
+    }
+
+
+    #[test]
+    fn silent_when_package_absent_from_all_sections() {
+        // `no-implicit-deps` handles missing packages; we don't double up.
+        let pkg = r#"{"dependencies":{"express":"4"}}"#;
+        let d = setup_with_pkg(pkg, "src/server.ts", "import x from 'unlisted-pkg';");
+        assert!(d.is_empty(), "got {d:?}");
+    }
+
+
+    #[test]
+    fn silent_when_no_package_json() {
+        let dir = TempDir::new().unwrap();
+        let file_path = dir.path().join("src/server.ts");
+        fs::create_dir_all(file_path.parent().unwrap()).unwrap();
+        let source = "import { jest } from 'jest';";
+        fs::write(&file_path, source).unwrap();
+        let source_file = SourceFile {
+            path: file_path.clone(),
+            language: Language::from_path(&file_path).unwrap(),
+        };
+        let refs = vec![&source_file];
+        let config = Config::default();
+        let project = ProjectCtx::load(&refs, &config);
+        let canon = fs::canonicalize(&file_path).unwrap();
+        let d = run_oxc_ts_with_project(source, &Check, &project);
+        assert!(d.is_empty(), "got {d:?}");
+    }
+
+
+    #[test]
+    fn package_root_helper() {
+        assert_eq!(package_root("react"), "react");
+        assert_eq!(package_root("react-dom/client"), "react-dom");
+        assert_eq!(package_root("@scope/pkg"), "@scope/pkg");
+        assert_eq!(package_root("@scope/pkg/sub/path"), "@scope/pkg");
+    }
+
+
+    #[test]
+    fn prefers_runtime_when_package_in_both_sections() {
+        // Duplicated deps are common (peer + dev pairs). If runtime lists it,
+        // don't flag — the package is reachable at install time.
+        let pkg = r#"{"dependencies":{"react":"18"},"devDependencies":{"react":"18"}}"#;
+        let d = setup_with_pkg(pkg, "src/app.ts", "import React from 'react';");
+        assert!(d.is_empty(), "got {d:?}");
+    }
 }

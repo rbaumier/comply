@@ -105,4 +105,48 @@ mod tests {
     fn skips_bare_find_by_import() {
         assert!(run(r#"expect(await findByTestId("x")).toBeVisible();"#).is_empty());
     }
+
+    use crate::rules::test_helpers::run_oxc_ts;
+
+
+    fn run_on(s: &str) -> Vec<Diagnostic> {
+        run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_expect_await_promise() {
+        let d = run_on("async function t() { expect(await fetchUser()).toEqual({id: 1}); }");
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].rule_id, "prefer-expect-resolves");
+    }
+
+
+    #[test]
+    fn flags_expect_await_identifier() {
+        let d = run_on("async function t() { expect(await p).toBe(42); }");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_await_expect_resolves() {
+        let d =
+            run_on("async function t() { await expect(fetchUser()).resolves.toEqual({id: 1}); }");
+        assert!(d.is_empty());
+    }
+
+
+    #[test]
+    fn allows_expect_on_sync_value() {
+        let d = run_on("function t() { expect(1 + 1).toBe(2); }");
+        assert!(d.is_empty());
+    }
+
+
+    #[test]
+    fn allows_expect_on_promise_without_await() {
+        let d = run_on("function t() { expect(fetchUser()).toBeInstanceOf(Promise); }");
+        assert!(d.is_empty());
+    }
 }

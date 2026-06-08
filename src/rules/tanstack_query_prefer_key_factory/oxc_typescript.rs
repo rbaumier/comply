@@ -77,3 +77,35 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_inline_dynamic_key() {
+        assert_eq!(
+            run("useQuery({ queryKey: ['todos', userId], queryFn: f })").len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn allows_static_key() {
+        assert!(run("useQuery({ queryKey: ['todos'], queryFn: f })").is_empty());
+    }
+
+
+    #[test]
+    fn allows_factory() {
+        assert!(run("useQuery({ queryKey: todoKeys.detail(userId), queryFn: f })").is_empty());
+    }
+}

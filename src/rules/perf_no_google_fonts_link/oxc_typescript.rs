@@ -64,3 +64,35 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_google_fonts_link() {
+        let code = r#"const x = <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter" />;"#;
+        assert_eq!(run(code).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_gstatic() {
+        let code = r#"const x = <link rel="preconnect" href="https://fonts.gstatic.com" />;"#;
+        assert_eq!(run(code).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_self_hosted_link() {
+        let code = r#"const x = <link rel="stylesheet" href="/fonts/inter.css" />;"#;
+        assert!(run(code).is_empty());
+    }
+}

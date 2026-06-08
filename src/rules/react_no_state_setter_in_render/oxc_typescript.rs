@@ -215,3 +215,41 @@ fn is_inside_nested_function(
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_setter_in_component_body() {
+        let src = "function Counter() { const [n, setN] = useState(0); setN(1); return null; }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_setter_in_event_handler() {
+        let src = "function Counter() { const [n, setN] = useState(0); return <button onClick={() => setN(1)} />; }";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_setter_in_useeffect() {
+        let src = "function Counter() { const [n, setN] = useState(0); useEffect(() => { setN(1); }, []); return null; }";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_component_function() {
+        let src = "function helper() { const [n, setN] = useState(0); setN(1); return n; }";
+        assert!(run(src).is_empty());
+    }
+}

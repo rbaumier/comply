@@ -215,4 +215,75 @@ mod tests {
         // This goes through the non-arrow path which already passes.
         assert!(run(src).is_empty());
     }
+
+
+
+    fn run_on(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_arrow_without_prevent_default() {
+        let src = "const x = <form onSubmit={(e) => submit(e)}>ok</form>;";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_function_expression_without_prevent_default() {
+        let src = "const x = <form onSubmit={function (e) { submit(e); }}>ok</form>;";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_arrow_with_prevent_default() {
+        let src = "const x = <form onSubmit={(e) => { e.preventDefault(); submit(e); }}>ok</form>;";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_nested_prevent_default() {
+        let src = r#"
+const x = <form onSubmit={(e) => {
+  if (valid) {
+    e.preventDefault();
+    submit(e);
+  }
+}}>ok</form>;
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn flags_wrong_receiver() {
+        let src = r#"const x = <form onSubmit={(event) => { other.preventDefault(); submit(event); }}>ok</form>;"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_short_param_name() {
+        let src =
+            r#"const x = <form onSubmit={(e) => { e.preventDefault(); submit(e); }}>ok</form>;"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_referenced_handler() {
+        // Cannot easily track across scopes; keep to inline handlers.
+        let src = "const x = <form onSubmit={handleSubmit}>ok</form>;";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_other_attributes() {
+        let src = "const x = <button onClick={(e) => submit(e)}>ok</button>;";
+        assert!(run_on(src).is_empty());
+    }
 }

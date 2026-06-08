@@ -183,3 +183,86 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_classic_for_loop() {
+        let d = run_on("for (let i = 0; i < arr.length; i++) { console.log(arr[i]); }");
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].rule_id, "no-for-loop");
+    }
+
+
+    #[test]
+    fn flags_var_for_loop() {
+        let d = run_on("for (var i = 0; i < items.length; i++) { use(items[i]); }");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_plus_equals_increment() {
+        let d = run_on("for (let i = 0; i < arr.length; i += 1) { f(arr[i]); }");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_prefix_increment() {
+        let d = run_on("for (let i = 0; i < arr.length; ++i) { f(arr[i]); }");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_reversed_condition() {
+        let d = run_on("for (let i = 0; arr.length > i; i++) { f(arr[i]); }");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_for_of() {
+        assert!(run_on("for (const item of arr) { console.log(item); }").is_empty());
+    }
+
+
+    #[test]
+    fn allows_for_in() {
+        assert!(run_on("for (const key in obj) { console.log(key); }").is_empty());
+    }
+
+
+    #[test]
+    fn allows_non_zero_init() {
+        assert!(run_on("for (let i = 1; i < arr.length; i++) { f(arr[i]); }").is_empty());
+    }
+
+
+    #[test]
+    fn allows_decrement() {
+        assert!(run_on("for (let i = 0; i < arr.length; i--) { f(arr[i]); }").is_empty());
+    }
+
+
+    #[test]
+    fn allows_step_two() {
+        assert!(run_on("for (let i = 0; i < arr.length; i += 2) { f(arr[i]); }").is_empty());
+    }
+
+
+    #[test]
+    fn allows_non_length_condition() {
+        assert!(run_on("for (let i = 0; i < 10; i++) { f(i); }").is_empty());
+    }
+}

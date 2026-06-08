@@ -1,8 +1,6 @@
 //! playwright-prefer-native-locators — flag `locator('[role="..."]')` in favor of `getByRole()` etc.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

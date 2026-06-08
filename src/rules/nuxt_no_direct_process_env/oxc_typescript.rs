@@ -64,3 +64,35 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_process_env_access() {
+        let src = "import {} from '#imports';\nconst k = process.env.API_KEY;";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_use_runtime_config() {
+        let src = "import {} from '#imports';\nconst cfg = useRuntimeConfig();\nconst k = cfg.public.apiBase;";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_nuxt_files() {
+        let src = "const k = process.env.API_KEY;";
+        assert!(run_on(src).is_empty());
+    }
+}

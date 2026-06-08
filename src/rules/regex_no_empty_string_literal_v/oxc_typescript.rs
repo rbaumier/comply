@@ -43,3 +43,50 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_empty_q_in_v_flag() {
+        assert_eq!(run_on(r#"const re = /[\q{}]/v;"#).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_non_v_flag() {
+        assert!(run_on(r#"const re = /[\q{}]/g;"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_non_empty_q() {
+        assert!(run_on(r#"const re = /[\q{ab}]/v;"#).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_tailwind_class_string() {
+        assert!(run_on(r#"const x = "has-[>svg]:grid-cols-[auto_1fr]";"#).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_url_string() {
+        assert!(run_on(r#"const u = "http://a/b/c";"#).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_import_path() {
+        assert!(run_on(r#"import X from "@scope/pkg/sub";"#).is_empty());
+    }
+}

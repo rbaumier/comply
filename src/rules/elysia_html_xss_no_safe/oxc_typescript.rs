@@ -165,4 +165,12 @@ mod tests {
         let src = "import React from 'react';\nfunction Search({ query }: { query: string }) {\n  return <p>{query}</p>;\n}";
         assert!(run_on(src).is_empty());
     }
+
+
+
+    #[test]
+    fn ignores_non_elysia_files() {
+        let src = "const v = <div>{body.name}</div>;";
+        assert!(crate::rules::test_helpers::run_oxc_ts(src, &Check).is_empty());
+    }
 }

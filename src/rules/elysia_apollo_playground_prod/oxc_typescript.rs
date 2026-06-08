@@ -50,3 +50,35 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_framework(source, &Check, "elysia")
+    }
+
+
+    #[test]
+    fn flags_enable_playground_true() {
+        let src = "import { apollo } from '@elysiajs/apollo';\napp.use(apollo({ enablePlayground: true }));";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_env_gated_playground() {
+        let src = "import { apollo } from '@elysiajs/apollo';\napp.use(apollo({ enablePlayground: process.env.NODE_ENV !== 'production' }));";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_apollo_files() {
+        let src = "server({ enablePlayground: true });";
+        assert!(crate::rules::test_helpers::run_oxc_ts(src, &Check).is_empty());
+    }
+}

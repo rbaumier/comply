@@ -4,8 +4,6 @@
 //! stack. `router.push` keeps it there; `router.replace` discards it.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

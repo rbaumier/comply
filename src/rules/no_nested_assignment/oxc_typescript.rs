@@ -62,3 +62,45 @@ fn contains_assignment(expr: &Expression) -> bool {
         _ => false,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_assignment_in_if() {
+        assert_eq!(run_on("if (x = 10) {}").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_assignment_in_while() {
+        assert_eq!(run_on("while (node = node.next) {}").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_equality_check() {
+        assert!(run_on("if (x === 10) {}").is_empty());
+    }
+
+
+    #[test]
+    fn allows_loose_equality() {
+        assert!(run_on("if (x == 10) {}").is_empty());
+    }
+
+
+    #[test]
+    fn allows_comparison_operators() {
+        assert!(run_on("if (x <= 10) {}").is_empty());
+        assert!(run_on("if (x >= 10) {}").is_empty());
+    }
+}

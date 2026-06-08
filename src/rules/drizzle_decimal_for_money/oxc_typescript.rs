@@ -85,3 +85,42 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(src, &Check)
+    }
+
+
+    #[test]
+    fn flags_numeric_price_without_precision() {
+        let src = "const p = numeric('price');";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_decimal_amount_without_precision() {
+        let src = "const a = decimal('amount');";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_numeric_with_precision() {
+        let src = "const p = numeric('price', { precision: 12, scale: 2 });";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_money_column() {
+        let src = "const p = numeric('latitude');";
+        assert!(run(src).is_empty());
+    }
+}

@@ -89,3 +89,77 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rules::test_helpers::run_oxc_ts_with_path;
+
+
+
+    fn run_oxc_ts(source: &str) -> Vec<Diagnostic> {
+        run_oxc_ts_with_path(source, &Check, "app.test.ts")
+    }
+
+
+    #[test]
+    fn flags_xtest() {
+        let d = run_oxc_ts("xtest('broken', () => { expect(1).toBe(1); });");
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].rule_id, "vitest-no-disabled-tests");
+    }
+
+
+    #[test]
+    fn flags_xit() {
+        let d = run_oxc_ts("xit('broken', () => {});");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_xdescribe() {
+        let d = run_oxc_ts("xdescribe('suite', () => {});");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_test_skip() {
+        let d = run_oxc_ts("test.skip('broken', () => {});");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_regular_test() {
+        let d = run_oxc_ts("test('works', () => { expect(1).toBe(1); });");
+        assert!(d.is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_test_file() {
+        let d = run_oxc_ts_with_path("xtest('a', () => {});", &Check, "src/util.ts");
+        assert!(d.is_empty());
+    }
+
+
+    #[test]
+    fn flags_skip_with_vitest_import_no_marker() {
+        let d = run_oxc_ts_with_path(
+            "import { it } from 'vitest';\nit.skip('login', () => {});",
+            &Check,
+            "tests/login.ts",
+        );
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].rule_id, "vitest-no-disabled-tests");
+    }
+
+
+    #[test]
+    fn ignores_no_marker_no_import() {
+        let d = run_oxc_ts_with_path("it.skip('login', () => {});", &Check, "tests/login.ts");
+        assert!(d.is_empty());
+    }
+}

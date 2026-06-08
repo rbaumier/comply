@@ -55,3 +55,43 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_imports_from_pound_imports() {
+        let src = "import { useRuntimeConfig } from '#imports';\nconst cfg = useRuntimeConfig();\nconst plugin = defineNuxtPlugin(() => {});";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_imports_from_pound_app() {
+        let src = "import { useNuxtApp } from '#app';\nconst plugin = defineNuxtPlugin(() => {});";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_other_imports_in_nuxt_file() {
+        let src = "import { ref } from 'vue';\nconst plugin = defineNuxtPlugin(() => {});";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_nuxt_files() {
+        // No Nuxt markers at all (no `#imports`, no `defineNuxtPlugin`, etc.).
+        let src = "import { foo } from 'lodash';\nconst x = foo();";
+        assert!(run_on(src).is_empty());
+    }
+}

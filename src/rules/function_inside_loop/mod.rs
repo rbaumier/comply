@@ -1,8 +1,6 @@
 //! Detects function declarations inside loops — creates new function object each iteration.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

@@ -62,3 +62,28 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_query_raw_call_form() {
+        let src = "import { PrismaClient } from '@prisma/client';\nconst prisma = new PrismaClient();\nasync function f(id: string) { return prisma.$queryRaw('SELECT * FROM u WHERE id = ' + id); }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_tagged_template_form() {
+        let src = "import { PrismaClient } from '@prisma/client';\nconst prisma = new PrismaClient();\nasync function f(id: number) { return prisma.$queryRaw`SELECT * FROM u WHERE id = ${id}`; }";
+        assert!(run(src).is_empty());
+    }
+}

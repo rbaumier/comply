@@ -15,8 +15,6 @@
 mod oxc_typescript;
 mod rust;
 mod type_prefix;
-#[cfg(test)]
-mod typescript;
 
 #[cfg(test)]
 mod shared_tests;

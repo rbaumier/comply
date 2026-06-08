@@ -239,3 +239,227 @@ fn prop_key_name(key: &PropertyKey) -> Option<String> {
         _ => None,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_unused_prop_in_interface() {
+        let src = r#"
+interface Props {
+  name: string;
+  age: number;
+}
+function App({ name }: Props) {
+  return name;
+}
+"#;
+        let d = run_on(src);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("`age`"));
+    }
+
+
+    #[test]
+    fn flags_unused_prop_in_type_alias() {
+        let src = r#"
+type Props = {
+  name: string;
+  age: number;
+};
+function App({ name }: Props) {
+  return name;
+}
+"#;
+        let d = run_on(src);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("`age`"));
+    }
+
+
+    #[test]
+    fn flags_unused_prop_inline_type() {
+        let src = r#"
+function App({ name }: { name: string; age: number }) {
+  return name;
+}
+"#;
+        let d = run_on(src);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("`age`"));
+    }
+
+
+    #[test]
+    fn allows_all_props_used() {
+        let src = r#"
+interface Props { name: string; age: number; }
+function App({ name, age }: Props) {
+  return name + age;
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_rest_spread() {
+        let src = r#"
+interface Props { name: string; age: number; email: string; }
+function App({ name, ...rest }: Props) {
+  return name;
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_arrow_with_all_props() {
+        let src = r#"
+interface Props { x: number; }
+const App = ({ x }: Props) => x;
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn flags_arrow_with_unused_prop() {
+        let src = r#"
+interface Props { x: number; y: number; }
+const App = ({ x }: Props) => x;
+"#;
+        let d = run_on(src);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("`y`"));
+    }
+
+
+    #[test]
+    fn flags_unused_with_member_access() {
+        let src = r#"
+interface Props { name: string; age: number; }
+function App(props: Props) {
+  return props.name;
+}
+"#;
+        let d = run_on(src);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("`age`"));
+    }
+
+
+    #[test]
+    fn allows_all_props_via_member_access() {
+        let src = r#"
+interface Props { name: string; age: number; }
+function App(props: Props) {
+  return props.name + props.age;
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_props_passed_opaquely() {
+        let src = r#"
+interface Props { name: string; age: number; }
+function App(props: Props) {
+  return doSomething(props);
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn flags_unused_with_secondary_destructure() {
+        let src = r#"
+interface Props { name: string; age: number; email: string; }
+function App(props: Props) {
+  const { name, age } = props;
+  return name + age;
+}
+"#;
+        let d = run_on(src);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("`email`"));
+    }
+
+
+    #[test]
+    fn allows_secondary_destructure_with_rest() {
+        let src = r#"
+interface Props { name: string; age: number; email: string; }
+function App(props: Props) {
+  const { name, ...rest } = props;
+  return name;
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn skips_non_component_function() {
+        let src = r#"
+function helper({ a }: { a: number; b: string }) {
+  return a;
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn skips_non_component_interface() {
+        let src = r#"
+interface EditorOptions {
+  at: Location;
+  match: NodeMatch;
+  mode: MaximizeMode;
+  voids: boolean;
+}
+function ancestors(editor: Editor, options: EditorOptions) {
+  return editor.at;
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn skips_type_test_files() {
+        let src = r#"
+interface Props { num: number; numGet: () => number; }
+function App({ num }: Props) {
+  return num;
+}
+"#;
+        let d = crate::rules::test_helpers::run_oxc_ts_with_path(src, &Check, "src/types.test.tsx");
+        assert!(d.is_empty());
+    }
+
+
+    #[test]
+    fn skips_ts_check_type_test_context() {
+        let src = r#"
+// @ts-check
+interface Props { num: number; numGet: () => number; }
+function App({ num }: Props) {
+  return num;
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+}

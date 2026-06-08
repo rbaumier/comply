@@ -71,3 +71,63 @@ fn count_chained_arms(stmt: &oxc_ast::ast::IfStatement) -> usize {
     }
     arms
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_four_arm_chain() {
+        let source = "
+function f(k: string) {
+    if (k === 'a') return 1;
+    else if (k === 'b') return 2;
+    else if (k === 'c') return 3;
+    else if (k === 'd') return 4;
+}
+";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_three_arm_chain() {
+        let source = "
+function f(k: string) {
+    if (k === 'a') return 1;
+    else if (k === 'b') return 2;
+    else if (k === 'c') return 3;
+}
+";
+        assert!(run_on(source).is_empty());
+    }
+
+
+    #[test]
+    fn allows_single_if() {
+        assert!(run_on("function f() { if (x) return 1; }").is_empty());
+    }
+
+
+    #[test]
+    fn does_not_double_count_nested_chain() {
+        // The inner `else if` shouldn't be counted as its own chain root.
+        let source = "
+function f(k: string) {
+    if (k === 'a') return 1;
+    else if (k === 'b') return 2;
+    else if (k === 'c') return 3;
+    else if (k === 'd') return 4;
+    else if (k === 'e') return 5;
+}
+";
+        assert_eq!(run_on(source).len(), 1);
+    }
+}

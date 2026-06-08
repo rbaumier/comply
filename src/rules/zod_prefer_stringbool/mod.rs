@@ -1,8 +1,6 @@
 //! zod-prefer-stringbool — prefer `z.stringbool()` over `z.coerce.boolean()` (Zod v4).
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

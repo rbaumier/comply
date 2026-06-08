@@ -126,4 +126,60 @@ mod tests {
         assert!(run(src).is_empty());
     }
 
+
+
+
+    fn run_on(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_bad_prefix_identifier() {
+        let d = run_on("const x = <Button onClick={doStuff} />;");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_on_prefix() {
+        assert!(run_on("const x = <Button onClick={onSubmit} />;").is_empty());
+    }
+
+
+    #[test]
+    fn allows_toggle_prefix() {
+        assert!(run_on("const x = <Button onClick={toggleMenu} />;").is_empty());
+    }
+
+
+    #[test]
+    fn allows_inline_arrow() {
+        assert!(run_on("const x = <Button onClick={() => {}} />;").is_empty());
+    }
+
+
+    #[test]
+    fn allows_member_expression() {
+        assert!(run_on("const x = <Button onClick={props.onClick} />;").is_empty());
+    }
+
+
+    #[test]
+    fn allows_call_expression() {
+        assert!(run_on("const x = <Button onClick={makeHandler()} />;").is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_handler_prop() {
+        assert!(run_on("const x = <Button label={doStuff} />;").is_empty());
+    }
+
+
+    #[test]
+    fn ignores_lowercase_on_prefix_prop() {
+        // `only` shouldn't be treated as an event handler.
+        assert!(run_on("const x = <Foo only={doStuff} />;").is_empty());
+    }
 }

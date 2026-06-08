@@ -68,3 +68,62 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_to_be_called() {
+        assert_eq!(run_on("expect(fn).toBeCalled()").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_to_be_called_with() {
+        assert_eq!(run_on("expect(fn).toBeCalledWith(1, 2)").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_last_called_with() {
+        assert_eq!(run_on("expect(fn).lastCalledWith('a')").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_to_throw_error() {
+        assert_eq!(run_on("expect(fn).toThrowError('boom')").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_nth_returned_with() {
+        assert_eq!(run_on("expect(fn).nthReturnedWith(1, 'x')").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_canonical_to_have_been_called() {
+        assert!(run_on("expect(fn).toHaveBeenCalled()").is_empty());
+    }
+
+
+    #[test]
+    fn allows_canonical_to_throw() {
+        assert!(run_on("expect(fn).toThrow('boom')").is_empty());
+    }
+
+
+    #[test]
+    fn allows_unrelated_method() {
+        assert!(run_on("arr.map(x => x)").is_empty());
+    }
+}

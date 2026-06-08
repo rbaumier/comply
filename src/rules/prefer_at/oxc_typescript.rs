@@ -73,3 +73,49 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_length_minus_bracket_access() {
+        let d = run_on("const last = arr[arr.length - 1];");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains(".at("));
+    }
+
+
+    #[test]
+    fn flags_char_at() {
+        let d = run_on("const c = str.charAt(0);");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("at("));
+    }
+
+
+    #[test]
+    fn allows_at() {
+        assert!(run_on("const last = arr.at(-1);").is_empty());
+    }
+
+
+    #[test]
+    fn allows_normal_bracket_access() {
+        assert!(run_on("const first = arr[0];").is_empty());
+    }
+
+
+    #[test]
+    fn flags_nested_receiver() {
+        let d = run_on("const x = foo.bar[foo.bar.length - 2];");
+        assert_eq!(d.len(), 1);
+    }
+}

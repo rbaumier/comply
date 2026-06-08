@@ -65,3 +65,39 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diagnostic::Diagnostic;
+    use super::Check;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_plural_without_useplural() {
+        assert_eq!(
+            run("drizzleAdapter(db, { schema: { users: users } })").len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn allows_with_useplural_true() {
+        assert!(
+            run("drizzleAdapter(db, { schema: { users: users }, usePlural: true })").is_empty()
+        );
+    }
+
+
+    #[test]
+    fn allows_singular_user() {
+        assert!(run("drizzleAdapter(db, { schema: { user: user } })").is_empty());
+    }
+}

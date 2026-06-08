@@ -89,3 +89,55 @@ impl OxcCheck for Check {
         diagnostics
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_package_dist_import() {
+        let d = run_on("import foo from 'pkg/dist/foo';");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("dist/"));
+    }
+
+
+    #[test]
+    fn flags_relative_dist_import() {
+        let d = run_on("import bar from './dist/bar';");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_dist_require() {
+        let d = run_on("const x = require('pkg/dist/foo');");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_normal_package_import() {
+        assert!(run_on("import foo from 'pkg';").is_empty());
+    }
+
+
+    #[test]
+    fn allows_relative_non_dist_import() {
+        assert!(run_on("import bar from './src/bar';").is_empty());
+    }
+
+
+    #[test]
+    fn allows_distance_substring() {
+        // `distance` should not be flagged — we only match `/dist/` or `dist/` at start.
+        assert!(run_on("import foo from 'distance-utils';").is_empty());
+    }
+}

@@ -51,3 +51,59 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_zero_quantifier() {
+        assert_eq!(run_on("const re = /a{0}/;").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_zero_zero_quantifier() {
+        assert_eq!(run_on("const re = /a{0,0}/;").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_positive_quantifier() {
+        assert!(run_on("const re = /a{1}/;").is_empty());
+    }
+
+
+    #[test]
+    fn allows_range_quantifier() {
+        assert!(run_on("const re = /a{0,1}/;").is_empty());
+    }
+
+
+    #[test]
+    fn ignores_tailwind_class_with_zero_quantifier_lookalike() {
+        let src = r#"const x = "grid-cols-[repeat(3,_minmax(0,_1fr))]{0}";"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_url_with_zero_quantifier_lookalike() {
+        let src = r#"const u = "https://example.com/path{0}";"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_scoped_import_empty_string_with_quantifier_lookalike() {
+        let src = r#"import x from "@scope/pkg/{0}";"#;
+        assert!(run_on(src).is_empty());
+    }
+}

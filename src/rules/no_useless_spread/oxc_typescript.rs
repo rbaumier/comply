@@ -69,3 +69,64 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_array_spread_in_array() {
+        assert_eq!(run_on("const x = [...[1, 2, 3]];").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_spread_variable_in_array() {
+        assert!(run_on("const x = [...arr];").is_empty());
+    }
+
+
+    #[test]
+    fn flags_object_spread_in_object() {
+        assert_eq!(run_on("const x = {...{a: 1}};").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_spread_variable_in_object() {
+        assert!(run_on("const x = {...obj};").is_empty());
+    }
+
+
+    #[test]
+    fn flags_array_spread_in_call() {
+        assert_eq!(run_on("foo(...[1, 2]);").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_spread_variable_in_call() {
+        assert!(run_on("foo(...args);").is_empty());
+    }
+
+
+    #[test]
+    fn allows_array_spread_in_object() {
+        // This is a type error, not our concern
+        assert!(run_on("const x = {...[1, 2]};").is_empty());
+    }
+
+
+    #[test]
+    fn allows_object_spread_in_array() {
+        // This is a type error, not our concern
+        assert!(run_on("const x = [...{a: 1}];").is_empty());
+    }
+}

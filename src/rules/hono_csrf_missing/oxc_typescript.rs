@@ -60,3 +60,43 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_post_without_csrf() {
+        let src =
+            "import { Hono } from 'hono';\nconst app = new Hono();\napp.post('/api', handler);";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_multiple_mutation_routes() {
+        let src = "import { Hono } from 'hono';\napp.post('/a', h);\napp.put('/b', h);\napp.delete('/c', h);";
+        assert_eq!(run_on(src).len(), 3);
+    }
+
+
+    #[test]
+    fn allows_with_csrf_import() {
+        let src = "import { Hono } from 'hono';\nimport { csrf } from 'hono/csrf';\napp.use(csrf());\napp.post('/api', handler);";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_hono_files() {
+        let src = "app.post('/api', handler);";
+        assert!(run_on(src).is_empty());
+    }
+}

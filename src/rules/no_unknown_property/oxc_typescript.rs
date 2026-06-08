@@ -161,3 +161,124 @@ fn jsx_attr_name(name: &oxc_ast::ast::JSXAttributeName) -> String {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(src, &Check)
+    }
+
+
+    #[test]
+    fn flags_class_attribute() {
+        let d = run_on(r#"const x = <div class="foo" />;"#);
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].rule_id, "no-unknown-property");
+        assert!(d[0].message.contains("className"));
+    }
+
+
+    #[test]
+    fn flags_for_on_label() {
+        let d = run_on(r#"const x = <label for="x" />;"#);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("htmlFor"));
+    }
+
+
+    #[test]
+    fn flags_tabindex() {
+        let d = run_on(r#"const x = <div tabindex="0" />;"#);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("tabIndex"));
+    }
+
+
+    #[test]
+    fn flags_autofocus_boolean_prop() {
+        let d = run_on("const x = <input autofocus />;");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("autoFocus"));
+    }
+
+
+    #[test]
+    fn flags_colspan() {
+        let d = run_on(r#"const x = <td colspan="2" />;"#);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("colSpan"));
+    }
+
+
+    #[test]
+    fn flags_lowercase_event_handler() {
+        let d = run_on("const x = <div onclick={() => {}} />;");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("onClick"));
+    }
+
+
+    #[test]
+    fn flags_lowercase_onchange() {
+        let d = run_on("const x = <input onchange={() => {}} />;");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("onChange"));
+    }
+
+
+    #[test]
+    fn allows_class_name() {
+        assert!(run_on(r#"const x = <div className="foo" />;"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_html_for() {
+        assert!(run_on(r#"const x = <label htmlFor="x" />;"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_data_attribute() {
+        assert!(run_on(r#"const x = <div data-testid="x" />;"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_aria_attribute() {
+        assert!(run_on(r#"const x = <div aria-label="x" />;"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_custom_component_with_unusual_prop() {
+        // PascalCase component — we don't know its prop surface, skip entirely.
+        assert!(
+            run_on(r#"const x = <MyComponent class="foo" for="bar" onclick={f} />;"#).is_empty()
+        );
+    }
+
+
+    #[test]
+    fn allows_camelcase_event_handler() {
+        assert!(run_on("const x = <button onClick={f} />;").is_empty());
+    }
+
+
+    #[test]
+    fn allows_standard_react_props() {
+        let src = r#"const x = <div style={{ color: 'red' }} key="x" ref={r} />;"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn flags_multiple_bad_props_on_same_element() {
+        let d = run_on(r#"const x = <div class="a" tabindex="0" onclick={f} />;"#);
+        assert_eq!(d.len(), 3);
+    }
+}

@@ -59,3 +59,58 @@ impl OxcCheck for Check {
         }]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on_test(source: &str) -> Vec<Diagnostic> {
+        let project = crate::project::ProjectCtx::for_test_with_framework("elysia");
+        crate::rules::test_helpers::run_oxc_ts_with_project(
+            source,
+            &Check,
+            &project)
+    }
+
+
+    #[test]
+    fn allows_schema_with_400() {
+        let src = "import { Elysia, t } from 'elysia';\nconst app = new Elysia();\ntest('create rejects', async () => { const r = await app.handle(new Request('/x', { method: 'POST', body: '{}' })); expect(r.status).toBe(400); });\n// body: t.Object({ a: t.String() })";
+        assert!(run_on_test(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_test_without_schema() {
+        let src = "import { Elysia } from 'elysia';\ntest('hello', () => { expect(r.status).toBe(200); });";
+        assert!(run_on_test(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_static_analysis_sweep_without_elysia_client() {
+        // Regression for #105: filesystem-sweep tests over handler source files
+        // mention `body:` in strings/comments but never make Elysia requests.
+        let src = "describe('no inline z.object in Elysia .body() / .response()', () => {\n  it('every handler wires the canonical schema', async () => {\n    const offenders = await findAllOffenders();\n    expect(offenders).toEqual([]);\n  });\n});";
+        assert!(run_on_test(src).is_empty());
+    }
+
+
+    #[test]
+    fn no_fp_on_app_routes_sweep() {
+        // Regression for #367: tests iterating app.routes to verify schema presence
+        // are static-analysis sweeps, not HTTP request tests.
+        let src = "import { app } from '../app';\nimport { Elysia, t } from 'elysia';\nconst _app = new Elysia();\nit('all routes have validation schemas', () => {\n  const routes = app.routes;\n  for (const route of routes) {\n    expect(route.schema).toBeDefined();\n  }\n});\n// body: t.Object({ a: t.String() })";
+        assert!(run_on_test(src).is_empty());
+    }
+
+
+    #[test]
+    fn no_fp_on_app_stack_sweep() {
+        // Regression for #367: tests iterating app.stack also count as static-analysis sweeps.
+        let src = "import { app } from '../app';\nimport { Elysia, t } from 'elysia';\nconst _app = new Elysia();\nit('all handlers have body validation', () => {\n  const stack = app.stack;\n  for (const entry of stack) {\n    expect(entry.hooks.body).toBeDefined();\n  }\n});\n// body: t.Object({ a: t.String() })";
+        assert!(run_on_test(src).is_empty());
+    }
+}

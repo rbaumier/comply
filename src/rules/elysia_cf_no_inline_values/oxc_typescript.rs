@@ -62,3 +62,35 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_framework(source, &Check, "elysia")
+    }
+
+
+    #[test]
+    fn flags_inline_string_handler() {
+        let src = "import { CloudflareAdapter } from 'elysia/adapter/cloudflare';\napp.get('/', 'Hello');";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_function_handler() {
+        let src = "import { CloudflareAdapter } from 'elysia/adapter/cloudflare';\napp.get('/', () => 'Hello');";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_cf_files() {
+        let src = "app.get('/', 'Hello');";
+        assert!(crate::rules::test_helpers::run_oxc_ts(src, &Check).is_empty());
+    }
+}

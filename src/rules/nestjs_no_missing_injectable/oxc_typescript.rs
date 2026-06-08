@@ -74,3 +74,35 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_service_without_injectable() {
+        let src = "import { Module } from '@nestjs/common';\nexport class UserService {}";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_service_with_injectable() {
+        let src = "import { Injectable } from '@nestjs/common';\n@Injectable() export class UserService {}";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_provider_class() {
+        let src = "import { Module } from '@nestjs/common';\nexport class UserDto {}";
+        assert!(run(src).is_empty());
+    }
+}

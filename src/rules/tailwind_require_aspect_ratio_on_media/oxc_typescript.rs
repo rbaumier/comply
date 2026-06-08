@@ -80,3 +80,47 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(source: &str) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_img_without_aspect_or_dims() {
+        assert_eq!(run(r#"const x = <img src="/a.png" />;"#).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_video_without_aspect_or_dims() {
+        assert_eq!(run(r#"const x = <video src="/a.mp4" />;"#).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_img_with_aspect_class() {
+        assert!(run(r#"const x = <img src="/a.png" className="aspect-video" />;"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_img_with_width_and_height() {
+        assert!(run(r#"const x = <img src="/a.png" width={200} height={100} />;"#).is_empty());
+    }
+
+
+    #[test]
+    fn flags_img_with_only_width() {
+        assert_eq!(
+            run(r#"const x = <img src="/a.png" width={200} />;"#).len(),
+            1
+        );
+    }
+}

@@ -99,3 +99,38 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rules::test_helpers::run_oxc_ts_with_path;
+
+    const PW_IMPORT: &str = "import { test, expect } from \"@playwright/test\";\n";
+
+
+    fn run_oxc_ts(source: &str) -> Vec<Diagnostic> {
+        run_oxc_ts_with_path(&format!("{PW_IMPORT}{source}"), &Check, "login.test.ts")
+    }
+
+
+    #[test]
+    fn flags_if_in_test() {
+        let d = run_oxc_ts("test('cond', () => { if (x) { expect(1).toBe(1); } });");
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].rule_id, "playwright-no-conditional-in-test");
+    }
+
+
+    #[test]
+    fn allows_if_outside_test() {
+        let d = run_oxc_ts("if (process.env.CI) { console.log('ci'); }");
+        assert!(d.is_empty());
+    }
+
+
+    #[test]
+    fn flags_ternary_in_test() {
+        let d = run_oxc_ts("test('tern', () => { const v = x ? 1 : 2; });");
+        assert_eq!(d.len(), 1);
+    }
+}

@@ -154,3 +154,39 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_empty_constructor() {
+        let diags = run_on("class Foo { constructor() {} }");
+        assert_eq!(diags.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_constructor_with_body() {
+        assert!(run_on("class Foo { constructor() { this.init(); } }").is_empty());
+    }
+
+
+    #[test]
+    fn allows_private_constructor() {
+        assert!(run_on("class Foo { private constructor() {} }").is_empty());
+    }
+
+
+    #[test]
+    fn allows_parameter_property() {
+        assert!(run_on("class Foo { constructor(public name: string) {} }").is_empty());
+    }
+}

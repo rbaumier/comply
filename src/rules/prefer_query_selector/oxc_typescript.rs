@@ -49,3 +49,44 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_get_element_by_id() {
+        let d = run_on(r#"document.getElementById("foo");"#);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("querySelector"));
+    }
+
+
+    #[test]
+    fn flags_get_elements_by_class_name() {
+        let d = run_on(r#"document.getElementsByClassName("bar");"#);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("querySelectorAll"));
+    }
+
+
+    #[test]
+    fn flags_get_elements_by_tag_name() {
+        let d = run_on(r#"document.getElementsByTagName("div");"#);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("querySelectorAll"));
+    }
+
+
+    #[test]
+    fn allows_query_selector() {
+        assert!(run_on(r##"document.querySelector("#foo");"##).is_empty());
+    }
+}

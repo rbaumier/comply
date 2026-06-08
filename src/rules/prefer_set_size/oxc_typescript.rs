@@ -55,3 +55,47 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_spread_length() {
+        let d = run_on("const len = [...mySet].length;");
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].rule_id, "prefer-set-size");
+    }
+
+
+    #[test]
+    fn flags_array_from_length() {
+        let d = run_on("const len = Array.from(mySet).length;");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_set_size() {
+        assert!(run_on("const len = mySet.size;").is_empty());
+    }
+
+
+    #[test]
+    fn allows_array_spread_without_length() {
+        assert!(run_on("const arr = [...mySet];").is_empty());
+    }
+
+
+    #[test]
+    fn allows_regular_array_length() {
+        assert!(run_on("const len = myArray.length;").is_empty());
+    }
+}

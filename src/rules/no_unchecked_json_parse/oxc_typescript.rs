@@ -158,4 +158,46 @@ mod tests {
         let diags = run_oxc_ts(src, &Check);
         assert_eq!(diags.len(), 1);
     }
+
+    use super::*;
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_bare_variable_declaration() {
+        assert_eq!(run("const data = JSON.parse(body);").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_return_statement() {
+        assert_eq!(
+            run("function f(s: string) { return JSON.parse(s); }").len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn allows_zod_parse_wrapper() {
+        assert!(run("const data = schema.parse(JSON.parse(body));").is_empty());
+    }
+
+
+    #[test]
+    fn allows_zod_safe_parse_wrapper() {
+        assert!(run("const data = schema.safeParse(JSON.parse(body));").is_empty());
+    }
+
+
+    #[test]
+    fn flags_bare_return_in_handler() {
+        assert_eq!(
+            run("function handler(str: string) { return JSON.parse(str); }").len(),
+            1
+        );
+    }
 }

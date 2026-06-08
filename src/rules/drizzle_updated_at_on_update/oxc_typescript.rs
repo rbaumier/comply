@@ -61,3 +61,35 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_updated_at_without_on_update() {
+        let src = "const t = { updatedAt: timestamp('updated_at').defaultNow() }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_updated_at_with_on_update() {
+        let src = "const t = { updatedAt: timestamp('updated_at').defaultNow().$onUpdate(() => new Date()) }";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_other_keys() {
+        let src = "const t = { createdAt: timestamp('created_at') }";
+        assert!(run(src).is_empty());
+    }
+}

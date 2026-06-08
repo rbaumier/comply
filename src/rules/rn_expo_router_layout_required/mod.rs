@@ -5,8 +5,6 @@
 //! without `_layout.*` almost always indicates a routing bug.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

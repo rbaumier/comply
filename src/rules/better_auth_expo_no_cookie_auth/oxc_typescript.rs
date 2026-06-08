@@ -47,3 +47,61 @@ impl OxcCheck for Check {
         }]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diagnostic::Diagnostic;
+    use super::Check;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_expo_without_expoclient() {
+        let src = r#"
+            import { View } from "react-native";
+            import { createAuthClient } from "better-auth/react";
+            export const authClient = createAuthClient({});
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_with_expoclient() {
+        let src = r#"
+            import { View } from "react-native";
+            import { createAuthClient } from "better-auth/react";
+            import { expoClient } from "@better-auth/expo/client";
+            export const authClient = createAuthClient({ plugins: [expoClient()] });
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn flags_when_expoclient_only_in_comment() {
+        let src = r#"
+            import { View } from "react-native";
+            import { createAuthClient } from "better-auth/react";
+            // TODO: add expoClient plugin
+            export const authClient = createAuthClient({});
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn ignores_web_file() {
+        let src = r#"
+            import { createAuthClient } from "better-auth/react";
+            export const authClient = createAuthClient({});
+        "#;
+        assert!(run(src).is_empty());
+    }
+}

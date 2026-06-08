@@ -49,3 +49,50 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    #[test]
+    fn flags_math_random_key() {
+        let d = crate::rules::test_helpers::run_oxc_tsx(
+            r#"const el = <Item key={Math.random()} />;"#,
+            &Check,
+        );
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].rule_id, "no-uniq-key");
+    }
+
+
+    #[test]
+    fn flags_date_now_key() {
+        let d =
+            crate::rules::test_helpers::run_oxc_tsx(r#"const el = <Item key={Date.now()} />;"#, &Check);
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_uuid_key() {
+        let d = crate::rules::test_helpers::run_oxc_tsx(r#"const el = <Item key={uuid()} />;"#, &Check);
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_stable_key() {
+        let d =
+            crate::rules::test_helpers::run_oxc_tsx(r#"const el = <Item key={item.id} />;"#, &Check);
+        assert!(d.is_empty());
+    }
+
+
+    #[test]
+    fn allows_index_key() {
+        let d = crate::rules::test_helpers::run_oxc_tsx(r#"const el = <Item key={index} />;"#, &Check);
+        assert!(d.is_empty());
+    }
+}

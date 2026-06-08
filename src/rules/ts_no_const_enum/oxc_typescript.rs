@@ -41,3 +41,42 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_const_enum() {
+        let diags = run_on("const enum E { A, B }");
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].rule_id, "ts-no-const-enum");
+    }
+
+
+    #[test]
+    fn allows_regular_enum() {
+        assert!(run_on("enum E { A, B }").is_empty());
+    }
+
+
+    #[test]
+    fn flags_declare_const_enum() {
+        let diags = run_on("declare const enum E { A, B }");
+        assert_eq!(diags.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_exported_const_enum() {
+        let diags = run_on("export const enum E { A, B }");
+        assert_eq!(diags.len(), 1);
+    }
+}

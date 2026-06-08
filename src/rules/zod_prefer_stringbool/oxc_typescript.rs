@@ -72,3 +72,49 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_coerce_boolean_with_useform() {
+        let src = "import { useForm } from 'react-hook-form';\nconst S = z.coerce.boolean();";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_coerce_boolean_with_searchparams() {
+        let src = "const params = new URLSearchParams(); const S = z.coerce.boolean();";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_stringbool() {
+        let src = "import { useForm } from 'react-hook-form';\nconst S = z.stringbool();";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_coerce_number() {
+        let src = "import { useForm } from 'react-hook-form';\nconst S = z.coerce.number();";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_coerce_boolean_outside_form_context() {
+        // No form/HTML-input context → don't flag.
+        assert!(run("const S = z.coerce.boolean();").is_empty());
+    }
+}

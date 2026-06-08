@@ -46,3 +46,36 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_prepare_with_inline_where() {
+        let src = "const q = db.select().from(u).where(eq(u.id, id)).prepare('q')";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_prepare_with_placeholder() {
+        let src =
+            "const q = db.select().from(u).where(eq(u.id, sql.placeholder('id'))).prepare('q')";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_prepare_without_where() {
+        let src = "const q = db.select().from(u).prepare('q')";
+        assert!(run(src).is_empty());
+    }
+}

@@ -89,4 +89,43 @@ mod tests {
     fn allows_block_comment_in_catch() {
         assert!(run("try { f(); } catch { /* ignore */ }").is_empty());
     }
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_empty_catch() {
+        let src = "try { doSomething(); } catch (e) {}";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_catch_with_only_comments() {
+        let src = r#"
+try {
+  doSomething();
+} catch (e) {
+  // intentionally empty
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_catch_with_handler() {
+        let src = "try { doSomething(); } catch (e) { console.error(e); }";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_catch_with_rethrow() {
+        let src = "try { doSomething(); } catch (e) { throw e; }";
+        assert!(run_on(src).is_empty());
+    }
 }

@@ -73,3 +73,43 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_large_inline_snapshot() {
+        let body = "\n".repeat(60);
+        let src = format!("expect(x).toMatchInlineSnapshot(`{body}`)");
+        assert_eq!(run_on(&src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_small_inline_snapshot() {
+        let src = "expect(x).toMatchInlineSnapshot(`hello\nworld`)";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_snapshot_matcher() {
+        let body = "\n".repeat(60);
+        let src = format!("expect(x).toEqual(`{body}`)");
+        assert!(run_on(&src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_empty_args() {
+        assert!(run_on("expect(x).toMatchInlineSnapshot()").is_empty());
+    }
+}

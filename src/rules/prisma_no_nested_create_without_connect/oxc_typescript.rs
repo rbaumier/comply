@@ -102,3 +102,28 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_nested_create_without_connect() {
+        let src = "import { PrismaClient } from '@prisma/client';\nconst prisma = new PrismaClient();\nasync function f() { await prisma.user.create({ data: { name: 'a', posts: { create: { title: 't' } } } }); }";
+        assert!(!run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_nested_create_with_connect() {
+        let src = "import { PrismaClient } from '@prisma/client';\nconst prisma = new PrismaClient();\nasync function f() { await prisma.user.create({ data: { name: 'a', org: { connect: { id: 1 }, create: { name: 'x' } } } }); }";
+        assert!(run(src).is_empty());
+    }
+}

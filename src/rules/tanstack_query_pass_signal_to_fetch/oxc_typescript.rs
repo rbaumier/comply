@@ -197,3 +197,64 @@ fn has_bad_fetch_in_span(
     }
     false
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_fetch_without_signal() {
+        let src = "useQuery({ queryKey: ['x'], queryFn: ({ signal }) => fetch('/api') });";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_fetch_options_without_signal() {
+        let src = "useQuery({ queryKey: ['x'], queryFn: ({ signal }) => fetch('/api', { method: 'GET' }) });";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_fetch_with_signal() {
+        let src =
+            "useQuery({ queryKey: ['x'], queryFn: ({ signal }) => fetch('/api', { signal }) });";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_query_fn_without_signal_destructure() {
+        let src = "useQuery({ queryKey: ['x'], queryFn: () => fetch('/api') });";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn flags_ctx_param_fetch_without_signal() {
+        let src = "useQuery({ queryKey: ['user'], queryFn: (ctx) => fetch('/api/user') });";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_ctx_param_fetch_with_ctx_signal() {
+        let src = "useQuery({ queryKey: ['user'], queryFn: (ctx) => fetch('/api/user', { signal: ctx.signal }) });";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn flags_ctx_param_fetch_options_without_signal() {
+        let src = "useQuery({ queryKey: ['user'], queryFn: (context) => fetch('/api/user', { method: 'GET' }) });";
+        assert_eq!(run(src).len(), 1);
+    }
+}

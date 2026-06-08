@@ -136,3 +136,61 @@ impl OxcCheck for Check {
         diagnostics
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(src, &Check)
+    }
+
+
+    #[test]
+    fn flags_generic_fn_without_template() {
+        let src = "/**\n * identity\n */\nfunction id<T>(x: T): T { return x; }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_generic_fn_with_template() {
+        let src = "/**\n * identity\n * @template T\n */\nfunction id<T>(x: T): T { return x; }";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_non_generic_fn() {
+        let src = "/**\n * add\n */\nfunction add(a: number, b: number): number { return a + b; }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_when_all_params_have_extends_constraint() {
+        let src = r#"/**
+ * Bridge between search params and state.
+ * @example useListSearchSync<UsersSearch>(Route, opts)
+ */
+export function useListSearchSync<TSearch extends ListRouteSearch>(
+  routeApi: ListRouteApi<TSearch>,
+): void {}"#;
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn flags_when_some_params_lack_constraint() {
+        let src = "/**\n * mixed\n */\nfunction mix<T, U extends Foo>(a: T, b: U): void {}";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn no_fp_when_multiple_params_all_constrained() {
+        let src = "/**\n * multi\n */\nfunction multi<T extends Foo, U extends Bar>(): void {}";
+        assert!(run(src).is_empty());
+    }
+}

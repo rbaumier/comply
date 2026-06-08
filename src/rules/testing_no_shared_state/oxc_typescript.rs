@@ -206,3 +206,48 @@ fn root_name_of_expr<'a>(expr: &'a Expression<'a>) -> Option<&'a str> {
         _ => None,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn allows_let_reset_in_before_each() {
+        let src = "let counter = 0;\n\
+                   beforeEach(() => { counter = 0; });\n\
+                   test('a', () => { counter = counter + 1; });";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_const_even_if_read_in_tests() {
+        let src = "const fixture = { x: 1 };\n\
+                   test('a', () => { expect(fixture.x).toBe(1); });";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_let_not_mutated_in_any_test() {
+        let src = "let config = { env: 'test' };\n\
+                   test('a', () => { expect(config.env).toBe('test'); });";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_array_push_reset_in_before_each() {
+        let src = "let items = [];\n\
+                   beforeEach(() => { items = []; });\n\
+                   test('a', () => { items.push(1); });";
+        assert!(run(src).is_empty());
+    }
+}

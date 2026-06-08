@@ -126,3 +126,78 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diagnostic::Diagnostic;
+
+
+
+    fn run(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_transition_width() {
+        let src = r#"<div style={{ transition: 'width 0.3s ease' }} />"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_transition_height() {
+        let src = r#"<div style={{ transition: 'height 200ms linear' }} />"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_transition_property_padding() {
+        let src = r#"<div style={{ transitionProperty: 'padding' }} />"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_transition_margin_top() {
+        let src = r#"<div style={{ transition: 'margin-top 0.2s' }} />"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_transform_transition() {
+        let src = r#"<div style={{ transition: 'transform 0.3s ease' }} />"#;
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_opacity_transition() {
+        let src = r#"<div style={{ transition: 'opacity 0.2s' }} />"#;
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_color_and_background() {
+        let src = r#"<div style={{ transition: 'color 0.2s, background 0.3s' }} />"#;
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_filter_transition() {
+        let src = r#"<div style={{ transitionProperty: 'filter' }} />"#;
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_non_style_object() {
+        let src = r#"const config = { transition: 'width 0.3s ease' };"#;
+        assert!(run(src).is_empty());
+    }
+}

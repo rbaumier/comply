@@ -145,3 +145,78 @@ impl OxcCheck for Check {
         flush_run(&mut run, diagnostics, ctx);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn allows_dependent_await() {
+        let src = r#"
+async function f() {
+  const a = await fetchUser();
+  const b = await fetchPosts(a.id);
+}
+"#;
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_single_await() {
+        assert!(run("async function f() { const a = await fetch('/api'); }").is_empty());
+    }
+
+
+    #[test]
+    fn allows_promise_all_already() {
+        let src = r#"
+async function f() {
+  const [a, b] = await Promise.all([fetchUser(), fetchPosts()]);
+}
+"#;
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_dependent_destructured_object() {
+        let src = r#"
+async function load() {
+  const { id } = await getUser();
+  const posts = await getPosts(id);
+}
+"#;
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_dependent_renamed_destructuring() {
+        let src = r#"
+async function load() {
+  const { id: userId } = await getUser();
+  const posts = await getPosts(userId);
+}
+"#;
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_dependent_array_destructuring() {
+        let src = r#"
+async function load() {
+  const [first] = await getItems();
+  const details = await getDetails(first);
+}
+"#;
+        assert!(run(src).is_empty());
+    }
+}

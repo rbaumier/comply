@@ -67,3 +67,28 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_pipe_without_transform() {
+        let src = "import { PipeTransform } from '@nestjs/common';\nexport class P implements PipeTransform { other() {} }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_pipe_with_transform() {
+        let src = "import { PipeTransform } from '@nestjs/common';\nexport class P implements PipeTransform { transform(v: any) { return v; } }";
+        assert!(run(src).is_empty());
+    }
+}

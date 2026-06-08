@@ -108,3 +108,41 @@ fn is_utf8_encoding_arg(expr: &Expression, _source: &str) -> bool {
         _ => false,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_oxc_ts(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_readfilesync_utf8() {
+        let d = run_oxc_ts(r#"const data = JSON.parse(fs.readFileSync('config.json', 'utf-8'));"#);
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].rule_id, "prefer-json-parse-buffer");
+    }
+
+
+    #[test]
+    fn flags_readfilesync_utf8_no_dash() {
+        let d = run_oxc_ts(r#"const data = JSON.parse(fs.readFileSync('config.json', 'utf8'));"#);
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_readfilesync_without_encoding() {
+        assert!(run_oxc_ts(r#"JSON.parse(fs.readFileSync('config.json'))"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_non_utf8_encoding() {
+        assert!(run_oxc_ts(r#"JSON.parse(fs.readFileSync('file', 'ascii'))"#).is_empty());
+    }
+}

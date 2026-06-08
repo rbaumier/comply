@@ -67,3 +67,43 @@ impl OxcCheck for Check {
         diagnostics
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(src, &Check)
+    }
+
+
+    #[test]
+    fn flags_property_without_name() {
+        let src = "/**\n * @property {string}\n */\ntype T = {};";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_property_with_only_description() {
+        let src = "/**\n * @property - some description\n */\ntype T = {};";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_property_with_name() {
+        let src = "/**\n * @property {string} name\n */\ntype T = { name: string };";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_property_with_name_and_description() {
+        let src =
+            "/**\n * @property {string} name - the user's name\n */\ntype T = { name: string };";
+        assert!(run(src).is_empty());
+    }
+}

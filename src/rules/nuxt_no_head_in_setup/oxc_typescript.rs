@@ -87,3 +87,42 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_head_property_in_define_component() {
+        let src = "import {} from '#imports';\nexport default defineComponent({ head: { title: 'X' }, setup() { return {}; } });";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_head_method_in_define_component() {
+        let src = "import {} from '#imports';\nexport default defineComponent({ head() { return { title: 'X' }; }, setup() { return {}; } });";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_use_head_call() {
+        let src = "import {} from '#imports';\nexport default defineComponent({ setup() { useHead({ title: 'X' }); return {}; } });";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_nuxt_files() {
+        let src = "export default { head: { title: 'X' } };";
+        assert!(run_on(src).is_empty());
+    }
+}

@@ -1,8 +1,6 @@
 //! ts-no-wrapper-object-types — flag `String`, `Number`, `Boolean`, etc. in type positions.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

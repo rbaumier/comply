@@ -88,4 +88,31 @@ mod tests {
         "#;
         assert!(run(src).is_empty());
     }
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_framework(source, &Check, "elysia")
+    }
+
+
+    #[test]
+    fn flags_listen_without_shutdown() {
+        let src = "import { Elysia } from 'elysia';\nnew Elysia().listen(3000);";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_listen_with_sigterm_handler() {
+        let src = "import { Elysia } from 'elysia';\nconst app = new Elysia().listen(3000);\nprocess.on('SIGTERM', () => app.stop());";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_elysia_files() {
+        let src = "app.listen(3000);";
+        assert!(crate::rules::test_helpers::run_oxc_ts(src, &Check).is_empty());
+    }
 }

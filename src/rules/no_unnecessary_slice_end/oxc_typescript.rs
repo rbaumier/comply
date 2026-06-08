@@ -115,4 +115,34 @@ mod tests {
     fn allows_single_arg_slice() {
         assert!(run("const x = arr.slice(2);").is_empty());
     }
+
+
+
+    #[test]
+    fn flags_slice_with_length() {
+        let d = crate::rules::test_helpers::run_oxc_ts("arr.slice(2, arr.length);", &Check);
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].rule_id, "no-unnecessary-slice-end");
+    }
+
+
+    #[test]
+    fn flags_slice_with_infinity() {
+        let d = crate::rules::test_helpers::run_oxc_ts("str.slice(0, Infinity);", &Check);
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_slice_without_end() {
+        let d = crate::rules::test_helpers::run_oxc_ts("arr.slice(2);", &Check);
+        assert!(d.is_empty());
+    }
+
+
+    #[test]
+    fn allows_slice_with_numeric_end() {
+        let d = crate::rules::test_helpers::run_oxc_ts("arr.slice(2, 5);", &Check);
+        assert!(d.is_empty());
+    }
 }

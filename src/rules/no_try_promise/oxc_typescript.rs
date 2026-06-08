@@ -69,3 +69,59 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    #[test]
+    fn flags_fetch_without_await_in_try() {
+        let d = crate::rules::test_helpers::run_oxc_ts(
+            r#"
+try {
+    const res = fetch("/api");
+} catch (e) {}
+"#,
+            &Check,
+        );
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].rule_id, "no-try-promise");
+    }
+
+
+    #[test]
+    fn flags_then_without_await_in_try() {
+        let d = crate::rules::test_helpers::run_oxc_ts(
+            r#"
+try {
+    getData().then(r => r.json());
+} catch (e) {}
+"#,
+            &Check,
+        );
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_awaited_fetch_in_try() {
+        let d = crate::rules::test_helpers::run_oxc_ts(
+            r#"
+try {
+    const res = await fetch("/api");
+} catch (e) {}
+"#,
+            &Check,
+        );
+        assert!(d.is_empty());
+    }
+
+
+    #[test]
+    fn ignores_fetch_outside_try() {
+        let d = crate::rules::test_helpers::run_oxc_ts(r#"const res = fetch("/api");"#, &Check);
+        assert!(d.is_empty());
+    }
+}

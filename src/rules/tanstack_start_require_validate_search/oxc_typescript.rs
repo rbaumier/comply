@@ -114,4 +114,16 @@ mod tests {
             1,
         );
     }
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn ignores_no_use_search() {
+        assert!(run("const route = createFileRoute('/posts')({})").is_empty());
+    }
 }

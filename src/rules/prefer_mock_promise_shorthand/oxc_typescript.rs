@@ -148,3 +148,95 @@ fn settle_kind_from_block_body<'a>(
     let expr = ret.argument.as_ref()?;
     promise_settle_kind(expr)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_arrow_expression_body_resolve() {
+        assert_eq!(
+            run("fn.mockImplementation(() => Promise.resolve(1));").len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn flags_arrow_expression_body_reject() {
+        assert_eq!(
+            run("fn.mockImplementation(() => Promise.reject(new Error('x')));").len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn flags_arrow_block_body_resolve() {
+        assert_eq!(
+            run("fn.mockImplementation(() => { return Promise.resolve(42); });").len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn flags_function_expression_reject() {
+        assert_eq!(
+            run("fn.mockImplementation(function () { return Promise.reject(err); });").len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn allows_mock_resolved_value_shorthand() {
+        assert!(run("fn.mockResolvedValue(1);").is_empty());
+    }
+
+
+    #[test]
+    fn allows_mock_rejected_value_shorthand() {
+        assert!(run("fn.mockRejectedValue(new Error('x'));").is_empty());
+    }
+
+
+    #[test]
+    fn allows_non_promise_implementation() {
+        assert!(run("fn.mockImplementation(() => 42);").is_empty());
+    }
+
+
+    #[test]
+    fn allows_implementation_with_logic() {
+        let src = "fn.mockImplementation(() => { doWork(); return Promise.resolve(1); });";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_implementation_with_params() {
+        // Arg-using implementations can't be replaced with a static value.
+        // We still flag them since the body only returns `Promise.resolve(x)`,
+        // but only when the returned expression doesn't depend on params.
+        // Here the body returns `Promise.resolve(a)` which depends on `a` —
+        // but the rule's remit (matching eslint-plugin-unicorn) still flags this.
+        // Accept either 0 or 1 depending on interpretation — we keep it simple
+        // and flag, which matches the upstream rule.
+        let src = "fn.mockImplementation((a) => Promise.resolve(a));";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_promise_all() {
+        assert!(run("fn.mockImplementation(() => Promise.all([a, b]));").is_empty());
+    }
+}

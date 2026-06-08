@@ -83,3 +83,57 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_bitwise_and_in_if() {
+        assert_eq!(run_on("if (x & y) {}").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_bitwise_or_in_if() {
+        assert_eq!(run_on("if (x | y) {}").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_bitwise_xor_in_while() {
+        assert_eq!(run_on("while (a ^ b) {}").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_logical_and() {
+        assert!(run_on("if (x && y) {}").is_empty());
+    }
+
+
+    #[test]
+    fn allows_logical_or() {
+        assert!(run_on("if (x || y) {}").is_empty());
+    }
+
+
+    #[test]
+    fn allows_bitwise_outside_condition() {
+        assert!(run_on("const mask = a & b;").is_empty());
+    }
+
+
+    #[test]
+    fn allows_bitmask_test() {
+        assert!(run_on("if ((state & FLAG) === 0) {}").is_empty());
+        assert!(run_on("while ((mask & bits) !== 0) {}").is_empty());
+    }
+}

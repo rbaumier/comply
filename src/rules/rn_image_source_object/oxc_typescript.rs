@@ -58,3 +58,27 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(s, &Check)
+    }
+
+
+    #[test]
+    fn allows_uri_object() {
+        let src = "const x = <Image source={{ uri: 'https://a.b/c.png' }} />;";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_require() {
+        let src = "const x = <Image source={require('./img.png')} />;";
+        assert!(run(src).is_empty());
+    }
+}

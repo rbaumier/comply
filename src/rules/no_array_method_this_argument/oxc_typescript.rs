@@ -68,3 +68,51 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_filter_with_this_arg() {
+        assert_eq!(run_on("arr.filter(fn, context);").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_map_with_this_arg() {
+        assert_eq!(run_on("arr.map(fn, thisObj);").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_every_with_this_arg() {
+        assert_eq!(run_on("arr.every(fn, ctx);").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_filter_without_this_arg() {
+        assert!(run_on("arr.filter(x => x > 0);").is_empty());
+    }
+
+
+    #[test]
+    fn allows_reduce_with_initial_value() {
+        // reduce's 2nd arg is initial value, not thisArg
+        assert!(run_on("arr.reduce((acc, x) => acc + x, 0);").is_empty());
+    }
+
+
+    #[test]
+    fn allows_non_array_method() {
+        assert!(run_on("foo.bar(fn, context);").is_empty());
+    }
+}

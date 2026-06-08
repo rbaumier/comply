@@ -152,3 +152,51 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_callback_without_state() {
+        let src = "app.get('/auth/callback', (req, res) => { exchange(req.query.code); });";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_callback_validating_state() {
+        let src =
+            "app.get('/auth/callback', (req, res) => { if (req.query.state !== saved) throw 0; });";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_callback_paths() {
+        assert!(run("app.get('/widgets', listWidgets);").is_empty());
+    }
+
+
+    #[test]
+    fn flags_callback_with_only_state_in_comment() {
+        // Bare textual occurrence of `state` (here in a comment) must not
+        // count as CSRF validation — only an actual comparison/use does.
+        let src = "app.get('/auth/callback', (req, res) => { /* TODO: validate state */ exchange(req.query.code); });";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_callback_passing_state_to_verify() {
+        let src = "app.get('/auth/callback', (req, res) => { verifyState(req.query.state); });";
+        assert!(run(src).is_empty());
+    }
+}

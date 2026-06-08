@@ -70,3 +70,42 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_new_in_class() {
+        let diags = run_on("class Foo { new(): Foo {} }");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("constructor"));
+    }
+
+
+    #[test]
+    fn flags_constructor_in_interface() {
+        let diags = run_on("interface Foo { constructor(): Foo; }");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("new()"));
+    }
+
+
+    #[test]
+    fn allows_constructor_in_class() {
+        assert!(run_on("class Foo { constructor() {} }").is_empty());
+    }
+
+
+    #[test]
+    fn allows_new_in_interface() {
+        assert!(run_on("interface Foo { new(): Foo; }").is_empty());
+    }
+}

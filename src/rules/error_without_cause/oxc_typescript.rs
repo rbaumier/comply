@@ -86,3 +86,36 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_wrap_without_cause() {
+        let diags = run_on("try { f(); } catch (e) { throw new Error(e.message); }");
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].rule_id, "error-without-cause");
+    }
+
+
+    #[test]
+    fn allows_wrap_with_cause() {
+        let diags = run_on("try { f(); } catch (e) { throw new Error(e.message, { cause: e }); }");
+        assert!(diags.is_empty());
+    }
+
+
+    #[test]
+    fn allows_fresh_error_with_literal() {
+        let diags = run_on("throw new Error('boom');");
+        assert!(diags.is_empty());
+    }
+}

@@ -130,3 +130,73 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rules::backend::AstCheck;
+    use crate::rules::backend::CheckCtx;
+    use std::path::Path;
+
+
+
+    fn run(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_bare_fs_import() {
+        let d = run(r#"import fs from "fs";"#);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("node:fs"));
+    }
+
+
+    #[test]
+    fn flags_bare_path_require() {
+        let d = run(r#"const path = require("path");"#);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("node:path"));
+    }
+
+
+    #[test]
+    fn allows_node_prefix() {
+        assert!(run(r#"import fs from "node:fs";"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_user_package() {
+        assert!(run(r#"import lodash from "lodash";"#).is_empty());
+    }
+
+
+    #[test]
+    fn flags_sub_path() {
+        let d = run(r#"import { readFile } from "fs/promises";"#);
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_node_sub_path() {
+        assert!(run(r#"import { readFile } from "node:fs/promises";"#).is_empty());
+    }
+
+
+    #[test]
+    fn flags_export_from() {
+        let d = run(r#"export { createServer } from "http";"#);
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn skips_comments() {
+        // `// import fs from "fs";` is a comment node — its children are
+        // not parsed as `import_statement`, so the rule never fires.
+        assert!(run(r#"// import fs from "fs";"#).is_empty());
+    }
+}

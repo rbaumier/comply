@@ -86,3 +86,53 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_span_badge() {
+        assert_eq!(
+            run(r#"const x = <span className="rounded-full bg-blue-100 px-2 py-0.5">new</span>;"#)
+                .len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn flags_span_badge_semantic_bg() {
+        assert_eq!(
+            run(r#"const x = <span className="rounded-full bg-primary text-xs">new</span>;"#).len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn allows_badge_component() {
+        assert!(run(r#"const x = <Badge variant="secondary">new</Badge>;"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_span_without_bg() {
+        assert!(
+            run(r#"const x = <span className="rounded-full border px-2">new</span>;"#).is_empty()
+        );
+    }
+
+
+    #[test]
+    fn allows_span_without_rounded_full() {
+        assert!(run(r#"const x = <span className="bg-primary px-2">new</span>;"#).is_empty());
+    }
+}

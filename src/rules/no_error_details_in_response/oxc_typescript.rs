@@ -84,3 +84,38 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_err_message_in_res_json() {
+        assert_eq!(run_on("res.json({ error: err.message })").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_err_stack_in_response_json() {
+        assert_eq!(run_on("Response.json({ stack: error.stack })").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_generic_error_message() {
+        assert!(run_on("res.json({ error: 'Internal Server Error' })").is_empty());
+    }
+
+
+    #[test]
+    fn allows_err_message_in_log() {
+        assert!(run_on("console.error(err.message)").is_empty());
+    }
+}

@@ -73,3 +73,26 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(src, &Check)
+    }
+
+
+    #[test]
+    fn flags_concat() {
+        assert_eq!(run("const msg = t('hello') + ' ' + name").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_interpolation() {
+        assert!(run("const msg = t('greeting', { name })").is_empty());
+    }
+}

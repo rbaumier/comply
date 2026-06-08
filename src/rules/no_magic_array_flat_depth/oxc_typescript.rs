@@ -57,3 +57,62 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_magic_number_depth() {
+        assert_eq!(run_on("arr.flat(3);").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_magic_number_depth_two() {
+        assert_eq!(run_on("arr.flat(2);").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_magic_number_depth_large() {
+        assert_eq!(run_on("const result = items.flat(10);").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_flat_without_args() {
+        assert!(run_on("arr.flat();").is_empty());
+    }
+
+
+    #[test]
+    fn allows_flat_depth_one() {
+        assert!(run_on("arr.flat(1);").is_empty());
+    }
+
+
+    #[test]
+    fn allows_flat_infinity() {
+        assert!(run_on("arr.flat(Infinity);").is_empty());
+    }
+
+
+    #[test]
+    fn allows_flat_variable() {
+        assert!(run_on("arr.flat(depth);").is_empty());
+    }
+
+
+    #[test]
+    fn ignores_comments() {
+        assert!(run_on("// arr.flat(3);").is_empty());
+    }
+}

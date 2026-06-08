@@ -1,8 +1,6 @@
 //! throw-error-values — flag `throw 'string'` / `throw {}` / `throw 42`.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

@@ -89,3 +89,41 @@ fn walk_type(ty: &TSType, ctx: &CheckCtx, diagnostics: &mut Vec<Diagnostic>) {
         _ => {}
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_infer_select_model() {
+        assert_eq!(run("type User = InferSelectModel<typeof users>").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_infer_insert_model() {
+        assert_eq!(
+            run("type NewUser = InferInsertModel<typeof users>").len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn allows_infer_select_property() {
+        assert!(run("type User = typeof users.$inferSelect").is_empty());
+    }
+
+
+    #[test]
+    fn allows_unrelated_generic() {
+        assert!(run("type X = Array<string>").is_empty());
+    }
+}

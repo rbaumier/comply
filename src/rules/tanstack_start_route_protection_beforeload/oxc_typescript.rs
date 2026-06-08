@@ -105,3 +105,77 @@ fn contains_auth_redirect_text(body: &str) -> bool {
 
     has_redirect_call || has_location_assign
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_effect_navigate_string() {
+        let src = "useEffect(() => { if (!user) navigate('/login'); }, [user]);";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_effect_navigate_object() {
+        let src = "useEffect(() => { navigate({ to: '/login' }); }, []);";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_effect_without_login_redirect() {
+        let src = "useEffect(() => { doThing(); }, []);";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_navigate_to_other_route() {
+        let src = "useEffect(() => { navigate('/dashboard'); }, []);";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn flags_router_push_to_signin() {
+        let src = "useEffect(() => { router.push('/signin'); }, []);";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_router_replace_to_auth() {
+        let src = "useEffect(() => { router.replace('/auth/callback'); }, []);";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_redirect_to_signin_dash() {
+        let src = "useEffect(() => { redirect('/sign-in'); }, []);";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_window_location_assignment() {
+        let src = "useEffect(() => { window.location.href = '/login'; }, []);";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_window_location_assign_call() {
+        let src = "useEffect(() => { window.location.assign('/login'); }, []);";
+        assert_eq!(run(src).len(), 1);
+    }
+}

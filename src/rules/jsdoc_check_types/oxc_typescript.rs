@@ -119,3 +119,53 @@ impl OxcCheck for Check {
         diagnostics
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(src, &Check)
+    }
+
+
+    #[test]
+    fn flags_uppercase_string() {
+        let src = "/**\n * @param {String} x\n */\n";
+        let diags = run(src);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("string"));
+    }
+
+
+    #[test]
+    fn allows_lowercase_string() {
+        let src = "/**\n * @param {string} x\n */\n";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_capitalised_in_description() {
+        let src = "/**\n * @param {string} x - a String value\n */\n";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn flags_number_and_boolean() {
+        let src = "/**\n * @param {Number} n\n * @param {Boolean} b\n */\n";
+        assert_eq!(run(src).len(), 2);
+    }
+
+
+    #[test]
+    fn handles_union_types() {
+        let src = "/**\n * @param {string | Number} x\n */\n";
+        let diags = run(src);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("Number"));
+    }
+}

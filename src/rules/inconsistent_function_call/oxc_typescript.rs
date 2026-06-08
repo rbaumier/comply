@@ -224,3 +224,150 @@ fn collect_from_declaration(
             });
         }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::files::{Language, SourceFile};
+    use crate::project::ProjectCtx;
+    use std::fs;
+    use std::path::PathBuf;
+    use tempfile::TempDir;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+    fn build_project(files: &[(&str, &str)]) -> (TempDir, ProjectCtx, Vec<PathBuf>) {
+        let dir = TempDir::new().unwrap();
+        let mut sources = Vec::new();
+        let mut paths = Vec::new();
+        for (rel, content) in files {
+            let p = dir.path().join(rel);
+            if let Some(parent) = p.parent() {
+                fs::create_dir_all(parent).unwrap();
+            }
+            fs::write(&p, content).unwrap();
+            let lang = Language::from_path(&p).unwrap();
+            sources.push(SourceFile {
+                path: p.clone(),
+                language: lang,
+            });
+            paths.push(fs::canonicalize(&p).unwrap());
+        }
+        let refs: Vec<&SourceFile> = sources.iter().collect();
+        let project = ProjectCtx::for_test_with_files(&refs);
+        (dir, project, paths)
+    }
+
+
+    fn run_on_file(project: &ProjectCtx, path: &std::path::Path) -> Vec<Diagnostic> {
+        let source = fs::read_to_string(path).unwrap();
+        crate::rules::test_helpers::run_oxc_ts_with_project(&source, &Check, project)
+    }
+
+
+    #[test]
+    fn flags_mixed_new_and_plain_call() {
+        let src = r#"
+function Widget() { this.id = 1; }
+const a = new Widget();
+const b = Widget();
+"#;
+        let d = run_on(src);
+        assert_eq!(d.len(), 2);
+        assert!(d.iter().all(|x| x.message.contains("Widget")));
+    }
+
+
+    #[test]
+    fn allows_only_new_calls() {
+        let src = r#"
+function Widget() { this.id = 1; }
+const a = new Widget();
+const b = new Widget();
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_only_plain_calls() {
+        let src = r#"
+function helper(x) { return x + 1; }
+const a = helper(1);
+const b = helper(2);
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_classes() {
+        // Classes are always called with `new`; even if someone tries
+        // `MyClass()` the grammar treats the class body separately.
+        let src = r#"
+class MyClass { constructor() {} }
+const a = new MyClass();
+const b = new MyClass();
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_arrow_functions() {
+        let src = r#"
+const toId = (x) => x.id;
+const a = toId({ id: 1 });
+const b = toId({ id: 2 });
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn handles_multiple_functions_independently() {
+        let src = r#"
+function Widget() { this.id = 1; }
+function helper(x) { return x; }
+const a = new Widget();
+const b = new Widget();
+const c = helper(1);
+const d = helper(2);
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn flags_only_the_mixed_one() {
+        let src = r#"
+function Widget() { this.id = 1; }
+function helper(x) { return x; }
+const a = new Widget();
+const b = Widget();
+const c = helper(1);
+"#;
+        let d = run_on(src);
+        assert_eq!(d.len(), 2);
+        assert!(d.iter().all(|x| x.message.contains("Widget")));
+    }
+
+
+    #[test]
+    fn flags_three_way_imbalance() {
+        // Two `new`, one plain — all three sites are inconsistent, so we
+        // expect three diagnostics.
+        let src = r#"
+function Widget() { this.id = 1; }
+const a = new Widget();
+const b = new Widget();
+const c = Widget();
+"#;
+        let d = run_on(src);
+        assert_eq!(d.len(), 3);
+    }
+}

@@ -66,3 +66,46 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diagnostic::Diagnostic;
+    use super::Check;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_linking_without_trusted() {
+        assert_eq!(
+            run("betterAuth({ accountLinking: { enabled: true } })").len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn allows_linking_with_trusted_providers() {
+        assert!(
+            run("betterAuth({ accountLinking: { enabled: true, trustedProviders: ['google'] } })")
+                .is_empty()
+        );
+    }
+
+
+    #[test]
+    fn allows_linking_disabled() {
+        assert!(run("betterAuth({ accountLinking: { enabled: false } })").is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_auth_files() {
+        assert!(run("const x = 42").is_empty());
+    }
+}

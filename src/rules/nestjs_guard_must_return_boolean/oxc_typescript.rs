@@ -63,3 +63,35 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_void_return() {
+        let src = "import { CanActivate } from '@nestjs/common';\nclass G implements CanActivate { canActivate(): void {} }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_boolean_return() {
+        let src = "import { CanActivate } from '@nestjs/common';\nclass G implements CanActivate { canActivate(): boolean { return true; } }";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_promise_boolean_return() {
+        let src = "import { CanActivate } from '@nestjs/common';\nclass G implements CanActivate { async canActivate(): Promise<boolean> { return true; } }";
+        assert!(run(src).is_empty());
+    }
+}

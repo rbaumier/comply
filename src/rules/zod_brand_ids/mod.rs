@@ -1,8 +1,6 @@
 //! zod-brand-ids — nudge ID-like string fields toward `z.string().brand<"...">()`.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

@@ -113,3 +113,48 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_map_without_return() {
+        let src = r#"const x = arr.map((item) => {
+  console.log(item);
+});"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_filter_without_return() {
+        let src = r#"const x = arr.filter((item) => {
+  item > 0;
+});"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_map_with_return() {
+        let src = r#"const x = arr.map((item) => {
+  return item * 2;
+});"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_concise_arrow() {
+        let src = "const x = arr.map((item) => item * 2);";
+        assert!(run_on(src).is_empty());
+    }
+}

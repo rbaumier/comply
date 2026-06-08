@@ -76,3 +76,34 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_passthrough() {
+        let src = "class A { foo(a, b) { return this.bar(a, b); } }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_reordered_args() {
+        let src = "class A { foo(a, b) { return this.bar(b, a); } }";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_added_logic() {
+        let src = "class A { foo(a, b) { const x = a + 1; return this.bar(x, b); } }";
+        assert!(run(src).is_empty());
+    }
+}

@@ -8,8 +8,6 @@
 //! reported once, with the metric that blew the budget.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

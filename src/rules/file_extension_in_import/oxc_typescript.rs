@@ -171,3 +171,246 @@ fn check_specifier(
         span: None,
     });
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Config;
+    use crate::files::{Language, SourceFile};
+    use crate::project::ProjectCtx;
+    use crate::rules::test_helpers::{run_oxc_ts, run_oxc_ts_with_project};
+    use std::fs;
+    use tempfile::TempDir;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        run_oxc_ts(source, &Check)
+    }
+
+
+    fn run_with_project(
+        pkg_json: Option<&str>,
+        tsconfig_json: Option<&str>,
+        source: &str,
+    ) -> Vec<Diagnostic> {
+        let dir = TempDir::new().unwrap();
+        if let Some(pj) = pkg_json {
+            fs::write(dir.path().join("package.json"), pj).unwrap();
+        }
+        if let Some(tc) = tsconfig_json {
+            fs::write(dir.path().join("tsconfig.json"), tc).unwrap();
+        }
+        let file_path = dir.path().join("src/server.ts");
+        fs::create_dir_all(file_path.parent().unwrap()).unwrap();
+        fs::write(&file_path, source).unwrap();
+        let lang = Language::from_path(&file_path).unwrap();
+        let source_file = SourceFile {
+            path: file_path.clone(),
+            language: lang,
+        };
+        let refs = vec![&source_file];
+        let config = Config::default();
+        let project = ProjectCtx::load(&refs, &config);
+        let canon = fs::canonicalize(&file_path).unwrap();
+        run_oxc_ts_with_project(source, &Check, &project)
+    }
+
+
+    fn run_with_config_file(config_file: &str, source: &str) -> Vec<Diagnostic> {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join(config_file), "").unwrap();
+        let file_path = dir.path().join("src/server.ts");
+        fs::create_dir_all(file_path.parent().unwrap()).unwrap();
+        fs::write(&file_path, source).unwrap();
+        let lang = Language::from_path(&file_path).unwrap();
+        let source_file = SourceFile {
+            path: file_path.clone(),
+            language: lang,
+        };
+        let refs = vec![&source_file];
+        let config = Config::default();
+        let project = ProjectCtx::load(&refs, &config);
+        let canon = fs::canonicalize(&file_path).unwrap();
+        run_oxc_ts_with_project(source, &Check, &project)
+    }
+
+
+    fn run_with_extends_tsconfig(
+        base_tsconfig: &str,
+        child_tsconfig_extends: &str,
+        source: &str,
+    ) -> Vec<Diagnostic> {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("tsconfig.base.json"), base_tsconfig).unwrap();
+        let src = dir.path().join("src");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(src.join("tsconfig.json"), child_tsconfig_extends).unwrap();
+        let file_path = src.join("server.ts");
+        fs::write(&file_path, source).unwrap();
+        let lang = Language::from_path(&file_path).unwrap();
+        let source_file = SourceFile {
+            path: file_path.clone(),
+            language: lang,
+        };
+        let refs = vec![&source_file];
+        let config = Config::default();
+        let project = ProjectCtx::load(&refs, &config);
+        let canon = fs::canonicalize(&file_path).unwrap();
+        run_oxc_ts_with_project(source, &Check, &project)
+    }
+
+
+    #[test]
+    fn flags_relative_import_without_extension() {
+        let pkg = r#"{"type":"module"}"#;
+        let d = run_with_project(Some(pkg), None, "import { foo } from './utils';");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_relative_import_with_extension() {
+        assert!(run_on("import { foo } from './utils.js';").is_empty());
+    }
+
+
+    #[test]
+    fn allows_ts_extension() {
+        assert!(run_on("import { foo } from './utils.ts';").is_empty());
+    }
+
+
+    #[test]
+    fn skips_bare_specifier() {
+        assert!(run_on("import React from 'react';").is_empty());
+    }
+
+
+    #[test]
+    fn flags_parent_relative_without_extension() {
+        let pkg = r#"{"type":"module"}"#;
+        let d = run_with_project(Some(pkg), None, "import { bar } from '../helpers/bar';");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_json_extension() {
+        assert!(run_on("import data from './config.json';").is_empty());
+    }
+
+
+    #[test]
+    fn flags_reexport_without_extension() {
+        let pkg = r#"{"type":"module"}"#;
+        let d = run_with_project(Some(pkg), None, "export { foo } from './utils';");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn skips_node_protocol() {
+        assert!(run_on("import fs from 'node:fs';").is_empty());
+    }
+
+
+    #[test]
+    fn skips_scoped_bare_specifier() {
+        assert!(run_on("import x from '@scope/pkg';").is_empty());
+    }
+
+
+    #[test]
+    fn skips_directory_import_trailing_slash() {
+        assert!(run_on("import x from './components/';").is_empty());
+    }
+
+
+    #[test]
+    fn skips_directory_import_index() {
+        assert!(run_on("import x from './components/index';").is_empty());
+    }
+
+
+    #[test]
+    fn allows_tsx_extension() {
+        assert!(run_on("import Btn from './Button.tsx';").is_empty());
+    }
+
+
+    #[test]
+    fn skips_dynamic_import() {
+        // Dynamic imports are call_expression nodes, not import_statement.
+        assert!(run_on("const m = import('./utils');").is_empty());
+    }
+
+
+    #[test]
+    fn flags_when_node_esm_without_bundler() {
+        let pkg = r#"{"type":"module","dependencies":{}}"#;
+        let d = run_with_project(Some(pkg), None, "import { foo } from './utils';");
+        assert_eq!(
+            d.len(),
+            1,
+            "Node ESM without a bundler still needs explicit extensions"
+        );
+    }
+
+
+    #[test]
+    fn flags_when_module_resolution_node16() {
+        let tsc = r#"{"compilerOptions":{"moduleResolution":"node16"}}"#;
+        let d = run_with_project(None, Some(tsc), "import { foo } from './utils';");
+        assert_eq!(
+            d.len(),
+            1,
+            "moduleResolution:node16 requires explicit extensions"
+        );
+    }
+
+
+    #[test]
+    fn flags_when_module_resolution_nodenext() {
+        let tsc = r#"{"compilerOptions":{"moduleResolution":"nodenext"}}"#;
+        let d = run_with_project(None, Some(tsc), "import { foo } from './utils';");
+        assert_eq!(
+            d.len(),
+            1,
+            "moduleResolution:nodenext requires explicit extensions"
+        );
+    }
+
+
+    #[test]
+    fn flags_when_module_node16() {
+        let tsc = r#"{"compilerOptions":{"module":"node16"}}"#;
+        let d = run_with_project(None, Some(tsc), "import { foo } from './utils';");
+        assert_eq!(d.len(), 1, "module:node16 requires explicit extensions");
+    }
+
+
+    #[test]
+    fn flags_when_module_nodenext() {
+        let tsc = r#"{"compilerOptions":{"module":"nodenext"}}"#;
+        let d = run_with_project(None, Some(tsc), "import { foo } from './utils';");
+        assert_eq!(d.len(), 1, "module:nodenext requires explicit extensions");
+    }
+
+
+    #[test]
+    fn flags_when_module_resolution_node16_in_extended_tsconfig() {
+        let base = r#"{"compilerOptions":{"moduleResolution":"node16"}}"#;
+        let child = r#"{"extends":"../tsconfig.base.json"}"#;
+        let d = run_with_extends_tsconfig(
+            base,
+            child,
+            "import { foo } from './utils';",
+        );
+        assert_eq!(
+            d.len(),
+            1,
+            "moduleResolution:node16 inherited via extends → must flag"
+        );
+    }
+}

@@ -66,3 +66,42 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_framework(source, &Check, "elysia")
+    }
+
+
+    #[test]
+    fn flags_bare_cors() {
+        let src = "import { cors } from '@elysiajs/cors';\napp.use(cors());";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_wildcard_origin() {
+        let src = "import { cors } from '@elysiajs/cors';\napp.use(cors({ origin: '*' }));";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_specific_origin() {
+        let src = "import { cors } from '@elysiajs/cors';\napp.use(cors({ origin: 'https://example.com' }));";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_elysia_files() {
+        let src = "app.use(cors());";
+        assert!(crate::rules::test_helpers::run_oxc_ts(src, &Check).is_empty());
+    }
+}

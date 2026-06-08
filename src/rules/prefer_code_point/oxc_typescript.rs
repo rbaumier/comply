@@ -71,3 +71,42 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_char_code_at() {
+        let d = run_on("const c = str.charCodeAt(0);");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("codePointAt"));
+    }
+
+
+    #[test]
+    fn flags_from_char_code() {
+        let d = run_on("const s = String.fromCharCode(65);");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("fromCodePoint"));
+    }
+
+
+    #[test]
+    fn allows_code_point_at() {
+        assert!(run_on("const c = str.codePointAt(0);").is_empty());
+    }
+
+
+    #[test]
+    fn allows_from_code_point() {
+        assert!(run_on("const s = String.fromCodePoint(65);").is_empty());
+    }
+}

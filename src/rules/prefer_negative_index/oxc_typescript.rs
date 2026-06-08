@@ -70,3 +70,53 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_slice_length_minus() {
+        let d = run_on("const x = str.slice(str.length - 3);");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_splice_length_minus() {
+        let d = run_on("arr.splice(arr.length - 1, 1);");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_at_length_minus() {
+        let d = run_on("const last = arr.at(arr.length - 1);");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_negative_index() {
+        assert!(run_on("const x = str.slice(-3);").is_empty());
+    }
+
+
+    #[test]
+    fn allows_different_receiver() {
+        assert!(run_on("const x = str.slice(other.length - 3);").is_empty());
+    }
+
+
+    #[test]
+    fn allows_normal_slice() {
+        assert!(run_on("const x = str.slice(0, 5);").is_empty());
+    }
+}

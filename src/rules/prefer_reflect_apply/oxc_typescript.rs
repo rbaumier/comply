@@ -72,3 +72,41 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_direct_apply() {
+        let d = run_on("fn.apply(null, args);");
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].rule_id, "prefer-reflect-apply");
+    }
+
+
+    #[test]
+    fn flags_apply_with_this() {
+        let d = run_on("foo.bar.apply(this, args);");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_reflect_apply() {
+        assert!(run_on("Reflect.apply(fn, null, args);").is_empty());
+    }
+
+
+    #[test]
+    fn allows_non_apply_method() {
+        assert!(run_on("fn.call(null, args);").is_empty());
+    }
+}

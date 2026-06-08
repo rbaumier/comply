@@ -84,3 +84,38 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_spread_req_body_in_set() {
+        assert_eq!(run_on("db.update(users).set({ ...req.body })").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_spread_req_body_in_values() {
+        assert_eq!(run_on("db.insert(users).values({ ...req.body })").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_explicit_fields() {
+        assert!(run_on("db.update(users).set({ name: req.body.name })").is_empty());
+    }
+
+
+    #[test]
+    fn allows_spread_in_non_db_context() {
+        assert!(run_on("const copy = { ...req.body }").is_empty());
+    }
+}

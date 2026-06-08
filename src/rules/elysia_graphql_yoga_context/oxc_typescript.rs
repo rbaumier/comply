@@ -57,3 +57,42 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_framework(source, &Check, "elysia")
+    }
+
+
+    #[test]
+    fn flags_context_without_placeholder() {
+        let src = "import { yoga } from '@elysiajs/graphql-yoga';\napp.use(yoga({ context: () => ({ user: 1 }) }));";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_when_use_context_present() {
+        let src = "import { yoga } from '@elysiajs/graphql-yoga';\nimport { useContext } from './ctx';\napp.use(yoga({ context: () => ({ user: 1 }) }));";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_when_no_context_field() {
+        let src = "import { yoga } from '@elysiajs/graphql-yoga';\napp.use(yoga({ typeDefs }));";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_yoga_files() {
+        let src = "yoga({ context: () => ({}) });";
+        assert!(crate::rules::test_helpers::run_oxc_ts(src, &Check).is_empty());
+    }
+}

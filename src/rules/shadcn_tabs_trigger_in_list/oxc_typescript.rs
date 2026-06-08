@@ -85,3 +85,36 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(s, &Check)
+    }
+
+
+    #[test]
+    fn allows_trigger_in_list() {
+        let src = r#"const x = <Tabs><TabsList><TabsTrigger value="a">A</TabsTrigger></TabsList></Tabs>;"#;
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_trigger_in_dotted_list() {
+        let src = r#"const x = <Tabs.Root><Tabs.List><Tabs.Trigger value="a">A</Tabs.Trigger></Tabs.List></Tabs.Root>;"#;
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_trigger_outside_tabs() {
+        // Standalone `<TabsTrigger>` — no Tabs ancestor, nothing to complain about here.
+        let src = r#"const x = <TabsTrigger value="a">A</TabsTrigger>;"#;
+        assert!(run(src).is_empty());
+    }
+}

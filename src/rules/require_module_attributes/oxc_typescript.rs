@@ -60,3 +60,42 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_import_with_empty_attributes() {
+        let diags = run_on("import data from './data.json' with {};");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("import"));
+    }
+
+
+    #[test]
+    fn flags_export_with_empty_attributes() {
+        let diags = run_on("export { foo } from './bar' with {};");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("export"));
+    }
+
+
+    #[test]
+    fn allows_import_with_attributes() {
+        assert!(run_on("import data from './data.json' with { type: 'json' };").is_empty());
+    }
+
+
+    #[test]
+    fn allows_import_without_with_clause() {
+        assert!(run_on("import { foo } from './foo';").is_empty());
+    }
+}

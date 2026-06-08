@@ -94,3 +94,44 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_direct_cast_to_brand_type() {
+        let src = "function consume() { const id = 'abc' as UserId; }";
+        let diags = run(src);
+        assert_eq!(diags.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_direct_cast_to_brand_suffixed() {
+        let src = "function fetch() { const t = raw as AuthToken; }";
+        let diags = run(src);
+        assert_eq!(diags.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_cast_inside_validator() {
+        let src = "function parseUserId(x: string): UserId { return x as UserId; }";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_cast_to_plain_type() {
+        let src = "function f() { const s = x as string; }";
+        assert!(run(src).is_empty());
+    }
+}

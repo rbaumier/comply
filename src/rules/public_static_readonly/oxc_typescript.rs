@@ -51,3 +51,42 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_public_static_without_readonly() {
+        let src = "class C { public static MAX = 100; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_static_public_without_readonly() {
+        let src = "class C { static public MAX = 100; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_public_static_readonly() {
+        let src = "class C { public static readonly MAX = 100; }";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_public_static_method() {
+        let src = "class C { public static getInstance() { return new C(); } }";
+        assert!(run_on(src).is_empty());
+    }
+}

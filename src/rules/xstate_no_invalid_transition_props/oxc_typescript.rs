@@ -123,3 +123,121 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_typo_target() {
+        let src = r#"
+            createMachine({
+                on: {
+                    NEXT: {
+                        taget: 'b',
+                        actions: 'doIt',
+                    },
+                },
+            });
+        "#;
+        let diags = run_on(src);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("taget"));
+    }
+
+
+    #[test]
+    fn flags_multiple_unknown_props() {
+        let src = r#"
+            createMachine({
+                on: {
+                    NEXT: {
+                        target: 'b',
+                        unknown1: 1,
+                        unknown2: 2,
+                    },
+                },
+            });
+        "#;
+        assert_eq!(run_on(src).len(), 2);
+    }
+
+
+    #[test]
+    fn allows_all_valid_transition_props() {
+        let src = r#"
+            createMachine({
+                on: {
+                    NEXT: {
+                        target: 'b',
+                        guard: 'isReady',
+                        cond: 'legacyGuard',
+                        actions: ['log'],
+                        internal: true,
+                        description: 'go to b',
+                        meta: { foo: 1 },
+                        reenter: false,
+                    },
+                },
+            });
+        "#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_keys_in_unrelated_objects() {
+        let src = r#"
+            const config = {
+                something: {
+                    taget: 'b',
+                    whatever: true,
+                },
+            };
+        "#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_state_node_keys_outside_on() {
+        // Keys like `entry`, `exit`, `invoke` are valid on state nodes but
+        // NOT on transition objects. This rule only inspects transitions,
+        // so state-node keys must not produce diagnostics.
+        let src = r#"
+            createMachine({
+                states: {
+                    idle: {
+                        entry: 'log',
+                        exit: 'cleanup',
+                        invoke: { src: 'fetcher' },
+                    },
+                },
+            });
+        "#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn flags_unknown_prop_with_quoted_key() {
+        let src = r#"
+            createMachine({
+                on: {
+                    NEXT: {
+                        'target': 'b',
+                        'bogus': 1,
+                    },
+                },
+            });
+        "#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+}

@@ -56,3 +56,36 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_default_param_before_required() {
+        let diags = run_on("function foo(a = 1, b: number) {}");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("Default parameters"));
+    }
+
+
+    #[test]
+    fn allows_default_param_last() {
+        let diags = run_on("function foo(a: number, b = 1) {}");
+        assert!(diags.is_empty());
+    }
+
+
+    #[test]
+    fn allows_all_default_params() {
+        let diags = run_on("function foo(a = 1, b = 2) {}");
+        assert!(diags.is_empty());
+    }
+}

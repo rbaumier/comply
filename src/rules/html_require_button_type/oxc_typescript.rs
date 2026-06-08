@@ -62,3 +62,44 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_button_without_type() {
+        assert_eq!(run(r#"const x = <button>Save</button>;"#).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_self_closing_button_without_type() {
+        assert_eq!(run(r#"const x = <button />;"#).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_button_with_type() {
+        assert!(run(r#"const x = <button type="button">Save</button>;"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_button_type_submit() {
+        assert!(run(r#"const x = <button type="submit">Go</button>;"#).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_button() {
+        assert!(run(r#"const x = <div>Save</div>;"#).is_empty());
+    }
+}

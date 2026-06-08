@@ -73,3 +73,53 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diagnostic::Diagnostic;
+    use super::Check;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_generic_barrel_import() {
+        assert_eq!(
+            run("import { twoFactor } from \"better-auth/plugins\"").len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn flags_single_quote_barrel() {
+        assert_eq!(
+            run("import { oAuthProxy } from 'better-auth/plugins'").len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn allows_specific_plugin_path() {
+        assert!(run("import { twoFactor } from \"better-auth/plugins/two-factor\"").is_empty());
+    }
+
+
+    #[test]
+    fn allows_core_import() {
+        assert!(run("import { betterAuth } from \"better-auth\"").is_empty());
+    }
+
+
+    #[test]
+    fn no_fp_for_barrel_only_plugin() {
+        // openAPI has no specific subpath in better-auth — barrel import is the only option
+        assert!(run("import { openAPI as betterAuthOpenApi } from 'better-auth/plugins'").is_empty());
+    }
+}

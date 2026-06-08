@@ -89,3 +89,49 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_bare_return_value() {
+        let src = "export default defineNuxtRouteMiddleware((to) => { if (!to.params.id) return false; });";
+        assert!(!run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_navigate_to() {
+        let src = "export default defineNuxtRouteMiddleware((to) => { if (!to.params.id) return navigateTo('/'); });";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_abort_navigation() {
+        let src = "export default defineNuxtRouteMiddleware(() => { return abortNavigation(); });";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_bare_return() {
+        let src = "export default defineNuxtRouteMiddleware(() => { return; });";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_middleware_functions() {
+        let src = "function helper() { return 42; }";
+        assert!(run_on(src).is_empty());
+    }
+}

@@ -105,3 +105,83 @@ fn is_deprecated(export_start: u32, comments: &[oxc_ast::Comment], source: &str)
     }
     false
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_deprecated_handler_without_headers() {
+        let d = run_on(
+            "/** @deprecated use v2 */\n\
+             export async function GET() { return Response.json({ ok: true }); }",
+        );
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("GET"));
+    }
+
+
+    #[test]
+    fn flags_deprecated_const_handler() {
+        let d = run_on(
+            "/** @deprecated */\n\
+             export const POST = async () => Response.json({ ok: true });",
+        );
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("POST"));
+    }
+
+
+    #[test]
+    fn allows_deprecated_handler_with_headers() {
+        assert!(run_on(
+            "/** @deprecated */\n\
+             export async function GET() { \
+                return new Response('ok', { headers: { 'Deprecation': 'true', 'Sunset': 'Wed, 31 Dec 2025' } }); \
+             }"
+        )
+        .is_empty());
+    }
+
+
+    #[test]
+    fn allows_deprecated_with_only_sunset() {
+        assert!(
+            run_on(
+                "/** @deprecated */\n\
+             export async function GET() { \
+                return new Response('ok', { headers: { 'Sunset': 'Wed, 31 Dec 2025' } }); \
+             }"
+            )
+            .is_empty()
+        );
+    }
+
+
+    #[test]
+    fn allows_non_deprecated_handler() {
+        assert!(
+            run_on("export async function GET() { return Response.json({ ok: true }); }")
+                .is_empty()
+        );
+    }
+
+
+    #[test]
+    fn allows_deprecated_non_http_export() {
+        assert!(
+            run_on(
+                "/** @deprecated */\n\
+             export function helper() { return 1; }"
+            )
+            .is_empty()
+        );
+    }
+}

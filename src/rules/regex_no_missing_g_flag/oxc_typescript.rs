@@ -55,3 +55,66 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_matchall_without_g() {
+        assert_eq!(run_on(r#"str.matchAll(/foo/i);"#).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_matchall_with_g() {
+        assert!(run_on(r#"str.matchAll(/foo/gi);"#).is_empty());
+    }
+
+
+    #[test]
+    fn flags_replaceall_without_g() {
+        assert_eq!(run_on(r#"str.replaceAll(/bar/, "baz");"#).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_replaceall_with_g() {
+        assert!(run_on(r#"str.replaceAll(/bar/g, "baz");"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_replace_without_g() {
+        // `.replace(...)` does not require the `g` flag.
+        assert!(run_on(r#"str.replace(/bar/, "baz");"#).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_tailwind_arbitrary_value_in_string() {
+        let src = r#"const x = "has-[>svg]:grid-cols-[auto_1fr]";"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_url_in_string() {
+        let src = r#"const u = "http://example.com/a/b";"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_scoped_import_path() {
+        let src = r#"import X from "@tanstack/react-query";"#;
+        assert!(run_on(src).is_empty());
+    }
+}

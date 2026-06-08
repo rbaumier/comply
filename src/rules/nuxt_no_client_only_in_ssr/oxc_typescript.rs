@@ -117,3 +117,49 @@ impl OxcCheck for Check {
         diagnostics
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_top_level_window_access() {
+        let src = "import {} from '#imports';\nconst w = window.innerWidth;";
+        assert!(!run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn flags_top_level_localstorage() {
+        let src = "import {} from '#imports';\nconst v = localStorage.getItem('k');";
+        assert!(!run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_inside_function() {
+        let src = "import {} from '#imports';\nfunction read() { return window.innerWidth; }";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_with_process_client_guard() {
+        let src = "import {} from '#imports';\nif (process.client) { const w = window.innerWidth; }";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_nuxt_files() {
+        let src = "const w = window.innerWidth;";
+        assert!(run_on(src).is_empty());
+    }
+}

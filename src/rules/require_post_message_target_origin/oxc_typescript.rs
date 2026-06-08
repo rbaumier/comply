@@ -47,3 +47,44 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_single_arg_post_message() {
+        assert_eq!(run_on("window.postMessage(data);").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_self_post_message() {
+        assert_eq!(run_on("self.postMessage(message);").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_post_message_with_origin() {
+        assert!(run_on(r#"window.postMessage(data, "https://example.com");"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_post_message_with_star() {
+        assert!(run_on(r#"window.postMessage(data, '*');"#).is_empty());
+    }
+
+
+    #[test]
+    fn flags_nested_call_single_arg() {
+        assert_eq!(run_on("window.postMessage(getData());").len(), 1);
+    }
+}

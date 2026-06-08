@@ -116,3 +116,72 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diagnostic::Diagnostic;
+
+
+
+    fn run(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_repeated_get_item() {
+        assert_eq!(
+            run(r#"
+function load() {
+    const a = localStorage.getItem("token");
+    const b = localStorage.getItem("token");
+}
+"#)
+            .len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn flags_session_storage() {
+        assert_eq!(
+            run(r#"
+function load() {
+    const a = sessionStorage.getItem("key");
+    const b = sessionStorage.getItem("key");
+}
+"#)
+            .len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn allows_different_keys() {
+        assert!(
+            run(r#"
+function load() {
+    const a = localStorage.getItem("token");
+    const b = localStorage.getItem("user");
+}
+"#)
+            .is_empty()
+        );
+    }
+
+
+    #[test]
+    fn allows_single_call() {
+        assert!(
+            run(r#"
+function load() {
+    const a = localStorage.getItem("token");
+}
+"#)
+            .is_empty()
+        );
+    }
+}

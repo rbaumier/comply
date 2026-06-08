@@ -114,3 +114,41 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_raw_string_in_view() {
+        let src = "const x = <View>hello</View>;";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_number_expression_in_view() {
+        let src = "const x = <View>{42}</View>;";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_string_inside_text() {
+        let src = "const x = <Text>hello</Text>;";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_nested_text_in_view() {
+        let src = "const x = <View><Text>hello</Text></View>;";
+        assert!(run(src).is_empty());
+    }
+}

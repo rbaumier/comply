@@ -65,3 +65,42 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_framework(source, &Check, "elysia")
+    }
+
+
+    #[test]
+    fn flags_uppercase_authorization() {
+        let src = "import { Elysia, t } from 'elysia';\nnew Elysia().get('/x', () => 'ok', { headers: t.Object({ Authorization: t.String() }) });";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_uppercase_x_header() {
+        let src = "import { Elysia, t } from 'elysia';\nnew Elysia().get('/x', () => 'ok', { headers: t.Object({ 'X-Api-Key': t.String() }) });";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_lowercase_headers() {
+        let src = "import { Elysia, t } from 'elysia';\nnew Elysia().get('/x', () => 'ok', { headers: t.Object({ authorization: t.String() }) });";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_elysia_files() {
+        let src = "app.get('/x', () => 'ok', { headers: t.Object({ Authorization: 1 }) });";
+        assert!(crate::rules::test_helpers::run_oxc_ts(src, &Check).is_empty());
+    }
+}

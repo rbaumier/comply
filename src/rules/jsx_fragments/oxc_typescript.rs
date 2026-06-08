@@ -74,3 +74,54 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_react_fragment() {
+        let d = run_on("const x = <React.Fragment><Child /></React.Fragment>;");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_bare_fragment() {
+        let d = run_on("const x = <Fragment><Child /></Fragment>;");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_short_fragment() {
+        assert!(run_on("const x = <><Child /></>;").is_empty());
+    }
+
+
+    #[test]
+    fn allows_react_fragment_with_key() {
+        let src = "const x = <React.Fragment key={id}><Child /></React.Fragment>;";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_bare_fragment_with_key() {
+        let src = "const x = <Fragment key={id}><Child /></Fragment>;";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_regular_component() {
+        assert!(run_on("const x = <Foo><Child /></Foo>;").is_empty());
+    }
+}

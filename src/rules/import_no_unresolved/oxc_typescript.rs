@@ -84,3 +84,66 @@ mod oxc_tests {
         assert!(!is_generated_specifier("./generated"));
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Config;
+    use crate::files::{Language, SourceFile};
+    use crate::project::ProjectCtx;
+    use crate::rules::test_helpers::run_oxc_ts_with_project;
+    use std::fs;
+    use std::path::PathBuf;
+    use tempfile::TempDir;
+
+
+
+    fn setup_project(files: &[(&str, &str)]) -> (TempDir, ProjectCtx, Vec<PathBuf>) {
+        let dir = TempDir::new().unwrap();
+        let mut source_files = Vec::new();
+        let mut paths = Vec::new();
+
+        for (rel, content) in files {
+            let p = dir.path().join(rel);
+            if let Some(parent) = p.parent() {
+                fs::create_dir_all(parent).unwrap();
+            }
+            fs::write(&p, content).unwrap();
+            let lang = Language::from_path(&p).unwrap();
+            source_files.push(SourceFile {
+                path: p.clone(),
+                language: lang,
+            });
+            paths.push(fs::canonicalize(&p).unwrap());
+        }
+
+        let refs: Vec<&SourceFile> = source_files.iter().collect();
+        let config = Config::default();
+        let project = ProjectCtx::load(&refs, &config);
+
+        (dir, project, paths)
+    }
+
+
+    #[test]
+    fn allows_import_of_existing_dts_file() {
+        let dir = TempDir::new().unwrap();
+        let dts_path = dir.path().join("index.d.ts");
+        fs::write(&dts_path, "export type Schema = {};").unwrap();
+        let ts_path = dir.path().join("test-d/schema.ts");
+        fs::create_dir_all(ts_path.parent().unwrap()).unwrap();
+        fs::write(&ts_path, "import type { Schema } from '../index.d.ts';").unwrap();
+        let lang = Language::from_path(&ts_path).unwrap();
+        let source_files = vec![SourceFile {
+            path: ts_path.clone(),
+            language: lang,
+        }];
+        let refs: Vec<&SourceFile> = source_files.iter().collect();
+        let config = Config::default();
+        let project = ProjectCtx::load(&refs, &config);
+        let canon_ts = fs::canonicalize(&ts_path).unwrap();
+        let source = "import type { Schema } from '../index.d.ts';";
+        let diags = run_oxc_ts_with_project(source, &Check, &project);
+        assert!(diags.is_empty(), "unexpected FP: {diags:?}");
+    }
+}

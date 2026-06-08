@@ -3,8 +3,6 @@
 //! or `aria-labelledby`. A dialog without a name is unannounced.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

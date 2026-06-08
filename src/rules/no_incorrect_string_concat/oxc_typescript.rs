@@ -70,3 +70,38 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_string_plus_count() {
+        assert_eq!(run_on(r#"const msg = "Total: " + itemCount;"#).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_string_plus_total() {
+        assert_eq!(run_on(r#"console.log("Sum is " + totalAmount);"#).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_string_plus_string_var() {
+        assert!(run_on(r#"const msg = "Hello " + userName;"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_template_literal() {
+        assert!(run_on(r#"const msg = `Total: ${itemCount}`;"#).is_empty());
+    }
+}

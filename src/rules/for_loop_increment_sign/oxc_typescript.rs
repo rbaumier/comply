@@ -77,3 +77,32 @@ impl OxcCheck for Check {
         diagnostics
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_less_than_with_decrement() {
+        assert_eq!(run_on("for (let i = 0; i < 10; i--) {}").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_greater_than_with_increment() {
+        assert_eq!(run_on("for (let i = 10; i > 0; i++) {}").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_less_than_with_increment() {
+        assert!(run_on("for (let i = 0; i < 10; i++) {}").is_empty());
+    }
+}

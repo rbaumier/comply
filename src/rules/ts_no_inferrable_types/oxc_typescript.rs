@@ -74,3 +74,48 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_number_literal() {
+        let diags = run_on("const x: number = 5;");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("`number`"));
+    }
+
+
+    #[test]
+    fn flags_string_literal() {
+        let diags = run_on(r#"const s: string = "hello";"#);
+        assert_eq!(diags.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_boolean_literal() {
+        let diags = run_on("const b: boolean = true;");
+        assert_eq!(diags.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_non_literal_init() {
+        assert!(run_on("const x: number = getValue();").is_empty());
+    }
+
+
+    #[test]
+    fn allows_different_type_and_value() {
+        assert!(run_on("const x: string | undefined = getValue();").is_empty());
+    }
+}

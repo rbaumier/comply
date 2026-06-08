@@ -84,3 +84,32 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_refine_no_path() {
+        assert_eq!(
+            run("z.object({ a: z.string(), b: z.string() }).refine(d => d.a !== d.b, { message: 'Must differ' })").len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn allows_refine_with_path() {
+        assert!(run(
+            "z.object({ a: z.string() }).refine(d => d.a.length > 0, { message: 'Required', path: ['a'] })"
+        )
+        .is_empty());
+    }
+}

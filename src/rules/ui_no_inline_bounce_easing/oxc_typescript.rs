@@ -188,4 +188,6 @@ mod tests {
                 .is_empty()
         );
     }
+
+    use crate::diagnostic::Diagnostic;
 }

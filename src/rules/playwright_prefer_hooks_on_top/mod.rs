@@ -1,8 +1,6 @@
 //! playwright-prefer-hooks-on-top — hooks should come before test cases.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

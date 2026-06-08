@@ -72,3 +72,42 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_missing_initial_page_param() {
+        let src = "useInfiniteQuery({ queryKey: ['x'], queryFn: f, getNextPageParam: p });";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_missing_on_infinite_query_options() {
+        let src = "infiniteQueryOptions({ queryKey: ['x'], queryFn: f });";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_with_initial_page_param() {
+        let src = "useInfiniteQuery({ queryKey: ['x'], queryFn: f, initialPageParam: 0, getNextPageParam: p });";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_regular_use_query() {
+        let src = "useQuery({ queryKey: ['x'], queryFn: f });";
+        assert!(run(src).is_empty());
+    }
+}

@@ -86,3 +86,28 @@ impl OxcCheck for Check {
         diagnostics
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(src, &Check)
+    }
+
+
+    #[test]
+    fn allows_returns_with_description() {
+        let src = "/**\n * @returns {string} the normalized name\n */\n";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_returns_without_type() {
+        let src = "/**\n * @returns the normalized name\n */\n";
+        assert!(run(src).is_empty());
+    }
+}

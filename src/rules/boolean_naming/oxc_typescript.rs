@@ -178,4 +178,78 @@ mod tests {
         assert_eq!(run("let initialized = false;").len(), 1);
         assert_eq!(run("let serveRenamed = false;").len(), 1);
     }
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn allows_is_prefix() {
+        assert!(run_on("const isReady: boolean = true;").is_empty());
+    }
+
+
+    #[test]
+    fn allows_has_prefix() {
+        assert!(run_on("const hasItems: boolean = false;").is_empty());
+    }
+
+
+    #[test]
+    fn allows_should_will_did_was() {
+        for name in ["shouldRetry", "willSucceed", "didFire", "wasLoaded"] {
+            let source = format!("const {name} = true;");
+            assert!(run_on(&source).is_empty(), "'{name}' should be allowed");
+        }
+    }
+
+
+    #[test]
+    fn flags_missing_prefix_with_annotation() {
+        let diags = run_on("const ready: boolean = true;");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("'ready'"));
+    }
+
+
+    #[test]
+    fn flags_inferred_boolean() {
+        let diags = run_on("const ready = true;");
+        assert_eq!(diags.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_negative_phrasing() {
+        let diags = run_on("const isNotReady = false;");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("negatively"));
+    }
+
+
+    #[test]
+    fn does_not_flag_word_starting_with_prefix_letters() {
+        // `issuer` starts with `is` but is not a boolean predicate.
+        // It won't be flagged because its type isn't boolean.
+        assert!(run_on("const issuer: string = 'ACME';").is_empty());
+    }
+
+
+    #[test]
+    fn flags_param_without_prefix() {
+        let diags = run_on("function f(ready: boolean) {}");
+        assert_eq!(diags.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_controlled_component_props() {
+        for name in ["open", "checked", "disabled", "hidden", "selected", "value"] {
+            let source = format!("function F({name}: boolean) {{}}");
+            assert!(run_on(&source).is_empty(), "'{name}' should be allowed");
+        }
+    }
 }

@@ -48,3 +48,32 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_promise_reject() {
+        assert_eq!(run("return Promise.reject(new Error('fail'));").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_promise_reject_no_arg() {
+        assert_eq!(run("return Promise.reject();").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_promise_resolve() {
+        assert!(run("return Promise.resolve(value);").is_empty());
+    }
+}

@@ -1,8 +1,6 @@
 //! zod-prefer-extend-over-merge — prefer `.extend(...)` over `.merge(...)` (Zod v4).
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

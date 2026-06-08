@@ -45,3 +45,44 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_oxc_ts(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_event_keycode() {
+        assert_eq!(run_oxc_ts("if (event.keyCode === 13) {}").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_event_which() {
+        assert_eq!(run_oxc_ts("if (e.which === 27) {}").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_event_charcode() {
+        assert_eq!(run_oxc_ts("const code = event.charCode;").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_event_key() {
+        assert!(run_oxc_ts("if (event.key === 'Enter') {}").is_empty());
+    }
+
+
+    #[test]
+    fn allows_comment() {
+        assert!(run_oxc_ts("// event.keyCode is deprecated").is_empty());
+    }
+}

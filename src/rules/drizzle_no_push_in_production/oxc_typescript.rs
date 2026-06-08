@@ -91,3 +91,58 @@ impl OxcCheck for Check {
         diagnostics
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(src, &Check)
+    }
+
+
+    #[test]
+    fn flags_plain_push_in_string() {
+        assert_eq!(run_on("const cmd = \"drizzle-kit push\";").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_dialect_suffixed_push_in_template() {
+        assert_eq!(
+            run_on("const cmd = `drizzle-kit push:pg --config=drizzle.config.ts`;").len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn flags_push_in_object_literal() {
+        assert_eq!(
+            run_on("const scripts = { deploy: 'drizzle-kit push' };").len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn allows_drizzle_kit_migrate() {
+        assert!(run_on("const cmd = \"drizzle-kit migrate\";").is_empty());
+    }
+
+
+    #[test]
+    fn allows_pusher_word() {
+        // `drizzle-kit pusher` is not a command we care about.
+        assert!(run_on("const cmd = \"drizzle-kit pusher\";").is_empty());
+    }
+
+
+    #[test]
+    fn allows_push_outside_string() {
+        // A bare identifier `push` in code shouldn't be flagged.
+        assert!(run_on("queue.push(item);").is_empty());
+    }
+}

@@ -70,3 +70,51 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diagnostic::Diagnostic;
+
+
+
+    fn run(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_default_import() {
+        assert_eq!(run(r#"import moment from 'moment';"#).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_namespace_import() {
+        assert_eq!(run(r#"import * as moment from 'moment';"#).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_require_call() {
+        assert_eq!(run(r#"const moment = require('moment');"#).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_dayjs_import() {
+        assert!(run(r#"import dayjs from 'dayjs';"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_date_fns_import() {
+        assert!(run(r#"import { format } from 'date-fns';"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_unrelated_require() {
+        assert!(run(r#"const fs = require('fs');"#).is_empty());
+    }
+}

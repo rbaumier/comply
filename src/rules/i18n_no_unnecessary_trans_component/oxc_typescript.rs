@@ -82,3 +82,35 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(src, &Check)
+    }
+
+
+    #[test]
+    fn allows_trans_with_jsx_child() {
+        let src = r#"const x = <Trans><b>bold</b> text</Trans>;"#;
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_trans_with_expression_child() {
+        let src = r#"const x = <Trans>{userName}</Trans>;"#;
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_self_closing_trans() {
+        let src = r#"const x = <Trans i18nKey="x" />;"#;
+        assert!(run(src).is_empty());
+    }
+}

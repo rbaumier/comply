@@ -65,3 +65,66 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_backslash_before_normal_letter() {
+        // \a is not a valid regex escape
+        assert_eq!(run_on(r#"const re = /\a/;"#).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_backslash_e() {
+        assert_eq!(run_on(r#"const re = /\e/;"#).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_valid_escape_d() {
+        assert!(run_on(r#"const re = /\d+/;"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_valid_escape_w() {
+        assert!(run_on(r#"const re = /\w+/;"#).is_empty());
+    }
+
+
+    #[test]
+    fn allows_escaped_dot() {
+        assert!(run_on(r#"const re = /\./;"#).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_tailwind_arbitrary_value_in_string() {
+        let src = r#"const x = "bg-[url(\a)]";"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_backslash_in_url_string() {
+        let src = r#"const u = "http://a/\foo";"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_empty_scoped_import() {
+        let src = r#"import X from "@tanstack/react-query";"#;
+        assert!(run_on(src).is_empty());
+    }
+}

@@ -96,3 +96,66 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_reject_string() {
+        let d = run_on("Promise.reject('boom');");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_reject_number() {
+        let d = run_on("Promise.reject(42);");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_reject_object_literal() {
+        let d = run_on("Promise.reject({ code: 500 });");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn flags_reject_template_string() {
+        let d = run_on("Promise.reject(`boom ${x}`);");
+        assert_eq!(d.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_reject_new_error() {
+        assert!(run_on("Promise.reject(new Error('boom'));").is_empty());
+    }
+
+
+    #[test]
+    fn allows_reject_identifier() {
+        assert!(run_on("Promise.reject(err);").is_empty());
+    }
+
+
+    #[test]
+    fn allows_reject_call() {
+        assert!(run_on("Promise.reject(makeError());").is_empty());
+    }
+
+
+    #[test]
+    fn allows_promise_resolve() {
+        assert!(run_on("Promise.resolve('value');").is_empty());
+    }
+}

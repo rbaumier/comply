@@ -38,3 +38,38 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_for_infinite() {
+        assert_eq!(run_on("for (;;) {}").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_for_condition_only() {
+        assert_eq!(run_on("for (;x < 10;) {}").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_standard_for_loop() {
+        assert!(run_on("for (let i = 0; i < 10; i++) {}").is_empty());
+    }
+
+
+    #[test]
+    fn allows_while_true() {
+        assert!(run_on("while (true) {}").is_empty());
+    }
+}

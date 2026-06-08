@@ -1,8 +1,6 @@
 //! no-single-promise-in-promise-methods — flag `Promise.all([single])`.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

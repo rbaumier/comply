@@ -57,3 +57,34 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_navigate_string() {
+        let src = "navigation.navigate('Home', { id: 1 });";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_router_push() {
+        let src = "router.push('/home');";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_typed_object_arg() {
+        let src = "navigation.navigate({ screen: 'Home' });";
+        assert!(run(src).is_empty());
+    }
+}

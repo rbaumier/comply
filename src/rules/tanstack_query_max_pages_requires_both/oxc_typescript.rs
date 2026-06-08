@@ -101,3 +101,42 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_max_pages_without_previous() {
+        let src = "useInfiniteQuery({ queryKey: ['x'], queryFn: f, initialPageParam: 0, getNextPageParam: n, maxPages: 5 });";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_max_pages_without_next() {
+        let src = "useInfiniteQuery({ queryKey: ['x'], queryFn: f, initialPageParam: 0, getPreviousPageParam: p, maxPages: 5 });";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_max_pages_with_both() {
+        let src = "useInfiniteQuery({ queryKey: ['x'], queryFn: f, initialPageParam: 0, getNextPageParam: n, getPreviousPageParam: p, maxPages: 5 });";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_missing_max_pages() {
+        let src = "useInfiniteQuery({ queryKey: ['x'], queryFn: f, initialPageParam: 0, getNextPageParam: n });";
+        assert!(run(src).is_empty());
+    }
+}

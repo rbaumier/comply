@@ -4,8 +4,6 @@
 //! component. Catching this at lint time avoids a red box on first render.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

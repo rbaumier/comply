@@ -70,3 +70,34 @@ impl OxcCheck for Check {
         diagnostics
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_authorize_url_without_pkce() {
+        let src = "const url = 'https://idp.example.com/oauth/authorize?client_id=abc&response_type=code';";
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_authorize_url_with_pkce() {
+        let src = "const url = 'https://idp.example.com/oauth/authorize?client_id=abc&response_type=code&code_challenge=xyz&code_challenge_method=S256';";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_unrelated_strings() {
+        assert!(run("const s = 'hello world';").is_empty());
+    }
+}

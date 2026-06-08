@@ -1,8 +1,6 @@
 //! ts-no-empty-object-type — flag `{}` used as a type.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

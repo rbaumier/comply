@@ -104,3 +104,46 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_short_message() {
+        assert_eq!(run_on(r#"throw new Error("Invalid");"#).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_noun_only_message() {
+        assert_eq!(run_on(r#"throw new Error("Configuration");"#).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_descriptive_message() {
+        assert!(
+            run_on(r#"throw new Error("User not found — verify the ID and retry");"#).is_empty()
+        );
+    }
+
+
+    #[test]
+    fn allows_message_with_verb() {
+        assert!(run_on(r#"throw new Error("Cannot connect to the database server");"#).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_error_constructor() {
+        assert!(run_on(r#"const msg = "Invalid";"#).is_empty());
+    }
+}

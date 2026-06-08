@@ -71,3 +71,36 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_type_annotation_with_generics() {
+        let diags = run_on("const m: Map<string, number> = new Map();");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("constructor"));
+    }
+
+
+    #[test]
+    fn allows_generics_on_constructor() {
+        let diags = run_on("const m = new Map<string, number>();");
+        assert!(diags.is_empty());
+    }
+
+
+    #[test]
+    fn allows_no_generics() {
+        let diags = run_on("const m = new Map();");
+        assert!(diags.is_empty());
+    }
+}

@@ -3,8 +3,6 @@
 //! `type="font/woff2"` so the preload can match the CSSOM request.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

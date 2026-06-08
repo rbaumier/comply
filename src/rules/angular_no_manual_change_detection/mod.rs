@@ -1,8 +1,6 @@
 //! angular-no-manual-change-detection — avoid `ChangeDetectorRef.detectChanges()`.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

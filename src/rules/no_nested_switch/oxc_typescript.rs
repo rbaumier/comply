@@ -37,3 +37,75 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_nested_switch() {
+        let src = r#"
+switch (a) {
+  case 1:
+    switch (b) {
+      case 2: break;
+    }
+    break;
+}
+"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_sequential_switches() {
+        let src = r#"
+switch (a) {
+  case 1: break;
+}
+switch (b) {
+  case 2: break;
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_single_switch() {
+        let src = r#"
+switch (action) {
+  case "start": run(); break;
+  case "stop": halt(); break;
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn flags_deeply_nested_switch() {
+        let src = r#"
+switch (a) {
+  case 1:
+    switch (b) {
+      case 2:
+        switch (c) {
+          case 3: break;
+        }
+        break;
+    }
+    break;
+}
+"#;
+        let diags = run_on(src);
+        assert_eq!(diags.len(), 2);
+    }
+}

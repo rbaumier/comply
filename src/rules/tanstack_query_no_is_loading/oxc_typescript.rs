@@ -77,3 +77,32 @@ impl OxcCheck for Check {
         diagnostics
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_is_loading() {
+        assert!(!run("const { isLoading } = useQuery({ queryKey: ['x'], queryFn: f })").is_empty());
+    }
+
+
+    #[test]
+    fn allows_is_pending() {
+        assert!(run("const { isPending } = useQuery({ queryKey: ['x'], queryFn: f })").is_empty());
+    }
+
+
+    #[test]
+    fn ignores_file_without_usequery() {
+        assert!(run("const isLoading = true").is_empty());
+    }
+}

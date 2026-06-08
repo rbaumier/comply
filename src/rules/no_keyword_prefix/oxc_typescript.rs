@@ -120,4 +120,54 @@ mod tests {
     fn allows_classlist_issue_523() {
         assert!(run_oxc_ts("const classList = el.classList;", &Check).is_empty());
     }
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_new_prefix() {
+        let d = run_on("const newUser = getUser();");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("`new`"));
+    }
+
+
+    #[test]
+    fn flags_class_prefix() {
+        let d = run_on("const classNames = getClasses();");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("`class`"));
+    }
+
+
+    #[test]
+    fn allows_plain_new() {
+        // `new` by itself is a keyword, not an identifier with a prefix
+        assert!(run_on("const x = new Map();").is_empty());
+    }
+
+
+    #[test]
+    fn allows_lowercase_after_prefix() {
+        // `newborn` does not have an uppercase letter after `new`
+        assert!(run_on("const newborn = true;").is_empty());
+    }
+
+
+    #[test]
+    fn allows_classify() {
+        // `classify` has `class` prefix but `i` is lowercase
+        assert!(run_on("const classify = (x: number) => x;").is_empty());
+    }
+
+
+    #[test]
+    fn flags_function_param() {
+        let d = run_on("function f(newValue: string) {}");
+        assert_eq!(d.len(), 1);
+    }
 }

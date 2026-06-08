@@ -140,3 +140,54 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_empty_class() {
+        let diags = run_on("class Empty {}");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("empty"));
+    }
+
+
+    #[test]
+    fn flags_only_static() {
+        let diags = run_on("class Utils { static foo() {} }");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("static"));
+    }
+
+
+    #[test]
+    fn allows_class_with_extends() {
+        assert!(run_on("class Foo extends Bar {}").is_empty());
+    }
+
+
+    #[test]
+    fn allows_class_with_instance_method() {
+        assert!(run_on("class Foo { bar() {} }").is_empty());
+    }
+
+
+    #[test]
+    fn allows_decorated_empty_class() {
+        assert!(run_on("@Component\nclass Foo {}").is_empty());
+    }
+
+
+    #[test]
+    fn allows_exported_decorated_empty_class() {
+        assert!(run_on("@Module({})\nexport class AppModule {}").is_empty());
+    }
+}

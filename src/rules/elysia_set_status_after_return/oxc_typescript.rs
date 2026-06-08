@@ -63,3 +63,35 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_framework(source, &Check, "elysia")
+    }
+
+
+    #[test]
+    fn allows_set_status_before_return() {
+        let src = "import { Elysia } from 'elysia';\napp.get('/x', ({ set }) => {\n  set.status = 404;\n  return { ok: true };\n});";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_set_status_alone() {
+        let src = "import { Elysia } from 'elysia';\napp.get('/x', ({ set }) => {\n  set.status = 200;\n});";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_elysia_files() {
+        let src = "function h() { return 1; this.set.status = 404; }";
+        assert!(crate::rules::test_helpers::run_oxc_ts(src, &Check).is_empty());
+    }
+}

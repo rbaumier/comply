@@ -120,3 +120,40 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn allows_different_property() {
+        let src = r#"
+class Foo {
+    constructor(public name: string) {
+        this.label = name;
+    }
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_non_parameter_property() {
+        let src = r#"
+class Foo {
+    constructor(name: string) {
+        this.name = name;
+    }
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+}

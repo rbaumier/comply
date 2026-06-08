@@ -48,3 +48,42 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_framework(source, &Check, "elysia")
+    }
+
+
+    #[test]
+    fn flags_app_server_bang() {
+        let src = "import { Elysia } from 'elysia';\nconst port = app.server!.port;";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_bare_server_bang() {
+        let src = "import { Elysia } from 'elysia';\nconst s = server!;";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_server_without_bang() {
+        let src = "import { Elysia } from 'elysia';\napp.listen(3000, () => { console.log(app.server?.port); });";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_elysia_files() {
+        let src = "const port = app.server!.port;";
+        assert!(crate::rules::test_helpers::run_oxc_ts(src, &Check).is_empty());
+    }
+}

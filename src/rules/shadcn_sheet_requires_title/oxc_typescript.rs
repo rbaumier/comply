@@ -131,3 +131,44 @@ impl OxcCheck for Check {
         diagnostics
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_sheet_content_without_title() {
+        assert_eq!(
+            run(r#"const x = <SheetContent><p>hi</p></SheetContent>;"#).len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn flags_self_closing_sheet_content() {
+        assert_eq!(run(r#"const x = <SheetContent />;"#).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_sheet_content_with_title() {
+        assert!(
+            run(r#"const x = <SheetContent><SheetTitle>Hi</SheetTitle></SheetContent>;"#)
+                .is_empty()
+        );
+    }
+
+
+    #[test]
+    fn ignores_dialog_content() {
+        assert!(run(r#"const x = <DialogContent>hi</DialogContent>;"#).is_empty());
+    }
+}

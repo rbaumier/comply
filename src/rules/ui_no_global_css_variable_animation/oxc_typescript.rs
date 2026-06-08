@@ -78,3 +78,53 @@ fn is_inside_raf<'a>(
     }
     false
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diagnostic::Diagnostic;
+
+
+
+    fn run(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_set_property_in_raf() {
+        assert_eq!(
+            run(r#"
+requestAnimationFrame(() => {
+    document.documentElement.style.setProperty('--scroll', window.scrollY);
+});
+"#)
+            .len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn allows_scoped_set_property_in_raf() {
+        assert!(
+            run(r#"
+requestAnimationFrame(() => {
+    element.style.setProperty('--x', value);
+});
+"#)
+            .is_empty()
+        );
+    }
+
+
+    #[test]
+    fn allows_set_property_outside_raf() {
+        assert!(
+            run(r#"
+document.documentElement.style.setProperty('--theme', 'dark');
+"#)
+            .is_empty()
+        );
+    }
+}

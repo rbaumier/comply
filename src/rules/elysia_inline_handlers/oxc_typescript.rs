@@ -221,4 +221,12 @@ it("fetches data", () => {
             "issue #341: MSW http.get in .test.tsx must not be flagged by elysia-inline-handlers"
         );
     }
+
+
+
+    #[test]
+    fn ignores_non_elysia_files() {
+        let src = "app.get('/', handleFn);";
+        assert!(crate::rules::test_helpers::run_oxc_ts(src, &Check).is_empty());
+    }
 }

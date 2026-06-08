@@ -105,3 +105,59 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_useless_i_flag() {
+        assert_eq!(run_on(r#"const re = /\d+/i;"#).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_useful_i_flag() {
+        assert!(run_on(r#"const re = /foo/i;"#).is_empty());
+    }
+
+
+    #[test]
+    fn flags_useless_m_flag() {
+        assert_eq!(run_on(r#"const re = /foo/m;"#).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_useless_s_flag() {
+        assert_eq!(run_on(r#"const re = /foo/s;"#).len(), 1);
+    }
+
+
+    #[test]
+    fn ignores_url_in_string() {
+        let src = r#"const u = "http://localhost:6762/api/v1/diffs/query";"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_import_path() {
+        let src = r#"import X from "@tanstack/react-query";"#;
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_tailwind_arbitrary_value() {
+        let src = r#"const x = "has-[>svg]:grid-cols-[auto_1fr]";"#;
+        assert!(run_on(src).is_empty());
+    }
+}

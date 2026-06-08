@@ -164,4 +164,12 @@ it("fetches data", () => {
             "issue #341: MSW http.get with :param in .test.tsx must not be flagged by elysia-route-missing-params-schema"
         );
     }
+
+
+
+    #[test]
+    fn ignores_non_elysia_files() {
+        let src = "app.get('/users/:id', () => 'ok');";
+        assert!(crate::rules::test_helpers::run_oxc_ts(src, &Check).is_empty());
+    }
 }

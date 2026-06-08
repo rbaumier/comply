@@ -53,3 +53,35 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_object_strict_chain() {
+        assert_eq!(
+            run("const S = z.object({ a: z.string() }).strict();").len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn allows_strict_object_factory() {
+        assert!(run("const S = z.strictObject({ a: z.string() });").is_empty());
+    }
+
+
+    #[test]
+    fn ignores_bare_object() {
+        assert!(run("const S = z.object({ a: z.string() });").is_empty());
+    }
+}

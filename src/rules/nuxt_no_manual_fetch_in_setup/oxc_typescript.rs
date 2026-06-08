@@ -105,3 +105,42 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_fetch_at_module_scope() {
+        let src = "import {} from '#imports';\nconst data = await fetch('/api/x').then(r => r.json());";
+        assert!(!run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn flags_fetch_inside_setup_method() {
+        let src = "import {} from '#imports';\nexport default defineComponent({ async setup() { const r = await fetch('/api/x'); return {}; } });";
+        assert!(!run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_use_fetch() {
+        let src = "import {} from '#imports';\nconst { data } = await useFetch('/api/x');";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_nuxt_files() {
+        let src = "const data = await fetch('/api/x').then(r => r.json());";
+        assert!(run_on(src).is_empty());
+    }
+}

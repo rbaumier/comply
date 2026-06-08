@@ -72,3 +72,53 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(source: &str, path: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_path(source, &Check, path)
+    }
+
+
+    #[test]
+    fn flags_dot_import_in_index() {
+        let src = "import { foo } from '.';\n";
+        let diags = run(src, "src/index.ts");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("imports itself"));
+    }
+
+
+    #[test]
+    fn flags_self_name_import() {
+        let src = "import { foo } from './utils';\n";
+        let diags = run(src, "src/utils.ts");
+        assert_eq!(diags.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_different_module() {
+        let src = "import { foo } from './other';\n";
+        assert!(run(src, "src/utils.ts").is_empty());
+    }
+
+
+    #[test]
+    fn flags_index_import_in_index_file() {
+        let src = "import { foo } from './index';\n";
+        let diags = run(src, "src/index.ts");
+        assert_eq!(diags.len(), 1);
+    }
+
+
+    #[test]
+    fn allows_subdir_index_import_from_index() {
+        let src = "import { foo } from './_lib/formatDistance/index.ts';\n";
+        assert!(run(src, "src/locale/sl/index.ts").is_empty());
+    }
+}

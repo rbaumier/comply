@@ -59,3 +59,44 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+    fn run(code: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(code, &Check)
+    }
+
+
+    #[test]
+    fn flags_arrow_wrapper() {
+        assert_eq!(run("setTimeout(() => doSomething(arg), 100)").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_set_interval() {
+        assert_eq!(run("setInterval(() => tick(count), 1000)").len(), 1);
+    }
+
+
+    #[test]
+    fn allows_direct_args() {
+        assert!(run("setTimeout(doSomething, 100, arg)").is_empty());
+    }
+
+
+    #[test]
+    fn allows_method_call() {
+        // Method calls can't use the direct args pattern
+        assert!(run("setTimeout(() => obj.method(arg), 100)").is_empty());
+    }
+
+
+    #[test]
+    fn allows_complex_body() {
+        assert!(run("setTimeout(() => { doA(); doB(); }, 100)").is_empty());
+    }
+}

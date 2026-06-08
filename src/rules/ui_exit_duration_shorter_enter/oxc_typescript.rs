@@ -100,3 +100,50 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_exit_longer_than_enter() {
+        let src = r#"
+            const x = <motion.div
+                animate={{ transition: { duration: 0.2 } }}
+                exit={{ transition: { duration: 0.5 } }}
+            />;
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_exit_shorter_than_enter() {
+        let src = r#"
+            const x = <motion.div
+                animate={{ transition: { duration: 0.3 } }}
+                exit={{ transition: { duration: 0.15 } }}
+            />;
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_motion() {
+        let src = r#"
+            const x = <div
+                animate={{ transition: { duration: 0.2 } }}
+                exit={{ transition: { duration: 0.5 } }}
+            />;
+        "#;
+        assert!(run(src).is_empty());
+    }
+}

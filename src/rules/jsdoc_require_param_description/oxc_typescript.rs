@@ -93,3 +93,28 @@ impl OxcCheck for Check {
         diagnostics
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(src, &Check)
+    }
+
+
+    #[test]
+    fn allows_param_with_description() {
+        let src = "/**\n * @param {string} x - the user id\n */\n";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_param_without_type() {
+        let src = "/**\n * @param x - the id\n */\n";
+        assert!(run(src).is_empty());
+    }
+}

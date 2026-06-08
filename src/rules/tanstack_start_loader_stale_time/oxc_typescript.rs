@@ -117,3 +117,65 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(s, &Check)
+    }
+
+
+    #[test]
+    fn flags_stale_time_below_threshold() {
+        let src =
+            r#"loader: () => ensureQueryData({ queryKey: ['x'], queryFn: f, staleTime: 1000 })"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn flags_missing_stale_time() {
+        let src = r#"loader: () => ensureQueryData({ queryKey: ['x'], queryFn: f })"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_stale_time_at_threshold() {
+        let src =
+            r#"loader: () => ensureQueryData({ queryKey: ['x'], queryFn: f, staleTime: 5000 })"#;
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_stale_time_above_threshold() {
+        let src =
+            r#"loader: () => ensureQueryData({ queryKey: ['x'], queryFn: f, staleTime: 30000 })"#;
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn skips_commented_line() {
+        let src = "// ensureQueryData({ queryKey: ['x'], queryFn: f })";
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn handles_multiline_call() {
+        let src = r#"
+            ensureQueryData({
+              queryKey: ['users'],
+              queryFn: fetchUsers,
+              staleTime: 2000,
+            })
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+}

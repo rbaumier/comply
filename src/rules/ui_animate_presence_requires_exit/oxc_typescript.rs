@@ -97,3 +97,36 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(s, &Check)
+    }
+
+
+    #[test]
+    fn allows_motion_with_exit_in_presence() {
+        let src = r#"
+            const x = (
+                <AnimatePresence>
+                    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} />
+                </AnimatePresence>
+            );
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_motion_outside_presence() {
+        let src = r#"
+            const x = <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} />;
+        "#;
+        assert!(run(src).is_empty());
+    }
+}

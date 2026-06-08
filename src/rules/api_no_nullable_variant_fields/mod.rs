@@ -9,8 +9,6 @@
 //! the key MUST be absent, the opposite of a state flag.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

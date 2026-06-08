@@ -2,8 +2,6 @@
 //! simply returns a value and suggest the shorthand `.mockReturnValue(x)`.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

@@ -52,3 +52,42 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_framework(source, &Check, "elysia")
+    }
+
+
+    #[test]
+    fn flags_unbounded_array() {
+        let src = "import { t } from 'elysia';\nconst s = t.Array(t.String());";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+
+    #[test]
+    fn allows_array_with_max_items() {
+        let src = "import { t } from 'elysia';\nconst s = t.Array(t.String(), { maxItems: 100 });";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn allows_array_with_min_items_only() {
+        let src = "import { t } from 'elysia';\nconst s = t.Array(t.String(), { minItems: 1 });";
+        assert!(run_on(src).is_empty());
+    }
+
+
+    #[test]
+    fn ignores_non_elysia_files() {
+        let src = "const s = t.Array(t.String());";
+        assert!(crate::rules::test_helpers::run_oxc_ts(src, &Check).is_empty());
+    }
+}

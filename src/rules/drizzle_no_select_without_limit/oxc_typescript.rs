@@ -260,4 +260,54 @@ const rows = await tx.with(insertedUser).select().from(usersTable);
         let diags = run(&src);
         assert_eq!(diags.len(), 1, "should flag the unbounded select, not panic");
     }
+
+
+
+    fn run_on(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(src, &Check)
+    }
+
+
+    #[test]
+    fn flags_unbounded_select() {
+        assert_eq!(
+            run_on("const users = await db.select().from(usersTable)").len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn flags_partial_select_without_limit() {
+        assert_eq!(
+            run_on("const all = await db.select({ id: users.id }).from(usersTable)").len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn allows_select_with_where() {
+        assert!(
+            run_on("await db.select().from(usersTable).where(eq(usersTable.active, true))")
+                .is_empty()
+        );
+    }
+
+
+    #[test]
+    fn ignores_select_without_from() {
+        // Something other than a query builder — still `.select(..)` but no `.from()`.
+        assert!(run_on("obj.select(x)").is_empty());
+    }
+
+
+    #[test]
+    fn allows_select_with_where_before_from() {
+        // Chain order shouldn't matter for detection.
+        assert!(
+            run_on("await db.select().from(usersTable).where(eq(usersTable.id, 1)).limit(1)")
+                .is_empty()
+        );
+    }
 }

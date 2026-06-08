@@ -125,3 +125,56 @@ fn is_simple_equality(
     (left_text == param_name && left_is_ident && right_is_ident)
         || (right_text == param_name && right_is_ident && left_is_ident)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
+    }
+
+
+    #[test]
+    fn flags_findindex_arrow_equality() {
+        assert_eq!(run_on("const i = arr.findIndex(x => x === val);").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_findindex_parens_arrow() {
+        assert_eq!(
+            run_on("const i = arr.findIndex((x) => x === val);").len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn flags_findindex_reversed_comparison() {
+        assert_eq!(run_on("const i = arr.findIndex(x => val === x);").len(), 1);
+    }
+
+
+    #[test]
+    fn flags_findlastindex() {
+        assert_eq!(
+            run_on("const i = arr.findLastIndex(x => x === val);").len(),
+            1
+        );
+    }
+
+
+    #[test]
+    fn allows_indexof() {
+        assert!(run_on("const i = arr.indexOf(val);").is_empty());
+    }
+
+
+    #[test]
+    fn allows_complex_callback() {
+        assert!(run_on("const i = arr.findIndex(x => x.id === val);").is_empty());
+    }
+}
