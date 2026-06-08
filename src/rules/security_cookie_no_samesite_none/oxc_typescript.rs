@@ -1,30 +1,18 @@
-//! Flag cookie configurations that set `SameSite=None` without `Secure`.
-//!
-//! Two shapes:
-//! - object literal: `{ sameSite: 'none', ... }` — must contain `secure: true`.
-//! - raw header string: `"SameSite=None"` — must also contain `Secure`.
-
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::rules::backend::{CheckCtx, TextCheck};
+use crate::rules::backend::{CheckCtx, OxcCheck};
 use std::sync::Arc;
 
-#[derive(Debug)]
 pub struct Check;
 
-/// Find the byte offset of an object-literal `sameSite: 'none'` (or
-/// `"none"`) on this line. Case-insensitive on the value side.
 fn find_samesite_none_object(line: &str) -> Option<usize> {
-    // Quick reject.
     let lower = line.to_ascii_lowercase();
     if !lower.contains("samesite") {
         return None;
     }
-    // Look for the property form: `sameSite` followed by `:` then 'none' or "none".
     let mut from = 0;
     while let Some(rel) = lower[from..].find("samesite") {
         let abs = from + rel;
         let after = abs + "samesite".len();
-        // Skip whitespace, then expect ':'.
         let mut j = after;
         let bytes = lower.as_bytes();
         while j < bytes.len() && (bytes[j] == b' ' || bytes[j] == b'\t') {
@@ -35,7 +23,6 @@ fn find_samesite_none_object(line: &str) -> Option<usize> {
             while j < bytes.len() && (bytes[j] == b' ' || bytes[j] == b'\t') {
                 j += 1;
             }
-            // Expect a quote.
             if j < bytes.len() && (bytes[j] == b'\'' || bytes[j] == b'"') {
                 let quote = bytes[j];
                 let value_start = j + 1;
@@ -55,16 +42,11 @@ fn find_samesite_none_object(line: &str) -> Option<usize> {
     None
 }
 
-/// Find the byte offset of a raw `SameSite=None` token (case-insensitive)
-/// inside a string literal-ish context.
 fn find_samesite_none_header(line: &str) -> Option<usize> {
     let lower = line.to_ascii_lowercase();
     lower.find("samesite=none")
 }
 
-/// Object-literal form: scan a small window of preceding/following lines for
-/// a `secure:` key set to a truthy expression (`true`, a variable, or `process.env.X`
-/// — we conservatively accept anything that's not literal `false` or `0`).
 fn has_secure_true_nearby(source: &str, line_idx: usize) -> bool {
     let lines: Vec<&str> = source.lines().collect();
     let start = line_idx.saturating_sub(8);
@@ -74,7 +56,6 @@ fn has_secure_true_nearby(source: &str, line_idx: usize) -> bool {
         if !lower.contains("secure") {
             continue;
         }
-        // Object property `secure:` followed by a non-false value.
         if let Some(rel) = lower.find("secure") {
             let after = rel + "secure".len();
             let bytes = lower.as_bytes();
@@ -94,18 +75,17 @@ fn has_secure_true_nearby(source: &str, line_idx: usize) -> bool {
     false
 }
 
-/// Raw-header form: same line should also contain `Secure` (case-insensitive,
-/// outside of the value `none`).
 fn header_has_secure_token(line: &str) -> bool {
     let lower = line.to_ascii_lowercase();
-    // Match a `secure` token after `samesite=none`. Cheap: look for "secure"
-    // anywhere on the line, since the only realistic position is the same
-    // Set-Cookie value.
     lower.contains("secure")
 }
 
-impl TextCheck for Check {
-    fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
+impl OxcCheck for Check {
+    fn run_on_semantic<'a>(
+        &self,
+        _semantic: &'a oxc_semantic::Semantic<'a>,
+        ctx: &CheckCtx,
+    ) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
         for (idx, line) in ctx.source.lines().enumerate() {
             if let Some(col) = find_samesite_none_object(line) {
@@ -124,8 +104,8 @@ impl TextCheck for Check {
                 }
                 continue;
             }
-            if let Some(col) = find_samesite_none_header(line)
-                && !header_has_secure_token(line) {
+            if let Some(col) = find_samesite_none_header(line) {
+                if !header_has_secure_token(line) {
                     diagnostics.push(Diagnostic {
                         path: Arc::clone(&ctx.path_arc),
                         line: idx + 1,
@@ -138,6 +118,7 @@ impl TextCheck for Check {
                         span: None,
                     });
                 }
+            }
         }
         diagnostics
     }
@@ -146,10 +127,9 @@ impl TextCheck for Check {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
 
     fn run(source: &str) -> Vec<Diagnostic> {
-        Check.check(&CheckCtx::for_test(Path::new("session.ts"), source))
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
     }
 
     #[test]
