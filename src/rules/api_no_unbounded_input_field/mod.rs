@@ -4,7 +4,8 @@
 //! shapes (recognised by name suffix) are skipped — they are not HTTP
 //! request inputs.
 
-mod typescript;
+#[cfg(test)] mod typescript;
+mod oxc_typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
@@ -30,15 +31,15 @@ pub fn register() -> RuleDef {
         backends: vec![
             (
                 Language::TypeScript,
-                Backend::TreeSitter(Box::new(typescript::Check)),
+                Backend::Oxc(Box::new(oxc_typescript::Check)),
             ),
             (
                 Language::JavaScript,
-                Backend::TreeSitter(Box::new(typescript::Check)),
+                Backend::Oxc(Box::new(oxc_typescript::Check)),
             ),
             (
                 Language::Tsx,
-                Backend::TreeSitter(Box::new(typescript::Check)),
+                Backend::Oxc(Box::new(oxc_typescript::Check)),
             ),
         ],
     }
