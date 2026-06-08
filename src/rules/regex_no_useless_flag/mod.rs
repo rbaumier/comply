@@ -17,6 +17,9 @@ pub const META: RuleMeta = RuleMeta {
     severity: Severity::Warning,
     doc_url: Some("https://ota-meshi.github.io/eslint-plugin-regexp/rules/no-useless-flag.html"),
     categories: &["regex"],
+
+    skip_in_test_dir: false,
+    skip_in_relaxed_dir: false,
 };
 
 pub fn register() -> RuleDef {

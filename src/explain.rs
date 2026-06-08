@@ -99,6 +99,8 @@ mod tests {
             severity: Severity::Warning,
             doc_url: None,
             categories: &[],
+            skip_in_test_dir: false,
+            skip_in_relaxed_dir: false,
         };
         let out = format_meta(&meta);
         assert!(out.contains("[test-rule]"));

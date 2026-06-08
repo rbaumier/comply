@@ -90,6 +90,8 @@ fn entry(
             severity,
             doc_url: None,
             categories: &["typescript"],
+            skip_in_test_dir: false,
+            skip_in_relaxed_dir: false,
         },
         oxlint_key,
         TS_FAMILY,

@@ -65,6 +65,9 @@ pub const META: RuleMeta = RuleMeta {
         "https://github.com/sindresorhus/eslint-plugin-unicorn/blob/main/docs/rules/catch-error-name.md",
     ),
     categories: &["unicorn"],
+
+    skip_in_test_dir: false,
+    skip_in_relaxed_dir: false,
 };
 
 /// The canonical name the rule wants on the catch parameter.

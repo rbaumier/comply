@@ -18,6 +18,9 @@ pub const META: RuleMeta = RuleMeta {
         "https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Set-Cookie#samesitesamesite-value",
     ),
     categories: &["security"],
+
+    skip_in_test_dir: false,
+    skip_in_relaxed_dir: true,
 };
 
 pub fn register() -> RuleDef {

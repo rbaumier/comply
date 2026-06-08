@@ -15,6 +15,9 @@ pub const META: RuleMeta = RuleMeta {
     severity: Severity::Warning,
     doc_url: None,
     categories: &["i18n"],
+
+    skip_in_test_dir: false,
+    skip_in_relaxed_dir: false,
 };
 
 fn is_malformed(inner: &str) -> bool {

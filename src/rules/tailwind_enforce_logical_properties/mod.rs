@@ -15,6 +15,9 @@ pub const META: RuleMeta = RuleMeta {
     severity: Severity::Warning,
     doc_url: Some("https://tailwindcss.com/docs/margin#using-logical-properties"),
     categories: &["tailwind", "internationalization"],
+
+    skip_in_test_dir: true,
+    skip_in_relaxed_dir: false,
 };
 
 /// True if any class in `s` uses a physical directional spacing prefix

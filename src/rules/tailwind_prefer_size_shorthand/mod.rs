@@ -15,6 +15,9 @@ pub const META: RuleMeta = RuleMeta {
     severity: Severity::Warning,
     doc_url: None,
     categories: &["tailwind"],
+
+    skip_in_test_dir: true,
+    skip_in_relaxed_dir: false,
 };
 
 /// Return the matching `w-V`/`h-V` value if both appear in the class string.

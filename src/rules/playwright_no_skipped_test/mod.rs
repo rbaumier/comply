@@ -20,6 +20,9 @@ pub const META: RuleMeta = RuleMeta {
         "https://github.com/playwright-community/eslint-plugin-playwright/blob/main/docs/rules/no-skipped-test.md",
     ),
     categories: &["testing"],
+
+    skip_in_test_dir: false,
+    skip_in_relaxed_dir: false,
 };
 
 pub fn register() -> RuleDef {

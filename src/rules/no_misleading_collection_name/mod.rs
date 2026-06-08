@@ -20,6 +20,9 @@ pub const META: RuleMeta = RuleMeta {
     severity: Severity::Error,
     doc_url: None,
     categories: &["naming"],
+
+    skip_in_test_dir: false,
+    skip_in_relaxed_dir: false,
 };
 
 /// Claimed vs. actual collection shape inferred from a binding name's

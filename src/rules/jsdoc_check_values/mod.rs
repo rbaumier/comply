@@ -19,6 +19,9 @@ pub const META: RuleMeta = RuleMeta {
         "https://github.com/gajus/eslint-plugin-jsdoc/blob/main/docs/rules/check-values.md",
     ),
     categories: &["jsdoc"],
+
+    skip_in_test_dir: false,
+    skip_in_relaxed_dir: false,
 };
 
 pub fn register() -> RuleDef {

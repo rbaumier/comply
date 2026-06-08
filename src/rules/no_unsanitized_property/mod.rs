@@ -21,6 +21,9 @@ pub const META: RuleMeta = RuleMeta {
         "https://developer.mozilla.org/en-US/docs/Web/API/Element/innerHTML#security_considerations",
     ),
     categories: &["security"],
+
+    skip_in_test_dir: false,
+    skip_in_relaxed_dir: true,
 };
 
 pub fn register() -> RuleDef {

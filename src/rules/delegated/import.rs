@@ -16,6 +16,8 @@ pub fn register_all() -> Vec<RuleDef> {
                 severity: Severity::Error,
                 doc_url: None,
                 categories: &["typescript"],
+                skip_in_test_dir: false,
+                skip_in_relaxed_dir: false,
             },
             "import/no-mutable-exports",
             TS_FAMILY,

@@ -17,6 +17,9 @@ pub const META: RuleMeta = RuleMeta {
     severity: Severity::Warning,
     doc_url: Some("https://nextjs.org/docs/messages/no-html-link-for-pages"),
     categories: &["nextjs", "performance"],
+
+    skip_in_test_dir: false,
+    skip_in_relaxed_dir: false,
 };
 
 pub fn register() -> RuleDef {

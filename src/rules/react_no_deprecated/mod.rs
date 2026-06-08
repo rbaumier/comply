@@ -25,6 +25,9 @@ pub const META: RuleMeta = RuleMeta {
         "https://github.com/jsx-eslint/eslint-plugin-react/blob/master/docs/rules/no-deprecated.md",
     ),
     categories: &["react"],
+
+    skip_in_test_dir: false,
+    skip_in_relaxed_dir: false,
 };
 
 pub fn register() -> RuleDef {

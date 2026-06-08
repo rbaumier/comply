@@ -20,6 +20,9 @@ pub const META: RuleMeta = RuleMeta {
         "https://ota-meshi.github.io/eslint-plugin-regexp/rules/no-dupe-disjunctions.html",
     ),
     categories: &["regex"],
+
+    skip_in_test_dir: false,
+    skip_in_relaxed_dir: false,
 };
 
 pub fn register() -> RuleDef {

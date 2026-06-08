@@ -20,6 +20,9 @@ pub const META: RuleMeta = RuleMeta {
         "https://nextjs.org/docs/app/building-your-application/data-fetching/server-actions-and-mutations",
     ),
     categories: &["nextjs"],
+
+    skip_in_test_dir: false,
+    skip_in_relaxed_dir: false,
 };
 
 pub fn register() -> RuleDef {

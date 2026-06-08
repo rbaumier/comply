@@ -17,6 +17,9 @@ pub const META: RuleMeta = RuleMeta {
         "https://tanstack.com/query/v5/docs/react/guides/infinite-queries#what-if-i-want-to-limit-the-number-of-pages",
     ),
     categories: &["tanstack-query"],
+
+    skip_in_test_dir: false,
+    skip_in_relaxed_dir: false,
 };
 
 pub fn register() -> RuleDef {

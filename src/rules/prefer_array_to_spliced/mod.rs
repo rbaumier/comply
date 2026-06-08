@@ -19,6 +19,9 @@ pub const META: RuleMeta = RuleMeta {
         "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Array/toSpliced",
     ),
     categories: &["unicorn", "es2023"],
+
+    skip_in_test_dir: false,
+    skip_in_relaxed_dir: false,
 };
 
 pub fn register() -> RuleDef {

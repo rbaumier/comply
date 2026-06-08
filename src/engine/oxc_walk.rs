@@ -29,8 +29,7 @@ pub(super) fn oxc_pre_enabled(ld: &LangDispatch, ctx: &CheckCtx) -> Vec<bool> {
                 ctx.config.is_rule_enabled(meta.id, ctx.path)
             };
             config_enabled
-                && !super::should_skip_test_fixture_rule(meta, ctx.file)
-                && !super::should_skip_relaxed_directory_rule(meta, ctx.file)
+                && meta.applies_to_file(ctx.file)
                 && pf
                     .as_ref()
                     .is_none_or(|f| source_matches_prefilter(ctx.source, f))

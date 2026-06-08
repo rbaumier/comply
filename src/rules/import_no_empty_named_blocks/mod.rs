@@ -19,6 +19,9 @@ pub const META: RuleMeta = RuleMeta {
         "https://github.com/import-js/eslint-plugin-import/blob/main/docs/rules/no-empty-named-blocks.md",
     ),
     categories: &["imports"],
+
+    skip_in_test_dir: false,
+    skip_in_relaxed_dir: false,
 };
 
 pub fn register() -> RuleDef {

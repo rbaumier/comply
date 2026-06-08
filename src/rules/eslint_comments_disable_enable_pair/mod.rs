@@ -18,6 +18,9 @@ pub const META: RuleMeta = RuleMeta {
     severity: Severity::Warning,
     doc_url: Some("https://mysticatea.github.io/eslint-plugin-eslint-comments/rules/disable-enable-pair.html"),
     categories: &["eslint-comments"],
+
+    skip_in_test_dir: false,
+    skip_in_relaxed_dir: false,
 };
 
 pub fn register() -> RuleDef {

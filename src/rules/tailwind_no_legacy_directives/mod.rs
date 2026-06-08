@@ -16,6 +16,9 @@ pub const META: RuleMeta = RuleMeta {
     severity: Severity::Warning,
     doc_url: None,
     categories: &["tailwind"],
+
+    skip_in_test_dir: true,
+    skip_in_relaxed_dir: false,
 };
 
 pub fn register() -> RuleDef {

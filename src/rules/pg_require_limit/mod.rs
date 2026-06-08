@@ -17,6 +17,9 @@ pub const META: RuleMeta = RuleMeta {
     severity: Severity::Error,
     doc_url: Some("https://wiki.postgresql.org/wiki/Don%27t_Do_This#Don.27t_forget_LIMIT"),
     categories: &["database", "postgresql"],
+
+    skip_in_test_dir: false,
+    skip_in_relaxed_dir: false,
 };
 
 pub fn register() -> RuleDef {

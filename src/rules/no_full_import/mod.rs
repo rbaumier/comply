@@ -19,6 +19,9 @@ pub const META: RuleMeta = RuleMeta {
         "https://github.com/jfmengels/eslint-plugin-lodash-fp/blob/master/docs/rules/use-fp.md",
     ),
     categories: &["imports"],
+
+    skip_in_test_dir: false,
+    skip_in_relaxed_dir: false,
 };
 
 pub fn register() -> RuleDef {

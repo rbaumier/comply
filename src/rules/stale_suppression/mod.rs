@@ -26,6 +26,9 @@ pub const META: RuleMeta = RuleMeta {
     severity: Severity::Warning,
     doc_url: None,
     categories: &["comments", "suppressions"],
+
+    skip_in_test_dir: false,
+    skip_in_relaxed_dir: false,
 };
 
 /// Register the rule with no backends — diagnostics are emitted by

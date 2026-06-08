@@ -19,6 +19,9 @@ pub const META: RuleMeta = RuleMeta {
         "https://github.com/eslint-community/eslint-plugin-n/blob/master/docs/rules/global-require.md",
     ),
     categories: &["node"],
+
+    skip_in_test_dir: false,
+    skip_in_relaxed_dir: false,
 };
 
 pub fn register() -> RuleDef {

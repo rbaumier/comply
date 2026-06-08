@@ -382,6 +382,8 @@ mod tests {
             severity: Severity::Error,
             doc_url: None,
             categories: &[],
+            skip_in_test_dir: false,
+            skip_in_relaxed_dir: false,
         };
         let mut remap: HashMap<String, &'static RuleMeta> = HashMap::new();
         remap.insert("clippy::unwrap_used".to_string(), &META);
@@ -408,6 +410,8 @@ mod tests {
             severity: Severity::Error,
             doc_url: None,
             categories: &[],
+            skip_in_test_dir: false,
+            skip_in_relaxed_dir: false,
         };
         let mut remap: HashMap<String, &'static RuleMeta> = HashMap::new();
         remap.insert("clippy::unwrap_used".to_string(), &META);

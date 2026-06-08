@@ -15,6 +15,9 @@ pub const META: RuleMeta = RuleMeta {
     severity: Severity::Warning,
     doc_url: Some("https://tailwindcss.com/docs/upgrade-guide"),
     categories: &["tailwind"],
+
+    skip_in_test_dir: true,
+    skip_in_relaxed_dir: false,
 };
 
 /// Deprecated class → recommended replacement.

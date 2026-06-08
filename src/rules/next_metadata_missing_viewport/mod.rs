@@ -17,6 +17,8 @@ pub const META: RuleMeta = RuleMeta {
     severity: Severity::Warning,
     doc_url: Some("https://nextjs.org/docs/app/api-reference/functions/generate-viewport"),
     categories: &["nextjs", "a11y"],
+    skip_in_test_dir: true,
+    skip_in_relaxed_dir: false,
 };
 
 pub fn register() -> RuleDef {

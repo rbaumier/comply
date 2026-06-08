@@ -18,6 +18,9 @@ pub const META: RuleMeta = RuleMeta {
         "https://www.electronjs.org/docs/latest/tutorial/security#2-do-not-enable-nodejs-integration-for-remote-content",
     ),
     categories: &["security"],
+
+    skip_in_test_dir: false,
+    skip_in_relaxed_dir: true,
 };
 
 pub fn register() -> RuleDef {
