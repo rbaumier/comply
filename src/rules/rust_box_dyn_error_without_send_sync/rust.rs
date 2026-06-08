@@ -13,6 +13,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
+use crate::rules::rust_helpers::{is_in_test_context, is_under_tests_dir};
 
 const KINDS: &[&str] = &["generic_type"];
 
@@ -53,6 +54,9 @@ impl AstCheck for Check {
         let has_send = args_text.contains("Send");
         let has_sync = args_text.contains("Sync");
         if has_send && has_sync {
+            return;
+        }
+        if is_in_test_context(node, source_bytes) || is_under_tests_dir(ctx.path) {
             return;
         }
         let missing = match (has_send, has_sync) {
@@ -141,6 +145,30 @@ mod tests {
     fn allows_dyn_my_error_subclass() {
         // `dyn MyError` should NOT match — only the standalone `Error` token does.
         let source = "fn f() -> Box<dyn MyError> { todo!() }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_box_dyn_error_in_tokio_test() {
+        let source = r#"
+            #[tokio::test]
+            async fn test() -> Result<(), Box<dyn std::error::Error>> {
+                Ok(())
+            }
+        "#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_box_dyn_error_in_cfg_test_mod() {
+        let source = r#"
+            #[cfg(test)]
+            mod tests {
+                fn test_fn() -> Result<(), Box<dyn std::error::Error>> {
+                    Ok(())
+                }
+            }
+        "#;
         assert!(run_on(source).is_empty());
     }
 }
