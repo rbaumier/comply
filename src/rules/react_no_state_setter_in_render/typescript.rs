@@ -14,7 +14,7 @@
 //! arrow functions, useEffect callbacks, event handlers, etc.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 
 fn starts_with_uppercase(name: &str) -> bool {
     name.chars().next().is_some_and(|c| c.is_ascii_uppercase())
@@ -26,8 +26,8 @@ fn starts_with_use_hook(name: &str) -> bool {
 
 /// Walk the function body and collect setter names from
 /// `const [x, setX] = useState(...)`.
-fn collect_setters(body: tree_sitter::Node, source: &[u8]) -> HashSet<String> {
-    let mut setters = HashSet::new();
+fn collect_setters(body: tree_sitter::Node, source: &[u8]) -> FxHashSet<String> {
+    let mut setters = FxHashSet::default();
     let mut stack: Vec<tree_sitter::Node> = vec![body];
     while let Some(node) = stack.pop() {
         if node.kind() == "variable_declarator" {
@@ -78,7 +78,7 @@ fn collect_setters(body: tree_sitter::Node, source: &[u8]) -> HashSet<String> {
 fn find_direct_setter_calls(
     body: tree_sitter::Node,
     source: &[u8],
-    setters: &HashSet<String>,
+    setters: &FxHashSet<String>,
 ) -> Vec<tree_sitter::Node<'static>> {
     // We can't return Node<'static> safely; collect (line, column, name).
     let _ = (body, source, setters);
@@ -88,7 +88,7 @@ fn find_direct_setter_calls(
 fn walk_for_calls(
     body: tree_sitter::Node,
     source: &[u8],
-    setters: &HashSet<String>,
+    setters: &FxHashSet<String>,
     out: &mut Vec<(usize, usize, String)>,
 ) {
     let mut stack: Vec<tree_sitter::Node> = vec![body];

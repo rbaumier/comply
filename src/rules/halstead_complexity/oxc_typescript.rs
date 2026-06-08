@@ -9,7 +9,7 @@
 //! counting — they are routing labels, not algorithmic elements, analogous to
 //! how cyclomatic-complexity counts a switch as +1 regardless of arm count.
 
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -133,8 +133,8 @@ impl OxcCheck for Check {
 
 #[derive(Default)]
 struct Counts {
-    distinct_ops: HashSet<String>,
-    distinct_operands: HashSet<String>,
+    distinct_ops: FxHashSet<String>,
+    distinct_operands: FxHashSet<String>,
     total_ops: u32,
     total_operands: u32,
 }

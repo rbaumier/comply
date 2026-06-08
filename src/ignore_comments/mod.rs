@@ -11,27 +11,27 @@ mod payload;
 
 use crate::diagnostic::Diagnostic;
 use rayon::prelude::*;
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::path::{Path, PathBuf};
 
 /// Result of parsing comply-ignore comments in a source file.
 #[derive(Debug)]
 pub struct IgnoreResult {
     /// Map: line number → set of rule ids suppressed on that line. Keyed
-    /// this way (instead of HashSet<(line, String)>) so the lookup in
+    /// this way (instead of FxHashSet<(line, String)>) so the lookup in
     /// `apply_suppressions` doesn't have to clone the rule_id per check.
-    pub suppressions: HashMap<usize, HashSet<String>>,
+    pub suppressions: FxHashMap<usize, FxHashSet<String>>,
     /// Set of rule ids suppressed for the entire file via the
     /// `// comply-ignore-file: <rule-id> — <reason>` directive.
-    pub file_suppressions: HashSet<String>,
+    pub file_suppressions: FxHashSet<String>,
     /// Diagnostics for malformed comply-ignore comments (missing justification).
     pub bad_ignores: Vec<Diagnostic>,
 }
 
 /// Parse all comply-ignore comments in source text.
 pub fn parse_ignores(path: &Path, source: &str) -> IgnoreResult {
-    let mut suppressions: HashMap<usize, HashSet<String>> = HashMap::new();
-    let mut file_suppressions: HashSet<String> = HashSet::new();
+    let mut suppressions: FxHashMap<usize, FxHashSet<String>> = FxHashMap::default();
+    let mut file_suppressions: FxHashSet<String> = FxHashSet::default();
     let mut bad_ignores = Vec::new();
 
     // Strip leading UTF-8 BOM — `is_whitespace` doesn't include U+FEFF, so
@@ -42,7 +42,7 @@ pub fn parse_ignores(path: &Path, source: &str) -> IgnoreResult {
     // marker lines. Needed in pass 2 to forward above-line markers past
     // stacked siblings (ESLint behaviour, rbaumier/comply#22).
     let mut parses: Vec<(usize, line::LineParse)> = Vec::new();
-    let mut marker_lines: HashSet<usize> = HashSet::new();
+    let mut marker_lines: FxHashSet<usize> = FxHashSet::default();
     let mut last_line = 0usize;
     for (idx, raw_line) in source.lines().enumerate() {
         let line_num = idx + 1;
@@ -54,7 +54,7 @@ pub fn parse_ignores(path: &Path, source: &str) -> IgnoreResult {
     }
 
     // Skip JSDoc lines when forwarding above-line markers so a `// comply-ignore` above `/** ... */` still reaches the declaration below (#185).
-    let mut jsdoc_lines: HashSet<usize> = HashSet::new();
+    let mut jsdoc_lines: FxHashSet<usize> = FxHashSet::default();
     {
         let mut in_block = false;
         for (idx, raw_line) in source.lines().enumerate() {
@@ -152,20 +152,20 @@ pub fn apply_suppressions(
 ///
 /// **Path canonicalization**: oxlint reports paths it canonicalized
 /// internally, while the discovery walker returns paths as passed by the
-/// user. Without canonicalizing both sides, the HashMap lookup would
+/// user. Without canonicalizing both sides, the FxHashMap lookup would
 /// silently miss for every oxlint diagnostic — completely defeating
 /// `comply-ignore` for any oxlint rule.
 pub fn apply_to_all(
     diagnostics: Vec<Diagnostic>,
     discovered: &[crate::files::SourceFile],
-    clean_files: &HashSet<PathBuf>,
+    clean_files: &FxHashSet<PathBuf>,
 ) -> Vec<Diagnostic> {
     // Group diagnostics by their as-reported path. The in-process engine and
     // clone detector report the discovery path verbatim (a cloned `Arc<Path>`),
     // so this raw match needs no syscall. Keyed by `Arc<Path>` so grouping is a
     // refcount bump, not a path allocation.
-    let mut by_raw: HashMap<std::sync::Arc<Path>, Vec<Diagnostic>> =
-        HashMap::with_capacity(diagnostics.len());
+    let mut by_raw: FxHashMap<std::sync::Arc<Path>, Vec<Diagnostic>> =
+        FxHashMap::with_capacity_and_hasher(diagnostics.len(), Default::default());
     for d in diagnostics {
         by_raw.entry(std::sync::Arc::clone(&d.path)).or_default().push(d);
     }
@@ -189,7 +189,7 @@ pub fn apply_to_all(
     // syscall per discovered file.
     let mut orphans: Vec<Diagnostic> = Vec::new();
     if !by_raw.is_empty() {
-        let mut by_canon: HashMap<PathBuf, Vec<Diagnostic>> = HashMap::new();
+        let mut by_canon: FxHashMap<PathBuf, Vec<Diagnostic>> = FxHashMap::default();
         for (raw, diags) in by_raw.drain() {
             by_canon.entry(canonical_key(&raw)).or_default().extend(diags);
         }
@@ -235,7 +235,7 @@ pub fn apply_to_all(
     result
 }
 
-/// Canonical path key for HashMap matching. Falls back to the original path
+/// Canonical path key for FxHashMap matching. Falls back to the original path
 /// if the file no longer exists (canonicalize fails on missing files).
 fn canonical_key(path: &std::path::Path) -> std::path::PathBuf {
     std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())

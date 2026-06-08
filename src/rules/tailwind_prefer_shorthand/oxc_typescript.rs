@@ -1,6 +1,6 @@
 //! tailwind-prefer-shorthand oxc backend for TS / JS / TSX.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -40,7 +40,7 @@ impl OxcCheck for Check {
         };
         let class_str = lit.value.as_str();
 
-        let mut buckets: HashMap<(&str, bool), Vec<&str>> = HashMap::new();
+        let mut buckets: FxHashMap<(&str, bool), Vec<&str>> = FxHashMap::default();
         for class in class_str.split_whitespace() {
             let (variant, rest) = super::split_variant(class);
             let (imp, base) = super::strip_important(rest);

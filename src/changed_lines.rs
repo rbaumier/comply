@@ -10,7 +10,8 @@
 //! only the reporting step is filtered.
 
 use anyhow::{Context, Result, bail};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::BTreeSet;
+use rustc_hash::FxHashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -20,7 +21,7 @@ use crate::diagnostic::Diagnostic;
 /// Map from repo-relative file path to the 1-based line numbers that
 /// the selected scan mode introduced. `BTreeSet` keeps lookups O(log n)
 /// and the structure small for large diffs.
-pub type ChangedLines = HashMap<PathBuf, BTreeSet<usize>>;
+pub type ChangedLines = FxHashMap<PathBuf, BTreeSet<usize>>;
 
 /// Compute the set of changed lines per file for the given scan mode.
 /// `ScanMode::All` has no associated diff — returns an empty map and
@@ -28,7 +29,7 @@ pub type ChangedLines = HashMap<PathBuf, BTreeSet<usize>>;
 /// layer. Kept infallible here so callers don't need a separate branch.
 pub fn changed_lines(mode: &ScanMode) -> Result<ChangedLines> {
     let output = match mode {
-        ScanMode::All(_) => return Ok(HashMap::new()),
+        ScanMode::All(_) => return Ok(FxHashMap::default()),
         ScanMode::WorkingTree => run_git_diff(&["diff", "--unified=0", "--no-color"]),
         ScanMode::Staged => run_git_diff(&["diff", "--cached", "--unified=0", "--no-color"]),
         ScanMode::LastCommit => {
@@ -103,7 +104,7 @@ fn run_git_diff(args: &[&str]) -> Result<String> {
 /// line on the new side and `B` is the count (default 1 when omitted,
 /// 0 for pure-deletion hunks which we skip).
 fn parse_unified_diff(text: &str) -> ChangedLines {
-    let mut out: ChangedLines = HashMap::new();
+    let mut out: ChangedLines = FxHashMap::default();
     let mut current: Option<PathBuf> = None;
 
     for line in text.lines() {
@@ -309,7 +310,7 @@ diff --git a/x.rs b/x.rs
     #[test]
     fn diag_in_diff_drops_file_not_in_diff() {
         use crate::diagnostic::Severity;
-        let changed: ChangedLines = HashMap::new();
+        let changed: ChangedLines = FxHashMap::default();
         let diag = Diagnostic {
             path: std::sync::Arc::from(std::path::Path::new("nope.rs")),
             line: 1,

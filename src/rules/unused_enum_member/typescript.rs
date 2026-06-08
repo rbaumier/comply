@@ -18,7 +18,7 @@
 //! 3. Diff: any member with zero recorded accesses produces a diagnostic.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap, FxHashSet};
 
 fn text_of<'a>(node: tree_sitter::Node, source: &'a [u8]) -> &'a str {
     std::str::from_utf8(&source[node.byte_range()]).unwrap_or("")
@@ -27,7 +27,7 @@ fn text_of<'a>(node: tree_sitter::Node, source: &'a [u8]) -> &'a str {
 fn collect_enums(
     root: tree_sitter::Node,
     source: &[u8],
-    out: &mut HashMap<String, Vec<(String, usize)>>,
+    out: &mut FxHashMap<String, Vec<(String, usize)>>,
 ) {
     let mut stack = vec![root];
     while let Some(current) = stack.pop() {
@@ -91,8 +91,8 @@ fn collect_enums(
 fn collect_usages(
     root: tree_sitter::Node,
     source: &[u8],
-    enums: &HashMap<String, Vec<(String, usize)>>,
-    used: &mut HashSet<(String, String)>,
+    enums: &FxHashMap<String, Vec<(String, usize)>>,
+    used: &mut FxHashSet<(String, String)>,
 ) {
     let mut stack = vec![root];
     while let Some(current) = stack.pop() {
@@ -123,14 +123,14 @@ fn collect_usages(
 }
 
 crate::ast_check! { on ["program"] prefilter = ["enum"] => |node, source, ctx, diagnostics|
-    let mut enums: HashMap<String, Vec<(String, usize)>> = HashMap::new();
+    let mut enums: FxHashMap<String, Vec<(String, usize)>> = FxHashMap::default();
     collect_enums(node, source, &mut enums);
 
     if enums.is_empty() {
         return;
     }
 
-    let mut used: HashSet<(String, String)> = HashSet::new();
+    let mut used: FxHashSet<(String, String)> = FxHashSet::default();
     collect_usages(node, source, &enums, &mut used);
 
     for (enum_name, members) in &enums {

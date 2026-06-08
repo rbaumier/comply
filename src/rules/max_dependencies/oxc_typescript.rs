@@ -1,7 +1,7 @@
 //! max-dependencies OXC backend — count unique import sources and flag
 //! when the count exceeds the configured threshold.
 
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 use std::sync::Arc;
 
 use crate::diagnostic::{Diagnostic, Severity};
@@ -17,7 +17,7 @@ impl OxcCheck for Check {
         ctx: &CheckCtx,
     ) -> Vec<Diagnostic> {
         let max = ctx.config.threshold("max-dependencies", "max", ctx.lang);
-        let mut seen: HashSet<&str> = HashSet::new();
+        let mut seen: FxHashSet<&str> = FxHashSet::default();
         let mut last_import_offset: u32 = 0;
 
         for node in semantic.nodes().iter() {

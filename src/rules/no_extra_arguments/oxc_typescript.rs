@@ -4,7 +4,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, CheckCtx, OxcCheck};
 use oxc_ast::ast::{BindingPattern, Expression, FormalParameters};
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 use std::sync::Arc;
 
 struct FunctionInfo {
@@ -27,7 +27,7 @@ impl OxcCheck for Check {
         ctx: &CheckCtx,
     ) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
-        let mut functions: HashMap<String, FunctionInfo> = HashMap::new();
+        let mut functions: FxHashMap<String, FunctionInfo> = FxHashMap::default();
 
         // Pass 1: collect function declarations and arrow/function expression assignments.
         for node in semantic.nodes().iter() {

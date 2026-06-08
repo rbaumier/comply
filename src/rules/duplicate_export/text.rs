@@ -13,7 +13,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::project::import_index::ExportKind;
 use crate::rules::backend::{CheckCtx, TextCheck};
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 use std::path::{Path, PathBuf};
 
 const RULE_ID: &str = "duplicate-export";
@@ -34,7 +34,7 @@ impl TextCheck for Check {
         }
 
         // symbol name -> list of (barrel file, line) where it is re-exported.
-        let mut reexports: HashMap<String, Vec<(PathBuf, usize)>> = HashMap::new();
+        let mut reexports: FxHashMap<String, Vec<(PathBuf, usize)>> = FxHashMap::default();
         for (path, exports) in index.iter_exports() {
             for export in exports {
                 if !matches!(export.kind, ExportKind::ReExport) {

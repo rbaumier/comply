@@ -1,6 +1,6 @@
 //! import-namespace backend — verify namespace imports' member accesses resolve to real exports.
 
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::path::PathBuf;
 
 use crate::diagnostic::{Diagnostic, Severity};
@@ -15,7 +15,7 @@ crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
     let canon = std::fs::canonicalize(ctx.path).unwrap_or_else(|_| ctx.path.to_path_buf());
 
     // 1. Collect namespace imports: local_name → resolved source path.
-    let mut ns_map: HashMap<String, PathBuf> = HashMap::new();
+    let mut ns_map: FxHashMap<String, PathBuf> = FxHashMap::default();
     for imp in index.get_imports(&canon) {
         if imp.kind == ImportKind::Namespace
             && let Some(src) = &imp.source_path
@@ -30,7 +30,7 @@ crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
 
     // 2. For each source module, collect exported names. Skip if the module
     //    has `export * from '…'` — we can't enumerate transitive exports.
-    let mut exports_by_source: HashMap<PathBuf, HashSet<String>> = HashMap::new();
+    let mut exports_by_source: FxHashMap<PathBuf, FxHashSet<String>> = FxHashMap::default();
     for src in ns_map.values() {
         if exports_by_source.contains_key(src) {
             continue;
@@ -40,7 +40,7 @@ crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
         if has_star {
             continue;
         }
-        let names: HashSet<String> = exports.iter().map(|e| e.name.clone()).collect();
+        let names: FxHashSet<String> = exports.iter().map(|e| e.name.clone()).collect();
         exports_by_source.insert(src.clone(), names);
     }
 
@@ -78,8 +78,8 @@ crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
 fn inspect_member(
     member: tree_sitter::Node,
     source: &[u8],
-    ns_map: &HashMap<String, PathBuf>,
-    exports_by_source: &HashMap<PathBuf, HashSet<String>>,
+    ns_map: &FxHashMap<String, PathBuf>,
+    exports_by_source: &FxHashMap<PathBuf, FxHashSet<String>>,
     ctx: &crate::rules::backend::CheckCtx,
     diagnostics: &mut Vec<Diagnostic>,
 ) {

@@ -3,7 +3,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 use std::sync::Arc;
 
 pub struct Check;
@@ -20,7 +20,7 @@ impl OxcCheck for Check {
     ) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
         // (module source, is_type_import) -> first line number
-        let mut seen: HashMap<(&str, bool), usize> = HashMap::new();
+        let mut seen: FxHashMap<(&str, bool), usize> = FxHashMap::default();
 
         for node in semantic.nodes().iter() {
             let AstKind::ImportDeclaration(import) = node.kind() else {

@@ -1,5 +1,5 @@
 use crate::diagnostic::{Diagnostic, Severity};
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 
 crate::ast_check! { on ["function_declaration", "function_expression", "method_definition", "arrow_function"] => |node, source, ctx, diagnostics|
     let body = match node.kind() {
@@ -20,7 +20,7 @@ crate::ast_check! { on ["function_declaration", "function_expression", "method_d
     let Some(body) = body else { return; };
 
     // Collect return statement value types
-    let mut return_types: HashSet<&str> = HashSet::new();
+    let mut return_types: FxHashSet<&str> = FxHashSet::default();
     collect_return_types(body, source, &mut return_types);
 
     // Skip if less than 2 different types or if empty
@@ -50,7 +50,7 @@ crate::ast_check! { on ["function_declaration", "function_expression", "method_d
 fn collect_return_types<'a>(
     node: tree_sitter::Node<'a>,
     source: &'a [u8],
-    types: &mut HashSet<&'a str>,
+    types: &mut FxHashSet<&'a str>,
 ) {
     if node.kind() == "return_statement"
         && let Some(value) = node.named_child(0)

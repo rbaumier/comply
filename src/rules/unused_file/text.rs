@@ -43,10 +43,10 @@ impl TextCheck for Check {
             .project_root
             .as_deref()
             .map(|r| std::fs::canonicalize(r).unwrap_or_else(|_| r.to_path_buf()));
-        // A `HashSet` so the workspace-root membership test in `is_entry_point`
+        // A `FxHashSet` so the workspace-root membership test in `is_entry_point`
         // is O(1) instead of a linear scan per indexed path — a monorepo can
         // declare hundreds of workspace roots, making that scan O(files × roots).
-        let canon_workspace_roots: std::collections::HashSet<std::path::PathBuf> = ctx
+        let canon_workspace_roots: rustc_hash::FxHashSet<std::path::PathBuf> = ctx
             .project
             .workspace_roots
             .iter()
@@ -96,7 +96,7 @@ fn detect_entry_points<'a>(
     index: &'a ImportIndex,
     project: &ProjectCtx,
     canon_root: Option<&Path>,
-    canon_workspace_roots: &std::collections::HashSet<std::path::PathBuf>,
+    canon_workspace_roots: &rustc_hash::FxHashSet<std::path::PathBuf>,
 ) -> Vec<&'a Path> {
     index
         .indexed_paths()
@@ -112,7 +112,7 @@ fn is_entry_point(
     path: &Path,
     project: &ProjectCtx,
     canon_root: Option<&Path>,
-    canon_workspace_roots: &std::collections::HashSet<std::path::PathBuf>,
+    canon_workspace_roots: &rustc_hash::FxHashSet<std::path::PathBuf>,
 ) -> bool {
     let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
 

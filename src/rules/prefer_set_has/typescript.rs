@@ -1,12 +1,12 @@
 //! prefer-set-has backend — flag `const arr = [...]; arr.includes(x)` patterns.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 
 crate::ast_check! { on ["program"] prefilter = [".includes"] => |node, source, ctx, diagnostics|
     // We only run at the program (root) level to do a two-pass scan.
     // Phase 1: collect names of `const NAME = [...]` declarations.
-    let mut array_names = HashSet::new();
+    let mut array_names = FxHashSet::default();
     collect_const_arrays(node, source, &mut array_names);
 
     if array_names.is_empty() {
@@ -20,7 +20,7 @@ crate::ast_check! { on ["program"] prefilter = [".includes"] => |node, source, c
 fn collect_const_arrays<'a>(
     node: tree_sitter::Node<'a>,
     source: &[u8],
-    names: &mut HashSet<String>,
+    names: &mut FxHashSet<String>,
 ) {
     // Look for variable_declarator with kind=const and value=array.
     // tree-sitter uses `lexical_declaration` for const/let.
@@ -60,7 +60,7 @@ fn find_includes_calls(
     node: tree_sitter::Node,
     source: &[u8],
     ctx: &crate::rules::backend::CheckCtx,
-    array_names: &HashSet<String>,
+    array_names: &FxHashSet<String>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     if node.kind() == "call_expression"

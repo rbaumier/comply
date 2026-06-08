@@ -15,7 +15,7 @@
 //! constructed at all (the engine throws on `new`), and named function
 //! expressions are rare enough that the extra noise isn't worth it.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::project::import_index::CallKind;
@@ -24,17 +24,17 @@ crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
     // Run once per file, at the root.
     // 1. Collect every top-level `function_declaration` name + whether it is
     //    exported (so cross-file call-sites can join the analysis).
-    let mut declared: HashMap<String, DeclInfo> = HashMap::new();
+    let mut declared: FxHashMap<String, DeclInfo> = FxHashMap::default();
     collect_function_declarations(node, source, &mut declared);
     if declared.is_empty() {
         return;
     }
 
     // 2. Scan every call site in THIS file.
-    let declared_names: HashMap<String, tree_sitter::Range> =
+    let declared_names: FxHashMap<String, tree_sitter::Range> =
         declared.iter().map(|(n, d)| (n.clone(), d.range)).collect();
-    let mut new_sites: HashMap<String, Vec<Site>> = HashMap::new();
-    let mut plain_sites: HashMap<String, Vec<Site>> = HashMap::new();
+    let mut new_sites: FxHashMap<String, Vec<Site>> = FxHashMap::default();
+    let mut plain_sites: FxHashMap<String, Vec<Site>> = FxHashMap::default();
     collect_calls(node, source, &declared_names, ctx.path, &mut new_sites, &mut plain_sites);
 
     // 3. Merge in cross-file call sites for exported functions. The index
@@ -114,7 +114,7 @@ struct Site {
 fn collect_function_declarations(
     root: tree_sitter::Node<'_>,
     source: &[u8],
-    out: &mut HashMap<String, DeclInfo>,
+    out: &mut FxHashMap<String, DeclInfo>,
 ) {
     let mut stack = vec![root];
     while let Some(node) = stack.pop() {
@@ -147,10 +147,10 @@ fn collect_function_declarations(
 fn collect_calls(
     root: tree_sitter::Node<'_>,
     source: &[u8],
-    declared: &HashMap<String, tree_sitter::Range>,
+    declared: &FxHashMap<String, tree_sitter::Range>,
     path: &std::path::Path,
-    new_sites: &mut HashMap<String, Vec<Site>>,
-    plain_sites: &mut HashMap<String, Vec<Site>>,
+    new_sites: &mut FxHashMap<String, Vec<Site>>,
+    plain_sites: &mut FxHashMap<String, Vec<Site>>,
 ) {
     let mut stack = vec![root];
     while let Some(node) = stack.pop() {

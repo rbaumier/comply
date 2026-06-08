@@ -70,7 +70,7 @@ pub fn scan_dense_lines(
     let line_offsets = compute_line_offsets(ctx.source);
     let comment_ranges = collect_comment_ranges(tree, comment_kinds);
 
-    let mut reported_lines = std::collections::HashSet::new();
+    let mut reported_lines = rustc_hash::FxHashSet::default();
     let mut diagnostics = Vec::new();
 
     walk_tree(tree, |node| {

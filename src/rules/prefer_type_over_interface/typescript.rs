@@ -12,7 +12,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 
 #[derive(Debug)]
 pub struct Check;
@@ -23,7 +23,7 @@ pub struct Check;
 /// `finish` once the entire AST has been walked.
 #[derive(Default)]
 struct State {
-    implemented: HashSet<String>,
+    implemented: FxHashSet<String>,
     candidates: Vec<Candidate>,
 }
 

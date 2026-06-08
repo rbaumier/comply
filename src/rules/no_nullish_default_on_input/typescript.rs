@@ -13,7 +13,7 @@
 //! every enclosing function node, then flag any `param ?? x` / `param || x`
 //! pattern inside that function body.
 
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -31,7 +31,7 @@ pub struct Check;
 /// `finish` keeps the logic tolerant of traversal order).
 #[derive(Default)]
 struct State {
-    params: HashSet<String>,
+    params: FxHashSet<String>,
     candidates: Vec<Candidate>,
 }
 

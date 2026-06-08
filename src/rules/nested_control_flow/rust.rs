@@ -50,7 +50,7 @@ impl AstCheck for Check {
     }
 
     fn create_state(&self) -> Option<Box<dyn std::any::Any>> {
-        Some(Box::new(std::collections::HashSet::<usize>::new()))
+        Some(Box::new(rustc_hash::FxHashSet::<usize>::default()))
     }
 
     fn visit_node(
@@ -63,7 +63,7 @@ impl AstCheck for Check {
         let max_depth = ctx.config.threshold("nested-control-flow", "max", ctx.lang);
         let flagged_lines = state
             .unwrap()
-            .downcast_mut::<std::collections::HashSet<usize>>()
+            .downcast_mut::<rustc_hash::FxHashSet<usize>>()
             .unwrap();
 
         // Skip the inner `if_expression` of an `else if` cascade — it is

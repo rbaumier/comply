@@ -2,7 +2,7 @@
 //! does not exist in the input set.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 
 crate::ast_check! { on ["program"] => |node, _source, ctx, diagnostics|
     let index = ctx.project.import_index();
@@ -15,7 +15,7 @@ crate::ast_check! { on ["program"] => |node, _source, ctx, diagnostics|
     // Deduplicate by (specifier, line) in case the index exposes the same
     // import twice (defensive — a single `import` statement should produce
     // one entry per symbol, and we want one diagnostic per statement).
-    let mut seen: HashSet<(String, usize)> = HashSet::new();
+    let mut seen: FxHashSet<(String, usize)> = FxHashSet::default();
 
     for imp in index.get_imports(&canon) {
         let is_relative = imp.specifier.starts_with("./") || imp.specifier.starts_with("../");

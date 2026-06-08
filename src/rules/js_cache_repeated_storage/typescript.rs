@@ -1,7 +1,7 @@
 //! Flags repeated `localStorage.getItem("same-key")` calls in a function body.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 
 const STORAGE_OBJECTS: &[&str] = &["localStorage", "sessionStorage"];
 
@@ -55,7 +55,7 @@ crate::ast_check! { on ["function_declaration", "arrow_function", "function_expr
     let mut calls = Vec::new();
     collect_getitem_calls(body, source, &mut calls);
 
-    let mut seen = HashSet::new();
+    let mut seen = FxHashSet::default();
     for (key, call_node) in &calls {
         if !seen.insert(key.clone()) {
             diagnostics.push(Diagnostic {

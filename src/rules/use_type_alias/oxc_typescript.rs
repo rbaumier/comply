@@ -4,7 +4,7 @@
 //! Two-pass via `run_on_semantic`: iterate all nodes collecting union/intersection
 //! type text, then report duplicates.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 use std::sync::Arc;
 
 use crate::diagnostic::{Diagnostic, Severity};
@@ -78,7 +78,7 @@ impl OxcCheck for Check {
             return vec![];
         }
 
-        let mut annotation_lines: HashMap<String, Vec<usize>> = HashMap::new();
+        let mut annotation_lines: FxHashMap<String, Vec<usize>> = FxHashMap::default();
 
         for node in semantic.nodes().iter() {
             let span = match node.kind() {

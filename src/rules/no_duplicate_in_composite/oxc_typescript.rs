@@ -5,7 +5,7 @@ use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::TSType;
 use oxc_span::GetSpan;
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 use std::sync::Arc;
 
 pub struct Check;
@@ -15,7 +15,7 @@ fn check_members(types: &oxc_allocator::Vec<'_, TSType<'_>>, source: &str, ctx: 
         return;
     }
 
-    let mut seen = HashSet::new();
+    let mut seen = FxHashSet::default();
     for ty in types.iter() {
         let text = &source[ty.span().start as usize..ty.span().end as usize];
         let normalized = text.trim();

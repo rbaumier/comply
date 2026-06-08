@@ -50,8 +50,8 @@ impl TextCheck for Check {
 
         // Bucket openings by tag name (in source order).
         let mut diagnostics = Vec::new();
-        let mut seen_per_tag: std::collections::HashMap<String, usize> =
-            std::collections::HashMap::new();
+        let mut seen_per_tag: rustc_hash::FxHashMap<String, usize> =
+            rustc_hash::FxHashMap::default();
         for (tag, line) in &openings {
             let n = seen_per_tag.entry(tag.clone()).or_insert(0);
             *n += 1;
@@ -73,8 +73,8 @@ impl TextCheck for Check {
 }
 
 /// Count `</tagname>` occurrences per tag name (lowercased) in `template`.
-fn count_closing_tags(template: &str) -> std::collections::HashMap<String, usize> {
-    let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+fn count_closing_tags(template: &str) -> rustc_hash::FxHashMap<String, usize> {
+    let mut counts: rustc_hash::FxHashMap<String, usize> = rustc_hash::FxHashMap::default();
     let bytes = template.as_bytes();
     let len = bytes.len();
     let mut i = 0;

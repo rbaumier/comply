@@ -11,7 +11,7 @@
 //! nodes by their identifier name, and flag every signature that's part of
 //! an overload group (2+ signatures with the same name).
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -24,8 +24,8 @@ impl AstCheck for Check {
         let source_bytes = ctx.source.as_bytes();
         let root = tree.root_node();
 
-        let mut signatures: HashMap<String, Vec<tree_sitter::Node>> = HashMap::new();
-        let mut implementations: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut signatures: FxHashMap<String, Vec<tree_sitter::Node>> = FxHashMap::default();
+        let mut implementations: rustc_hash::FxHashSet<String> = rustc_hash::FxHashSet::default();
         let mut cursor = root.walk();
         for child in root.children(&mut cursor) {
             let (kind, inner) = match child.kind() {

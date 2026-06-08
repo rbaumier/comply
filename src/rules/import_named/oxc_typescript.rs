@@ -7,7 +7,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::project::import_index::{ExportKind, ImportKind};
 use crate::rules::backend::{AstType, CheckCtx, OxcCheck};
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -30,7 +30,7 @@ impl OxcCheck for Check {
         }
 
         let canon = index.canonical(ctx.path);
-        let mut exports_cache: HashMap<PathBuf, Option<HashSet<String>>> = HashMap::new();
+        let mut exports_cache: FxHashMap<PathBuf, Option<FxHashSet<String>>> = FxHashMap::default();
 
         for imp in index.get_imports(&canon) {
             if imp.kind != ImportKind::Named {

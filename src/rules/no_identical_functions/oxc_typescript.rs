@@ -6,7 +6,7 @@
 //! the `pub(super)` visibility — the module is only `#[cfg(test)]` for the
 //! AstCheck impl, but the helper functions are always compiled).
 
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 use std::hash::{Hash, Hasher};
 
 use crate::diagnostic::{Diagnostic, Severity};
@@ -149,7 +149,7 @@ impl OxcCheck for Check {
         // since we can't reuse the TS backend's cache across cfg boundaries,
         // we build a lightweight per-file hash lookup here.
         if !_import_index.is_empty() {
-            let mut local_hashes: HashSet<(u64, usize)> = HashSet::new();
+            let mut local_hashes: FxHashSet<(u64, usize)> = FxHashSet::default();
             for (name, line, normalized) in &local_functions {
                 let h = hash_str(normalized);
                 if local_hashes.insert((h, *line)) {

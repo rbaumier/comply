@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -18,7 +18,7 @@ impl OxcCheck for Check {
         semantic: &'a oxc_semantic::Semantic<'a>,
         ctx: &CheckCtx,
     ) -> Vec<Diagnostic> {
-        let mut seen: HashMap<(&str, bool), usize> = HashMap::new();
+        let mut seen: FxHashMap<(&str, bool), usize> = FxHashMap::default();
         let mut diagnostics = Vec::new();
 
         for stmt in &semantic.nodes().program().body {

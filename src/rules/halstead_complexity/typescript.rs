@@ -13,7 +13,7 @@
 //! assignment on a member expression) are skipped: their metrics are
 //! never informative and they'd drown the signal.
 
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 
 use crate::diagnostic::{Diagnostic, Severity};
 
@@ -72,8 +72,8 @@ fn is_operand_kind(kind: &str) -> bool {
 
 #[derive(Default)]
 struct Counts {
-    distinct_ops: HashSet<String>,
-    distinct_operands: HashSet<String>,
+    distinct_ops: FxHashSet<String>,
+    distinct_operands: FxHashSet<String>,
     total_ops: u32,
     total_operands: u32,
 }

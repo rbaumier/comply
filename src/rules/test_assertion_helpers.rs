@@ -4,7 +4,7 @@
 use crate::rules::backend::AstKind;
 use oxc_ast::ast::Expression;
 use oxc_semantic::NodeId;
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 
 /// True when the test callback (2nd argument of an `it`/`test` call) invokes an
 /// identifier bound to a formal parameter of an *enclosing* function. Such a
@@ -28,7 +28,7 @@ pub(crate) fn delegates_to_outer_param(
 
     // Functions enclosing the it() call — i.e. wrappers OUTSIDE the test
     // callback (the callback is a child of the call, never an ancestor).
-    let outer_fns: HashSet<NodeId> = nodes
+    let outer_fns: FxHashSet<NodeId> = nodes
         .ancestors(it_call.id())
         .filter(|a| {
             matches!(
@@ -74,7 +74,7 @@ pub(crate) fn delegates_to_outer_param(
 /// True when `decl` is a formal-parameter binding of one of `outer_fns`.
 fn binding_is_outer_param(
     decl: NodeId,
-    outer_fns: &HashSet<NodeId>,
+    outer_fns: &FxHashSet<NodeId>,
     semantic: &oxc_semantic::Semantic,
 ) -> bool {
     let nodes = semantic.nodes();

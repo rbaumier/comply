@@ -4,13 +4,13 @@
 //! call sites. Flags when argument names match parameter names but in wrong
 //! positions, suggesting a potential argument swap.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 use crate::diagnostic::{Diagnostic, Severity};
 
 crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
     // 1. Collect function declarations with their parameter names
-    let mut signatures: HashMap<String, Vec<String>> = HashMap::new();
+    let mut signatures: FxHashMap<String, Vec<String>> = FxHashMap::default();
     collect_function_signatures(node, source, &mut signatures);
 
     // 2. Merge exported function params from ImportIndex
@@ -33,7 +33,7 @@ crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
 fn collect_function_signatures(
     root: tree_sitter::Node<'_>,
     source: &[u8],
-    out: &mut HashMap<String, Vec<String>>,
+    out: &mut FxHashMap<String, Vec<String>>,
 ) {
     let mut stack = vec![root];
     while let Some(node) = stack.pop() {
@@ -84,7 +84,7 @@ fn check_calls(
     root: tree_sitter::Node<'_>,
     source: &[u8],
     path: &std::path::Path,
-    signatures: &HashMap<String, Vec<String>>,
+    signatures: &FxHashMap<String, Vec<String>>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let mut stack = vec![root];

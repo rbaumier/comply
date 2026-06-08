@@ -70,7 +70,7 @@ impl TextCheck for Check {
             .map(|r| r.join("package.json"))
             .unwrap_or_else(|| ctx.path.to_path_buf());
         let mut diagnostics = Vec::new();
-        let extra_tooling: std::collections::HashSet<&str> =
+        let extra_tooling: rustc_hash::FxHashSet<&str> =
             ctx.project.framework_tooling_deps().collect();
         for dep in pkg.dependencies.keys() {
             if is_skipped(dep, &extra_tooling) {
@@ -96,7 +96,7 @@ impl TextCheck for Check {
     }
 }
 
-fn is_skipped(dep: &str, extra_tooling: &std::collections::HashSet<&str>) -> bool {
+fn is_skipped(dep: &str, extra_tooling: &rustc_hash::FxHashSet<&str>) -> bool {
     if dep.starts_with("@types/") {
         return true;
     }

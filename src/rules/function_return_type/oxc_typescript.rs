@@ -2,7 +2,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{Expression, Statement};
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 use std::sync::Arc;
 
 pub struct Check;
@@ -30,7 +30,7 @@ impl OxcCheck for Check {
                     return;
                 }
                 let Some(body) = &func.body else { return };
-                let mut return_types = HashSet::new();
+                let mut return_types = FxHashSet::default();
                 collect_return_types_from_stmts(&body.statements, &mut return_types);
                 if let Some(diag) = check_return_types(&return_types, ctx, func.span.start as usize) {
                     diagnostics.push(diag);
@@ -55,7 +55,7 @@ impl OxcCheck for Check {
                         return;
                     }
                 }
-                let mut return_types = HashSet::new();
+                let mut return_types = FxHashSet::default();
                 collect_return_types_from_stmts(&arrow.body.statements, &mut return_types);
                 if let Some(diag) = check_return_types(&return_types, ctx, arrow.span.start as usize) {
                     diagnostics.push(diag);
@@ -67,7 +67,7 @@ impl OxcCheck for Check {
 }
 
 fn check_return_types(
-    return_types: &HashSet<&str>,
+    return_types: &FxHashSet<&str>,
     ctx: &CheckCtx,
     span_start: usize,
 ) -> Option<Diagnostic> {
@@ -107,7 +107,7 @@ fn check_return_types(
 
 fn collect_return_types_from_stmts<'a>(
     stmts: &'a [Statement<'a>],
-    types: &mut HashSet<&'static str>,
+    types: &mut FxHashSet<&'static str>,
 ) {
     for stmt in stmts {
         collect_return_types_from_stmt(stmt, types);
@@ -116,7 +116,7 @@ fn collect_return_types_from_stmts<'a>(
 
 fn collect_return_types_from_stmt<'a>(
     stmt: &'a Statement<'a>,
-    types: &mut HashSet<&'static str>,
+    types: &mut FxHashSet<&'static str>,
 ) {
     match stmt {
         Statement::ReturnStatement(ret) => {
@@ -181,7 +181,7 @@ fn collect_return_types_from_stmt<'a>(
 
 fn collect_return_types_from_expr<'a>(
     _expr: &'a Expression<'a>,
-    _types: &mut HashSet<&'static str>,
+    _types: &mut FxHashSet<&'static str>,
 ) {
     // Expression statements don't contain return statements at the top level.
 }

@@ -1,7 +1,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 use std::sync::Arc;
 
 pub struct Check;
@@ -25,8 +25,8 @@ fn leading_prefix(name: &str) -> String {
     buf
 }
 
-fn collect_optional_prefixes(members: &oxc_allocator::Vec<'_, oxc_ast::ast::TSSignature<'_>>) -> HashMap<String, usize> {
-    let mut counts: HashMap<String, usize> = HashMap::new();
+fn collect_optional_prefixes(members: &oxc_allocator::Vec<'_, oxc_ast::ast::TSSignature<'_>>) -> FxHashMap<String, usize> {
+    let mut counts: FxHashMap<String, usize> = FxHashMap::default();
     for member in members.iter() {
         let oxc_ast::ast::TSSignature::TSPropertySignature(prop) = member else {
             continue;
@@ -56,7 +56,7 @@ fn collect_optional_prefixes(members: &oxc_allocator::Vec<'_, oxc_ast::ast::TSSi
 }
 
 fn check_optional_clusters(
-    counts: HashMap<String, usize>,
+    counts: FxHashMap<String, usize>,
     type_name: &str,
     span_start: u32,
     ctx: &CheckCtx,

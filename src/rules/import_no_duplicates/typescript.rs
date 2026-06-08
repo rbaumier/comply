@@ -6,12 +6,12 @@
 //! single statement keeps the dependency footprint of the file visible
 //! at a glance.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 use crate::diagnostic::{Diagnostic, Severity};
 
 crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
-    let mut seen: HashMap<(String, bool), usize> = HashMap::new();
+    let mut seen: FxHashMap<(String, bool), usize> = FxHashMap::default();
     let mut cursor = node.walk();
 
     for child in node.children(&mut cursor) {

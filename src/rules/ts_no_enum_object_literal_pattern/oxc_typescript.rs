@@ -8,14 +8,14 @@ use oxc_ast::ast::{
     BindingPattern, Expression, IdentifierReference, TSType, TSTypeOperatorOperator,
     TSTypeQueryExprName, VariableDeclarationKind,
 };
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::sync::Arc;
 
 pub struct Check;
 
 /// Collect names of `const X = { ... } as const` bindings.
-fn collect_as_const_objects<'a>(semantic: &'a oxc_semantic::Semantic<'a>) -> HashSet<&'a str> {
-    let mut names = HashSet::new();
+fn collect_as_const_objects<'a>(semantic: &'a oxc_semantic::Semantic<'a>) -> FxHashSet<&'a str> {
+    let mut names = FxHashSet::default();
     for node in semantic.nodes().iter() {
         let AstKind::VariableDeclaration(decl) = node.kind() else { continue };
         if decl.kind != VariableDeclarationKind::Const {
@@ -47,8 +47,8 @@ fn collect_as_const_objects<'a>(semantic: &'a oxc_semantic::Semantic<'a>) -> Has
 /// Collect `type Alias = keyof typeof Obj` declarations as `alias -> obj`.
 fn collect_keyof_typeof_aliases<'a>(
     semantic: &'a oxc_semantic::Semantic<'a>,
-) -> HashMap<&'a str, &'a str> {
-    let mut aliases = HashMap::new();
+) -> FxHashMap<&'a str, &'a str> {
+    let mut aliases = FxHashMap::default();
     for node in semantic.nodes().iter() {
         let AstKind::TSTypeAliasDeclaration(decl) = node.kind() else { continue };
         if let Some(obj) = keyof_typeof_target(&decl.type_annotation) {
@@ -73,7 +73,7 @@ fn keyof_typeof_target<'a>(ty: &'a TSType<'a>) -> Option<&'a str> {
 
 /// True when `ty` is `keyof typeof obj_name`, either directly or through a
 /// type alias that resolves to it.
-fn type_keys_obj(ty: &TSType, obj_name: &str, aliases: &HashMap<&str, &str>) -> bool {
+fn type_keys_obj(ty: &TSType, obj_name: &str, aliases: &FxHashMap<&str, &str>) -> bool {
     if keyof_typeof_target(ty) == Some(obj_name) {
         return true;
     }
@@ -91,7 +91,7 @@ fn index_ident_keys_obj<'a>(
     id: &IdentifierReference<'a>,
     obj_name: &str,
     semantic: &'a oxc_semantic::Semantic<'a>,
-    aliases: &HashMap<&str, &str>,
+    aliases: &FxHashMap<&str, &str>,
 ) -> bool {
     let Some(ref_id) = id.reference_id.get() else { return false };
     let scoping = semantic.scoping();

@@ -20,7 +20,7 @@
 //! max = 60` only changes that one knob, not the rest.
 
 use serde::Deserialize;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 /// Top-level shape of a `comply.toml` file. Both sections are optional;
 /// an empty file is equivalent to "use every default".
@@ -36,9 +36,9 @@ pub struct ComplyToml {
     #[serde(default)]
     pub entrypoints: Vec<String>,
     #[serde(default)]
-    pub rules: HashMap<String, RuleConfig>,
+    pub rules: FxHashMap<String, RuleConfig>,
     #[serde(default)]
-    pub overrides: HashMap<String, OverrideConfig>,
+    pub overrides: FxHashMap<String, OverrideConfig>,
 }
 
 /// Per-rule overrides. Every field is optional — only the ones the
@@ -67,7 +67,7 @@ pub struct RuleConfig {
     #[serde(default)]
     pub severity: Option<SeverityToml>,
     #[serde(default, flatten)]
-    pub extra: HashMap<String, toml::Value>,
+    pub extra: FxHashMap<String, toml::Value>,
 }
 
 /// Per-glob block. Use `disable = [...]` to silence specific rules

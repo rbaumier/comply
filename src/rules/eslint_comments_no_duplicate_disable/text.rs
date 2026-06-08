@@ -2,7 +2,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 
 #[derive(Debug)]
 pub struct Check;
@@ -51,7 +51,7 @@ impl TextCheck for Check {
             for &marker in MARKERS {
                 if let Some(payload) = payload_after(line, marker) {
                     let rules = extract_rules(payload);
-                    let mut seen: HashSet<&str> = HashSet::new();
+                    let mut seen: FxHashSet<&str> = FxHashSet::default();
                     let mut duplicates: Vec<&str> = Vec::new();
                     for rule in &rules {
                         if !seen.insert(*rule) {

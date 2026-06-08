@@ -1,7 +1,7 @@
 //! js-cache-repeated-storage OxcCheck backend — repeated `localStorage.getItem(key)`
 //! / `sessionStorage.getItem(key)` with the same key in one function body.
 
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 use std::sync::Arc;
 
 use crate::diagnostic::{Diagnostic, Severity};
@@ -96,7 +96,7 @@ impl OxcCheck for Check {
             calls.push((format!("{obj_name}.{key}"), call.span.start));
         }
 
-        let mut seen = HashSet::new();
+        let mut seen = FxHashSet::default();
         for (key, span_start) in &calls {
             if !seen.insert(key.clone()) {
                 let display_key = key.split('.').next_back().unwrap_or(key);

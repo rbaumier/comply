@@ -82,7 +82,7 @@ pub(super) fn collect_diagnostics(
     kinds: &[&'static str],
 ) -> Vec<crate::diagnostic::Diagnostic> {
     use crate::diagnostic::{Diagnostic, Severity};
-    use std::collections::HashMap;
+    use rustc_hash::FxHashMap;
 
     if ctx.file.path_segments.in_test_dir {
         return Vec::new();
@@ -94,7 +94,7 @@ pub(super) fn collect_diagnostics(
 
     let source_bytes = ctx.source.as_bytes();
     let is_rust = kinds.contains(&"string_literal");
-    let mut occurrences: HashMap<String, Vec<tree_sitter::Node>> = HashMap::new();
+    let mut occurrences: FxHashMap<String, Vec<tree_sitter::Node>> = FxHashMap::default();
     for node in crate::rules::walker::collect_nodes_of_kinds(tree, kinds) {
         let Ok(raw) = node.utf8_text(source_bytes) else {
             continue;

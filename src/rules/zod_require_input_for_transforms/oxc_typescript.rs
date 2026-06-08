@@ -20,8 +20,8 @@ impl OxcCheck for Check {
         }
 
         // Collect variable declarators whose init contains `.transform(`.
-        let mut transform_schemas: std::collections::HashSet<&str> =
-            std::collections::HashSet::new();
+        let mut transform_schemas: rustc_hash::FxHashSet<&str> =
+            rustc_hash::FxHashSet::default();
         for snode in semantic.nodes().iter() {
             let AstKind::VariableDeclaration(decl) = snode.kind() else {
                 continue;

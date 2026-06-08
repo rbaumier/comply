@@ -8,7 +8,7 @@
 //! `SHORTHAND_PAIRS` table for matching `(left, right)` prefixes whose
 //! values are identical and reports the collapsible pair.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 use crate::diagnostic::{Diagnostic, Severity};
 
@@ -98,7 +98,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
 
     // Group classes by (variant, important) so we only pair classes with
     // the same variants (e.g. `md:pt-2` with `md:pb-2`).
-    let mut buckets: HashMap<(&str, bool), Vec<&str>> = HashMap::new();
+    let mut buckets: FxHashMap<(&str, bool), Vec<&str>> = FxHashMap::default();
     for class in class_str.split_whitespace() {
         let (variant, rest) = split_variant(class);
         let (imp, base) = strip_important(rest);

@@ -1,6 +1,6 @@
 //! import-named backend — verify every named import resolves to a real named export.
 
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::path::PathBuf;
 
 use crate::diagnostic::{Diagnostic, Severity};
@@ -17,7 +17,7 @@ crate::ast_check! { on ["program"] => |node, _source, ctx, diagnostics|
     // Cache per-source export names. A source with `export * from '…'` is
     // skipped entirely — we can't enumerate transitive exports. `None` in the
     // cache means "bail, don't verify imports from this source".
-    let mut exports_cache: HashMap<PathBuf, Option<HashSet<String>>> = HashMap::new();
+    let mut exports_cache: FxHashMap<PathBuf, Option<FxHashSet<String>>> = FxHashMap::default();
 
     for imp in index.get_imports(&canon) {
         if imp.kind != ImportKind::Named {

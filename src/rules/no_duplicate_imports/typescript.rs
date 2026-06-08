@@ -5,7 +5,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 #[derive(Debug)]
 pub struct Check;
@@ -13,7 +13,7 @@ pub struct Check;
 #[derive(Default)]
 struct State {
     /// (module, is_type_import) -> first line number
-    seen: HashMap<(String, bool), usize>,
+    seen: FxHashMap<(String, bool), usize>,
 }
 
 impl AstCheck for Check {

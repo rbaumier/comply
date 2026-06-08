@@ -20,7 +20,8 @@
 //! - Lazy fields use `OnceLock<Option<T>>`; parse failures cache as `None`
 //!   (no retry within the run) and emit one stderr warning per field.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::BTreeMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -130,7 +131,7 @@ impl PackageJson {
     }
 
     /// Iterator over every declared package name across every dep section.
-    /// Consumers looking up "is X declared anywhere?" use this — a `HashSet`
+    /// Consumers looking up "is X declared anywhere?" use this — a `FxHashSet`
     /// view would force an allocation every call.
     pub fn all_deps(&self) -> impl Iterator<Item = &str> + '_ {
         self.dependencies
@@ -387,18 +388,18 @@ pub struct ProjectCtx {
     pub entrypoint_globs: Vec<String>,
 
     // Per-manifest caches, keyed by the *directory* that contains the
-    // manifest. Mutex over HashMap is sufficient: contention is low (same
+    // manifest. Mutex over FxHashMap is sufficient: contention is low (same
     // manifest reused across sibling files hits the cache, so after the
     // first insert all readers take the lock briefly just to clone an Arc).
-    package_json_cache: Mutex<HashMap<PathBuf, Arc<PackageJson>>>,
-    tsconfig_cache: Mutex<HashMap<PathBuf, Arc<Tsconfig>>>,
+    package_json_cache: Mutex<FxHashMap<PathBuf, Arc<PackageJson>>>,
+    tsconfig_cache: Mutex<FxHashMap<PathBuf, Arc<Tsconfig>>>,
 
     // Memoizes the upward `walk_up_finding` stat-walk that locates a marker
     // file (`package.json`, `tsconfig.json`). The resolved manifest directory
     // is identical for every file in the same directory, so the walk runs once
     // per (start dir, marker) instead of once per file. Nested by marker so
     // hits avoid allocating a composite key.
-    manifest_dir_cache: Mutex<HashMap<&'static str, HashMap<PathBuf, Option<PathBuf>>>>,
+    manifest_dir_cache: Mutex<FxHashMap<&'static str, FxHashMap<PathBuf, Option<PathBuf>>>>,
 
     // Lazy project-wide fields. `OnceLock<Option<T>>` keeps the "init once,
     // cache None on failure, never retry" contract in a single primitive.
@@ -443,14 +444,14 @@ pub struct ProjectCtx {
     // bundler/babel configs from that dir up to the root), not file content,
     // and the underlying probe stat-walks config files — so without this memo a
     // JSX-dense tree pays the full walk once per file.
-    react_compiler_dir_cache: Mutex<HashMap<PathBuf, bool>>,
+    react_compiler_dir_cache: Mutex<FxHashMap<PathBuf, bool>>,
 
     // "Does this project use a bundler?" keyed by the *directory* of the file
     // asking. Like `react_compiler_dir_cache`, the answer depends only on the
     // directory chain (nearest package.json + bundler config files up to the
     // root), not file content, and the probe stat-walks config files — so
     // without this memo a deep monorepo pays the full walk once per file.
-    bundler_dir_cache: Mutex<HashMap<PathBuf, bool>>,
+    bundler_dir_cache: Mutex<FxHashMap<PathBuf, bool>>,
 
     // Workspace member package names, read+parsed from each workspace root's
     // package.json. Project-wide and constant, but queried once per import by
@@ -464,13 +465,13 @@ pub struct ProjectCtx {
     // recorded here it can skip the read entirely (a known-clean file can carry
     // neither a suppression nor a malformed marker). Keyed by the discovery path
     // (same value `apply_to_all` iterates), so no canonicalization is needed.
-    clean_files: Mutex<HashSet<PathBuf>>,
+    clean_files: Mutex<FxHashSet<PathBuf>>,
 
     // Prisma model names (lowercase) that have a `deletedAt` field in the
     // project's schema.prisma. `None` when no schema.prisma is found (rules
     // fall back to the old "fire on all" behaviour). Populated lazily on
     // first access, cached for the lifetime of the run.
-    prisma_soft_delete_models: OnceLock<Option<HashSet<String>>>,
+    prisma_soft_delete_models: OnceLock<Option<FxHashSet<String>>>,
 }
 
 impl ProjectCtx {
@@ -491,7 +492,7 @@ impl ProjectCtx {
     /// Snapshot of the known-clean file set, taken once after the engine
     /// completes so the post-filter can do lock-free membership checks.
     #[must_use]
-    pub fn clean_files_snapshot(&self) -> HashSet<PathBuf> {
+    pub fn clean_files_snapshot(&self) -> FxHashSet<PathBuf> {
         self.clean_files.lock().unwrap().clone()
     }
 
@@ -884,7 +885,7 @@ impl ProjectCtx {
     /// `deletedAt` field in the project's `schema.prisma`. Returns `None` when
     /// no `schema.prisma` is found — callers should fire on all models in that
     /// case to preserve backward-compatible behaviour.
-    pub fn prisma_soft_delete_models(&self) -> Option<&HashSet<String>> {
+    pub fn prisma_soft_delete_models(&self) -> Option<&FxHashSet<String>> {
         self.prisma_soft_delete_models
             .get_or_init(|| {
                 let start: PathBuf = self
@@ -903,7 +904,7 @@ impl ProjectCtx {
     #[must_use]
     pub fn for_test_with_prisma_models(models: &[&str]) -> Self {
         let ctx = ProjectCtx::default();
-        let set: HashSet<String> = models.iter().map(|s| s.to_lowercase()).collect();
+        let set: FxHashSet<String> = models.iter().map(|s| s.to_lowercase()).collect();
         let _ = ctx.prisma_soft_delete_models.set(Some(set));
         ctx
     }
@@ -912,8 +913,8 @@ impl ProjectCtx {
 /// Parse a `schema.prisma` text and return the lowercase names of models that
 /// declare a `deletedAt` field. Uses a simple line-based scan — no full Prisma
 /// parser needed.
-fn parse_prisma_soft_delete_models(schema: &str) -> HashSet<String> {
-    let mut result = HashSet::new();
+fn parse_prisma_soft_delete_models(schema: &str) -> FxHashSet<String> {
+    let mut result = FxHashSet::default();
     let mut current_model: Option<String> = None;
     let mut block_has_deleted_at = false;
     let mut depth: i32 = 0;
@@ -999,8 +1000,8 @@ fn resolve_workspace_roots(project_root: Option<&Path>, pkg: &PackageJson) -> Ve
 /// Cache miss: read + parse + insert at the manifest directory. Cache hit:
 /// clone the `Arc` under the lock.
 fn nearest<T>(
-    cache: &Mutex<HashMap<PathBuf, Arc<T>>>,
-    dir_cache: &Mutex<HashMap<&'static str, HashMap<PathBuf, Option<PathBuf>>>>,
+    cache: &Mutex<FxHashMap<PathBuf, Arc<T>>>,
+    dir_cache: &Mutex<FxHashMap<&'static str, FxHashMap<PathBuf, Option<PathBuf>>>>,
     path: &Path,
     filename: &'static str,
     parse: impl Fn(&str) -> Option<T>,
@@ -1074,7 +1075,7 @@ pub(crate) fn walk_up_finding(start: &Path, target: &str) -> Option<PathBuf> {
 /// while collapsing thousands of duplicate stat-walks (one per file sharing a
 /// directory) down to one per (directory, marker).
 fn walk_up_finding_cached(
-    cache: &Mutex<HashMap<&'static str, HashMap<PathBuf, Option<PathBuf>>>>,
+    cache: &Mutex<FxHashMap<&'static str, FxHashMap<PathBuf, Option<PathBuf>>>>,
     start: &Path,
     target: &'static str,
 ) -> Option<PathBuf> {

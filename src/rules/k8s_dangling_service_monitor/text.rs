@@ -3,11 +3,11 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::project::k8s_index::K8sIndex;
 use crate::rules::yaml_k8s_helpers as y;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 use tree_sitter::Node;
 
-fn collect_pairs(mapping: Node, source: &[u8]) -> HashMap<String, String> {
-    let mut out = HashMap::new();
+fn collect_pairs(mapping: Node, source: &[u8]) -> FxHashMap<String, String> {
+    let mut out = FxHashMap::default();
     let mut cursor = mapping.walk();
     for child in mapping.named_children(&mut cursor) {
         if child.kind() != "block_mapping_pair" {

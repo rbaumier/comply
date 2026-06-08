@@ -5,7 +5,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstType, CheckCtx, OxcCheck};
 use crate::rules::jsdoc_helpers::scan_blocks;
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 use std::sync::Arc;
 
 pub struct Check;
@@ -42,7 +42,7 @@ impl OxcCheck for Check {
                 if !is_typedef {
                     continue;
                 }
-                let mut seen: HashSet<String> = HashSet::new();
+                let mut seen: FxHashSet<String> = FxHashSet::default();
                 for tag in tags
                     .iter()
                     .filter(|t| matches!(t.name.as_str(), "property" | "prop"))

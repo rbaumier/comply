@@ -4,7 +4,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, CheckCtx, OxcCheck};
 use oxc_span::GetSpan;
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 use std::sync::Arc;
 
 pub struct Check;
@@ -24,8 +24,8 @@ fn collect_ref_bindings<'a>(
     body_span: oxc_span::Span,
     semantic: &'a oxc_semantic::Semantic<'a>,
     source: &str,
-) -> HashSet<String> {
-    let mut refs = HashSet::new();
+) -> FxHashSet<String> {
+    let mut refs = FxHashSet::default();
     for node in semantic.nodes().iter() {
         let AstKind::VariableDeclarator(decl) = node.kind() else {
             continue;

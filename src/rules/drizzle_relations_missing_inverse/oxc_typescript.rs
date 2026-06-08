@@ -7,14 +7,14 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::Expression;
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 use std::sync::Arc;
 
 pub struct Check;
 
 /// Collect all table names that are the first argument to a top-level `relations(...)` call.
-fn declared_relation_tables(semantic: &oxc_semantic::Semantic<'_>) -> HashSet<String> {
-    let mut declared = HashSet::new();
+fn declared_relation_tables(semantic: &oxc_semantic::Semantic<'_>) -> FxHashSet<String> {
+    let mut declared = FxHashSet::default();
     for node in semantic.nodes().iter() {
         let AstKind::CallExpression(call) = node.kind() else {
             continue;
@@ -102,7 +102,7 @@ impl OxcCheck for Check {
         let declared = declared_relation_tables(semantic);
         let refs = referenced_tables_in_call(call, ctx.source);
 
-        let mut seen: HashSet<&str> = HashSet::new();
+        let mut seen: FxHashSet<&str> = FxHashSet::default();
         for (name, byte_offset) in &refs {
             if !seen.insert(name.as_str()) {
                 continue;

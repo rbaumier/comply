@@ -6,7 +6,7 @@
 //! warrant a discriminated union.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 fn is_optional_property(member: tree_sitter::Node) -> bool {
     // tree-sitter-typescript marks optional properties either with
@@ -71,8 +71,8 @@ fn is_inside_ambient_declaration(node: tree_sitter::Node) -> bool {
     false
 }
 
-fn collect_optional_prefixes(body: tree_sitter::Node, source: &[u8]) -> HashMap<String, usize> {
-    let mut counts: HashMap<String, usize> = HashMap::new();
+fn collect_optional_prefixes(body: tree_sitter::Node, source: &[u8]) -> FxHashMap<String, usize> {
+    let mut counts: FxHashMap<String, usize> = FxHashMap::default();
     let mut cursor = body.walk();
     for member in body.children(&mut cursor) {
         if member.kind() != "property_signature" {

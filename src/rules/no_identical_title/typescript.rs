@@ -13,7 +13,7 @@
 //! flagged.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 
 /// Which test constructs we track. `.only` / `.skip` variants reuse the
 /// base kind (`describe.only('x', …)` collides with `describe('x', …)`
@@ -91,7 +91,7 @@ fn check_scope(
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     // (kind, title) set used to detect duplicates within this scope.
-    let mut seen: HashSet<(&'static str, String)> = HashSet::new();
+    let mut seen: FxHashSet<(&'static str, String)> = FxHashSet::default();
     let mut cursor = scope.walk();
     for child in scope.children(&mut cursor) {
         // Test calls live inside expression statements at scope top.

@@ -23,7 +23,7 @@
 //! more than fifty normalized characters. Trivial getters / delegation
 //! stubs slip under the floor and don't get flagged.
 
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
@@ -73,20 +73,20 @@ fn hash_str(s: &str) -> u64 {
 /// this cache.
 #[allow(clippy::type_complexity)]
 static CROSS_FILE_CACHE: OnceLock<
-    Mutex<HashMap<usize, std::sync::Arc<HashMap<u64, Vec<FunctionLocation>>>>>,
+    Mutex<FxHashMap<usize, std::sync::Arc<FxHashMap<u64, Vec<FunctionLocation>>>>>,
 > = OnceLock::new();
 
 #[allow(clippy::type_complexity)]
 fn cross_file_cache()
--> &'static Mutex<HashMap<usize, std::sync::Arc<HashMap<u64, Vec<FunctionLocation>>>>> {
-    CROSS_FILE_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+-> &'static Mutex<FxHashMap<usize, std::sync::Arc<FxHashMap<u64, Vec<FunctionLocation>>>>> {
+    CROSS_FILE_CACHE.get_or_init(|| Mutex::new(FxHashMap::default()))
 }
 
 /// Build (or fetch from cache) the process-wide hash of every function
 /// body across the indexed file set. Re-parses each file with its own
 /// local parser — `tree_sitter::Parser` is `!Sync`, so we can't reuse
 /// the engine's parser across a flat fan-out without a bigger refactor.
-fn cross_file_index(index: &ImportIndex, min_body_lines: usize, min_normalized_chars: usize) -> std::sync::Arc<HashMap<u64, Vec<FunctionLocation>>> {
+fn cross_file_index(index: &ImportIndex, min_body_lines: usize, min_normalized_chars: usize) -> std::sync::Arc<FxHashMap<u64, Vec<FunctionLocation>>> {
     let key = std::ptr::from_ref::<ImportIndex>(index) as usize;
     let mut cache = cross_file_cache()
         .lock()
@@ -100,8 +100,8 @@ fn cross_file_index(index: &ImportIndex, min_body_lines: usize, min_normalized_c
     arc
 }
 
-fn build_cross_file_index(index: &ImportIndex, min_body_lines: usize, min_normalized_chars: usize) -> HashMap<u64, Vec<FunctionLocation>> {
-    let mut by_hash: HashMap<u64, Vec<FunctionLocation>> = HashMap::new();
+fn build_cross_file_index(index: &ImportIndex, min_body_lines: usize, min_normalized_chars: usize) -> FxHashMap<u64, Vec<FunctionLocation>> {
+    let mut by_hash: FxHashMap<u64, Vec<FunctionLocation>> = FxHashMap::default();
     let mut parser = Parser::new();
     for path in index.indexed_paths() {
         let Ok(source) = std::fs::read_to_string(path) else {
@@ -289,7 +289,7 @@ crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
     // appears twice in the group (shouldn't, but guard anyway) doesn't
     // fire twice.
     let global = cross_file_index(import_index, min_body_lines, min_normalized_chars);
-    let mut fired: HashSet<(u64, usize)> = HashSet::new();
+    let mut fired: FxHashSet<(u64, usize)> = FxHashSet::default();
     for (_name, line, normalized) in &local_functions {
         let h = hash_str(normalized);
         let Some(group) = global.get(&h) else { continue };

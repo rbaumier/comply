@@ -1,6 +1,6 @@
 //! import-export backend — flag duplicate export names within a single module.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::project::import_index::ExportKind;
@@ -18,8 +18,8 @@ crate::ast_check! { on ["program"] => |node, _source, ctx, diagnostics|
     // to coexist under the same name (value vs. type namespace), so they must
     // not be treated as duplicates of each other.
     let exports = index.get_exports(&canon);
-    let mut by_name: HashMap<(&str, bool), Vec<&crate::project::import_index::ExportedSymbol>> =
-        HashMap::new();
+    let mut by_name: FxHashMap<(&str, bool), Vec<&crate::project::import_index::ExportedSymbol>> =
+        FxHashMap::default();
     for exp in exports {
         if exp.kind == ExportKind::StarReExport {
             continue;

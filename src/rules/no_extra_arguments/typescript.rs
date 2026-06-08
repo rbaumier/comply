@@ -1,7 +1,7 @@
 //! no-extra-arguments backend — flag calls with more args than params.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 struct FunctionInfo {
     param_count: usize,
@@ -80,7 +80,7 @@ fn get_function_name<'a>(node: tree_sitter::Node<'a>, source: &'a [u8]) -> Optio
 fn collect_functions<'a>(
     node: tree_sitter::Node<'a>,
     source: &'a [u8],
-    functions: &mut HashMap<String, FunctionInfo>,
+    functions: &mut FxHashMap<String, FunctionInfo>,
 ) {
     match node.kind() {
         "function_declaration" | "generator_function_declaration" => {
@@ -139,7 +139,7 @@ fn count_args(args_node: tree_sitter::Node) -> usize {
 fn check_calls<'a>(
     node: tree_sitter::Node<'a>,
     source: &'a [u8],
-    functions: &HashMap<String, FunctionInfo>,
+    functions: &FxHashMap<String, FunctionInfo>,
     diagnostics: &mut Vec<Diagnostic>,
     path: &std::path::Path,
 ) {
@@ -176,7 +176,7 @@ fn check_calls<'a>(
 }
 
 crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
-    let mut functions = HashMap::new();
+    let mut functions = FxHashMap::default();
     collect_functions(node, source, &mut functions);
     check_calls(node, source, &functions, diagnostics, ctx.path);
 }

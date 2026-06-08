@@ -5,7 +5,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{PropertyKey, TSSignature};
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 use std::sync::Arc;
 
 pub struct Check;
@@ -15,7 +15,7 @@ fn collect_signatures<'a>(
     ctx: &CheckCtx,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let mut seen: HashMap<String, Vec<u32>> = HashMap::new();
+    let mut seen: FxHashMap<String, Vec<u32>> = FxHashMap::default();
 
     for sig in members {
         match sig {

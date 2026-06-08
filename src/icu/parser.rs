@@ -403,7 +403,7 @@ fn is_arg_name_char(b: u8) -> bool {
 /// Extract all placeholder names from an ICU message.
 /// Returns a sorted Vec of unique placeholder names.
 pub fn extract_placeholders(input: &str) -> Vec<String> {
-    let mut placeholders = std::collections::HashSet::new();
+    let mut placeholders = rustc_hash::FxHashSet::default();
     let bytes = input.as_bytes();
     let mut i = 0;
 

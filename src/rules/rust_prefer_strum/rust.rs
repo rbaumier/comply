@@ -11,14 +11,14 @@
 //! `enum_item` node. The two impls together are the redundancy
 //! `strum::Display` + `strum::EnumString` is designed to remove.
 
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 
 use crate::diagnostic::{Diagnostic, Severity};
 
 crate::ast_check! { on ["source_file"] => |node, source, ctx, diagnostics|
     let mut enums: Vec<(tree_sitter::Node, String)> = Vec::new();
-    let mut display_targets: HashSet<String> = HashSet::new();
-    let mut from_str_targets: HashSet<String> = HashSet::new();
+    let mut display_targets: FxHashSet<String> = FxHashSet::default();
+    let mut from_str_targets: FxHashSet<String> = FxHashSet::default();
 
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {

@@ -7,7 +7,7 @@
 //! (`<svg:rect />`), `this` expressions and fragments (`<></>`) are
 //! skipped — they are out of scope for this rule.
 
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 
 use oxc_ast::AstKind;
 use oxc_ast::ast::JSXElementName;
@@ -24,7 +24,7 @@ impl crate::rules::backend::AstCheck for Check {
         let source_type = source_type_for_path(ctx.path);
         with_semantic(ctx.source, source_type, |semantic| {
             let scoping = semantic.scoping();
-            let defined: HashSet<String> = scoping.symbol_names().map(|s| s.to_string()).collect();
+            let defined: FxHashSet<String> = scoping.symbol_names().map(|s| s.to_string()).collect();
 
             let mut diagnostics = Vec::new();
             for node in semantic.nodes().iter() {

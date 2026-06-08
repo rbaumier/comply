@@ -5,7 +5,7 @@ use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, CheckCtx, OxcCheck};
 use oxc_ast::ast::{BindingPattern, Expression};
 use oxc_span::GetSpan;
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 use std::sync::Arc;
 
 fn starts_with_uppercase(name: &str) -> bool {
@@ -83,8 +83,8 @@ fn collect_setters_oxc(
     func_node: &oxc_semantic::AstNode,
     semantic: &oxc_semantic::Semantic,
     ctx: &CheckCtx,
-) -> HashSet<String> {
-    let mut setters = HashSet::new();
+) -> FxHashSet<String> {
+    let mut setters = FxHashSet::default();
     let nodes = semantic.nodes();
 
     for node in nodes.iter() {
@@ -123,7 +123,7 @@ fn find_setter_calls_oxc(
     func_node: &oxc_semantic::AstNode,
     semantic: &oxc_semantic::Semantic,
     ctx: &CheckCtx,
-    setters: &HashSet<String>,
+    setters: &FxHashSet<String>,
     _func_name: &str,
     diagnostics: &mut Vec<Diagnostic>,
 ) {

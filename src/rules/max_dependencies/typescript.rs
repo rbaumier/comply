@@ -5,13 +5,13 @@
 //! specifiers (so duplicates don't inflate the tally), and emit a single
 //! diagnostic anchored on the last import when the limit is breached.
 
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 
 use crate::diagnostic::{Diagnostic, Severity};
 
 crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
     let max = ctx.config.threshold("max-dependencies", "max", ctx.lang);
-    let mut seen: HashSet<String> = HashSet::new();
+    let mut seen: FxHashSet<String> = FxHashSet::default();
     let mut last_import_line: usize = 1;
 
     let mut cursor = node.walk();

@@ -4,10 +4,10 @@
 //! which the file does not also contain a `relations(<other>, ...)` call.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 
-fn declared_relation_tables(root: tree_sitter::Node<'_>, source: &[u8]) -> HashSet<String> {
-    let mut declared = HashSet::new();
+fn declared_relation_tables(root: tree_sitter::Node<'_>, source: &[u8]) -> FxHashSet<String> {
+    let mut declared = FxHashSet::default();
     let mut stack = vec![root];
     while let Some(node) = stack.pop() {
         if node.kind() == "call_expression" {
@@ -77,7 +77,7 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     let declared = declared_relation_tables(root, source);
 
     let refs = referenced_tables(node, source);
-    let mut seen: HashSet<&str> = HashSet::new();
+    let mut seen: FxHashSet<&str> = FxHashSet::default();
     for (name, ref_node) in &refs {
         if !seen.insert(name.as_str()) {
             continue;

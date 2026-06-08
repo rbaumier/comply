@@ -1,6 +1,6 @@
 //! OXC backend for arguments-order.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 use std::sync::Arc;
 
 use crate::diagnostic::{Diagnostic, Severity};
@@ -23,7 +23,7 @@ impl OxcCheck for Check {
         let mut diagnostics = Vec::new();
 
         // 1. Collect function declarations with their parameter names
-        let mut signatures: HashMap<String, Vec<String>> = HashMap::new();
+        let mut signatures: FxHashMap<String, Vec<String>> = FxHashMap::default();
         for node in semantic.nodes().iter() {
             if let AstKind::Function(func) = node.kind()
                 && let Some(ref id) = func.id {

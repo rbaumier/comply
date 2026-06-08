@@ -4,7 +4,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::project::import_index::ExportKind;
 use crate::rules::backend::{CheckCtx, OxcCheck};
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 use std::sync::Arc;
 
 pub struct Check;
@@ -23,8 +23,8 @@ impl OxcCheck for Check {
         let canon = index.canonical(ctx.path);
 
         let exports = index.get_exports(&canon);
-        let mut by_name: HashMap<(&str, bool), Vec<&crate::project::import_index::ExportedSymbol>> =
-            HashMap::new();
+        let mut by_name: FxHashMap<(&str, bool), Vec<&crate::project::import_index::ExportedSymbol>> =
+            FxHashMap::default();
         for exp in exports {
             if exp.kind == ExportKind::StarReExport {
                 continue;

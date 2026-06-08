@@ -22,7 +22,7 @@ crate::ast_check! { on ["if_statement"] => |node, source, ctx, diagnostics|
 
     // Report each duplicate line once: for each j >= 1, if bodies[j]
     // matches any earlier bodies[i], emit exactly one diagnostic at line j.
-    let mut reported: std::collections::HashSet<usize> = std::collections::HashSet::new();
+    let mut reported: rustc_hash::FxHashSet<usize> = rustc_hash::FxHashSet::default();
     for j in 1..bodies.len() {
         if bodies[j].1.is_empty() {
             continue;

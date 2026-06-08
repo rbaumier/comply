@@ -8,12 +8,12 @@
 //! those, and the renderer omits the help/url sections for that diagnostic.
 
 use crate::rules::meta::RuleMeta;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 use std::sync::OnceLock;
 
-static REGISTRY: OnceLock<HashMap<&'static str, RuleMeta>> = OnceLock::new();
+static REGISTRY: OnceLock<FxHashMap<&'static str, RuleMeta>> = OnceLock::new();
 
-fn build() -> HashMap<&'static str, RuleMeta> {
+fn build() -> FxHashMap<&'static str, RuleMeta> {
     crate::rules::all_rule_defs()
         .into_iter()
         .map(|r| (r.meta.id, r.meta))

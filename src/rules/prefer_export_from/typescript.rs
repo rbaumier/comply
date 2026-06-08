@@ -1,5 +1,5 @@
 use crate::diagnostic::{Diagnostic, Severity};
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap, FxHashSet};
 
 /// Collect named imports as `local_name -> module_specifier` so a later pass
 /// can recognise re-exports of the same local name.
@@ -8,8 +8,8 @@ use std::collections::{HashMap, HashSet};
 /// `import { foo as bar } from './m'`  → { "bar" -> "./m" }  (local name is `bar`)
 /// `import type { foo } from './m'`    → skipped (type-only imports don't
 ///                                       round-trip through `export { foo }`)
-fn collect_named_imports(program: tree_sitter::Node<'_>, source: &[u8]) -> HashMap<String, String> {
-    let mut map = HashMap::new();
+fn collect_named_imports(program: tree_sitter::Node<'_>, source: &[u8]) -> FxHashMap<String, String> {
+    let mut map = FxHashMap::default();
     let mut cursor = program.walk();
     for child in program.children(&mut cursor) {
         if child.kind() != "import_statement" {
@@ -63,8 +63,8 @@ fn collect_named_imports(program: tree_sitter::Node<'_>, source: &[u8]) -> HashM
 fn collect_locally_used_identifiers(
     program: tree_sitter::Node<'_>,
     source: &[u8],
-) -> HashSet<String> {
-    fn visit(node: tree_sitter::Node<'_>, source: &[u8], out: &mut HashSet<String>) {
+) -> FxHashSet<String> {
+    fn visit(node: tree_sitter::Node<'_>, source: &[u8], out: &mut FxHashSet<String>) {
         if node.kind() == "identifier" {
             if let Ok(name) = std::str::from_utf8(&source[node.byte_range()]) {
                 out.insert(name.to_string());
@@ -76,7 +76,7 @@ fn collect_locally_used_identifiers(
         }
     }
 
-    let mut used = HashSet::new();
+    let mut used = FxHashSet::default();
     let mut cursor = program.walk();
     for child in program.children(&mut cursor) {
         // Skip import_statement (declarations) and export_statement (re-exports).

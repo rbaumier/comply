@@ -1,7 +1,7 @@
 use crate::diagnostic::Diagnostic;
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 use std::sync::Arc;
 
 pub struct Check;
@@ -26,7 +26,7 @@ impl OxcCheck for Check {
         }
 
         // First pass: collect all names used in `implements` clauses.
-        let mut implemented = HashSet::new();
+        let mut implemented = FxHashSet::default();
         for node in semantic.nodes().iter() {
             if let AstKind::TSClassImplements(impl_clause) = node.kind() {
                 // The expression is a TSTypeName — extract the identifier.

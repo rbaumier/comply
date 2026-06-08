@@ -1,14 +1,14 @@
 //! rust-prefer-fast-hasher backend.
 //!
 //! Walks `generic_type` nodes. Matches the base type name (trailing
-//! segment) against `HashMap` / `HashSet`. Inspects `type_arguments`:
+//! segment) against `FxHashMap` / `FxHashSet`. Inspects `type_arguments`:
 //!
-//! - `HashMap<K, V>` with exactly two type args where `K` is a
+//! - `FxHashMap<K, V>` with exactly two type args where `K` is a
 //!   primitive integer → flag.
-//! - `HashSet<K>` with exactly one type arg where `K` is a primitive
+//! - `FxHashSet<K>` with exactly one type arg where `K` is a primitive
 //!   integer → flag.
 //!
-//! Any explicit hasher (e.g. `HashMap<K, V, FxBuildHasher>`) pushes the
+//! Any explicit hasher (e.g. `FxHashMap<K, V, FxBuildHasher>`) pushes the
 //! arg count past the threshold and is left alone — the user has
 //! already opted into a custom hasher.
 
@@ -21,11 +21,11 @@ const INT_PRIMITIVES: &[&str] = &[
 crate::ast_check! { on ["generic_type"] => |node, source, ctx, diagnostics|
     let Some(type_node) = node.child_by_field_name("type") else { return; };
     let type_text = type_node.utf8_text(source).unwrap_or("");
-    // Accept `HashMap`, `std::collections::HashMap`, etc. — trailing segment wins.
+    // Accept `FxHashMap`, `rustc_hash::FxHashMap`, etc. — trailing segment wins.
     let base = type_text.rsplit("::").next().unwrap_or("");
     let (expected_args, map_label): (usize, &str) = match base {
-        "HashMap" => (2, "HashMap"),
-        "HashSet" => (1, "HashSet"),
+        "FxHashMap" => (2, "FxHashMap"),
+        "FxHashSet" => (1, "FxHashSet"),
         _ => return,
     };
 
@@ -63,22 +63,22 @@ mod tests {
 
     #[test]
     fn flags_hashmap_u64_key() {
-        assert_eq!(run("fn f() -> HashMap<u64, String> { todo!() }").len(), 1);
+        assert_eq!(run("fn f() -> FxHashMap<u64, String> { todo!() }").len(), 1);
     }
 
     #[test]
     fn flags_hashset_usize() {
-        assert_eq!(run("fn f() -> HashSet<usize> { todo!() }").len(), 1);
+        assert_eq!(run("fn f() -> FxHashSet<usize> { todo!() }").len(), 1);
     }
 
     #[test]
     fn allows_hashmap_string_key() {
-        assert!(run("fn f() -> HashMap<String, u64> { todo!() }").is_empty());
+        assert!(run("fn f() -> FxHashMap<String, u64> { todo!() }").is_empty());
     }
 
     #[test]
     fn allows_hashmap_with_explicit_hasher() {
-        assert!(run("fn f() -> HashMap<u64, String, FxBuildHasher> { todo!() }").is_empty());
+        assert!(run("fn f() -> FxHashMap<u64, String, FxBuildHasher> { todo!() }").is_empty());
     }
 
     #[test]

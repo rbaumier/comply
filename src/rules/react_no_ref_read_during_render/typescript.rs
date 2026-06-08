@@ -4,7 +4,7 @@
 //! event handlers, or any nested function are accepted.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 
 fn starts_with_uppercase(name: &str) -> bool {
     name.chars().next().is_some_and(|c| c.is_ascii_uppercase())
@@ -14,8 +14,8 @@ fn starts_with_use_hook(name: &str) -> bool {
     name.starts_with("use") && name.chars().nth(3).is_some_and(|c| c.is_ascii_uppercase())
 }
 
-fn collect_ref_bindings(body: tree_sitter::Node, source: &[u8]) -> HashSet<String> {
-    let mut refs = HashSet::new();
+fn collect_ref_bindings(body: tree_sitter::Node, source: &[u8]) -> FxHashSet<String> {
+    let mut refs = FxHashSet::default();
     let mut stack: Vec<tree_sitter::Node> = vec![body];
     while let Some(node) = stack.pop() {
         if node.kind() == "variable_declarator" {
@@ -65,7 +65,7 @@ fn is_assignment_lhs(node: tree_sitter::Node) -> bool {
 fn walk_for_current_reads(
     body: tree_sitter::Node,
     source: &[u8],
-    refs: &HashSet<String>,
+    refs: &FxHashSet<String>,
     out: &mut Vec<(usize, usize, String)>,
 ) {
     let body_id = body.id();

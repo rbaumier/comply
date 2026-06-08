@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use oxc_ast::AstKind;
 use oxc_ast::ast::{BindingPattern, PropertyKey, TSSignature, TSType, TSTypeName};
@@ -33,7 +33,7 @@ impl crate::rules::backend::AstCheck for Check {
             let mut diagnostics = Vec::new();
 
             // Pass 1: collect interface/type property names
-            let mut prop_types: HashMap<String, Vec<PropInfo>> = HashMap::new();
+            let mut prop_types: FxHashMap<String, Vec<PropInfo>> = FxHashMap::default();
             for node in nodes.iter() {
                 match node.kind() {
                     AstKind::TSInterfaceDeclaration(decl) => {
@@ -74,7 +74,7 @@ impl crate::rules::backend::AstCheck for Check {
                     None => continue,
                 };
 
-                let used_props: HashSet<String> = match &param.pattern {
+                let used_props: FxHashSet<String> = match &param.pattern {
                     BindingPattern::ObjectPattern(obj) => {
                         if obj.rest.is_some() {
                             continue;
@@ -165,7 +165,7 @@ fn collect_ts_signature_props(sigs: &[TSSignature]) -> Vec<PropInfo> {
 
 fn resolve_props<'a>(
     param: &oxc_ast::ast::FormalParameter<'a>,
-    prop_types: &HashMap<String, Vec<PropInfo>>,
+    prop_types: &FxHashMap<String, Vec<PropInfo>>,
 ) -> Option<Vec<PropInfo>> {
     let ta = param.type_annotation.as_ref()?;
     match &ta.type_annotation {
@@ -197,8 +197,8 @@ fn collect_accessed_props(
     scoping: &oxc_semantic::Scoping,
     nodes: &oxc_semantic::AstNodes,
     sym: oxc_semantic::SymbolId,
-) -> Option<HashSet<String>> {
-    let mut used = HashSet::new();
+) -> Option<FxHashSet<String>> {
+    let mut used = FxHashSet::default();
     for reference in scoping.get_resolved_references(sym) {
         let ref_id = reference.node_id();
         let parent_id = nodes.parent_id(ref_id);
