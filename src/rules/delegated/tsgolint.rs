@@ -298,11 +298,12 @@ pub fn register_all() -> Vec<RuleDef> {
             "`this.x = x` is redundant when `x` is a parameter property.",
             "Remove the assignment — parameter property handles it.",
         ),
-        entry(
+        entry_with_filter(
             "no-redundant-type-constituents",
             "no-redundant-type-constituents",
             "`string | \"foo\"` is redundant — the literal is subsumed.",
             "Remove the redundant type constituent.",
+            Some(Arc::new(NoRedundantTypeConstituentsFilter)),
         ),
         entry(
             "no-duplicate-type-constituents",
@@ -972,6 +973,62 @@ fn pfa_is_single_return_block_no_await(block: &str) -> bool {
     semicolons <= 1
 }
 
+// ── no-redundant-type-constituents post-filter ────────────────────────────
+//
+// Drops false positives on the `keyof T & string` narrowing idiom.
+// The `& string` constituent is intentional — it filters out numeric/symbol
+// keys that `keyof T` can include. Checked in a ±5-line window around the
+// diagnostic to handle multi-line satisfies clauses.
+
+const NRTC_WINDOW: usize = 5;
+
+struct NoRedundantTypeConstituentsFilter;
+
+impl PostFilter for NoRedundantTypeConstituentsFilter {
+    fn keep(&self, diag: &crate::diagnostic::Diagnostic, source: Option<&str>) -> bool {
+        let Some(src) = source else {
+            return true;
+        };
+        !nrtc_is_keyof_string_narrowing_fp(src, diag.line)
+    }
+}
+
+fn nrtc_is_keyof_string_narrowing_fp(src: &str, line_1based: usize) -> bool {
+    if line_1based == 0 {
+        return false;
+    }
+    let lines: Vec<&str> = src.lines().collect();
+    let lo = line_1based.saturating_sub(NRTC_WINDOW + 1);
+    let hi = (line_1based + NRTC_WINDOW).min(lines.len());
+    lines[lo..hi]
+        .iter()
+        .any(|line| nrtc_has_keyof_string_intersection(line))
+}
+
+fn nrtc_has_keyof_string_intersection(line: &str) -> bool {
+    if !line.contains("keyof") {
+        return false;
+    }
+    let bytes = line.as_bytes();
+    let needle = b"& string";
+    let mut i = 0;
+    while i + needle.len() <= bytes.len() {
+        if bytes[i..i + needle.len()] == *needle {
+            let after = i + needle.len();
+            let after_ok = after >= bytes.len() || !nrtc_is_ident_byte(bytes[after]);
+            if after_ok {
+                return true;
+            }
+        }
+        i += 1;
+    }
+    false
+}
+
+fn nrtc_is_ident_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_' || b == b'$'
+}
+
 // ── no-unnecessary-type-parameters post-filter (equal-probe) ──────────────
 //
 // Two FP shapes are dropped:
@@ -1639,6 +1696,48 @@ export function loader() {
         let src_content = source_for(&path);
         let f = PromiseFunctionAsyncFilter;
         assert!(!f.keep(&pfa_diag(&path, line, col), Some(&src_content)));
+    }
+
+    // ── no-redundant-type-constituents ──────────────────────────────────
+
+    fn nrtc_diag(path: &std::path::Path, line: usize) -> Diagnostic {
+        Diagnostic {
+            path: Arc::from(path),
+            line,
+            column: 1,
+            rule_id: Cow::Borrowed("no-redundant-type-constituents"),
+            message: String::new(),
+            severity: crate::diagnostic::Severity::Error,
+            span: None,
+        }
+    }
+
+    #[test]
+    fn nrtc_drops_single_line_keyof_string_satisfies() {
+        let src = "type User = { id: string; email: string };\nconst s = ['email'] as const satisfies readonly (keyof User & string)[];\n";
+        let path = write_temp("nrtc_single_keyof.ts", src);
+        let src_content = source_for(&path);
+        let line = line_of(src, "satisfies");
+        let f = NoRedundantTypeConstituentsFilter;
+        assert!(!f.keep(&nrtc_diag(&path, line), Some(&src_content)));
+    }
+
+    #[test]
+    fn nrtc_keeps_string_union_literal() {
+        let src = "type T = string | 'foo';\n";
+        let path = write_temp("nrtc_union_literal.ts", src);
+        let src_content = source_for(&path);
+        let f = NoRedundantTypeConstituentsFilter;
+        assert!(f.keep(&nrtc_diag(&path, 1), Some(&src_content)));
+    }
+
+    #[test]
+    fn nrtc_keeps_string_intersection_string() {
+        let src = "type T = string & string;\n";
+        let path = write_temp("nrtc_string_and_string.ts", src);
+        let src_content = source_for(&path);
+        let f = NoRedundantTypeConstituentsFilter;
+        assert!(f.keep(&nrtc_diag(&path, 1), Some(&src_content)));
     }
 
     // ── no-unnecessary-type-parameters (equal probe) ────────────────────
