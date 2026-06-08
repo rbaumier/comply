@@ -1,11 +1,7 @@
-//! Flag `useEffect(async` patterns. Detection is text-based — match the
-//! literal substring at a word boundary.
-
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::rules::backend::{CheckCtx, TextCheck};
+use crate::rules::backend::{CheckCtx, OxcCheck};
 use std::sync::Arc;
 
-#[derive(Debug)]
 pub struct Check;
 
 const NEEDLES: &[&str] = &[
@@ -14,12 +10,16 @@ const NEEDLES: &[&str] = &[
     "useInsertionEffect(async",
 ];
 
-impl TextCheck for Check {
+impl OxcCheck for Check {
     fn prefilter(&self) -> Option<&'static [&'static str]> {
         Some(NEEDLES)
     }
 
-    fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
+    fn run_on_semantic<'a>(
+        &self,
+        _semantic: &'a oxc_semantic::Semantic<'a>,
+        ctx: &CheckCtx,
+    ) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
         for (idx, line) in ctx.source.lines().enumerate() {
             for n in NEEDLES {
@@ -49,10 +49,9 @@ impl TextCheck for Check {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
 
     fn run(source: &str) -> Vec<Diagnostic> {
-        Check.check(&CheckCtx::for_test(Path::new("c.tsx"), source))
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
     }
 
     #[test]
