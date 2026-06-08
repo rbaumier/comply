@@ -167,21 +167,20 @@ pub fn lint_files(
         }
     }
 
-    await_thenable_post_filter::apply(&mut all);
-    ban_types_post_filter::apply(&mut all);
-    elysia_post_filter::apply(&mut all);
-    equal_probe_post_filter::apply(&mut all);
-    no_misused_spread_post_filter::apply(&mut all);
-    no_redundant_type_constituents_post_filter::apply(&mut all);
-    no_unnecessary_condition_exhaustiveness_post_filter::apply(&mut all);
-    no_unsafe_assignment_post_filter::apply(&mut all);
-    no_unsafe_type_assertion_css_post_filter::apply(&mut all);
-    no_unsafe_type_assertion_from_any_post_filter::apply(&mut all);
-    no_unsafe_type_assertion_generic_bridge_post_filter::apply(&mut all);
-    no_unsafe_type_assertion_test_file_post_filter::apply(&mut all);
-    only_throw_error_tanstack_post_filter::apply(&mut all);
-    promise_function_async_post_filter::apply(&mut all);
-    strict_void_return_post_filter::apply(&mut all);
+    let filters = crate::rules::collect_delegated_post_filters();
+    if !filters.is_empty() {
+        let mut source_cache: FxHashMap<PathBuf, Option<String>> = FxHashMap::default();
+        all.retain(|d| {
+            let Some(filter_vec) = filters.get(d.rule_id.as_ref()) else {
+                return true;
+            };
+            let source = source_cache
+                .entry(d.path.to_path_buf())
+                .or_insert_with(|| std::fs::read_to_string(d.path.as_ref()).ok())
+                .as_deref();
+            filter_vec.iter().all(|f| f.keep(d, source))
+        });
+    }
 
     Ok(all)
 }
