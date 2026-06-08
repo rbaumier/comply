@@ -3,6 +3,13 @@ use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{CheckCtx, OxcCheck};
 use std::sync::Arc;
 
+const TEST_MARKERS: &[&str] = &[".test.", ".spec.", "__tests__", "_test.", ".e2e."];
+
+fn is_test_file(path: &std::path::Path) -> bool {
+    let s = path.to_string_lossy();
+    TEST_MARKERS.iter().any(|m| s.contains(m))
+}
+
 pub struct Check;
 
 impl OxcCheck for Check {
@@ -15,6 +22,10 @@ impl OxcCheck for Check {
         semantic: &'a oxc_semantic::Semantic<'a>,
         ctx: &CheckCtx,
     ) -> Vec<Diagnostic> {
+        if is_test_file(ctx.path) {
+            return Vec::new();
+        }
+
         let mut diagnostics = Vec::new();
 
         for comment in semantic.comments() {

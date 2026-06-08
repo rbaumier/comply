@@ -1,6 +1,10 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
 crate::ast_check! { on ["attribute_item"] => |node, source, ctx, diagnostics|
+    if crate::rules::rust_helpers::is_under_tests_dir(ctx.path) {
+        return;
+    }
+
     let text = node.utf8_text(source).unwrap_or("");
 
     if !text.contains("deprecated") {
@@ -64,6 +68,18 @@ mod tests {
     fn allows_deprecated_note_only() {
         assert!(
             run("#[deprecated(note = \"Use new_fn\")]\npub fn old() {}").is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_deprecated_without_note_in_tests_dir() {
+        assert!(
+            crate::rules::test_helpers::run_rust_with_path(
+                "#[deprecated]\npub fn old() {}",
+                &Check,
+                "axum/src/routing/tests/merge.rs",
+            )
+            .is_empty()
         );
     }
 

@@ -38,4 +38,16 @@ mod tests {
     fn ignores_line_comment() {
         assert!(run("// @deprecated\nfunction old() {}").is_empty());
     }
+
+    #[test]
+    fn allows_bare_deprecated_in_test_file() {
+        assert!(
+            crate::rules::test_helpers::run_oxc_ts_with_path(
+                "/** @deprecated */\nfunction old() {}",
+                &Check,
+                "src/user.test.ts",
+            )
+            .is_empty()
+        );
+    }
 }
