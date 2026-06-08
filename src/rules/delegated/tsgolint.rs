@@ -39,11 +39,12 @@ pub fn register_all() -> Vec<RuleDef> {
         // that keep it from contradicting `promise-function-async` on no-op
         // `Promise<void>` stubs. The raw tsgolint variant lacks those and
         // re-introduces an unsatisfiable rule pair. See #283.
-        entry(
+        entry_with_filter(
             "promise-function-async",
             "promise-function-async",
             "Function returns a Promise but is not marked `async`.",
             "Add the `async` keyword to the function declaration.",
+            Some(Arc::new(PromiseFunctionAsyncFilter)),
         ),
         entry(
             "prefer-promise-reject-errors",
@@ -764,6 +765,211 @@ fn imports_tanstack_router(src: &str) -> bool {
         || src.contains("from '@tanstack/router-core'")
 }
 
+// ── promise-function-async post-filter ────────────────────────────────────
+//
+// Two FP shapes are suppressed:
+// 1. Functions returning an explicit non-Promise return type (e.g.
+//    Effect.Effect<…>) — making them async would wrap the effect in a Promise.
+// 2. Concise pass-through arrow callbacks — adding async only wraps the
+//    already-pending Promise in an extra microtask with no semantic benefit.
+
+struct PromiseFunctionAsyncFilter;
+
+impl PostFilter for PromiseFunctionAsyncFilter {
+    fn keep(&self, diag: &crate::diagnostic::Diagnostic, source: Option<&str>) -> bool {
+        let Some(src) = source else { return true };
+        !pfa_returns_explicit_non_promise(src, diag.line, diag.column)
+            && !pfa_is_passthrough_arrow(src, diag.line, diag.column)
+    }
+}
+
+fn pfa_byte_offset(src: &str, line: usize, col: usize) -> Option<usize> {
+    if line == 0 || col == 0 {
+        return None;
+    }
+    let mut offset = 0usize;
+    for (idx, l) in src.lines().enumerate() {
+        if idx + 1 == line {
+            return Some(offset + (col - 1).min(l.len()));
+        }
+        offset += l.len() + 1;
+    }
+    None
+}
+
+fn pfa_return_type_annotation(after: &str) -> Option<String> {
+    let bytes = after.as_bytes();
+    let open = after.find('(')?;
+    let mut depth = 0i32;
+    let mut i = open;
+    let mut close = None;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'(' => depth += 1,
+            b')' => {
+                depth -= 1;
+                if depth == 0 {
+                    close = Some(i);
+                    break;
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    let close = close?;
+    let mut j = close + 1;
+    while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+        j += 1;
+    }
+    if bytes.get(j) != Some(&b':') {
+        return None;
+    }
+    j += 1;
+    let start = j;
+    let (mut angle, mut paren) = (0i32, 0i32);
+    while j < bytes.len() {
+        match bytes[j] {
+            b'<' => angle += 1,
+            b'>' if angle > 0 => angle -= 1,
+            b'(' => paren += 1,
+            b')' if paren > 0 => paren -= 1,
+            b'{' | b';' if angle == 0 && paren == 0 => break,
+            b'=' if angle == 0 && paren == 0 && bytes.get(j + 1) == Some(&b'>') => break,
+            _ => {}
+        }
+        j += 1;
+    }
+    Some(after[start..j].trim().to_string())
+}
+
+fn pfa_returns_explicit_non_promise(src: &str, line: usize, col: usize) -> bool {
+    let Some(offset) = pfa_byte_offset(src, line, col) else {
+        return false;
+    };
+    if !src.is_char_boundary(offset) {
+        return false;
+    }
+    let Some(ret) = pfa_return_type_annotation(&src[offset..]) else {
+        return false;
+    };
+    !ret.contains("Promise")
+}
+
+fn pfa_is_passthrough_arrow(src: &str, line: usize, col: usize) -> bool {
+    let Some(offset) = pfa_byte_offset(src, line, col) else {
+        return false;
+    };
+    if !src.is_char_boundary(offset) {
+        return false;
+    }
+    let after = &src[offset..];
+    let bytes = after.as_bytes();
+    let Some(open) = after.find('(') else {
+        return false;
+    };
+    let mut depth = 0i32;
+    let mut i = open;
+    let mut close = None;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'(' => depth += 1,
+            b')' => {
+                depth -= 1;
+                if depth == 0 {
+                    close = Some(i);
+                    break;
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    let Some(close) = close else {
+        return false;
+    };
+    let mut j = close + 1;
+    while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+        j += 1;
+    }
+    if bytes.get(j) == Some(&b':') {
+        return false;
+    }
+    if bytes.get(j) != Some(&b'=') || bytes.get(j + 1) != Some(&b'>') {
+        return false;
+    }
+    j += 2;
+    while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+        j += 1;
+    }
+    if bytes.get(j) != Some(&b'{') {
+        return true;
+    }
+    pfa_is_single_return_block_no_await(&after[j..])
+}
+
+fn pfa_is_single_return_block_no_await(block: &str) -> bool {
+    let bytes = block.as_bytes();
+    if bytes.first() != Some(&b'{') {
+        return false;
+    }
+    let mut depth = 0i32;
+    let mut content_start = None;
+    let mut content_end = None;
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'{' => {
+                depth += 1;
+                if depth == 1 {
+                    content_start = Some(i + 1);
+                }
+            }
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    content_end = Some(i);
+                    break;
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    let (start, end) = match (content_start, content_end) {
+        (Some(s), Some(e)) => (s, e),
+        _ => return false,
+    };
+    let content = block[start..end].trim();
+    if content.contains("await") {
+        return false;
+    }
+    if !content.starts_with("return") {
+        return false;
+    }
+    let after_return = &content["return".len()..];
+    if !after_return.starts_with(|c: char| c.is_whitespace() || c == ';') {
+        return false;
+    }
+    let (mut angle, mut paren, mut bracket, mut brace) = (0i32, 0i32, 0i32, 0i32);
+    let mut semicolons = 0usize;
+    for b in after_return.bytes() {
+        match b {
+            b'<' => angle += 1,
+            b'>' if angle > 0 => angle -= 1,
+            b'(' => paren += 1,
+            b')' if paren > 0 => paren -= 1,
+            b'[' => bracket += 1,
+            b']' if bracket > 0 => bracket -= 1,
+            b'{' => brace += 1,
+            b'}' if brace > 0 => brace -= 1,
+            b';' if angle == 0 && paren == 0 && bracket == 0 && brace == 0 => semicolons += 1,
+            _ => {}
+        }
+    }
+    semicolons <= 1
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -947,5 +1153,70 @@ export function loader() {
         let src_content = source_for(&path);
         let f = OnlyThrowErrorFilter;
         assert!(f.keep(&throw_diag(&path, line), Some(&src_content)));
+    }
+
+    // ── promise-function-async ──────────────────────────────────────────────
+
+    fn pfa_diag(path: &std::path::Path, line: usize, col: usize) -> Diagnostic {
+        Diagnostic {
+            path: std::sync::Arc::from(path),
+            line,
+            column: col,
+            rule_id: Cow::Borrowed("promise-function-async"),
+            message: String::new(),
+            severity: Severity::Error,
+            span: None,
+        }
+    }
+
+    fn line_col_of(src: &str, needle: &str) -> (usize, usize) {
+        for (i, l) in src.lines().enumerate() {
+            if let Some(c) = l.find(needle) {
+                return (i + 1, c + 1);
+            }
+        }
+        panic!("needle not in source: {needle}");
+    }
+
+    // Regression for #273: Effect.Effect return type must be dropped.
+    #[test]
+    fn drops_effect_return_type() {
+        let src = "function getUser(id: string): Effect.Effect<User, Err> {\n  return program;\n}\n";
+        let path = write_temp("pfa_effect_fn.ts", src);
+        let (line, col) = line_col_of(src, "function");
+        let src_content = source_for(&path);
+        let f = PromiseFunctionAsyncFilter;
+        assert!(!f.keep(&pfa_diag(&path, line, col), Some(&src_content)));
+    }
+
+    #[test]
+    fn keeps_promise_return_type() {
+        let src = "function f(): Promise<void> {\n  return p;\n}\n";
+        let path = write_temp("pfa_promise_fn.ts", src);
+        let (line, col) = line_col_of(src, "function");
+        let src_content = source_for(&path);
+        let f = PromiseFunctionAsyncFilter;
+        assert!(f.keep(&pfa_diag(&path, line, col), Some(&src_content)));
+    }
+
+    // Regression for #342: concise callback arrow is a pass-through.
+    #[test]
+    fn drops_concise_callback_arrow_passthrough() {
+        let src = "apiCall((api) => api.get())\n";
+        let path = write_temp("pfa_callback.ts", src);
+        let (line, col) = line_col_of(src, "(api)");
+        let src_content = source_for(&path);
+        let f = PromiseFunctionAsyncFilter;
+        assert!(!f.keep(&pfa_diag(&path, line, col), Some(&src_content)));
+    }
+
+    #[test]
+    fn drops_single_return_block_callback_arrow() {
+        let src = "apiCall((api) => { return api.get(); })\n";
+        let path = write_temp("pfa_block_callback.ts", src);
+        let (line, col) = line_col_of(src, "(api)");
+        let src_content = source_for(&path);
+        let f = PromiseFunctionAsyncFilter;
+        assert!(!f.keep(&pfa_diag(&path, line, col), Some(&src_content)));
     }
 }
