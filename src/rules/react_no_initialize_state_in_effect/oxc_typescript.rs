@@ -109,7 +109,7 @@ impl OxcCheck for Check {
         }
 
         // Second arg must be an empty array.
-        let deps_expr = call.arguments[1].to_expression();
+        let Some(deps_expr) = call.arguments[1].as_expression() else { return };
         let Expression::ArrayExpression(deps_arr) = deps_expr else {
             return;
         };
@@ -118,7 +118,7 @@ impl OxcCheck for Check {
         }
 
         // First arg must be arrow/function with a body that calls a setter.
-        let callback_expr = call.arguments[0].to_expression();
+        let Some(callback_expr) = call.arguments[0].as_expression() else { return };
         let has_setter = match callback_expr {
             Expression::ArrowFunctionExpression(arrow) => {
                 body_calls_setter(&arrow.body.statements)
@@ -143,5 +143,26 @@ impl OxcCheck for Check {
             severity: Severity::Warning,
             span: None,
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_tsx(source, &Check)
+    }
+
+    // Regression for #911: a spread as the deps argument made `call.arguments[1].to_expression()` panic.
+    #[test]
+    fn does_not_panic_on_spread_deps() {
+        assert!(run("useEffect(cb, ...deps)").is_empty());
+    }
+
+    // Regression for #911: a spread as the callback argument made `call.arguments[0].to_expression()` panic.
+    #[test]
+    fn does_not_panic_on_spread_callback() {
+        assert!(run("useEffect(...args, [])").is_empty());
     }
 }

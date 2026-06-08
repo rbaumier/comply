@@ -41,7 +41,7 @@ impl OxcCheck for Check {
         let Some(first_arg) = call.arguments.first() else {
             return;
         };
-        let arg_expr = first_arg.to_expression();
+        let Some(arg_expr) = first_arg.as_expression() else { return };
         let Expression::Identifier(ident) = arg_expr else {
             return;
         };
@@ -59,5 +59,20 @@ impl OxcCheck for Check {
             severity: Severity::Warning,
             span: None,
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts_with_framework(source, &Check, "elysia")
+    }
+
+    // Regression for #911: a spread argument made `Argument::to_expression()` panic.
+    #[test]
+    fn does_not_panic_on_spread_arg() {
+        assert!(run("eden.post(...args)").is_empty());
     }
 }

@@ -129,7 +129,7 @@ fn is_map_call(call: &oxc_ast::ast::CallExpression) -> bool {
 /// Extract the first parameter name from a `.map(callback)`.
 fn map_callback_param_name(call: &oxc_ast::ast::CallExpression) -> Option<String> {
     let first_arg = call.arguments.first()?;
-    let expr = first_arg.to_expression();
+    let Some(expr) = first_arg.as_expression() else { return None };
     let params = match expr {
         Expression::ArrowFunctionExpression(arrow) => &arrow.params,
         Expression::FunctionExpression(func) => &func.params,
@@ -177,5 +177,11 @@ mod tests {
     fn flags_ts_that_imports_react() {
         let src = format!("import {{ useMemo }} from \"react\";\n{NESTED}");
         assert_eq!(run_oxc_ts_with_path(&src, &Check, "hook.ts").len(), 1);
+    }
+
+    // Regression for #911: a spread argument to .map() made `Argument::to_expression()` panic.
+    #[test]
+    fn does_not_panic_on_spread_arg_in_map() {
+        assert!(run_oxc_tsx("arr.map(...fns)", &Check).is_empty());
     }
 }

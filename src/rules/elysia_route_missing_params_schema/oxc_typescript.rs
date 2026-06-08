@@ -74,7 +74,7 @@ impl OxcCheck for Check {
         let Some(first_arg) = call.arguments.first() else {
             return;
         };
-        let arg_expr = first_arg.to_expression();
+        let Some(arg_expr) = first_arg.as_expression() else { return };
         let Expression::StringLiteral(path_lit) = arg_expr else {
             return;
         };
@@ -145,6 +145,12 @@ http.get("/users/:id", ({ params }) => params);
 
     /// Regression for issue #341: MSW handlers with `:param` paths inside Vitest .test.tsx
     /// component tests must not be flagged.
+    // Regression for #911: a spread argument made `Argument::to_expression()` panic.
+    #[test]
+    fn does_not_panic_on_spread_arg() {
+        assert!(run_on("http.get(...args)").is_empty());
+    }
+
     #[test]
     fn ignores_msw_handler_in_tsx_test_file() {
         let src = r#"
