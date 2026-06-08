@@ -2,3 +2,39 @@ disallowed-types = [
     { path = "std::collections::HashMap", reason = "Use rustc_hash::FxHashMap — faster for non-DoS-resistant keys (ADR: fallow-inspired)" },
     { path = "std::collections::HashSet", reason = "Use rustc_hash::FxHashSet — faster for non-DoS-resistant keys (ADR: fallow-inspired)" },
 ]
+
+# clippy.toml — Comply's clippy tuning.
+#
+# Corresponds to entries in comply.toml. When Comply delegates a rule to
+# a clippy lint (like `id-length` → `clippy::min_ident_chars`), the
+# threshold knobs live here.
+
+# Minimum identifier length. clippy's semantics are "flag if len <= N"
+# (inclusive), so `= 1` means "flag len=1 only" which matches comply's
+# `id-length min = 2` intent of flagging only actual single-char names.
+# The allowlist below then exempts common single-char idioms.
+min-ident-chars-threshold = 1
+
+# Single-letter idents are allowed ACROSS THE BOARD. Every working Rust
+# programmer reads `.and_then(|r| r.severity)`, `|i| i * 2`, `(a, b): (u8, u8)`
+# at sight without guessing. The rule's original intent was to catch
+# abbreviations like `acct`/`usr`/`btn`, which is handled separately by
+# `no-abbreviated-names`. For length-1 idents specifically, the noise
+# floor crosses well above the signal.
+allowed-idents-below-min-chars = [
+    "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m",
+    "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z",
+    "_",
+]
+
+# `too_many_arguments` and `excessive_nesting` are left at clippy's
+# defaults (7 and 5 respectively). Comply's coding-standards skill
+# recommends 3 for both as an IDEAL, but on an existing codebase that
+# threshold produces thousands of violations that drown the signal.
+# Projects that want the stricter default can override here.
+
+# `too_many_lines` — clippy default is 100. Comply's `all_rule_defs()`
+# is a flat data table (103 lines of rule registrations) that grows by
+# 1 line per rule added. Splitting it adds no value. 120 gives headroom
+# for ~20 more rules before the threshold bites.
+too-many-lines-threshold = 120
