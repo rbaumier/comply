@@ -11,7 +11,7 @@ pub struct Check;
 
 const BANNED_WORDS: &[&str] = &[
     "info", "temp", "result", "obj", "item", "thing", "stuff", "val", "retval", "value", "foo",
-    "bar", "row", "rows", "lookup",
+    "bar", "row", "rows", "lookup", "cell", "cells",
 ];
 
 const PARAM_ALLOWED_WORDS: &[&str] = &["value", "item"];
@@ -38,19 +38,6 @@ const DESCRIPTIVE_SUFFIXES: &[&str] = &[
 /// PascalCase `Data*` UI primitive names exempted from the `data` banned-prefix check.
 const DATA_PASCAL_CASE_ALLOWED_COMPOUNDS: &[&str] =
     &["DataTable", "DataGrid", "DataView", "DataList"];
-
-const ITERATOR_METHODS: &[&str] = &[
-    "map",
-    "filter",
-    "find",
-    "findIndex",
-    "forEach",
-    "some",
-    "every",
-    "flatMap",
-    "reduce",
-    "sort",
-];
 
 /// Return the banned prefix matching `name` on a word boundary, or None.
 fn matched_banned_prefix(name: &str) -> Option<&'static str> {
@@ -281,59 +268,6 @@ fn ts_type_is_descriptive(ty: &TSType) -> bool {
     }
 }
 
-/// True if the identifier is a parameter of an iterator callback (.map, .filter, etc.).
-fn is_iterator_callback_param<'a>(
-    node: &oxc_semantic::AstNode<'a>,
-    semantic: &'a oxc_semantic::Semantic<'a>,
-    source: &str,
-) -> bool {
-    let nodes = semantic.nodes();
-    // Walk up: FormalParameter -> FormalParameters -> Function/Arrow -> Argument -> CallExpression
-    let mut func_id = None;
-    for (kind, nid) in nodes.ancestor_kinds(node.id()).zip(nodes.ancestor_ids(node.id())) {
-        match kind {
-            AstKind::ArrowFunctionExpression(_) | AstKind::Function(_) => {
-                func_id = Some(nid);
-                break;
-            }
-            AstKind::FormalParameter(_) | AstKind::FormalParameters(_) => continue,
-            _ => break,
-        }
-    }
-    let Some(func_id) = func_id else {
-        return false;
-    };
-    // The function must be a direct argument of a call expression whose callee
-    // is a member expression with a property in ITERATOR_METHODS.
-    let parent_id = nodes.parent_id(func_id);
-    if parent_id == func_id {
-        return false;
-    }
-    // Walk up through Argument wrapper to CallExpression
-    let mut cur = parent_id;
-    for _ in 0..3 {
-        let kind = nodes.kind(cur);
-        if let AstKind::CallExpression(call) = kind {
-            if let Expression::StaticMemberExpression(ref member) = call.callee {
-                let method = member.property.name.as_str();
-                return ITERATOR_METHODS.contains(&method);
-            }
-            let callee_text =
-                &source[call.callee.span().start as usize..call.callee.span().end as usize];
-            if let Some(method) = callee_text.rsplit('.').next() {
-                return ITERATOR_METHODS.contains(&method);
-            }
-            return false;
-        }
-        let next = nodes.parent_id(cur);
-        if next == cur {
-            break;
-        }
-        cur = next;
-    }
-    false
-}
-
 /// True when the identifier is a function parameter inside an arrow function
 /// or function expression that is used as an object property value.
 /// Covers TanStack Query callbacks like `useMutation({ onSuccess: (data) => {} })`
@@ -444,7 +378,6 @@ impl OxcCheck for Check {
         // Check banned words — only at declaration sites (BindingIdentifier)
         if let AstKind::BindingIdentifier(_) = node.kind()
             && !is_destructuring(node, semantic)
-                && !is_iterator_callback_param(node, semantic, ctx.source)
             {
                 let lower = name.to_ascii_lowercase();
                 if BANNED_WORDS.contains(&lower.as_str()) {
@@ -788,5 +721,50 @@ mod tests {
         // `runMigration` uses `run` as a generic verb — must still flag.
         let src = r#"function runMigration() {}"#;
         assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_row_and_rows_in_iterator_callbacks() {
+        // Iterator-callback params are not exempt — `row`/`rows` are vague
+        // even as `.map`/`.flatMap` parameters (e.g. valuation-tariff readers).
+        let src = r#"
+            readSheetRows(buffer, { skipRows: 1 }).map((rows) =>
+                rows.flatMap((row): Out[] => {
+                    return [row[0]];
+                }),
+            );
+        "#;
+        assert_eq!(run(src).len(), 2);
+    }
+
+    #[test]
+    fn still_allows_value_and_item_params_in_iterator_callbacks() {
+        // `value`/`item` stay allowed as function parameters (PARAM_ALLOWED_WORDS).
+        assert!(run("[1].map((value) => value);").is_empty());
+        assert!(run("[1].map((item) => item);").is_empty());
+    }
+
+    #[test]
+    fn flags_cell_and_cells_banned_words() {
+        assert_eq!(run("const cell = 1;").len(), 1);
+        assert_eq!(run("const cells = [];").len(), 1);
+    }
+
+    #[test]
+    fn does_not_flag_row_cell_as_prefix_or_suffix() {
+        // row/rows/cell/cells are exact-name bans only — compounds like
+        // `rowIndex` or `headerCell` carry meaning and must not be flagged.
+        for name in [
+            "tableRow",
+            "rowIndex",
+            "firstRow",
+            "rowCount",
+            "headerCell",
+            "cellValue",
+            "cellRenderer",
+        ] {
+            let src = format!("const {name} = 1;");
+            assert!(run(&src).is_empty(), "'{name}' must NOT be flagged");
+        }
     }
 }
