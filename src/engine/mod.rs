@@ -285,6 +285,7 @@ pub fn lint_files_with_project(
 /// LSP path inherits "tree-sitter and text rules only" for free, which is
 /// exactly what we want for per-keystroke editor feedback.
 #[must_use = "diagnostics from in-memory lint must be reported"]
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn lint_in_memory(
     path: &std::path::Path,
     language: Language,

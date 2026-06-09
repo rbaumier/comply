@@ -12,7 +12,7 @@ fn is_prisma_file(source: &str) -> bool {
         || crate::oxc_helpers::source_contains(source, "prisma.")
 }
 
-fn object_has_key(obj: &oxc_ast::ast::ObjectExpression, source: &str, name: &str) -> bool {
+fn object_has_key(obj: &oxc_ast::ast::ObjectExpression, name: &str) -> bool {
     for prop in &obj.properties {
         if let ObjectPropertyKind::ObjectProperty(p) = prop {
             let key_name = match &p.key {
@@ -88,8 +88,8 @@ impl OxcCheck for Check {
         }
 
         for obj in obj_args {
-            if !object_has_key(obj, ctx.source, "select")
-                && !object_has_key(obj, ctx.source, "include")
+            if !object_has_key(obj, "select")
+                && !object_has_key(obj, "include")
             {
                 let (line, column) =
                     byte_offset_to_line_col(ctx.source, call.span.start as usize);

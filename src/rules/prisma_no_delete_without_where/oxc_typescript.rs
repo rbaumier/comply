@@ -3,7 +3,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{Argument, Expression, ObjectPropertyKind};
+use oxc_ast::ast::{Expression, ObjectPropertyKind};
 use std::sync::Arc;
 
 fn is_prisma_file(source: &str) -> bool {

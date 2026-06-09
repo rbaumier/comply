@@ -202,7 +202,6 @@ fn merge_and_emit(
         last_rstart: usize,
         rline: usize,
         cfi: usize,
-        cstart: usize,
         cline: usize,
     }
 
@@ -233,7 +232,7 @@ fn merge_and_emit(
             .as_ref()
             .is_some_and(|ft| has_enough_distinct_texts(ft, rstart, last_rstart));
         if keep {
-            spans.push(Span { rfi, rstart, last_rstart, rline, cfi, cstart, cline });
+            spans.push(Span { rfi, rstart, last_rstart, rline, cfi, cline });
         }
         i = j;
     }
