@@ -5,9 +5,17 @@
 //! because the wildcard is represented as a `use_wildcard` node
 //! deep in the tree, and the `pub` modifier is a separate child —
 //! easier to scan the line.
+//!
+//! Two cases are exempt because they do not invisibly mirror an external
+//! dependency's surface:
+//! - prelude modules (`prelude.rs` / `prelude/mod.rs`), which exist
+//!   precisely to be glob-imported (`use my_crate::prelude::*`);
+//! - local-submodule flattening (`mod foo; pub use foo::*;`), which
+//!   re-exports a submodule the author owns in the same file.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
+use std::path::Path;
 
 const KINDS: &[&str] = &["use_declaration"];
 
@@ -50,6 +58,21 @@ impl AstCheck for Check {
         {
             return;
         }
+        // Prelude modules exist to be glob-imported (`use crate::prelude::*`,
+        // like `std::prelude`); wholesale re-export is their purpose.
+        if is_prelude_module(ctx.path) {
+            return;
+        }
+        // Module-flattening: `mod foo; pub use foo::*;` re-exports a submodule
+        // the author owns in this same file to keep file layout separate from
+        // the public API shape — not the dependency-surface mirroring this rule
+        // targets. (External / cross-module globs like `pub use serde::*;` or
+        // `pub use crate::types::*;` are not exempt — no local `mod` matches.)
+        if let Some(seg) = first_use_segment(trimmed) {
+            if declares_submodule(node, seg, source_bytes) {
+                return;
+            }
+        }
         let pos = node.start_position();
         diagnostics.push(Diagnostic {
             path: std::sync::Arc::clone(&ctx.path_arc),
@@ -65,6 +88,65 @@ impl AstCheck for Check {
             span: None,
         });
     }
+}
+
+/// `prelude` modules (`prelude.rs` or `prelude/mod.rs`) exist precisely to
+/// be glob-imported (`use my_crate::prelude::*`), the same convention as
+/// `std::prelude`. Re-exporting wholesale is their entire purpose, so a
+/// `pub use ...::*;` there is never a surprise.
+fn is_prelude_module(path: &Path) -> bool {
+    let file = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+    if file == "prelude.rs" {
+        return true;
+    }
+    if file == "mod.rs" {
+        return path
+            .parent()
+            .and_then(|p| p.file_name())
+            .and_then(|s| s.to_str())
+            == Some("prelude");
+    }
+    false
+}
+
+/// First path segment of a `pub use` target, skipping a leading `self::`.
+/// `pub use execution_state::*;` -> `Some("execution_state")`
+/// `pub use self::foo::*;`       -> `Some("foo")`
+/// `pub use crate::types::*;`    -> `Some("crate")`
+fn first_use_segment(trimmed: &str) -> Option<&str> {
+    let after = trimmed.strip_prefix("pub use")?.trim_start();
+    let after = after.strip_prefix("self::").unwrap_or(after);
+    let seg = after.split("::").next()?.trim();
+    (!seg.is_empty()).then_some(seg)
+}
+
+/// True if the file declares a submodule named `seg` (`mod seg;` or
+/// `mod seg { ... }`). Then `pub use seg::*;` flattens a submodule the
+/// author owns in this very file, an intentional API-shape choice.
+fn declares_submodule(node: tree_sitter::Node, seg: &str, source: &[u8]) -> bool {
+    let mut root = node;
+    while let Some(parent) = root.parent() {
+        root = parent;
+    }
+    find_mod_decl(root, seg, source)
+}
+
+fn find_mod_decl(node: tree_sitter::Node, seg: &str, source: &[u8]) -> bool {
+    if node.kind() == "mod_item"
+        && node
+            .child_by_field_name("name")
+            .and_then(|n| n.utf8_text(source).ok())
+            == Some(seg)
+    {
+        return true;
+    }
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        if find_mod_decl(child, seg, source) {
+            return true;
+        }
+    }
+    false
 }
 
 #[cfg(test)]
@@ -109,5 +191,44 @@ mod tests {
     fn allows_pub_crate_use_glob() {
         // pub(crate) doesn't escape the crate — internal scope, fine.
         assert!(run_on("pub(crate) use crate::types::*;").is_empty());
+    }
+
+    #[test]
+    fn exempts_prelude_file_issue_1013() {
+        // Issue #1013: polars crates/*/src/prelude.rs glob re-exports.
+        let src = "pub use crate::expressions::*;\npub use crate::state::*;";
+        assert!(crate::rules::test_helpers::run_rule(&Check, src, "src/prelude.rs").is_empty());
+    }
+
+    #[test]
+    fn exempts_prelude_mod_rs() {
+        assert!(
+            crate::rules::test_helpers::run_rule(&Check, "pub use crate::types::*;", "prelude/mod.rs")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn exempts_local_submodule_flattening_issue_1013() {
+        // Issue #1013: polars state/mod.rs flattens an owned submodule.
+        let src = "mod execution_state;\nmod node_timer;\npub use execution_state::*;\nuse node_timer::*;";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn exempts_self_prefixed_submodule_flattening() {
+        assert!(run_on("mod foo;\npub use self::foo::*;").is_empty());
+    }
+
+    #[test]
+    fn still_flags_external_crate_glob_issue_1013() {
+        // `serde` is an external crate, not a submodule declared here.
+        assert_eq!(run_on("pub use serde::*;").len(), 1);
+    }
+
+    #[test]
+    fn still_flags_bare_glob_without_local_mod() {
+        // No `mod external_thing;` in the file -> not local flattening.
+        assert_eq!(run_on("pub use external_thing::*;").len(), 1);
     }
 }
