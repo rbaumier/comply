@@ -1,4 +1,6 @@
 //! jsdoc/check-tag-names OxcCheck backend — scan comments for unknown tags.
+//! Tags containing an uppercase letter (custom convention tags like `@publicApi`,
+//! decorator references like `@Module`) are not flagged.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -148,6 +150,14 @@ impl OxcCheck for Check {
                     if is_known(&tag.name) {
                         continue;
                     }
+                    // Standard JSDoc tags are all lowercase, so a typo of one is
+                    // too. A tag containing an uppercase letter is an intentional
+                    // custom convention tag (camelCase `@publicApi`, `@usageNotes`)
+                    // or a decorator reference in an example (`@Module`), never a
+                    // misspelling — leave it alone.
+                    if tag.name.chars().any(|c| c.is_ascii_uppercase()) {
+                        continue;
+                    }
                     let suggestion = suggest(&tag.name);
                     let message = match suggestion {
                         Some(s) => format!(
@@ -173,5 +183,52 @@ impl OxcCheck for Check {
         }
 
         diagnostics
+    }
+}
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, src, "t.ts")
+    }
+
+    #[test]
+    fn allows_custom_convention_tags_issue_1016() {
+        // NestJS @publicApi / @usageNotes — camelCase custom tags.
+        assert!(run("/**\n * @publicApi\n */\n").is_empty());
+        assert!(run("/**\n * @usageNotes\n * notes\n */\n").is_empty());
+    }
+
+    #[test]
+    fn allows_decorator_reference_in_example_issue_1016() {
+        // A decorator reference inside a JSDoc example is PascalCase.
+        let src = "/**\n * @example\n * @Module({\n *   imports: [],\n * })\n */\n";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn still_flags_lowercase_typos() {
+        // Genuine misspellings of standard tags are all lowercase.
+        assert_eq!(run("/**\n * @return thing\n */\n").len(), 1);
+        assert_eq!(run("/**\n * @arg x\n */\n").len(), 1);
+        assert_eq!(run("/**\n * @bogus foo\n */\n").len(), 1);
     }
 }
