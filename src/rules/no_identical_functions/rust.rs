@@ -1,6 +1,10 @@
 //! no-identical-functions Rust backend.
 //!
-//! Flag `fn` items with identical bodies.
+//! Flag `fn` items with identical bodies. Methods inside trait impls
+//! (`impl Trait for Type`) are exempt: identical bodies there are forced by
+//! the trait contract (you cannot call across impl blocks for different
+//! types, and differing argument types block a shared generic helper).
+//! Inherent impl methods and free functions are still flagged.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
@@ -61,6 +65,11 @@ fn collect_functions(
             }
         }
         "impl_item" | "mod_item" => {
+            // Trait impl methods (`impl Trait for Type`) are forced by the
+            // trait contract and cannot share a helper — skip them entirely.
+            if node.kind() == "impl_item" && node.child_by_field_name("trait").is_some() {
+                return;
+            }
             let count = node.named_child_count();
             for i in 0..count {
                 if let Some(child) = node.named_child(i) {
@@ -171,5 +180,77 @@ fn bar() -> i32 {
 }
 "#;
         assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_identical_trait_methods_across_impl_blocks() {
+        let src = r#"
+struct A;
+struct B;
+
+impl De for A {
+    fn deserialize_enum<V>(self, name: &str, visitor: V) -> R {
+        let _ = name;
+        let _ = visitor;
+        visitor.visit_enum(self)
+    }
+}
+
+impl De for B {
+    fn deserialize_enum<V>(self, name: &str, visitor: V) -> R {
+        let _ = name;
+        let _ = visitor;
+        visitor.visit_enum(self)
+    }
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_identical_trait_methods_within_one_impl_block() {
+        let src = r#"
+struct IgnoredAny;
+
+impl Visitor for IgnoredAny {
+    fn visit_bool(self, x: bool) -> Result<IgnoredAny, E> {
+        let _ = x;
+        let ack = ();
+        Ok(IgnoredAny)
+    }
+
+    fn visit_i64(self, x: i64) -> Result<IgnoredAny, E> {
+        let _ = x;
+        let ack = ();
+        Ok(IgnoredAny)
+    }
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_identical_inherent_impl_methods() {
+        let src = r#"
+struct Foo;
+
+impl Foo {
+    fn a(&self, x: i32) -> i32 {
+        let a = x + 1;
+        let b = a * 2;
+        b
+    }
+
+    fn b(&self, x: i32) -> i32 {
+        let a = x + 1;
+        let b = a * 2;
+        b
+    }
+}
+"#;
+        let d = run_on(src);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("`b`"));
+        assert!(d[0].message.contains("`a`"));
     }
 }
