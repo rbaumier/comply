@@ -6,7 +6,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::Statement;
+use oxc_ast::ast::{Expression, Statement};
 use std::sync::Arc;
 
 pub struct Check;
@@ -15,7 +15,42 @@ pub struct Check;
 /// string literal (e.g. `"use strict";`, `"use client";`).
 fn is_directive(stmt: &Statement) -> bool {
     matches!(stmt, Statement::ExpressionStatement(expr)
-        if matches!(&expr.expression, oxc_ast::ast::Expression::StringLiteral(_)))
+        if matches!(&expr.expression, Expression::StringLiteral(_)))
+}
+
+/// Test-framework configuration calls that are conventionally placed before
+/// imports:
+/// - `jest.setTimeout(N)` — sets the default test timeout for the file
+/// - `vi.setConfig({ testTimeout: N })` — Vitest equivalent
+/// - `jasmine.DEFAULT_TIMEOUT_INTERVAL = N` — Jasmine equivalent (assignment)
+///
+/// These are zero-import-side-effect statements and must not flip `saw_non_import`.
+fn is_test_framework_config(stmt: &Statement) -> bool {
+    let Statement::ExpressionStatement(expr_stmt) = stmt else {
+        return false;
+    };
+
+    // `jest.setTimeout(N)` / `vi.setConfig(...)`
+    if let Expression::CallExpression(call) = &expr_stmt.expression
+        && let Expression::StaticMemberExpression(member) = &call.callee
+        && let Expression::Identifier(obj) = &member.object
+    {
+        return matches!(
+            (obj.name.as_str(), member.property.name.as_str()),
+            ("jest", "setTimeout") | ("vi", "setConfig")
+        );
+    }
+
+    // `jasmine.DEFAULT_TIMEOUT_INTERVAL = N`
+    if let Expression::AssignmentExpression(assign) = &expr_stmt.expression
+        && let oxc_ast::ast::AssignmentTarget::StaticMemberExpression(member) = &assign.left
+        && let Expression::Identifier(obj) = &member.object
+    {
+        return obj.name.as_str() == "jasmine"
+            && member.property.name.as_str() == "DEFAULT_TIMEOUT_INTERVAL";
+    }
+
+    false
 }
 
 impl OxcCheck for Check {
@@ -61,6 +96,11 @@ impl OxcCheck for Check {
                 _ if is_directive(stmt) => {}
                 // Empty statements (lone semicolons) are harmless.
                 Statement::EmptyStatement(_) => {}
+                // Test-framework configuration calls (`jest.setTimeout`,
+                // `vi.setConfig`, `jasmine.DEFAULT_TIMEOUT_INTERVAL = N`) placed
+                // before imports are a widespread convention with no import side
+                // effects — they must not flip `saw_non_import`.
+                _ if is_test_framework_config(stmt) => {}
                 _ => {
                     saw_non_import = true;
                 }
