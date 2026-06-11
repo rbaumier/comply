@@ -1,4 +1,4 @@
-//! no-match-snapshot — reject snapshot-based assertions.
+//! no-match-snapshot — reject snapshot-based assertions outside contract/protocol files.
 
 mod oxc_typescript;
 #[cfg(test)]
@@ -15,7 +15,10 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Replace `toMatchSnapshot()` with specific assertions on \
                   the fields that matter. Snapshots break on unrelated \
                   refactors and get blindly updated, losing all assertion \
-                  value.",
+                  value. \
+                  Exception: files whose path contains `contract`, `serial`, \
+                  `wire`, or `protocol` are exempt — snapshots pin a \
+                  protocol/wire-format contract and are the correct tool there.",
     severity: Severity::Warning,
     doc_url: None,
     categories: &["testing"],

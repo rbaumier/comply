@@ -4,6 +4,10 @@ use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::Expression;
 use std::sync::Arc;
 
+/// Path segments that identify files dedicated to protocol/contract/serialization
+/// testing, where snapshots are the correct tool (they pin a wire format).
+const CONTRACT_MARKERS: &[&str] = &["contract", "serial", "wire", "protocol"];
+
 pub struct Check;
 
 impl OxcCheck for Check {
@@ -22,6 +26,9 @@ impl OxcCheck for Check {
         _semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
+        if is_contract_file(ctx.path) {
+            return;
+        }
         let AstKind::CallExpression(call) = node.kind() else {
             return;
         };
@@ -47,6 +54,11 @@ impl OxcCheck for Check {
             span: None,
         });
     }
+}
+
+fn is_contract_file(path: &std::path::Path) -> bool {
+    let s = path.to_string_lossy().replace('\\', "/").to_lowercase();
+    CONTRACT_MARKERS.iter().any(|m| s.contains(m))
 }
 
 #[cfg(test)]
@@ -85,5 +97,54 @@ mod tests {
     #[test]
     fn allows_specific_assertions() {
         assert!(run_on("expect(x.foo).toBe('bar');").is_empty());
+    }
+
+    // Regression #992 — snapshots in protocol/contract/serialization test files
+    // are the correct tool for pinning wire formats; they must not be flagged.
+    #[test]
+    fn no_fp_in_contract_test_file() {
+        let src = "expect(await action()).toMatchInlineSnapshot(`Object { \"result\": Object { \"data\": Object { \"foo\": \"bar\" } } }`);";
+        assert!(
+            crate::rules::test_helpers::run_rule(&Check, src, "client.contract.test.ts")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn no_fp_in_serial_test_file() {
+        let src = "expect(x).toMatchSnapshot();";
+        assert!(
+            crate::rules::test_helpers::run_rule(&Check, src, "src/serial/response.test.ts")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn no_fp_in_wire_test_file() {
+        let src = "expect(x).toMatchInlineSnapshot('y');";
+        assert!(
+            crate::rules::test_helpers::run_rule(&Check, src, "wire-format.test.ts").is_empty()
+        );
+    }
+
+    #[test]
+    fn no_fp_in_protocol_test_file() {
+        let src = "expect(x).toMatchSnapshot();";
+        assert!(
+            crate::rules::test_helpers::run_rule(&Check, src, "trpc-protocol.test.tsx").is_empty()
+        );
+    }
+
+    #[test]
+    fn still_flags_in_regular_test_file() {
+        assert_eq!(
+            crate::rules::test_helpers::run_rule(
+                &Check,
+                "expect(x).toMatchInlineSnapshot('y');",
+                "src/app-dir/client.test.tsx"
+            )
+            .len(),
+            1
+        );
     }
 }
