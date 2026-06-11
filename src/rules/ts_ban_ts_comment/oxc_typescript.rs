@@ -1,9 +1,11 @@
 //! ts-ban-ts-comment OXC backend — flag @ts-ignore, @ts-nocheck, and bare
-//! @ts-expect-error via semantic comments. tsd/dtslint type-level test files
+//! @ts-expect-error via semantic comments. Test files are exempt from the
+//! `@ts-expect-error` description requirement: test dirs/suffixes (`.test.`,
+//! `.spec.`, `tests/`, `__tests__/`, …) plus tsd/dtslint type-test files
 //! (`test-d/` or `dtslint/` directories, `*.test-d.{ts,tsx}`,
-//! `*.types-test.{ts,tsx}`) are exempt from the `@ts-expect-error` description
-//! requirement: there a bare directive is the conventional type-level
-//! assertion. `@ts-ignore` and `@ts-nocheck` remain banned everywhere.
+//! `*.types-test.{ts,tsx}`). There a bare directive is a type-level assertion
+//! documented by the enclosing `it()`/`describe()` name. `@ts-ignore` and
+//! `@ts-nocheck` remain banned everywhere, including test files.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -48,7 +50,15 @@ impl OxcCheck for Check {
         ctx: &CheckCtx,
     ) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
-        let in_type_test = is_type_test_file(ctx.path);
+        // The `@ts-expect-error` description requirement is waived in test
+        // files: there a bare directive is a type-level assertion documented
+        // by the enclosing `it()`/`describe()`. tsd/dtslint type-test files
+        // (incl. `*.test-d.ts` / `*.types-test.ts` suffixes not covered by
+        // `in_test_dir`) keep their existing exemption. `@ts-ignore` and
+        // `@ts-nocheck` remain banned everywhere — this gate touches only the
+        // `@ts-expect-error` branch below.
+        let expect_error_exempt =
+            is_type_test_file(ctx.path) || ctx.file.path_segments.in_test_dir;
 
         for comment in semantic.comments() {
             // OXC comment spans INCLUDE the `//` or `/* */` markers
@@ -79,7 +89,7 @@ impl OxcCheck for Check {
                 });
             } else if let Some(rest) = stripped.strip_prefix("@ts-expect-error") {
                 let description = rest.trim();
-                if !in_type_test && (description.is_empty() || description.len() < 3) {
+                if !expect_error_exempt && (description.is_empty() || description.len() < 3) {
                     let (line, column) = byte_offset_to_line_col(ctx.source, comment.span.start as usize);
                     diagnostics.push(Diagnostic {
                         path: Arc::clone(&ctx.path_arc),
@@ -117,8 +127,11 @@ impl crate::rules::test_helpers::RunRule for Check {
 mod tests {
     use super::*;
 
+    // `run_rule_gated` builds the FileCtx from the path (so
+    // `path_segments.in_test_dir` matches production), unlike `run_rule`
+    // which uses a static default FileCtx.
     fn run_at(src: &str, path: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_rule(&Check, src, path)
+        crate::rules::test_helpers::run_rule_gated(&Check, src, path)
     }
 
     #[test]
@@ -143,5 +156,31 @@ mod tests {
     fn flags_ts_ignore_in_test_d_directory() {
         let src = "// @ts-ignore\ntype A = IsAny;\n";
         assert_eq!(run_at(src, "test-d/x.ts").len(), 1);
+    }
+
+    #[test]
+    fn exempts_bare_expect_error_in_test_file_issue_1033() {
+        // ts-pattern tests/*.test.ts: bare @ts-expect-error is a type assertion.
+        let src = "it('x', () => {\n  // @ts-expect-error\n  const r = bad();\n});\n";
+        assert!(run_at(src, "tests/record.test.ts").is_empty(), "{:?}", run_at(src, "tests/record.test.ts"));
+    }
+
+    #[test]
+    fn exempts_bare_expect_error_in_dot_test_suffixed_file() {
+        let src = "// @ts-expect-error\nconst x: number = 'a';\n";
+        assert!(run_at(src, "src/record.test.ts").is_empty());
+    }
+
+    #[test]
+    fn still_flags_ts_ignore_in_test_file_issue_1033() {
+        // @ts-ignore stays banned everywhere, including test files.
+        let src = "// @ts-ignore\nconst x = bad;\n";
+        assert_eq!(run_at(src, "tests/record.test.ts").len(), 1);
+    }
+
+    #[test]
+    fn still_flags_ts_nocheck_in_test_file() {
+        let src = "// @ts-nocheck\nconst x = bad;\n";
+        assert_eq!(run_at(src, "tests/record.test.ts").len(), 1);
     }
 }
