@@ -11,7 +11,7 @@ pub struct Check;
 
 const BANNED_WORDS: &[&str] = &[
     "info", "temp", "result", "obj", "item", "thing", "stuff", "val", "retval", "value", "foo",
-    "bar", "row", "rows", "lookup", "cell", "cells",
+    "bar", "row", "rows", "cell", "cells",
 ];
 
 const PARAM_ALLOWED_WORDS: &[&str] = &["value", "item"];
@@ -35,9 +35,18 @@ const DESCRIPTIVE_SUFFIXES: &[&str] = &[
     "_LEN", "_COUNT", "_MAX", "_MIN", "_TIMEOUT", "_INTERVAL", "_LIMIT", "_TTL", "_ROOT", "_BASE",
 ];
 
-/// PascalCase `Data*` UI primitive names exempted from the `data` banned-prefix check.
-const DATA_PASCAL_CASE_ALLOWED_COMPOUNDS: &[&str] =
-    &["DataTable", "DataGrid", "DataView", "DataList"];
+/// PascalCase `Data*` compound names exempted from the `data` banned-prefix
+/// check: UI primitives (shadcn/TanStack/MUI/Radix) and fp-ts/Effect
+/// data-first/data-last vocabulary (`dual()` pattern, `DataTag` discriminants).
+const DATA_PASCAL_CASE_ALLOWED_COMPOUNDS: &[&str] = &[
+    "DataTable",
+    "DataGrid",
+    "DataView",
+    "DataList",
+    "DataLast",
+    "DataFirst",
+    "DataTag",
+];
 
 /// Return the banned prefix matching `name` on a word boundary, or None.
 fn matched_banned_prefix(name: &str) -> Option<&'static str> {
@@ -597,6 +606,35 @@ mod tests {
         // canonical UI primitives.
         let src = r#"const dataSource = 1; const DataObject = {}; const DataValue = 2;"#;
         assert_eq!(run(src).len(), 3);
+    }
+
+    #[test]
+    fn allows_data_last_data_first_fp_compounds() {
+        // Regression for rbaumier/comply#973 — `DataLast`/`DataFirst` are the
+        // fp-ts/Effect terms for the `dual()` calling conventions, not generic
+        // `data` names.
+        let src = r#"
+            function dual<DataLast extends (...args: any[]) => any, DataFirst extends (...args: any[]) => any>(body: DataFirst): DataLast & DataFirst { return body as any; }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_lookup_function_and_variable() {
+        // Regression for rbaumier/comply#973 — `lookup` is the canonical FP
+        // term for "get by key/index" (Haskell `Data.Map.lookup`).
+        let src = r#"
+            export const lookup = (arr: number[], i: number) => arr[i];
+            function f() { const lookup = {}; return lookup; }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_other_banned_words() {
+        // Negative: the banned-word list stays intact apart from `lookup`.
+        let src = r#"const obj = 1; const temp = 2;"#;
+        assert_eq!(run(src).len(), 2);
     }
 
     #[test]
