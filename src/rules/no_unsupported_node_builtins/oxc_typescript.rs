@@ -184,10 +184,10 @@ mod tests {
 
     #[test]
     fn skips_file_in_deno_dir() {
-        // Regression for issue #831: Response is a Web API valid in Deno
+        // Regression for issue #831: fetch is a Web API valid in Deno
         let d = setup_at_path(
             ">=16",
-            "new Response('auth');",
+            "fetch('https://example.com');",
             "runtime-tests/deno/middleware.test.tsx",
         );
         assert!(d.is_empty());
@@ -206,8 +206,20 @@ mod tests {
     #[test]
     fn still_flags_in_regular_dir() {
         // Guard must not suppress diagnostics for normal Node.js files
-        let d = setup_at_path(">=16", "new Response('auth');", "src/app.ts");
+        let d = setup_at_path(">=16", "fetch('https://example.com');", "src/app.ts");
         assert_eq!(d.len(), 1);
-        assert!(d[0].message.contains("Response"));
+        assert!(d[0].message.contains("fetch"));
+    }
+
+    #[test]
+    fn treats_fetch_api_value_types_as_universal_issue_1029() {
+        // Regression for issue #1029: Request/Response/Headers/FormData are
+        // WHATWG standards across all modern runtimes, never version-gated.
+        let d = setup_at_path(
+            ">=16",
+            "const f = (r: Response) => { const q = new Request('x'); const h = new Headers(); const fd = new FormData(); return new Response('ok'); };",
+            "src/context.ts",
+        );
+        assert!(d.is_empty(), "{d:?}");
     }
 }

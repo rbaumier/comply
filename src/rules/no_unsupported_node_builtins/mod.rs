@@ -39,6 +39,13 @@ pub fn register() -> RuleDef {
 // ── shared helpers (used by both tree-sitter and oxc backends) ──────
 
 /// Minimum Node major version at which each global API became available.
+///
+/// The Fetch API request/response value types (`Request`, `Response`, `Headers`,
+/// `FormData`) are intentionally NOT version-gated: they are WHATWG web-platform
+/// standards available across all modern runtimes (browsers, Deno, Bun,
+/// Cloudflare Workers, Node 18+) and the core abstraction of multi-runtime
+/// frameworks, so gating them by `engines.node` produces false positives.
+/// `fetch` itself (the I/O function) stays gated.
 const GLOBAL_APIS: &[(&str, u32)] = &[
     ("AbortController", 15),
     ("AbortSignal", 15),
@@ -48,10 +55,6 @@ const GLOBAL_APIS: &[(&str, u32)] = &[
     ("structuredClone", 17),
     ("fetch", 18),
     ("Blob", 18),
-    ("FormData", 18),
-    ("Headers", 18),
-    ("Request", 18),
-    ("Response", 18),
     ("CustomEvent", 19),
     ("File", 20),
     ("navigator", 21),
