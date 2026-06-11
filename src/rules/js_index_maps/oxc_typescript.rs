@@ -4,7 +4,8 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::Expression;
+use oxc_ast::ast::{Argument, CallExpression, Expression, NewExpression, Statement, UnaryOperator};
+use oxc_semantic::ReferenceFlags;
 use std::sync::Arc;
 
 pub struct Check;
@@ -50,6 +51,13 @@ impl OxcCheck for Check {
             return;
         }
 
+        // The lookup is already O(1) when the callback predicate is a
+        // `.has()` on a known `Set`/`Map` — the index the rule would suggest
+        // building already exists.
+        if callback_is_known_set_lookup(call, semantic) {
+            return;
+        }
+
         let (line, column) = byte_offset_to_line_col(ctx.source, call.span.start as usize);
         diagnostics.push(Diagnostic {
             path: Arc::clone(&ctx.path_arc),
@@ -63,6 +71,81 @@ impl OxcCheck for Check {
             span: None,
         });
     }
+}
+
+/// True when `call`'s callback predicate is a (possibly negated) `.has()`
+/// lookup whose receiver is structurally known to be a `Set` or `Map`. Such a
+/// lookup is O(1), so the flagged method does no O(n*m) scan.
+fn callback_is_known_set_lookup<'a>(
+    call: &CallExpression<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    let Some(Argument::ArrowFunctionExpression(arrow)) = call.arguments.first() else {
+        return false;
+    };
+    if !arrow.expression {
+        return false;
+    }
+    let Some(Statement::ExpressionStatement(stmt)) = arrow.body.statements.first() else {
+        return false;
+    };
+
+    let mut predicate = &stmt.expression;
+    while let Expression::UnaryExpression(unary) = predicate {
+        if unary.operator != UnaryOperator::LogicalNot {
+            return false;
+        }
+        predicate = &unary.argument;
+    }
+
+    let Expression::CallExpression(lookup) = predicate else {
+        return false;
+    };
+    let Expression::StaticMemberExpression(lookup_member) = &lookup.callee else {
+        return false;
+    };
+    if lookup_member.property.name.as_str() != "has" {
+        return false;
+    }
+    is_known_set_or_map(&lookup_member.object, semantic)
+}
+
+/// True when `expr` is structurally a `Set`/`Map`: a direct `new Set(...)` /
+/// `new Map(...)`, or an identifier whose declaration initializer is one and
+/// which is never reassigned.
+fn is_known_set_or_map<'a>(expr: &Expression<'a>, semantic: &'a oxc_semantic::Semantic<'a>) -> bool {
+    match expr {
+        Expression::NewExpression(new_expr) => is_set_or_map_constructor(new_expr),
+        Expression::Identifier(id) => {
+            let Some(ref_id) = id.reference_id.get() else {
+                return false;
+            };
+            let scoping = semantic.scoping();
+            let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
+                return false;
+            };
+            if scoping
+                .get_resolved_references(sym_id)
+                .any(|reference| reference.flags().contains(ReferenceFlags::Write))
+            {
+                return false;
+            }
+            let AstKind::VariableDeclarator(decl) =
+                semantic.nodes().kind(scoping.symbol_declaration(sym_id))
+            else {
+                return false;
+            };
+            matches!(&decl.init, Some(Expression::NewExpression(n)) if is_set_or_map_constructor(n))
+        }
+        _ => false,
+    }
+}
+
+fn is_set_or_map_constructor(new_expr: &NewExpression<'_>) -> bool {
+    matches!(
+        &new_expr.callee,
+        Expression::Identifier(id) if matches!(id.name.as_str(), "Set" | "Map")
+    )
 }
 
 fn is_inside_loop<'a>(
@@ -241,6 +324,92 @@ items.forEach(item => {
 "#)
             .is_empty()
         );
+    }
+
+    #[test]
+    fn no_fp_on_set_has_lookup_in_filter() {
+        // Regression for #957: updatedGtins is a Set — `.has()` is already O(1).
+        assert!(
+            run(r#"
+const updatedGtins = new Set(updatedRows.map((r) => r.gtin));
+const unknownGtins = parsedRows
+  .filter((r) => !updatedGtins.has(r.gtin))
+  .map((r) => r.gtin);
+"#)
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn no_fp_on_map_has_lookup_in_find_inside_loop() {
+        assert!(
+            run(r#"
+const byId = new Map(items.map((i) => [i.id, i]));
+for (const row of rows) {
+    const known = candidates.find((c) => byId.has(c.id));
+}
+"#)
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn no_fp_on_direct_new_set_has_receiver() {
+        assert!(
+            run(r#"
+const unknown = parsedRows
+  .filter((r) => !new Set(updatedGtins).has(r.gtin))
+  .map((r) => r.gtin);
+"#)
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn still_flags_includes_lookup_in_filter_chain() {
+        // Plain-array `.includes()` is the genuine O(n*m) pattern.
+        let diags = run(r#"
+const updatedGtins = updatedRows.map((r) => r.gtin);
+const unknownGtins = parsedRows
+  .filter((r) => !updatedGtins.includes(r.gtin))
+  .map((r) => r.gtin);
+"#);
+        assert!(!diags.is_empty());
+    }
+
+    #[test]
+    fn still_flags_has_on_unknown_receiver() {
+        // `updatedGtins` is not provably a Set/Map — keep flagging.
+        let diags = run(r#"
+const updatedGtins = getGtins();
+const unknownGtins = parsedRows
+  .filter((r) => !updatedGtins.has(r.gtin))
+  .map((r) => r.gtin);
+"#);
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn still_flags_has_on_reassigned_receiver() {
+        // The binding is reassigned after the Set declaration — no guarantee left.
+        let diags = run(r#"
+let updatedGtins = new Set(updatedRows.map((r) => r.gtin));
+updatedGtins = getGtins();
+const unknownGtins = parsedRows
+  .filter((r) => !updatedGtins.has(r.gtin))
+  .map((r) => r.gtin);
+"#);
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn still_flags_find_callback_over_plain_array_inside_loop() {
+        let diags = run(r#"
+for (const item of items) {
+    const match = others.find((o) => candidates.find((c) => c.id === o.id));
+}
+"#);
+        assert!(!diags.is_empty());
     }
 
     #[test]
