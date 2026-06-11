@@ -44,8 +44,16 @@ impl OxcCheck for Check {
                 continue;
             }
 
-            // Skip methods in decorated classes
-            if is_in_decorated_class(method_def.span.start, nodes) {
+            // Skip methods whose enclosing class is decorated, extends a base
+            // class, or implements an interface. With `extends`/`implements`,
+            // the method may be required by the base-class or interface
+            // contract (e.g. NestJS DI factories, overrides), so making it
+            // `static` or extracting it would break polymorphism.
+            if let Some(class) = enclosing_class(node.id(), nodes)
+                && (!class.decorators.is_empty()
+                    || class.super_class.is_some()
+                    || !class.implements.is_empty())
+            {
                 continue;
             }
 
@@ -136,31 +144,23 @@ fn body_contains_this(
     false
 }
 
-fn is_in_decorated_class(
-    method_span_start: u32,
-    nodes: &oxc_semantic::AstNodes,
-) -> bool {
-    // Find the method node first, then walk up
-    for n in nodes.iter() {
-        if let AstKind::MethodDefinition(m) = n.kind() {
-            if m.span.start != method_span_start {
-                continue;
-            }
-            let mut current = n.id();
-            loop {
-                let parent_id = nodes.parent_id(current);
-                if parent_id == current {
-                    return false;
-                }
-                let parent = nodes.get_node(parent_id);
-                if let AstKind::Class(class) = parent.kind() {
-                    return !class.decorators.is_empty();
-                }
-                current = parent_id;
-            }
+/// Walk up from a method node to its enclosing `Class`.
+fn enclosing_class<'a>(
+    method_node_id: oxc_semantic::NodeId,
+    nodes: &oxc_semantic::AstNodes<'a>,
+) -> Option<&'a oxc_ast::ast::Class<'a>> {
+    let mut current = method_node_id;
+    loop {
+        let parent_id = nodes.parent_id(current);
+        if parent_id == current {
+            return None;
         }
+        let parent = nodes.get_node(parent_id);
+        if let AstKind::Class(class) = parent.kind() {
+            return Some(class);
+        }
+        current = parent_id;
     }
-    false
 }
 
 #[cfg(test)]
@@ -217,6 +217,31 @@ mod tests {
     #[test]
     fn allows_methods_in_decorated_class_without_this() {
         let src = "@Controller()\nclass Foo { bar() { return 1; } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_method_in_class_implementing_interface() {
+        // Issue #972: NestJS factory pattern — `createGqlOptions` is required
+        // by the `GqlOptionsFactory` interface and cannot be made static.
+        let src = "class ConfigService implements GqlOptionsFactory {\n\
+                   createGqlOptions() { return { typePaths: [] }; }\n\
+                   }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_method_in_class_extending_base_class() {
+        // Issue #972: `serializeError` overrides a method of the parent class.
+        let src = "class ErrorHandlingProxy extends ClientGrpcProxy {\n\
+                   serializeError(err) { return new RpcException(err); }\n\
+                   }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_override_method_in_extends_class() {
+        let src = "class Foo extends Bar { override baz() { return 1; } }";
         assert!(run_on(src).is_empty());
     }
 }
