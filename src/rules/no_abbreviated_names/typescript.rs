@@ -16,8 +16,10 @@ use crate::rules::backend::{AstCheck, CheckCtx};
 // (cfg, ctx, idx, err, fmt, ret, val, num, str, obj, arr, req, res,
 // msg, auth, db, dict) are NOT on the list: every working programmer
 // reads them at sight and expanding them to `config`/`context`/`index`
-// only adds typing overhead. The rule targets the 2-keystroke-savings
-// names that look like leetcode solution variables.
+// only adds typing overhead. `org` is likewise exempt: it is the
+// canonical domain term of the GitHub API (`GET /orgs/{org}`) and
+// multi-tenant SaaS schemas (`orgId`). The rule targets the
+// 2-keystroke-savings names that look like leetcode solution variables.
 // better-result API: Result.err(value), result.isErr()
 const ALLOWED_METHOD_NAMES: &[&str] = &["err", "isErr"];
 
@@ -29,7 +31,6 @@ const DEFAULT_BANNED: &[(&str, &str)] = &[
     ("cnt", "count"),
     ("desc", "description"),
     ("addr", "address"),
-    ("org", "organization"),
 ];
 
 #[derive(Debug)]
@@ -191,5 +192,19 @@ mod tests {
     fn does_not_flag_word_containing_abbreviation_letters() {
         // 'account' contains 'acct' letters but isn't the abbreviation.
         assert!(run_on("const accountant = 1;").is_empty());
+    }
+
+    #[test]
+    fn allows_org_domain_term() {
+        // Regression for issue #977: `org` is the canonical GitHub-API /
+        // multi-tenant SaaS term (`orgId`, `/orgs/{org}`).
+        assert!(run_on("const org = 1;").is_empty());
+        assert!(run_on("const orgId = 1;").is_empty());
+    }
+
+    #[test]
+    fn still_flags_pwd() {
+        let diags = run_on("const pwd = \"x\";");
+        assert!(diags.iter().any(|d| d.message.contains("pwd")));
     }
 }

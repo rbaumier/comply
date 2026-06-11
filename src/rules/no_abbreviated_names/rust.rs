@@ -16,6 +16,10 @@ use crate::rules::backend::{AstCheck, CheckCtx};
 //
 // `addr` is intentionally NOT on the list — `std::net::SocketAddr`,
 // `peer_addr()`, `local_addr()`, and `bind_addr` are standard Rust API.
+// `org` is likewise exempt: it is the canonical domain term of the GitHub
+// API (`GET /orgs/{org}`, `org_member`), Kubernetes labels, and
+// multi-tenant SaaS schemas (`org_id`) — not an abbreviation a reader
+// has to guess about.
 const DEFAULT_BANNED: &[(&str, &str)] = &[
     ("acct", "account"),
     ("usr", "user"),
@@ -23,7 +27,6 @@ const DEFAULT_BANNED: &[(&str, &str)] = &[
     ("pwd", "password"),
     ("cnt", "count"),
     ("desc", "description"),
-    ("org", "organization"),
 ];
 
 #[derive(Debug)]
@@ -63,6 +66,9 @@ impl AstCheck for Check {
         if allowed.iter().any(|a| a == &abbr) {
             return;
         }
+        if abbr == "pwd" && binding_type_mentions_passwd(parent, source_bytes) {
+            return;
+        }
         let pos = node.start_position();
         diagnostics.push(Diagnostic {
             path: std::sync::Arc::clone(&ctx.path_arc),
@@ -78,6 +84,18 @@ impl AstCheck for Check {
             span: None,
         });
     }
+}
+
+/// `pwd` is the canonical POSIX name for a `struct passwd` binding
+/// (`libc::passwd` holds uid/gid/home dir/shell — a user-database entry,
+/// not a password). When the binding's type annotation mentions `passwd`
+/// (e.g. `let mut pwd: MaybeUninit<libc::passwd>`), renaming to
+/// `password` would be misleading, so the identifier is exempt.
+fn binding_type_mentions_passwd(binding: tree_sitter::Node, source: &[u8]) -> bool {
+    binding
+        .child_by_field_name("type")
+        .and_then(|type_node| type_node.utf8_text(source).ok())
+        .is_some_and(|type_text| type_text.contains("passwd"))
 }
 
 fn build_banned_list(extra: &[String]) -> Vec<(String, String)> {
@@ -173,5 +191,36 @@ mod tests {
     fn does_not_flag_word_containing_abbreviation_letters() {
         // 'account' contains 'acct' letters but isn't the abbreviation.
         assert!(run_on("fn f() { let accountant = 1; }").is_empty());
+    }
+
+    #[test]
+    fn allows_org_domain_term() {
+        // Regression for issue #977: `org` is the canonical GitHub-API /
+        // multi-tenant SaaS term (`org_id`, `/orgs/{org}`), not an
+        // abbreviation a reader has to guess about.
+        assert!(run_on("fn f() { let org = get(); }").is_empty());
+        assert!(run_on("fn f() { let org_id = 1; }").is_empty());
+        assert!(run_on("fn f(org: &Org) {}").is_empty());
+    }
+
+    #[test]
+    fn allows_pwd_bound_to_posix_passwd_struct() {
+        // Regression for issue #977: a `libc::passwd` binding is a POSIX
+        // user-database entry, not a password — `pwd` is the canonical
+        // name and `password` would be misleading.
+        assert!(run_on(
+            "fn f() { let mut pwd: std::mem::MaybeUninit<libc::passwd> = \
+             std::mem::MaybeUninit::uninit(); }"
+        )
+        .is_empty());
+        assert!(run_on("fn f() { let pwd: libc::passwd = entry; }").is_empty());
+    }
+
+    #[test]
+    fn still_flags_pwd_without_passwd_type() {
+        let diags = run_on("fn f() { let pwd = \"secret\"; }");
+        assert!(diags.iter().any(|d| d.message.contains("pwd")));
+        let diags = run_on("fn f() { let mut pwd = \"secret\"; }");
+        assert!(diags.iter().any(|d| d.message.contains("pwd")));
     }
 }
