@@ -10,7 +10,10 @@
 //!   impossible state; document it with an `// Impossible: …` comment.
 //!
 //! Tests are exempted because panicking in a `#[test]` is a clean
-//! failure mode. Same exemption logic as `rust-no-unwrap`.
+//! failure mode. Same exemption logic as `rust-no-unwrap`. cargo-fuzz
+//! targets (files under a `fuzz_targets/` directory) are also exempt:
+//! in a libfuzzer-sys target, `panic!` is the deliberate
+//! crash-signaling mechanism the fuzzer catches to report a found bug.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -19,6 +22,14 @@ use crate::rules::rust_helpers::{is_in_test_context, is_under_tests_dir};
 const KINDS: &[&str] = &["macro_invocation"];
 
 const BANNED_MACROS: &[&str] = &["panic", "todo", "unimplemented", "unreachable"];
+
+/// True if `path` is under cargo-fuzz's `fuzz_targets/` directory — any
+/// path segment equals `"fuzz_targets"`. In a libfuzzer-sys target,
+/// `panic!` is the deliberate crash-signaling mechanism (the fuzzer
+/// catches it and reports a found bug), functionally an assertion.
+fn is_under_fuzz_targets_dir(path: &std::path::Path) -> bool {
+    path.components().any(|c| c.as_os_str() == "fuzz_targets")
+}
 
 #[derive(Debug)]
 pub struct Check;
@@ -45,7 +56,10 @@ impl AstCheck for Check {
         if !BANNED_MACROS.contains(&macro_name) {
             return;
         }
-        if is_in_test_context(node, source_bytes) || is_under_tests_dir(ctx.path) {
+        if is_in_test_context(node, source_bytes)
+            || is_under_tests_dir(ctx.path)
+            || is_under_fuzz_targets_dir(ctx.path)
+        {
             return;
         }
         let pos = node.start_position();
@@ -143,5 +157,25 @@ mod tests {
     fn allows_panic_in_tests_directory() {
         let source = "fn helper() { panic!(); }";
         assert!(crate::rules::test_helpers::run_rule(&Check, source, "tests/helpers.rs").is_empty());
+    }
+
+    #[test]
+    fn allows_panic_in_fuzz_target() {
+        let source = r#"fn run() { panic!("should be able to parse a printed value"); }"#;
+        assert!(crate::rules::test_helpers::run_rule(
+            &Check,
+            source,
+            "fuzz/fuzz_targets/rfc2822_parse.rs"
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn flags_panic_in_regular_src() {
+        let source = r#"fn f() { panic!("boom"); }"#;
+        assert_eq!(
+            crate::rules::test_helpers::run_rule(&Check, source, "src/lib.rs").len(),
+            1
+        );
     }
 }
