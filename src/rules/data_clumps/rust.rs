@@ -2,6 +2,10 @@
 //!
 //! Walks the AST to find `struct_item` nodes, extracts their field names,
 //! and flags when the same 3-field subset appears in 2+ structs.
+//!
+//! Borrowed "view" structs (a lifetime parameter plus at least one
+//! reference-typed field) are excluded: they intentionally mirror an owned
+//! struct's field names but cannot be merged with it.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use std::collections::{HashMap, HashSet};
@@ -84,7 +88,7 @@ fn collect_structs(node: tree_sitter::Node, source: &[u8], out: &mut Vec<(usize,
         }
         names.sort();
         names.dedup();
-        if names.len() >= 3 {
+        if names.len() >= 3 && !is_borrowed_view_struct(node) {
             out.push((node.start_position().row + 1, names));
         }
     }
@@ -98,6 +102,53 @@ fn collect_structs(node: tree_sitter::Node, source: &[u8], out: &mut Vec<(usize,
             }
         }
     }
+}
+
+/// True if `struct_node` is a borrowed "view" type: it has a lifetime
+/// parameter and at least one reference-typed field (e.g. `RealmRef<'a>`
+/// with `&'a str` fields, mirroring an owned `Realm`). Such a struct
+/// intentionally shares its field names with the owned version but cannot
+/// be merged with it, so it does not participate in data-clump detection.
+fn is_borrowed_view_struct(struct_node: tree_sitter::Node) -> bool {
+    has_lifetime_param(struct_node) && has_reference_field(struct_node)
+}
+
+fn has_lifetime_param(struct_node: tree_sitter::Node) -> bool {
+    let Some(tp) = struct_node.child_by_field_name("type_parameters") else {
+        return false;
+    };
+    let mut cursor = tp.walk();
+    tp.named_children(&mut cursor)
+        .any(|c| c.kind() == "lifetime_parameter")
+}
+
+fn has_reference_field(struct_node: tree_sitter::Node) -> bool {
+    let child_count = struct_node.named_child_count();
+    for i in 0..child_count {
+        if let Some(list) = struct_node.named_child(i)
+            && list.kind() == "field_declaration_list"
+        {
+            let field_count = list.named_child_count();
+            for j in 0..field_count {
+                if let Some(field) = list.named_child(j)
+                    && field.kind() == "field_declaration"
+                    && let Some(ty) = field.child_by_field_name("type")
+                    && type_contains_reference(ty)
+                {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+fn type_contains_reference(node: tree_sitter::Node) -> bool {
+    if node.kind() == "reference_type" {
+        return true;
+    }
+    let mut cursor = node.walk();
+    node.children(&mut cursor).any(type_contains_reference)
 }
 
 /// Generate all sorted subsets of size `k` from `items`.
@@ -224,6 +275,46 @@ mod tests {
 }
 "#;
         assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_owned_borrowed_pair_issue_1026() {
+        let src = r#"
+type SmallString = String;
+
+pub struct Realm {
+    scheme: SmallString,
+    host: Option<SmallString>,
+    port: Option<u16>,
+}
+
+pub struct RealmRef<'a> {
+    scheme: &'a str,
+    host: Option<&'a str>,
+    port: Option<u16>,
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_lifetime_struct_without_reference_fields() {
+        let src = r#"
+use std::borrow::Cow;
+
+struct Owned {
+    x: String,
+    y: String,
+    z: String,
+}
+
+struct Lazy<'a> {
+    x: Cow<'a, str>,
+    y: Cow<'a, str>,
+    z: String,
+}
+"#;
+        assert_eq!(run_on(src).len(), 2);
     }
 
     #[test]
