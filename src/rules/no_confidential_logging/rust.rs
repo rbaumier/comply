@@ -44,9 +44,30 @@ const BOOLEAN_PREFIXES: &[&str] = &[
     "has_", "is_", "no_", "without_", "needs_", "can_", "should_",
 ];
 
+/// Suffixes that indicate the identifier holds metadata *about* a secret
+/// (e.g. a filesystem path, directory name, or container) rather than the
+/// secret value itself. `token_path` is a file path; `credential_dir` is a
+/// directory — neither leaks a credential.
+const METADATA_SUFFIXES: &[&str] = &["_path", "_dir", "_file", "_store", "_cache"];
+
 fn is_boolean_name(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
     BOOLEAN_PREFIXES.iter().any(|p| lower.starts_with(p))
+}
+
+/// Returns true when `name` contains a sensitive word only because it is a
+/// metadata identifier (e.g. `token_path` where `token` is followed by a
+/// metadata suffix). Such identifiers hold filesystem paths or containers,
+/// not secret values.
+fn is_metadata_only(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    SENSITIVE_WORDS.iter().any(|w| {
+        if let Some(after) = lower.strip_prefix(*w) {
+            METADATA_SUFFIXES.iter().any(|s| after == *s || after.starts_with(s))
+        } else {
+            false
+        }
+    })
 }
 
 fn has_sensitive_identifier(node: tree_sitter::Node, source: &[u8]) -> bool {
@@ -71,6 +92,9 @@ fn has_sensitive_identifier(node: tree_sitter::Node, source: &[u8]) -> bool {
             return false;
         };
         if is_boolean_name(text) {
+            return false;
+        }
+        if is_metadata_only(text) {
             return false;
         }
         if let Some(next) = node.next_sibling()
@@ -220,6 +244,62 @@ mod tests {
     fn flags_sensitive_field_access() {
         assert_eq!(
             run_on(r#"fn f() { info!("val: {}", config.api_key); }"#).len(),
+            1
+        );
+    }
+
+    // Regression tests for issue #984: path/metadata variables are FPs
+    #[test]
+    fn allows_token_path_variable() {
+        // `token_path` is a PathBuf pointing to a cache file — not a secret
+        assert!(run_on(r#"
+            fn f(token_path: &str) {
+                debug!("Token cache file path {:?} does not exist", token_path);
+            }
+        "#).is_empty());
+    }
+
+    #[test]
+    fn allows_credential_dir_variable() {
+        assert!(run_on(r#"
+            fn f() {
+                debug!("Reading credentials from {:?}", credential_dir);
+            }
+        "#).is_empty());
+    }
+
+    #[test]
+    fn allows_token_file_variable() {
+        assert!(run_on(r#"
+            fn f() {
+                info!("Loading token file: {:?}", token_file);
+            }
+        "#).is_empty());
+    }
+
+    #[test]
+    fn allows_secret_store_variable() {
+        assert!(run_on(r#"
+            fn f() {
+                debug!("Using secret store at {:?}", secret_store);
+            }
+        "#).is_empty());
+    }
+
+    #[test]
+    fn still_flags_token_variable() {
+        // bare `token` is still a secret
+        assert_eq!(
+            run_on(r#"fn f() { debug!("token: {}", token); }"#).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn still_flags_auth_token_variable() {
+        // `auth_token` does not have a metadata suffix after the sensitive word
+        assert_eq!(
+            run_on(r#"fn f() { debug!("auth: {}", auth_token); }"#).len(),
             1
         );
     }
