@@ -12,6 +12,12 @@
 //! Generic type parameters live in the type namespace, so a type parameter
 //! sharing a name with a value declaration (`<t>(t: t)`) is legal —
 //! skipped when any declaration of a symbol is a `TSTypeParameter` node.
+//!
+//! Namespace declaration merging: a `namespace`/`module`
+//! (`TSModuleDeclaration`) may share a name with an interface, class,
+//! function, or enum (e.g. `interface Foo` + `declare namespace Foo`,
+//! the Standard Schema V1 pattern) — skipped when one declaration is a
+//! namespace and another is a type or value declaration.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -73,6 +79,20 @@ impl OxcCheck for Check {
             if decl_ids.iter().all(|&id| is_value_decl(id) || is_type_decl(id))
                 && decl_ids.iter().any(|&id| is_value_decl(id))
                 && decl_ids.iter().any(|&id| is_type_decl(id))
+            {
+                continue;
+            }
+
+            // Namespace declaration merging: a `namespace`/`module` may share a
+            // name with an interface, class, function, or enum (`interface Foo`
+            // + `declare namespace Foo`, the Standard Schema V1 pattern). Always
+            // intentional in TypeScript.
+            let is_namespace =
+                |id| -> bool { matches!(nodes.kind(id), AstKind::TSModuleDeclaration(_)) };
+            if decl_ids.iter().any(|&id| is_namespace(id))
+                && decl_ids
+                    .iter()
+                    .any(|&id| is_type_decl(id) || is_value_decl(id))
             {
                 continue;
             }
@@ -261,5 +281,23 @@ export function make<F extends FilterMap, const C extends SortColumns>(
         let d = run("let x = 1;\nvar x = 2;");
         assert_eq!(d.len(), 1, "expected 1 diagnostic, got: {d:?}");
         assert!(d[0].message.contains("`x`"));
+    }
+
+    #[test]
+    fn allows_interface_plus_namespace_merging() {
+        // Regression for #969: interface + namespace declaration merging
+        // (Standard Schema V1 pattern, used by zod/valibot/arktype).
+        let d = run(
+            "export interface StandardSchemaV1<Input = unknown, Output = Input> {\n  readonly \"~standard\": StandardSchemaV1.Props<Input, Output>;\n}\nexport declare namespace StandardSchemaV1 {\n  export interface Props<Input = unknown, Output = Input> {}\n  export type InferInput<Schema extends StandardSchemaV1> = unknown;\n}",
+        );
+        assert!(d.is_empty(), "expected no diagnostics, got: {d:?}");
+    }
+
+    #[test]
+    fn allows_function_plus_namespace_merging() {
+        // Regression for #969: function + namespace declaration merging is
+        // also intentional TypeScript.
+        let d = run("function fn() {}\nnamespace fn {\n  export const x = 1;\n}");
+        assert!(d.is_empty(), "expected no diagnostics, got: {d:?}");
     }
 }
