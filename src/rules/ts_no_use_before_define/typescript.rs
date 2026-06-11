@@ -15,7 +15,7 @@
 
 use oxc_ast::AstKind;
 use oxc_ast::ast::Expression;
-use oxc_semantic::{NodeId, SymbolFlags};
+use oxc_semantic::{NodeId, ReferenceFlags, SymbolFlags};
 use oxc_span::GetSpan;
 
 use crate::diagnostic::{Diagnostic, Severity};
@@ -50,6 +50,16 @@ impl crate::rules::backend::AstCheck for Check {
                 let name = scoping.symbol_name(symbol_id);
 
                 for reference in scoping.get_resolved_references(symbol_id) {
+                    // Type-position references are erased at compile time; they have
+                    // no runtime execution order, so they can never cause a TDZ error.
+                    // This covers `typeof X` inside a type alias (ValueAsType) and
+                    // plain type references like `type T = X` (Type).
+                    if reference
+                        .flags()
+                        .intersects(ReferenceFlags::Type | ReferenceFlags::ValueAsType)
+                    {
+                        continue;
+                    }
                     let ref_node_id = reference.node_id();
                     let ref_span = nodes.kind(ref_node_id).span();
                     if ref_span.start < decl_span.start {
@@ -223,5 +233,38 @@ mod tests {
              const Route = makeRoute();",
         );
         assert_eq!(d.len(), 1, "non-TanStack forward refs still flagged");
+    }
+
+    // Regression test for https://github.com/rbaumier/comply/issues/989:
+    // References to a class that appear exclusively inside a type alias (type position)
+    // must not be flagged — TypeScript erases type information at compile time, so
+    // there is no runtime TDZ violation.
+    #[test]
+    fn allows_instance_type_of_typeof_class_before_definition() {
+        // `Collab` is referenced only via `InstanceType<typeof Collab>` in a type alias,
+        // which is a type-level expression. The class is defined below.
+        let source = "type CollabInstance = InstanceType<typeof Collab>;\n\
+                      class Collab { greet() {} }";
+        assert!(
+            run_on(source).is_empty(),
+            "InstanceType<typeof Collab> in a type alias is type-only, not a runtime use"
+        );
+    }
+
+    #[test]
+    fn allows_return_type_of_typeof_before_definition() {
+        let source = "type R = ReturnType<typeof MyFn>;\n\
+                      function MyFn() { return 1; }";
+        assert!(
+            run_on(source).is_empty(),
+            "ReturnType<typeof MyFn> in a type alias is type-only"
+        );
+    }
+
+    #[test]
+    fn still_flags_runtime_use_of_class_before_definition() {
+        // `new Collab()` is a value-position use — still a TDZ violation.
+        let d = run_on("const c = new Collab();\nclass Collab {}");
+        assert_eq!(d.len(), 1, "runtime instantiation before definition is still flagged");
     }
 }
