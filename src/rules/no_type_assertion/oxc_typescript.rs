@@ -59,6 +59,48 @@ fn peel_parens<'a>(expr: &'a Expression<'a>) -> &'a Expression<'a> {
     current
 }
 
+/// Returns `true` when this `as` expression is `[] as T[]` used as the initial
+/// accumulator of a `.reduce()` / `.reduceRight()` call.
+///
+/// TypeScript infers `never[]` for a bare `[]` initial value unless typed —
+/// the assertion is purely informational and does not bypass any runtime check.
+fn is_reduce_array_accumulator(
+    node: &oxc_semantic::AstNode<'_>,
+    as_expr: &oxc_ast::ast::TSAsExpression<'_>,
+    semantic: &oxc_semantic::Semantic<'_>,
+    source: &str,
+) -> bool {
+    // The cast expression must be an empty array literal `[]`.
+    let inner = peel_parens(&as_expr.expression);
+    let Expression::ArrayExpression(arr) = inner else { return false };
+    if !arr.elements.is_empty() {
+        return false;
+    }
+
+    // The target type must be an array type (T[]).
+    if !matches!(as_expr.type_annotation, TSType::TSArrayType(_)) {
+        return false;
+    }
+
+    // Walk up the AST: the immediate parent must be a CallExpression argument
+    // (possibly through a ParenthesizedExpression wrapper) whose callee
+    // resolves to `.reduce` or `.reduceRight`.
+    let nodes = semantic.nodes();
+    let parent_id = nodes.parent_id(node.id());
+    if parent_id == node.id() {
+        return false;
+    }
+    let AstKind::CallExpression(call) = nodes.kind(parent_id) else { return false };
+
+    // Must be the last argument (the initial value position).
+    if call.arguments.is_empty() {
+        return false;
+    }
+
+    let callee_text = &source[call.callee.span().start as usize..call.callee.span().end as usize];
+    callee_text.ends_with(".reduce") || callee_text.ends_with(".reduceRight")
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[AstType::TSAsExpression]
@@ -162,6 +204,13 @@ impl OxcCheck for Check {
                     _ => break,
                 }
             }
+        }
+
+        // Allow `[] as T[]` as the initial accumulator of `.reduce()` /
+        // `.reduceRight()`. TypeScript infers `never[]` for a bare `[]` without
+        // the annotation — the assertion is purely informational, not a cast.
+        if is_reduce_array_accumulator(node, as_expr, semantic, ctx.source) {
+            return;
         }
 
         // Allow single `as T` when the line or the preceding line carries
@@ -371,6 +420,39 @@ mod tests {
         let src = "const x = junctionTable as AnyPgTable;";
         let diags = run_on(src);
         assert_eq!(diags.len(), 1);
+    }
+
+    // Regression for #988: `[] as T[]` as reduce() / reduceRight() initial value.
+    #[test]
+    fn allows_empty_array_as_typed_reduce_accumulator() {
+        // Exact pattern from excalidraw/excalidraw App.tsx:470
+        let src = "(data.elements || []).reduce((acc, element) => acc, [] as FileId[]);";
+        let diags = run_on(src);
+        assert!(diags.is_empty(), "unexpected diags: {:?}", diags);
+    }
+
+    #[test]
+    fn allows_empty_array_as_typed_reduce_accumulator_generic_form() {
+        // Generic type parameter form is the cleaner alternative — also allowed.
+        let src = "(data.elements || []).reduceRight((acc, element) => acc, [] as string[]);";
+        let diags = run_on(src);
+        assert!(diags.is_empty(), "unexpected diags: {:?}", diags);
+    }
+
+    #[test]
+    fn still_flags_non_empty_array_in_reduce() {
+        // A non-empty array cast is still suspicious — not an accumulator seed.
+        let src = "(arr).reduce((acc, el) => acc, [1, 2] as number[]);";
+        let diags = run_on(src);
+        assert_eq!(diags.len(), 1, "expected 1 diag, got: {:?}", diags);
+    }
+
+    #[test]
+    fn still_flags_empty_array_cast_outside_reduce() {
+        // `[] as Foo[]` outside a reduce call is still flagged.
+        let src = "const x = [] as Foo[];";
+        let diags = run_on(src);
+        assert_eq!(diags.len(), 1, "expected 1 diag, got: {:?}", diags);
     }
 
     #[test]
