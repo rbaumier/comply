@@ -131,6 +131,23 @@ mod tests {
     }
 
     #[test]
+    fn exempt_in_test_dir_issue_1011() {
+        // Issue #1011: sled tests/test_crash_recovery.rs — bare unsafe in a
+        // test file. skip_in_test_dir suppresses the rule under tests/.
+        let source = "fn f() { unsafe { env::set_var(\"K\", \"v\"); } }";
+        // Bare unsafe block still flags on a normal source path.
+        assert_eq!(
+            crate::rules::test_helpers::run_rule_gated(&Check, source, "src/lib.rs").len(),
+            1
+        );
+        // …but is exempt under a tests/ directory.
+        assert!(
+            crate::rules::test_helpers::run_rule_gated(&Check, source, "tests/test_crash_recovery.rs")
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn allows_unsafe_with_safety_comment() {
         let source = "fn f(p: *const u8) {\n\
                       // SAFETY: p is non-null and points to valid memory.\n\
