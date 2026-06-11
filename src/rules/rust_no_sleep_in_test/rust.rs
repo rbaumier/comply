@@ -11,12 +11,15 @@
 //! condition wait (channel, polled deadline) or with tokio's
 //! virtual-time helpers (`tokio::time::pause` + `advance`).
 //!
-//! Two legitimate sleep patterns are exempt:
+//! Three legitimate sleep patterns are exempt:
 //! - Files under Cargo's `tests/` integration-test directory:
 //!   integration tests are black-box clients of real systems, where
 //!   a wall-clock wait on external readiness (e.g. a remote consumer
 //!   connecting) can be unavoidable. The rule's value is in unit
 //!   tests, where you control both sides of the sync point.
+//! - Tests annotated `#[tokio::test(start_paused = true)]`: the
+//!   Tokio clock is paused, so `time::sleep` advances simulated time
+//!   instantly instead of blocking — never slow or flaky.
 //! - Sleeps inside a bounded retry loop (a loop containing a
 //!   `break`): polling a condition with an early exit is the correct
 //!   way to wait when no sync primitive exists, not a flaky fixed
@@ -55,6 +58,9 @@ impl AstCheck for Check {
             return;
         }
         if !is_in_test_context(node, source_bytes) {
+            return;
+        }
+        if is_in_start_paused_tokio_test(node, source_bytes) {
             return;
         }
         if is_in_bounded_retry_loop(node) {
@@ -98,6 +104,43 @@ fn is_sleep_call(name: &str) -> bool {
 /// wall-clock wait is the only available readiness signal.
 fn is_under_tests_dir(path: &std::path::Path) -> bool {
     path.components().any(|c| c.as_os_str() == "tests")
+}
+
+/// True if the test function enclosing `node` carries
+/// `#[tokio::test(start_paused = true)]`. Under a paused clock, Tokio's
+/// `time::sleep` advances simulated time instantly instead of blocking the
+/// thread, so it is a yield point — not a flaky wall-clock wait.
+fn is_in_start_paused_tokio_test(node: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut cur = node;
+    while let Some(parent) = cur.parent() {
+        if parent.kind() == "function_item" {
+            return function_has_start_paused_attr(parent, source);
+        }
+        cur = parent;
+    }
+    false
+}
+
+/// True if `item` has a preceding `attribute_item` sibling whose text, with
+/// whitespace removed, contains `start_paused=true` (e.g.
+/// `#[tokio::test(start_paused = true)]`). `start_paused` is a tokio::test
+/// parameter, so this match is specific to paused tokio tests. A
+/// `start_paused = false` attribute does NOT match.
+fn function_has_start_paused_attr(item: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut sibling = item.prev_named_sibling();
+    while let Some(s) = sibling {
+        if s.kind() != "attribute_item" {
+            break;
+        }
+        if let Ok(text) = s.utf8_text(source) {
+            let compact: String = text.chars().filter(|c| !c.is_whitespace()).collect();
+            if compact.contains("start_paused=true") {
+                return true;
+            }
+        }
+        sibling = s.prev_named_sibling();
+    }
+    false
 }
 
 const LOOP_KINDS: &[&str] = &["for_expression", "while_expression", "loop_expression"];
@@ -212,6 +255,43 @@ mod tests {
     #[test]
     fn flags_sleep_in_loop_without_break() {
         let source = "#[test]\nfn slow() { for _ in 0..5 { std::thread::sleep(d); } }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn allows_sleep_in_start_paused_tokio_test_issue_1023() {
+        let source =
+            "#[tokio::test(start_paused = true)]\nasync fn t() { tokio::time::sleep(d).await; }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_sleep_in_closure_inside_start_paused_tokio_test() {
+        // tokio's own unit tests: the sleep sits inside a stream
+        // combinator closure, still governed by the paused clock.
+        let source = "#[tokio::test(start_paused = true)]\nasync fn t() { \
+                      let s = stream::iter([5]).then(move |n| \
+                      time::sleep(d).map(move |_| n)); }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_sleep_in_start_paused_tokio_test_without_spaces() {
+        let source =
+            "#[tokio::test(start_paused=true)]\nasync fn t() { tokio::time::sleep(d).await; }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_sleep_in_plain_tokio_test() {
+        let source = "#[tokio::test]\nasync fn t() { tokio::time::sleep(d).await; }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_sleep_when_start_paused_is_false() {
+        let source =
+            "#[tokio::test(start_paused = false)]\nasync fn t() { tokio::time::sleep(d).await; }";
         assert_eq!(run_on(source).len(), 1);
     }
 }
