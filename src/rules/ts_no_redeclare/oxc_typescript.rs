@@ -8,6 +8,10 @@
 //! Branded type pattern: TypeScript allows a symbol to occupy both the
 //! value namespace (`const`/function) and the type namespace (`type`/`interface`)
 //! simultaneously — skipped when declarations are a mix of value and type-only nodes.
+//!
+//! Generic type parameters live in the type namespace, so a type parameter
+//! sharing a name with a value declaration (`<t>(t: t)`) is legal —
+//! skipped when any declaration of a symbol is a `TSTypeParameter` node.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -70,6 +74,16 @@ impl OxcCheck for Check {
                 && decl_ids.iter().any(|&id| is_value_decl(id))
                 && decl_ids.iter().any(|&id| is_type_decl(id))
             {
+                continue;
+            }
+
+            // Generic type parameter sharing a name with a value declaration
+            // (e.g. `<input extends object>(input: input) => input`): the type
+            // parameter lives in the type namespace, so coexisting with a
+            // value-namespace name is always legal.
+            let is_type_param =
+                |id| -> bool { matches!(nodes.kind(id), AstKind::TSTypeParameter(_)) };
+            if decl_ids.iter().any(|&id| is_type_param(id)) {
                 continue;
             }
 
@@ -218,5 +232,34 @@ export function make<F extends FilterMap, const C extends SortColumns>(
 "#;
         let d = run(src);
         assert!(d.is_empty(), "expected no diagnostics, got: {d:?}");
+    }
+
+    #[test]
+    fn allows_type_param_sharing_name_with_value_param() {
+        // Regression for #967: generic type parameter and value parameter
+        // sharing a name (`<s>(s: s)`) occupy distinct namespaces.
+        let d = run(
+            "const capitalize = <s extends string>(s: s): Capitalize<s> =>\n  (s[0].toUpperCase() + s.slice(1)) as never",
+        );
+        assert!(d.is_empty(), "expected no diagnostics, got: {d:?}");
+    }
+
+    #[test]
+    fn allows_type_param_in_function_type_annotation() {
+        // Regression for #967: arktype's shallowClone — type param `input` in
+        // the annotation + value param `input` in the implementation.
+        let d = run(
+            "declare const _clone: (v: object, x: null) => object;\nexport const shallowClone: <input extends object>(\n  input: input\n) => input = input => _clone(input, null) as never;",
+        );
+        assert!(d.is_empty(), "expected no diagnostics, got: {d:?}");
+    }
+
+    #[test]
+    fn flags_let_plus_var_redeclaration() {
+        // Genuine value-namespace redeclaration with no type parameter
+        // involved must still fire.
+        let d = run("let x = 1;\nvar x = 2;");
+        assert_eq!(d.len(), 1, "expected 1 diagnostic, got: {d:?}");
+        assert!(d[0].message.contains("`x`"));
     }
 }
