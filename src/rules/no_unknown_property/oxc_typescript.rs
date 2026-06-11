@@ -1,4 +1,9 @@
 //! OXC backend for no-unknown-property.
+//!
+//! Files importing from Vue, Solid, Preact, or Qwik (or carrying a matching
+//! `@jsxImportSource` pragma) are exempt: those frameworks use native HTML
+//! attribute names (`class`, `for`, …) in JSX, so React's camelCase prop
+//! conventions do not apply.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -68,6 +73,24 @@ fn react_equivalent(name: &str) -> Option<String> {
     None
 }
 
+/// True when the file is JSX for a framework that uses native HTML attribute
+/// names (`class`, `for`, …) rather than React's camelCase — Vue, Solid,
+/// Preact, or Qwik — detected via its imports or `@jsxImportSource` pragma.
+/// `no-unknown-property` encodes React's prop conventions and must not fire
+/// on these.
+fn is_non_react_jsx_file(ctx: &CheckCtx) -> bool {
+    ctx.source_contains("solid-js")
+        || ctx.source_contains("@vue/")
+        || ctx.source_contains("@builder.io/qwik")
+        || ctx.source_contains("preact/")
+        || ctx.source_contains("'vue'")
+        || ctx.source_contains("\"vue\"")
+        || ctx.source_contains("'preact'")
+        || ctx.source_contains("\"preact\"")
+        || ctx.source_contains("jsxImportSource vue")
+        || ctx.source_contains("jsxImportSource preact")
+}
+
 fn is_intrinsic_tag(tag: &str) -> bool {
     tag.chars().next().is_some_and(|c| c.is_ascii_lowercase())
 }
@@ -114,6 +137,10 @@ impl OxcCheck for Check {
                 continue;
             };
 
+            if is_non_react_jsx_file(ctx) {
+                return;
+            }
+
             let (line, column) = byte_offset_to_line_col(ctx.source, attr.span.start as usize);
             diagnostics.push(Diagnostic {
                 path: Arc::clone(&ctx.path_arc),
@@ -159,5 +186,53 @@ fn jsx_attr_name(name: &oxc_ast::ast::JSXAttributeName) -> String {
         oxc_ast::ast::JSXAttributeName::NamespacedName(ns) => {
             format!("{}:{}", ns.namespace.name, ns.name.name)
         }
+    }
+}
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, src, "t.tsx")
+    }
+
+    #[test]
+    fn flags_class_in_react_jsx() {
+        let src = "const a = <div class=\"x\" />;";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_class_in_vue_jsx() {
+        let src = "import { ref, defineComponent } from 'vue';\nconst a = <div class=\"x\" />;";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_class_in_solid_jsx() {
+        let src = "import { createSignal } from 'solid-js';\nconst a = <div class=\"x\" />;";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_for_in_react_jsx() {
+        let src = "const a = <label for=\"x\" />;";
+        assert_eq!(run(src).len(), 1);
     }
 }
