@@ -1,5 +1,9 @@
 //! no-array-callback-reference OXC backend — flag passing a function
 //! reference directly to an iterator method like `.map(parseInt)`.
+//!
+//! Only single-argument iterator calls are flagged; multi-argument calls
+//! (data-first functional APIs like fp-ts `Module.map(value, fn)`, or an
+//! explicit `thisArg`) are exempt.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -51,6 +55,14 @@ impl OxcCheck for Check {
             return;
         }
 
+        // The accidental-callback-reference footgun (`arr.map(parseInt)`) is always a
+        // single-argument call. A second argument means a data-first functional API
+        // (fp-ts `Module.map(value, fn)`, Ramda, …) where arg0 is the value, or an
+        // explicit `thisArg` the author deliberately bound — neither is the footgun.
+        if call.arguments.len() != 1 {
+            return;
+        }
+
         // Get the first argument
         let Some(first_arg) = call.arguments.first() else {
             return;
@@ -98,5 +110,66 @@ impl OxcCheck for Check {
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Check;
+
+    fn run_on(src: &str) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, src, "t.ts")
+    }
+
+    // Regression #1032: fp-ts data-first call — arg0 is the monadic value, not a callback.
+    #[test]
+    fn no_fp_data_first_two_arg_call() {
+        assert!(run_on("const a = MT.map(greetingT, (s: string) => s + '!');").is_empty());
+    }
+
+    #[test]
+    fn no_fp_function_reference_with_this_arg() {
+        assert!(run_on("const g = arr.map(this.handler, this);").is_empty());
+    }
+
+    #[test]
+    fn flags_single_arg_identifier_reference() {
+        assert_eq!(run_on("const x = arr.map(parseInt);").len(), 1);
+    }
+
+    #[test]
+    fn flags_single_arg_local_function_reference() {
+        assert_eq!(run_on("const x = arr.filter(myFunc);").len(), 1);
+    }
+
+    #[test]
+    fn flags_single_arg_member_reference() {
+        assert_eq!(run_on("const x = arr.map(utils.transform);").len(), 1);
+    }
+
+    #[test]
+    fn no_fp_arrow_callback() {
+        assert!(run_on("const x = arr.map(x => parseInt(x));").is_empty());
+    }
+
+    #[test]
+    fn no_fp_boolean_constructor() {
+        assert!(run_on("const x = arr.filter(Boolean);").is_empty());
     }
 }
