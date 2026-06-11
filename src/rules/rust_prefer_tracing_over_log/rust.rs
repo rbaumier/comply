@@ -12,9 +12,18 @@
 //! tree-sitter-rust models `log::info!` as a `macro_invocation` with
 //! a `scoped_identifier` macro path, so the textual prefix check
 //! (`text.starts_with("log::")`) is the simplest correct match.
+//!
+//! ## Async-only exemption
+//!
+//! `tracing`'s key advantage over `log` is span context propagation across
+//! `async` boundaries. In synchronous crates (no `tokio`, `async-std`, or
+//! `futures` in the nearest `Cargo.toml`), `log` is the established standard
+//! and switching would add a heavier dependency for no functional gain. The
+//! rule is therefore silenced for crates that have no async runtime dependency.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
+use std::path::Path;
 
 const KINDS: &[&str] = &["use_declaration", "macro_invocation"];
 
@@ -42,6 +51,13 @@ impl AstCheck for Check {
             _ => false,
         };
         if !hit {
+            return;
+        }
+        // Silence the rule for crates that have no async runtime dependency.
+        // `tracing`'s advantage (span context across `async` boundaries) does
+        // not apply in purely synchronous code, where `log` is the established
+        // standard with a smaller footprint.
+        if !crate_has_async_runtime(ctx.path) {
             return;
         }
         let pos = node.start_position();
@@ -81,6 +97,48 @@ fn is_log_use(node: tree_sitter::Node, source: &[u8]) -> bool {
     path.starts_with("log::") || path.starts_with("log ") || path.starts_with("log;")
 }
 
+/// Returns `true` when the nearest `Cargo.toml` ancestor of `path` lists
+/// `tokio`, `async-std`, or `futures` as a dependency (in `[dependencies]`,
+/// `[dev-dependencies]`, or `[build-dependencies]`).  Returns `true` (safe
+/// default — keep flagging) when no `Cargo.toml` is found or it cannot be
+/// parsed.
+fn crate_has_async_runtime(path: &Path) -> bool {
+    let Some(cargo_toml_path) = nearest_cargo_toml(path) else {
+        return true;
+    };
+    let Ok(content) = std::fs::read_to_string(&cargo_toml_path) else {
+        return true;
+    };
+    let Ok(value) = content.parse::<toml::Value>() else {
+        return true;
+    };
+
+    const ASYNC_RUNTIMES: &[&str] = &["tokio", "async-std", "async_std", "futures"];
+
+    for section in &["dependencies", "dev-dependencies", "build-dependencies"] {
+        if let Some(table) = value.get(section).and_then(toml::Value::as_table) {
+            for rt in ASYNC_RUNTIMES {
+                if table.contains_key(*rt) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+fn nearest_cargo_toml(path: &Path) -> Option<std::path::PathBuf> {
+    let mut dir = path.parent();
+    while let Some(d) = dir {
+        let candidate = d.join("Cargo.toml");
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+        dir = d.parent();
+    }
+    None
+}
+
 fn is_log_macro_call(node: tree_sitter::Node, source: &[u8]) -> bool {
     let Some(macro_node) = node.child_by_field_name("macro") else {
         return false;
@@ -113,9 +171,24 @@ impl crate::rules::test_helpers::RunRule for Check {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use tempfile::TempDir;
 
+    /// Run on a path within comply's own worktree, which has `tokio` in
+    /// its `Cargo.toml`. This ensures the "async runtime present" path is
+    /// exercised by the basic positive/negative tests.
     fn run_on(source: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_rule(&Check, source, "t.rs")
+    }
+
+    /// Run on a file in `dir/src/t.rs` with the given `Cargo.toml` contents.
+    fn run_on_with_cargo(cargo_toml_contents: &str, source: &str) -> Vec<Diagnostic> {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("Cargo.toml"), cargo_toml_contents).unwrap();
+        fs::create_dir_all(dir.path().join("src")).unwrap();
+        let src_path = dir.path().join("src/t.rs");
+        fs::write(&src_path, source).unwrap();
+        crate::rules::test_helpers::run_rule(&Check, source, &src_path)
     }
 
     #[test]
@@ -157,5 +230,74 @@ mod tests {
     fn allows_unrelated_log_named_module() {
         // `mylog::info!` is not the `log` crate.
         assert!(run_on(r#"fn f() { mylog::info!("hi"); }"#).is_empty());
+    }
+
+    // ── Async-exemption regression tests (Closes #990) ──────────────────
+
+    const SYNC_CARGO_TOML: &str = r#"
+[package]
+name = "searcher"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+log = "0.4"
+"#;
+
+    const ASYNC_CARGO_TOML: &str = r#"
+[package]
+name = "my-server"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+log = "0.4"
+"#;
+
+    /// Regression for #990: `log::trace!` in a synchronous crate (no tokio/
+    /// async-std/futures) must not be flagged — switching to `tracing` would
+    /// add a heavier dependency with no functional benefit.
+    #[test]
+    fn no_fp_on_sync_crate_log_macro() {
+        let src = r#"fn f() { log::trace!("searcher core: will use fast line searcher"); }"#;
+        assert!(
+            run_on_with_cargo(SYNC_CARGO_TOML, src).is_empty(),
+            "must not flag log::trace! in a synchronous crate"
+        );
+    }
+
+    #[test]
+    fn no_fp_on_sync_crate_log_use() {
+        assert!(
+            run_on_with_cargo(SYNC_CARGO_TOML, "use log::trace;").is_empty(),
+            "must not flag `use log::…` in a synchronous crate"
+        );
+    }
+
+    #[test]
+    fn still_flags_log_macro_in_async_crate() {
+        let src = r#"fn f() { log::info!("hello"); }"#;
+        assert_eq!(
+            run_on_with_cargo(ASYNC_CARGO_TOML, src).len(),
+            1,
+            "must flag log::info! when tokio is a dependency"
+        );
+    }
+
+    #[test]
+    fn no_cargo_toml_defaults_to_flagging() {
+        // When no Cargo.toml is found, default to flagging (safe fallback).
+        let src = r#"fn f() { log::warn!("fallback"); }"#;
+        let diagnostics = crate::rules::test_helpers::run_rule(
+            &Check,
+            src,
+            "/nonexistent_cargo_project/src/t.rs",
+        );
+        assert_eq!(
+            diagnostics.len(),
+            1,
+            "must flag when Cargo.toml is absent (safe default)"
+        );
     }
 }
