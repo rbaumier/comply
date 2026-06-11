@@ -263,6 +263,32 @@ const rows = await tx.with(insertedUser).select().from(usersTable);
         assert_eq!(run(src).len(), 1, "should flag when .from() is not the INSERT RETURNING CTE");
     }
 
+    // Regression for #979: integration/type tests intentionally read whole
+    // tables — the rule is gated out of test dirs, including `*-tests/`.
+    #[test]
+    fn skips_test_dirs_via_production_gate() {
+        let src = "const r = await db.select().from(users);";
+        assert!(
+            crate::rules::test_helpers::run_rule_gated(
+                &Check,
+                src,
+                "integration-tests/type-tests/join-nodenext/mysql.ts"
+            )
+            .is_empty(),
+            "must not fire inside *-tests/ dirs"
+        );
+        assert!(
+            crate::rules::test_helpers::run_rule_gated(&Check, src, "drizzle-arktype/tests/pg.test.ts")
+                .is_empty(),
+            "must not fire inside tests/ dirs"
+        );
+        assert_eq!(
+            crate::rules::test_helpers::run_rule_gated(&Check, src, "src/db/queries.ts").len(),
+            1,
+            "must still fire on production paths"
+        );
+    }
+
     // Regression for #265: an em-dash straddling the 500-byte scan window must
     // not panic the slice. Padded so byte 500 lands inside the em-dash.
     #[test]
