@@ -1,4 +1,9 @@
 //! no-boolean-flag-param OXC backend — flag function parameters typed as boolean.
+//!
+//! A boolean parameter is exempt when it is the function's first parameter and
+//! the function's declared return type is also `boolean`: a boolean-in /
+//! boolean-out signature is a transform over the boolean (e.g. a debounce
+//! hook), not a mode flag selecting between behaviors.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -35,7 +40,7 @@ impl OxcCheck for Check {
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
+        semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let AstKind::FormalParameter(param) = node.kind() else {
@@ -67,6 +72,10 @@ impl OxcCheck for Check {
             return;
         }
 
+        if is_boolean_transform_subject(node, semantic) {
+            return;
+        }
+
         let (line, column) = byte_offset_to_line_col(ctx.source, param.span.start as usize);
         diagnostics.push(Diagnostic {
             path: Arc::clone(&ctx.path_arc),
@@ -83,6 +92,37 @@ impl OxcCheck for Check {
             span: None,
         });
     }
+}
+
+/// True when the parameter is the function's subject rather than a mode flag:
+/// it is the first parameter of a function whose declared return type is also
+/// `boolean` (a boolean-in/boolean-out transform, e.g. `useDelayedFlag`).
+fn is_boolean_transform_subject<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    let AstKind::FormalParameter(param) = node.kind() else {
+        return false;
+    };
+    let nodes = semantic.nodes();
+    let params_node = nodes.parent_node(node.id());
+    let AstKind::FormalParameters(params) = params_node.kind() else {
+        return false;
+    };
+    if params.items.first().is_none_or(|first| first.span != param.span) {
+        return false;
+    }
+    match nodes.parent_node(params_node.id()).kind() {
+        AstKind::Function(func) => returns_boolean(func.return_type.as_deref()),
+        AstKind::ArrowFunctionExpression(arrow) => returns_boolean(arrow.return_type.as_deref()),
+        _ => false,
+    }
+}
+
+fn returns_boolean(return_type: Option<&oxc_ast::ast::TSTypeAnnotation<'_>>) -> bool {
+    return_type.is_some_and(|ann| {
+        matches!(ann.type_annotation, oxc_ast::ast::TSType::TSBooleanKeyword(_))
+    })
 }
 
 #[cfg(test)]
@@ -128,5 +168,48 @@ mod tests {
         assert!(
             run("function getTeamsColumns({ canEdit }: { canEdit: boolean }) {}").is_empty()
         );
+    }
+
+    // Regression for #910: a spin-delay hook debounces a boolean signal — the
+    // boolean is the data the function transforms (boolean in, boolean out),
+    // not a mode flag. Exact reproducer from the issue.
+    #[test]
+    fn no_fp_debounce_hook_boolean_subject_issue_910() {
+        let src = "export function useDelayedFlag(\
+                     isActive: boolean,\
+                     options: { delayMs: number; minVisibleMs: number },\
+                   ): boolean {\
+                     const delay = isActive ? options.delayMs : options.minVisibleMs;\
+                     return isActive && delay > 0;\
+                   }";
+        assert!(run(src).is_empty(), "got {:#?}", run(src));
+    }
+
+    // Same shape without a predicate-prefixed name (real-world spin-delay
+    // hooks take `loading`): the boolean-in/boolean-out exemption must carry it.
+    #[test]
+    fn allows_first_boolean_param_of_boolean_returning_fn() {
+        assert!(
+            run("export function useSpinDelay(loading: boolean, options: { delayMs: number }): boolean { return loading; }")
+                .is_empty()
+        );
+        assert!(run("const useDelayed = (active: boolean): boolean => active;").is_empty());
+    }
+
+    // A boolean-returning function whose boolean is NOT the first parameter is
+    // still a mode flag — `save(data, sendEmail)` must keep firing.
+    #[test]
+    fn still_flags_mode_flag_in_boolean_returning_fn() {
+        assert_eq!(
+            run("function save(data: string, sendEmail: boolean): boolean { return sendEmail; }")
+                .len(),
+            1
+        );
+    }
+
+    // A first boolean param without a boolean return type is still a flag.
+    #[test]
+    fn still_flags_first_boolean_param_without_boolean_return() {
+        assert_eq!(run("function send(urgent: boolean): void {}").len(), 1);
     }
 }
