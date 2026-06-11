@@ -132,6 +132,19 @@ mod tests {
     }
 
     #[test]
+    fn allows_dividers_in_dtslint_file() {
+        // Regression #1006 — dtslint/ holds type tests (fp-ts organizes them
+        // with `// ---` section dividers); the path maps to in_test_dir.
+        let src = large_file("// ----- model -----\nconst y = 2;\n// ----- pipeable -----\n");
+        let diags = crate::rules::test_helpers::run_rule_gated(
+            &Check,
+            &src,
+            "fp-ts/dtslint/Array.ts",
+        );
+        assert!(diags.is_empty(), "dtslint/ files are type tests, got {diags:?}");
+    }
+
+    #[test]
     fn allows_dividers_in_small_file() {
         assert!(run("// ============\nconst y = 2;\n// ============\n").is_empty());
     }

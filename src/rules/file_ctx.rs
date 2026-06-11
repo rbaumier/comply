@@ -241,6 +241,8 @@ fn scan_path(path: &Path) -> PathSegments {
             || lower.starts_with("test-helper/")
             || lower.contains("/test-d/")
             || lower.starts_with("test-d/")
+            || lower.contains("/dtslint/")
+            || lower.starts_with("dtslint/")
             || lower.contains("/__tests__/")
             || lower.starts_with("__tests__/")
             || lower.contains("/fixtures/")
@@ -389,6 +391,14 @@ mod tests {
         // tsd type-testing convention (issue #793).
         assert!(scan_path(&PathBuf::from("test-d/schema.ts")).in_test_dir);
         assert!(scan_path(&PathBuf::from("src/test-d/types.ts")).in_test_dir);
+        // dtslint type-testing convention (issue #1006).
+        assert!(scan_path(&PathBuf::from("dtslint/Array.ts")).in_test_dir);
+        assert!(
+            scan_path(&PathBuf::from(
+                "very-well-written-projects/typescript/fp-ts/dtslint/Array.ts"
+            ))
+            .in_test_dir
+        );
     }
 
     #[test]
