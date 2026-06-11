@@ -120,6 +120,29 @@ fn has_side_effects(expr: &Expression) -> bool {
         Expression::TSAsExpression(inner) => has_side_effects(&inner.expression),
         Expression::TSSatisfiesExpression(inner) => has_side_effects(&inner.expression),
 
+        // Chai getter assertions: `expect(x).to.be.true` accesses a getter
+        // that checks the value and throws AssertionError on failure — the
+        // property access IS the side effect. Recognise a member-access
+        // chain rooted at an `expect(...)` call.
+        Expression::StaticMemberExpression(_)
+        | Expression::ComputedMemberExpression(_) => chain_roots_at_expect(expr),
+
+        _ => false,
+    }
+}
+
+/// True when `expr` is a member-access chain whose innermost object is a
+/// call to the identifier `expect` — i.e. a Chai assertion chain such as
+/// `expect(x).to.be.true`. The terminating getter access is the assertion.
+fn chain_roots_at_expect(expr: &Expression) -> bool {
+    match expr {
+        Expression::CallExpression(call) => {
+            matches!(&call.callee, Expression::Identifier(id) if id.name.as_str() == "expect")
+        }
+        Expression::StaticMemberExpression(m) => chain_roots_at_expect(&m.object),
+        Expression::ComputedMemberExpression(m) => chain_roots_at_expect(&m.object),
+        Expression::ParenthesizedExpression(p) => chain_roots_at_expect(&p.expression),
+        Expression::TSNonNullExpression(n) => chain_roots_at_expect(&n.expression),
         _ => false,
     }
 }
@@ -186,5 +209,30 @@ mod tests {
     fn allows_arrow_ternary_body() {
         let src = r#"const clamp = (text, max) => text.length <= max ? text : text.slice(0, max);"#;
         assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    // Regression #1015: Chai getter assertions are side-effectful (the getter
+    // throws AssertionError on failure) — not unused expressions.
+    #[test]
+    fn allows_chai_getter_assertions_issue_1015() {
+        assert!(run_on("expect(x).to.be.true;").is_empty());
+        assert!(run_on("expect(foo).to.be.null;").is_empty());
+        assert!(run_on("expect(bar).to.exist;").is_empty());
+        assert!(run_on("expect(baz).to.be.ok;").is_empty());
+        assert!(run_on("expect(obj.prop).to.be.undefined;").is_empty());
+    }
+
+    #[test]
+    fn still_flags_non_expect_member_chain() {
+        // A bare member-access chain NOT rooted at expect(...) is still unused.
+        let d = run_on("foo.to.be.true;");
+        assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn still_flags_bare_identifier_in_test_file() {
+        // The genuine unused-expression case must keep flagging.
+        let d = run_on("let y = 1; y;");
+        assert_eq!(d.len(), 1);
     }
 }
