@@ -73,6 +73,20 @@ fn has_assertion_prefixed_call(text: &str) -> bool {
     false
 }
 
+/// True when a TS `satisfies` expression lies within `body_span`.
+fn body_contains_satisfies(
+    semantic: &oxc_semantic::Semantic<'_>,
+    body_span: oxc_span::Span,
+) -> bool {
+    semantic.nodes().iter().any(|n| {
+        if let AstKind::TSSatisfiesExpression(sat) = n.kind() {
+            sat.span.start >= body_span.start && sat.span.end <= body_span.end
+        } else {
+            false
+        }
+    })
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[AstType::CallExpression]
@@ -114,13 +128,16 @@ impl OxcCheck for Check {
             _ => return,
         };
         let body_text = &ctx.source[body_span.start as usize..body_span.end as usize];
-        // Direct matcher chains and short-form `assert(…)` count.
+        // Direct matcher chains, short-form `assert(…)`, and arktype's
+        // `attest(…)` (the entry point of every `@arktype/attest` assertion)
+        // count.
         if body_text.contains(".toBe(")
             || body_text.contains(".toEqual(")
             || body_text.contains(".toThrow(")
             || body_text.contains(".toMatch(")
             || body_text.contains(".toHave")
             || body_text.contains("assert(")
+            || body_text.contains("attest(")
         {
             return;
         }
@@ -135,6 +152,13 @@ impl OxcCheck for Check {
         // compiler itself fails the build if the expected type error is absent.
         // Tests that rely solely on this directive have a valid assertion.
         if body_text.contains("@ts-expect-error") {
+            return;
+        }
+        // A `satisfies` expression in the body marks a type-level test:
+        // it passes iff the file compiles, so no runtime assertion is
+        // expected. AST-based so the word "satisfies" inside a string
+        // literal doesn't count.
+        if body_contains_satisfies(semantic, body_span) {
             return;
         }
         // The test delegates to a caller-supplied callback (`it(name, () =>
@@ -319,6 +343,28 @@ mod tests {
                 createListQuerySchema({ sortColumns: ["id"], defaultSort: "id:asc" });
             });
         "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // Regression for #971 — arktype's `attest(…)` is the entry point of
+    // every `@arktype/attest` assertion.
+    #[test]
+    fn allows_test_with_attest_assertions() {
+        let src = r#"it("x", () => { attest(f instanceof Sub).equals(true); attest(f("ff")).snap("y"); });"#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // Regression for #971 — `satisfies` marks a type-level test that
+    // passes iff the file compiles; no runtime assertion is expected.
+    #[test]
+    fn allows_type_level_test_with_satisfies() {
+        let src = r#"test("assignability", () => { z.string() satisfies z.core.$ZodString; z.number() satisfies z.core.$ZodNumber; });"#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn still_flags_test_mentioning_satisfies_in_string_only() {
+        let src = r#"it("x", () => { log("this satisfies nothing"); });"#;
         assert_eq!(run(src).len(), 1);
     }
 }
