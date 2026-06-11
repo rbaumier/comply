@@ -5,11 +5,15 @@
 //!
 //! - is **not** in test context (`#[test]` / `#[cfg(test)]` /
 //!   `tests/` integration directory), and
-//! - is **not** in a binary file (`main.rs`, `src/bin/*.rs`).
+//! - is **not** in a binary file (`main.rs`, `src/bin/*.rs`), and
+//! - is **not** in a binary-only crate (the nearest `Cargo.toml`
+//!   declares no `[lib]` table and no `src/lib.rs` exists next to it).
 //!
 //! `eprintln!` is fine in CLI binaries — that's where it belongs.
 //! It's a problem in libraries because consumers can't redirect or
-//! capture it.
+//! capture it. A crate that builds no library has no library
+//! consumers, so every one of its source files is exempt, not just
+//! the entry points.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -48,6 +52,9 @@ impl AstCheck for Check {
         if is_binary_file(ctx.path) {
             return;
         }
+        if is_binary_only_crate(ctx.path) {
+            return;
+        }
         diagnostics.push(Diagnostic::at_node(
             std::sync::Arc::clone(&ctx.path_arc),
             &node,
@@ -77,6 +84,42 @@ fn is_binary_file(path: &Path) -> bool {
     path.components().any(|c| c.as_os_str() == "bin")
 }
 
+/// True when the nearest `Cargo.toml` ancestor of `path` describes a crate
+/// that builds no library target: the manifest declares no `[lib]` table
+/// and no `src/lib.rs` exists next to it. Returns `false` (keep flagging —
+/// safe default) when no `Cargo.toml` is found or it cannot be read or
+/// parsed.
+fn is_binary_only_crate(path: &Path) -> bool {
+    let Some(cargo_toml_path) = nearest_cargo_toml(path) else {
+        return false;
+    };
+    let Ok(content) = std::fs::read_to_string(&cargo_toml_path) else {
+        return false;
+    };
+    let Ok(value) = content.parse::<toml::Value>() else {
+        return false;
+    };
+    if value.get("lib").is_some() {
+        return false;
+    }
+    let Some(manifest_dir) = cargo_toml_path.parent() else {
+        return false;
+    };
+    !manifest_dir.join("src/lib.rs").is_file()
+}
+
+fn nearest_cargo_toml(path: &Path) -> Option<std::path::PathBuf> {
+    let mut dir = path.parent();
+    while let Some(d) = dir {
+        let candidate = d.join("Cargo.toml");
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+        dir = d.parent();
+    }
+    None
+}
+
 #[cfg(test)]
 impl crate::rules::test_helpers::RunRule for Check {
     fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
@@ -95,21 +138,72 @@ impl crate::rules::test_helpers::RunRule for Check {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use tempfile::TempDir;
 
     fn run_on(source: &str, path: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_rule(&Check, source, path)
     }
 
+    /// Run on `rel_path` inside a temp crate with the given `Cargo.toml`,
+    /// so the crate-shape check resolves against a controlled manifest
+    /// instead of comply's own (binary-only) `Cargo.toml`.
+    fn run_in_crate(cargo_toml_contents: &str, rel_path: &str, source: &str) -> Vec<Diagnostic> {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("Cargo.toml"), cargo_toml_contents).unwrap();
+        fs::create_dir_all(dir.path().join("src")).unwrap();
+        let src_path = dir.path().join(rel_path);
+        fs::write(&src_path, source).unwrap();
+        crate::rules::test_helpers::run_rule(&Check, source, &src_path)
+    }
+
+    const LIB_CARGO_TOML: &str = r#"
+[package]
+name = "mylib"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "mylib"
+path = "src/lib.rs"
+"#;
+
+    const BIN_ONLY_CARGO_TOML: &str = r#"
+[package]
+name = "mytool"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "mytool"
+path = "src/main.rs"
+"#;
+
     #[test]
     fn flags_eprintln_in_library_file() {
         let source = "fn f() { eprintln!(\"oops\"); }";
-        assert_eq!(run_on(source, "src/lib.rs").len(), 1);
+        assert_eq!(run_in_crate(LIB_CARGO_TOML, "src/lib.rs", source).len(), 1);
     }
 
     #[test]
     fn flags_eprint_in_library_file() {
         let source = "fn f() { eprint!(\"oops\"); }";
-        assert_eq!(run_on(source, "src/lib.rs").len(), 1);
+        assert_eq!(run_in_crate(LIB_CARGO_TOML, "src/lib.rs", source).len(), 1);
+    }
+
+    /// Regression for #981: a module of a binary-only crate (no `[lib]`,
+    /// no `src/lib.rs`) has no library consumers — `eprintln!` is fine
+    /// even outside `main.rs` / `bin/`.
+    #[test]
+    fn allows_eprintln_in_binary_only_crate_module() {
+        let source = "fn print_help() { eprintln!(\"usage\"); }";
+        assert!(run_in_crate(BIN_ONLY_CARGO_TOML, "src/session.rs", source).is_empty());
+    }
+
+    #[test]
+    fn flags_eprintln_in_library_crate_module() {
+        let source = "fn f() { eprintln!(\"oops\"); }";
+        assert_eq!(run_in_crate(LIB_CARGO_TOML, "src/util.rs", source).len(), 1);
     }
 
     #[test]
