@@ -6,8 +6,10 @@
 //! declaration of a symbol is a `Function` AST node.
 //!
 //! Branded type pattern: TypeScript allows a symbol to occupy both the
-//! value namespace (`const`/function) and the type namespace (`type`/`interface`)
-//! simultaneously — skipped when declarations are a mix of value and type-only nodes.
+//! value namespace (`const`/function/import binding) and the type namespace
+//! (`type`/`interface`) simultaneously — skipped when declarations are a mix
+//! of value and type-only nodes (e.g. `import Database from 'better-sqlite3'`
+//! + `export interface Database`).
 //!
 //! Generic type parameters live in the type namespace, so a type parameter
 //! sharing a name with a value declaration (`<t>(t: t)`) is legal —
@@ -57,12 +59,16 @@ impl OxcCheck for Check {
             }
 
             // Branded type pattern: `export const Foo = ...; export type Foo = ...;`
-            // TypeScript merges value-namespace (const/function) and type-namespace
-            // (type alias/interface) declarations — exempt only when both sides present
-            // and every decl is one or the other (const only, not let/var).
+            // TypeScript merges value-namespace (const/function/import binding)
+            // and type-namespace (type alias/interface) declarations — exempt only
+            // when both sides present and every decl is one or the other
+            // (const only, not let/var).
             let is_value_decl = |id| -> bool {
                 match nodes.kind(id) {
-                    AstKind::Function(_) => true,
+                    AstKind::Function(_)
+                    | AstKind::ImportDefaultSpecifier(_)
+                    | AstKind::ImportSpecifier(_)
+                    | AstKind::ImportNamespaceSpecifier(_) => true,
                     AstKind::VariableDeclarator(_) => {
                         let parent_id = nodes.parent_id(id);
                         matches!(nodes.kind(parent_id), AstKind::VariableDeclaration(d) if d.kind == VariableDeclarationKind::Const)
@@ -291,6 +297,32 @@ export function make<F extends FilterMap, const C extends SortColumns>(
             "export interface StandardSchemaV1<Input = unknown, Output = Input> {\n  readonly \"~standard\": StandardSchemaV1.Props<Input, Output>;\n}\nexport declare namespace StandardSchemaV1 {\n  export interface Props<Input = unknown, Output = Input> {}\n  export type InferInput<Schema extends StandardSchemaV1> = unknown;\n}",
         );
         assert!(d.is_empty(), "expected no diagnostics, got: {d:?}");
+    }
+
+    #[test]
+    fn allows_default_import_plus_interface() {
+        // Regression for #970: a value import + an interface of the same name
+        // occupy distinct namespaces (kysely test-setup pattern).
+        let d = run(
+            "import Database from 'better-sqlite3'\nexport interface Database {\n  person: Person\n  pet: Pet\n  toy: Toy\n}",
+        );
+        assert!(d.is_empty(), "expected no diagnostics, got: {d:?}");
+    }
+
+    #[test]
+    fn allows_named_import_plus_type_alias() {
+        // Regression for #970: named import + type alias of the same name.
+        let d = run("import { Foo } from 'x'\ntype Foo = { a: string }");
+        assert!(d.is_empty(), "expected no diagnostics, got: {d:?}");
+    }
+
+    #[test]
+    fn flags_import_plus_const_redeclaration() {
+        // import + const of the same name are both value-namespace
+        // declarations — a genuine redeclaration, still flagged.
+        let d = run("import Foo from 'a'\nconst Foo = 1;");
+        assert_eq!(d.len(), 1, "expected 1 diagnostic, got: {d:?}");
+        assert!(d[0].message.contains("`Foo`"));
     }
 
     #[test]
