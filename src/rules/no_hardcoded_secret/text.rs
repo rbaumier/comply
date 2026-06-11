@@ -294,7 +294,35 @@ fn contains_keyed_literal(line: &str) -> bool {
     }
     // Values prefixed with `test_` are deliberately fake test credentials
     // (e.g. Vitest setup files that satisfy schema validation without real secrets).
-    !inner.to_ascii_lowercase().starts_with("test_")
+    if inner.to_ascii_lowercase().starts_with("test_") {
+        return false;
+    }
+    // Attribute-name constants hold symbolic keys (database field names, protocol
+    // parameters) rather than actual credentials. The variable name mirrors the
+    // value: ATTR_APPLICATION_PASSWORD holds "application_password". Detect this
+    // by checking whether the variable name (left side, uppercased) contains the
+    // value (uppercased), which is impossible for random credential strings.
+    // URN constants (e.g. "urn:ietf:params:oauth:token-type:access_token") are
+    // exempt separately because their colons make them recognisable as protocol
+    // identifiers rather than secret material.
+    let left_upper = left.to_ascii_uppercase();
+    let value_upper = inner.to_ascii_uppercase().replace(['-', ':', '/', '.'], "_");
+    if left_upper.contains(&value_upper) {
+        return false;
+    }
+    if is_urn_or_protocol_identifier(&inner) {
+        return false;
+    }
+    true
+}
+
+/// Returns true when the value is a URN or protocol identifier — a colon-
+/// delimited path used as an OAuth2 token type, SAML binding, or similar.
+/// These are symbolic keys, never secret material.
+fn is_urn_or_protocol_identifier(s: &str) -> bool {
+    s.contains(':')
+        && s.chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '_' | '-' | ':' | '/' | '.'))
 }
 
 #[cfg(test)]
@@ -435,6 +463,40 @@ mod tests {
     fn still_flags_real_secret_without_test_prefix() {
         assert_eq!(
             run(r#"const API_AUTH_SECRET = 'prod_secret_padded_to_meet_min_length_xx';"#).len(),
+            1
+        );
+    }
+
+    // Regression tests for #985 — attribute-name constants (Closes #985)
+    #[test]
+    fn allows_attr_name_constants_with_password_keyword() {
+        // Database attribute name — value is a symbolic key, not a credential.
+        assert!(run(r#"pub const ATTR_APPLICATION_PASSWORD: &str = "application_password";"#).is_empty());
+        assert!(run(r#"pub const ATTR_BADLIST_PASSWORD: &str = "badlist_password";"#).is_empty());
+    }
+
+    #[test]
+    fn allows_attr_name_constants_with_secret_keyword() {
+        assert!(run(r#"pub const ATTR_OAUTH2_RS_BASIC_SECRET: &str = "oauth2_rs_basic_secret";"#).is_empty());
+        assert!(run(r#"pub const ATTR_OAUTH2_CLIENT_SECRET: &str = "oauth2_client_secret";"#).is_empty());
+    }
+
+    #[test]
+    fn allows_urn_access_token_constant() {
+        // RFC URI constant — symbolic protocol parameter, not a credential.
+        assert!(run(r#"pub const OAUTH2_TOKEN_TYPE_ACCESS_TOKEN: &str = "urn:ietf:params:oauth:token-type:access_token";"#).is_empty());
+    }
+
+    #[test]
+    fn allows_api_token_session_constant() {
+        assert!(run(r#"pub const ATTR_API_TOKEN_SESSION: &str = "api_token_session";"#).is_empty());
+    }
+
+    #[test]
+    fn still_flags_mixed_case_value_with_secret_keyword() {
+        // Mixed-case or base62 value — genuine credential shape.
+        assert_eq!(
+            run(r#"const CLIENT_SECRET = "Abc123XYZqwertyuiop";"#).len(),
             1
         );
     }
