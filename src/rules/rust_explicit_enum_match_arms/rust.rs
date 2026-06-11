@@ -15,6 +15,11 @@
 //!   Or-patterns (`Foo::A | Foo::B`) are unwrapped and any disjunct
 //!   that qualifies makes the whole arm enum-like.
 //!
+//! Matches whose enum-like arms all reference a known stdlib closed or
+//! non_exhaustive enum — `Result` (`Ok`/`Err`), `Option` (`Some`/`None`),
+//! or `std::io::ErrorKind` — are exempt: the wildcard there is idiomatic
+//! or compiler-mandated, and all arms of a `match` share one type.
+//!
 //! We do not descend into nested `match`es here — the walker visits
 //! every `match_expression` independently, so each match is classified
 //! on its own arms.
@@ -46,10 +51,10 @@ impl AstCheck for Check {
             return;
         };
 
-        // Walk the match_arm children, collecting wildcard arms and
-        // noting whether any arm looks enum-like.
+        // Walk the match_arm children, collecting wildcard arms and the
+        // patterns of arms that look enum-like.
         let mut wildcard_arms: Vec<tree_sitter::Node> = Vec::new();
-        let mut has_enum_like_arm = false;
+        let mut enum_like_arms: Vec<tree_sitter::Node> = Vec::new();
         let mut cursor = match_block.walk();
         for child in match_block.named_children(&mut cursor) {
             if child.kind() != "match_arm" {
@@ -61,11 +66,22 @@ impl AstCheck for Check {
             if pattern_is_wildcard(pattern, source_bytes) {
                 wildcard_arms.push(child);
             } else if pattern_is_enum_like(pattern, source_bytes) {
-                has_enum_like_arm = true;
+                enum_like_arms.push(pattern);
             }
         }
 
-        if !has_enum_like_arm {
+        if enum_like_arms.is_empty() {
+            return;
+        }
+        // All arms of a `match` necessarily cover the same type, so when
+        // every enum-like arm references a known stdlib closed or
+        // non_exhaustive enum, the scrutinee is that stdlib type and the
+        // wildcard is idiomatic (Result/Option) or compiler-mandated
+        // (ErrorKind) — never a silent catch-all for a project enum.
+        if enum_like_arms
+            .iter()
+            .all(|p| references_stdlib_closed_enum(*p, source_bytes))
+        {
             return;
         }
         // Emit on each wildcard arm found (usually just one).
@@ -150,6 +166,43 @@ fn pattern_is_enum_like(pattern: tree_sitter::Node, source: &[u8]) -> bool {
     matches!(first_ident_char, Some(c) if c.is_ascii_uppercase())
 }
 
+/// True if `pattern` references a variant of a known stdlib closed or
+/// non_exhaustive enum: `Result` (`Ok`/`Err`), `Option` (`Some`/`None`),
+/// or `std::io::ErrorKind`. Matching is purely syntactic: the final path
+/// segment of the variant head must be exactly one of the Result/Option
+/// constructors, or the head must contain `ErrorKind::`.
+fn references_stdlib_closed_enum(pattern: tree_sitter::Node, source: &[u8]) -> bool {
+    // Unwrap the `match_pattern` wrapper, mirroring `pattern_is_enum_like`.
+    if pattern.kind() == "match_pattern" {
+        let mut cursor = pattern.walk();
+        if let Some(inner) = pattern.named_children(&mut cursor).next() {
+            return references_stdlib_closed_enum(inner, source);
+        }
+        return false;
+    }
+    // Or-pattern: every disjunct must reference a stdlib enum.
+    if pattern.kind() == "or_pattern" {
+        let mut cursor = pattern.walk();
+        return pattern
+            .named_children(&mut cursor)
+            .all(|child| references_stdlib_closed_enum(child, source));
+    }
+
+    let Ok(text) = pattern.utf8_text(source) else {
+        return false;
+    };
+    let text = text.trim();
+    // Strip tuple-struct fields: `Err(e)` → `Err`, `Some(v)` → `Some`.
+    let head = text.split('(').next().unwrap_or(text).trim();
+    // Final path segment: `Result::Ok` → `Ok`, `Option::Some` → `Some`.
+    let last_seg = head.rsplit("::").next().unwrap_or(head).trim();
+    if matches!(last_seg, "Ok" | "Err" | "Some" | "None") {
+        return true;
+    }
+    // `std::io::ErrorKind` is #[non_exhaustive]: a `_` arm is mandatory.
+    head.contains("ErrorKind::")
+}
+
 #[cfg(test)]
 impl crate::rules::test_helpers::RunRule for Check {
     fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
@@ -180,8 +233,33 @@ mod tests {
     }
 
     #[test]
-    fn flags_wildcard_with_option_variants() {
+    fn allows_wildcard_with_option_variants() {
         let src = "fn f(x: Option<i32>) -> i32 { match x { Some(v) => v, _ => 0 } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_wildcard_with_result_variants() {
+        let src = "fn f(r: Result<i32, E>) -> i32 { match r { Err(e) => 1, _ => 0 } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_wildcard_with_errorkind() {
+        let src = "fn f(e: std::io::Error) -> i32 { \
+                   match e.kind() { ErrorKind::PermissionDenied => 1, _ => 0 } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_wildcard_with_qualified_result() {
+        let src = "fn f(r: Result<i32, E>) -> i32 { match r { Result::Ok(v) => v, _ => 0 } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_project_variant_resembling_ok() {
+        let src = "fn f(x: Foo) -> i32 { match x { Foo::OkResponse => 1, _ => 0 } }";
         assert_eq!(run_on(src).len(), 1);
     }
 

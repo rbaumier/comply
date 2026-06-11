@@ -11,15 +11,24 @@
 //!
 //! - exactly one arm is a wildcard (`_`), AND
 //! - at least one OTHER arm has a pattern that "looks like" an enum
-//!   variant — i.e. a path pattern such as `Foo::A`, `Some(x)`,
+//!   variant — i.e. a path pattern such as `Foo::A`,
 //!   `Direction::North`, or `Self::Foo`.
 //!
 //! A pattern is considered enum-like if its text contains `::`, or
 //! if the leading identifier starts with an ASCII uppercase letter
-//! (`Some`, `None`, `Ok`, `Err`, `Direction`, …). This intentionally
-//! accepts false negatives (e.g. enum match with only integer-like
-//! patterns) rather than false positives (flagging a `match` on
-//! integers where `_` is genuinely necessary).
+//! (`Direction`, `Foo`, …). This intentionally accepts false
+//! negatives (e.g. enum match with only integer-like patterns)
+//! rather than false positives (flagging a `match` on integers
+//! where `_` is genuinely necessary).
+//!
+//! Stdlib exemption: when every enum-like arm references a known
+//! stdlib closed or non_exhaustive enum — `Result` (`Ok`/`Err`),
+//! `Option` (`Some`/`None`), or `std::io::ErrorKind` — the match is
+//! not flagged. All arms of a `match` share one type, so this is a
+//! sound syntactic proxy for "the scrutinee is a stdlib type". The
+//! wildcard is idiomatic on Result/Option (stable, closed, two
+//! variants) and compiler-mandated on `#[non_exhaustive]` enums like
+//! `ErrorKind`. Project-defined enums still require explicit arms.
 //!
 //! Test contexts are exempted for consistency with `rust-no-unwrap`:
 //! test code routinely writes compact wildcard matches for setup
