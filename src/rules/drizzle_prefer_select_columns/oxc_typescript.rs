@@ -135,4 +135,30 @@ mod tests {
         let src = "obj.select().from(users);";
         assert!(run(src).is_empty());
     }
+
+    // Regression for #979: integration/type tests intentionally select every
+    // column — the rule is gated out of test dirs, including `*-tests/`.
+    #[test]
+    fn skips_test_dirs_via_production_gate() {
+        let src = "const r = await db.select().from(users);";
+        assert!(
+            crate::rules::test_helpers::run_rule_gated(
+                &Check,
+                src,
+                "integration-tests/type-tests/join-nodenext/mysql.ts"
+            )
+            .is_empty(),
+            "must not fire inside *-tests/ dirs"
+        );
+        assert!(
+            crate::rules::test_helpers::run_rule_gated(&Check, src, "drizzle-arktype/tests/pg.test.ts")
+                .is_empty(),
+            "must not fire inside tests/ dirs"
+        );
+        assert_eq!(
+            crate::rules::test_helpers::run_rule_gated(&Check, src, "src/db/queries.ts").len(),
+            1,
+            "must still fire on production paths"
+        );
+    }
 }

@@ -18,7 +18,7 @@ pub const META: RuleMeta = RuleMeta {
     doc_url: Some("https://orm.drizzle.team/docs/select#basic-and-partial-select"),
     categories: &["drizzle", "database"],
 
-    skip_in_test_dir: false,
+    skip_in_test_dir: true,
     skip_in_relaxed_dir: false,
 };
 

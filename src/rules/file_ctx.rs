@@ -231,6 +231,7 @@ fn scan_path(path: &Path) -> PathSegments {
         in_test_dir: lower.contains("/tests/")
             || lower.contains("/test/")
             || lower.contains("/tests-")
+            || lower.contains("-tests/")
             || lower.contains("/test-helpers/")
             || lower.contains("/test-helper/")
             || lower.starts_with("tests/")
@@ -388,6 +389,17 @@ mod tests {
         // tsd type-testing convention (issue #793).
         assert!(scan_path(&PathBuf::from("test-d/schema.ts")).in_test_dir);
         assert!(scan_path(&PathBuf::from("src/test-d/types.ts")).in_test_dir);
+    }
+
+    #[test]
+    fn hyphenated_plural_tests_dirs_are_test_dirs() {
+        // `*-tests/` segments such as integration-tests/ or type-tests/ (issue #979).
+        assert!(
+            scan_path(&PathBuf::from("integration-tests/type-tests/join-nodenext/mysql.ts"))
+                .in_test_dir
+        );
+        // Singular `*-test/` stays a feature dir (e.g. A/B testing), not a test dir.
+        assert!(!scan_path(&PathBuf::from("src/ab-test/widget.ts")).in_test_dir);
     }
 
     #[test]
