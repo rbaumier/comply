@@ -16,14 +16,16 @@ mod tests {
 
     #[test]
     fn flags_catch_chain() {
-        let diags = run("fetchUser(id).catch(err => { console.error(err); });");
+        // Inside a function the chain has an async host available, so the
+        // top-level fire-and-forget exemption does not apply.
+        let diags = run("function f() { fetchUser(id).catch(err => { console.error(err); }); }");
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains(".catch()"));
     }
 
     #[test]
     fn flags_then_and_catch() {
-        let diags = run("fetchUser(id).then(d => d).catch(e => e);");
+        let diags = run("function f() { fetchUser(id).then(d => d).catch(e => e); }");
         assert_eq!(diags.len(), 2);
     }
 
