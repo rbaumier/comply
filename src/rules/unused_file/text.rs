@@ -124,6 +124,16 @@ fn is_entry_point(
         return true;
     }
 
+    // `main.{ts,js,mts,tsx,...}` is universally a bootstrapper/entry point: it is
+    // launched directly (by a runtime or a test runner), never imported. Multi-app
+    // monorepos (NestJS integration tests, Nx, Turborepo) place a `src/main.ts` in
+    // every app subdirectory at arbitrary depth, so depth is not a reliable signal
+    // — the stem is. (`index` stays depth-restricted below: a barrel `index.ts`
+    // exists at every level and must not become a blanket entry seed.)
+    if stem == "main" {
+        return true;
+    }
+
     let Some(canon_root) = canon_root else {
         return false;
     };
@@ -145,11 +155,11 @@ fn is_entry_point(
     let canon_parent = std::fs::canonicalize(parent).unwrap_or_else(|_| parent.to_path_buf());
     let at_root = canon_parent == canon_root;
     // A bundler/CLI entry conventionally sits at the project root *or* directly
-    // under the source root — `main.ts`, `index.ts`, `src/main.ts`.
+    // under the source root — `index.ts`, `src/index.ts`.
     let under_src = canon_parent.parent() == Some(canon_root)
         && canon_parent.file_name().and_then(|n| n.to_str()) == Some("src");
 
-    if (stem == "main" || stem == "index") && (at_root || under_src) {
+    if stem == "index" && (at_root || under_src) {
         return true;
     }
     // Framework root file stems (e.g. "next.config" matches next.config.ts).
@@ -157,10 +167,10 @@ fn is_entry_point(
         return true;
     }
 
-    // Workspace package entry points: treat index.ts/main.ts at the root of any
+    // Workspace package entry points: treat index.ts at the root of any
     // workspace package (or its src/ subdir) as a BFS seed, so files reachable
     // only within that package are not flagged.
-    if stem == "main" || stem == "index" {
+    if stem == "index" {
         let at_wr = canon_workspace_roots.contains(&canon_parent);
         let under_wr_src = canon_parent.file_name().and_then(|n| n.to_str()) == Some("src")
             && canon_parent
@@ -448,6 +458,29 @@ mod tests {
         assert!(
             diags.is_empty(),
             "example-apps/ files are entry points and must not be flagged: {diags:?}"
+        );
+    }
+
+    // Regression for #1062: a nested integration-test app entry (`src/main.ts`
+    // at arbitrary depth) is a bootstrapper launched directly, not imported — it
+    // and its reachable module tree must not be flagged.
+    #[test]
+    fn treats_nested_app_main_as_entry_point() {
+        let files: Vec<(&str, &str)> = vec![
+            ("index.ts", "export const root = 1;\n"),
+            (
+                "integration/microservices/src/main.ts",
+                "import { ApplicationModule } from './app.module';\nvoid ApplicationModule;\n",
+            ),
+            (
+                "integration/microservices/src/app.module.ts",
+                "export const ApplicationModule = class {};\n",
+            ),
+        ];
+        let (_dir, diags) = run_on_project(&files);
+        assert!(
+            diags.is_empty(),
+            "nested app main.ts and its module tree must not be flagged: {diags:?}"
         );
     }
 }
