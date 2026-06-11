@@ -89,7 +89,11 @@ impl OxcCheck for Check {
             let is_assert = match node.kind() {
                 AstKind::CallExpression(call) => {
                     let callee_is_expect = match &call.callee {
-                        Expression::Identifier(id) => id.name.starts_with("expect"),
+                        // `attest(…)` is the entry point of every
+                        // `@arktype/attest` assertion.
+                        Expression::Identifier(id) => {
+                            id.name.starts_with("expect") || id.name.as_str() == "attest"
+                        }
                         Expression::StaticMemberExpression(member) => {
                             member.property.name.as_str() == "expect"
                                 || member.property.name.starts_with("expect")
@@ -110,6 +114,10 @@ impl OxcCheck for Check {
                     let name = member.property.name.as_str();
                     matches!(name, "should" | "toBe" | "toEqual" | "toMatch" | "toThrow")
                 }
+                // `expr satisfies T` is a compile-time assertion: a test
+                // containing one is a type-level test that passes iff the
+                // file compiles, so it counts as asserted.
+                AstKind::TSSatisfiesExpression(_) => true,
                 _ => false,
             };
 
@@ -282,5 +290,27 @@ mod tests {
             }
         "#;
         assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // Regression for #971 — arktype's `attest(…)` is the entry point of
+    // every `@arktype/attest` assertion.
+    #[test]
+    fn allows_test_with_attest_assertions() {
+        let src = r#"it("x", () => { attest(f instanceof Sub).equals(true); attest(f("ff")).snap("y"); });"#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // Regression for #971 — `satisfies` marks a type-level test that
+    // passes iff the file compiles; no runtime assertion is expected.
+    #[test]
+    fn allows_type_level_test_with_satisfies() {
+        let src = r#"test("assignability", () => { z.string() satisfies z.core.$ZodString; z.number() satisfies z.core.$ZodNumber; });"#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn still_flags_test_without_assertion_after_satisfies_support() {
+        let src = r#"it("x", () => { setup(); });"#;
+        assert_eq!(run(src).len(), 1);
     }
 }
