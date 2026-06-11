@@ -9,6 +9,19 @@ use std::sync::Arc;
 
 pub struct Check;
 
+/// True when the bytes just before `start` (skipping inline spaces/tabs) end
+/// with a block comment `*/`. This is the `/*paramName*/ undefined`
+/// documentation convention naming which optional parameter receives
+/// `undefined`, which is intentional and not a smell.
+fn preceded_by_block_comment(source: &str, start: usize) -> bool {
+    let bytes = source.as_bytes();
+    let mut i = start;
+    while i > 0 && (bytes[i - 1] == b' ' || bytes[i - 1] == b'\t') {
+        i -= 1;
+    }
+    i >= 2 && bytes[i - 1] == b'/' && bytes[i - 2] == b'*'
+}
+
 fn is_create_context_call(call: &oxc_ast::ast::CallExpression) -> bool {
     match &call.callee {
         Expression::Identifier(id) => id.name == "createContext",
@@ -103,6 +116,9 @@ impl OxcCheck for Check {
             };
             if is_undefined {
                 let span = arg.span();
+                if preceded_by_block_comment(ctx.source, span.start as usize) {
+                    continue;
+                }
                 let (line, column) = byte_offset_to_line_col(ctx.source, span.start as usize);
                 diagnostics.push(Diagnostic {
                     path: Arc::clone(&ctx.path_arc),
@@ -170,6 +186,17 @@ mod tests {
         // Explicit `undefined` exercising the function-under-test's input path.
         assert!(run_in_test_file("expect(redactValue(undefined)).toBe(undefined);").is_empty());
         assert!(run_in_test_file(r#"const r = requireOrError(undefined, "empty");"#).is_empty());
+    }
+
+    #[test]
+    fn allows_block_comment_documented_undefined_issue_1021() {
+        // TypeScript convention: /*paramName*/ undefined names the optional param.
+        assert!(crate::rules::test_helpers::run_rule(
+            &Check, "ts.visitEachChild(node, visit, /*context*/ undefined);", "t.ts"
+        ).is_empty());
+        assert!(crate::rules::test_helpers::run_rule(
+            &Check, "foo(/*bar*/undefined);", "t.ts"
+        ).is_empty());
     }
 
     #[test]
