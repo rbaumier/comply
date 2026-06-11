@@ -20,13 +20,16 @@ use crate::rules::backend::{AstCheck, CheckCtx};
 // API (`GET /orgs/{org}`, `org_member`), Kubernetes labels, and
 // multi-tenant SaaS schemas (`org_id`) — not an abbreviation a reader
 // has to guess about.
+// `desc` is likewise exempt: it is the canonical abbreviation for a
+// descriptor in virtualization/device-driver protocols (VirtIO/USB/PCIe
+// `Descriptor`) and the SQL `ORDER BY … DESC` keyword — it has multiple
+// canonical expansions, so suggesting 'description' is frequently wrong.
 const DEFAULT_BANNED: &[(&str, &str)] = &[
     ("acct", "account"),
     ("usr", "user"),
     ("btn", "button"),
     ("pwd", "password"),
     ("cnt", "count"),
-    ("desc", "description"),
 ];
 
 #[derive(Debug)]
@@ -201,6 +204,17 @@ mod tests {
         assert!(run_on("fn f() { let org = get(); }").is_empty());
         assert!(run_on("fn f() { let org_id = 1; }").is_empty());
         assert!(run_on("fn f(org: &Org) {}").is_empty());
+    }
+
+    #[test]
+    fn allows_desc_descriptor_term() {
+        // Regression for issue #1017: `desc` is the canonical abbreviation
+        // for a descriptor in virtualization/device-driver code (VirtIO
+        // `Descriptor` in Firecracker) and the SQL `ORDER BY … DESC`
+        // keyword — suggesting 'description' is frequently wrong.
+        assert!(run_on("fn f() { let desc_size = std::mem::size_of::<virtio::Descriptor>(); }")
+            .is_empty());
+        assert!(run_on("fn f() { let desc = queue.pop_first_descriptor().unwrap(); }").is_empty());
     }
 
     #[test]

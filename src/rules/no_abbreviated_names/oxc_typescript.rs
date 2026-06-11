@@ -14,13 +14,16 @@ const ALLOWED_METHOD_NAMES: &[&str] = &["err", "isErr"];
 // `org` is likewise exempt: it is the canonical domain term of the GitHub
 // API (`GET /orgs/{org}`, `org_member`) and multi-tenant SaaS schemas
 // (`orgId`) — not an abbreviation a reader has to guess about.
+// `desc` is likewise exempt: it is the canonical abbreviation for a
+// descriptor in virtualization/device-driver protocols (VirtIO/USB/PCIe
+// `Descriptor`) and the SQL `ORDER BY … DESC` keyword — it has multiple
+// canonical expansions, so suggesting 'description' is frequently wrong.
 const DEFAULT_BANNED: &[(&str, &str)] = &[
     ("acct", "account"),
     ("usr", "user"),
     ("btn", "button"),
     ("pwd", "password"),
     ("cnt", "count"),
-    ("desc", "description"),
 ];
 
 pub struct Check;
@@ -191,6 +194,15 @@ mod tests {
         // multi-tenant SaaS term (`orgId`, `/orgs/{org}`).
         assert!(run_on("const org = 1;").is_empty());
         assert!(run_on("const orgId = 1;").is_empty());
+    }
+
+    #[test]
+    fn allows_desc_term() {
+        // Regression for issue #1017: `desc` is the canonical abbreviation
+        // for a descriptor (VirtIO/USB/PCIe) and the SQL `ORDER BY … DESC`
+        // keyword — suggesting 'description' is frequently wrong.
+        assert!(run_on("const desc = getDescriptor();").is_empty());
+        assert!(run_on("const descSize = 1;").is_empty());
     }
 
     #[test]
