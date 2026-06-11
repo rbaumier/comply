@@ -8,6 +8,12 @@
 //! Branded type pattern: TypeScript allows a symbol to occupy both the
 //! value namespace (`const`/function) and the type namespace (`type`/`interface`)
 //! simultaneously — skipped when declarations are a mix of value and type-only nodes.
+//!
+//! Generic type parameter + value parameter: the pattern `<T>(t: T)` where a
+//! type parameter and same-named value parameter share an identifier is valid
+//! TypeScript — type and value namespaces are distinct. OXC registers both as
+//! declarations of the same symbol; `TSTypeParameter` nodes are filtered out
+//! before any redeclaration check.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -34,7 +40,10 @@ impl OxcCheck for Check {
         let mut diagnostics = Vec::new();
 
         for symbol_id in scoping.symbol_ids() {
-            let decl_ids: Vec<_> = scoping.symbol_declarations(symbol_id).collect();
+            let decl_ids: Vec<_> = scoping
+                .symbol_declarations(symbol_id)
+                .filter(|&id| !matches!(nodes.kind(id), AstKind::TSTypeParameter(_)))
+                .collect();
             if decl_ids.len() <= 1 {
                 continue;
             }
@@ -184,6 +193,31 @@ mod tests {
         let d = run("let Foo = 1;\ntype Foo = string;");
         assert_eq!(d.len(), 1, "expected 1 diagnostic, got: {d:?}");
         assert!(d[0].message.contains("`Foo`"));
+    }
+
+    #[test]
+    fn allows_generic_type_param_same_name_as_value_param_arrow() {
+        // Regression for #967: <s extends string>(s: s) — type param and value param share name
+        let d = run(
+            "const capitalize = <s extends string>(s: s): Capitalize<s> => (s[0].toUpperCase() + s.slice(1)) as never",
+        );
+        assert!(d.is_empty(), "expected no diagnostics, got: {d:?}");
+    }
+
+    #[test]
+    fn allows_generic_type_param_same_name_as_value_param_const_signature() {
+        // Regression for #967: const with generic type annotation (arktype shallowClone pattern)
+        let d = run(
+            "const shallowClone: <input extends object>(input: input) => input = input => input",
+        );
+        assert!(d.is_empty(), "expected no diagnostics, got: {d:?}");
+    }
+
+    #[test]
+    fn allows_function_declaration_with_same_named_type_and_value_param() {
+        // Regression for #967: named function — filter must not suppress genuine T vs t patterns
+        let d = run("function identity<T>(t: T): T { return t; }");
+        assert!(d.is_empty(), "expected no diagnostics, got: {d:?}");
     }
 
     #[test]
