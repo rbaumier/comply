@@ -44,6 +44,12 @@ crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
             "comment" | "hash_bang_line" => {}
             "expression_statement"
                 if is_directive_prologue(&child, ctx.source.as_bytes()) => {}
+            // Test-framework configuration calls placed before imports are a
+            // widespread convention (`jest.setTimeout`, `vi.setConfig`,
+            // `jasmine.DEFAULT_TIMEOUT_INTERVAL = N`). They have no import
+            // side effects so they do not break the imports-first invariant.
+            "expression_statement"
+                if is_test_framework_config(&child, ctx.source.as_bytes()) => {}
             _ => {
                 saw_non_import = true;
             }
@@ -63,6 +69,53 @@ fn is_directive_prologue(node: &tree_sitter::Node<'_>, _source: &[u8]) -> bool {
         return false;
     }
     first.kind() == "string"
+}
+
+/// Test-framework configuration calls that are conventionally placed before
+/// imports:
+/// - `jest.setTimeout(N)` — sets the default test timeout for the file
+/// - `vi.setConfig({ testTimeout: N })` — Vitest equivalent
+/// - `jasmine.DEFAULT_TIMEOUT_INTERVAL = N` — Jasmine equivalent (assignment)
+///
+/// These are zero-import-side-effect statements and must not flip `saw_non_import`.
+fn is_test_framework_config(node: &tree_sitter::Node<'_>, source: &[u8]) -> bool {
+    let mut cursor = node.walk();
+    let mut named = node.named_children(&mut cursor);
+    let Some(inner) = named.next() else {
+        return false;
+    };
+    if named.next().is_some() {
+        return false;
+    }
+
+    // `jest.setTimeout(N)` / `vi.setConfig(...)` — call_expression
+    if inner.kind() == "call_expression"
+        && let Some(callee) = inner.child_by_field_name("function")
+        && callee.kind() == "member_expression"
+        && let Some(obj) = callee.child_by_field_name("object")
+        && let Some(prop) = callee.child_by_field_name("property")
+    {
+        let obj_name = obj.utf8_text(source).unwrap_or("");
+        let prop_name = prop.utf8_text(source).unwrap_or("");
+        return matches!(
+            (obj_name, prop_name),
+            ("jest", "setTimeout") | ("vi", "setConfig")
+        );
+    }
+
+    // `jasmine.DEFAULT_TIMEOUT_INTERVAL = N` — assignment_expression
+    if inner.kind() == "assignment_expression"
+        && let Some(left) = inner.child_by_field_name("left")
+        && left.kind() == "member_expression"
+        && let Some(obj) = left.child_by_field_name("object")
+        && let Some(prop) = left.child_by_field_name("property")
+    {
+        let obj_name = obj.utf8_text(source).unwrap_or("");
+        let prop_name = prop.utf8_text(source).unwrap_or("");
+        return obj_name == "jasmine" && prop_name == "DEFAULT_TIMEOUT_INTERVAL";
+    }
+
+    false
 }
 
 
@@ -171,5 +224,46 @@ import A from "x";
 import B from "y";
 "#;
         assert!(run_on(src).is_empty());
+    }
+
+    // Regression test for https://github.com/rbaumier/comply/issues/987
+    // `jest.setTimeout` before imports is a widespread convention and must not
+    // trigger imports-first.
+    #[test]
+    fn allows_jest_set_timeout_before_imports() {
+        let src = r#"jest.setTimeout(180000);
+
+import { PostResponse } from "lemmy-js-client/dist/types/PostResponse";
+import { alpha, beta } from "./shared";
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_vi_set_config_before_imports() {
+        let src = r#"vi.setConfig({ testTimeout: 30000 });
+
+import { describe, it } from "vitest";
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_jasmine_timeout_before_imports() {
+        let src = r#"jasmine.DEFAULT_TIMEOUT_INTERVAL = 10000;
+
+import { Component } from "@angular/core";
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_other_code_before_imports() {
+        // A regular function call (not a known framework config) must still flag.
+        let src = r#"console.log("hello");
+
+import { a } from "a";
+"#;
+        assert_eq!(run_on(src).len(), 1);
     }
 }
