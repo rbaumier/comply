@@ -1,3 +1,7 @@
+//! jsx-no-new-function-as-prop OxcCheck backend. Files importing from
+//! `solid-js` are exempt: SolidJS components do not re-render, so inline JSX
+//! functions never cause extra renders and `useCallback` does not apply.
+
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
@@ -18,6 +22,9 @@ impl OxcCheck for Check {
         _semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
+        if ctx.source_contains("solid-js") {
+            return;
+        }
         let AstKind::JSXAttribute(attr) = node.kind() else { return };
         let oxc_ast::ast::JSXAttributeName::Identifier(name_ident) = &attr.name else { return };
         let attr_name = name_ident.name.as_str();
@@ -46,5 +53,41 @@ impl OxcCheck for Check {
             severity: Severity::Warning,
             span: None,
         });
+    }
+}
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, src, "t.tsx")
+    }
+
+    #[test]
+    fn flags_arrow_in_jsx_prop_react() {
+        let src = "const a = <button onClick={() => f()} />;";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_arrow_in_jsx_prop_solid() {
+        let src = "import { createSignal } from \"solid-js\";\nconst a = <button onClick={() => f()} />;";
+        assert!(run(src).is_empty());
     }
 }
