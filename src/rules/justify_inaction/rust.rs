@@ -6,9 +6,11 @@
 //! - `if_expression.consequence` — empty `if cond { }`.
 //! - `else_clause`'s `block` child — empty `else { }`.
 //! - `match_arm.value` when the value is an empty `block` AND the
-//!   pattern is a wildcard `_` or an error-ignoring `Err(…)`.
-//!   Named variant no-ops (`Progress::None => {}`) are exempt
-//!   because the variant name documents the intent.
+//!   pattern is an error-ignoring `Err(…)` — silently swallowing an
+//!   error deserves a justification. Wildcard arms (`_ => {}`) and
+//!   named variant no-ops (`Progress::None => {}`) are exempt: the
+//!   explicit catch-all / variant name documents the intent, and the
+//!   wildcard arm is required for match exhaustiveness anyway.
 //! - `for_expression.body` / `while_expression.body` /
 //!   `loop_expression.body` — empty loop body.
 //!
@@ -36,7 +38,7 @@ fn match_arm_needs_justification(arm: tree_sitter::Node, source: &[u8]) -> bool 
 
 fn pattern_needs_justification(node: tree_sitter::Node, source: &[u8]) -> bool {
     match node.kind() {
-        "_" | "wildcard_pattern" => return true,
+        "_" | "wildcard_pattern" => false,
         "match_pattern" | "or_pattern" => {
             let mut cursor = node.walk();
             for child in node.children(&mut cursor) {
@@ -44,17 +46,16 @@ fn pattern_needs_justification(node: tree_sitter::Node, source: &[u8]) -> bool {
                     return true;
                 }
             }
-            return false;
+            false
         }
         "tuple_struct_pattern" => {
             if let Ok(text) = node.utf8_text(source) {
                 return text.starts_with("Err(") || text.contains("::Err(");
             }
-            return false;
+            false
         }
-        _ => {}
+        _ => false,
     }
-    matches!(node.utf8_text(source), Ok("_"))
 }
 
 fn loop_name(kind: &str) -> &'static str {
@@ -209,9 +210,21 @@ mod tests {
     }
 
     #[test]
-    fn flags_empty_wildcard_arm() {
+    fn allows_empty_wildcard_arm() {
         let src = "fn f(x: u8) { match x { 0 => go(), _ => {} } }";
-        assert_eq!(run_on(src).len(), 1);
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_empty_wildcard_arm_issue_1002() {
+        let src = "fn f(v: E) { match v { E::Specific(fld) => { go(fld); } _ => {} } }";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn allows_unit_wildcard_arm() {
+        let src = "fn f(x: u8) { match x { 0 => go(), _ => () } }";
+        assert!(run_on(src).is_empty());
     }
 
     #[test]
