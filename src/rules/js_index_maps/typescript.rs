@@ -14,6 +14,7 @@ const ITERATOR_METHODS: &[&str] = &["forEach", "map", "flatMap", "reduce", "some
 const LOOKUP_METHODS: &[&str] = &["find", "findIndex", "filter", "includes", "indexOf"];
 
 fn is_inside_loop(node: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut prev = node;
     let mut ancestor = node.parent();
     while let Some(a) = ancestor {
         if LOOP_KINDS.contains(&a.kind()) {
@@ -27,14 +28,18 @@ fn is_inside_loop(node: tree_sitter::Node, source: &[u8]) -> bool {
         ) {
             return false;
         }
-        // .forEach() / .map() etc. count as loops.
+        // .forEach() / .map() etc. count as loops — but only when the
+        // original node is in the *arguments* (callback), not in the
+        // *callee* chain (receiver that executes once before the loop).
         if a.kind() == "call_expression" {
             if let Some(callee) = a.child_by_field_name("function") {
                 if callee.kind() == "member_expression" {
                     if let Some(prop) = callee.child_by_field_name("property") {
                         if let Ok(method) = prop.utf8_text(source) {
                             if ITERATOR_METHODS.contains(&method) {
-                                return true;
+                                if prev != callee {
+                                    return true;
+                                }
                             }
                         }
                     }
@@ -44,6 +49,7 @@ fn is_inside_loop(node: tree_sitter::Node, source: &[u8]) -> bool {
         if a.kind() == "program" {
             break;
         }
+        prev = a;
         ancestor = a.parent();
     }
     false
@@ -194,6 +200,20 @@ items.forEach(item => {
     function helper() { return others.find(o => o.id === id); }
     return helper;
 });
+"#)
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn no_fp_on_filter_chained_before_map() {
+        // Regression for #957: filter is the receiver of map, not a callback inside it.
+        // The Set.has() inside filter is O(1); the chain is O(n), not O(n*m).
+        assert!(
+            run(r#"
+const unknownGtins = parsedRows
+  .filter((r) => !updatedGtins.has(r.gtin))
+  .map((r) => r.gtin);
 "#)
             .is_empty()
         );

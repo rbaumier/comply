@@ -5,6 +5,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::Expression;
+use oxc_span::GetSpan;
 use std::sync::Arc;
 
 pub struct Check;
@@ -69,6 +70,11 @@ fn is_inside_loop<'a>(
     node: &oxc_semantic::AstNode<'a>,
     semantic: &'a oxc_semantic::Semantic<'a>,
 ) -> bool {
+    let node_span = match node.kind() {
+        AstKind::CallExpression(call) => call.span,
+        _ => return false,
+    };
+
     for ancestor in semantic.nodes().ancestors(node.id()) {
         match ancestor.kind() {
             AstKind::ForStatement(_)
@@ -82,12 +88,20 @@ fn is_inside_loop<'a>(
             AstKind::Function(f) if f.id.is_some() => return false,
             AstKind::Class(_) => return false,
 
-            // .forEach() / .map() etc. count as loops.
+            // .forEach() / .map() etc. count as loops — but only when the
+            // original node is in the *arguments* (callback), not in the
+            // *callee* chain (receiver that executes once before the loop).
             AstKind::CallExpression(call) => {
                 if let Expression::StaticMemberExpression(member) = &call.callee
-                    && ITERATOR_METHODS.contains(&member.property.name.as_str()) {
+                    && ITERATOR_METHODS.contains(&member.property.name.as_str())
+                {
+                    let callee_span = call.callee.span();
+                    if !(callee_span.start <= node_span.start
+                        && node_span.end <= callee_span.end)
+                    {
                         return true;
                     }
+                }
             }
 
             _ => {}
@@ -252,5 +266,19 @@ items.map(item => {
 });
 "#);
         assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn no_fp_on_filter_chained_before_map() {
+        // Regression for #957: filter is the receiver of map, not a callback inside it.
+        // The Set.has() inside filter is O(1); the chain is O(n), not O(n*m).
+        assert!(
+            run(r#"
+const unknownGtins = parsedRows
+  .filter((r) => !updatedGtins.has(r.gtin))
+  .map((r) => r.gtin);
+"#)
+            .is_empty()
+        );
     }
 }
