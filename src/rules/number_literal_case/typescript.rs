@@ -1,8 +1,9 @@
-//! number-literal-case — enforce lowercase prefix/exponent, uppercase hex digits.
+//! number-literal-case — enforce lowercase prefix/exponent and lowercase hex digits.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-/// The canonical form: lowercase prefix/exponent, uppercase hex digits.
+/// The canonical form: lowercase prefix/exponent and lowercase hex digits,
+/// matching oxfmt's normalisation of hex literals.
 fn canonical(raw: &str) -> Option<String> {
     let (body, suffix) = if let Some(stripped) = raw.strip_suffix('n') {
         (stripped, "n")
@@ -18,7 +19,7 @@ fn canonical(raw: &str) -> Option<String> {
     let fixed = match prefix_lower.as_str() {
         "0x" => {
             let digits = &body[2..];
-            format!("0x{}{}", digits.to_uppercase(), suffix)
+            format!("0x{}{}", digits.to_lowercase(), suffix)
         }
         "0b" | "0o" => {
             format!("{}{}{}", prefix_lower, &body[2..], suffix)
@@ -78,14 +79,14 @@ mod tests {
     fn flags_uppercase_hex_prefix() {
         let d = crate::rules::test_helpers::run_rule(&Check, "const x = 0XFF;", "t.ts");
         assert_eq!(d.len(), 1);
-        assert!(d[0].message.contains("0xFF"));
+        assert!(d[0].message.contains("0xff"));
     }
 
     #[test]
-    fn flags_lowercase_hex_digits() {
-        let d = crate::rules::test_helpers::run_rule(&Check, "const x = 0xff;", "t.ts");
+    fn flags_uppercase_hex_digits() {
+        let d = crate::rules::test_helpers::run_rule(&Check, "const x = 0xFF;", "t.ts");
         assert_eq!(d.len(), 1);
-        assert!(d[0].message.contains("0xFF"));
+        assert!(d[0].message.contains("0xff"));
     }
 
     #[test]
@@ -111,7 +112,7 @@ mod tests {
 
     #[test]
     fn allows_correct_hex() {
-        assert!(crate::rules::test_helpers::run_rule(&Check, "const x = 0xFF;", "t.ts").is_empty());
+        assert!(crate::rules::test_helpers::run_rule(&Check, "const x = 0xff;", "t.ts").is_empty());
     }
 
     #[test]
@@ -128,6 +129,32 @@ mod tests {
     fn flags_bigint_hex() {
         let d = crate::rules::test_helpers::run_rule(&Check, "const x = 0XFFn;", "t.ts");
         assert_eq!(d.len(), 1);
-        assert!(d[0].message.contains("0xFFn"));
+        assert!(d[0].message.contains("0xffn"));
+    }
+
+    // Regression for issue #958: oxfmt normalises hex literals to lowercase.
+    #[test]
+    fn flags_uppercase_hex_in_issue_reproducer() {
+        let d = crate::rules::test_helpers::run_rule(
+            &Check,
+            "const buf = new Uint8Array([0x50, 0x4B, 0x03, 0x04, 0xFF, 0xFF]);",
+            "t.ts",
+        );
+        assert_eq!(d.len(), 3);
+        assert!(d[0].message.contains("`0x4B` should be `0x4b`"));
+        assert!(d[1].message.contains("`0xFF` should be `0xff`"));
+        assert!(d[2].message.contains("`0xFF` should be `0xff`"));
+    }
+
+    #[test]
+    fn allows_lowercase_hex_issue_reproducer() {
+        assert!(
+            crate::rules::test_helpers::run_rule(
+                &Check,
+                "const buf = new Uint8Array([0x50, 0x4b, 0x03, 0x04, 0xff, 0xff]);",
+                "t.ts",
+            )
+            .is_empty()
+        );
     }
 }

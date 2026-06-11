@@ -14,7 +14,7 @@ use crate::rules::meta::RuleMeta;
 pub const META: RuleMeta = RuleMeta {
     id: "number-literal-case",
     description: "Enforce proper case for numeric literals.",
-    remediation: "Use lowercase for prefix/exponent (`0x`, `0b`, `0o`, `1e3`) and uppercase for hex digits (`0xFF`).",
+    remediation: "Use lowercase for prefix/exponent (`0x`, `0b`, `0o`, `1e3`) and lowercase hex digits in JS/TS (`0xff`, matching oxfmt).",
     severity: Severity::Warning,
     doc_url: None,
     categories: &["unicorn"],
