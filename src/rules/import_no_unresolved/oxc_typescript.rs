@@ -40,6 +40,9 @@ impl OxcCheck for Check {
             if is_generated_specifier(&imp.specifier) {
                 continue;
             }
+            if is_build_output_specifier(&imp.specifier) {
+                continue;
+            }
             if !seen.insert((imp.specifier.clone(), imp.line)) {
                 continue;
             }
@@ -71,9 +74,18 @@ fn is_generated_specifier(spec: &str) -> bool {
     last.ends_with(".gen") || last.contains(".gen.")
 }
 
+/// True for specifiers that traverse into a conventional build-output
+/// directory (`dist`, `build`, `out`). Integration tests deliberately import
+/// the compiled artifact (e.g. `../../dist/cjs/index.js`); these directories
+/// are gitignored and absent in a clean checkout, so an unresolved import
+/// there is expected, not a defect.
+fn is_build_output_specifier(spec: &str) -> bool {
+    spec.split('/').any(|seg| matches!(seg, "dist" | "build" | "out"))
+}
+
 #[cfg(test)]
 mod oxc_tests {
-    use super::is_generated_specifier;
+    use super::{is_build_output_specifier, is_generated_specifier};
 
     #[test]
     fn detects_generated_specifiers_issue_487() {
@@ -82,5 +94,19 @@ mod oxc_tests {
         assert!(is_generated_specifier("../app/routeTree.gen"));
         assert!(!is_generated_specifier("./routeTree"));
         assert!(!is_generated_specifier("./generated"));
+    }
+
+    #[test]
+    fn detects_build_output_specifiers_issue_1005() {
+        // reproducers from the issue
+        assert!(is_build_output_specifier("../../../dist/cjs/index.js"));
+        assert!(is_build_output_specifier("../../dist/esm/index.js"));
+        assert!(is_build_output_specifier("../build/index.js"));
+        assert!(is_build_output_specifier("./out/index.js"));
+        // still flagged — real source / not an exact build segment
+        assert!(!is_build_output_specifier("./src/index.js"));
+        assert!(!is_build_output_specifier("../distance/index.js"));
+        assert!(!is_build_output_specifier("./distribution/x"));
+        assert!(!is_build_output_specifier("./lib/util.js")); // lib intentionally NOT skipped
     }
 }
