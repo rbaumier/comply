@@ -3,6 +3,9 @@
 //! This rule uses the project import index, not AST — same as the
 //! tree-sitter version. We use `run_on_semantic` with an empty
 //! `interested_kinds` since the real work is index-based.
+//!
+//! Imports from `.d.ts` declaration files are not verified: declaration files
+//! are excluded from the scan set, so the index has no export data for them.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::project::import_index::{ExportKind, ImportKind};
@@ -41,6 +44,15 @@ impl OxcCheck for Check {
             };
 
             let entry = exports_cache.entry(src.clone()).or_insert_with(|| {
+                // `.d.ts` declaration files are valid import targets but are
+                // intentionally excluded from the scan set, so the index has no
+                // export data for them. Without a reliable export set we cannot
+                // verify named imports against a declaration file — skip rather
+                // than emit false positives (type-fest et al. export only types
+                // from `.d.ts`).
+                if is_declaration_file(src) {
+                    return None;
+                }
                 // Framework entry points (route trees, generated manifests) and
                 // @generated files may have synthesised exports not tracked by
                 // the index — skip verification so tests importing from them
@@ -80,6 +92,17 @@ impl OxcCheck for Check {
 
         diagnostics
     }
+}
+
+fn is_declaration_file(path: &std::path::Path) -> bool {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| {
+            n.ends_with(".d.ts")
+                || n.ends_with(".d.mts")
+                || n.ends_with(".d.cts")
+                || n.ends_with(".d.tsx")
+        })
 }
 
 fn is_generated_file(path: &std::path::Path) -> bool {
@@ -226,5 +249,36 @@ mod tests {
         let (_dir, diags) = run_on_project(&files, "src/app.test.ts");
         assert_eq!(diags.len(), 1, "bad import must still be flagged");
         assert!(diags[0].message.contains("multiply"));
+    }
+
+    #[test]
+    fn no_fp_on_named_type_import_from_d_ts_issue_1052() {
+        // type-fest pattern: `import type { And } from '../source/and.d.ts'`.
+        // .d.ts files are excluded from the scan set, so the index has no
+        // export data — import-named must not flag them.
+        let files: Vec<(&str, &str)> = vec![
+            ("source/and.d.ts", "export type And<A, B> = [A, B];\n"),
+            (
+                "test-d/and.ts",
+                "import type { And } from '../source/and.d.ts';\nconst x: And<number, string> = [1, 'a'];\n",
+            ),
+        ];
+        let (_dir, diags) = run_on_project(&files, "test-d/and.ts");
+        assert!(diags.is_empty(), "import from .d.ts must not be flagged: {diags:?}");
+    }
+
+    #[test]
+    fn no_fp_on_named_type_import_from_d_ts_reexport_issue_1052() {
+        // type-only re-export through a .d.ts barrel (type-fest index.d.ts).
+        let files: Vec<(&str, &str)> = vec![
+            ("source/schema.d.ts", "export type Schema = { a: number };\n"),
+            ("index.d.ts", "export type { Schema } from './source/schema.d.ts';\n"),
+            (
+                "test-d/schema.ts",
+                "import type { Schema } from '../index.d.ts';\nconst y: Schema = { a: 1 };\n",
+            ),
+        ];
+        let (_dir, diags) = run_on_project(&files, "test-d/schema.ts");
+        assert!(diags.is_empty(), "import from .d.ts re-export must not be flagged: {diags:?}");
     }
 }
