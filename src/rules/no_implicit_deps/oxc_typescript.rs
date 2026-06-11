@@ -205,4 +205,28 @@ mod tests {
         let diags = run_oxc_in_project(&file, source);
         assert_eq!(diags.len(), 1, "unlisted dep in flat project must be flagged, got {diags:?}");
     }
+
+    // Regression #1060: a nested tsconfig.json with path aliases AND a trailing
+    // comma (JSONC) must still suppress an aliased bare import — the parser must
+    // tolerate the trailing comma so the alias survives.
+    #[test]
+    fn allows_import_via_tsconfig_paths_with_trailing_comma_issue_1060() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("package.json"), r#"{"name":"nest"}"#).unwrap();
+        let micro = dir.path().join("integration").join("microservices");
+        fs::create_dir_all(micro.join("e2e")).unwrap();
+        fs::write(
+            micro.join("tsconfig.json"),
+            "{\"compilerOptions\":{\"paths\":{\"@nestjs/common\":[\"../../packages/common\"],\"@nestjs/common/*\":[\"../../packages/common/*\"]}},\"exclude\":[\"node_modules\",]}",
+        )
+        .unwrap();
+        let file = micro.join("e2e").join("broadcast.spec.ts");
+        let source = "import { Module } from '@nestjs/common';";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert!(
+            diags.is_empty(),
+            "tsconfig path alias (with trailing comma) must suppress, got {diags:?}"
+        );
+    }
 }

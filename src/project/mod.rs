@@ -1130,8 +1130,58 @@ fn detect_framework(pkg: &PackageJson) -> Framework {
 /// alone. tsconfig.json is jsonc-ish; serde_json rejects line comments so we
 /// normalise first.
 fn parse_jsonc(raw: &str) -> Option<Value> {
-    let stripped = json_comments::StripComments::new(raw.as_bytes());
-    serde_json::from_reader(stripped).ok()
+    use std::io::Read;
+    let mut stripped = String::new();
+    json_comments::StripComments::new(raw.as_bytes())
+        .read_to_string(&mut stripped)
+        .ok()?;
+    serde_json::from_str(&strip_trailing_commas(&stripped)).ok()
+}
+
+/// Remove trailing commas (a `,` whose next non-whitespace character is `}` or
+/// `]`) that JSONC and `tsconfig.json` permit but `serde_json` rejects. String
+/// contents are preserved verbatim — commas inside string literals are never
+/// touched.
+fn strip_trailing_commas(s: &str) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    let mut out = String::with_capacity(s.len());
+    let mut in_string = false;
+    let mut escaped = false;
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if in_string {
+            out.push(c);
+            if escaped {
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else if c == '"' {
+                in_string = false;
+            }
+            i += 1;
+            continue;
+        }
+        if c == '"' {
+            in_string = true;
+            out.push(c);
+            i += 1;
+            continue;
+        }
+        if c == ',' {
+            let mut j = i + 1;
+            while j < chars.len() && chars[j].is_whitespace() {
+                j += 1;
+            }
+            if j < chars.len() && (chars[j] == '}' || chars[j] == ']') {
+                i += 1; // skip the trailing comma
+                continue;
+            }
+        }
+        out.push(c);
+        i += 1;
+    }
+    out
 }
 
 /// Process-wide default `ProjectCtx` used by `CheckCtx::for_test`. Production
@@ -1184,6 +1234,18 @@ mod tests {
         .unwrap();
         assert!(ts.paths.contains_key("~/*"));
         assert_eq!(ts.alias_prefixes(), vec!["~".to_string()]);
+    }
+
+    #[test]
+    fn tsconfig_parses_paths_with_trailing_commas() {
+        // Regression #1060: tsconfig.json permits trailing commas (JSONC). They must
+        // not break parsing, or path aliases silently disappear and bare imports get
+        // wrongly flagged as implicit deps.
+        let ts = Tsconfig::parse(
+            "{\"compilerOptions\":{\"paths\":{\"@app\":[\"./app\"],}},\"exclude\":[\"node_modules\",]}",
+        )
+        .expect("tsconfig with trailing commas must parse");
+        assert!(ts.paths.contains_key("@app"));
     }
 
     #[test]
