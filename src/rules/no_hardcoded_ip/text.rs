@@ -85,6 +85,37 @@ fn is_version_like(line: &str, ip_end: usize, ip_len: usize) -> bool {
     false
 }
 
+/// True when the IPv4 token at byte range `[ip_end - ip_len, ip_end)` in
+/// `line` sits inside a quoted string literal that also contains
+/// whitespace — a multi-word string (JVM banner, log message, prose),
+/// not a bare network address. Network endpoints are single tokens
+/// (`"10.0.0.5"`, `"10.0.0.5:8080"`, a URL); a dotted-quad embedded in a
+/// sentence is a version string (`8.0.222.0`) or prose, not an address.
+fn ip_in_multiword_string(line: &str, ip_end: usize, ip_len: usize) -> bool {
+    let bytes = line.as_bytes();
+    let ip_start = ip_end - ip_len;
+    // Nearest quote to the left of the IP = opening delimiter.
+    let mut l = ip_start;
+    let open = loop {
+        if l == 0 {
+            return false;
+        }
+        l -= 1;
+        if matches!(bytes[l], b'"' | b'\'' | b'`') {
+            break bytes[l];
+        }
+    };
+    // Matching quote to the right = closing delimiter.
+    let mut r = ip_end;
+    while r < bytes.len() {
+        if bytes[r] == open {
+            return bytes[l + 1..r].iter().any(|&b| b == b' ' || b == b'\t');
+        }
+        r += 1;
+    }
+    false
+}
+
 fn is_cidr_notation(line: &str, ip_end: usize) -> bool {
     let bytes = line.as_bytes();
     ip_end < bytes.len()
@@ -132,6 +163,9 @@ impl TextCheck for Check {
                     continue;
                 }
                 if is_cidr_notation(line, next) {
+                    continue;
+                }
+                if ip_in_multiword_string(line, next, ip.len()) {
                     continue;
                 }
                 if is_in_comment(line) {
@@ -236,6 +270,21 @@ mod tests {
     fn flags_private_range_ips() {
         assert_eq!(run(r#"const host = "10.0.0.5";"#).len(), 1);
         assert_eq!(run(r#"const dns = "8.8.8.8";"#).len(), 1);
+    }
+
+    #[test]
+    fn allows_java_version_in_banner_issue_1001() {
+        let src = r#"let java_8 = "Eclipse OpenJ9 OpenJDK 64-bit Server VM (1.8.0_222-b10) from linux-amd64 JRE ... 8.0.222.0, built on Jul 17 2019";"#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+        assert!(run(r#"let java_11 = "Build 11.0.4.0, built on Jul 17 2019";"#).is_empty());
+        assert!(run(r#"let v = "Picked up 19.2.0.1 from the environment";"#).is_empty());
+    }
+
+    #[test]
+    fn flags_ip_in_single_token_string_despite_spaces_on_line() {
+        assert_eq!(run(r#"const host = "192.168.1.1";"#).len(), 1);
+        assert_eq!(run(r#"let endpoint = "10.0.0.5:8080";"#).len(), 1);
+        assert_eq!(run(r#"let dns = "8.8.8.8";"#).len(), 1);
     }
 
     #[test]
