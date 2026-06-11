@@ -2055,6 +2055,19 @@ fn lexical_normalize(p: &Path) -> PathBuf {
     pb
 }
 
+/// TypeScript source extensions to try when an import specifier carries a
+/// JS-family extension. TypeScript ESM (`"module": "NodeNext"` / `"ESNext"`)
+/// requires writing the emitted `.js` extension in specifiers even when the
+/// on-disk source is `.ts`, so `./checks.js` must resolve to `checks.ts`.
+fn ts_counterpart_exts(ext: &str) -> &'static [&'static str] {
+    match ext {
+        "js" | "jsx" => &["ts", "tsx"],
+        "mjs" => &["mts"],
+        "cjs" => &["cts"],
+        _ => &[],
+    }
+}
+
 fn probe_path(raw: &Path, known: &std::collections::HashSet<PathBuf>) -> Option<PathBuf> {
     const EXTS: &[&str] = &["ts", "tsx", "js", "jsx", "mts", "mjs", "cts", "cjs", "vue"];
 
@@ -2073,10 +2086,10 @@ fn probe_path(raw: &Path, known: &std::collections::HashSet<PathBuf>) -> Option<
         return std::fs::canonicalize(raw).ok();
     }
 
-    let has_known_ext = raw
+    let known_ext = raw
         .extension()
         .and_then(|e| e.to_str())
-        .is_some_and(|ext| EXTS.contains(&ext));
+        .filter(|ext| EXTS.contains(ext));
 
     // Fast pass: try every candidate the syscall pass below would, but resolve
     // it lexically and look it up in the in-memory `known` set. `raw` is built
@@ -2085,10 +2098,16 @@ fn probe_path(raw: &Path, known: &std::collections::HashSet<PathBuf>) -> Option<
     // tried in the same priority order, so the result is identical. Anything
     // reachable only through a symlink misses here and falls to the syscall
     // pass, preserving behavior.
-    if has_known_ext {
+    if let Some(ext) = known_ext {
         let n = lexical_normalize(raw);
         if known.contains(&n) {
             return Some(n);
+        }
+        for ts_ext in ts_counterpart_exts(ext) {
+            let n = lexical_normalize(&raw.with_extension(ts_ext));
+            if known.contains(&n) {
+                return Some(n);
+            }
         }
     } else {
         if raw.extension().is_some() {
@@ -2115,11 +2134,18 @@ fn probe_path(raw: &Path, known: &std::collections::HashSet<PathBuf>) -> Option<
         }
     }
 
-    if has_known_ext {
+    if let Some(ext) = known_ext {
         if let Ok(c) = std::fs::canonicalize(raw)
             && known.contains(&c)
         {
             return Some(c);
+        }
+        for ts_ext in ts_counterpart_exts(ext) {
+            if let Ok(c) = std::fs::canonicalize(raw.with_extension(ts_ext))
+                && known.contains(&c)
+            {
+                return Some(c);
+            }
         }
         return None;
     }
@@ -3015,6 +3041,51 @@ mod tests {
             ("app.ts", "import { x } from './lib';"),
         ]);
         assert_eq!(index.get_usages(&paths[0], "x").len(), 1);
+    }
+
+    #[test]
+    fn js_extension_specifier_resolves_to_ts_source() {
+        // Regression for rbaumier/comply#968 — TypeScript ESM requires the
+        // emitted `.js` extension in specifiers even when the source is `.ts`.
+        let (_dir, index, paths) = build_index(&[
+            ("core/checks.ts", "export const fmt = 1;"),
+            ("locales/zh.ts", "import { fmt } from '../core/checks.js';"),
+        ]);
+        let imports = index.get_imports(&paths[1]);
+        assert_eq!(imports.len(), 1);
+        assert_eq!(imports[0].source_path.as_ref(), Some(&paths[0]));
+    }
+
+    #[test]
+    fn mjs_extension_specifier_resolves_to_mts_source() {
+        let (_dir, index, paths) = build_index(&[
+            ("util.mts", "export const u = 1;"),
+            ("app.mts", "import { u } from './util.mjs';"),
+        ]);
+        let imports = index.get_imports(&paths[1]);
+        assert_eq!(imports.len(), 1);
+        assert_eq!(imports[0].source_path.as_ref(), Some(&paths[0]));
+    }
+
+    #[test]
+    fn exact_js_file_takes_priority_over_ts_counterpart() {
+        let (_dir, index, paths) = build_index(&[
+            ("foo.js", "export const f = 1;"),
+            ("foo.ts", "export const f = 2;"),
+            ("app.ts", "import { f } from './foo.js';"),
+        ]);
+        let imports = index.get_imports(&paths[2]);
+        assert_eq!(imports.len(), 1);
+        assert_eq!(imports[0].source_path.as_ref(), Some(&paths[0]));
+    }
+
+    #[test]
+    fn js_extension_specifier_without_any_source_stays_unresolved() {
+        let (_dir, index, paths) =
+            build_index(&[("app.ts", "import { x } from './missing.js';")]);
+        let imports = index.get_imports(&paths[0]);
+        assert_eq!(imports.len(), 1);
+        assert!(imports[0].source_path.is_none());
     }
 
     #[test]
