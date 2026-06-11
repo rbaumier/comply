@@ -193,7 +193,13 @@ impl OxcCheck for Check {
                         // Type narrowing (result.isErr(), instanceof, !== null) or a
                         // preceding unconditional assertion guarantees the branch —
                         // not conditional logic.
-                    } else {
+                    } else if !in_test {
+                        // Only an `if` reached before crossing the enclosing
+                        // `it()`/`test()` call sits inside the test body. Once
+                        // `in_test` is set, the `if` wraps the test registration
+                        // itself (e.g. dialect filtering around `describe()`) —
+                        // test selection, not a conditional assertion: when the
+                        // test runs, its assertions execute unconditionally.
                         let test_span = if_stmt.test.span();
                         let call_span = call.span;
                         if call_span.start < test_span.start || call_span.start >= test_span.end {
@@ -311,6 +317,44 @@ mod tests {
                      }\n\
                    });";
         assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // Regression for #1004: an `if` wrapping the `describe()`/`it()` registration
+    // is test selection (dialect filtering) — when the test runs, every assertion
+    // executes unconditionally.
+    #[test]
+    fn allows_if_wrapping_describe_registration() {
+        let src = "for (const dialect of DIALECTS) {\n\
+  if (dialect === 'mysql' || dialect === 'sqlite') {\n\
+    describe('replace', () => {\n\
+      it('inserts', async () => {\n\
+        const result = await query.executeTakeFirst();\n\
+        expect(result).to.be.instanceOf(InsertResult);\n\
+        expect(result.insertId).to.be.a('bigint');\n\
+      });\n\
+    });\n\
+  }\n\
+}";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // An `if` directly wrapping the `it()` call is also test selection.
+    #[test]
+    fn allows_if_wrapping_it_registration() {
+        let src = "if (cond) { it('x', () => { expect(a).toBe(b); }); }";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // An inner `if` inside the test body stays flagged even when an outer `if`
+    // wraps the test registration.
+    #[test]
+    fn flags_inner_if_despite_outer_registration_if() {
+        let src = "if (outer) {\n\
+  it('x', () => {\n\
+    if (inner) { expect(a).toBe(b); }\n\
+  });\n\
+}";
+        assert_eq!(run(src).len(), 1, "{:?}", run(src));
     }
 
     // A plain if without a guard is still flagged.
