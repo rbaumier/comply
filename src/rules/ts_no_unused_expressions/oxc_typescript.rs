@@ -1,7 +1,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, CheckCtx, OxcCheck};
-use oxc_ast::ast::Expression;
+use oxc_ast::ast::{ChainElement, Expression};
 use std::sync::Arc;
 
 pub struct Check;
@@ -120,6 +120,10 @@ fn has_side_effects(expr: &Expression) -> bool {
         Expression::TSAsExpression(inner) => has_side_effects(&inner.expression),
         Expression::TSSatisfiesExpression(inner) => has_side_effects(&inner.expression),
 
+        // Optional chaining: `f?.()` is a side-effectful call exactly like
+        // `f()`; `obj?.prop` is an unused expression exactly like `obj.prop`.
+        Expression::ChainExpression(chain) => chain_element_has_side_effects(&chain.expression),
+
         // Chai getter assertions: `expect(x).to.be.true` accesses a getter
         // that checks the value and throws AssertionError on failure — the
         // property access IS the side effect. Recognise a member-access
@@ -127,6 +131,17 @@ fn has_side_effects(expr: &Expression) -> bool {
         Expression::StaticMemberExpression(_)
         | Expression::ComputedMemberExpression(_) => chain_roots_at_expect(expr),
 
+        _ => false,
+    }
+}
+
+/// An optional-chaining tail is side-effectful only when it ends in a call.
+/// `f?.()` / `obj.method?.(args)` are calls; `obj?.prop` is a bare member
+/// access (unused, like `obj.prop`).
+fn chain_element_has_side_effects(elem: &ChainElement) -> bool {
+    match elem {
+        ChainElement::CallExpression(_) => true,
+        ChainElement::TSNonNullExpression(inner) => has_side_effects(&inner.expression),
         _ => false,
     }
 }
@@ -233,6 +248,24 @@ mod tests {
     fn still_flags_bare_identifier_in_test_file() {
         // The genuine unused-expression case must keep flagging.
         let d = run_on("let y = 1; y;");
+        assert_eq!(d.len(), 1);
+    }
+
+    // Regression #1059: optional-chaining calls are side-effectful like `f()`.
+    #[test]
+    fn allows_optional_call_issue_1059() {
+        assert!(run_on("callback?.();").is_empty(), "{:?}", run_on("callback?.();"));
+        assert!(
+            run_on("obj.method?.(a, b);").is_empty(),
+            "{:?}",
+            run_on("obj.method?.(a, b);")
+        );
+    }
+
+    #[test]
+    fn still_flags_optional_member_access() {
+        // `foo?.bar;` is an unused expression just like `foo.bar;`.
+        let d = run_on("foo?.bar;");
         assert_eq!(d.len(), 1);
     }
 }
