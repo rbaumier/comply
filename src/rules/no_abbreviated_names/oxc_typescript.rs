@@ -11,6 +11,9 @@ const ALLOWED_METHOD_NAMES: &[&str] = &["err", "isErr"];
 
 // `addr` is intentionally NOT on the list — `std::net::SocketAddr`,
 // `peer_addr()`, `local_addr()`, and `bind_addr` are standard Rust API.
+// `org` is likewise exempt: it is the canonical domain term of the GitHub
+// API (`GET /orgs/{org}`, `org_member`) and multi-tenant SaaS schemas
+// (`orgId`) — not an abbreviation a reader has to guess about.
 const DEFAULT_BANNED: &[(&str, &str)] = &[
     ("acct", "account"),
     ("usr", "user"),
@@ -18,7 +21,6 @@ const DEFAULT_BANNED: &[(&str, &str)] = &[
     ("pwd", "password"),
     ("cnt", "count"),
     ("desc", "description"),
-    ("org", "organization"),
 ];
 
 pub struct Check;
@@ -181,6 +183,20 @@ mod tests {
         // `addr` is standard in networking/socket code.
         assert!(run_on("function f(addr: SocketAddr) {}").is_empty());
         assert!(run_on("const toAddr = destination.parse();").is_empty());
+    }
+
+    #[test]
+    fn allows_org_domain_term() {
+        // Regression for issue #977: `org` is the canonical GitHub-API /
+        // multi-tenant SaaS term (`orgId`, `/orgs/{org}`).
+        assert!(run_on("const org = 1;").is_empty());
+        assert!(run_on("const orgId = 1;").is_empty());
+    }
+
+    #[test]
+    fn still_flags_pwd() {
+        let diags = run_on("const pwd = \"x\";");
+        assert!(diags.iter().any(|d| d.message.contains("pwd")));
     }
 
     #[test]
