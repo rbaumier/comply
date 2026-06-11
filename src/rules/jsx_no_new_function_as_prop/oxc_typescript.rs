@@ -10,6 +10,20 @@ use std::sync::Arc;
 
 pub struct Check;
 
+/// Module-level JSX is evaluated exactly once: there is no render cycle, so an
+/// inline function cannot create per-render reference churn and `useCallback`
+/// is not even usable there.
+fn is_inside_function<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    semantic
+        .nodes()
+        .ancestors(node.id())
+        .skip(1)
+        .any(|a| matches!(a.kind(), AstKind::Function(_) | AstKind::ArrowFunctionExpression(_)))
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[AstType::JSXAttribute]
@@ -19,13 +33,16 @@ impl OxcCheck for Check {
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
+        semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         if ctx.source_contains("solid-js") {
             return;
         }
         let AstKind::JSXAttribute(attr) = node.kind() else { return };
+        if !is_inside_function(node, semantic) {
+            return;
+        }
         let oxc_ast::ast::JSXAttributeName::Identifier(name_ident) = &attr.name else { return };
         let attr_name = name_ident.name.as_str();
 
@@ -81,13 +98,27 @@ mod tests {
 
     #[test]
     fn flags_arrow_in_jsx_prop_react() {
-        let src = "const a = <button onClick={() => f()} />;";
+        let src = "function App() { return <button onClick={() => f()} />; }";
         assert_eq!(run(src).len(), 1);
     }
 
     #[test]
     fn allows_arrow_in_jsx_prop_solid() {
-        let src = "import { createSignal } from \"solid-js\";\nconst a = <button onClick={() => f()} />;";
+        let src = "import { createSignal } from \"solid-js\";\nfunction App() { return <button onClick={() => f()} />; }";
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_module_level_jsx_issue_1053() {
+        // Regression for issue #1053: module-level JSX is evaluated once,
+        // no render cycle, so inline functions are not a re-render hazard.
+        let src = "const state = { description: <Trans bold={(text) => <strong>{text}</strong>} br={() => <br />} /> };";
+        assert!(run(src).is_empty(), "unexpected: {:?}", run(src));
+    }
+
+    #[test]
+    fn flags_jsx_inside_component_issue_1053() {
+        let src = "function App() { return <button onClick={() => f()} />; }";
+        assert!(!run(src).is_empty());
     }
 }
