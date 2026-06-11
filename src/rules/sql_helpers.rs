@@ -76,21 +76,43 @@ pub fn is_sql_string(text: &str) -> bool {
     contains_word(&lower, "where") || contains_word(&lower, "from")
 }
 
+/// DDL keywords that may legally sit between the verb (`CREATE`/`ALTER`)
+/// and the object (`TABLE`/`TYPE`) — e.g. `CREATE OR REPLACE TYPE`,
+/// `CREATE GLOBAL TEMPORARY TABLE`, `CREATE UNLOGGED TABLE`.
+const DDL_MODIFIERS: &[&str] = &[
+    "or", "replace", "temp", "temporary", "global", "local", "unlogged",
+];
+
 /// Returns true if `text` looks like a SQL DDL statement (schema
 /// management) — `CREATE TABLE`, `ALTER TABLE`, etc. Used by rules
 /// that look for column type smells (`VARCHAR`, `TIMESTAMP` without
 /// timezone, …) which only appear in DDL, never in DML.
 ///
-/// Heuristic: requires `CREATE` or `ALTER` AND `TABLE` or `TYPE`,
-/// both whole-word matched. This catches the common schema
-/// statements while rejecting English prose and identifiers.
+/// Heuristic: a whole-word `CREATE` or `ALTER` verb, followed by zero
+/// or more DDL modifier keywords (`OR REPLACE`, `TEMPORARY`, …), with
+/// the very next word being `TABLE` or `TYPE`. Requiring adjacency
+/// (modulo modifiers) rejects English prose like "create a link type"
+/// where arbitrary words separate the verb from the object.
 pub fn is_sql_ddl(text: &str) -> bool {
     let lower = text.to_ascii_lowercase();
-    let has_verb = contains_word(&lower, "create") || contains_word(&lower, "alter");
-    if !has_verb {
-        return false;
+    let words: Vec<&str> = lower
+        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+        .filter(|w| !w.is_empty())
+        .collect();
+    for (i, w) in words.iter().enumerate() {
+        if *w != "create" && *w != "alter" {
+            continue;
+        }
+        // Skip DDL modifier keywords, then require the object keyword next.
+        let mut j = i + 1;
+        while j < words.len() && DDL_MODIFIERS.contains(&words[j]) {
+            j += 1;
+        }
+        if j < words.len() && (words[j] == "table" || words[j] == "type") {
+            return true;
+        }
     }
-    contains_word(&lower, "table") || contains_word(&lower, "type")
+    false
 }
 
 /// Returns true if `lower_text` (already lowercase) contains `word`
@@ -201,6 +223,25 @@ mod tests {
     #[test]
     fn rejects_dml_as_ddl() {
         assert!(!is_sql_ddl("SELECT * FROM users"));
+    }
+
+    #[test]
+    fn rejects_prose_create_with_distant_type_issue_1003() {
+        // arktype ark/docs/.../type.ts: English JSDoc "Create ... Type" sharing a
+        // string with TS `type` keywords must NOT be treated as DDL.
+        assert!(!is_sql_ddl(
+            "Create a copy of this `Type` with only the specified keys"
+        ));
+        assert!(!is_sql_ddl("create a link type")); // empirically the closest phrase (gap 2)
+        assert!(!is_sql_ddl("you can create a custom type here"));
+    }
+
+    #[test]
+    fn accepts_ddl_with_modifier_keywords() {
+        assert!(is_sql_ddl("CREATE TEMPORARY TABLE t (x INT)"));
+        assert!(is_sql_ddl("CREATE OR REPLACE TYPE status AS ENUM ('a')"));
+        assert!(is_sql_ddl("CREATE GLOBAL TEMPORARY TABLE t (x INT)"));
+        assert!(is_sql_ddl("CREATE UNLOGGED TABLE t (x INT)"));
     }
 
     #[test]

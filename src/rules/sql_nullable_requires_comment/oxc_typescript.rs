@@ -80,4 +80,12 @@ mod tests {
         let src = "const q = `CREATE TABLE t (\n  email TEXT NOT NULL,\n)`;";
         assert!(run_on(src).is_empty());
     }
+
+    #[test]
+    fn ignores_embedded_ts_prose_issue_1003() {
+        // "create ... type" in prose + a TS line that contains SQL-type substrings
+        // ("Date"); not DDL, so nothing should fire.
+        let src = "const dts = `Create a copy of this Type.\n  updatedAt: Date | null\n`;";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
 }
