@@ -50,7 +50,16 @@ fn find_ipv4(s: &str, start: usize) -> Option<(usize, String)> {
     }
 }
 
-const ALLOWED: &[&str] = &["127.0.0.1", "0.0.0.0", "255.255.255.255"];
+const ALLOWED: &[&str] = &["255.255.255.255"];
+
+/// Reserved ranges that are never routable production endpoints:
+/// `127.0.0.0/8` (loopback) and `0.0.0.0/8` ("this host", RFC 1122).
+/// Hardcoding them never points at a remote host, so there is nothing
+/// to move to configuration. Private ranges (`10/8`, `192.168/16`,
+/// `172.16/12`) ARE real connection targets and still flag.
+fn is_reserved_nonroutable(ip: &str) -> bool {
+    ip.starts_with("127.") || ip.starts_with("0.")
+}
 
 fn is_documentation_ip(ip: &str) -> bool {
     ip.starts_with("192.0.2.")
@@ -113,7 +122,10 @@ impl TextCheck for Check {
             let mut pos = 0;
             while let Some((next, ip)) = find_ipv4(line, pos) {
                 pos = next;
-                if ALLOWED.contains(&ip.as_str()) || is_documentation_ip(&ip) {
+                if ALLOWED.contains(&ip.as_str())
+                    || is_reserved_nonroutable(&ip)
+                    || is_documentation_ip(&ip)
+                {
                     continue;
                 }
                 if is_version_like(line, next, ip.len()) {
@@ -203,6 +215,27 @@ mod tests {
     #[test]
     fn allows_version_with_dash_suffix() {
         assert!(run(r#"let s = "Zulu 8.40.0.25-CA-linux64";"#).is_empty());
+    }
+
+    #[test]
+    fn allows_loopback_range() {
+        // Issue #975: tantivy IP range-query test data.
+        assert!(run(r#"let lower = Ipv4Addr::from_str("127.0.0.10").unwrap().into_ipv6_addr();"#)
+            .is_empty());
+        assert!(run(r#"let upper = "127.0.0.20";"#).is_empty());
+    }
+
+    #[test]
+    fn allows_zero_slash_eight_range() {
+        // Issue #975: tantivy query-grammar IPv6 literal embedding 0/8 quads.
+        assert!(run(r#"let res1 = literal("ip:[::0.0.0.50 TO ::0.0.0.52}").expect("parse").1;"#)
+            .is_empty());
+    }
+
+    #[test]
+    fn flags_private_range_ips() {
+        assert_eq!(run(r#"const host = "10.0.0.5";"#).len(), 1);
+        assert_eq!(run(r#"const dns = "8.8.8.8";"#).len(), 1);
     }
 
     #[test]
