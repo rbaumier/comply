@@ -1,7 +1,9 @@
 //! boundary-condition OXC backend.
 //!
 //! Flags `arr[0]` or `arr[arr.length - 1]` reads without a length guard
-//! or nullish fallback.
+//! or nullish fallback. Optional-chained computed access (`arr?.[0]`) is
+//! exempt: it is a deliberate optional read that short-circuits to
+//! `undefined` when the base is nullish.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -27,6 +29,12 @@ impl OxcCheck for Check {
         let AstKind::ComputedMemberExpression(member) = node.kind() else {
             return;
         };
+        // `arr?.[0]` is a deliberate optional access (short-circuits to `undefined`
+        // when the base is nullish) — the same intent signal as `.at(0)` or a
+        // `?? fallback`, so it is not an accidental unchecked read.
+        if member.optional {
+            return;
+        }
         let source = ctx.source;
 
         // Only flag when object is a plain identifier or member expression chain
@@ -354,5 +362,31 @@ mod tests {
     fn still_flags_when_no_early_exit() {
         let src = "if (arr.length > 0) { doSomething(); } const x = arr[0];";
         assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn no_fp_optional_chained_first_access_issue_1030() {
+        assert!(run_on("const h = (arr: number[]) => arr?.[0];").is_empty());
+    }
+
+    #[test]
+    fn no_fp_optional_chain_sequence_issue_1030() {
+        assert!(run_on(
+            "const f = (router: any, c: any) => !!router?.match(c)?.[0]?.[0]?.[0];"
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn still_flags_bare_first_access() {
+        assert_eq!(run_on("const g = (arr: number[]) => arr[0];").len(), 1);
+    }
+
+    #[test]
+    fn still_flags_bare_last_access() {
+        assert_eq!(
+            run_on("const i = (arr: number[]) => arr[arr.length - 1];").len(),
+            1
+        );
     }
 }
