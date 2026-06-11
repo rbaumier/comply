@@ -1,10 +1,43 @@
 //! ts-no-unused-generic-parameter OXC backend — flag generic parameters
-//! not referenced in function parameters or return type.
+//! not referenced in function parameters or return type. A generic parameter
+//! referenced inside a function returned by the function (the curried-generic
+//! idiom) is not flagged.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
+use oxc_ast::ast::{Expression, FunctionBody, Statement};
 use std::sync::Arc;
+
+/// Absolute byte span `(start, end)` of a function expression returned by
+/// `body` — either `return <fn>` in a block body or a concise arrow body that
+/// *is* a function. Used to recognise the curried-generic idiom where an outer
+/// type parameter is referenced inside the returned (inner) function.
+fn returned_function_span(body: &FunctionBody, concise: bool) -> Option<(usize, usize)> {
+    let expr = if concise {
+        match body.statements.first()? {
+            Statement::ExpressionStatement(es) => &es.expression,
+            _ => return None,
+        }
+    } else {
+        body.statements.iter().find_map(|s| match s {
+            Statement::ReturnStatement(r) => r.argument.as_ref(),
+            _ => None,
+        })?
+    };
+    returned_fn_expr_span(expr)
+}
+
+fn returned_fn_expr_span(expr: &Expression) -> Option<(usize, usize)> {
+    match expr {
+        Expression::ArrowFunctionExpression(a) => {
+            Some((a.span.start as usize, a.span.end as usize))
+        }
+        Expression::FunctionExpression(f) => Some((f.span.start as usize, f.span.end as usize)),
+        Expression::ParenthesizedExpression(p) => returned_fn_expr_span(&p.expression),
+        _ => None,
+    }
+}
 
 pub struct Check;
 
@@ -44,16 +77,18 @@ impl OxcCheck for Check {
         let mut diagnostics = Vec::new();
 
         for node in semantic.nodes().iter() {
-            let (type_params, params, return_type) = match node.kind() {
+            let (type_params, params, return_type, ret_fn_span) = match node.kind() {
                 AstKind::Function(f) => (
                     f.type_parameters.as_deref(),
                     f.params.span,
                     f.return_type.as_ref().map(|r| r.span),
+                    f.body.as_ref().and_then(|b| returned_function_span(b, false)),
                 ),
                 AstKind::ArrowFunctionExpression(f) => (
                     f.type_parameters.as_deref(),
                     f.params.span,
                     f.return_type.as_ref().map(|r| r.span),
+                    returned_function_span(&f.body, f.expression),
                 ),
                 _ => continue,
             };
@@ -89,7 +124,14 @@ impl OxcCheck for Check {
                     source_contains_ident(ctx.source, r.start, r.end, name)
                 });
 
-                if !used_in_params && !used_in_return && !used_in_other_tp {
+                // Curried-generic idiom: the outer type parameter is referenced
+                // inside the function returned by this function (its inner
+                // signature/body), e.g. `FilterKey<TSearch>` — a real use.
+                let used_in_returned_fn = ret_fn_span.is_some_and(|(s, e)| {
+                    source_contains_ident(ctx.source, s as u32, e as u32, name)
+                });
+
+                if !used_in_params && !used_in_return && !used_in_other_tp && !used_in_returned_fn {
                     let (line, column) =
                         byte_offset_to_line_col(ctx.source, tp.span.start as usize);
                     diagnostics.push(Diagnostic {
@@ -156,5 +198,16 @@ mod tests {
     #[test]
     fn allows_generic_constraint_referencing_other() {
         assert!(run("function f<T extends U, U>(x: T): U { return x; }").is_empty());
+    }
+
+    #[test]
+    fn allows_curried_generic_used_in_returned_function_issue_1038() {
+        let src = "export function filterKeysOf<TSearch extends ListRouteSearch>() {\n  return <TKeys extends readonly FilterKey<TSearch>[]>(keys: TKeys & FilterKey<TSearch>): TKeys => keys;\n}";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn still_flags_truly_unused_generic_issue_1038() {
+        assert_eq!(run("function f<U>(x: number): number { return x; }").len(), 1);
     }
 }
