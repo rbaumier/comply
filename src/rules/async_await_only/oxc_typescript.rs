@@ -71,6 +71,25 @@ impl OxcCheck for Check {
             if exempt {
                 return;
             }
+
+            // A fire-and-forget `.catch()` statement at module top level (e.g.
+            // Angular's canonical `bootstrapApplication(App, appConfig)
+            // .catch((err) => console.error(err))` in main.ts) has no enclosing
+            // async function to host an `await`, and top-level await is not
+            // available in every bundling context — the bare `.catch()`
+            // statement is the idiomatic form there. Only the discarded-result
+            // statement shape is exempt: a `.catch()` whose value is used
+            // (assigned, passed as an argument) is still flagged.
+            if matches!(parent, AstKind::ExpressionStatement(_))
+                && !semantic.nodes().ancestor_kinds(node.id()).any(|kind| {
+                    matches!(
+                        kind,
+                        AstKind::Function(_) | AstKind::ArrowFunctionExpression(_)
+                    )
+                })
+            {
+                return;
+            }
         }
 
         // React.lazy() requires a sync callback returning a Promise — the .then()
@@ -141,6 +160,22 @@ mod tests {
         // fire-and-forget idiom with a handled rejection.
         let src = "void navigator.clipboard.writeText(s).catch(() => {});";
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_top_level_fire_and_forget_catch() {
+        // Regression for issue #978: Angular's canonical standalone bootstrap in
+        // main.ts runs at module top level where no async host exists for `await`.
+        let src = "bootstrapApplication(App, appConfig).catch((err) => console.error(err));";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_fire_and_forget_catch_inside_function() {
+        // Inside a function body an `await` host is one `async` keyword away —
+        // the top-level exemption does not apply.
+        let src = "function f() { foo().catch(() => {}); }";
+        assert_eq!(run(src).len(), 1);
     }
 
     #[test]
