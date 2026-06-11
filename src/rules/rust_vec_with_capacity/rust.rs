@@ -1,10 +1,14 @@
 //! rust-vec-with-capacity backend.
 //!
 //! Matches `let [mut] X = Vec::new()` declarations and checks whether a
-//! following sibling `for_expression` pushes into `X`. When both are
-//! present, the Vec's final length is knowable up front and
-//! `Vec::with_capacity(n)` avoids the log2(n) reallocation chain from
-//! doubling.
+//! following sibling `for_expression` pushes into `X` unconditionally:
+//! the `X.push(...)` must be a direct statement of the loop body (not
+//! nested inside an `if`/`match`) and the body must contain no `continue`
+//! that would skip iterations. Only then does the Vec's final length equal
+//! the iterable's length, making `Vec::with_capacity(n)` the right call —
+//! it avoids the log2(n) reallocation chain from doubling. A conditional
+//! push or a `continue` makes the final length unknowable up front, so
+//! `with_capacity` would mis-size.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
@@ -39,7 +43,8 @@ crate::ast_check! { on ["let_declaration"] => |node, source, ctx, diagnostics|
             continue;
         };
         if let Some(body) = for_node.child_by_field_name("body")
-            && contains_push(body, var_name, source)
+            && body_directly_pushes(body, var_name, source)
+            && !body_has_continue(body)
         {
             has_for_with_push = true;
             break;
@@ -72,7 +77,7 @@ fn extract_var_name<'a>(pattern: tree_sitter::Node<'a>, source: &'a [u8]) -> Opt
     None
 }
 
-fn contains_push(node: tree_sitter::Node, var: &str, source: &[u8]) -> bool {
+fn is_push_call(node: tree_sitter::Node, var: &str, source: &[u8]) -> bool {
     if node.kind() == "call_expression"
         && let Some(fn_node) = node.child_by_field_name("function")
         && fn_node.kind() == "field_expression"
@@ -85,17 +90,37 @@ fn contains_push(node: tree_sitter::Node, var: &str, source: &[u8]) -> bool {
             .child_by_field_name("field")
             .and_then(|n| n.utf8_text(source).ok())
             .unwrap_or("");
-        if val == var && field == "push" {
-            return true;
-        }
+        return val == var && field == "push";
     }
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        if contains_push(child, var, source) {
+    false
+}
+
+fn body_directly_pushes(body: tree_sitter::Node, var: &str, source: &[u8]) -> bool {
+    let mut cursor = body.walk();
+    for child in body.named_children(&mut cursor) {
+        let call = if child.kind() == "call_expression" {
+            child
+        } else if child.kind() == "expression_statement" {
+            match child.named_child(0) {
+                Some(inner) if inner.kind() == "call_expression" => inner,
+                _ => continue,
+            }
+        } else {
+            continue;
+        };
+        if is_push_call(call, var, source) {
             return true;
         }
     }
     false
+}
+
+fn body_has_continue(node: tree_sitter::Node) -> bool {
+    if node.kind() == "continue_expression" {
+        return true;
+    }
+    let mut cursor = node.walk();
+    node.children(&mut cursor).any(body_has_continue)
 }
 
 
@@ -138,5 +163,29 @@ mod tests {
     #[test]
     fn allows_vec_new_no_for() {
         assert!(run("fn f() {\n    let mut v = Vec::new();\n    v.push(1);\n}").is_empty());
+    }
+
+    #[test]
+    fn allows_conditional_push_in_if_issue_1024() {
+        let src = "fn f(items: Vec<i32>) {\n    let mut v = Vec::new();\n    for x in items {\n        if x > 0 { v.push(x); }\n    }\n}";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_push_with_continue_in_body_issue_1024() {
+        let src = "fn f(items: Vec<i32>) {\n    let mut ok = Vec::new();\n    for x in items {\n        if x < 0 { continue; }\n        ok.push(x);\n    }\n}";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_push_nested_in_double_if_issue_1024() {
+        let src = "fn f(items: Vec<Option<i32>>) {\n    let mut names = Vec::new();\n    for x in items {\n        if true {\n            if let Some(v) = x {\n                names.push(v);\n            }\n        }\n    }\n}";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_unconditional_push_with_unrelated_if() {
+        let src = "fn f(items: Vec<i32>) {\n    let mut out = Vec::new();\n    for x in items {\n        if x > 0 { println!(\"{x}\"); }\n        out.push(x);\n    }\n}";
+        assert_eq!(run(src).len(), 1);
     }
 }
