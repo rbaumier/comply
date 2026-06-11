@@ -4,6 +4,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::*;
+use oxc_span::GetSpan;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
@@ -38,6 +39,7 @@ impl OxcCheck for Check {
                         && member.property.name == "object"
                             && let Expression::Identifier(id) = &member.object
                                 && id.name == "z"
+                                    && is_named_schema_init(node, semantic)
                                     && let Some(first_arg) = call.arguments.first()
                                         && let Some(expr) = first_arg.as_expression()
                                             && let Some(keys) = collect_object_expr_keys(expr, ctx.source) {
@@ -83,6 +85,36 @@ impl OxcCheck for Check {
     }
 }
 
+/// Returns true when the `z.object(...)` call is the initializer of a
+/// `VariableDeclarator` (`const X = z.object({...})`), possibly through a
+/// method chain such as `z.object({...}).strict()`. Only such schemas are
+/// referenceable via `z.infer<typeof X>`; an anonymous `z.object(...)` nested
+/// inside another schema's arguments is not a candidate.
+fn is_named_schema_init(
+    node: &oxc_semantic::AstNode,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let nodes = semantic.nodes();
+    let mut current_id = node.id();
+    let mut current_span = node.kind().span();
+    loop {
+        let parent = nodes.parent_node(current_id);
+        if parent.id() == current_id {
+            return false;
+        }
+        match parent.kind() {
+            AstKind::VariableDeclarator(_) => return true,
+            // `.strict()` / `.partial()` / ... chained on the schema: keep
+            // climbing while we stay on the callee side of the chain.
+            AstKind::StaticMemberExpression(member) if member.object.span() == current_span => {}
+            AstKind::CallExpression(call) if call.callee.span() == current_span => {}
+            _ => return false,
+        }
+        current_id = parent.id();
+        current_span = parent.kind().span();
+    }
+}
+
 fn collect_object_expr_keys(expr: &Expression, _source: &str) -> Option<BTreeSet<String>> {
     let Expression::ObjectExpression(obj) = expr else { return None };
     let mut keys = BTreeSet::new();
@@ -117,4 +149,82 @@ fn collect_ts_type_keys(ty: &TSType) -> Option<BTreeSet<String>> {
         }
     }
     if keys.is_empty() { None } else { Some(keys) }
+}
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, s, "t.ts")
+    }
+
+    #[test]
+    fn flags_duplicate_of_named_schema() {
+        let src = "const Foo = z.object({ a: z.string(), b: z.number() });\n\
+                   type Bar = { a: string; b: number };";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_duplicate_of_chained_named_schema() {
+        let src = "const Foo = z.object({ a: z.string(), b: z.number() }).strict();\n\
+                   type Bar = { a: string; b: number };";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_duplicate_of_named_inner_schema() {
+        let src = "const Inner = z.object({ statut: z.string(), page: z.number() });\n\
+                   const Outer = z.object({ search: Inner, replace: z.boolean() });\n\
+                   type C = { statut: string; page: number };";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_z_infer_alias() {
+        let src = "const Foo = z.object({ a: z.string(), b: z.number() });\n\
+                   type Bar = z.infer<typeof Foo>;";
+        assert!(run(src).is_empty());
+    }
+
+    // Regression for #965: a flat alias that only shares field names with an
+    // anonymous `z.object(...)` nested inside another schema must not be
+    // flagged — that inner schema has no name, so `z.infer<typeof X>` cannot
+    // reproduce the alias.
+    #[test]
+    fn ignores_flat_projection_of_anonymous_nested_schema() {
+        let src = r#"
+import { z } from "zod";
+
+const StatutNavigateCallSchema = z.object({
+  search: z.object({
+    statut: z.enum(["actif", "tous", "desactive"]),
+    page: z.number(),
+  }),
+  replace: z.boolean(),
+});
+
+type ParsedStatutNavigateCall = z.infer<typeof StatutNavigateCallSchema>;
+
+type StatutNavigateCriteria = { statut: Statut; page: number };
+"#;
+        assert!(run(src).is_empty());
+    }
 }
