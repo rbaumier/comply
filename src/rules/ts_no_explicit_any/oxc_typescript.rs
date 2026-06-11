@@ -1,9 +1,30 @@
-//! ts-no-explicit-any oxc backend — flag TSAnyKeyword.
+//! ts-no-explicit-any oxc backend — flag TSAnyKeyword. tsd-style type-level
+//! test files (`test-d/` directory, `*.test-d.{ts,tsx}`, `*.types-test.{ts,tsx}`)
+//! are exempt: there `any` is a required test vector, not a production type.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use std::sync::Arc;
+
+/// True when `path` is a tsd-style type-level test file, where `any` is a
+/// required test vector (verifying how a type distributes over `any`, which
+/// differs from `unknown`/`never`) rather than a production escape hatch.
+/// tsd convention: files under a `test-d/` directory, or named
+/// `*.test-d.{ts,tsx}` / `*.types-test.{ts,tsx}`.
+fn is_tsd_type_test_file(path: &std::path::Path) -> bool {
+    if path.components().any(|c| c.as_os_str() == "test-d") {
+        return true;
+    }
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|name| {
+            name.ends_with(".test-d.ts")
+                || name.ends_with(".test-d.tsx")
+                || name.ends_with(".types-test.ts")
+                || name.ends_with(".types-test.tsx")
+        })
+}
 
 pub struct Check;
 
@@ -19,6 +40,9 @@ impl OxcCheck for Check {
         _semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
+        if is_tsd_type_test_file(ctx.path) {
+            return;
+        }
         let AstKind::TSAnyKeyword(kw) = node.kind() else {
             return;
         };
@@ -76,5 +100,26 @@ mod tests {
     fn ignores_unknown() {
         let src = "function f(x: unknown): number { return 0; }";
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_any_in_regular_src() {
+        let src = "function f(x: any): number { return 0; }";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/foo.ts");
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn ignores_any_in_test_d_directory() {
+        let src = "function f(x: any): number { return 0; }";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "test-d/and.ts");
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn ignores_any_in_test_d_suffixed_file() {
+        let src = "function f(x: any): number { return 0; }";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "and.test-d.ts");
+        assert!(diags.is_empty());
     }
 }
