@@ -28,7 +28,7 @@ crate::ast_check! { on ["import_statement"] prefilter = ["lodash", "underscore",
         .named_children(&mut cursor)
         .find(|c| c.kind() == "import_clause")
     else {
-        // Side-effect import `import 'lodash';` — leave to no-unassigned-import.
+        // Side-effect import `import 'lodash';` — no specifiers to flag.
         return;
     };
     let mut cc = clause.walk();
