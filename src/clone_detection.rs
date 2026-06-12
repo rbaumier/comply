@@ -72,7 +72,25 @@ pub fn lint_files(files: &[&SourceFile]) -> Vec<Diagnostic> {
     merge_and_emit(&mut raw, &file_data, files)
 }
 
+/// Number of hash shards `find_raw_clones` fans out over. Each window hash
+/// belongs to exactly one shard, and a shard processes its windows in the
+/// same `(file, window)` order as a sequential scan would — so results are
+/// identical to a single-threaded run, including first-seen-is-canonical
+/// and bucket-saturation behaviour, which both only depend on the insertion
+/// order *within* one bucket.
+const FIND_SHARDS: u64 = 16;
+
 fn find_raw_clones(file_data: &[Option<FileTokens>]) -> Vec<RawClone> {
+    (0..FIND_SHARDS)
+        .into_par_iter()
+        .flat_map_iter(|shard| find_raw_clones_shard(file_data, shard))
+        .collect()
+}
+
+/// Sequential scan restricted to windows whose hash lands in `shard`. The
+/// rolling hash is recomputed per shard — a handful of integer ops per
+/// window, far cheaper than sharing materialized hashes across threads.
+fn find_raw_clones_shard(file_data: &[Option<FileTokens>], shard: u64) -> Vec<RawClone> {
     // Weight of the token leaving the window when rolling one step right, i.e.
     // `WINDOW_HASH_MULT^(MIN_TOKENS - 1)`.
     let k_pow: u64 = WINDOW_HASH_MULT.wrapping_pow((MIN_TOKENS - 1) as u32);
@@ -99,6 +117,12 @@ fn find_raw_clones(file_data: &[Option<FileTokens>]) -> Vec<RawClone> {
                     .wrapping_sub(outgoing.wrapping_mul(k_pow))
                     .wrapping_mul(WINDOW_HASH_MULT)
                     .wrapping_add(incoming);
+            }
+
+            // Mix the high bits in before sharding — the multiplicative
+            // rolling hash concentrates entropy there.
+            if (wh ^ (wh >> 32)) % FIND_SHARDS != shard {
+                continue;
             }
 
             let bucket = index.entry(wh).or_default();
