@@ -1,5 +1,7 @@
 //! ts-init-declarations OXC backend — flag `let`/`var` declarations
-//! without an initializer, skipping `declare` and `const`.
+//! without an initializer, skipping `declare`, `const`, and bindings that are
+//! assigned later (deferred-assignment patterns such as try/catch or if/else,
+//! which TypeScript's definite-assignment analysis already validates).
 
 use std::sync::Arc;
 
@@ -7,6 +9,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, CheckCtx, OxcCheck};
 use oxc_ast::ast::VariableDeclarationKind;
+use oxc_semantic::ReferenceFlags;
 
 pub struct Check;
 
@@ -43,6 +46,19 @@ impl OxcCheck for Check {
                 }
                 let name = match &declarator.id {
                     oxc_ast::ast::BindingPattern::BindingIdentifier(ident) => {
+                        // Skip bindings assigned later (deferred-assignment):
+                        // a write reference means the value is set in a
+                        // subsequent statement — try/catch, if/else, switch —
+                        // which TypeScript's definite-assignment analysis
+                        // verifies on all paths before use. Only declarations
+                        // that are never assigned remain a genuine smell.
+                        if let Some(symbol_id) = ident.symbol_id.get()
+                            && semantic.symbol_references(symbol_id).any(|reference| {
+                                reference.flags().contains(ReferenceFlags::Write)
+                            })
+                        {
+                            continue;
+                        }
                         ident.name.as_str()
                     }
                     _ => "variable",
@@ -124,5 +140,53 @@ describe('example', () => {
     #[test]
     fn still_flags_uninitialized_let_at_runtime() {
         assert_eq!(run("let x: number;").len(), 1);
+    }
+
+    #[test]
+    fn no_fp_on_try_catch_assignment() {
+        // `let` declared uninitialized, then assigned in a `try` block — moving
+        // the declaration inside `try` would scope it out of later use. (Closes #1107)
+        let src = r#"
+function f(tag: string, packageDir: string) {
+  let modifiedFiles;
+  try {
+    modifiedFiles = getModifiedFilesSinceTag(tag, packageDir);
+  } catch (err) {
+    return;
+  }
+  return modifiedFiles;
+}
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_on_conditional_branch_assignment() {
+        // Assigned on all branches of an if/else — TS definite-assignment
+        // analysis validates this; annotating `| undefined` would defeat it. (Closes #1107)
+        let src = r#"
+function f(storageAccount: string, containerName: string, credential: unknown) {
+  let containerClient: ContainerClient;
+  if (process.env.AZURE_CONTAINER_SAS_URL) {
+    containerClient = new ContainerClient(process.env.AZURE_CONTAINER_SAS_URL);
+  } else {
+    containerClient = new ContainerClient(storageAccount, containerName, credential);
+  }
+  return containerClient;
+}
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_let_never_assigned() {
+        // Declared uninitialized and never written anywhere — genuine smell.
+        let src = r#"
+function g() {
+  let neverAssigned: number;
+  return 1;
+}
+"#;
+        assert_eq!(run(src).len(), 1);
     }
 }
