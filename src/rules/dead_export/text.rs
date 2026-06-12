@@ -142,17 +142,23 @@ impl TextCheck for Check {
         let magic: std::collections::HashSet<&str> =
             ctx.project.framework_magic_exports().collect();
 
-        // Types/interfaces consumed structurally by other exported functions
-        // in the same file. Callers don't have to import the type name —
-        // passing an object literal to the exported function is enough — so
-        // the type's usage map looks empty but it is not dead.
-        let structurally_consumed = collect_structurally_consumed_types(ctx.source, ctx.lang);
-
-        // Names referenced anywhere in the file's body (outside their own
-        // declaration site). Captures schema chains (`BaseSchema.extend(...)`,
-        // `z.infer<typeof BaseSchema>`), object composition, and any other
-        // intra-file re-use that doesn't go through the import index.
-        let in_file_referenced = collect_in_file_referenced_names(ctx.source, ctx.lang);
+        // The two source scans below each tree-sitter-parse the whole file, so
+        // they are computed lazily: only an export that already survived the
+        // cheap index checks (almost none, in a healthy project) pays for them.
+        //
+        // `structurally_consumed`: types/interfaces consumed structurally by
+        // other exported functions in the same file. Callers don't have to
+        // import the type name — passing an object literal to the exported
+        // function is enough — so the type's usage map looks empty but it is
+        // not dead.
+        //
+        // `in_file_referenced`: names referenced anywhere in the file's body
+        // (outside their own declaration site). Captures schema chains
+        // (`BaseSchema.extend(...)`, `z.infer<typeof BaseSchema>`), object
+        // composition, and any other intra-file re-use that doesn't go through
+        // the import index.
+        let mut structurally_consumed: Option<HashSet<String>> = None;
+        let mut in_file_referenced: Option<HashSet<String>> = None;
 
         let mut diagnostics = Vec::new();
         for export in exports {
@@ -165,9 +171,13 @@ impl TextCheck for Check {
             if !index.get_usages(&canon, &export.name).is_empty() {
                 continue;
             }
+            let structurally_consumed = structurally_consumed
+                .get_or_insert_with(|| collect_structurally_consumed_types(ctx.source, ctx.lang));
             if structurally_consumed.contains(export.name.as_str()) {
                 continue;
             }
+            let in_file_referenced = in_file_referenced
+                .get_or_insert_with(|| collect_in_file_referenced_names(ctx.source, ctx.lang));
             if in_file_referenced.contains(export.name.as_str()) {
                 continue;
             }
