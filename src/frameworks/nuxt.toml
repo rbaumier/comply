@@ -1,0 +1,13 @@
+[detection]
+dependencies = ["nuxt"]
+files = ["nuxt.config.ts", "nuxt.config.js"]
+
+[entry_points]
+dirs = []
+files = []
+
+[magic_exports]
+names = []
+
+[tooling_deps]
+names = []

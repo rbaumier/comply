@@ -1,0 +1,12 @@
+[detection]
+dependencies = ["@nestjs/core", "@nestjs/common"]
+
+[entry_points]
+dirs = []
+files = []
+
+[magic_exports]
+names = []
+
+[tooling_deps]
+names = ["@nestjs/cli"]

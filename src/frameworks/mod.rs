@@ -77,6 +77,10 @@ const RAW: &[(&str, &str)] = &[
     ("xstate", include_str!("xstate.toml")),
     ("zod", include_str!("zod.toml")),
     ("i18n", include_str!("i18n.toml")),
+    ("nuxt", include_str!("nuxt.toml")),
+    ("nestjs", include_str!("nestjs.toml")),
+    ("svelte", include_str!("svelte.toml")),
+    ("graphql", include_str!("graphql.toml")),
 ];
 
 fn registry() -> &'static [FrameworkDef] {
