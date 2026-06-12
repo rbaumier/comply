@@ -1,4 +1,4 @@
-//! no-keyword-prefix — disallow identifiers starting with `new` or `class`.
+//! no-keyword-prefix — disallow identifiers starting with the `class` keyword.
 
 mod oxc_typescript;
 #[cfg(test)]
@@ -12,9 +12,9 @@ use crate::rules::meta::RuleMeta;
 
 pub const META: RuleMeta = RuleMeta {
     id: "no-keyword-prefix",
-    description: "Do not prefix identifiers with keyword `new` or `class`.",
+    description: "Do not prefix identifiers with the keyword `class`.",
     remediation: "Rename the identifier to remove the keyword prefix. \
-                  For example, `newUser` -> `user`, `classNames` -> `names` or `cssNames`.",
+                  For example, `classNames` -> `names` or `cssNames`.",
     severity: Severity::Warning,
     doc_url: None,
     categories: &["unicorn"],
