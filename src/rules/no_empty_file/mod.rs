@@ -16,7 +16,11 @@ pub const META: RuleMeta = RuleMeta {
     doc_url: None,
     categories: &["unicorn"],
 
-    skip_in_test_dir: false,
+    // Empty files inside test directories are intentional: ESLint-plugin test
+    // suites use empty fixtures to verify rules handle no-content files, and as
+    // stub files referenced by name. The test-dir signal already covers
+    // `fixtures/`, `__tests__/`, `/tests/`, etc.
+    skip_in_test_dir: true,
     skip_in_relaxed_dir: false,
 };
 
