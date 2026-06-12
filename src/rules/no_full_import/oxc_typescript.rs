@@ -31,7 +31,7 @@ impl OxcCheck for Check {
         }
 
         let Some(ref specifiers) = import.specifiers else {
-            // Side-effect import `import 'lodash';` — leave to no-unassigned-import.
+            // Side-effect import `import 'lodash';` — no specifiers to flag.
             return;
         };
 
