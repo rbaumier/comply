@@ -116,9 +116,6 @@ max = 5
 [rules.playwright-max-expects]
 max = 5
 
-[rules.no-section-divider-comments]
-min_run = 5
-
 [rules.template-indent]
 min_indent = 4
 
