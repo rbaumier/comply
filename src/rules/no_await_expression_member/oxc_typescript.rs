@@ -30,7 +30,14 @@ fn check_object_is_await(
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let inner = unwrap_wrappers(obj);
-    if !matches!(inner, Expression::AwaitExpression(_)) {
+    let Expression::AwaitExpression(await_expr) = inner else {
+        return;
+    };
+
+    // `(await import(path)).default` is the canonical way to read a dynamic
+    // module's exports — the namespace object only exists to be member-accessed,
+    // so extracting it to a variable buys nothing.
+    if matches!(unwrap_wrappers(&await_expr.argument), Expression::ImportExpression(_)) {
         return;
     }
 
@@ -154,5 +161,18 @@ mod tests {
     #[test]
     fn allows_plain_await() {
         assert!(run("async function f() { await fetch('/'); }").is_empty());
+    }
+
+    #[test]
+    fn allows_default_on_dynamic_import() {
+        assert!(
+            run("async function f() { const c = (await import('../../vitest.config.ts')).default; }")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_named_member_on_dynamic_import() {
+        assert!(run("async function f() { const x = (await import('./mod.ts')).foo; }").is_empty());
     }
 }
