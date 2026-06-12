@@ -111,7 +111,16 @@ pub(super) fn is_clear_text_url(content: &str) -> Option<&'static str> {
             if hostname.len() <= 1 {
                 return None;
             }
-            if DUMMY_HOSTS.contains(&hostname) {
+            // `schemas.*` subdomains exist solely to host XML/SOAP namespace
+            // URIs (schemas.microsoft.com, schemas.xmlsoap.org, …). The
+            // `http://` is part of an opaque identifier, never a connection.
+            if hostname.starts_with("schemas.") {
+                return None;
+            }
+            // A leading `www.` is cosmetic — `www.contoso.com` and `contoso.com`
+            // are the same dummy host for allowlisting purposes.
+            let bare_host = hostname.strip_prefix("www.").unwrap_or(hostname);
+            if DUMMY_HOSTS.contains(&bare_host) || DEMO_HOSTS.contains(&hostname) {
                 return None;
             }
             // RFC 2606 / RFC 6761 reserve `.test`, `.invalid`, and
@@ -130,7 +139,17 @@ pub(super) fn is_clear_text_url(content: &str) -> Option<&'static str> {
     None
 }
 
-const DUMMY_HOSTS: &[&str] = &["example.com", "example.org", "example.net", "test.local"];
+// Reserved/fictional example hosts that never name a real endpoint.
+// `contoso.com` / `fabrikam.com` are Microsoft's documented stand-ins for
+// `example.com`, used throughout the Azure SDK samples. Matched after a
+// leading `www.` is stripped, so both bare and `www.`-prefixed forms apply.
+const DUMMY_HOSTS: &[&str] =
+    &["example.com", "example.org", "example.net", "test.local", "contoso.com", "fabrikam.com"];
+
+// Canonical public demo endpoints that appear verbatim in API tutorials —
+// Swagger's Petstore and Azure API Management's echo API. They are illustrative
+// samples, not production connections.
+const DEMO_HOSTS: &[&str] = &["petstore.swagger.io", "echoapi.cloudapp.net"];
 
 // XML namespace URIs are frozen spec identifiers, not network endpoints.
 // The browser never makes an HTTP request to these; they are syntax-level
@@ -250,5 +269,46 @@ mod helper_tests {
     #[test]
     fn still_flags_real_host() {
         assert_eq!(is_clear_text_url("\"http://api.internal.corp/v1\""), Some("http://"));
+    }
+
+    // #1102 — `schemas.*` subdomains host XML/SOAP namespace URIs, not endpoints.
+    #[test]
+    fn does_not_flag_schemas_namespace_uri() {
+        assert!(
+            is_clear_text_url(
+                "\"http://schemas.microsoft.com/netservices/2010/10/servicebus/\""
+            )
+            .is_none()
+        );
+        assert!(is_clear_text_url("\"http://schemas.xmlsoap.org/soap/envelope/\"").is_none());
+    }
+
+    // #1102 — Microsoft's documented fictional example domains.
+    #[test]
+    fn does_not_flag_contoso_and_fabrikam() {
+        assert!(is_clear_text_url("\"http://www.contoso.com\"").is_none());
+        assert!(is_clear_text_url("\"http://www.fabrikam.com\"").is_none());
+        assert!(is_clear_text_url("\"http://contoso.com/path\"").is_none());
+    }
+
+    // #1102 — canonical public demo endpoints from API tutorials.
+    #[test]
+    fn does_not_flag_canonical_demo_endpoints() {
+        assert!(is_clear_text_url("\"http://petstore.swagger.io/v2/swagger.json\"").is_none());
+        assert!(is_clear_text_url("\"http://echoapi.cloudapp.net/api\"").is_none());
+    }
+
+    // #1102 — a real `*.cloudapp.net` / `*.microsoft.com` endpoint that is NOT
+    // a demo host or a `schemas.` namespace must still fire.
+    #[test]
+    fn still_flags_non_demo_azure_host() {
+        assert_eq!(
+            is_clear_text_url("\"http://myapp.cloudapp.net/api\""),
+            Some("http://")
+        );
+        assert_eq!(
+            is_clear_text_url("\"http://download.microsoft.com/file\""),
+            Some("http://")
+        );
     }
 }
