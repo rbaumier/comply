@@ -23,6 +23,17 @@ const NARROWING_UTILITY_TYPES: &[&str] = &[
     "Lowercase",
 ];
 
+/// Built-in DOM element interfaces (`HTMLSpanElement`, `SVGPathElement`, the
+/// bare `HTMLElement`/`Element`, …). DOM query APIs return the broad
+/// `HTMLElement | null` / `Element | null`, so casting their result to a
+/// specific element interface is the idiomatic way to access element-specific
+/// members — `instanceof` narrowing is equivalent but verbose, not a smell.
+fn is_dom_element_type(name: &str) -> bool {
+    name == "Element"
+        || ((name.starts_with("HTML") || name.starts_with("SVG") || name.starts_with("MathML"))
+            && name.ends_with("Element"))
+}
+
 fn target_is_narrowing(ty: &TSType, _source: &str) -> bool {
     match ty {
         TSType::TSLiteralType(_) | TSType::TSTemplateLiteralType(_) => true,
@@ -32,6 +43,8 @@ fn target_is_narrowing(ty: &TSType, _source: &str) -> bool {
             if r.type_arguments.is_some() {
                 // Generic utility type like `NonNullable<T>`.
                 NARROWING_UTILITY_TYPES.contains(&name)
+            } else if is_dom_element_type(name) {
+                false
             } else {
                 // PascalCase identifier — likely a user-defined narrowing type.
                 name.chars().next().is_some_and(|c| c.is_ascii_uppercase())
@@ -236,6 +249,28 @@ mod tests {
         let src = "declare const x: unknown; const y = (x as unknown) as Foo;";
         let diags = run_on(src);
         assert!(diags.is_empty(), "unexpected diags: {:?}", diags);
+    }
+
+    #[test]
+    fn allows_dom_element_subtype_cast() {
+        // Regression for #1080: DOM query APIs return the broad
+        // `HTMLElement | null`, so casting to a specific element interface is
+        // the idiomatic refinement, not a narrowing smell.
+        let src = "let secretDisplay: HTMLSpanElement = document.getElementById(\"secret-display\") as HTMLSpanElement;\n\
+                   let secretButton: HTMLButtonElement = document.getElementById(\"secret-button\") as HTMLButtonElement;\n\
+                   const el = document.querySelector(\".foo\") as HTMLInputElement;\n\
+                   const svg = node as SVGPathElement;\n\
+                   const generic = root as Element;";
+        let diags = run_on(src);
+        assert!(diags.is_empty(), "unexpected diags: {:?}", diags);
+    }
+
+    #[test]
+    fn still_flags_non_dom_pascal_type() {
+        // Control: a user-defined PascalCase target is still a narrowing,
+        // even though it superficially resembles a DOM type name.
+        let diags = run_on("const x = value as AdminElement;");
+        assert_eq!(diags.len(), 1);
     }
 
     #[test]
