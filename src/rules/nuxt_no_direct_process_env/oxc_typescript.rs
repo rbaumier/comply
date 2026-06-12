@@ -1,18 +1,18 @@
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::oxc_helpers::byte_offset_to_line_col;
+use crate::oxc_helpers::{byte_offset_to_line_col, source_contains};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::Expression;
 use std::sync::Arc;
 
 fn is_nuxt_source(src: &str) -> bool {
-    src.contains("#imports")
-        || src.contains("nuxt/app")
-        || src.contains("#app")
-        || src.contains("defineNuxtConfig")
-        || src.contains("defineNuxtPlugin")
-        || src.contains("defineNuxtRouteMiddleware")
-        || src.contains("useRuntimeConfig")
-        || src.contains("useNuxtApp")
+    source_contains(src, "#imports")
+        || source_contains(src, "nuxt/app")
+        || source_contains(src, "#app")
+        || source_contains(src, "defineNuxtConfig")
+        || source_contains(src, "defineNuxtPlugin")
+        || source_contains(src, "defineNuxtRouteMiddleware")
+        || source_contains(src, "useRuntimeConfig")
+        || source_contains(src, "useNuxtApp")
 }
 
 pub struct Check;
@@ -33,10 +33,6 @@ impl OxcCheck for Check {
         _semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
-        if !is_nuxt_source(ctx.source) {
-            return;
-        }
-
         let AstKind::StaticMemberExpression(member) = node.kind() else { return };
 
         let full_span = member.span;
@@ -47,6 +43,10 @@ impl OxcCheck for Check {
 
         let is_process = matches!(&member.object, Expression::Identifier(id) if id.name == "process");
         if !is_process {
+            return;
+        }
+
+        if !is_nuxt_source(ctx.source) {
             return;
         }
 

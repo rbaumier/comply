@@ -1,20 +1,20 @@
 //! nuxt-no-vue-router-import oxc backend.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::oxc_helpers::byte_offset_to_line_col;
+use crate::oxc_helpers::{byte_offset_to_line_col, source_contains};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use std::sync::Arc;
 
 pub struct Check;
 
 fn is_nuxt_source(src: &str) -> bool {
-    src.contains("#imports")
-        || src.contains("nuxt/app")
-        || src.contains("#app")
-        || src.contains("defineNuxtConfig")
-        || src.contains("defineNuxtPlugin")
-        || src.contains("defineNuxtRouteMiddleware")
-        || src.contains("useNuxtApp")
+    source_contains(src, "#imports")
+        || source_contains(src, "nuxt/app")
+        || source_contains(src, "#app")
+        || source_contains(src, "defineNuxtConfig")
+        || source_contains(src, "defineNuxtPlugin")
+        || source_contains(src, "defineNuxtRouteMiddleware")
+        || source_contains(src, "useNuxtApp")
 }
 
 impl OxcCheck for Check {
@@ -34,10 +34,10 @@ impl OxcCheck for Check {
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let AstKind::ImportDeclaration(import) = node.kind() else { return };
-        if !is_nuxt_source(ctx.source) {
+        if import.source.value.as_str() != "vue-router" {
             return;
         }
-        if import.source.value.as_str() != "vue-router" {
+        if !is_nuxt_source(ctx.source) {
             return;
         }
         let (line, column) = byte_offset_to_line_col(ctx.source, import.span.start as usize);
