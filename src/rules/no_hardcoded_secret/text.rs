@@ -281,6 +281,13 @@ fn contains_keyed_literal(line: &str) -> bool {
     if !KEYS.iter().any(|k| left.contains(k)) {
         return false;
     }
+    // Name-based exemptions operate on the assigned identifier in original case
+    // (e.g. `secretEndpoint`, `API_KEY_HEADER_NAME`), so extract it before the
+    // left side is consumed as uppercase.
+    let name = assigned_name(&line[..eq_pos]);
+    if names_an_identifier_not_a_value(name) || is_secret_as_adjective(name) {
+        return false;
+    }
     let after = line[eq_pos..].trim_start_matches('=').trim_start();
     let Some(quote) = after.chars().next() else {
         return false;
@@ -292,9 +299,17 @@ fn contains_keyed_literal(line: &str) -> bool {
     if inner.len() < 16 || inner.contains("${") {
         return false;
     }
-    // Values prefixed with `test_` are deliberately fake test credentials
-    // (e.g. Vitest setup files that satisfy schema validation without real secrets).
-    if inner.to_ascii_lowercase().starts_with("test_") {
+    // Values prefixed with `test_` or `fake_` are deliberately fabricated test
+    // credentials (e.g. Vitest setup files that satisfy schema validation without
+    // real secrets, or fixtures named `fake_secret_info`).
+    let inner_lower = inner.to_ascii_lowercase();
+    if inner_lower.starts_with("test_") || inner_lower.starts_with("fake_") {
+        return false;
+    }
+    // Placeholder notations from documentation and samples are never real
+    // credentials: angle-bracket tokens (`<another-client-secret>`) and
+    // asterisk-masked text (`***Access Token***`).
+    if is_placeholder_literal(&inner) {
         return false;
     }
     // Attribute-name constants hold symbolic keys (database field names, protocol
@@ -314,6 +329,56 @@ fn contains_keyed_literal(line: &str) -> bool {
         return false;
     }
     true
+}
+
+/// Extract the assigned identifier from the left side of an assignment, in
+/// original case. Returns the last identifier-like run (alphanumeric or `_`),
+/// which covers `const secretEndpoint`, `API_KEY_HEADER_NAME`, and bracket-key
+/// forms like `process.env["ACCESS_TOKEN"]`.
+fn assigned_name(left: &str) -> &str {
+    let bytes = left.as_bytes();
+    let mut end = bytes.len();
+    while end > 0 && !is_ident_byte(bytes[end - 1]) {
+        end -= 1;
+    }
+    let mut start = end;
+    while start > 0 && is_ident_byte(bytes[start - 1]) {
+        start -= 1;
+    }
+    &left[start..end]
+}
+
+fn is_ident_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_'
+}
+
+/// Names ending in `_NAME`, `_HEADER`, or `_HEADER_NAME` hold a symbolic
+/// identifier (an HTTP header name, a field key) rather than a credential
+/// value — e.g. `API_KEY_HEADER_NAME = "subscription-key"`.
+fn names_an_identifier_not_a_value(name: &str) -> bool {
+    let upper = name.to_ascii_uppercase();
+    upper.ends_with("_NAME") || upper.ends_with("_HEADER")
+}
+
+/// `secret` used as an adjective ("the X to be kept confidential") rather than
+/// a noun ("a value that is a secret"): `secretEndpoint`, `secretUrl`,
+/// `secretPath`, etc. The value such a variable holds is a location, not a key.
+fn is_secret_as_adjective(name: &str) -> bool {
+    let Some(rest) = name.strip_prefix("secret") else {
+        return false;
+    };
+    matches!(
+        rest,
+        "Endpoint" | "Url" | "Uri" | "Path" | "Host" | "Hostname" | "Domain" | "File" | "Dir"
+    )
+}
+
+/// Documentation placeholders: `<angle-bracket>` tokens or `***masked***`
+/// values. Never real credentials.
+fn is_placeholder_literal(s: &str) -> bool {
+    let trimmed = s.trim();
+    (trimmed.starts_with('<') && trimmed.ends_with('>'))
+        || (trimmed.starts_with("***") && trimmed.ends_with("***"))
 }
 
 /// Returns true when the value is a URN or protocol identifier — a colon-
@@ -499,5 +564,41 @@ mod tests {
             run(r#"const CLIENT_SECRET = "Abc123XYZqwertyuiop";"#).len(),
             1
         );
+    }
+
+    // Regression tests for #1065 — azure-sdk-for-js FP patterns (Closes #1065)
+    #[test]
+    fn allows_header_name_constant() {
+        // The variable NAMES the header; it holds an identifier, not a key.
+        assert!(run(r#"const API_KEY_HEADER_NAME = "subscription-key";"#).is_empty());
+    }
+
+    #[test]
+    fn allows_fake_prefixed_value() {
+        // `fake_` is a deliberately fabricated fixture, parallel to `test_`.
+        assert!(run(r#"const fakeSecretValue = "fake_secret_info";"#).is_empty());
+    }
+
+    #[test]
+    fn allows_angle_bracket_placeholder() {
+        assert!(run(r#"const anotherSecret = "<another-client-secret>";"#).is_empty());
+    }
+
+    #[test]
+    fn allows_asterisk_masked_placeholder() {
+        assert!(run(r#"process.env["ACCESS_TOKEN"] = "***Access Token***";"#).is_empty());
+    }
+
+    #[test]
+    fn allows_secret_as_adjective_on_endpoint() {
+        // `secretEndpoint` = "the endpoint to keep confidential", not a key value.
+        assert!(run(r#"const secretEndpoint = "host.docker.internal";"#).is_empty());
+    }
+
+    #[test]
+    fn still_flags_real_secret_after_1065_exemptions() {
+        // A genuine credential assignment must continue to fire.
+        assert_eq!(run(r#"const API_KEY = "abcd1234567890abcdef";"#).len(), 1);
+        assert_eq!(run(r#"const CLIENT_SECRET = "Abc123XYZqwertyuiop";"#).len(), 1);
     }
 }
