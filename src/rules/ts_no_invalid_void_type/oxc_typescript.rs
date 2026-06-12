@@ -4,6 +4,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
+use oxc_span::GetSpan;
 use std::sync::Arc;
 
 pub struct Check;
@@ -72,6 +73,24 @@ fn is_generic_type_arg(
     false
 }
 
+// `<T = void>` — `void` as the default of a generic type parameter is valid
+// TypeScript (it sets `T` when the caller omits the argument). The constraint
+// position (`<T extends void>`) is NOT exempted here.
+fn is_generic_param_default(
+    node: &oxc_semantic::AstNode,
+    semantic: &oxc_semantic::Semantic,
+    void_start: u32,
+) -> bool {
+    for ancestor in semantic.nodes().ancestors(node.id()) {
+        if let AstKind::TSTypeParameter(param) = ancestor.kind() {
+            return param.default.as_ref().is_some_and(|default| {
+                void_start >= default.span().start && void_start < default.span().end
+            });
+        }
+    }
+    false
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[AstType::TSVoidKeyword]
@@ -92,6 +111,9 @@ impl OxcCheck for Check {
             return;
         }
         if is_generic_type_arg(node, semantic) {
+            return;
+        }
+        if is_generic_param_default(node, semantic, kw.span.start) {
             return;
         }
 
@@ -179,5 +201,27 @@ mod tests {
     fn allows_void_in_constructor_type() {
         let src = "type Make = new (x: number) => void;";
         assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_void_as_type_alias_generic_default() {
+        // Regression for rbaumier/comply#1094 — `void` as a generic default.
+        let src = "export type Fn<T = void> = (...values: any[]) => T;";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_void_as_function_generic_default() {
+        // Regression for rbaumier/comply#1094 — azure-sdk-for-js poller.
+        let src = "export function poll<TResponse, TResult = void>(\
+                   p: (r: TResponse) => Promise<TResult>) {}";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_void_as_generic_constraint() {
+        // The constraint position is still invalid, unlike the default.
+        let diags = run_on("type Fn<T extends void> = () => T;");
+        assert_eq!(diags.len(), 1);
     }
 }
