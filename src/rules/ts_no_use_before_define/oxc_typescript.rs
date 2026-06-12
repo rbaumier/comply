@@ -19,6 +19,14 @@
 //! `createLazyFileRoute(...)({...})` options objects. TanStack invokes those
 //! callbacks lazily (on navigation), so any symbol declared after the factory
 //! call is already initialized when the callback runs.
+//!
+//! Also skips forward references to module-scoped bindings made from inside a
+//! deferred class member body — a method/getter/setter/constructor, or an
+//! instance field initializer. Those bodies run only on instance/method
+//! invocation, after the module has finished evaluating, so the module-level
+//! `const`/`let` is already initialized. Static field initializers and static
+//! blocks run at class-definition time (during module evaluation) and stay
+//! flagged.
 
 use oxc_ast::AstKind;
 use oxc_ast::ast::Expression;
@@ -59,6 +67,8 @@ impl OxcCheck for Check {
 
             let decl_span = scoping.symbol_span(symbol_id);
             let name = scoping.symbol_name(symbol_id);
+            let decl_is_module_scoped =
+                scoping.symbol_scope_id(symbol_id) == scoping.root_scope_id();
 
             for reference in scoping.get_resolved_references(symbol_id) {
                 let ref_node_id = reference.node_id();
@@ -68,6 +78,11 @@ impl OxcCheck for Check {
                         continue;
                     }
                     if is_inside_tanstack_route_factory_callback(nodes, ref_node_id) {
+                        continue;
+                    }
+                    if decl_is_module_scoped
+                        && is_inside_deferred_class_member(nodes, ref_node_id)
+                    {
                         continue;
                     }
                     let (line, column) =
@@ -254,6 +269,27 @@ fn call_is_tanstack_route_factory(call: &oxc_ast::ast::CallExpression) -> bool {
         && callee_name(&inner.callee).is_some_and(is_tanstack_route_callee)
     {
         return true;
+    }
+    false
+}
+
+/// True when the reference sits inside a class member body that executes only
+/// after module evaluation: a method/getter/setter/constructor, or an instance
+/// (non-static) field initializer. The reference may be nested in any number of
+/// closures or blocks inside that member. Static field initializers and static
+/// blocks run at class-definition time (during module evaluation), so they are
+/// NOT deferred and any forward reference inside them is a real TDZ hazard.
+fn is_inside_deferred_class_member<'a>(
+    nodes: &'a oxc_semantic::AstNodes<'a>,
+    ref_node_id: NodeId,
+) -> bool {
+    for ancestor_id in nodes.ancestor_ids(ref_node_id) {
+        match nodes.get_node(ancestor_id).kind() {
+            AstKind::MethodDefinition(_) => return true,
+            AstKind::PropertyDefinition(prop) => return !prop.r#static,
+            AstKind::StaticBlock(_) | AstKind::Program(_) => return false,
+            _ => {}
+        }
     }
     false
 }
@@ -548,5 +584,77 @@ mod tests {
             run_on(source).is_empty(),
             "forward ref in component callback should not be flagged"
         );
+    }
+
+    // Regression for #1075: an auto-generated Azure SDK class method references
+    // a module-level `const` declared after the class. The const is initialized
+    // during module evaluation, before any method runs — safe forward ref.
+    #[test]
+    fn no_fp_module_const_used_in_class_method_issue_1075() {
+        let source = "class ManagementGroupsImpl {\n\
+                      get(groupId) {\n\
+                      return this.client.sendOperationRequest({ groupId }, getOperationSpec);\n\
+                      }\n\
+                      }\n\
+                      const getOperationSpec = { path: \"/x\" };";
+        assert!(
+            run_on(source).is_empty(),
+            "module const used in class method should not be flagged: {:?}",
+            run_on(source)
+        );
+    }
+
+    #[test]
+    fn no_fp_module_const_used_in_instance_field_initializer() {
+        // Instance field initializers run at construction, after module eval.
+        let source = "class C {\n\
+                      spec = makeSpec(getOperationSpec);\n\
+                      }\n\
+                      const getOperationSpec = { path: \"/x\" };";
+        assert!(
+            run_on(source).is_empty(),
+            "module const in instance field initializer should not be flagged: {:?}",
+            run_on(source)
+        );
+    }
+
+    #[test]
+    fn still_flags_module_const_in_static_field_initializer() {
+        // Static field initializers run at class-definition time (module eval),
+        // so the forward reference is a real TDZ hazard.
+        let d = run_on(
+            "class C {\n\
+             static spec = getOperationSpec;\n\
+             }\n\
+             const getOperationSpec = { path: \"/x\" };",
+        );
+        assert_eq!(d.len(), 1, "static field initializer must still be flagged");
+    }
+
+    #[test]
+    fn still_flags_module_const_in_static_block() {
+        // Static blocks run at class-definition time (module eval).
+        let d = run_on(
+            "class C {\n\
+             static { use(getOperationSpec); }\n\
+             }\n\
+             const getOperationSpec = { path: \"/x\" };",
+        );
+        assert_eq!(d.len(), 1, "static block must still be flagged");
+    }
+
+    #[test]
+    fn still_flags_local_const_tdz_inside_class_method() {
+        // The binding is local to the method, not module-scoped: using it before
+        // its `const` line is a genuine intra-execution TDZ error.
+        let d = run_on(
+            "class C {\n\
+             m() {\n\
+             use(local);\n\
+             const local = 1;\n\
+             }\n\
+             }",
+        );
+        assert_eq!(d.len(), 1, "intra-method local TDZ must still be flagged");
     }
 }
