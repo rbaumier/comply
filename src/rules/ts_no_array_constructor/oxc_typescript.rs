@@ -81,3 +81,48 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
+    }
+
+    #[test]
+    fn flags_new_array_no_args() {
+        // Issue #1074 example.
+        assert_eq!(run("const resArray = new Array();").len(), 1);
+    }
+
+    #[test]
+    fn flags_bare_array_call() {
+        assert_eq!(run("const called = Array();").len(), 1);
+    }
+
+    #[test]
+    fn allows_single_arg_length_spec() {
+        assert!(run("const sized = new Array(5);").is_empty());
+    }
+
+    #[test]
+    fn allows_type_arguments() {
+        assert!(run("const typed = new Array<string>();").is_empty());
+    }
+}
