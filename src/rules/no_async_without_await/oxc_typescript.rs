@@ -46,6 +46,23 @@ fn nearest_function_id(
     None
 }
 
+/// Check if the function/arrow node is passed as an argument to a call
+/// expression (i.e. it is a callback). In oxc's semantic tree, arguments have
+/// no wrapper node, so a callback's immediate parent is the `CallExpression`
+/// itself. The callee position (an IIFE like `(async () => {})()`) is excluded
+/// by requiring the node to appear in the call's `arguments`.
+fn is_call_argument(
+    func_node: &oxc_semantic::AstNode,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let parent = semantic.nodes().parent_node(func_node.id());
+    let AstKind::CallExpression(call) = parent.kind() else { return false };
+    let span = func_node.kind().span();
+    call.arguments
+        .iter()
+        .any(|arg| arg.span() == span)
+}
+
 /// Check if a method node or its class has decorators.
 fn has_decorators(
     func_node: &oxc_semantic::AstNode,
@@ -126,6 +143,17 @@ impl OxcCheck for Check {
             }
 
             if has_decorators(node, semantic) {
+                continue;
+            }
+
+            // Async callback passed to a call (framework route handler, event
+            // listener, etc.). The callee controls the contract: it frequently
+            // requires a `() => Promise<T>` signature, and `async` is also
+            // load-bearing for sync-throw safety (a synchronous `throw` becomes
+            // a rejected Promise the framework handles uniformly). The author
+            // does not own the call site, so flagging the missing `await` here
+            // is noise. Standalone/named async functions stay flagged.
+            if is_call_argument(node, semantic) {
                 continue;
             }
 
@@ -249,6 +277,38 @@ mod tests {
     #[test]
     fn allows_async_arrow_promise_void_stub() {
         assert!(run_on("const noopAsync = async (): Promise<void> => undefined;").is_empty());
+    }
+
+    #[test]
+    fn allows_async_callback_passed_to_call() {
+        // Regression for rbaumier/comply#1108 — async route handler registered
+        // with a framework. The callee controls the contract and `async` is
+        // intentional for sync-throw safety, so the missing await is not a smell.
+        let src = r#"fastify.get("/v8/artifacts/status", async (_request, reply) => {
+            return reply.send({ status: "enabled" });
+        });"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_async_callback_with_sync_throw() {
+        // Second example from rbaumier/comply#1108 — a block-body async handler
+        // whose only justification for `async` is sync-throw safety.
+        let src = r#"fastify.post("/v8/artifacts/events", async (request, reply) => {
+            if (!Array.isArray(request.body)) {
+                throw new Error("Invalid request body.");
+            }
+            reply.code(200).send({});
+        });"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_async_iife_without_await() {
+        // An immediately-invoked async arrow is the callee, not an argument, so
+        // it is not a framework callback and stays flagged.
+        let src = "(async () => { return 42; })();";
+        assert_eq!(run_on(src).len(), 1);
     }
 
     #[test]
