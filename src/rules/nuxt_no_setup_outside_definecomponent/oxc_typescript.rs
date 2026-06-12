@@ -1,7 +1,7 @@
 //! nuxt-no-setup-outside-definecomponent OXC backend.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::oxc_helpers::byte_offset_to_line_col;
+use crate::oxc_helpers::{byte_offset_to_line_col, source_contains};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use std::sync::Arc;
 
@@ -16,15 +16,15 @@ const SETUP_COMPOSABLES: &[&str] = &[
 ];
 
 fn is_nuxt_options_api(src: &str) -> bool {
-    let nuxt = src.contains("#imports")
-        || src.contains("nuxt/app")
-        || src.contains("#app")
-        || src.contains("defineNuxtPlugin")
-        || src.contains("defineNuxtRouteMiddleware");
+    let nuxt = source_contains(src, "#imports")
+        || source_contains(src, "nuxt/app")
+        || source_contains(src, "#app")
+        || source_contains(src, "defineNuxtPlugin")
+        || source_contains(src, "defineNuxtRouteMiddleware");
     if !nuxt {
         return false;
     }
-    src.contains("export default {") && !src.contains("defineComponent(")
+    source_contains(src, "export default {") && !source_contains(src, "defineComponent(")
 }
 
 pub struct Check;
@@ -45,9 +45,6 @@ impl OxcCheck for Check {
         semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
-        if !is_nuxt_options_api(ctx.source) {
-            return;
-        }
         let AstKind::CallExpression(call) = node.kind() else {
             return;
         };
@@ -58,6 +55,9 @@ impl OxcCheck for Check {
             _ => return,
         };
         if !SETUP_COMPOSABLES.contains(&name) {
+            return;
+        }
+        if !is_nuxt_options_api(ctx.source) {
             return;
         }
 

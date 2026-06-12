@@ -4,7 +4,7 @@
 //! state across SSR requests on the server.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::oxc_helpers::byte_offset_to_line_col;
+use crate::oxc_helpers::{byte_offset_to_line_col, source_contains};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::VariableDeclarationKind;
 use std::sync::Arc;
@@ -12,16 +12,16 @@ use std::sync::Arc;
 pub struct Check;
 
 fn is_composable_file(src: &str) -> bool {
-    let nuxt = src.contains("#imports")
-        || src.contains("nuxt/app")
-        || src.contains("#app")
-        || src.contains("useState")
-        || src.contains("useRuntimeConfig")
-        || src.contains("useNuxtApp");
+    let nuxt = source_contains(src, "#imports")
+        || source_contains(src, "nuxt/app")
+        || source_contains(src, "#app")
+        || source_contains(src, "useState")
+        || source_contains(src, "useRuntimeConfig")
+        || source_contains(src, "useNuxtApp");
     if !nuxt {
         return false;
     }
-    src.contains("export function use") || src.contains("export const use")
+    source_contains(src, "export function use") || source_contains(src, "export const use")
 }
 
 impl OxcCheck for Check {
@@ -40,10 +40,6 @@ impl OxcCheck for Check {
         semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
-        if !is_composable_file(ctx.source) {
-            return;
-        }
-
         let AstKind::VariableDeclaration(decl) = node.kind() else {
             return;
         };
@@ -54,6 +50,10 @@ impl OxcCheck for Check {
             VariableDeclarationKind::Var => "var",
             _ => return,
         };
+
+        if !is_composable_file(ctx.source) {
+            return;
+        }
 
         // Must be at program top level (possibly inside an export)
         let parent = semantic.nodes().parent_node(node.id());

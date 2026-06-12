@@ -5,15 +5,6 @@ use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use std::sync::Arc;
 
-fn is_nuxt_source(src: &str) -> bool {
-    src.contains("#imports")
-        || src.contains("nuxt/app")
-        || src.contains("#app")
-        || src.contains("defineNuxtConfig")
-        || src.contains("defineNuxtPlugin")
-        || src.contains("defineNuxtRouteMiddleware")
-}
-
 pub struct Check;
 
 impl OxcCheck for Check {
@@ -28,14 +19,12 @@ impl OxcCheck for Check {
         _semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
-        if !is_nuxt_source(ctx.source) {
-            return;
-        }
-
         let AstKind::ImportDeclaration(import) = node.kind() else {
             return;
         };
 
+        // Importing from `#imports`/`#app`/`nuxt/app` is itself the Nuxt
+        // marker — no separate file-level gate needed.
         let module = import.source.value.as_str();
         if module != "#imports" && module != "#app" && module != "nuxt/app" {
             return;

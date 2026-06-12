@@ -1,19 +1,19 @@
 //! nuxt-no-head-in-setup OXC backend.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::oxc_helpers::byte_offset_to_line_col;
+use crate::oxc_helpers::{byte_offset_to_line_col, source_contains};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use std::sync::Arc;
 
 fn is_nuxt_source(src: &str) -> bool {
-    src.contains("#imports")
-        || src.contains("nuxt/app")
-        || src.contains("#app")
-        || src.contains("defineNuxtConfig")
-        || src.contains("defineNuxtPlugin")
-        || src.contains("defineNuxtRouteMiddleware")
-        || src.contains("useNuxtApp")
-        || src.contains("defineComponent")
+    source_contains(src, "#imports")
+        || source_contains(src, "nuxt/app")
+        || source_contains(src, "#app")
+        || source_contains(src, "defineNuxtConfig")
+        || source_contains(src, "defineNuxtPlugin")
+        || source_contains(src, "defineNuxtRouteMiddleware")
+        || source_contains(src, "useNuxtApp")
+        || source_contains(src, "defineComponent")
 }
 
 pub struct Check;
@@ -34,12 +34,12 @@ impl OxcCheck for Check {
         semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
-        if !is_nuxt_source(ctx.source) {
-            return;
-        }
         let AstKind::ObjectExpression(obj) = node.kind() else {
             return;
         };
+        if !is_nuxt_source(ctx.source) {
+            return;
+        }
 
         // Check if this object is inside a defineComponent call
         let mut in_define_component = false;

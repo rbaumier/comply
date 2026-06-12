@@ -1,18 +1,19 @@
 //! nuxt-no-v-html-in-server OXC backend.
 
 use crate::diagnostic::{Diagnostic, Severity};
+use crate::oxc_helpers::source_contains;
 use crate::rules::backend::{CheckCtx, OxcCheck};
 use std::sync::Arc;
 
 fn is_nuxt_or_vue_source(src: &str) -> bool {
-    src.contains("#imports")
-        || src.contains("nuxt/app")
-        || src.contains("#app")
-        || src.contains("defineNuxtPlugin")
-        || src.contains("defineNuxtRouteMiddleware")
-        || src.contains("useNuxtApp")
-        || src.contains("<template")
-        || src.contains("defineComponent")
+    source_contains(src, "#imports")
+        || source_contains(src, "nuxt/app")
+        || source_contains(src, "#app")
+        || source_contains(src, "defineNuxtPlugin")
+        || source_contains(src, "defineNuxtRouteMiddleware")
+        || source_contains(src, "useNuxtApp")
+        || source_contains(src, "<template")
+        || source_contains(src, "defineComponent")
 }
 
 pub struct Check;

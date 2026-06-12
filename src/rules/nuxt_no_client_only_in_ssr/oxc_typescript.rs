@@ -9,7 +9,7 @@ use std::sync::Arc;
 use oxc_span::GetSpan;
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::oxc_helpers::byte_offset_to_line_col;
+use crate::oxc_helpers::{byte_offset_to_line_col, source_contains};
 use crate::rules::backend::{AstKind, CheckCtx, OxcCheck};
 
 pub struct Check;
@@ -23,14 +23,14 @@ const BROWSER_GLOBALS: &[&str] = &[
 ];
 
 fn is_nuxt_source(src: &str) -> bool {
-    src.contains("#imports")
-        || src.contains("nuxt/app")
-        || src.contains("#app")
-        || src.contains("defineNuxtConfig")
-        || src.contains("defineNuxtPlugin")
-        || src.contains("defineNuxtRouteMiddleware")
-        || src.contains("useNuxtApp")
-        || src.contains("useRuntimeConfig")
+    source_contains(src, "#imports")
+        || source_contains(src, "nuxt/app")
+        || source_contains(src, "#app")
+        || source_contains(src, "defineNuxtConfig")
+        || source_contains(src, "defineNuxtPlugin")
+        || source_contains(src, "defineNuxtRouteMiddleware")
+        || source_contains(src, "useNuxtApp")
+        || source_contains(src, "useRuntimeConfig")
 }
 
 impl OxcCheck for Check {
