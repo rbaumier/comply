@@ -30,6 +30,10 @@
 //! - `_` — the parameter is unused. `catch (_) { return fallback; }`
 //!   is a legitimate shape.
 //! - `error` — the canonical name.
+//! - `cause` — the caught error is forwarded as the `cause` of a new
+//!   error: `catch (cause) { throw new Error(msg, { cause }); }`. The
+//!   ES2022 `Error.cause` shorthand requires the binding to be named
+//!   `cause`, so this name communicates intent rather than obscuring it.
 //! - `*error` / `*Error` — suffix match for disambiguated bindings
 //!   like `networkError`, `parseError`, `httpError`, `readError`. The
 //!   shape `innerError` is allowed for nested try/catch where the
@@ -78,11 +82,17 @@ pub(super) const EXPECTED: &str = "error";
 /// Allowed shapes:
 /// - `_` — deliberately-unused parameter.
 /// - `error` — the canonical name.
+/// - `cause` — forwarded as the `cause` of a new error via the ES2022
+///   `Error.cause` shorthand (`throw new Error(msg, { cause })`).
 /// - `*error` / `*Error` — suffix forms like `networkError`, `parseError`,
 ///   `innerError` (used to disambiguate nested catches that would
 ///   otherwise shadow the outer `error`).
 pub(super) fn is_acceptable_name(name: &str) -> bool {
-    name == "_" || name == EXPECTED || name.ends_with(EXPECTED) || name.ends_with("Error")
+    name == "_"
+        || name == EXPECTED
+        || name == "cause"
+        || name.ends_with(EXPECTED)
+        || name.ends_with("Error")
 }
 
 pub fn register() -> RuleDef {
@@ -122,6 +132,11 @@ mod helper_tests {
     #[test]
     fn accepts_underscore() {
         assert!(is_acceptable_name("_"));
+    }
+
+    #[test]
+    fn accepts_cause() {
+        assert!(is_acceptable_name("cause"));
     }
 
     #[test]

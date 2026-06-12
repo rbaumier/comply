@@ -120,6 +120,13 @@ mod tests {
     }
 
     #[test]
+    fn allows_catch_cause_forwarded_to_error_cause() {
+        let src = "try { result = f(); } catch (cause) { \
+                   throw errorWithCause(message, cause as Error); }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
     fn allows_bare_catch() {
         assert!(run_on("try {} catch {}").is_empty());
     }
