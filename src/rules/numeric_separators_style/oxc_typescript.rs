@@ -26,8 +26,11 @@ fn add_separators(digits: &str, group: usize) -> String {
 
 fn format_prefixed(prefix: &str, digits: &str, suffix: &str) -> String {
     let group = match prefix.to_lowercase().as_str() {
-        "0x" => 2,
         "0b" | "0o" => 4,
+        // Hex grouping is domain-dependent: colors group by bytes
+        // (0xFF_AA_BB), addresses by 4 (0xDEAD_BEEF), Unicode codepoints
+        // not at all (0x10FFFF). No single grouping is correct, so comply
+        // does not enforce separators on hex literals.
         _ => return format!("{}{}{}", prefix, digits, suffix),
     };
     let formatted = add_separators(digits, group);
@@ -153,5 +156,22 @@ mod tests {
         let d = run_on("const x = 10000;");
         assert_eq!(d.len(), 1);
         assert!(d[0].message.contains("10_000"));
+    }
+
+    // Regression #1020: hex grouping is domain-dependent (Unicode
+    // codepoints, addresses, colors all differ) — comply does not enforce
+    // separators on hex literals.
+    #[test]
+    fn allows_hex_literals_issue_1020() {
+        assert!(run_on("const MAX_CODEPOINT = 0x10FFFF;").is_empty());
+        assert!(run_on("const addr = 0xDEADBEEF;").is_empty());
+        assert!(run_on("const color = 0xFFAABB;").is_empty());
+    }
+
+    // Binary literals keep nibble grouping — that convention is unambiguous.
+    #[test]
+    fn still_groups_long_binary_literal() {
+        let d = run_on("const flags = 0b101010101;");
+        assert_eq!(d.len(), 1, "{:?}", d);
     }
 }
