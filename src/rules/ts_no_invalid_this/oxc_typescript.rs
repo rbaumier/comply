@@ -16,6 +16,7 @@ fn is_valid_this_context(
     // determines validity:
     // - ArrowFunction: transparent, keep going.
     // - Function inside a MethodDefinition (class method): valid.
+    // - Function that is an object-literal shorthand method: valid.
     // - Standalone Function: invalid — stop.
     // - Class: valid (property initializer, etc.).
     let mut hit_function = false;
@@ -34,6 +35,14 @@ fn is_valid_this_context(
             }
             AstKind::PropertyDefinition(_) if hit_function => {
                 // Property initializer context — valid.
+                return true;
+            }
+            AstKind::ObjectProperty(prop) if hit_function && prop.method => {
+                // Object-literal shorthand method (`{ foo() { this } }`,
+                // including `[Symbol.asyncIterator]() { return this; }`) —
+                // `this` is bound to the object. A function-valued property
+                // (`{ foo: function() {} }`) has `method == false` and stays
+                // flagged.
                 return true;
             }
             _ => {
@@ -124,6 +133,18 @@ mod tests {
     #[test]
     fn flags_this_in_standalone_function() {
         let diags = run_on("function foo() { return this; }");
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn allows_this_in_object_literal_async_iterator_method() {
+        let src = "const asyncIterable = {\n  next() { return iter.next(); },\n  [Symbol.asyncIterator]() {\n    return this;\n  },\n};";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_this_in_function_valued_property() {
+        let diags = run_on("const obj = { foo: function() { return this; } };");
         assert_eq!(diags.len(), 1);
     }
 }
