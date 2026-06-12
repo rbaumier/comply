@@ -38,6 +38,9 @@ impl OxcCheck for Check {
         if is_build_script(ctx.path) {
             return;
         }
+        if is_sample_file(ctx.path) {
+            return;
+        }
 
         let specifier = import.source.value.as_str();
         if !is_bare_specifier(specifier) {
@@ -105,6 +108,18 @@ fn is_test_file(path: &Path) -> bool {
 fn is_build_script(path: &Path) -> bool {
     let s = path.to_string_lossy().replace('\\', "/");
     s.contains("/scripts/") || s.starts_with("scripts/")
+}
+
+/// Demonstration code under `samples/`, `samples-dev/`, `examples/`, or
+/// `example-apps/` is compiled and run at dev time to show library usage; it is
+/// never bundled into the shipped package. Such files intentionally import peer
+/// libraries (e.g. auth providers) declared as devDependencies, so importing a
+/// devDependency from them is the correct classification.
+fn is_sample_file(path: &Path) -> bool {
+    let s = path.to_string_lossy().replace('\\', "/");
+    ["samples", "samples-dev", "examples", "example-apps"]
+        .iter()
+        .any(|dir| s.contains(&format!("/{dir}/")) || s.starts_with(&format!("{dir}/")))
 }
 
 fn is_bare_specifier(spec: &str) -> bool {
@@ -222,6 +237,31 @@ export default defineConfig({});"#;
         let src = r#"import { Generator, getConfig } from "@tanstack/router-generator";"#;
         let d = run_with_pkg_at_path(pkg, "scripts/generate-routes.ts", src);
         assert!(d.is_empty(), "build script should not flag devDeps: {d:?}");
+    }
+
+    #[test]
+    fn allows_dev_dep_in_samples_dev_file() {
+        // Issue #1073: Azure SDK `samples-dev/` files are compiled and run as
+        // documentation examples; `@azure/identity` is intentionally a
+        // devDependency. Demonstration code must not flag.
+        let pkg = r#"{
+            "dependencies": {"@azure/core-client": "^1"},
+            "devDependencies": {"@azure/identity": "^4"}
+        }"#;
+        let src = r#"import { DefaultAzureCredential } from "@azure/identity";"#;
+        let d = run_with_pkg_at_path(pkg, "samples-dev/managementGroupsGetSample.ts", src);
+        assert!(d.is_empty(), "samples-dev file should not flag devDeps: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_dev_dep_outside_sample_dirs() {
+        // Guard against over-relaxing: a path that merely contains "samples" as a
+        // substring of another segment (not its own directory) must still flag.
+        let pkg = r#"{"devDependencies":{"@azure/identity":"^4"}}"#;
+        let src = r#"import { DefaultAzureCredential } from "@azure/identity";"#;
+        let d = run_with_pkg_at_path(pkg, "src/mysamples/index.ts", src);
+        assert_eq!(d.len(), 1, "non-sample dir should still flag: {d:?}");
+        assert!(d[0].message.contains("@azure/identity"));
     }
 
     #[test]
