@@ -13,6 +13,25 @@ fn is_test_file(path: &std::path::Path) -> bool {
     s.contains(".test.") || s.contains(".spec.") || s.contains("__tests__")
 }
 
+/// True for README-snippet test files (`snippets.spec.ts`,
+/// `foo.snippets.spec.js`, …). These wrap README code samples in test
+/// runners purely to confirm the samples compile and run without throwing;
+/// the absence of `expect()` is intentional — the implicit assertion is
+/// "this sample does not throw" — so requiring an explicit assertion is a
+/// false positive.
+fn is_snippet_test_file(path: &std::path::Path) -> bool {
+    let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+        return false;
+    };
+    let Some(stem) = name
+        .strip_suffix(".spec.ts")
+        .or_else(|| name.strip_suffix(".spec.js"))
+    else {
+        return false;
+    };
+    stem == "snippets" || stem.ends_with(".snippets")
+}
+
 /// True when `text` contains a call to a function whose identifier starts
 /// with `expect` or `assert`. The identifier must be word-boundary-anchored
 /// on the left so we don't match `inspect(` or `reassert(`. A TypeScript
@@ -122,7 +141,7 @@ impl OxcCheck for Check {
         semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
-        if !is_test_file(ctx.path) {
+        if !is_test_file(ctx.path) || is_snippet_test_file(ctx.path) {
             return;
         }
         let AstKind::CallExpression(call) = node.kind() else {
@@ -221,6 +240,10 @@ mod tests {
     
     fn run(src: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_rule_with_ctx(&Check, src, "/tmp/foo.test.ts", &crate::project::ProjectCtx::for_test_with_framework(""), crate::rules::file_ctx::default_static_file_ctx())
+    }
+
+    fn run_at(src: &str, path: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule_with_ctx(&Check, src, path, &crate::project::ProjectCtx::for_test_with_framework(""), crate::rules::file_ctx::default_static_file_ctx())
     }
 
     #[test]
@@ -409,5 +432,31 @@ mod tests {
     fn still_flags_test_with_assert_member_property_read() {
         let src = r#"it("x", () => { const n = assert.length; log(n); });"#;
         assert_eq!(run(src).len(), 1);
+    }
+
+    // Regression for #1111 — README-snippet test files wrap sample code in
+    // test runners purely to confirm the samples compile and run without
+    // throwing; the missing `expect()` is intentional, not a smell.
+    #[test]
+    fn allows_snippets_spec_file() {
+        let src = r#"
+            describe("snippets", () => {
+                it("ReadmeSampleCreateClient_Node", async () => {
+                    const client = new ManagementGroupsAPI(new DefaultAzureCredential(), subscriptionId);
+                });
+            });
+        "#;
+        assert!(
+            run_at(src, "/tmp/snippets.spec.ts").is_empty(),
+            "{:?}",
+            run_at(src, "/tmp/snippets.spec.ts")
+        );
+    }
+
+    #[test]
+    fn still_flags_non_snippet_spec_without_assertion() {
+        // A regular `*.spec.ts` is NOT a snippet file and must still flag.
+        let src = r#"it("does nothing", () => { const x = 1 + 1; });"#;
+        assert_eq!(run_at(src, "/tmp/feature.spec.ts").len(), 1);
     }
 }
