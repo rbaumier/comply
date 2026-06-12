@@ -1,5 +1,5 @@
-//! no-keyword-prefix OXC backend — flag identifiers starting with `new` or
-//! `class` followed by an uppercase letter.
+//! no-keyword-prefix OXC backend — flag identifiers starting with the `class`
+//! keyword followed by an uppercase letter.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 pub struct Check;
 
-const DISALLOWED_PREFIXES: &[&str] = &["new", "class"];
+const DISALLOWED_PREFIXES: &[&str] = &["class"];
 
 /// Canonical DOM property names that begin with the `class` keyword prefix but
 /// are platform-dictated and cannot be renamed (React uses `className`
@@ -133,5 +133,14 @@ mod tests {
     #[test]
     fn allows_classlist_issue_523() {
         assert!(crate::rules::test_helpers::run_rule(&Check, "const classList = el.classList;", "t.ts").is_empty());
+    }
+
+    // Regression for #1089: `new` is an idiomatic semantic prefix ("the
+    // updated/replacement value"), not a misuse of the `new` operator, so
+    // `new`-prefixed identifiers must not be flagged.
+    #[test]
+    fn allows_new_prefix_issue_1089() {
+        let src = "const newVersion = bump(); let newDep = []; const newSetting = read(); const newAppDir = \"app\"; function f(newValue: string) { return newValue; }";
+        assert!(crate::rules::test_helpers::run_rule(&Check, src, "t.ts").is_empty());
     }
 }
