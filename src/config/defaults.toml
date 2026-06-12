@@ -62,9 +62,6 @@ max = 3
 [rules.max-depth]
 max = 3
 
-[rules.ts-max-params]
-max = 3
-
 [rules.nested-control-flow]
 max = 3
 

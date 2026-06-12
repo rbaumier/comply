@@ -54,3 +54,63 @@ impl OxcCheck for Check {
         diagnostics
     }
 }
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod oxc_tests {
+    use super::*;
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, src, "t.ts")
+    }
+
+    #[test]
+    fn flags_two_imports_from_same_module_issue_1081() {
+        // Regression for rbaumier/comply#1081 — two value imports from the
+        // same module are flagged once, on the second statement. The
+        // duplicate `import-no-duplicates` rule that fired on the same line
+        // has been deleted.
+        let src = "\
+import { foo } from './mod';
+import { bar } from './mod';
+";
+        let diags = run(src);
+        assert_eq!(diags.len(), 1, "unexpected: {diags:?}");
+        assert_eq!(diags[0].line, 2);
+    }
+
+    #[test]
+    fn allows_single_import_per_module() {
+        let src = "\
+import { foo } from './a';
+import { bar } from './b';
+";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_type_only_import_alongside_value_import() {
+        // A `import type` and a value `import` from the same module are
+        // distinct statements (different `is_type` key) and not duplicates.
+        let src = "\
+import { foo } from './mod';
+import type { Bar } from './mod';
+";
+        assert!(run(src).is_empty());
+    }
+}
