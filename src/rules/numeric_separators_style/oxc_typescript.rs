@@ -168,6 +168,16 @@ mod tests {
         assert!(run_on("const color = 0xFFAABB;").is_empty());
     }
 
+    // Regression #1087: zero-padded hex bitmask/flag and hash constants are
+    // intentionally aligned and must not have separators forced on them.
+    #[test]
+    fn allows_zero_padded_hex_constants_issue_1087() {
+        assert!(run_on("const v = 0x0001;").is_empty());
+        assert!(run_on("const v = 0x00000001;").is_empty());
+        assert!(run_on("const v = 0x80000000;").is_empty());
+        assert!(run_on("const hash = 0x0bcaa747;").is_empty());
+    }
+
     // Binary literals keep nibble grouping — that convention is unambiguous.
     #[test]
     fn still_groups_long_binary_literal() {
