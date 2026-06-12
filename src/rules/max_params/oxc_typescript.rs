@@ -1,10 +1,9 @@
 //! max-params OXC backend.
 //!
-//! Mirrors `ts-max-params` but reads its threshold from `[rules.max-params]`
-//! and applies to TS/JS/TSX uniformly. Skips function expressions / arrow
-//! functions passed as fixed-signature library callbacks (TanStack Query
-//! `onError` / `queryFn` / etc.) since the user has no control over those
-//! arities.
+//! Reads its threshold from `[rules.max-params]` and applies to TS/JS/TSX
+//! uniformly. Skips function expressions / arrow functions passed as
+//! fixed-signature library callbacks (TanStack Query `onError` / `queryFn` /
+//! etc.) since the user has no control over those arities.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::{byte_offset_to_line_col, is_fixed_signature_library_callback};
@@ -101,6 +100,16 @@ mod oxc_tests {
         // `max-params` default is 3 — 4 params triggers the rule.
         let src = "function foo(a: number, b: number, c: number, d: number) {}";
         assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_four_param_function_exactly_once_issue_1081() {
+        // Regression for rbaumier/comply#1081 — a 4-param function is flagged
+        // a single time. The duplicate `ts-max-params` rule that fired on the
+        // same line has been deleted.
+        let src = "function tooMany(a: number, b: number, c: number, d: number) {}";
+        let diags = run(src);
+        assert_eq!(diags.len(), 1, "unexpected: {diags:?}");
     }
 
     #[test]
