@@ -461,6 +461,35 @@ mod tests {
         );
     }
 
+    // Regression for #1115: TypeScript ESM (`NodeNext`/`Bundler`) requires
+    // writing the emitted `.js` extension in specifiers even when the on-disk
+    // source is `.ts`/`.tsx`. The import-graph walker must resolve `./toolbar.js`
+    // to `toolbar.tsx`, so the importer and its `.js`-imported `.tsx` sources
+    // stay reachable instead of being orphaned.
+    #[test]
+    fn resolves_js_extension_imports_to_tsx_sources() {
+        let files: Vec<(&str, &str)> = vec![
+            ("index.ts", "import { theme } from './theme/theme.js';\nexport { theme };\n"),
+            (
+                "theme/theme.ts",
+                "import { toolbar } from './toolbar.js';\n\
+                 import { versionPicker, versionPickerScript } from './versionPicker.js';\n\
+                 export const theme = { toolbar, versionPicker, versionPickerScript };\n",
+            ),
+            ("theme/toolbar.tsx", "export const toolbar = () => null;\n"),
+            (
+                "theme/versionPicker.tsx",
+                "export const versionPicker = () => null;\nexport const versionPickerScript = '';\n",
+            ),
+        ];
+        let (_dir, diags) = run_on_project(&files);
+        assert!(
+            diags.is_empty(),
+            "`.js`-extensioned ESM imports must resolve to their `.tsx` sources, \
+             keeping the importer and imported files reachable: {diags:?}"
+        );
+    }
+
     // Regression for #1062: a nested integration-test app entry (`src/main.ts`
     // at arbitrary depth) is a bootstrapper launched directly, not imported — it
     // and its reachable module tree must not be flagged.
