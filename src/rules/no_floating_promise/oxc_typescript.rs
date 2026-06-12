@@ -102,8 +102,27 @@ fn is_async_looking_member_call(call: &CallExpression) -> bool {
     if is_stream_controller_close(member) {
         return false;
     }
+    if is_xml_http_request_send(member) {
+        return false;
+    }
     let method = member.property.name.as_str();
     ASYNC_LOOKING_METHODS.contains(&method)
+}
+
+/// `XMLHttpRequest.prototype.send(...)` returns `void` per `lib.dom.d.ts` — the
+/// legacy XHR API delivers its result through the `onreadystatechange` callback,
+/// not a Promise, so there is nothing to await.
+/// Matches when the receiver is a bare identifier whose name (case-insensitive)
+/// reads as an XHR handle, e.g. `xmlHttp`, `xhr`, `xmlHttpRequest`.
+fn is_xml_http_request_send(member: &StaticMemberExpression) -> bool {
+    if member.property.name.as_str() != "send" {
+        return false;
+    }
+    let Expression::Identifier(id) = &member.object else {
+        return false;
+    };
+    let name = id.name.as_str().to_lowercase();
+    name.contains("xhr") || name.contains("xmlhttp")
 }
 
 /// `ReadableStreamDefaultController.close()` / `WritableStreamDefaultController.close()` etc.
@@ -284,6 +303,37 @@ async function pull(controller) {
     #[test]
     fn still_flags_non_controller_close() {
         let d = run_on("db.close();");
+        assert_eq!(d.len(), 1);
+    }
+
+    // Regression tests for issue #1104: XMLHttpRequest.send() returns void per
+    // lib.dom.d.ts — the legacy XHR callback API, not a Promise — so it must not
+    // be flagged.
+
+    #[test]
+    fn allows_xml_http_request_send() {
+        let src = "\
+function httpGetAsync(targetUrl, callback) {
+  var xmlHttp = new XMLHttpRequest();
+  xmlHttp.onreadystatechange = function () {
+    if (xmlHttp.readyState == 4 && xmlHttp.status == 200)
+      callback(xmlHttp.responseText);
+  }
+  xmlHttp.open(\"GET\", targetUrl, true);
+  xmlHttp.send(null);
+}
+";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_xhr_send() {
+        assert!(run_on("xhr.send(body);").is_empty());
+    }
+
+    #[test]
+    fn still_flags_non_xhr_send() {
+        let d = run_on("producer.send(message);");
         assert_eq!(d.len(), 1);
     }
 }
