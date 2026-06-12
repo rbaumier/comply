@@ -124,4 +124,34 @@ mod tests {
         let diags = Check.check(&CheckCtx::for_test(Path::new("utils.rs"), "// nothing\n"));
         assert_eq!(diags.len(), 1);
     }
+
+    #[test]
+    fn empty_eslint_fixture_in_test_dir_not_flagged() {
+        // Issue #1091: empty fixture files in an ESLint-plugin test suite.
+        let path =
+            Path::new("common/tools/eslint-plugin-azure-sdk/tests/fixture/file.ts");
+        let file = crate::rules::file_ctx::FileCtx::build(
+            path,
+            "",
+            Language::TypeScript,
+            crate::project::default_static_project_ctx(),
+        );
+        assert!(file.path_segments.in_test_dir);
+        assert!(!crate::rules::no_empty_file::META.applies_to_file(&file));
+    }
+
+    #[test]
+    fn empty_source_file_still_flagged() {
+        // Control: an empty file outside any test directory is still a smell.
+        let path = Path::new("src/empty.ts");
+        let file = crate::rules::file_ctx::FileCtx::build(
+            path,
+            "",
+            Language::TypeScript,
+            crate::project::default_static_project_ctx(),
+        );
+        assert!(!file.path_segments.in_test_dir);
+        assert!(crate::rules::no_empty_file::META.applies_to_file(&file));
+        assert_eq!(Check.check(&CheckCtx::for_test(path, "")).len(), 1);
+    }
 }
