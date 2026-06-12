@@ -7,6 +7,10 @@
 //!   `setup.*`, `setup-*`, `*-setup`, `globalSetup`, or anything under
 //!   `test-helpers/`), or by content shape where every top-level call is a
 //!   Vitest hook with a `"vitest"` import present;
+//! - server application entry points by content shape: any module with a
+//!   top-level `listen(...)` / `*.listen(...)` call (Fastify/Express/Node HTTP
+//!   servers start the server this way, so the surrounding route/hook/
+//!   middleware registrations are mandatory side effects, not library code);
 //! - framework entry points reported by `is_framework_entry_point`;
 //! - TanStack Start entry files (`app/{client,router,server}.{ts,tsx}` or
 //!   `src/app/…`) when the `tanstack-router` framework is detected;
@@ -128,6 +132,30 @@ fn shape_is_vitest_setup(program: &Program) -> bool {
     seen_any
 }
 
+/// True when the call's callee is `listen` (bare) or a `.listen` member
+/// access (`fastify.listen`, `app.listen`, `server.listen`, …). Server
+/// frameworks (Fastify, Express, Node's `http.Server`) all start the server
+/// with a `listen` call.
+fn is_listen_call(call: &oxc_ast::ast::CallExpression) -> bool {
+    match &call.callee {
+        Expression::Identifier(id) => id.name == "listen",
+        Expression::StaticMemberExpression(m) => m.property.name == "listen",
+        _ => false,
+    }
+}
+
+/// True when the program has a top-level `listen(...)` call statement. Such a
+/// module is a server application entry point: it starts an HTTP server, so
+/// the route/hook/middleware registrations around it are mandatory, intentional
+/// side effects, not tree-shakeable library code.
+fn is_server_entry_shape(program: &Program) -> bool {
+    program.body.iter().any(|stmt| {
+        let Statement::ExpressionStatement(es) = stmt else { return false };
+        let Expression::CallExpression(call) = &es.expression else { return false };
+        is_listen_call(call)
+    })
+}
+
 /// Collect local identifier names that are bound to `startTransition`
 /// imported from `"react"`. Handles `import { startTransition } from "react"`
 /// and `import { startTransition as ST } from "react"`.
@@ -225,7 +253,10 @@ impl OxcCheck for Check {
 
         let program = semantic.nodes().program();
 
-        if is_test_setup_path(ctx.path) || shape_is_vitest_setup(program) {
+        if is_test_setup_path(ctx.path)
+            || shape_is_vitest_setup(program)
+            || is_server_entry_shape(program)
+        {
             return Vec::new();
         }
 
@@ -510,6 +541,62 @@ mod tests {
     fn allows_test_d_type_test_file() {
         let diags = crate::rules::test_helpers::run_rule(&Check, "expectNotAssignable(foo);", "test-d/schema.ts");
         assert!(diags.is_empty(), "test-d/ files are tsd type-testing utilities, got {diags:?}");
+    }
+
+    // --- (e) Server application entry points (Closes #1113) ----------------
+
+    // Regression for #1113: a Fastify server entry point registers routes,
+    // hooks, and content-type parsers at the top level by contract, then
+    // starts the server with `fastify.listen()`. None of it is tree-shakeable.
+    #[test]
+    fn allows_fastify_server_entry_point() {
+        let src = "\
+            const fastify = Fastify({ exposeHeadRoutes: false, bodyLimit: MAX_FILE_SIZE });\n\
+            fastify.addContentTypeParser('application/octet-stream', { parseAs: 'buffer' }, (_req, body, done) => done(null, body));\n\
+            fastify.addHook('preHandler', authenticateTeamId);\n\
+            fastify.get('/v8/artifacts/status', async (_req, reply) => reply.send({ status: 'enabled' }));\n\
+            fastify.listen({ port: 3000 });\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/index.ts");
+        assert!(
+            diags.is_empty(),
+            "a module that starts a server with fastify.listen() is an entry point, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn allows_express_server_entry_point() {
+        let src = "\
+            const app = express();\n\
+            app.use(cors());\n\
+            app.get('/health', (_req, res) => res.send('ok'));\n\
+            app.listen(8080);\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "server.ts");
+        assert!(diags.is_empty(), "express app.listen() entry point is exempt, got {diags:?}");
+    }
+
+    #[test]
+    fn allows_bare_listen_server_entry_point() {
+        let src = "\
+            registerRoutes(server);\n\
+            listen(server, 3000);\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/main.ts");
+        assert!(diags.is_empty(), "a bare listen() call marks a server entry point, got {diags:?}");
+    }
+
+    #[test]
+    fn still_flags_library_module_without_listen() {
+        // No top-level `listen` call — an ordinary library module whose
+        // top-level effects DO block tree-shaking.
+        let src = "\
+            register('widget');\n\
+            doSideEffect();\n\
+            new EventEmitter();\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/util.ts");
+        assert_eq!(
+            diags.len(),
+            3,
+            "library module without listen() must still be flagged, got {diags:?}"
+        );
     }
 
 }
