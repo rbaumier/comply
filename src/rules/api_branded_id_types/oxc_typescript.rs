@@ -53,6 +53,18 @@ impl OxcCheck for Check {
             return;
         }
 
+        // Published-library entry points (package.json declares `main`/`module`/
+        // `exports`) have public signatures fixed by an external contract — e.g.
+        // Azure SDK clients whose ID params mirror the REST spec. Branding those
+        // IDs would be a breaking change for consumers, so the smell does not apply.
+        if ctx
+            .project
+            .nearest_package_json(ctx.path)
+            .is_some_and(|pkg| pkg.is_library)
+        {
+            return;
+        }
+
         if is_comparison_only_usage(ident.symbol_id.get(), semantic) {
             return;
         }
@@ -246,6 +258,47 @@ mod tests {
         crate::rules::test_helpers::run_rule(&Check, src, "t.ts")
     }
 
+    /// Run the check against `source` with a real `ProjectCtx` rooted at a
+    /// tempdir whose `package.json` is `pkg_json` — exercises the
+    /// published-library relaxation, which depends on `nearest_package_json`.
+    fn run_with_pkg(pkg_json: &str, source: &str) -> Vec<Diagnostic> {
+        use crate::config::Config;
+        use crate::files::{Language, SourceFile};
+        use crate::project::ProjectCtx;
+        use oxc_allocator::Allocator;
+        use oxc_parser::Parser as OxcParser;
+        use oxc_semantic::SemanticBuilder;
+        use oxc_span::SourceType;
+
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(dir.path().join("package.json"), pkg_json).unwrap();
+        let file_path = dir.path().join("src/api/context.ts");
+        std::fs::create_dir_all(file_path.parent().unwrap()).unwrap();
+        std::fs::write(&file_path, source).unwrap();
+        let source_file = SourceFile {
+            path: file_path.clone(),
+            language: Language::TypeScript,
+        };
+        let refs = vec![&source_file];
+        let config = Config::default();
+        let project = ProjectCtx::load(&refs, &config);
+        let canon = std::fs::canonicalize(&file_path).unwrap();
+
+        let allocator = Allocator::default();
+        let parse_ret = OxcParser::new(&allocator, source, SourceType::ts()).parse();
+        let semantic = SemanticBuilder::new().build(&parse_ret.program).semantic;
+        let ctx = CheckCtx::for_test_with_project(&canon, source, &project);
+
+        let mut diagnostics = Vec::new();
+        let kinds = Check.interested_kinds();
+        for node in semantic.nodes().iter() {
+            if kinds.contains(&node.kind().ty()) {
+                Check.run(node, &ctx, &semantic, &mut diagnostics);
+            }
+        }
+        diagnostics
+    }
+
     #[test]
     fn flags_raw_string_id_in_exported_function() {
         let d = run("export function getOrder(orderId: string) { return orderId; }");
@@ -380,5 +433,48 @@ mod tests {
             }
         "#;
         assert_eq!(run(src).len(), 1);
+    }
+
+    // --- Issue #1083 regression: published-library entry points ---
+
+    #[test]
+    fn allows_id_param_in_published_library_entry_point() {
+        // The user's exact repro from issue #1083: an Azure SDK client function
+        // whose `subscriptionId: string` mirrors the ARM REST spec. The package
+        // is published (declares `main`/`module`/`exports`), so branding the ID
+        // would be a breaking change for consumers and the rule must not fire.
+        let pkg = r#"{
+            "name": "@azure/arm-maps",
+            "main": "./dist/commonjs/index.js",
+            "module": "./dist/esm/index.js",
+            "exports": { ".": "./dist/esm/index.js" }
+        }"#;
+        let src = r#"
+            export function createAzureMapsManagement(
+                credential: TokenCredential,
+                subscriptionId: string,
+                options: AzureMapsManagementClientOptionalParams = {},
+            ): AzureMapsManagementContext {
+                return getClient(credential, subscriptionId, options);
+            }
+        "#;
+        let diagnostics = run_with_pkg(pkg, src);
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    }
+
+    #[test]
+    fn flags_id_param_in_non_library_application_package() {
+        // The same signature in an application package (no `main`/`module`/
+        // `exports`) is the rule's legitimate target — the export is the app's
+        // own code, so branding the ID is safe and the smell still fires.
+        let pkg = r#"{ "name": "my-app", "private": true }"#;
+        let src = r#"
+            export function createClient(
+                subscriptionId: string,
+            ): unknown {
+                return getClient(subscriptionId);
+            }
+        "#;
+        assert_eq!(run_with_pkg(pkg, src).len(), 1);
     }
 }
