@@ -20,9 +20,20 @@ impl OxcCheck for Check {
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
+        semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
+        // Import/export source strings (`from "./api/getThing.js"`) are file
+        // paths, not REST URLs — never flag them.
+        let parent = semantic.nodes().parent_node(node.id());
+        if matches!(
+            parent.kind(),
+            AstKind::ImportDeclaration(_)
+                | AstKind::ExportNamedDeclaration(_)
+                | AstKind::ExportAllDeclaration(_)
+        ) {
+            return;
+        }
         let (text, offset) = match node.kind() {
             AstKind::StringLiteral(lit) => (lit.value.as_str().to_string(), lit.span.start as usize),
             AstKind::TemplateLiteral(tpl) => {
@@ -53,5 +64,47 @@ impl OxcCheck for Check {
             severity: Severity::Warning,
             span: None,
         });
+    }
+}
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
+    }
+
+    #[test]
+    fn ignores_import_and_export_source_paths() {
+        // Module import/export paths are file paths, not REST URLs (issue #1103).
+        let src = "\
+import { cancelScheduledNotification } from \"./api/cancelScheduledNotification.js\";
+import { createOrUpdateInstallation } from \"./api/createOrUpdateInstallation.js\";
+import { getInstallation } from \"./api/getInstallation.js\";
+export { getFeedbackContainerUrl } from \"./api/getFeedbackContainerUrl.js\";
+export * from \"./api/listRegistrations.js\";";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_verb_in_actual_url_literal() {
+        assert_eq!(run("fetch('/api/createOrder');").len(), 1);
     }
 }
