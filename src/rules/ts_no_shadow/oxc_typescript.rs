@@ -25,6 +25,11 @@ impl OxcCheck for Check {
             };
             let name = scoping.symbol_name(symbol_id);
             let decl_node = scoping.symbol_declaration(symbol_id);
+            // Enum members are scoped inside the enum object and are only
+            // reachable as `Enum.Member`, so they never shadow a module binding.
+            if matches!(nodes.kind(decl_node), AstKind::TSEnumMember(_)) {
+                continue;
+            }
             if std::iter::once(nodes.kind(decl_node))
                 .chain(nodes.ancestor_kinds(decl_node))
                 .any(is_type_only_binding_context)
@@ -105,6 +110,17 @@ mod tests {
     #[test]
     fn allows_infer_type_parameter_with_shadow() {
         let d = run_on("type Unpack<T> = T extends Promise<infer R> ? R : never; const R = 1;");
+        assert!(d.is_empty(), "expected no diagnostics, got: {d:?}");
+    }
+
+    #[test]
+    fn allows_enum_member_matching_interface_name() {
+        let d = run_on(
+            "export enum KnownIdentityType {\n  \
+             SystemAssignedIdentity = \"systemAssignedIdentity\",\n  \
+             UserAssignedIdentity = \"userAssignedIdentity\",\n}\n\
+             export interface UserAssignedIdentity { clientId?: string; }",
+        );
         assert!(d.is_empty(), "expected no diagnostics, got: {d:?}");
     }
 
