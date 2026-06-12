@@ -4,7 +4,11 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{ClassElement, TSSignature};
+use oxc_ast::ast::{
+    AssignmentTarget, Class, ClassElement, Expression, MethodDefinitionKind, Statement,
+    TSSignature,
+};
+use rustc_hash::FxHashSet;
 use std::sync::Arc;
 
 fn class_element_rank(elem: &ClassElement) -> Option<u8> {
@@ -27,6 +31,35 @@ fn class_element_rank(elem: &ClassElement) -> Option<u8> {
         ClassElement::AccessorProperty(_) => Some(1),
         ClassElement::StaticBlock(_) => None,
     }
+}
+
+/// Property names assigned via `this.<name> = ...` directly in the constructor
+/// body. Such fields are legitimately declared after methods: the constructor
+/// definitely assigns them, so their declaration position is purely stylistic
+/// (e.g. AutoRest-generated SDK clients group sub-client fields at the end).
+fn constructor_assigned_fields<'a>(class: &Class<'a>) -> FxHashSet<&'a str> {
+    let mut names = FxHashSet::default();
+    for elem in &class.body.body {
+        let ClassElement::MethodDefinition(method) = elem else { continue };
+        if method.kind != MethodDefinitionKind::Constructor || method.r#static {
+            continue;
+        }
+        let Some(body) = method.value.body.as_ref() else { continue };
+        for stmt in &body.statements {
+            let Statement::ExpressionStatement(expr_stmt) = stmt else { continue };
+            let Expression::AssignmentExpression(assign) = &expr_stmt.expression else {
+                continue;
+            };
+            let AssignmentTarget::StaticMemberExpression(member) = &assign.left else {
+                continue;
+            };
+            if !matches!(&member.object, Expression::ThisExpression(_)) {
+                continue;
+            }
+            names.insert(member.property.name.as_str());
+        }
+    }
+    names
 }
 
 fn ts_signature_rank(sig: &TSSignature) -> Option<u8> {
@@ -55,10 +88,19 @@ impl OxcCheck for Check {
     ) {
         match node.kind() {
             AstKind::Class(class) => {
+                let assigned = constructor_assigned_fields(class);
                 let mut max_rank: u8 = 0;
                 for elem in &class.body.body {
                     let Some(rank) = class_element_rank(elem) else { continue };
                     if rank < max_rank {
+                        if let ClassElement::PropertyDefinition(prop) = elem
+                            && prop
+                                .key
+                                .name()
+                                .is_some_and(|name| assigned.contains(name.as_ref()))
+                        {
+                            continue;
+                        }
                         let span = match elem {
                             ClassElement::MethodDefinition(m) => m.span,
                             ClassElement::PropertyDefinition(p) => p.span,
@@ -114,5 +156,71 @@ impl OxcCheck for Check {
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
+    }
+
+    #[test]
+    fn flags_field_after_method() {
+        let diags = run("class Foo {\n  bar(): void {}\n  x: string;\n}");
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn allows_constructor_assigned_fields_after_methods() {
+        // AutoRest-generated ARM SDK pattern: sub-client fields are declared
+        // after methods but assigned in the constructor body.
+        let src = "export class ManagementGroupsAPI {\n\
+            \x20 $host: string;\n\
+            \x20 apiVersion: string;\n\
+            \x20 constructor() {\n\
+            \x20   this.managementGroups = new ManagementGroupsImpl(this);\n\
+            \x20   this.entities = new EntitiesImpl(this);\n\
+            \x20 }\n\
+            \x20 checkNameAvailability(): Promise<void> { return Promise.resolve(); }\n\
+            \x20 startTenantBackfill(): Promise<void> { return Promise.resolve(); }\n\
+            \x20 managementGroups: ManagementGroups;\n\
+            \x20 entities: Entities;\n\
+            }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_unassigned_field_after_method() {
+        // A field declared after methods that is NOT assigned in the
+        // constructor is a genuine ordering smell and must still fire.
+        let src = "class Foo {\n\
+            \x20 constructor() {\n\
+            \x20   this.assigned = 1;\n\
+            \x20 }\n\
+            \x20 bar(): void {}\n\
+            \x20 assigned: number;\n\
+            \x20 stray: string;\n\
+            }";
+        let diags = run(src);
+        assert_eq!(diags.len(), 1);
     }
 }
