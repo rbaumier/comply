@@ -1,0 +1,12 @@
+[detection]
+dependencies = ["svelte", "@sveltejs/kit"]
+
+[entry_points]
+dirs = []
+files = []
+
+[magic_exports]
+names = []
+
+[tooling_deps]
+names = []
