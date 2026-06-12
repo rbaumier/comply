@@ -684,6 +684,11 @@ fn collect_bare_specifiers(
     // preserving the first-seen insertion order into the `Vec`.
     let mut seen: HashMap<String, std::collections::HashSet<PathBuf>> = HashMap::new();
     for (file, imps) in imports {
+        // Rust external crates that weren't resolved by RustModuleGraph are
+        // not npm packages — skip them to avoid "unlisted-dependency" FPs.
+        if file.extension().is_some_and(|e| e == "rs") {
+            continue;
+        }
         for imp in imps {
             if imp.source_path.is_some() || imp.specifier.starts_with('.') {
                 continue;
@@ -3094,6 +3099,25 @@ mod tests {
         let imports = index.get_imports(&paths[0]);
         assert_eq!(imports.len(), 1);
         assert!(imports[0].source_path.is_none());
+    }
+
+    #[test]
+    fn rust_external_crates_not_in_bare_specifiers() {
+        // Regression: unresolved Rust `use` paths (external crates) must not
+        // appear in bare_specifiers() — they are not npm packages.
+        let (_dir, index, _paths) = build_index(&[(
+            "lib.rs",
+            "use turbopack_ecmascript_plugins::transform::StyledComponents;\nuse patterns::*;\n",
+        )]);
+        let bare = index.bare_specifiers();
+        assert!(
+            !bare.contains_key("turbopack_ecmascript_plugins"),
+            "Rust external crate should not be in bare_specifiers"
+        );
+        assert!(
+            !bare.contains_key("patterns"),
+            "Rust module path should not be in bare_specifiers"
+        );
     }
 
     #[test]
