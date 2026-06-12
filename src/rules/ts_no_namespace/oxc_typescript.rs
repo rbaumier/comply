@@ -30,6 +30,13 @@ impl OxcCheck for Check {
             return;
         }
 
+        // Allow `namespace NodeJS { ... }` — the prescribed mechanism for
+        // augmenting Node.js built-in globals (e.g. `NodeJS.ProcessEnv`).
+        // No ES module syntax can extend these ambient globals.
+        if decl.id.name().as_str() == "NodeJS" {
+            return;
+        }
+
         // Only flag `namespace`, not `module`.
         let text = &ctx.source[decl.span.start as usize..decl.span.end as usize];
         if !text.starts_with("namespace") && !text.starts_with("export namespace") {
@@ -48,5 +55,43 @@ impl OxcCheck for Check {
             severity: Severity::Warning,
             span: None,
         });
+    }
+}
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
+    }
+
+    #[test]
+    fn allows_nodejs_global_augmentation() {
+        let diags = run(
+            "namespace NodeJS {\n  interface ProcessEnv {\n    AZURE_HTTP_USER_AGENT?: string;\n  }\n}",
+        );
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn flags_legacy_namespace() {
+        assert_eq!(run("namespace Foo { export const x = 1; }").len(), 1);
     }
 }
