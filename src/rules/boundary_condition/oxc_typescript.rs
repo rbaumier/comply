@@ -73,7 +73,13 @@ impl OxcCheck for Check {
 
         let which = if is_first { "first" } else { "last" };
         let at_arg = if is_first { "0" } else { "-1" };
-        let (line, column) = byte_offset_to_line_col(source, member.span().start as usize);
+        // Report at the opening `[` of this access, not at `member.span().start`.
+        // A `ComputedMemberExpression`'s span starts at its object, so every link
+        // of a chain like `a[0][0][0]` would otherwise share one position and
+        // collapse into duplicate diagnostics. The bracket offset is distinct per
+        // access and points at the actual index site.
+        let bracket_offset = open_bracket_offset(member, source);
+        let (line, column) = byte_offset_to_line_col(source, bracket_offset);
         diagnostics.push(Diagnostic {
             path: Arc::clone(&ctx.path_arc),
             line,
@@ -93,6 +99,16 @@ fn expr_text<'a>(expr: &'a Expression, source: &'a str) -> &'a str {
     let start = expr.span().start as usize;
     let end = expr.span().end as usize;
     &source[start..end]
+}
+
+/// Byte offset of the opening `[` of a computed access. The bracket sits after
+/// the object (skipping any whitespace and an optional `?.`); falls back to the
+/// object's end if no `[` is found, which never happens for valid input.
+fn open_bracket_offset(member: &ComputedMemberExpression, source: &str) -> usize {
+    let object_end = member.object.span().end as usize;
+    source[object_end..member.span().end as usize]
+        .find('[')
+        .map_or(object_end, |rel| object_end + rel)
 }
 
 fn is_zero_index(expr: &Expression, source: &str) -> bool {
@@ -388,5 +404,19 @@ mod tests {
             run_on("const i = (arr: number[]) => arr[arr.length - 1];").len(),
             1
         );
+    }
+
+    #[test]
+    fn no_duplicate_positions_on_chained_index_issue_1067() {
+        // `calls[0][0][0]` is three computed accesses; each is a real unchecked
+        // read, but they must land on distinct positions (their own `[`), not
+        // collapse onto the chain start.
+        let diags = run_on("const lgs = exportStub.mock.calls[0][0][0];");
+        assert_eq!(diags.len(), 3);
+        let mut positions: Vec<(usize, usize)> =
+            diags.iter().map(|d| (d.line, d.column)).collect();
+        positions.sort_unstable();
+        positions.dedup();
+        assert_eq!(positions.len(), 3, "each access must report a unique column");
     }
 }
