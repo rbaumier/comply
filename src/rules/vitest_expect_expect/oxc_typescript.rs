@@ -17,7 +17,9 @@ fn is_test_file(path: &std::path::Path) -> bool {
 /// with `expect` or `assert`. The identifier must be word-boundary-anchored
 /// on the left so we don't match `inspect(` or `reassert(`. A TypeScript
 /// type-argument list (`<...>`) between the identifier and the call's `(`
-/// is allowed — `expectTypeOf<X>()` is a runtime call.
+/// is allowed — `expectTypeOf<X>()` is a runtime call. A member chain is
+/// allowed too — `assert.deepStrictEqual(...)` / `expect.soft(...)` are calls
+/// on vitest's `assert`/`expect` objects.
 fn has_assertion_prefixed_call(text: &str) -> bool {
     let bytes = text.as_bytes();
     for prefix in ["expect", "assert"] {
@@ -43,6 +45,23 @@ fn has_assertion_prefixed_call(text: &str) -> bool {
                 }
                 if bytes.get(j) == Some(&b'(') {
                     return true;
+                }
+                if bytes.get(j) == Some(&b'.') {
+                    // Member chain: `assert.deepStrictEqual(` / `expect.soft(`.
+                    // Skip `.identifier` segments; a `(` after one is a call.
+                    while bytes.get(j) == Some(&b'.') {
+                        j += 1;
+                        while j < bytes.len()
+                            && (bytes[j].is_ascii_alphanumeric()
+                                || bytes[j] == b'_'
+                                || bytes[j] == b'$')
+                        {
+                            j += 1;
+                        }
+                        if bytes.get(j) == Some(&b'(') {
+                            return true;
+                        }
+                    }
                 }
                 if bytes.get(j) == Some(&b'<') {
                     // expectTypeOf<X>() / assertType<Y>() — look for `>(`
@@ -365,6 +384,30 @@ mod tests {
     #[test]
     fn still_flags_test_mentioning_satisfies_in_string_only() {
         let src = r#"it("x", () => { log("this satisfies nothing"); });"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // Regression for #1078 — vitest re-exports an `assert` object (chai-backed);
+    // `assert.deepStrictEqual(...)` / `assert.ok(...)` / `assert.throws(...)`
+    // are member-call assertions, not direct `assert(...)` calls.
+    #[test]
+    fn allows_test_with_assert_member_call() {
+        let src =
+            r#"it("ok", () => { const m = f(); assert.deepStrictEqual(m, expected); });"#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn allows_test_with_assert_ok_and_throws() {
+        let src = r#"it("ok", () => { assert.ok(value); assert.throws(() => fn()); });"#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // Member access on an `assert`-prefixed object that is NOT a call (a
+    // property read) must not be mistaken for an assertion.
+    #[test]
+    fn still_flags_test_with_assert_member_property_read() {
+        let src = r#"it("x", () => { const n = assert.length; log(n); });"#;
         assert_eq!(run(src).len(), 1);
     }
 }
