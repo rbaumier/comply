@@ -13,12 +13,16 @@ const VALID_PREFIXES: &[&str] = &[
 ];
 const NEGATIVE_SUBSTRINGS: &[&str] = &["Not", "Isnt", "Cannot", "Cant", "Shouldnt"];
 
-/// Standard HTML attributes and React controlled-component props whose names
-/// are dictated by the platform / component library API.
+/// Boolean names dictated by an external contract rather than chosen by the
+/// author: HTML attributes and React controlled-component props (`open`,
+/// `checked`, …), plus conventional protocol/API flag terms whose spelling is
+/// fixed by a spec (`force` in CLI/ARM imperative APIs, `reserved` for RFC 3986
+/// reserved characters). Prefixing these (`isForce`, `isReserved`) breaks the
+/// link to the documented name without adding information.
 const ALLOWED_NAMES: &[&str] = &[
     "open", "checked", "disabled", "enabled", "hidden", "required", "selected",
     "readOnly", "multiple", "autoFocus", "autoPlay", "defer", "async",
-    "noValidate", "value", "defaultOpen", "defaultChecked",
+    "noValidate", "value", "defaultOpen", "defaultChecked", "force", "reserved",
 ];
 
 /// Return a short problem description if the name doesn't match the rule.
@@ -192,5 +196,22 @@ mod tests {
     fn still_flags_in_non_test_file() {
         assert_eq!(run("let initialized = false;").len(), 1);
         assert_eq!(run("let serveRenamed = false;").len(), 1);
+    }
+
+    #[test]
+    fn no_fp_on_contract_dictated_boolean_terms() {
+        // `force` and `reserved` are spelled by an external contract (ARM/CLI
+        // imperative APIs, RFC 3986 reserved characters); prefixing them breaks
+        // the link to the documented name. (Closes #1099)
+        assert!(run("const force = false;").is_empty());
+        assert!(
+            run("function encodeComponent(val: string, reserved?: boolean, op?: string): string { return val; }")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn still_flags_unprefixed_boolean_outside_allowlist() {
+        assert_eq!(run("const overwrite = false;").len(), 1);
     }
 }
