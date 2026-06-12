@@ -23,6 +23,19 @@ const SENSITIVE_WORDS: &[&str] = &[
     "credit_card",
 ];
 
+/// Path segments identifying documentation/example files that demonstrate an
+/// API to library users. Their `console.log` calls show usage with literal
+/// placeholder values, not real secrets, so the rule does not apply.
+const EXAMPLE_FILE_MARKERS: &[&str] = &["snippet", "example", "sample"];
+
+/// Qualifiers that, when they prefix a `…token` identifier, mark it as a
+/// transaction/iteration handle rather than a credential. A lock token,
+/// continuation token, or page token is a temporary processing handle —
+/// like a database cursor — not a secret. `accessToken`/`authToken` carry
+/// no such qualifier and remain flagged.
+const BENIGN_TOKEN_PREFIXES: &[&str] =
+    &["lock", "continuation", "cancellation", "page", "next", "reset"];
+
 pub struct Check;
 
 impl OxcCheck for Check {
@@ -41,6 +54,10 @@ impl OxcCheck for Check {
         _semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
+        if is_example_file(ctx.path) {
+            return;
+        }
+
         let AstKind::CallExpression(call) = node.kind() else {
             return;
         };
@@ -96,9 +113,7 @@ fn has_sensitive_argument(args: &[Argument], source: &str) -> bool {
             }
             _ => {
                 let span = arg.span();
-                let text = &source[span.start as usize..span.end as usize];
-                let lower = text.to_ascii_lowercase();
-                if SENSITIVE_WORDS.iter().any(|w| lower.contains(w)) {
+                if text_is_sensitive(&source[span.start as usize..span.end as usize]) {
                     return true;
                 }
             }
@@ -110,11 +125,142 @@ fn has_sensitive_argument(args: &[Argument], source: &str) -> bool {
 fn template_has_sensitive_substitution(tpl: &TemplateLiteral, source: &str) -> bool {
     for expr in &tpl.expressions {
         let span = expr.span();
-        let text = &source[span.start as usize..span.end as usize];
-        let lower = text.to_ascii_lowercase();
-        if SENSITIVE_WORDS.iter().any(|w| lower.contains(w)) {
+        if text_is_sensitive(&source[span.start as usize..span.end as usize]) {
             return true;
         }
     }
     false
+}
+
+fn is_example_file(path: &std::path::Path) -> bool {
+    let s = path.to_string_lossy().replace('\\', "/").to_ascii_lowercase();
+    EXAMPLE_FILE_MARKERS.iter().any(|m| s.contains(m))
+}
+
+/// Returns true when an interpolated expression names a secret. Matching is
+/// per identifier segment (split on non-`[a-z0-9_]`) so a benign `…token`
+/// compound such as `lockToken` is not flagged on the strength of an
+/// unrelated neighbour.
+fn text_is_sensitive(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    lower
+        .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+        .filter(|seg| !seg.is_empty())
+        .any(segment_is_sensitive)
+}
+
+fn segment_is_sensitive(segment: &str) -> bool {
+    SENSITIVE_WORDS.iter().any(|w| {
+        if !segment.contains(w) {
+            return false;
+        }
+        if *w == "token" && is_benign_token(segment) {
+            return false;
+        }
+        true
+    })
+}
+
+/// `lockToken`, `continuationToken`, `pageToken`, … — a `…token` identifier
+/// whose qualifier marks it as a transaction or iteration handle, not a
+/// credential.
+fn is_benign_token(segment: &str) -> bool {
+    let Some(prefix) = segment.strip_suffix("token") else {
+        return false;
+    };
+    let prefix = prefix.trim_end_matches('_');
+    BENIGN_TOKEN_PREFIXES.contains(&prefix)
+}
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
+    }
+
+    #[test]
+    fn flags_console_log_with_password() {
+        assert_eq!(run_on("console.log('label:', config.password);").len(), 1);
+    }
+
+    #[test]
+    fn flags_console_error_with_token() {
+        assert_eq!(run_on("console.error(`token=${accessToken}`);").len(), 1);
+    }
+
+    #[test]
+    fn flags_logger_with_api_key() {
+        assert_eq!(run_on("logger.info('label:', apiKey);").len(), 1);
+    }
+
+    #[test]
+    fn allows_logging_without_sensitive_data() {
+        assert!(run_on("console.log('User logged in');").is_empty());
+    }
+
+    #[test]
+    fn allows_string_literal_mentioning_token() {
+        assert!(run_on(r#"console.log("Token refresh succeeded");"#).is_empty());
+    }
+
+    // Regression #1105 — `snippets.spec.ts` is a documentation file whose
+    // console.log calls demonstrate an API with placeholder values.
+    #[test]
+    fn allows_logging_in_snippet_file() {
+        let src = "console.log(credential.key);";
+        assert!(
+            crate::rules::test_helpers::run_rule(&Check, src, "test/snippets.spec.ts").is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_logging_in_samples_dir() {
+        let src = "console.log(credential.key);";
+        assert!(
+            crate::rules::test_helpers::run_rule(&Check, src, "samples/demo.ts").is_empty()
+        );
+    }
+
+    // Regression #1105 — a lock token is a transaction handle, not a secret.
+    #[test]
+    fn allows_lock_token_in_error_log() {
+        let src =
+            "logger.logError(err, `An error occurred while auto renewing the message lock '${bMessage.lockToken}'`);";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_continuation_token() {
+        assert!(run_on("logger.info(`page from ${result.continuationToken}`);").is_empty());
+    }
+
+    // Still-flags controls: genuine secret tokens must keep firing.
+    #[test]
+    fn still_flags_access_token() {
+        assert_eq!(run_on("logger.info(`auth: ${accessToken}`);").len(), 1);
+    }
+
+    #[test]
+    fn still_flags_lock_token_outside_example_file() {
+        // The benign-token exemption is about the *name*, not the file: a real
+        // secret token in the same file still fires.
+        assert_eq!(run_on("logger.info(`token: ${authToken}`);").len(), 1);
+    }
 }
