@@ -172,6 +172,12 @@ struct FileExtract {
 
 fn extract_for(parser: &mut Parser, file: &SourceFile) -> Option<FileExtract> {
     let source = std::fs::read_to_string(&file.path).ok()?;
+    // Every k8s manifest requires `apiVersion`; a YAML file without it
+    // (lockfile, CI config) can't contribute resources, so skip the
+    // tree-sitter parse entirely.
+    if memchr::memmem::find(source.as_bytes(), b"apiVersion").is_none() {
+        return None;
+    }
     let lang: tree_sitter::Language = tree_sitter_yaml::LANGUAGE.into();
     parser.set_language(&lang).ok()?;
     let tree = parser.parse(source.as_bytes(), None)?;
