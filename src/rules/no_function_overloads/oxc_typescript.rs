@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use crate::diagnostic::Diagnostic;
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, CheckCtx, OxcCheck};
-use oxc_ast::ast::{Declaration, Function, Statement};
+use oxc_ast::ast::{Declaration, Function, Statement, TSType};
 use std::sync::Arc;
 
 pub struct Check;
@@ -45,6 +45,15 @@ fn generics_in_return_type(source: &str, f: &Function) -> Option<Vec<String>> {
     if names.is_empty() { None } else { Some(names) }
 }
 
+/// True when the signature's return type is a `x is T` type predicate. Such
+/// overloads narrow the return type per input variant and cannot collapse into
+/// a single union signature without erasing that narrowing at every call site.
+fn returns_type_predicate(f: &Function) -> bool {
+    f.return_type
+        .as_ref()
+        .is_some_and(|ann| matches!(ann.type_annotation, TSType::TSTypePredicate(_)))
+}
+
 impl OxcCheck for Check {
     fn run_on_semantic<'a>(
         &self,
@@ -65,6 +74,9 @@ impl OxcCheck for Check {
                         continue;
                     }
                     if preserves_generic_return_inference(&sigs) {
+                        continue;
+                    }
+                    if preserves_type_predicate_narrowing(&sigs) {
                         continue;
                     }
                     for sig in sigs {
@@ -97,6 +109,8 @@ struct OverloadSig {
     /// Generic parameter names that appear in this signature's return type.
     /// Empty when the signature has no generics referenced in its return type.
     generics_in_return: Vec<String>,
+    /// True when this signature returns a `x is T` type predicate.
+    returns_predicate: bool,
 }
 
 /// True when ALL overload signatures share at least one generic type parameter
@@ -119,6 +133,14 @@ fn preserves_generic_return_inference(sigs: &[OverloadSig]) -> bool {
         }
     }
     true
+}
+
+/// True when EVERY overload signature returns a `x is T` type predicate. Each
+/// predicate narrows the return type for its specific input variant; collapsing
+/// the overloads into one union signature would erase that per-call-site
+/// narrowing and force `as` casts on every caller.
+fn preserves_type_predicate_narrowing(sigs: &[OverloadSig]) -> bool {
+    sigs.iter().all(|sig| sig.returns_predicate)
 }
 
 /// Extract overload signature info if `stmt` is a function declaration without a body.
@@ -147,6 +169,7 @@ fn sig_from_function(source: &str, f: &Function) -> Option<OverloadSig> {
         name,
         span_start: f.span.start,
         generics_in_return,
+        returns_predicate: returns_type_predicate(f),
     })
 }
 
@@ -226,6 +249,37 @@ export function make<
 function foo<T>(x: T): string;
 function foo<T>(x: T, y: number): string;
 function foo<T>(x: T, y?: number): string { return ''; }
+";
+        assert_eq!(run_on(source).len(), 2);
+    }
+
+    #[test]
+    fn allows_type_predicate_overloads() {
+        // Regression for #1085: `isUnexpected` overloads each narrow `response`
+        // to a specific *Default response via an `is T` predicate. Collapsing
+        // them into one union signature would erase per-call-site narrowing.
+        let source = r#"
+export function isUnexpected(
+  response: SearchGetGeocoding200Response | SearchGetGeocodingDefaultResponse,
+): response is SearchGetGeocodingDefaultResponse;
+export function isUnexpected(
+  response: SearchGetGeocodingBatch200Response | SearchGetGeocodingBatchDefaultResponse,
+): response is SearchGetGeocodingBatchDefaultResponse;
+export function isUnexpected(response: AllResponses): response is AllResponses {
+  return false;
+}
+"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_overloads_when_only_some_return_predicate() {
+        // One overload returns a type predicate, the other returns a plain type
+        // — the group is not uniformly predicate-narrowing, so it still fires.
+        let source = "
+function foo(x: number): x is number;
+function foo(x: string): string;
+function foo(x: number | string): boolean { return true; }
 ";
         assert_eq!(run_on(source).len(), 2);
     }
