@@ -41,6 +41,9 @@ impl OxcCheck for Check {
             if is_generated_specifier(&imp.specifier) {
                 continue;
             }
+            if is_generated_dir_specifier(&imp.specifier) {
+                continue;
+            }
             if is_build_output_specifier(&imp.specifier) {
                 continue;
             }
@@ -91,6 +94,17 @@ fn is_build_output_specifier(spec: &str) -> bool {
     spec.split('/').any(|seg| matches!(seg, "dist" | "build" | "out"))
 }
 
+/// True for specifiers that traverse into a directory holding code-generated
+/// output (`generated`/`__generated__` from Prisma, GraphQL/Relay codegen, the
+/// `.prisma` client cache) or into `node_modules`. These artifacts are produced
+/// by a build step (`prisma generate`, `graphql-codegen`, `npm install`), are
+/// gitignored, and are absent in a clean checkout — so an unresolved import
+/// there is expected, not a defect.
+fn is_generated_dir_specifier(spec: &str) -> bool {
+    spec.split('/')
+        .any(|seg| matches!(seg, "generated" | "__generated__" | ".prisma" | "node_modules"))
+}
+
 /// Source extensions resolved through the TS/JS import index. A specifier
 /// carrying one of these is a real source import — if it stayed unresolved,
 /// the target is genuinely missing and must be flagged.
@@ -115,7 +129,7 @@ pub(super) fn is_existing_asset_import(importer: &Path, specifier: &str) -> bool
 
 #[cfg(test)]
 mod oxc_tests {
-    use super::{is_build_output_specifier, is_generated_specifier};
+    use super::{is_build_output_specifier, is_generated_dir_specifier, is_generated_specifier};
 
     #[test]
     fn detects_generated_specifiers_issue_487() {
@@ -138,5 +152,19 @@ mod oxc_tests {
         assert!(!is_build_output_specifier("../distance/index.js"));
         assert!(!is_build_output_specifier("./distribution/x"));
         assert!(!is_build_output_specifier("./lib/util.js")); // lib intentionally NOT skipped
+    }
+
+    #[test]
+    fn detects_generated_dir_specifiers_issue_1420() {
+        // reproducers from the issue (Prisma / GraphQL codegen output)
+        assert!(is_generated_dir_specifier("./generated/prisma/client"));
+        assert!(is_generated_dir_specifier("./generated/client"));
+        assert!(is_generated_dir_specifier("./node_modules/@prisma/client"));
+        assert!(is_generated_dir_specifier("../src/__generated__/graphql"));
+        assert!(is_generated_dir_specifier("./.prisma/client"));
+        // still flagged — a genuinely broken relative import has no codegen segment
+        assert!(!is_generated_dir_specifier("./does-not-exist"));
+        assert!(!is_generated_dir_specifier("../utils/helper"));
+        assert!(!is_generated_dir_specifier("./generated-things")); // substring, not a segment
     }
 }
