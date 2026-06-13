@@ -503,6 +503,70 @@ pub fn is_react_lazy_factory_then<'a>(
     false
 }
 
+/// Method names of the Playwright/Puppeteer APIs that serialize a function
+/// argument and run it inside the browser page realm.
+const BROWSER_EVAL_METHODS: &[&str] = &["evaluate", "evaluateHandle", "$eval", "$$eval"];
+
+/// True when `node` is lexically inside the function argument of a
+/// `*.evaluate(...)` / `*.evaluateHandle(...)` / `*.$eval(...)` / `*.$$eval(...)`
+/// call (Playwright/Puppeteer browser-context-injection APIs).
+///
+/// The callback passed to these methods is serialized and executed in the
+/// browser page realm, where `window` is the canonical global object — not the
+/// cross-realm `globalThis`. Rules that prefer `globalThis` over `window` must
+/// stay silent inside such callbacks.
+///
+/// Detection is by the callee's property name only; the receiver (page handle,
+/// frame, element handle, …) is not constrained, since these methods exist on
+/// several Playwright/Puppeteer handle types under the same names.
+#[must_use]
+pub fn is_in_browser_eval_callback<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    use oxc_ast::AstKind;
+    use oxc_ast::ast::Expression;
+    use oxc_span::GetSpan;
+
+    // The nearest enclosing function is the candidate callback. We record its
+    // span so that, on reaching the enclosing call, we can confirm the function
+    // is the call's *argument* and not (say) its receiver.
+    let mut enclosing_fn_span: Option<oxc_span::Span> = None;
+    for ancestor in semantic.nodes().ancestors(node.id()) {
+        match ancestor.kind() {
+            AstKind::ArrowFunctionExpression(_) | AstKind::Function(_)
+                if enclosing_fn_span.is_none() =>
+            {
+                enclosing_fn_span = Some(ancestor.kind().span());
+            }
+            AstKind::CallExpression(call) => {
+                let Some(fn_span) = enclosing_fn_span else {
+                    continue;
+                };
+                let Expression::StaticMemberExpression(member) = &call.callee else {
+                    continue;
+                };
+                if !BROWSER_EVAL_METHODS.contains(&member.property.name.as_str()) {
+                    continue;
+                }
+                // The callback must be one of the call's arguments, not the
+                // receiver: `window.foo` inside `evaluate.call(...)` style code
+                // would otherwise be wrongly exempted.
+                let is_argument = call
+                    .arguments
+                    .iter()
+                    .filter_map(|arg| arg.as_expression())
+                    .any(|arg| arg.span() == fn_span);
+                if is_argument {
+                    return true;
+                }
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
 /// True when `node_id` sits inside an ambient (`declare`) module context —
 /// `declare global { ... }` (parsed as `TSGlobalDeclaration`) or a `declare`
 /// module/namespace (`TSModuleDeclaration` with `declare`). Bindings inside

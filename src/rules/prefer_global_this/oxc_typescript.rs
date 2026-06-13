@@ -107,6 +107,12 @@ impl OxcCheck for Check {
             return;
         }
 
+        // Inside a Playwright/Puppeteer `*.evaluate(...)` callback the code runs
+        // in the browser page realm, where `window` is the intended global.
+        if crate::oxc_helpers::is_in_browser_eval_callback(node, semantic) {
+            return;
+        }
+
         let (line, column) = byte_offset_to_line_col(ctx.source, member.span.start as usize);
         diagnostics.push(Diagnostic {
             path: Arc::clone(&ctx.path_arc),

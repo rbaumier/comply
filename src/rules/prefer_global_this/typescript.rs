@@ -93,6 +93,53 @@ const WINDOW_SPECIFIC: &[&str] = &[
     "onunload",
 ];
 
+/// Method names of the Playwright/Puppeteer APIs that serialize a function
+/// argument and run it inside the browser page realm.
+const BROWSER_EVAL_METHODS: &[&str] = &["evaluate", "evaluateHandle", "$eval", "$$eval"];
+
+/// True if `node` is lexically inside the function argument of a
+/// `*.evaluate(...)` / `*.evaluateHandle(...)` / `*.$eval(...)` / `*.$$eval(...)`
+/// call (Playwright/Puppeteer browser-context-injection APIs). The callback is
+/// serialized and executed in the browser page realm, where `window` is the
+/// intended global, so `globalThis` is not preferable there.
+fn is_in_browser_eval_callback(node: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut cur = node;
+    // The nearest enclosing function is the candidate callback; its byte range
+    // lets us confirm it is the call's *argument* and not its receiver.
+    let mut enclosing_fn: Option<(usize, usize)> = None;
+    while let Some(parent) = cur.parent() {
+        match parent.kind() {
+            "arrow_function" | "function_expression" | "function_declaration"
+                if enclosing_fn.is_none() =>
+            {
+                enclosing_fn = Some((parent.start_byte(), parent.end_byte()));
+            }
+            "call_expression" => {
+                if let Some((fn_start, fn_end)) = enclosing_fn {
+                    let is_eval_method = parent
+                        .child_by_field_name("function")
+                        .filter(|f| f.kind() == "member_expression")
+                        .and_then(|f| f.child_by_field_name("property"))
+                        .and_then(|p| p.utf8_text(source).ok())
+                        .is_some_and(|m| BROWSER_EVAL_METHODS.contains(&m));
+                    let callback_is_argument =
+                        parent.child_by_field_name("arguments").is_some_and(|args| {
+                            let mut walker = args.walk();
+                            args.named_children(&mut walker)
+                                .any(|arg| arg.start_byte() == fn_start && arg.end_byte() == fn_end)
+                        });
+                    if is_eval_method && callback_is_argument {
+                        return true;
+                    }
+                }
+            }
+            _ => {}
+        }
+        cur = parent;
+    }
+    false
+}
+
 /// True if `node` is the operand of a `typeof` unary expression.
 fn is_under_typeof(node: tree_sitter::Node, source: &[u8]) -> bool {
     let mut cur = node;
@@ -145,6 +192,12 @@ crate::ast_check! { on ["member_expression"] => |node, source, ctx, diagnostics|
     }
 
     if is_under_typeof(node, source) {
+        return;
+    }
+
+    // Inside a Playwright/Puppeteer `*.evaluate(...)` callback the code runs in
+    // the browser page realm, where `window` is the intended global.
+    if is_in_browser_eval_callback(node, source) {
         return;
     }
 
@@ -299,5 +352,54 @@ mod tests {
             1,
             "Pure Node project should still flag window.foo: {diags:?}"
         );
+    }
+
+    // ── Playwright `page.evaluate()` browser-context callbacks (#1839) ──
+
+    #[test]
+    fn ignores_window_in_page_evaluate_callback() {
+        // Exact reproduction from issue #1839 (mswjs/msw).
+        let src = "const handlerHeaders = await page.evaluate(() => {\n  \
+                   const handlers = window.msw.worker.listHandlers()\n  \
+                   return handlers.map((handler) => handler.info.header)\n})";
+        assert!(
+            run_ts(src).is_empty(),
+            "window.X inside page.evaluate() runs in the browser realm"
+        );
+    }
+
+    #[test]
+    fn ignores_window_in_evaluate_handle_callback() {
+        assert!(run_ts("await page.evaluateHandle(() => window.foo);").is_empty());
+    }
+
+    #[test]
+    fn ignores_window_in_eval_callback() {
+        assert!(run_ts("await page.$eval('#sel', () => window.foo);").is_empty());
+        assert!(run_ts("await page.$$eval('#sel', () => window.foo);").is_empty());
+    }
+
+    #[test]
+    fn ignores_window_in_evaluate_function_expression() {
+        assert!(run_ts("await page.evaluate(function () { return window.foo; });").is_empty());
+    }
+
+    #[test]
+    fn ignores_window_in_frame_evaluate_callback() {
+        assert!(run_ts("await frame.evaluate(() => window.foo);").is_empty());
+    }
+
+    #[test]
+    fn flags_window_outside_evaluate_callback() {
+        // A genuine top-level `window.X` next to an evaluate call is still flagged.
+        let src = "const x = window.foo;\nawait page.evaluate(() => window.bar);";
+        let d = run_ts(src);
+        assert_eq!(d.len(), 1, "only the top-level window.foo is flagged: {d:?}");
+    }
+
+    #[test]
+    fn flags_window_in_non_evaluate_callback() {
+        // `window.X` in an ordinary callback (not a browser-eval API) still fires.
+        assert_eq!(run_ts("arr.map(() => window.foo);").len(), 1);
     }
 }
