@@ -18,9 +18,12 @@ fn is_test_runner_specifier(spec: &str) -> bool {
         || spec == "@jest/globals"
 }
 
-/// True if the nearest package.json declares vitest or jest as a dependency.
+/// True if the nearest package.json runs vitest or jest as its test runner —
+/// detected by a `scripts` entry that invokes the runner binary, not by its
+/// mere presence in `devDependencies` (which also covers packages that ship a
+/// vitest/jest integration and list the dep only to exercise it).
 fn package_uses_test_runner(pkg: &PackageJson) -> bool {
-    pkg.has_dep_or_engine("vitest") || pkg.has_dep_or_engine("jest")
+    pkg.scripts_invoke_test_runner("vitest") || pkg.scripts_invoke_test_runner("jest")
 }
 
 impl OxcCheck for Check {
@@ -135,19 +138,32 @@ mod tests {
     }
 
     #[test]
-    fn flags_node_test_when_package_uses_vitest() {
-        let pkg = r#"{"devDependencies":{"vitest":"^1"}}"#;
+    fn flags_node_test_when_test_script_runs_vitest() {
+        let pkg = r#"{"scripts":{"test":"vitest run"},"devDependencies":{"vitest":"^1"}}"#;
         let src = "import { describe, it } from 'node:test';";
         let d = run_with_pkg(pkg, "test/path.test.ts", src);
-        assert_eq!(d.len(), 1, "node:test in a vitest package mixes runners");
+        assert_eq!(d.len(), 1, "node:test in a vitest-run package mixes runners");
     }
 
     #[test]
-    fn flags_node_test_when_package_uses_jest() {
-        let pkg = r#"{"devDependencies":{"jest":"^29"}}"#;
+    fn flags_node_test_when_test_script_runs_jest() {
+        let pkg = r#"{"scripts":{"test":"jest"},"devDependencies":{"jest":"^29"}}"#;
         let src = "import test from 'node:test';";
         let d = run_with_pkg(pkg, "src/foo.test.ts", src);
         assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn allows_node_test_when_vitest_is_devdep_only() {
+        // Issue #2057: astro ships a vitest integration so vitest is in
+        // devDependencies, but the package runs its tests with node:test (via
+        // `astro-scripts test`). No script invokes the vitest binary, so the
+        // node:test import does not mix runners.
+        let pkg = r#"{"scripts":{"test":"astro-scripts test \"test/**/*.test.ts\""},"devDependencies":{"vitest":"^2"}}"#;
+        let src = "import assert from 'node:assert/strict';\n\
+                   import { before, describe, it } from 'node:test';";
+        let d = run_with_pkg(pkg, "test/html-escape.test.ts", src);
+        assert!(d.is_empty(), "vitest devDep-only must not flag node:test: {d:?}");
     }
 
     #[test]
