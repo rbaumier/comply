@@ -8,17 +8,6 @@ use std::sync::Arc;
 
 pub struct Check;
 
-const TEST_MARKERS: &[&str] = &[".test.", ".spec.", "__tests__", "_test.", ".e2e."];
-
-fn is_test_file(path: &std::path::Path) -> bool {
-    let s = path.to_string_lossy();
-    if TEST_MARKERS.iter().any(|m| s.contains(m)) {
-        return true;
-    }
-    path.components()
-        .any(|c| c.as_os_str() == "tests" || c.as_os_str() == "e2e")
-}
-
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[AstType::RegExpLiteral]
@@ -33,7 +22,7 @@ impl OxcCheck for Check {
     ) {
         let AstKind::RegExpLiteral(regex) = node.kind() else { return };
 
-        if is_test_file(ctx.path) {
+        if ctx.file.path_segments.in_test_dir {
             return;
         }
 
@@ -89,8 +78,15 @@ mod tests {
         crate::rules::test_helpers::run_rule(&Check, code, "t.ts")
     }
 
+    /// Build a real `FileCtx` from `path` so `ctx.file.path_segments.in_test_dir`
+    /// reflects the path's test-directory classification.
     fn run_at(code: &str, path: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_rule(&Check, code, path)
+        use crate::files::Language;
+        let path = std::path::Path::new(path);
+        let project = crate::project::default_static_project_ctx();
+        let lang = Language::from_path(path).unwrap_or(Language::TypeScript);
+        let file = crate::rules::file_ctx::FileCtx::build(path, code, lang, project);
+        crate::rules::test_helpers::run_rule_with_ctx(&Check, code, path, project, &file)
     }
 
     #[test]
@@ -124,5 +120,21 @@ mod tests {
         assert!(run_at(code, "src/__tests__/foo.ts").is_empty());
         assert!(run_at(code, "e2e/foo.ts").is_empty());
         assert!(run_at(code, "tests/foo.ts").is_empty());
+    }
+
+    #[test]
+    fn allows_regex_in_singular_test_dir() {
+        // Regression for issue #1969: pnpm uses a singular `test/` directory
+        // convention next to `src/`; a regex inside a function there is a
+        // false positive.
+        let code = "function f() { return /github\\.com/.test(s); }";
+        assert!(run_at(code, "installing/deps-installer/test/install/fromRepo.ts").is_empty());
+        assert!(run_at(code, "test/foo.ts").is_empty());
+    }
+
+    #[test]
+    fn flags_regex_in_non_test_source_file() {
+        let code = "function f() { return /abc/.test(s); }";
+        assert_eq!(run_at(code, "src/foo.ts").len(), 1);
     }
 }
