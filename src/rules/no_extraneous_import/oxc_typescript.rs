@@ -519,6 +519,43 @@ import { animated } from "@react-spring/web";
     }
 
     #[test]
+    fn allows_dev_dep_in_vitest_prefixed_tooling_file() {
+        // Issue #1891: immerjs/immer's root-level `vitest-custom-reporter.ts` is a
+        // Vitest custom reporter consumed only by the test runner (referenced from
+        // `vitest.config.ts` as `reporters: ['./vitest-custom-reporter']`). It is
+        // never shipped, so importing `vitest` (a devDependency) is correct — like
+        // any file under `__tests__/`.
+        let pkg = r#"{"devDependencies":{"vitest":"^1"}}"#;
+        let src = r#"
+import { Reporter } from "vitest";
+export default class CustomReporter implements Reporter {}
+"#;
+        let d = run_with_pkg_at_path(pkg, "vitest-custom-reporter.ts", src);
+        assert!(d.is_empty(), "vitest- tooling file should not flag devDeps: {d:?}");
+    }
+
+    #[test]
+    fn allows_dev_dep_in_jest_prefixed_tooling_file() {
+        // Issue #1891: `jest-setup.ts` is test-runner setup tooling, exempt for
+        // the same reason as the `vitest-` prefix.
+        let pkg = r#"{"devDependencies":{"jest":"^29"}}"#;
+        let src = r#"import { jest } from "jest";"#;
+        let d = run_with_pkg_at_path(pkg, "jest-setup.ts", src);
+        assert!(d.is_empty(), "jest- tooling file should not flag devDeps: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_dev_dep_in_production_index() {
+        // Guard against over-relaxing: a genuine production entry point importing a
+        // devDependency must still flag — the prefix exemption is name-anchored.
+        let pkg = r#"{"devDependencies":{"vitest":"^1"}}"#;
+        let src = r#"import { describe } from "vitest";"#;
+        let d = run_with_pkg_at_path(pkg, "src/index.ts", src);
+        assert_eq!(d.len(), 1, "production index should still flag: {d:?}");
+        assert!(d[0].message.contains("vitest"));
+    }
+
+    #[test]
     fn still_flags_dev_dep_in_production_code() {
         // Guard against over-relaxing: production code outside test/config
         // paths must still flag devDependency imports.
