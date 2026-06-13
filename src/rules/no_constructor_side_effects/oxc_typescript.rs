@@ -72,6 +72,16 @@ impl OxcCheck for Check {
             return;
         }
 
+        // SST/Pulumi infrastructure-as-code entry point:
+        // `$config({ async run() { new sst.aws.Service(...); } })`. In the Pulumi
+        // programming model every `new Resource(name, props)` registers the
+        // resource in the deployment graph as a constructor side effect — that
+        // *is* the program. An unassigned resource declaration inside the `run`
+        // callback is intentional, not a discarded side effect.
+        if is_in_sst_config_run(node, semantic) {
+            return;
+        }
+
         let (line, column) = byte_offset_to_line_col(ctx.source, new_expr.span.start as usize);
         diagnostics.push(Diagnostic {
             path: Arc::clone(&ctx.path_arc),
@@ -204,6 +214,48 @@ fn is_in_try_block(
         return false;
     };
     try_stmt.block.span == block_stmt.span
+}
+
+/// True when `node` (a `NewExpression`) sits inside the `run` callback of an SST
+/// `$config({ ... })` infrastructure-as-code entry point. Walks up to the nearest
+/// enclosing function and checks it is the value of an object property named
+/// `run` whose containing object literal is an argument to a `$config(...)` call.
+/// Both shapes are recognized: the `run() {}` method shorthand and the
+/// `run: () => {}` property form.
+fn is_in_sst_config_run(
+    node: &oxc_semantic::AstNode,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let nodes = semantic.nodes();
+    for ancestor in nodes.ancestors(node.id()) {
+        let is_function = matches!(
+            ancestor.kind(),
+            AstKind::Function(_) | AstKind::ArrowFunctionExpression(_)
+        );
+        if !is_function {
+            continue;
+        }
+        let prop = nodes.parent_node(ancestor.id());
+        let AstKind::ObjectProperty(object_property) = prop.kind() else {
+            return false;
+        };
+        if object_property.key.static_name().as_deref() != Some("run") {
+            return false;
+        }
+        let object = nodes.parent_node(prop.id());
+        if !matches!(object.kind(), AstKind::ObjectExpression(_)) {
+            return false;
+        }
+        let call = nodes.parent_node(object.id());
+        let AstKind::CallExpression(call_expr) = call.kind() else {
+            return false;
+        };
+        return matches!(
+            &call_expr.callee,
+            Expression::Identifier(ident) if ident.name.as_str() == "$config"
+        );
+    }
+    false
 }
 
 /// Name of a simple `BindingIdentifier` parameter; `None` for destructuring or
@@ -397,6 +449,61 @@ mod tests {
         // A genuinely side-effecting `new X()` in production code outside any
         // try block still flags.
         let src = "function f() { new Logger('global'); }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_new_in_sst_config_run() {
+        // Regression for #1770 — SST/Pulumi IaC entry point. Every
+        // `new sst.aws.X(...)` registers a resource in the deployment graph as a
+        // constructor side effect; the unassigned `new` is the program, not a bug.
+        let src = r#"
+            export default $config({
+              app(input) {
+                return { name: "aws-hono-redis", home: "aws" };
+              },
+              async run() {
+                const vpc = new sst.aws.Vpc("MyVpc", { bastion: true });
+                const redis = new sst.aws.Redis("MyRedis", { vpc });
+                const cluster = new sst.aws.Cluster("MyCluster", { vpc });
+
+                new sst.aws.Service("MyService", {
+                  cluster,
+                  link: [redis],
+                  loadBalancer: { ports: [{ listen: "80/http", forward: "3000/http" }] },
+                });
+              },
+            });
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_new_in_non_config_object_run() {
+        // The exemption is scoped to `$config(...)`; a `run` method on an
+        // unrelated object literal is not an IaC entry point.
+        let src = r#"
+            registerTask({
+              run() {
+                new Logger('global');
+              },
+            });
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_new_in_config_non_run_callback() {
+        // Only the `run` callback is the IaC program; a `new X()` in another
+        // `$config` method is still a discarded side effect.
+        let src = r#"
+            $config({
+              app() {
+                new Logger('global');
+                return { name: "x", home: "aws" };
+              },
+            });
+        "#;
         assert_eq!(run(src).len(), 1);
     }
 
